@@ -1,0 +1,97 @@
+{
+  "timestamp": "2025-12-12 23:24:37",
+  "checks": [
+    {
+      "name": "ENV文件检查",
+      "status": "ok",
+      "details": {
+        "user_id": "79505292",
+        "csrf_token_length": 198,
+        "cookies_length": 3711,
+        "has_user_id_in_cookie": true
+      }
+    },
+    {
+      "name": "BankID检查",
+      "status": "mismatch",
+      "details": {
+        "cookie_bank_id": "13",
+        "config_bank_id": "11",
+        "current_subject": "高中数学",
+        "match": false
+      },
+      "note": "代码已修复为优先使用Cookie中的bankId"
+    },
+    {
+      "name": "API连通性测试",
+      "status": "ok",
+      "details": {
+        "empty_sync": {
+          "status_code": 200,
+          "bank_id_used": "13",
+          "response": {
+            "serverVersion": "1765551523317",
+            "questions_count": 1
+          }
+        },
+        "add_question": {
+          "status_code": 200,
+          "test_question_id": "70287",
+          "bank_id_used": "13",
+          "response": {
+            "serverVersion": "1765551523317",
+            "questions_count": 1,
+            "question_ids_returned": [
+              70287
+            ]
+          },
+          "question_added": true
+        }
+      }
+    }
+  ],
+  "issues": [
+    "⚠️ BankID不匹配: Cookie=13, 配置=11"
+  ],
+  "recommendations": [],
+  "raw_data": {
+    "empty_sync_response": {
+      "serverVersion": "1765551523317",
+      "questions": [
+        {
+          "addTime": 1765551518031,
+          "childNum": 1,
+          "ext": null,
+          "from": "",
+          "quesDiff": 3.0,
+          "quesTypeId": 2703,
+          "quesTypeName": "填空题",
+          "questionId": 70287,
+          "status": "CHECK"
+        }
+      ]
+    },
+    "add_question_response": {
+      "serverVersion": "1765551523317",
+      "questions": [
+        {
+          "addTime": 1765551518031,
+          "childNum": 1,
+          "ext": null,
+          "from": "",
+          "quesDiff": 3.0,
+          "quesTypeId": 2703,
+          "quesTypeName": "填空题",
+          "questionId": 70287,
+          "status": "CHECK"
+        }
+      ]
+    }
+  },
+  "overall_status": "⚠️ 发现 1 个问题",
+  "debug_info": {
+    "current_subject": "高中数学",
+    "crawler_bank_id": 11,
+    "test_question_id": "70287"
+  }
+}

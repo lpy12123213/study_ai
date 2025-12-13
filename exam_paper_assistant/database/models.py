@@ -1,0 +1,427 @@
+"""
+数据库模型 - 只存储题目编号和试卷信息
+"""
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from datetime import datetime
+import json
+from typing import List
+
+Base = declarative_base()
+
+
+class Paper(Base):
+    """试卷表"""
+    __tablename__ = "papers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    paper_name = Column(String(200), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 关联题目
+    questions = relationship("PaperQuestion", back_populates="paper", cascade="all, delete-orphan")
+
+
+class PaperQuestion(Base):
+    """试卷题目关联表（只存储题目编号）"""
+    __tablename__ = "paper_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    paper_id = Column(Integer, ForeignKey("papers.id"), nullable=False)
+    question_id = Column(String(50), nullable=False)  # 题目编号
+    question_order = Column(Integer)  # 题目顺序
+    question_type = Column(String(50))  # 题型
+    difficulty = Column(String(20))  # 难度
+    knowledge_point = Column(String(200))  # 知识点
+    source_url = Column(String(500))  # 题目来源URL
+
+    # 关联试卷
+    paper = relationship("Paper", back_populates="questions")
+
+
+class SearchHistory(Base):
+    """搜索历史记录"""
+    __tablename__ = "search_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    search_type = Column(String(50))  # 搜索类型：keyword, knowledge等
+    search_query = Column(String(500))  # 搜索内容
+    result_count = Column(Integer)  # 结果数量
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Conversation(Base):
+    """对话会话表"""
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), default="新对话")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 关联消息
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+
+
+class Message(Base):
+    """消息表"""
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    role = Column(String(20), nullable=False)  # 'user' | 'assistant' | 'tool'
+    content = Column(Text)  # 消息内容
+    tool_calls = Column(Text)  # JSON: 工具调用信息
+    tool_call_id = Column(String(100))  # 工具调用ID（用于tool角色）
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 关联对话
+    conversation = relationship("Conversation", back_populates="messages")
+
+
+# 数据库引擎和会话
+import os
+_DB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DB_PATH = os.path.join(_DB_DIR, "exam_papers.db")
+DATABASE_URL = f"sqlite+aiosqlite:///{_DB_PATH}"
+
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    future=True
+)
+
+async_session_maker = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+
+async def init_db():
+    """初始化数据库"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("数据库初始化完成")
+
+
+async def get_session() -> AsyncSession:
+    """获取数据库会话"""
+    async with async_session_maker() as session:
+        yield session
+
+
+# 数据库操作函数
+async def save_paper(paper_name: str, questions: List[dict]) -> int:
+    """
+    保存试卷
+
+    Args:
+        paper_name: 试卷名称
+        questions: 题目列表，每个元素包含 question_id, type, difficulty 等
+
+    Returns:
+        试卷ID
+    """
+    async with async_session_maker() as session:
+        # 创建试卷
+        paper = Paper(paper_name=paper_name)
+        session.add(paper)
+        await session.commit()
+        await session.refresh(paper)
+
+        # 添加题目
+        for i, q_data in enumerate(questions):
+            # 兼容旧格式（如果只是字符串列表）
+            if isinstance(q_data, str):
+                qid = q_data
+                q_type = ""
+                q_diff = ""
+            else:
+                qid = q_data.get("question_id")
+                q_type = q_data.get("type") or q_data.get("question_type")
+                q_diff = q_data.get("difficulty")
+
+            paper_question = PaperQuestion(
+                paper_id=paper.id,
+                question_id=qid,
+                question_order=i + 1,
+                question_type=q_type,
+                difficulty=q_diff
+            )
+            session.add(paper_question)
+
+        await session.commit()
+        return paper.id
+
+
+async def get_paper(paper_id: int) -> dict:
+    """
+    获取试卷信息
+
+    Args:
+        paper_id: 试卷ID
+
+    Returns:
+        试卷信息字典
+    """
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+
+        # 查询试卷
+        result = await session.execute(
+            select(Paper).where(Paper.id == paper_id)
+        )
+        paper = result.scalar_one_or_none()
+
+        if not paper:
+            return None
+
+        # 查询关联的题目
+        questions_result = await session.execute(
+            select(PaperQuestion)
+            .where(PaperQuestion.paper_id == paper_id)
+            .order_by(PaperQuestion.question_order)
+        )
+        questions = questions_result.scalars().all()
+
+        return {
+            "paper_id": paper.id,
+            "paper_name": paper.paper_name,
+            "created_at": paper.created_at.isoformat(),
+            "questions": [
+                {
+                    "question_id": q.question_id,
+                    "order": q.question_order,
+                    "type": q.question_type,
+                    "difficulty": q.difficulty,
+                    "knowledge_point": q.knowledge_point,
+                    "source_url": q.source_url
+                }
+                for q in questions
+            ]
+        }
+
+
+async def list_papers(limit: int = 50) -> List[dict]:
+    """
+    列出所有试卷
+
+    Args:
+        limit: 返回数量限制
+
+    Returns:
+        试卷列表
+    """
+    async with async_session_maker() as session:
+        from sqlalchemy import select, func
+        from sqlalchemy.orm import selectinload
+
+        # 使用 selectinload 预加载关系，避免懒加载问题
+        result = await session.execute(
+            select(Paper)
+            .options(selectinload(Paper.questions))
+            .order_by(Paper.created_at.desc())
+            .limit(limit)
+        )
+        papers = result.scalars().all()
+
+        return [
+            {
+                "paper_id": p.id,
+                "paper_name": p.paper_name,
+                "created_at": p.created_at.isoformat(),
+                "question_count": len(p.questions)
+            }
+            for p in papers
+        ]
+
+
+async def delete_paper(paper_id: int) -> bool:
+    """
+    删除试卷
+
+    Args:
+        paper_id: 试卷ID
+
+    Returns:
+        是否删除成功
+    """
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(Paper).where(Paper.id == paper_id)
+        )
+        paper = result.scalar_one_or_none()
+
+        if not paper:
+            return False
+
+        await session.delete(paper)
+        await session.commit()
+        return True
+
+
+async def add_search_history(search_type: str, search_query: str, result_count: int):
+    """
+    添加搜索历史记录
+
+    Args:
+        search_type: 搜索类型
+        search_query: 搜索内容
+        result_count: 结果数量
+    """
+    async with async_session_maker() as session:
+        history = SearchHistory(
+            search_type=search_type,
+            search_query=search_query,
+            result_count=result_count
+        )
+        session.add(history)
+        await session.commit()
+
+
+# ============ 对话相关操作 ============
+
+async def create_conversation(title: str = "新对话") -> int:
+    """创建新对话"""
+    async with async_session_maker() as session:
+        conv = Conversation(title=title)
+        session.add(conv)
+        await session.commit()
+        await session.refresh(conv)
+        return conv.id
+
+
+async def list_conversations(limit: int = 50) -> List[dict]:
+    """获取对话列表"""
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Conversation)
+            .order_by(Conversation.updated_at.desc())
+            .limit(limit)
+        )
+        convs = result.scalars().all()
+        return [
+            {
+                "id": c.id,
+                "title": c.title,
+                "created_at": c.created_at.isoformat(),
+                "updated_at": c.updated_at.isoformat()
+            }
+            for c in convs
+        ]
+
+
+async def get_conversation(conv_id: int) -> dict:
+    """获取单个对话"""
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Conversation).where(Conversation.id == conv_id)
+        )
+        conv = result.scalar_one_or_none()
+        if not conv:
+            return None
+        return {
+            "id": conv.id,
+            "title": conv.title,
+            "created_at": conv.created_at.isoformat(),
+            "updated_at": conv.updated_at.isoformat()
+        }
+
+
+async def update_conversation_title(conv_id: int, title: str) -> bool:
+    """更新对话标题"""
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Conversation).where(Conversation.id == conv_id)
+        )
+        conv = result.scalar_one_or_none()
+        if not conv:
+            return False
+        conv.title = title
+        conv.updated_at = datetime.utcnow()
+        await session.commit()
+        return True
+
+
+async def delete_conversation(conv_id: int) -> bool:
+    """删除对话"""
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Conversation).where(Conversation.id == conv_id)
+        )
+        conv = result.scalar_one_or_none()
+        if not conv:
+            return False
+        await session.delete(conv)
+        await session.commit()
+        return True
+
+
+async def add_message(conv_id: int, role: str, content: str,
+                      tool_calls: str = None, tool_call_id: str = None) -> int:
+    """添加消息"""
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+        # 更新对话的更新时间
+        result = await session.execute(
+            select(Conversation).where(Conversation.id == conv_id)
+        )
+        conv = result.scalar_one_or_none()
+        if conv:
+            conv.updated_at = datetime.utcnow()
+
+        msg = Message(
+            conversation_id=conv_id,
+            role=role,
+            content=content,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id
+        )
+        session.add(msg)
+        await session.commit()
+        await session.refresh(msg)
+        return msg.id
+
+
+async def get_messages(conv_id: int) -> List[dict]:
+    """获取对话的所有消息"""
+    async with async_session_maker() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(Message)
+            .where(Message.conversation_id == conv_id)
+            .order_by(Message.created_at)
+        )
+        msgs = result.scalars().all()
+        return [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "tool_calls": json.loads(m.tool_calls) if m.tool_calls else None,
+                "tool_call_id": m.tool_call_id,
+                "created_at": m.created_at.isoformat()
+            }
+            for m in msgs
+        ]
+
+
+# 初始化脚本
+if __name__ == "__main__":
+    import asyncio
+
+    async def main():
+        await init_db()
+        print("数据库表创建成功！")
+
+    asyncio.run(main())

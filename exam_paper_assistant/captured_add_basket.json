@@ -1,0 +1,14 @@
+[
+  {
+    "url": "https://static.zxxk.com/zujuan/zjms/zjxt/static/assets/basket_loading.gif",
+    "method": "GET",
+    "post_data": null,
+    "headers": {
+      "sec-ch-ua-platform": "\"Windows\"",
+      "referer": "https://zujuan.xkw.com/",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+      "sec-ch-ua": "\"Chromium\";v=\"141\", \"Not?A_Brand\";v=\"8\"",
+      "sec-ch-ua-mobile": "?0"
+    }
+  }
+]

@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 组卷助手</title>
+    <style>
+        :root {
+            --bg: #0b1829;
+            --card: #0f233a;
+            --muted: #8ca2c0;
+            --primary: #32d5c4;
+            --primary-2: #1b9e8f;
+            --danger: #ff5f6d;
+            --radius: 14px;
+            --shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Space Grotesk","Noto Sans SC",system-ui,-apple-system;
+            background: radial-gradient(circle at 20% 20%, rgba(50,213,196,0.18), transparent 30%),
+                        radial-gradient(circle at 80% 10%, rgba(45,120,255,0.16), transparent 26%),
+                        var(--bg);
+            color: #e8f0ff;
+            min-height: 100vh;
+            padding: 24px;
+        }
+        a { color: var(--primary); }
+        .wrap {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: center;
+            padding: 18px 22px;
+            border-radius: var(--radius);
+            background: linear-gradient(120deg, #152d4a 0%, #0d1f33 100%);
+            box-shadow: var(--shadow);
+        }
+        .brand h1 {
+            margin: 0;
+            font-size: 28px;
+            letter-spacing: 0.4px;
+        }
+        .brand p {
+            margin: 6px 0 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+        .chip {
+            background: rgba(50,213,196,0.15);
+            color: var(--primary);
+            border: 1px solid rgba(50,213,196,0.35);
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 18px;
+            margin-top: 18px;
+        }
+        .card {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 18px;
+            box-shadow: var(--shadow);
+            border: 1px solid rgba(255,255,255,0.04);
+        }
+        h2 {
+            margin: 0 0 12px;
+            font-size: 20px;
+        }
+        .section {
+            margin-top: 16px;
+        }
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: #c7d6ee;
+            font-size: 13px;
+        }
+        input, select, button, textarea {
+            font-family: inherit;
+        }
+        input, select, textarea {
+            width: 100%;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: #122941;
+            color: #e8f0ff;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 14px;
+        }
+        textarea { resize: vertical; min-height: 80px; }
+        .row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit,minmax(160px,1fr));
+            gap: 12px;
+        }
+        .btn {
+            border: none;
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #0b1829;
+            background: var(--primary);
+            box-shadow: 0 12px 30px rgba(50,213,196,0.25);
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+        }
+        .btn:active { transform: translateY(1px); box-shadow: 0 6px 14px rgba(50,213,196,0.2); }
+        .btn.outline {
+            background: transparent;
+            color: var(--primary);
+            border: 1px solid rgba(50,213,196,0.5);
+            box-shadow: none;
+        }
+        .btn.danger {
+            background: var(--danger);
+            color: #fff;
+            box-shadow: 0 12px 30px rgba(255,95,109,0.25);
+        }
+        .flex { display: flex; gap: 10px; align-items: center; }
+        .results, .basket, .papers { display: grid; gap: 10px; margin-top: 12px; }
+        .result, .paper {
+            padding: 12px;
+            border-radius: 12px;
+            background: #11273e;
+            border: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: center;
+        }
+        .meta { color: var(--muted); font-size: 13px; }
+        .tag {
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.06);
+            font-size: 12px;
+            color: #dbe7ff;
+        }
+        .muted { color: var(--muted); }
+        .pill { padding: 6px 10px; background: rgba(50,213,196,0.1); color: var(--primary); border-radius: 999px; font-size: 12px; }
+        .divider { height: 1px; background: rgba(255,255,255,0.06); margin: 14px 0; }
+        .status { font-size: 13px; color: var(--muted); margin-top: 8px; }
+        .info-box {
+            background: rgba(50,213,196,0.06);
+            border: 1px solid rgba(50,213,196,0.3);
+            border-radius: 12px;
+            padding: 12px;
+            font-size: 13px;
+            color: #d8f7f3;
+        }
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.65);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            background: #0f233a;
+            padding: 20px;
+            border-radius: 14px;
+            width: min(720px, 90vw);
+            max-height: 80vh;
+            overflow: auto;
+            box-shadow: var(--shadow);
+        }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+            header { flex-direction: column; align-items: flex-start; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <header>
+            <div class="brand">
+                <h1>AI 组卷助手</h1>
+                <p>搜索题号、筛选元数据，生成试卷并跳转组卷网下载。</p>
+            </div>
+            <div class="chip">仅存题号 · 不含题干/答案</div>
+        </header>
+
+        <div class="grid">
+            <div class="card">
+                <h2>检索题目</h2>
+                <div class="section">
+                    <label>关键词</label>
+                    <input id="kw" placeholder="输入关键词，如：函数、不等式、三角" />
+                </div>
+                <div class="section row">
+                    <div>
+                        <label>难度</label>
+                        <select id="difficulty">
+                            <option value="">不限</option>
+                            <option value="简单">简单</option>
+                            <option value="中等">中等</option>
+                            <option value="困难">困难</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>题型</label>
+                        <input id="qtype" placeholder="如：选择题、填空题、解答题" />
+                    </div>
+                    <div>
+                        <label>数量</label>
+                        <input id="limit" type="number" min="1" max="50" value="10" />
+                    </div>
+                </div>
+                <div class="flex" style="margin-top:12px;">
+                    <button class="btn" onclick="search()">搜索题目</button>
+                    <span class="status" id="searchStatus"></span>
+                </div>
+                <div class="results" id="results"></div>
+            </div>
+
+            <div class="card">
+                <h2>草稿篮</h2>
+                <div class="info-box">
+                    1) 左侧搜索题号后点“加入”。<br/>
+                    2) 准备好后填写试卷名称并生成；下载请在“我的试卷”中获取官方链接。
+                </div>
+                <div class="divider"></div>
+                <div class="section">
+                    <label>草稿题号</label>
+                    <div class="basket" id="basket"></div>
+                </div>
+                <div class="section">
+                    <label>试卷名称</label>
+                    <input id="paperName" placeholder="例如：高一数学-函数专项练习" />
+                </div>
+                <div class="flex" style="margin-top:12px;">
+                    <button class="btn" onclick="createPaper()">生成试卷</button>
+                    <button class="btn outline" onclick="clearBasket()">清空草稿</button>
+                    <span class="status" id="createStatus"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top:18px;">
+            <div class="flex" style="justify-content: space-between;">
+                <h2>我的试卷</h2>
+                <button class="btn outline" onclick="loadPapers()">刷新</button>
+            </div>
+            <div class="papers" id="papers"></div>
+        </div>
+    </div>
+
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <div class="flex" style="justify-content: space-between;">
+                <h3 id="modalTitle" style="margin:0;">试卷详情</h3>
+                <button class="btn outline" onclick="closeModal()">关闭</button>
+            </div>
+            <div class="divider"></div>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        // 修改为后端地址，如果反向代理请保持为空
+        const API_BASE = "";
+        // 搜索默认指向 openai_adapter/同域路径
+        const SEARCH_ENDPOINT = `${API_BASE}/api/search-by-keyword`;
+
+        let basket = [];
+
+        function renderBasket() {
+            const box = document.getElementById("basket");
+            if (!basket.length) {
+                box.innerHTML = '<div class="muted">暂无题号，去左侧搜索添加。</div>';
+                return;
+            }
+            box.innerHTML = basket.map((id, idx) => `
+                <div class="result">
+                    <div>
+                        <div><strong>#${idx + 1}</strong> 题号：${id}</div>
+                        <div class="meta">${API_BASE || location.origin}/q/${id}</div>
+                    </div>
+                    <button class="btn outline" onclick="removeFromBasket('${id}')">移除</button>
+                </div>
+            `).join("");
+        }
+
+        function addToBasket(id) {
+            if (basket.includes(id)) return;
+            basket.push(id);
+            renderBasket();
+        }
+        function removeFromBasket(id) {
+            basket = basket.filter(x => x !== id);
+            renderBasket();
+        }
+        function clearBasket() { basket = []; renderBasket(); }
+
+        async function search() {
+            const kw = document.getElementById("kw").value.trim();
+            const difficulty = document.getElementById("difficulty").value;
+            const question_type = document.getElementById("qtype").value.trim();
+            const limit = parseInt(document.getElementById("limit").value || "10", 10);
+            const status = document.getElementById("searchStatus");
+            const list = document.getElementById("results");
+            if (!kw) { status.textContent = "请输入关键词"; return; }
+            status.textContent = "搜索中...";
+            list.innerHTML = "";
+            try {
+                const resp = await fetch(SEARCH_ENDPOINT, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ keyword: kw, limit, difficulty, question_type }),
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.error || "搜索失败");
+                const qs = data.questions || [];
+                if (!qs.length) {
+                    list.innerHTML = '<div class="muted">暂无结果，换个关键词试试。</div>';
+                } else {
+                    list.innerHTML = qs.map(q => `
+                        <div class="result">
+                            <div>
+                                <div><strong>题号</strong> ${q.question_id}</div>
+                                <div class="meta">
+                                    题型：${q.question_type || "未知"} · 难度：${q.difficulty || "未知"}
+                                </div>
+                                <a class="meta" href="${q.source_url}" target="_blank">查看原链接</a>
+                            </div>
+                            <button class="btn" onclick="addToBasket('${q.question_id}')">加入</button>
+                        </div>
+                    `).join("");
+                }
+                status.textContent = `共 ${qs.length} 条`;
+            } catch (err) {
+                status.textContent = err.message;
+                list.innerHTML = "";
+            }
+        }
+
+        async function createPaper() {
+            const name = document.getElementById("paperName").value.trim();
+            const status = document.getElementById("createStatus");
+            if (!name) { status.textContent = "请输入试卷名称"; return; }
+            if (!basket.length) { status.textContent = "请先添加题号"; return; }
+            status.textContent = "提交中...";
+            try {
+                const resp = await fetch(`${API_BASE}/api/papers`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ paper_name: name, question_ids: basket }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.detail || data.message || "创建失败");
+                status.textContent = "创建成功";
+                basket = [];
+                renderBasket();
+                loadPapers();
+            } catch (err) {
+                status.textContent = err.message;
+            }
+        }
+
+        async function loadPapers() {
+            const box = document.getElementById("papers");
+            box.innerHTML = '<div class="muted">加载中...</div>';
+            try {
+                const resp = await fetch(`${API_BASE}/api/papers`);
+                const data = await resp.json();
+                if (!Array.isArray(data)) throw new Error("接口返回异常");
+                if (!data.length) {
+                    box.innerHTML = '<div class="muted">暂无试卷，先创建一份吧。</div>';
+                    return;
+                }
+                box.innerHTML = data.map(p => `
+                    <div class="paper">
+                        <div>
+                            <div><strong>${p.paper_name}</strong></div>
+                            <div class="meta">题目数：${p.question_count} · 创建时间：${new Date(p.created_at).toLocaleString('zh-CN')}</div>
+                        </div>
+                        <div class="flex">
+                            <button class="btn outline" onclick="viewPaper(${p.paper_id})">详情</button>
+                            <button class="btn outline" onclick="downloadLink(${p.paper_id})">下载链接</button>
+                            <button class="btn danger" onclick="deletePaper(${p.paper_id})">删除</button>
+                        </div>
+                    </div>
+                `).join("");
+            } catch (err) {
+                box.innerHTML = `<div class="muted">加载失败：${err.message}</div>`;
+            }
+        }
+
+        async function viewPaper(id) {
+            try {
+                const resp = await fetch(`${API_BASE}/api/papers/${id}`);
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || "获取失败");
+                const body = document.getElementById("modalBody");
+                document.getElementById("modalTitle").textContent = data.paper_name;
+                body.innerHTML = `
+                    <div class="meta">创建时间：${new Date(data.created_at).toLocaleString('zh-CN')}</div>
+                    <div class="divider"></div>
+                    ${(data.questions || []).map((q,i)=>`
+                        <div class="result">
+                            <div>
+                                <div><strong>${i+1}.</strong> 题号：${q.question_id}</div>
+                                <div class="meta">题型：${q.type || "未知"} · 难度：${q.difficulty || "未知"}</div>
+                            </div>
+                            <a class="tag" href="https://zujuan.xkw.com/q/${q.question_id}" target="_blank">查看</a>
+                        </div>
+                    `).join("") || '<div class="muted">暂无题号</div>'}
+                `;
+                openModal();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function downloadLink(id) {
+            try {
+                const resp = await fetch(`${API_BASE}/api/papers/${id}/download-link`);
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.detail || data.message || "获取失败");
+                const body = document.getElementById("modalBody");
+                document.getElementById("modalTitle").textContent = "下载指引";
+                body.innerHTML = `
+                    <div class="info-box">
+                        ${data.instructions.map(step => `<div>· ${step}</div>`).join("")}
+                    </div>
+                    <div class="divider"></div>
+                    <div class="results">
+                        ${data.question_links.map((link,i)=>`
+                            <div class="result">
+                                <div>题号 ${data.question_ids[i]}</div>
+                                <a class="tag" href="${link}" target="_blank">去组卷网</a>
+                            </div>
+                        `).join("")}
+                    </div>
+                `;
+                openModal();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function deletePaper(id) {
+            if (!confirm("确定删除这份试卷吗？")) return;
+            await fetch(`${API_BASE}/api/papers/${id}`, { method: "DELETE" });
+            loadPapers();
+        }
+
+        function openModal() { document.getElementById("modal").classList.add("active"); }
+        function closeModal() { document.getElementById("modal").classList.remove("active"); }
+
+        // 初始化
+        renderBasket();
+        loadPapers();
+    </script>
+</body>
+</html>

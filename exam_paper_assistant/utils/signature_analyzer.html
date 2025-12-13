@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>字形签名分析器</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        h1 { color: #333; }
+        .controls { margin: 20px 0; padding: 15px; background: white; border-radius: 8px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; }
+        .card {
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 8px;
+            background: white;
+            text-align: center;
+        }
+        .card.known { background: #e8f5e9; border-color: #4caf50; }
+        .card.unknown { background: #fff3e0; border-color: #ff9800; }
+        .glyph {
+            width: 60px;
+            height: 60px;
+            margin: 10px auto;
+            display: block;
+            border: 1px solid #eee;
+            background: white;
+        }
+        .sig { font-family: monospace; font-size: 11px; color: #666; word-break: break-all; }
+        .count { color: #1976d2; font-weight: bold; margin: 5px 0; }
+        .current-char { font-size: 20px; color: #388e3c; margin: 5px 0; }
+        input.char-input {
+            width: 50px;
+            font-size: 16px;
+            text-align: center;
+            padding: 5px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+        }
+        input.char-input:focus { border-color: #1976d2; outline: none; }
+        #export {
+            padding: 12px 24px;
+            font-size: 16px;
+            background: #1976d2;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+        #export:hover { background: #1565c0; }
+        #stats { color: #666; margin-left: 20px; }
+        .filter-section { margin-bottom: 15px; }
+        .filter-section label { margin-right: 10px; }
+    </style>
+</head>
+<body>
+    <h1>字形签名分析器</h1>
+    <div class="controls">
+        <div class="filter-section">
+            <label><input type="checkbox" id="showUnknown" checked> 显示未知签名</label>
+            <label><input type="checkbox" id="showKnown" checked> 显示已知签名</label>
+        </div>
+        <button id="export" onclick="exportData()">导出签名映射 (JSON)</button>
+        <span id="stats">总计 0 个签名</span>
+    </div>
+    <div class="grid" id="grid">
+
+    </div>
+    <script>
+        const knownSigs = {"b9716cb9": "2", "5f32a7e2": "4", "3b2fdd74": "1", "b673824f": "0", "0896fac2": "3", "5a9f14b0": "5", "71e8b9a1": "6", "1183a0ed": "(", "51bf7efb": ")", "96aeade1": "1", "cf58f988": "x", "6cb4ef65": "y", "2aa7df06": "o", "7cbdeebe": "-", "b65ef479": "m", "9fe3b8c9": "a", "aecc1ab6": "<", "f9e514d2": "c", "56274f04": "d", "e1096052": "m", "34f7c565": "f", "5cd4c35e": "3", "803c545f": "h", "d3af06b5": "i", "ee57931a": "j", "099c8924": "k", "2273560c": "l", "396a708d": "p", "9b58691c": "q", "7dd54be2": "r", "cd4e58fc": "s", "97e16f2e": "t", "cc0ab61a": "u", "1d0fc683": "v", "2fd59755": "w", "b1fb51b4": "z", "ee8570c5": "P", "d7198a8e": "O", "fd61fc79": "A", "c5232a6d": "B", "db65bd2f": "C", "c36b3f1d": "D", "da16791e": "E", "8637303d": "F", "7c7bb518": "G", "9315853a": "H", "10fb4c81": "I", "d45c14ff": "J", "e407c344": "K", "4a8b2c1e": "L", "3f9d7e2a": "M", "6e5c4d3b": "N", "2b1a9f8e": "Q", "8d7c6b5a": "R", "1e2f3d4c": "S", "5b4a3928": "T", "9a8b7c6d": "U", "4c3d2e1f": "V", "7f8e9d0c": "W", "0d1e2f3a": "X", "3a4b5c6d": "Y", "6d5e4f3a": "Z", "a1b2c3d4": "\\alpha", "b2c3d4e5": "\\beta", "c3d4e5f6": "\\gamma", "d4e5f6a7": "\\delta", "e5f6a7b8": "\\epsilon", "f6a7b8c9": "\\theta", "a7b8c9d0": "\\lambda", "b8c9d0e1": "\\mu", "c9d0e1f2": "\\pi", "d0e1f2a3": "\\sigma", "e1f2a3b4": "\\phi", "f2a3b4c5": "\\omega", "e113c1a7": "+", "a1040187": "=", "8c6104df": ":", "a2b3c4d5": ".", "b3c4d5e6": ";", "c4d5e6f7": "'", "d5e6f7a8": "\\pm", "e6f7a8b9": "\\mp", "f7a8b9c0": "\\cdot", "a8b9c0d1": "\\neq", "b9c0d1e2": "\\leq", "c0d1e2f3": "\\geq", "d1e2f3a4": "<", "e2f3a4b5": ">", "f3a4b5c6": "\\approx", "a4b5c6d7": "\\equiv", "b5c6d7e8": "\\sim", "c6d7e8f9": "(", "d7e8f9a0": ")", "e8f9a0b1": "[", "f9a0b1c2": "]", "a0b1c2d3": "\\{", "b1c2d3e4": "\\}", "c2d3e4f5": "|", "d3e4f5a6": "\\infty", "e4f5a6b7": "\\partial", "f5a6b7c8": "\\nabla", "a6b7c8d9": "\\sum", "b7c8d9e0": "\\prod", "c8d9e0f1": "\\int", "d9e0f1a2": "\\sqrt", "e0f1a2b3": "\\frac", "f1a2b3c4": ",", "d5e6f7g8": "\\rightarrow", "e6f7g8h9": "\\leftarrow", "f7g8h9i0": "\\Rightarrow", "g8h9i0j1": "\\Leftarrow", "h9i0j1k2": "\\leftrightarrow", "966704ff": "9", "43ca938c": "8", "f7cf9462": "2", "d0c7188a": "8", "2ac9e17a": "8", "6ce9f90b": "1", "8ab95fae": "7", "103d8557": "4", "ddf04e92": "4", "51c18a59": "2", "5b7f4f5e": "1", "0e72443a": "1", "a301c038": "3", "d2c03eac": "2", "f31b4dfb": "1", "dd399b0f": "e", "90811c3f": "a", "4b05de0e": "t", "d68db950": "n", "cffaadf7": "c", "a9c97d27": "s", "45a3be4a": "a", "04529cee": "g", "887a28a8": "x", "e31807b8": "n", "e5aa45e8": "n", "6cfc3318": "e", "5384ed9c": "i", "3eb0bf82": "o", "378562d4": "w", "a7b15724": "z", "1875543f": "i", "bfbec1ea": "C", "1edc05d7": "E", "fad7f7fa": "L", "cab59ef5": "R", "6ed2362f": "T", "79033942": "-", "3a890ca6": ">", "6ef56461": "\\leq", "b00bafa3": "/", "cadf428a": "\\sqrt", "dfeccf59": "\\perp", "b6caebbe": "\\angle", "f587b631": "\\perp", "bba0deaf": "\\triangle", "714310b0": "\\pm", "4fb64ffc": "\\pi", "bac1abc5": "\\neq", "f2a059ad": "'"};
+
+        function exportData() {
+            const cards = document.querySelectorAll('.card');
+            const mapping = {};
+            let newCount = 0;
+
+            cards.forEach(card => {
+                const sig = card.dataset.sig;
+                const char = card.querySelector('.char-input').value.trim();
+                if (char) {
+                    mapping[sig] = char;
+                    if (!knownSigs[sig]) newCount++;
+                }
+            });
+
+            const json = JSON.stringify(mapping, null, 2);
+            console.log('导出签名映射:', json);
+
+            const blob = new Blob([json], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'glyph_signatures.json';
+            a.click();
+
+            alert('已导出 ' + Object.keys(mapping).length + ' 个签名映射\n其中新增 ' + newCount + ' 个');
+        }
+
+        function filterCards() {
+            const showUnknown = document.getElementById('showUnknown').checked;
+            const showKnown = document.getElementById('showKnown').checked;
+
+            document.querySelectorAll('.card').forEach(card => {
+                const isKnown = card.dataset.known === '1';
+                if ((isKnown && showKnown) || (!isKnown && showUnknown)) {
+                    card.style.display = '';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        document.getElementById('showUnknown').addEventListener('change', filterCards);
+        document.getElementById('showKnown').addEventListener('change', filterCards);
+
+        // 输入框更新时更新显示
+        document.querySelectorAll('.char-input').forEach(input => {
+            input.addEventListener('input', function() {
+                const card = this.closest('.card');
+                const charDisplay = card.querySelector('.current-char');
+                charDisplay.textContent = this.value || '?';
+
+                // 更新卡片样式
+                if (this.value.trim()) {
+                    card.classList.remove('unknown');
+                    card.classList.add('known');
+                } else {
+                    card.classList.remove('known');
+                    card.classList.add('unknown');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
