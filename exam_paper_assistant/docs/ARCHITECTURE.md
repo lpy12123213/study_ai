@@ -12,7 +12,7 @@
        ↓
 ┌─────────────┐
 │  Web前端    │
-│ (HTML/JS)   │
+│ (React/Vite)│
 └──────┬──────┘
        │
        │ REST API
@@ -212,10 +212,10 @@ POST /api/search-history         - 记录搜索历史
 - 删除试卷
 
 **关键文件：**
-- `index.html` - 单页应用
+- `src/main.tsx` - 应用入口
 
 **技术特点：**
-- 纯HTML/CSS/JavaScript
+- React/Vite/TypeScript
 - 响应式设计
 - 模态框交互
 - AJAX请求

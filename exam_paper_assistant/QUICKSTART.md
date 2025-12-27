@@ -11,7 +11,7 @@
 - 安装Python依赖
 - 安装Playwright浏览器
 - 初始化数据库
-- 启动Web服务器
+- 启动后端与前端开发服务器
 
 ### Linux/macOS用户
 
@@ -43,6 +43,11 @@ python database/models.py
 
 # 5. 启动服务
 python backend/app.py
+
+# 6. 启动前端（开发模式）
+cd frontend
+npm install
+npm run dev
 ```
 
 ## 第二步：配置Claude Desktop（可选但推荐）
@@ -84,7 +89,9 @@ python backend/app.py
 
 ### 访问Web界面
 
-打开浏览器，访问：http://localhost:8000
+打开浏览器，访问：http://localhost:3000
+
+后端API地址：http://localhost:8000
 
 你会看到：
 - 试卷列表

@@ -55,6 +55,70 @@ COMMON_SUBJECTS = [
     "小学数学", "小学语文", "小学英语",
 ]
 
+# 难度配置（统一为三档）
+DEFAULT_DIFFICULTY = "中等"
+DIFFICULTY_LEVELS = {"简单", "中等", "困难"}
+DIFFICULTY_ALIASES = {
+    "容易": "简单",
+    "较易": "简单",
+    "一般": "中等",
+    "适中": "中等",
+    "较难": "困难",
+    "难": "困难",
+}
+
+
+def normalize_difficulty(difficulty: str, strict: bool = True) -> str:
+    """将难度归一到 简单/中等/困难（严格模式下会拒绝未知值）"""
+    d = (difficulty or "").strip()
+    if not d:
+        if strict:
+            raise ValueError("difficulty_required")
+        return ""
+    if d in DIFFICULTY_LEVELS:
+        return d
+    if d in DIFFICULTY_ALIASES:
+        return DIFFICULTY_ALIASES[d]
+    # 兼容常见描述
+    if "难" in d:
+        return "困难"
+    if "中" in d or "适" in d or "一" in d:
+        return "中等"
+    if "易" in d or "简" in d:
+        return "简单"
+    if strict:
+        raise ValueError("invalid_difficulty")
+    return d
+
+
+def resolve_subject(subject_name: str, edu_level: str = "", strict: bool = True) -> str:
+    """解析学科名称，并可选强校验学段"""
+    name = (subject_name or "").strip()
+    if not name:
+        raise ValueError("subject_required")
+
+    if name in SUBJECTS:
+        resolved = name
+    elif not strict:
+        resolved = ""
+        for key in SUBJECTS:
+            if name in key or key in name:
+                resolved = key
+                break
+        if not resolved:
+            raise ValueError("subject_not_found")
+    else:
+        raise ValueError("subject_not_found")
+
+    if edu_level:
+        edu_id = EDU_LEVELS.get(edu_level)
+        if not edu_id:
+            raise ValueError("invalid_edu_level")
+        if SUBJECTS[resolved]["edu_id"] != edu_id:
+            raise ValueError("subject_edu_mismatch")
+
+    return resolved
+
 def get_subject_config(subject_name: str) -> Dict[str, Any]:
     """获取学科配置"""
     return SUBJECTS.get(subject_name, SUBJECTS["高中数学"])

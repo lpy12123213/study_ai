@@ -38,12 +38,12 @@ echo [5/6] Starting backend at http://localhost:8000 ...
 start "Backend - 8000" "%ROOT%start_backend.bat"
 
 rem -------- 6. Start frontend --------
-echo [6/6] Starting frontend at http://localhost:5173 ...
-start "Frontend - 5173" "%ROOT%start_frontend.bat"
+echo [6/6] Starting frontend at http://localhost:3000 ...
+start "Frontend - 3000" "%ROOT%start_frontend.bat"
 
 echo.
 echo Backend:  http://localhost:8000
-echo Frontend: http://localhost:5173
+echo Frontend: http://localhost:3000
 echo Close the backend window to stop backend; Ctrl+C in frontend window to stop dev server.
 echo.
 

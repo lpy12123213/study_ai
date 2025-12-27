@@ -31,6 +31,8 @@ MAX_TOOL_ITERATIONS = int(os.getenv("MAX_TOOL_ITERATIONS", "10"))  # 最大工�
 
 # ============ 爬虫配置 ============
 DEFAULT_SUBJECT = os.getenv("DEFAULT_SUBJECT", "高中数学")
+# 难度过滤模式：multi（默认，简单/困难多档查询）/ single（严格单档查询）
+DIFFICULTY_QUERY_MODE = os.getenv("DIFFICULTY_QUERY_MODE", "multi").strip().lower()
 
 # ============ 超时配置 ============
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "120"))  # API请求超时时间（秒）
@@ -46,5 +48,6 @@ def get_config_summary():
         "sub_temperature": SUB_MODEL_TEMPERATURE,
         "max_iterations": MAX_TOOL_ITERATIONS,
         "default_subject": DEFAULT_SUBJECT,
+        "difficulty_query_mode": DIFFICULTY_QUERY_MODE,
         "api_configured": bool(OPENROUTER_API_KEY)
     }

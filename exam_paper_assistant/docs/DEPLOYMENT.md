@@ -55,6 +55,26 @@ python backend/app.py
 
 访问：http://localhost:8000
 
+#### 2. 启动前端（开发模式）
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端地址：http://localhost:3000
+
+#### 3. 生产构建（可选）
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+构建产物位于 `frontend/dist`，后端会自动提供静态资源。
+
 #### 2. 启动MCP服务器（用于AI）
 
 ```bash

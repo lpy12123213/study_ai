@@ -1,7 +1,12 @@
 """直接获取题目页面的公式"""
 import asyncio
 import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+sys.path.insert(0, str(ROOT_DIR))
 
 async def main():
     from crawler.zujuan_crawler import ZujuanCrawler
@@ -11,7 +16,8 @@ async def main():
     import json
     
     # 加载现有签名
-    with open('utils/glyph_signatures.json', 'r', encoding='utf-8') as f:
+    sig_path = ROOT_DIR / "utils" / "glyph_signatures.json"
+    with sig_path.open("r", encoding="utf-8") as f:
         known = json.load(f)
         known_sigs = {k: v for k, v in known.items() if len(k) == 8 and all(c in '0123456789abcdef' for c in k)}
     
@@ -108,9 +114,10 @@ input{width:45px;font-size:13px;text-align:center;padding:2px}</style></head>
         
         html += '</div><br><button onclick="exp()">导出</button><pre id="o"></pre><script>function exp(){const s=' + json.dumps(list(unknown.keys())) + ';const m={};s.forEach(x=>{const v=document.getElementById(x).value.trim();if(v)m[x]=v});document.getElementById("o").textContent=JSON.stringify(m,null,2)}</script></body></html>'
         
-        with open('new_sigs.html', 'w', encoding='utf-8') as f:
+        output_path = ARTIFACTS_DIR / "new_sigs.html"
+        with output_path.open("w", encoding="utf-8") as f:
             f.write(html)
-        print(f'\n已生成 new_sigs.html，签名列表:')
+        print(f"\n已生成 {output_path}，签名列表:")
         for s in list(unknown.keys()):
             print(f'  {s}')
 

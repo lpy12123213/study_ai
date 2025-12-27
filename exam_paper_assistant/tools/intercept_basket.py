@@ -1,20 +1,24 @@
 """
 使用Playwright拦截添加到题篮的真实网络请求
 """
-import asyncio
 import json
-import os
+from pathlib import Path
+
 from playwright.sync_api import sync_playwright
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 
 def intercept_basket_api():
     with sync_playwright() as p:
         # 使用已有的登录数据
-        user_data_dir = os.path.join(os.path.dirname(__file__), "crawler", ".playwright_data")
-        os.makedirs(user_data_dir, exist_ok=True)
+        user_data_dir = ROOT_DIR / "crawler" / ".playwright_data"
+        user_data_dir.mkdir(parents=True, exist_ok=True)
 
         browser = p.chromium.launch_persistent_context(
-            user_data_dir,
+            str(user_data_dir),
             headless=False,  # 显示浏览器以便观察
         )
 
@@ -93,9 +97,10 @@ def intercept_basket_api():
 
         # 保存捕获的请求
         if captured_requests:
-            with open("captured_requests.json", "w", encoding="utf-8") as f:
+            output_path = ARTIFACTS_DIR / "captured_requests.json"
+            with output_path.open("w", encoding="utf-8") as f:
                 json.dump(captured_requests, f, ensure_ascii=False, indent=2)
-            print(f"\n已保存 {len(captured_requests)} 个请求到 captured_requests.json")
+            print(f"\n已保存 {len(captured_requests)} 个请求到 {output_path}")
 
         browser.close()
 

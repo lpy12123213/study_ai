@@ -6,7 +6,10 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+sys.path.insert(0, str(ROOT_DIR))
 
 from mcp_server.server import ExamPaperMCPServer
 
@@ -25,10 +28,11 @@ async def test_diagnose():
         result = await server._diagnose_export(test_question_id="70287")
 
         # 保存结果到文件
-        with open("diagnose_result.json", "w", encoding="utf-8") as f:
+        output_path = ARTIFACTS_DIR / "diagnose_result.json"
+        with output_path.open("w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
-        print("Result saved to diagnose_result.json")
+        print(f"Result saved to {output_path}")
 
         # 打印关键信息
         print(f"\nOverall Status: {result.get('overall_status', 'unknown')}")

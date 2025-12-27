@@ -19,6 +19,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from backend.config import DIFFICULTY_QUERY_MODE
+from backend.subjects import (
+    DEFAULT_DIFFICULTY,
+    DIFFICULTY_LEVELS,
+    SUBJECTS,
+    normalize_difficulty,
+    resolve_subject,
+)
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -43,8 +52,8 @@ async def _get_cookies_with_playwright() -> str:
                 page = context.new_page()
 
                 # 访问任意页面触发cookie生成
-                page.goto("https://zujuan.xkw.com/", timeout=30000)
-                page.wait_for_timeout(2000)  # 等待JS执行
+                page.goto("https://zujuan.xkw.com/", timeout=20000)
+                page.wait_for_timeout(1000)  # 减少等待时间以加快初始化
 
                 # 获取cookies
                 cookies = context.cookies()
@@ -171,8 +180,9 @@ async def _fetch_csrf_token_from_page(cookies: str) -> Optional[str]:
     }
 
     try:
+        # 用站点首页获取 CSRF token，避免绑定到某个具体学科入口（如 gzsx）
         async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get("https://zujuan.xkw.com/gzsx/", headers=headers)
+            resp = await client.get("https://zujuan.xkw.com/", headers=headers)
             if resp.status_code != 200:
                 return None
 
@@ -337,6 +347,30 @@ class ZujuanCrawler:
         self.subject = subject
         self._load_subject_config()
 
+    def _apply_search_constraints(
+        self,
+        subject: str,
+        edu_level: str,
+        difficulty: str,
+        require_difficulty: bool,
+        strict_subject: bool,
+    ) -> Tuple[str, str]:
+        resolved_subject = (subject or "").strip() or self.subject
+        resolved_subject = resolve_subject(
+            resolved_subject,
+            edu_level=(edu_level or "").strip(),
+            strict=strict_subject,
+        )
+        if resolved_subject != self.subject:
+            self.set_subject(resolved_subject)
+
+        normalized_difficulty = (difficulty or "").strip()
+        if require_difficulty and not normalized_difficulty:
+            normalized_difficulty = DEFAULT_DIFFICULTY
+        if normalized_difficulty:
+            normalized_difficulty = normalize_difficulty(normalized_difficulty, strict=True)
+        return resolved_subject, normalized_difficulty
+
     async def initialize(self):
         """初始化 HTTP 客户端，自动获取cookie。"""
         # 已初始化则复用（MCP 模式下避免每次工具调用都做一次网络/浏览器初始化）
@@ -498,8 +532,124 @@ class ZujuanCrawler:
         return {"page_name": page_name, "category_id": cat_id, "bank_id": bank_id}
 
     def _difficulty_code(self, difficulty: str) -> int:
-        mapping = {"简单": 1, "中等": 2, "困难": 3}
-        return mapping.get(difficulty.strip(), 0)
+        """
+        组卷网 question/list 的 quesDiff 使用站内难度 ID（常见为 1-5）：
+        - 1 容易
+        - 2 简单
+        - 3 一般/适中（≈中等）
+        - 4 较难
+        - 5 困难
+        """
+        d = (difficulty or "").strip()
+        if not d:
+            return 0
+
+        # 精确匹配优先
+        exact = {
+            "容易": 1,
+            "简单": 2,
+            "一般": 3,
+            "适中": 3,
+            "中等": 3,
+            "较难": 4,
+            "困难": 5,
+        }
+        if d in exact:
+            return exact[d]
+
+        # 宽松匹配（兼容输入中包含“难度：”“中等难度”等）
+        if "难" in d:
+            # “较难/困难”都当作困难档过滤（更严格可用“较难”）
+            return 5
+        if "中" in d or "适" in d or "一" in d:
+            return 3
+        if "易" in d:
+            return 1
+        if "简" in d:
+            return 2
+        return 0
+
+    def _difficulty_codes(self, difficulty: str) -> List[int]:
+        """
+        将三档难度映射为可直接请求的 quesDiff 列表：
+        - 简单 -> [1, 2]（容易/简单）
+        - 中等 -> [3]
+        - 困难 -> [4, 5]（较难/困难）
+        """
+        d = (difficulty or "").strip()
+        if not d:
+            return []
+        bucket_map = {
+            "简单": [1, 2],
+            "中等": [3],
+            "困难": [4, 5],
+        }
+        if d in bucket_map:
+            return bucket_map[d]
+
+        # 兼容细粒度描述
+        exact = {
+            "容易": 1,
+            "简单": 2,
+            "一般": 3,
+            "适中": 3,
+            "中等": 3,
+            "较难": 4,
+            "困难": 5,
+        }
+        if d in exact:
+            return [exact[d]]
+
+        code = self._difficulty_code(d)
+        return [code] if code else []
+
+    def _use_multi_difficulty_codes(self) -> bool:
+        mode = (DIFFICULTY_QUERY_MODE or "multi").strip().lower()
+        return mode not in {"single", "strict", "exact", "one"}
+
+    def _difficulty_bucket(self, difficulty_label: str) -> str:
+        """把站内难度文案归一到 easy/medium/hard，用于兜底的客户端过滤。"""
+        d = (difficulty_label or "").strip()
+        if not d:
+            return ""
+        if d in {"容易", "简单", "较易", "易"}:
+            return "easy"
+        if d in {"一般", "适中", "中等", "中"}:
+            return "medium"
+        if d in {"较难", "困难", "难"}:
+            return "hard"
+        # 部分页面会出现“适中(0.65)”这种形式
+        if "较难" in d or "困难" in d or d.endswith("难"):
+            return "hard"
+        if "一般" in d or "适中" in d or "中等" in d:
+            return "medium"
+        if "简单" in d or "容易" in d or "较易" in d:
+            return "easy"
+        return ""
+
+    def _requested_difficulty_buckets(self, requested: str) -> set[str]:
+        """
+        MCP 的 difficulty 目前是 3 档：简单/中等/困难。
+        这里把 3 档映射为可接受的站内难度集合，做兜底过滤。
+        """
+        d = (requested or "").strip()
+        if not d:
+            return set()
+        if d == "简单":
+            return {"容易", "简单", "较易"}
+        if d == "中等":
+            return {"一般", "适中", "中等"}
+        if d == "困难":
+            return {"较难", "困难"}
+        # 兼容用户/模型输出的其他写法
+        bucket = self._difficulty_bucket(d)
+        if bucket == "easy":
+            return {"容易", "简单", "较易"}
+        if bucket == "medium":
+            return {"一般", "适中", "中等"}
+        if bucket == "hard":
+            return {"较难", "困难"}
+        return set()
 
     def _question_url(self, question_id: str) -> str:
         """生成题目链接，使用当前学科的 bank_id"""
@@ -541,7 +691,7 @@ class ZujuanCrawler:
             )
             all_questions.extend(questions)
             debug_pages.append(dbg)
-            if len(all_questions) >= limit or not questions:
+            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):
                 break
 
         if not all_questions:
@@ -585,59 +735,121 @@ class ZujuanCrawler:
         if not self.client:
             return [], {"error": "client not initialized"}
 
-        data = {
-            "pageName": page_name,
-            "bankId": str(bank_id or 0),
-            "courseId": "0",
-            "categoryId": str(category_id),
-            "canCategoryId": "true",
-            "categoryIds[0]": "0",
-            "quesType": str(self._question_type_code(question_type)),
-            "quesDiff": str(self._difficulty_code(difficulty)),
-            "quesYear": "0",
-            "paperTypeId": "0",
-            "scenarioizedTypeId": "0",
-            "tagId": "0",
-            "provinceId": "-1",
-            "learngrade": "0",
-            "term": "0",
-            "orderBy": "2",
-            "curPage": str(cur_page),
-            "quesAttributeId": "0",
-            "examMethodId": "0",
-            "isFresh": "0",
-            "catelogTokpointId": "0",
+        use_multi = self._use_multi_difficulty_codes()
+        if use_multi:
+            difficulty_codes = self._difficulty_codes(difficulty)
+        else:
+            code = self._difficulty_code(difficulty)
+            difficulty_codes = [code] if code else []
+        if not difficulty_codes:
+            difficulty_codes = [0]
+
+        seen_ids = set()
+        all_questions: List[Dict[str, Any]] = []
+        total_raw_count = 0
+        sub_requests = []
+        errors = []
+
+        for diff_code in difficulty_codes:
+            data = {
+                "pageName": page_name,
+                "bankId": str(bank_id or 0),
+                "courseId": "0",
+                "categoryId": str(category_id),
+                "canCategoryId": "true",
+                "categoryIds[0]": "0",
+                "quesType": str(self._question_type_code(question_type)),
+                "quesDiff": str(diff_code),
+                "quesYear": "0",
+                "paperTypeId": "0",
+                "scenarioizedTypeId": "0",
+                "tagId": "0",
+                "provinceId": "-1",
+                "learngrade": "0",
+                "term": "0",
+                "orderBy": "2",
+                "curPage": str(cur_page),
+                "quesAttributeId": "0",
+                "examMethodId": "0",
+                "isFresh": "0",
+                "catelogTokpointId": "0",
+            }
+
+            resp = await self.client.post(
+                f"{self.base_url}/zujuan-api/question/list",
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+            try:
+                resp_json = resp.json()
+                html = resp_json.get("data", {}).get("html", "")
+            except Exception:
+                errors.append({"quesDiff": diff_code, "error": "json_parse_failed", "status": resp.status_code})
+                continue
+
+            if not html:
+                errors.append({"quesDiff": diff_code, "error": "empty_html", "status": resp.status_code})
+                continue
+
+            if not parse_content:
+                ids = re.findall(r'questionid="(\d+)"', html)
+                total_raw_count += len(ids)
+                for qid in ids:
+                    if qid not in seen_ids:
+                        all_questions.append({"question_id": qid})
+                        seen_ids.add(qid)
+                sub_requests.append({"quesDiff": diff_code, "raw_count": len(ids), "page": cur_page})
+                continue
+
+            questions = await self._parse_questions_from_html(html, bank_id)
+            total_raw_count += len(questions)
+            for q in questions:
+                qid = q.get("question_id")
+                if not qid:
+                    continue
+                if qid not in seen_ids:
+                    all_questions.append(q)
+                    seen_ids.add(qid)
+            sub_requests.append({"quesDiff": diff_code, "raw_count": len(questions), "page": cur_page})
+
+        if not all_questions and errors:
+            return [], {
+                "error": "question_list_failed",
+                "raw_count": 0,
+                "page": cur_page,
+                "details": errors,
+            }
+
+        # 兜底：若站点未按 quesDiff 过滤（偶发），这里再按解析出的难度文案过滤一次
+        accepted_labels = self._requested_difficulty_buckets(difficulty)
+        if accepted_labels and parse_content:
+            all_questions = [
+                q for q in all_questions if (q.get("difficulty") or "").strip() in accepted_labels
+            ]
+
+        debug_info = {
+            "raw_count": total_raw_count,
+            "returned_count": len(all_questions),
+            "page": cur_page,
+            "difficulty_mode": "multi" if use_multi else "single",
         }
+        if len(sub_requests) > 1:
+            debug_info["difficulty_codes"] = difficulty_codes
+            debug_info["sub_requests"] = sub_requests
+        if errors:
+            debug_info["errors"] = errors
 
-        resp = await self.client.post(
-            f"{self.base_url}/zujuan-api/question/list",
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-
-        # 处理响应
-        try:
-            resp_json = resp.json()
-            html = resp_json.get("data", {}).get("html", "")
-        except Exception:
-            # JSON 解析失败，返回空列表
-            return [], {"error": "json_parse_failed", "status": resp.status_code, "page": cur_page}
-
-        if not html:
-            return [], {"error": "empty_html", "page": cur_page}
-
-        if not parse_content:
-            # 仅返回ID（兼容旧逻辑）
-            ids = re.findall(r'questionid="(\d+)"', html)
-            return [{"question_id": qid} for qid in ids], {"raw_count": len(ids), "page": cur_page}
-
-        # 解析完整题目信息
-        questions = await self._parse_questions_from_html(html, bank_id)
-        return questions, {"raw_count": len(questions), "page": cur_page}
+        return all_questions, debug_info
 
     async def _parse_questions_from_html(self, html: str, bank_id: int) -> List[Dict[str, Any]]:
-        """从搜索结果 HTML 解析题目信息，将公式转换为 LaTeX"""
+        """
+        从搜索结果 HTML 解析题目信息，将公式转换为 LaTeX
+        
+        优化：先收集所有公式URL，批量转换，避免每个题目单独请求
+        """
         questions = []
+        question_stems = []  # 存储(题目索引, 题干HTML)用于批量处理
 
         # 按题目块分割
         question_blocks = re.split(r'<div class=" tk-quest-item', html)
@@ -661,7 +873,7 @@ class ZujuanCrawler:
                 if len(info_items) > 1:
                     diff_text = html_module.unescape(info_items[1].strip())
                     # 解析难度值，如 "适中(0.65)"
-                    diff_match = re.search(r'([\u4e00-\u9fa5]+)\s*\(?([\d.]+)?\)?', diff_text)
+                    diff_match = re.search(r'([\u4e00-\u9fa5]+)\s*\(?([\\d.]+)?\)?', diff_text)
                     if diff_match:
                         q["difficulty"] = diff_match.group(1)
                         q["difficulty_value"] = diff_match.group(2) if diff_match.group(2) else ""
@@ -681,23 +893,8 @@ class ZujuanCrawler:
             stem_match = re.search(r'<div class="exam-item__cnt[^"]*">([\s\S]*?)</div>\s*<div[^>]*class="exam-item__opt"', block)
             if stem_match:
                 stem_html = stem_match.group(1)
-
-                # 将公式图片转换为 LaTeX
-                stem_html = await self._replace_formulas_with_latex(stem_html)
-
-                # 保留普通图片链接
-                stem_html = re.sub(
-                    r'<img[^>]*src="([^"]+)"[^>]*>',
-                    r'[图片:\1]',
-                    stem_html
-                )
-                # 清理HTML标签
-                stem_text = re.sub(r'<[^>]+>', '', stem_html)
-                stem_text = html_module.unescape(stem_text)  # 解码 HTML 实体
-                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
-                # 去掉题号前缀
-                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
-                q["stem"] = stem_text[:2000]  # 限制长度
+                question_stems.append((len(questions), stem_html))
+                q["_stem_html"] = stem_html  # 临时存储
             else:
                 q["stem"] = ""
 
@@ -707,21 +904,146 @@ class ZujuanCrawler:
 
             questions.append(q)
 
+        # 批量处理所有题干中的公式（大幅提升性能）
+        if question_stems:
+            # 合并所有题干HTML，一次性提取所有公式URL
+            await self._batch_convert_formulas(questions, question_stems)
+
         return questions
+
+    async def _batch_convert_formulas(self, questions: List[Dict[str, Any]], question_stems: List[Tuple[int, str]]) -> None:
+        """
+        批量转换所有题目中的公式
+        
+        优化策略：
+        1. 收集所有公式URL
+        2. 一次性批量请求并转换
+        3. 用转换结果填充题目
+        """
+        try:
+            import sys
+            from pathlib import Path
+            utils_path = str(Path(__file__).parent.parent / "utils")
+            if utils_path not in sys.path:
+                sys.path.insert(0, utils_path)
+            from svg_to_latex import batch_svg_to_latex, load_signatures
+            
+            load_signatures()
+            
+            # 收集所有公式URL
+            formula_pattern = r'<img[^>]*src="(https://[^"]+/formula/[^"]+\.png)"[^>]*>'
+            all_png_urls = set()
+            stem_formula_map = {}  # {题目索引: [png_urls]}
+            
+            for idx, stem_html in question_stems:
+                png_urls = re.findall(formula_pattern, stem_html)
+                all_png_urls.update(png_urls)
+                stem_formula_map[idx] = png_urls
+            
+            # 转换为SVG URL并批量获取
+            svg_urls = [url.replace('.png', '.svg') for url in all_png_urls]
+            
+            if svg_urls:
+                # 批量转换，提高并发到30
+                latex_map = await batch_svg_to_latex(svg_urls, concurrency=30, use_advanced=True)
+                
+                # 构建 png_url -> latex 的映射
+                png_to_latex = {}
+                for png_url in all_png_urls:
+                    svg_url = png_url.replace('.png', '.svg')
+                    if svg_url in latex_map:
+                        latex, _ = latex_map[svg_url]
+                        if latex:
+                            png_to_latex[png_url] = latex
+            else:
+                png_to_latex = {}
+            
+            # 用转换结果填充题目
+            for idx, stem_html in question_stems:
+                # 替换公式
+                for png_url in stem_formula_map.get(idx, []):
+                    if png_url in png_to_latex:
+                        latex = png_to_latex[png_url]
+                        # 转义反斜杠
+                        latex_escaped = latex.replace('\\', '\\\\')
+                        img_pattern = f'<img[^>]*src="{re.escape(png_url)}"[^>]*>'
+                        stem_html = re.sub(img_pattern, f'${latex_escaped}$', stem_html)
+                
+                # 保留普通图片链接
+                stem_html = re.sub(
+                    r'<img[^>]*src="([^"]+)"[^>]*>',
+                    r'[图片:\1]',
+                    stem_html
+                )
+                # 清理HTML标签
+                stem_text = re.sub(r'<[^>]+>', '', stem_html)
+                stem_text = html_module.unescape(stem_text)
+                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
+                # 去掉题号前缀
+                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
+                
+                questions[idx]["stem"] = stem_text[:2000]
+                # 删除临时字段
+                if "_stem_html" in questions[idx]:
+                    del questions[idx]["_stem_html"]
+                    
+        except ImportError:
+            # 回退到串行处理
+            for idx, stem_html in question_stems:
+                stem_html = await self._replace_formulas_with_latex(stem_html)
+                stem_html = re.sub(r'<img[^>]*src="([^"]+)"[^>]*>', r'[图片:\1]', stem_html)
+                stem_text = re.sub(r'<[^>]+>', '', stem_html)
+                stem_text = html_module.unescape(stem_text)
+                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
+                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
+                questions[idx]["stem"] = stem_text[:2000]
+                if "_stem_html" in questions[idx]:
+                    del questions[idx]["_stem_html"]
+        except Exception as e:
+            print(f"批量公式转换失败，回退到串行: {e}")
+            for idx, stem_html in question_stems:
+                stem_html = await self._replace_formulas_with_latex(stem_html)
+                stem_html = re.sub(r'<img[^>]*src="([^"]+)"[^>]*>', r'[图片:\1]', stem_html)
+                stem_text = re.sub(r'<[^>]+>', '', stem_html)
+                stem_text = html_module.unescape(stem_text)
+                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
+                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
+                questions[idx]["stem"] = stem_text[:2000]
+                if "_stem_html" in questions[idx]:
+                    del questions[idx]["_stem_html"]
 
     async def search_by_keyword(
         self,
         keyword: str,
         subject: str = "",
+        edu_level: str = "",
         limit: int = 20,
         difficulty: str = "",
         question_type: str = "",
-        max_pages: int = 3,
+        max_pages: int = 2,
+        require_difficulty: bool = False,
+        strict_subject: bool = True,
     ) -> Dict[str, Any]:
         """
         关键词搜索（无需登录）：SSE 得到推荐参数 -> question/list 获取完整题目信息。
         返回的 questions 包含题干、难度、知识点等完整信息。
         """
+        try:
+            _, difficulty = self._apply_search_constraints(
+                subject=subject,
+                edu_level=edu_level,
+                difficulty=difficulty,
+                require_difficulty=require_difficulty,
+                strict_subject=strict_subject,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "available_subjects": list(SUBJECTS.keys()),
+                "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
+            }
+
         base_meta_task = None
         if question_type and not self.ques_type_map and self.client is not None:
             # 按需加载题型映射，并与 AI 搜索并行以减少等待
@@ -767,7 +1089,7 @@ class ZujuanCrawler:
             )
             all_questions.extend(questions)
             debug_pages.append(dbg)
-            if len(all_questions) >= limit or not questions:
+            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):
                 break
 
         return {
@@ -782,10 +1104,13 @@ class ZujuanCrawler:
         self,
         knowledge_point: str,
         subject: str,
+        edu_level: str = "",
         limit: int = 20,
         difficulty: str = "",
         question_type: str = "",
-        max_pages: int = 3,
+        max_pages: int = 2,
+        require_difficulty: bool = False,
+        strict_subject: bool = True,
     ) -> Dict[str, Any]:
         """
         通过知识点搜索（内部复用关键词搜索）。
@@ -793,10 +1118,13 @@ class ZujuanCrawler:
         return await self.search_by_keyword(
             keyword=knowledge_point,
             subject=subject,
+            edu_level=edu_level,
             limit=limit,
             difficulty=difficulty,
             question_type=question_type,
             max_pages=max_pages,
+            require_difficulty=require_difficulty,
+            strict_subject=strict_subject,
         )
 
     async def filter_questions(
@@ -1082,9 +1410,9 @@ class ZujuanCrawler:
                     })
                 else:
                     results.append(result)
-            # 添加小延迟避免请求过快
+            # 添加小延迟避免请求过快（减少延迟以提升速度）
             if i + max_concurrent < len(question_ids):
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.2)
 
         return {
             "success": True,
@@ -1096,7 +1424,8 @@ class ZujuanCrawler:
         self,
         question_ids: List[str],
         question_details: Optional[List[Dict]] = None,
-        auto_login: bool = True
+        auto_login: bool = True,
+        auto_switch_subject: bool = True,
     ) -> Dict[str, Any]:
         """
         导出题目到组卷网题篮
@@ -1105,6 +1434,7 @@ class ZujuanCrawler:
             question_ids: 题目ID列表
             question_details: 题目详情列表（可选，如果提供则使用其中的信息）
             auto_login: 未登录时是否自动弹出登录窗口
+            auto_switch_subject: Cookie题库不一致时是否自动切换bankId
 
         Returns:
             导出结果，包含成功/失败状态和消息
@@ -1193,14 +1523,42 @@ class ZujuanCrawler:
         # 构建请求数据
         basket_json = json.dumps(basket_items, ensure_ascii=False)
 
-        # 从cookie中提取bankId（优先使用cookie中的，因为这是用户当前选择的学科）
+        # 导出时使用“当前学科”的 bankId；若登录态 cookie 的 bankId 不一致，通常会导致导出不生效
         export_bank_id = str(self.bank_id)
-        cookie_str = session.get("cookies", "")
-        for part in cookie_str.split(";"):
-            part = part.strip()
-            if part.startswith("bankId="):
-                export_bank_id = part.split("=", 1)[1].strip()
-                break
+        cookie_str = session.get("cookies", "") or ""
+        cookie_bank_id: Optional[str] = None
+        cookie_bank_id_original: Optional[str] = None
+        cookie_switched = False
+        if cookie_str:
+            cookie_dict = _parse_cookie_string(cookie_str)
+            cookie_bank_id = cookie_dict.get("bankId")
+            cookie_bank_id_original = cookie_bank_id
+            if export_bank_id and cookie_bank_id != export_bank_id:
+                if auto_switch_subject:
+                    cookie_dict["bankId"] = export_bank_id
+                    cookie_str = _build_cookie_string(cookie_dict)
+                    session["cookies"] = cookie_str
+                    cookie_bank_id = export_bank_id
+                    cookie_switched = True
+                    refreshed_csrf = await _fetch_csrf_token_from_page(cookie_str)
+                    if refreshed_csrf:
+                        session["csrf_token"] = refreshed_csrf
+                else:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"当前登录态题库(bankId={cookie_bank_id})与当前学科“{self.subject}”(bankId={export_bank_id})不一致，"
+                            "请切换到目标学科后重新登录保存Cookie再导出"
+                        ),
+                        "user_action_required": True,
+                        "bank_id_cookie": cookie_bank_id,
+                        "bank_id_target": export_bank_id,
+                        "login_instructions": [
+                            f"1. 打开 https://zujuan.xkw.com/ 并在左上角切换到“{self.subject}”",
+                            f"2. 运行 scripts/登录组卷网.bat \"{self.subject}\" 重新登录并保存 Cookie",
+                            "3. 再次执行导出",
+                        ],
+                    }
 
         payload = {
             "bankId": export_bank_id,
@@ -1210,13 +1568,18 @@ class ZujuanCrawler:
 
         # 发送请求
         try:
+            referer_url = "https://zujuan.xkw.com/"
+            if question_ids:
+                # 使用题目页作为 Referer，避免学科入口路径（如 gzsx）硬编码
+                referer_url = f"{self.base_url}/{export_bank_id}q{question_ids[0]}.html"
+
             headers = {
                 "User-Agent": self.user_agent,
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Cookie": session["cookies"],
                 "Accept": "application/json, text/plain, */*",
                 "Origin": "https://zujuan.xkw.com",
-                "Referer": "https://zujuan.xkw.com/gzsx/",
+                "Referer": referer_url,
             }
 
             # 添加CSRF token
@@ -1290,10 +1653,18 @@ class ZujuanCrawler:
 
                     hit_ids = sorted(requested_set.intersection(returned_set))
                     if len(question_ids) > 0 and len(hit_ids) == 0:
+                        auto_switch_note = "（已尝试自动切换学科Cookie）" if cookie_switched else ""
                         return {
                             "success": False,
-                            "error": "导出未生效：sync_baskets 返回空题篮或未包含所选题目（通常是 bankId 与登录态 token 不一致，请在网页切到高中数学后重新登录再导出）",
+                            "error": (
+                                "导出未生效：sync_baskets 返回空题篮或未包含所选题目"
+                                f"{auto_switch_note}（通常是 bankId 与登录态 token 不一致，请在网页切到“{self.subject}”后重新登录再导出）"
+                            ),
                             "bank_id_used": export_bank_id,
+                            "bank_id_cookie": cookie_bank_id,
+                            "bank_id_cookie_original": cookie_bank_id_original,
+                            "auto_switched_subject": cookie_switched,
+                            "referer_used": referer_url,
                             "api_response": result,
                             "debug": {
                                 "requested_count": len(question_ids),
@@ -1302,8 +1673,8 @@ class ZujuanCrawler:
                             },
                             "user_action_required": True,
                             "login_instructions": [
-                                "1. 打开 https://zujuan.xkw.com/gzsx/ 确认左上角为“高中数学”",
-                                "2. 运行 scripts/登录组卷网.bat 重新登录并保存 Cookie",
+                                f"1. 打开 https://zujuan.xkw.com/ 并确认左上角为“{self.subject}”",
+                                f"2. 运行 scripts/登录组卷网.bat \"{self.subject}\" 重新登录并保存 Cookie",
                                 "3. 再次执行导出",
                             ],
                         }
@@ -1318,6 +1689,9 @@ class ZujuanCrawler:
                         "api_response": result,
                         "note": "题目已同步到服务器，请在组卷网题篮中查看",
                     }
+                    if cookie_switched:
+                        result_payload["auto_switched_subject"] = True
+                        result_payload["bank_id_cookie_original"] = cookie_bank_id_original
                     if len(hit_ids) != len(requested_set) and len(hit_ids) > 0:
                         missing_ids = sorted(list(requested_set.difference(hit_ids)))
                         result_payload["warning"] = "部分题目未出现在返回列表中，可能存在延迟或被过滤"
@@ -1427,31 +1801,32 @@ class ZujuanCrawler:
         try:
             import sys
 
-            # 获取登录脚本路径
-            script_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "scripts",
-                "login_zujuan.py"
-            )
+            project_root = os.path.dirname(os.path.dirname(__file__))
+            scripts_dir = os.path.join(project_root, "scripts")
+            bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
+            py_path = os.path.join(scripts_dir, "save_login.py")
 
-            if not os.path.exists(script_path):
+            if not (os.path.exists(bat_path) or os.path.exists(py_path)):
                 return {
                     "success": False,
-                    "error": f"登录脚本不存在: {script_path}"
+                    "error": f"登录脚本不存在: {bat_path} / {py_path}"
                 }
 
             # 使用 pythonw 或 start 命令启动独立窗口（Windows）
-            if sys.platform == 'win32':
-                # 使用 start 命令在新窗口中运行
-                cmd = f'start "组卷网登录" cmd /c "cd /d "{os.path.dirname(script_path)}" && python login_zujuan.py"'
+            if sys.platform == "win32":
+                # Windows：在新窗口中运行，传入学科名以保存对应 bankId 的登录态
+                if os.path.exists(bat_path):
+                    cmd = f'start "组卷网登录" "{bat_path}" "{self.subject}"'
+                else:
+                    cmd = f'start "组卷网登录" cmd /c "python \"{py_path}\" --subject \"{self.subject}\""'
                 subprocess.Popen(cmd, shell=True)
             else:
-                # Linux/Mac
-                subprocess.Popen([sys.executable, script_path])
+                # Linux/Mac：直接运行
+                subprocess.Popen([sys.executable, py_path, "--subject", self.subject])
 
             return {
                 "success": True,
-                "message": "已启动登录窗口，请在弹出的浏览器中登录",
+                "message": f"已启动登录窗口，请在弹出的浏览器中登录并切换到“{self.subject}”",
                 "note": "登录完成后请重新尝试导出"
             }
 

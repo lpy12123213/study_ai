@@ -2,13 +2,19 @@
 深入分析题篮页面和localStorage机制
 """
 import asyncio
-import httpx
 import re
-import json
+from pathlib import Path
+
+import httpx
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+ENV_PATH = ROOT_DIR / ".env"
 
 def load_env():
     env_data = {}
-    with open(".env", "r", encoding="utf-8") as f:
+    with ENV_PATH.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -37,9 +43,10 @@ async def analyze_basket():
         html = resp.text
 
         # 保存完整HTML
-        with open("basket_full.html", "w", encoding="utf-8") as f:
+        output_path = ARTIFACTS_DIR / "basket_full.html"
+        with output_path.open("w", encoding="utf-8") as f:
             f.write(html)
-        print("Saved to basket_full.html")
+        print(f"Saved to {output_path}")
 
         # 查找关键信息
         print("\n=== 页面关键信息 ===")

@@ -363,8 +363,8 @@ uvicorn.run(
 1) **`bankId`（题库/学科）不一致**
 - 组卷网题篮是按 `bankId` 分隔的；如果网页当前题库不是导出时使用的 `bankId`，题篮页面会看起来“为空”。
 - 处理：
-  - 在浏览器先打开 `https://zujuan.xkw.com/gzsx/`，确认左上角题库是“高中数学”
-  - 再运行 `scripts/登录组卷网.bat` 重新登录保存 Cookie（脚本为自动模式，不需要回车）
+  - 在浏览器先打开 `https://zujuan.xkw.com/`，在左上角切换到**目标题库/学科**
+  - 再运行 `scripts/登录组卷网.bat "<学科全名>"` 重新登录保存 Cookie（脚本为自动模式，不需要回车；例如 `scripts/登录组卷网.bat "高中物理"`）
   - 重新执行导出
 
 2) **不建议手工改 Cookie 里的 `bankId`**

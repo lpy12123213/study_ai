@@ -65,6 +65,8 @@ class Glyph:
     signature: str
     char: Optional[str] = None
     is_fraction_line: bool = False  # 是否为分数线
+    scale_x: float = 1.0
+    scale_y: float = 1.0
 
     @property
     def center_x(self) -> float:
@@ -120,6 +122,16 @@ class SqrtRegion:
     @property
     def center_x(self) -> float:
         return (self.x1 + self.x2) / 2
+
+
+@dataclass
+class CasesRegion:
+    """方程组（大括号）区域数据结构"""
+    x: float
+    y_top: float
+    y_bottom: float
+    brace_glyph: Glyph
+    rows: List[List[Glyph]] = field(default_factory=list)
 
 
 # 大型运算符列表（需要上下限的符号）
@@ -528,6 +540,71 @@ def detect_sqrt_regions(
     return sqrt_regions
 
 
+def is_brace_signature(sig: str) -> bool:
+    """检查签名是否对应左大括号"""
+    char = GLYPH_SIGNATURES.get(sig, "")
+    return char == "\\{" or sig == "65d6c9b1" or sig == "ac8466ff"
+
+
+def detect_cases_regions(glyphs: List[Glyph]) -> List[CasesRegion]:
+    """检测方程组（大括号）区域"""
+    cases_regions = []
+    
+    # Sort glyphs by x to process left-to-right
+    sorted_glyphs = sorted(glyphs, key=lambda g: g.x)
+    
+    for g in sorted_glyphs:
+        # Check if it's a brace
+        is_brace = is_brace_signature(g.signature)
+        if not is_brace:
+            # Heuristic for unknown braces: tall and narrow
+            if g.height > 30 and g.width < g.height / 4:
+                is_brace = True
+        
+        if is_brace:
+            brace_right_x = g.x + g.width
+            y_top = g.y
+            y_bottom = g.y + g.height
+            
+            # Find glyphs inside this region
+            inner_glyphs = []
+            for other in glyphs:
+                if other == g: continue
+                # Check if it's generally to the right and within y-bounds
+                if other.x > g.x - 5 and other.y >= y_top - 5 and other.y <= y_bottom + 5:
+                    if other.center_x > g.center_x:
+                        inner_glyphs.append(other)
+            
+            if inner_glyphs:
+                # Group into rows
+                inner_glyphs.sort(key=lambda ig: ig.y)
+                rows = []
+                current_row = []
+                if inner_glyphs:
+                    current_row.append(inner_glyphs[0])
+                    current_y = inner_glyphs[0].y
+                    
+                    for ig in inner_glyphs[1:]:
+                        # Threshold for row separation
+                        if abs(ig.y - current_y) < 12: 
+                            current_row.append(ig)
+                        else:
+                            rows.append(current_row)
+                            current_row = [ig]
+                            current_y = ig.y
+                    rows.append(current_row)
+                
+                cases_regions.append(CasesRegion(
+                    x=g.x,
+                    y_top=y_top,
+                    y_bottom=y_bottom,
+                    brace_glyph=g,
+                    rows=rows
+                ))
+                
+    return cases_regions
+
+
 def compute_path_signature(path_d: str) -> str:
     """计算path的MD5签名（前8位）"""
     return hashlib.md5(path_d.encode()).hexdigest()[:8]
@@ -616,53 +693,44 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
             if width >= 10:
                 fraction_bars.append(FractionBar(min(x1, x2), max(x1, x2), (y1 + y2) / 2))
 
-    def parse_transform(transform_str: str) -> Tuple[float, float]:
-        """解析transform属性中的translate"""
-        match = re.search(r'translate\(([^,)]+),?\s*([^)]*)\)', transform_str)
-        if match:
-            x = float(match.group(1).strip())
-            y = float(match.group(2).strip()) if match.group(2).strip() else 0.0
-            return x, y
-        return 0.0, 0.0
-
-    def extract_glyphs_from_g(g_content: str, parent_x: float = 0, parent_y: float = 0):
-        """从g元素中提取字形，处理transform"""
-        # 检查g元素自身的transform
-        transform_match = re.search(r'transform="([^"]+)"', g_content[:200])
+    def parse_transform_robust(transform_str: str) -> Tuple[float, float, float, float]:
+        """解析transform，返回 (tx, ty, sx, sy)"""
         tx, ty = 0.0, 0.0
-        if transform_match:
-            tx, ty = parse_transform(transform_match.group(1))
-
-        abs_x = parent_x + tx
-        abs_y = parent_y + ty
-
-        # 查找直接的path元素（不在嵌套g中）
-        # 首先移除嵌套的g元素内容
-        content_without_nested_g = re.sub(r'<g[^>]*>.*?</g>', '', g_content, flags=re.DOTALL)
-
-        path_matches = re.findall(r'<path[^>]*d="([^"]+)"[^>]*/?\s*>', content_without_nested_g)
-        for path_d in path_matches:
-            sig = compute_path_signature(path_d)
-            width, height = estimate_glyph_bounds(path_d)
-            char = GLYPH_SIGNATURES.get(sig)
-            glyphs.append(Glyph(abs_x, abs_y, width, height, path_d, sig, char))
+        sx, sy = 1.0, 1.0
+        
+        t_match = re.search(r'translate\(([^)]+)\)', transform_str)
+        if t_match:
+            parts = [float(x.strip()) for x in t_match.group(1).split(',')]
+            tx = parts[0]
+            if len(parts) > 1: ty = parts[1]
+            
+        m_match = re.search(r'matrix\(([^)]+)\)', transform_str)
+        if m_match:
+            parts = [float(x.strip()) for x in m_match.group(1).split(',')]
+            if len(parts) >= 4:
+                sx = parts[0]
+                sy = parts[3]
+                if len(parts) >= 6:
+                    tx += parts[4]
+                    ty += parts[5]
+        return tx, ty, sx, sy
 
     # 方式1：匹配带transform的g元素
-    g_pattern = r'<g([^>]*)transform="translate\(([^,)]+),?\s*([^)]*)\)"([^>]*)>(.*?)</g>'
-    g_matches = re.findall(g_pattern, svg_content, re.DOTALL)
+    # 查找带有transform的g
+    g_transform_pattern = r'<g[^>]*transform="([^"]+)"[^>]*>(.*?)</g>'
+    g_matches = re.findall(g_transform_pattern, svg_content, re.DOTALL)
 
-    for pre_attrs, x_str, y_str, post_attrs, inner_content in g_matches:
+    for transform_str, inner_content in g_matches:
         try:
-            x = float(x_str.strip())
-            y = float(y_str.strip()) if y_str.strip() else 0.0
-
-            # 查找内部的path
+            tx, ty, sx, sy = parse_transform_robust(transform_str)
             path_matches = re.findall(r'<path[^>]*d="([^"]+)"', inner_content)
             for path_d in path_matches:
                 sig = compute_path_signature(path_d)
                 width, height = estimate_glyph_bounds(path_d)
+                width *= sx
+                height *= sy
                 char = GLYPH_SIGNATURES.get(sig)
-                glyphs.append(Glyph(x, y, width, height, path_d, sig, char))
+                glyphs.append(Glyph(tx, ty, width, height, path_d, sig, char, scale_x=sx, scale_y=sy))
         except ValueError:
             continue
 
@@ -681,21 +749,21 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
                 continue
             path_d = d_match.group(1)
 
+            tx, ty, sx, sy = 0.0, 0.0, 1.0, 1.0
+            
             # 提取transform属性（如果有）
-            transform_match = re.search(r'transform="translate\(([^,)]+),?\s*([^)]*)\)"', path_attrs)
+            transform_match = re.search(r'transform="([^"]+)"', path_attrs)
             if transform_match:
-                try:
-                    x = float(transform_match.group(1).strip())
-                    y = float(transform_match.group(2).strip()) if transform_match.group(2).strip() else 0.0
-                except ValueError:
-                    x, y = 0.0, 0.0
-            else:
-                x, y = 0.0, 0.0
+                tx, ty, sx, sy = parse_transform_robust(transform_match.group(1))
 
             sig = compute_path_signature(path_d)
             width, height = estimate_glyph_bounds(path_d)
+            
+            width *= sx
+            height *= sy
+            
             char = GLYPH_SIGNATURES.get(sig)
-            glyphs.append(Glyph(x, y, width, height, path_d, sig, char))
+            glyphs.append(Glyph(tx, ty, width, height, path_d, sig, char, scale_x=sx, scale_y=sy))
 
     # 去重（基于签名和位置）
     seen = set()
@@ -969,6 +1037,42 @@ def glyphs_to_latex_advanced(
     svg_lines = svg_lines or []
     used_glyphs: Set[int] = set()
     result_parts = []  # [(x_position, latex_string)]
+
+    # 第-1步：检测方程组区域
+    cases_regions = detect_cases_regions(glyphs)
+    
+    for cases_region in cases_regions:
+        used_glyphs.add(id(cases_region.brace_glyph))
+        
+        row_latexs = []
+        
+        for row_glyphs in cases_region.rows:
+            # Mark as used
+            for g in row_glyphs:
+                used_glyphs.add(id(g))
+            
+            # Recurse
+            if not row_glyphs: continue
+            min_x = min(g.x for g in row_glyphs)
+            max_x = max(g.x + g.width for g in row_glyphs)
+            min_y = min(g.y for g in row_glyphs)
+            max_y = max(g.y + g.height for g in row_glyphs)
+            
+            row_bars = [
+                b for b in fraction_bars 
+                if b.x1 >= min_x - 5 and b.x2 <= max_x + 5 and b.y >= min_y - 5 and b.y <= max_y + 5
+            ]
+            row_lines = [
+                l for l in svg_lines
+                if l[0] >= min_x - 5 and l[2] <= max_x + 5 and l[1] >= min_y - 5 and l[3] <= max_y + 5
+            ]
+            
+            row_latex, row_unknown = glyphs_to_latex_advanced(row_glyphs, row_bars, row_lines)
+            row_latexs.append(row_latex)
+            unknown.extend(row_unknown)
+            
+        cases_latex = "\\begin{cases} " + " \\\\ ".join(row_latexs) + " \\end{cases}"
+        result_parts.append((cases_region.x, cases_latex))
 
     # 第零步：检测根号区域
     sqrt_regions = detect_sqrt_regions(glyphs, svg_lines) if svg_lines else []
@@ -1248,11 +1352,13 @@ async def batch_svg_to_latex(
     if not remaining_urls:
         return results
 
+    # 提高连接限制以支持高并发
     limits = httpx.Limits(
-        max_connections=max(concurrency * 2, 20),
-        max_keepalive_connections=max(concurrency * 2, 20),
+        max_connections=max(concurrency * 2, 60),
+        max_keepalive_connections=max(concurrency * 2, 60),
     )
-    client_kwargs = dict(timeout=30, limits=limits)
+    # 减少超时时间，加快单个请求失败后的恢复
+    client_kwargs = dict(timeout=15, limits=limits)
     try:
         http_client = httpx.AsyncClient(http2=True, **client_kwargs)
     except ImportError:

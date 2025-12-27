@@ -53,6 +53,7 @@ logs/
 
 # Playwright
 .playwright/
+.playwright_zujuan_user_data/
 playwright-report/
 test-results/
 crawler/.playwright_data/
@@ -80,6 +81,8 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+artifacts/
+data/
 archive/
 playground/
 

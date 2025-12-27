@@ -12,6 +12,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from crawler.zujuan_crawler import ZujuanCrawler
 from database.models import save_paper, get_paper, list_papers
+from backend.config import DEFAULT_SUBJECT
+from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 import asyncio
 
 app = FastAPI(
@@ -24,12 +26,15 @@ app = FastAPI(
 crawler = None
 
 
-async def get_crawler():
+async def get_crawler(subject: str = ""):
     """获取或创建爬虫实例"""
     global crawler
+    subject = subject or DEFAULT_SUBJECT
     if crawler is None:
-        crawler = ZujuanCrawler()
+        crawler = ZujuanCrawler(subject=subject)
         await crawler.initialize()
+    elif crawler.subject != subject:
+        crawler.set_subject(subject)
     return crawler
 
 
@@ -37,6 +42,7 @@ async def get_crawler():
 class SearchByKeywordRequest(BaseModel):
     keyword: str
     subject: str = ""
+    edu_level: str = ""
     limit: int = 20
     difficulty: str = ""
     question_type: str = ""
@@ -46,6 +52,7 @@ class SearchByKeywordRequest(BaseModel):
 class SearchByKnowledgeRequest(BaseModel):
     knowledge_point: str
     subject: str
+    edu_level: str = ""
     limit: int = 20
     difficulty: str = ""
     question_type: str = ""
@@ -72,15 +79,27 @@ async def search_by_keyword(request: SearchByKeywordRequest):
 
     这个API可以被OpenAI Function Calling调用
     """
-    crawler = await get_crawler()
+    subject = request.subject or DEFAULT_SUBJECT
+    try:
+        subject = resolve_subject(subject, edu_level=request.edu_level, strict=True)
+        difficulty = normalize_difficulty(request.difficulty or DEFAULT_DIFFICULTY, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    crawler = await get_crawler(subject)
     result = await crawler.search_by_keyword(
         keyword=request.keyword,
-        subject=request.subject,
+        subject=subject,
+        edu_level=request.edu_level,
         limit=request.limit,
-        difficulty=request.difficulty,
+        difficulty=difficulty,
         question_type=request.question_type,
-        max_pages=request.max_pages
+        max_pages=request.max_pages,
+        require_difficulty=True,
+        strict_subject=True,
     )
+    result["applied_subject"] = subject
+    result["applied_difficulty"] = difficulty
     return result
 
 
@@ -91,15 +110,26 @@ async def search_by_knowledge(request: SearchByKnowledgeRequest):
 
     这个API可以被OpenAI Function Calling调用
     """
-    crawler = await get_crawler()
+    try:
+        subject = resolve_subject(request.subject, edu_level=request.edu_level, strict=True)
+        difficulty = normalize_difficulty(request.difficulty or DEFAULT_DIFFICULTY, strict=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    crawler = await get_crawler(subject)
     result = await crawler.search_by_knowledge(
         knowledge_point=request.knowledge_point,
-        subject=request.subject,
+        subject=subject,
+        edu_level=request.edu_level,
         limit=request.limit,
-        difficulty=request.difficulty,
+        difficulty=difficulty,
         question_type=request.question_type,
-        max_pages=request.max_pages
+        max_pages=request.max_pages,
+        require_difficulty=True,
+        strict_subject=True,
     )
+    result["applied_subject"] = subject
+    result["applied_difficulty"] = difficulty
     return result
 
 

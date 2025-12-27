@@ -17,7 +17,7 @@
 - **爬虫**: Playwright
 - **AI集成**: MCP (Model Context Protocol)
 - **数据库**: SQLite
-- **前端**: HTML + JavaScript
+- **前端**: React + Vite + TypeScript
 
 ## 项目结构
 
@@ -26,8 +26,11 @@ exam_paper_assistant/
 ├── mcp_server/          # MCP服务器实现
 ├── crawler/             # Playwright爬虫模块
 ├── backend/             # Web后端API
-├── frontend/            # 前端页面
+├── frontend/            # 前端应用（Vite + React + TS）
 ├── database/            # 数据库模型和迁移
+├── tools/               # 调试/验证脚本
+├── artifacts/           # 调试产物（截图/HTML/JSON）
+├── data/                # 本地数据文件
 ├── docs/                # 项目文档
 └── README.md
 ```
@@ -96,7 +99,7 @@ npm run dev
 
 ### 4. 访问应用
 
-打开浏览器访问：`http://localhost:3002`
+打开浏览器访问：`http://localhost:3000`
 
 ## 配置说明
 

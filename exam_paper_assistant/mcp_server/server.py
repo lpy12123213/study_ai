@@ -15,7 +15,17 @@ from mcp.types import TextContent, Tool
 sys.path.append(str(Path(__file__).parent.parent))
 from crawler.zujuan_crawler import ZujuanCrawler  # noqa: E402
 from mcp_server.sub_ai_selector import select_best_question  # noqa: E402
-from backend.subjects import get_all_subjects, get_subject_config, SUBJECTS  # noqa: E402
+from mcp_server.reviewer import review_questions_with_openrouter  # noqa: E402
+from backend.subjects import (  # noqa: E402
+    DEFAULT_DIFFICULTY,
+    DIFFICULTY_LEVELS,
+    EDU_LEVELS,
+    SUBJECTS,
+    get_all_subjects,
+    get_subject_config,
+    normalize_difficulty,
+    resolve_subject,
+)
 
 
 class ExamPaperMCPServer:
@@ -36,7 +46,7 @@ class ExamPaperMCPServer:
                     description="""【推荐】通过关键词搜索题目，直接返回完整题目信息。
 返回内容包括：题号、题型、难度(含数值)、知识点列表、来源、日期、题干内容。
 搜索结果已包含题干，无需再调用 get_question_details。
-公式显示为 [公式:xxx.png] 格式。""",
+公式已转换为 LaTeX 格式。""",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -46,10 +56,16 @@ class ExamPaperMCPServer:
                                 "description": "学科全名（如：高中数学、初中物理、小学语文），会自动切换学科",
                                 "default": "",
                             },
+                            "edu_level": {
+                                "type": "string",
+                                "description": "学段筛选（可选：小学/初中/高中）",
+                                "enum": ["小学", "初中", "高中", ""],
+                                "default": "",
+                            },
                             "difficulty": {
                                 "type": "string",
-                                "description": "难度（可选：简单/中等/困难）",
-                                "default": "",
+                                "description": "难度（可选：简单/中等/困难，默认中等）",
+                                "default": "中等",
                             },
                             "question_type": {
                                 "type": "string",
@@ -63,8 +79,8 @@ class ExamPaperMCPServer:
                             },
                             "max_pages": {
                                 "type": "integer",
-                                "description": "最多翻页数（默认 3 页）",
-                                "default": 3,
+                                "description": "最多翻页数（默认 2 页）",
+                                "default": 2,
                             },
                         },
                         "required": ["keyword"],
@@ -74,7 +90,8 @@ class ExamPaperMCPServer:
                     name="search_questions_by_knowledge",
                     description="""【推荐】通过知识点搜索题目，直接返回完整题目信息。
 返回内容包括：题号、题型、难度(含数值)、知识点列表、来源、日期、题干内容。
-搜索结果已包含题干，无需再调用 get_question_details。""",
+搜索结果已包含题干，无需再调用 get_question_details。
+公式已转换为 LaTeX 格式。""",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -86,10 +103,16 @@ class ExamPaperMCPServer:
                                 "type": "string",
                                 "description": "学科全名（如：高中数学、初中物理）",
                             },
+                            "edu_level": {
+                                "type": "string",
+                                "description": "学段筛选（可选：小学/初中/高中）",
+                                "enum": ["小学", "初中", "高中", ""],
+                                "default": "",
+                            },
                             "difficulty": {
                                 "type": "string",
-                                "description": "难度（可选：简单/中等/困难）",
-                                "default": "",
+                                "description": "难度（可选：简单/中等/困难，默认中等）",
+                                "default": "中等",
                             },
                             "question_type": {
                                 "type": "string",
@@ -103,8 +126,8 @@ class ExamPaperMCPServer:
                             },
                             "max_pages": {
                                 "type": "integer",
-                                "description": "最多翻页数（默认 3 页）",
-                                "default": 3,
+                                "description": "最多翻页数（默认 2 页）",
+                                "default": 2,
                             },
                         },
                         "required": ["knowledge_point", "subject"],
@@ -214,7 +237,7 @@ class ExamPaperMCPServer:
                 ),
                 Tool(
                     name="export_to_zujuan",
-                    description="""导出题目到组卷网题篮。需要先登录（运行 scripts/登录组卷网.bat）。
+                    description="""导出题目到组卷网题篮。需要先登录（运行 scripts/登录组卷网.bat，可选传入学科名）。
 导出成功后可在 https://zujuan.xkw.com/basket/ 查看并生成试卷。""",
                     inputSchema={
                         "type": "object",
@@ -224,6 +247,11 @@ class ExamPaperMCPServer:
                                 "items": {"type": "string"},
                                 "description": "题目编号列表",
                             },
+                            "subject": {
+                                "type": "string",
+                                "description": "学科全名（可选，如：高中数学、初中物理、小学语文；不填则使用当前学科）",
+                                "default": "",
+                            },
                             "paper_name": {
                                 "type": "string",
                                 "description": "试卷名称（可选）",
@@ -231,6 +259,56 @@ class ExamPaperMCPServer:
                             },
                         },
                         "required": ["question_ids"],
+                    },
+                ),
+                Tool(
+                    name="review_paper",
+                    description="""【审卷人】调用子 AI 对试卷/题目进行审查，返回可读的审查意见。
+审查内容：题干规范性、难度分布、知识点覆盖、疑似错题、重复题等。
+
+**重要**：请务必将用户的具体要求通过 focus 参数传递给审卷人！
+例如：用户说"帮我检查这套卷子难度是否适合中考"，则 focus 应填写"检查难度是否适合中考"。
+
+注意：题干内容会发送到第三方模型，图片和公式可能无法正确显示。""",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "paper_id": {
+                                "type": "integer",
+                                "description": "试卷ID（可选，与 question_ids 二选一）",
+                            },
+                            "question_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "题目ID列表（可选，与 paper_id 二选一）",
+                            },
+                            "paper_name": {
+                                "type": "string",
+                                "description": "试卷名称（可选，用于提示模型）",
+                                "default": "",
+                            },
+                            "subject": {
+                                "type": "string",
+                                "description": "学科全名（可选，如：高中数学、初中物理、小学语文；不填则使用当前学科）",
+                                "default": "",
+                            },
+                            "focus": {
+                                "type": "string",
+                                "description": "【重要】用户的审查要求，必须如实传递用户原话或核心诉求（如：检查是否超纲、难度是否适合高考、有没有偏题怪题等）",
+                                "default": "",
+                            },
+                            "strictness": {
+                                "type": "integer",
+                                "description": "严格度 1-5（越高越苛刻）",
+                                "default": 3,
+                            },
+                            "max_questions": {
+                                "type": "integer",
+                                "description": "最多审查题目数（避免提示词过长）",
+                                "default": 20,
+                            },
+                        },
+                        "required": [],
                     },
                 ),
                 Tool(
@@ -307,57 +385,97 @@ class ExamPaperMCPServer:
             try:
                 if name == "search_questions_by_keyword":
                     await ensure_crawler_initialized()
-                    # 如果指定了学科，自动切换
-                    subject = arguments.get("subject", "")
-                    if subject and subject in SUBJECTS:
-                        self.current_subject = subject
-                        self.crawler.set_subject(subject)
-                    elif subject:
-                        # 尝试模糊匹配
-                        for name_key in SUBJECTS.keys():
-                            if subject in name_key:
-                                self.current_subject = name_key
-                                self.crawler.set_subject(name_key)
-                                break
+                    edu_level = (arguments.get("edu_level") or "").strip()
+                    subject_input = (arguments.get("subject") or "").strip()
+                    try:
+                        resolved_subject = resolve_subject(
+                            subject_input or self.current_subject,
+                            edu_level=edu_level,
+                            strict=True,
+                        )
+                        difficulty = normalize_difficulty(
+                            arguments.get("difficulty") or DEFAULT_DIFFICULTY,
+                            strict=True,
+                        )
+                    except ValueError as exc:
+                        result = {
+                            "success": False,
+                            "error": str(exc),
+                            "current_subject": self.current_subject,
+                            "available_subjects": list(SUBJECTS.keys()),
+                            "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
+                            "allowed_edu_levels": list(EDU_LEVELS.keys()),
+                        }
+                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                    if resolved_subject != self.current_subject:
+                        self.current_subject = resolved_subject
+                        self.crawler.set_subject(resolved_subject)
 
                     result = await self.crawler.search_by_keyword(
                         keyword=arguments["keyword"],
-                        subject=self.current_subject,
+                        subject=resolved_subject,
+                        edu_level=edu_level,
                         limit=arguments.get("limit", 10),
-                        difficulty=arguments.get("difficulty", ""),
+                        difficulty=difficulty,
                         question_type=arguments.get("question_type", ""),
-                        max_pages=arguments.get("max_pages", 3),
+                        max_pages=arguments.get("max_pages", 2),
+                        require_difficulty=True,
+                        strict_subject=True,
                     )
                     # 添加当前学科信息和使用提示
                     result["current_subject"] = self.current_subject
-                    result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，无需调用get_question_details"
+                    result["applied_difficulty"] = difficulty
+                    if edu_level:
+                        result["applied_edu_level"] = edu_level
+                    result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，公式已转换为LaTeX"
 
                 elif name == "search_questions_by_knowledge":
                     await ensure_crawler_initialized()
-                    # 如果指定了学科，自动切换
-                    subject = arguments.get("subject", "")
-                    if subject and subject in SUBJECTS:
-                        self.current_subject = subject
-                        self.crawler.set_subject(subject)
-                    elif subject:
-                        # 尝试模糊匹配
-                        for name_key in SUBJECTS.keys():
-                            if subject in name_key:
-                                self.current_subject = name_key
-                                self.crawler.set_subject(name_key)
-                                break
+                    edu_level = (arguments.get("edu_level") or "").strip()
+                    subject_input = (arguments.get("subject") or "").strip()
+                    try:
+                        resolved_subject = resolve_subject(
+                            subject_input or self.current_subject,
+                            edu_level=edu_level,
+                            strict=True,
+                        )
+                        difficulty = normalize_difficulty(
+                            arguments.get("difficulty") or DEFAULT_DIFFICULTY,
+                            strict=True,
+                        )
+                    except ValueError as exc:
+                        result = {
+                            "success": False,
+                            "error": str(exc),
+                            "current_subject": self.current_subject,
+                            "available_subjects": list(SUBJECTS.keys()),
+                            "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
+                            "allowed_edu_levels": list(EDU_LEVELS.keys()),
+                        }
+                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                    if resolved_subject != self.current_subject:
+                        self.current_subject = resolved_subject
+                        self.crawler.set_subject(resolved_subject)
 
                     result = await self.crawler.search_by_knowledge(
                         knowledge_point=arguments["knowledge_point"],
-                        subject=self.current_subject,
+                        subject=resolved_subject,
+                        edu_level=edu_level,
                         limit=arguments.get("limit", 10),
-                        difficulty=arguments.get("difficulty", ""),
+                        difficulty=difficulty,
                         question_type=arguments.get("question_type", ""),
-                        max_pages=arguments.get("max_pages", 3),
+                        max_pages=arguments.get("max_pages", 2),
+                        require_difficulty=True,
+                        strict_subject=True,
                     )
                     # 添加当前学科信息和使用提示
                     result["current_subject"] = self.current_subject
-                    result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，无需调用get_question_details"
+                    result["applied_difficulty"] = difficulty
+                    if edu_level:
+                        result["applied_edu_level"] = edu_level
+                    result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，公式已转换为LaTeX"
 
                 elif name == "filter_questions":
                     await ensure_crawler_initialized()
@@ -422,6 +540,30 @@ class ExamPaperMCPServer:
                     # 导出到组卷网题篮
                     question_ids = arguments["question_ids"]
                     paper_name = arguments.get("paper_name", "AI组卷")
+                    export_subject = (arguments.get("subject") or "").strip()
+
+                    if export_subject:
+                        # 复用 set_subject 的模糊匹配逻辑
+                        if export_subject not in SUBJECTS:
+                            matched = None
+                            for name_key in SUBJECTS.keys():
+                                if export_subject in name_key or name_key in export_subject:
+                                    matched = name_key
+                                    break
+                            if matched:
+                                export_subject = matched
+                            else:
+                                result = {
+                                    "success": False,
+                                    "error": f"未找到学科: {export_subject}",
+                                    "available_subjects": list(SUBJECTS.keys()),
+                                    "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
+                                }
+                                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                        self.current_subject = export_subject
+                        if self.crawler is not None:
+                            self.crawler.set_subject(export_subject)
 
                     # 先获取题目详情（用于填充题型、难度等信息）
                     details_result = await self.crawler.batch_get_question_details(
@@ -448,7 +590,7 @@ class ExamPaperMCPServer:
                         result["login_window"] = login_result
                         result["login_instructions"] = [
                             "首次使用需要登录组卷网：",
-                            "1. 双击运行 scripts/登录组卷网.bat",
+                            f"1. 双击运行 scripts/登录组卷网.bat \"{self.current_subject}\"",
                             "2. 在弹出的浏览器中登录",
                             "3. 登录成功后按回车保存",
                             "4. 重新调用此工具导出题目"
@@ -461,6 +603,92 @@ class ExamPaperMCPServer:
                             "2. 检查题目是否已添加",
                             "3. 点击'生成试卷'按钮完成组卷"
                         ]
+
+                elif name == "review_paper":
+                    await ensure_crawler_initialized()
+
+                    # 可选切换学科
+                    target_subject = (arguments.get("subject") or "").strip()
+                    if target_subject:
+                        if target_subject not in SUBJECTS:
+                            matched = None
+                            for name_key in SUBJECTS.keys():
+                                if target_subject in name_key or name_key in target_subject:
+                                    matched = name_key
+                                    break
+                            if matched:
+                                target_subject = matched
+                            else:
+                                result = {
+                                    "success": False,
+                                    "error": f"未找到学科: {target_subject}",
+                                    "available_subjects": list(SUBJECTS.keys()),
+                                    "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
+                                }
+                                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                        self.current_subject = target_subject
+                        self.crawler.set_subject(target_subject)
+
+                    paper_id = arguments.get("paper_id")
+                    question_ids = arguments.get("question_ids") or []
+                    paper_name = (arguments.get("paper_name") or "").strip()
+                    focus = (arguments.get("focus") or "").strip()
+                    strictness = int(arguments.get("strictness", 3) or 3)
+                    max_questions = int(arguments.get("max_questions", 20) or 20)
+                    if max_questions < 1:
+                        max_questions = 1
+                    if max_questions > 50:
+                        max_questions = 50
+
+                    paper_meta = None
+                    if paper_id is not None:
+                        from database.models import get_paper
+
+                        paper = await get_paper(int(paper_id))
+                        if not paper:
+                            result = {"success": False, "error": f"未找到试卷 paper_id={paper_id}"}
+                            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                        paper_meta = paper
+                        if not paper_name:
+                            paper_name = paper.get("paper_name", "") or ""
+                        question_ids = [q.get("question_id") for q in paper.get("questions", []) if q.get("question_id")]
+
+                    if not question_ids:
+                        result = {
+                            "success": False,
+                            "error": "review_paper 需要 paper_id 或 question_ids",
+                            "hint": "传入 paper_id（create_paper 的返回）或直接传入题目ID列表",
+                        }
+                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                    question_ids = [str(x) for x in question_ids][:max_questions]
+
+                    # 拉取题干等信息（batch_get_question_details 单次最多10个，这里分批拉取）
+                    details_all = []
+                    for i in range(0, len(question_ids), 10):
+                        chunk = question_ids[i : i + 10]
+                        chunk_res = await self.crawler.batch_get_question_details(chunk)
+                        details_all.extend(chunk_res.get("questions", []))
+
+                    # 保持顺序
+                    detail_map = {str(q.get("question_id")): q for q in details_all if q.get("question_id")}
+                    ordered_questions = [detail_map.get(qid, {"question_id": qid}) for qid in question_ids]
+
+                    result = await review_questions_with_openrouter(
+                        questions=ordered_questions,
+                        paper_name=paper_name,
+                        subject=self.current_subject,
+                        focus=focus,
+                        strictness=strictness,
+                    )
+                    if paper_meta:
+                        result["paper_meta"] = {
+                            "paper_id": paper_meta.get("paper_id"),
+                            "paper_name": paper_meta.get("paper_name"),
+                            "question_count": len(paper_meta.get("questions", []) or []),
+                        }
 
                 elif name == "list_subjects":
                     # 列出所有支持的学科
@@ -656,8 +884,8 @@ class ExamPaperMCPServer:
             elif cookie_bank_id != config_bank_id:
                 diagnosis["issues"].append(f"⚠️ BankID不匹配: Cookie中是{cookie_subject}(bankId={cookie_bank_id}), 当前配置是{config_subject}(bankId={config_bank_id})")
                 bank_id_check["status"] = "mismatch"
-                bank_id_check["note"] = f"题目会导出到 {cookie_subject} 的题篮中"
-                diagnosis["recommendations"].append(f"💡 题目将导出到 {cookie_subject} 题篮: https://zujuan.xkw.com/basket/")
+                bank_id_check["note"] = f"当前登录态题库为 {cookie_subject}，导出目标为 {config_subject}"
+                diagnosis["recommendations"].append(f"💡 请先切换到“{config_subject}”并重新登录保存Cookie，再执行导出")
             else:
                 bank_id_check["status"] = "ok"
         else:
@@ -682,7 +910,7 @@ class ExamPaperMCPServer:
                     }
 
                     # 使用cookie中的bankId（如果存在）
-                    test_bank_id = cookie_bank_id if "cookie_bank_id" in locals() and cookie_bank_id else "11"
+                    test_bank_id = cookie_bank_id if "cookie_bank_id" in locals() and cookie_bank_id else (config_bank_id or "11")
 
                     # 先测试空篮子同步
                     resp = await client.post(
@@ -790,11 +1018,11 @@ class ExamPaperMCPServer:
             diagnosis["overall_status"] = f"⚠️ 发现 {len(diagnosis['issues'])} 个问题"
 
             if any("未登录" in issue or "ZUJUAN_USER_ID" in issue for issue in diagnosis["issues"]):
-                diagnosis["recommendations"].append("🔧 请运行 scripts/登录组卷网.bat 进行登录")
+                diagnosis["recommendations"].append(f"🔧 请运行 scripts/登录组卷网.bat \"{self.current_subject}\" 进行登录")
 
             if any("BankID不匹配" in issue for issue in diagnosis["issues"]):
-                diagnosis["recommendations"].append("🔧 如需导出到其他学科题篮，请在浏览器中访问该学科页面后重新登录保存Cookie")
-                diagnosis["recommendations"].append("🔧 例如：访问 https://zujuan.xkw.com/gzsx/ (高中数学) 后重新运行登录脚本")
+                diagnosis["recommendations"].append("🔧 如需导出到其他学科题篮，请在浏览器中切换到目标学科后重新登录保存Cookie")
+                diagnosis["recommendations"].append(f"🔧 例如：访问 https://zujuan.xkw.com/ 并切换到“{self.current_subject}”后重新运行登录脚本")
 
             if any("API" in issue or "HTTP" in issue for issue in diagnosis["issues"]):
                 diagnosis["recommendations"].append("🔧 检查网络连接，或尝试重新登录获取新的Cookie")

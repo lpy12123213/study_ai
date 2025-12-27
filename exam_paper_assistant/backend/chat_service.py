@@ -14,6 +14,7 @@ from backend.config import (
     MAX_TOOL_ITERATIONS,
     API_TIMEOUT
 )
+from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 
 # 系统提示词（带学科占位符）
 SYSTEM_PROMPT_TEMPLATE = """你是一个智能组卷助手，具备完全自主的多轮工具调用能力。你可以连续执行多个工具调用，无需用户中间确认，直到完成整个组卷任务。
@@ -171,6 +172,12 @@ TOOLS = [
                         "type": "string",
                         "description": "搜索关键词，如'函数'、'导数'、'三角函数'等"
                     },
+                    "edu_level": {
+                        "type": "string",
+                        "enum": ["小学", "初中", "高中", ""],
+                        "description": "学段筛选，可选：小学/初中/高中（指定后将严格校验）",
+                        "default": ""
+                    },
                     "difficulty": {
                         "type": "string",
                         "enum": ["简单", "中等", "困难", ""],
@@ -297,7 +304,8 @@ class ChatService:
 
     async def _get_crawler(self, subject: str = None):
         """获取爬虫实例，支持学科切换"""
-        subject = subject or self.current_subject
+        subject = resolve_subject(subject or self.current_subject, strict=True)
+        self.current_subject = subject
         if self.crawler is None:
             import sys
             from pathlib import Path
@@ -315,12 +323,22 @@ class ChatService:
         try:
             if tool_name == "search_questions":
                 crawler = await self._get_crawler()
+                edu_level = (arguments.get("edu_level") or "").strip()
+                difficulty = normalize_difficulty(
+                    arguments.get("difficulty") or DEFAULT_DIFFICULTY,
+                    strict=True,
+                )
                 result = await crawler.search_by_keyword(
                     keyword=arguments.get("keyword", ""),
-                    difficulty=arguments.get("difficulty", ""),
+                    edu_level=edu_level,
+                    difficulty=difficulty,
                     question_type=arguments.get("question_type", ""),
-                    limit=arguments.get("limit", 10)
+                    limit=arguments.get("limit", 10),
+                    require_difficulty=True,
+                    strict_subject=True,
                 )
+                if edu_level:
+                    result["applied_edu_level"] = edu_level
                 return result
 
             elif tool_name == "create_paper":

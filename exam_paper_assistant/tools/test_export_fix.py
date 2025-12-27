@@ -5,8 +5,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-# 添加路径
-sys.path.insert(0, str(Path(__file__).parent))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
 
 from crawler.zujuan_crawler import ZujuanCrawler
 

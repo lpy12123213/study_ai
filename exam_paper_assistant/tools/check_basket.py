@@ -2,13 +2,19 @@
 直接检查题篮页面状态
 """
 import asyncio
-import httpx
 import re
-import json
+from pathlib import Path
+
+import httpx
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+ENV_PATH = ROOT_DIR / ".env"
 
 def load_env():
     env_data = {}
-    with open(".env", "r", encoding="utf-8") as f:
+    with ENV_PATH.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -95,9 +101,10 @@ async def check_basket():
                 print(f"{method} {url}: Error - {e}")
 
         # 保存HTML供分析
-        with open("basket_page.html", "w", encoding="utf-8") as f:
+        output_path = ARTIFACTS_DIR / "basket_page.html"
+        with output_path.open("w", encoding="utf-8") as f:
             f.write(html)
-        print("\n已保存题篮页面到 basket_page.html")
+        print(f"\n已保存题篮页面到 {output_path}")
 
 if __name__ == "__main__":
     asyncio.run(check_basket())

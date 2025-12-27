@@ -2,12 +2,17 @@
 分析组卷网前端JS，找到添加到题篮的API
 """
 import asyncio
-import httpx
 import re
+from pathlib import Path
+
+import httpx
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ENV_PATH = ROOT_DIR / ".env"
 
 def load_env():
     env_data = {}
-    with open(".env", "r", encoding="utf-8") as f:
+    with ENV_PATH.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:

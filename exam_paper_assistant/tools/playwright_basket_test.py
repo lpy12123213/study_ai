@@ -1,29 +1,28 @@
 """
 使用Playwright验证题篮功能和捕获网络请求
 """
-import asyncio
 import json
-import os
-import time
+import sys
 from pathlib import Path
 
-# 添加父目录到路径
-import sys
-sys.path.insert(0, str(Path(__file__).parent))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+sys.path.insert(0, str(ROOT_DIR))
 
 
 def run_playwright_test():
     from playwright.sync_api import sync_playwright
 
     # 使用已有的登录数据
-    user_data_dir = os.path.join(os.path.dirname(__file__), "crawler", ".playwright_data")
-    os.makedirs(user_data_dir, exist_ok=True)
+    user_data_dir = ROOT_DIR / "crawler" / ".playwright_data"
+    user_data_dir.mkdir(parents=True, exist_ok=True)
 
     captured_requests = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch_persistent_context(
-            user_data_dir,
+            str(user_data_dir),
             headless=False,  # 显示浏览器
         )
 
@@ -67,8 +66,9 @@ def run_playwright_test():
         page.wait_for_timeout(3000)
 
         # 截图
-        page.screenshot(path="basket_before.png")
-        print("已保存截图: basket_before.png")
+        before_path = ARTIFACTS_DIR / "basket_before.png"
+        page.screenshot(path=str(before_path))
+        print(f"已保存截图: {before_path}")
 
         # 获取题篮数量
         try:
@@ -113,8 +113,9 @@ def run_playwright_test():
             except:
                 pass
 
-            page.screenshot(path="after_add.png")
-            print("已保存截图: after_add.png")
+            after_add_path = ARTIFACTS_DIR / "after_add.png"
+            page.screenshot(path=str(after_add_path))
+            print(f"已保存截图: {after_add_path}")
 
         # 3. 再次检查题篮
         print("\n" + "=" * 50)
@@ -124,14 +125,16 @@ def run_playwright_test():
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(3000)
 
-        page.screenshot(path="basket_after.png")
-        print("已保存截图: basket_after.png")
+        after_path = ARTIFACTS_DIR / "basket_after.png"
+        page.screenshot(path=str(after_path))
+        print(f"已保存截图: {after_path}")
 
         # 保存捕获的请求
         if captured_requests:
-            with open("captured_basket_requests.json", "w", encoding="utf-8") as f:
+            output_path = ARTIFACTS_DIR / "captured_basket_requests.json"
+            with output_path.open("w", encoding="utf-8") as f:
                 json.dump(captured_requests, f, ensure_ascii=False, indent=2)
-            print(f"\n已保存 {len(captured_requests)} 个请求到 captured_basket_requests.json")
+            print(f"\n已保存 {len(captured_requests)} 个请求到 {output_path}")
 
             # 打印关键请求
             print("\n=== 关键API请求 ===")

@@ -1,14 +1,12 @@
 import asyncio
 import sys
-import os
-import json
-from mcp_server.server import ExamPaperMCPServer
-from mcp.types import Tool
-from mcp.server.stdio import stdio_server
+from pathlib import Path
 
-# 模拟 stdio 环境
-# 将输出重定向到临时文件以便检查
-import io
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from mcp_server.server import ExamPaperMCPServer
 
 async def test_server_startup():
     print("Testing server initialization...")
@@ -26,6 +24,4 @@ async def test_server_startup():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    if os.getcwd() not in sys.path:
-        sys.path.append(os.getcwd())
     asyncio.run(test_server_startup())

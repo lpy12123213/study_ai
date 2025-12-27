@@ -41,11 +41,15 @@ exam_paper_assistant/
 │                               # - 试卷管理
 │                               # - 下载链接生成
 │
-├── frontend/                   # Web前端
-│   └── index.html              # 单页应用
-│                               # - 试卷列表展示
-│                               # - 试卷详情查看
-│                               # - 下载链接获取
+├── frontend/                   # Web前端（Vite + React + TS）
+│   ├── index.html
+│   └── src/
+│       ├── main.tsx
+│       └── App.tsx
+│
+├── tools/                      # 调试/验证脚本
+├── artifacts/                  # 调试产物（截图/HTML/JSON）
+├── data/                       # 本地数据文件
 │
 └── docs/                       # 文档目录
     ├── DEPLOYMENT.md           # 部署指南
@@ -54,6 +58,8 @@ exam_paper_assistant/
     └── TROUBLESHOOTING.md      # 故障排除
 
 运行时生成的文件（不纳入版本控制）：
+├── artifacts/                  # 调试产物
+├── data/                       # 本地数据文件（含旧库备份）
 ├── venv/                       # Python虚拟环境
 ├── exam_papers.db              # SQLite数据库文件
 └── __pycache__/                # Python缓存
@@ -164,9 +170,11 @@ POST /api/search-history            - 搜索历史
 - 异步处理
 - 静态文件服务
 
-### 6. Web前端 (`frontend/index.html`)
+### 6. Web前端 (`frontend/`)
 
-**技术栈：** 纯HTML/CSS/JavaScript
+**技术栈：** React + Vite + TypeScript
+
+**入口：** `frontend/src/main.tsx`、`frontend/src/App.tsx`
 
 **核心功能：**
 - 试卷列表展示（卡片式）
@@ -224,10 +232,10 @@ POST /api/search-history            - 搜索历史
 - **MCP SDK** - AI工具协议
 
 ### 前端技术
-- **HTML5** - 页面结构
-- **CSS3** - 样式设计
-- **Vanilla JavaScript** - 交互逻辑
-- **Fetch API** - 异步请求
+- **React** - UI组件与状态管理
+- **Vite** - 构建与开发服务器
+- **TypeScript** - 类型系统
+- **Tailwind CSS** - 样式工具链
 
 ### 数据存储
 - **SQLite** - 轻量级数据库
@@ -261,7 +269,7 @@ POST /api/search-history            - 搜索历史
 - 在 `mcp_server/server.py` 添加新工具
 - 在 `crawler/` 添加新爬虫类
 - 在 `backend/app.py` 添加新API端点
-- 在 `frontend/index.html` 添加新UI
+- 在 `frontend/src` 添加新UI（建议从 `App.tsx` 或 components 开始）
 
 ### 支持新网站
 1. 创建 `crawler/new_site_crawler.py`

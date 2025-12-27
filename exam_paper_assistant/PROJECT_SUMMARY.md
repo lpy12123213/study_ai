@@ -59,7 +59,7 @@
 - [x] 试卷删除功能
 - [x] 美观的UI设计
 
-**文件：** `frontend/index.html`
+**文件：** `frontend/src/App.tsx`
 
 ### ✅ 6. 配置和脚本
 - [x] 依赖管理（requirements.txt）
@@ -139,7 +139,7 @@ chmod +x start.sh
 1. 启动MCP服务器
 2. 在Claude中说："帮我搜索高中数学函数相关题目"
 3. AI自动搜索并创建试卷
-4. 在Web界面（http://localhost:8000）查看试卷
+4. 在Web界面（http://localhost:3000）查看试卷
 5. 点击"下载链接"获取组卷网链接
 
 **方式2：直接使用API**
@@ -190,7 +190,7 @@ exam_paper_assistant/
 ├── crawler/             # Playwright爬虫
 ├── database/            # SQLAlchemy数据库
 ├── backend/             # FastAPI后端
-├── frontend/            # Web前端
+├── frontend/            # Web前端（Vite + React + TS）
 ├── docs/                # 完整文档
 └── [配置文件]
 ```
@@ -205,7 +205,7 @@ exam_paper_assistant/
 - MCP SDK - AI工具协议
 
 ### 前端
-- HTML5/CSS3/JavaScript
+- React/Vite/TypeScript
 - 响应式设计
 - Fetch API
 
@@ -283,7 +283,7 @@ exam_paper_assistant/
 3. **数据库设计** - SQLAlchemy ORM
 4. **浏览器自动化** - Playwright
 5. **AI集成** - MCP协议
-6. **前端开发** - HTML/CSS/JS
+6. **前端开发** - React/Vite/TypeScript
 7. **项目架构** - 模块化设计
 8. **文档编写** - 完整的项目文档
 
@@ -292,7 +292,7 @@ exam_paper_assistant/
 ### 立即体验
 1. 打开终端，进入项目目录
 2. 运行 `start.bat`（Windows）或 `./start.sh`（Linux/macOS）
-3. 访问 http://localhost:8000
+3. 访问 http://localhost:3000（前端）
 4. 配置Claude Desktop使用MCP
 5. 开始使用AI搜索题目！
 
