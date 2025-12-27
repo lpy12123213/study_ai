@@ -25,7 +25,7 @@ Frontend:
 
 - `cd exam_paper_assistant/frontend`
 - `npm install`
-- `npm run dev` (http://localhost:3000, proxies `/api` → `http://localhost:8000`)
+- `npm run dev` (http://localhost:3000, proxies `/api` -> `http://localhost:8000`)
 - `npm run lint` / `npm run build`
 
 Convenience scripts (Windows): `exam_paper_assistant/start.bat`, `start_backend.bat`, `start_frontend.bat`, `start_mcp.bat`.
@@ -49,4 +49,3 @@ There is no dedicated test suite in active paths. Before submitting changes, run
 - Follow Conventional Commits (examples from history): `feat: ...`, `fix: ...`, `refactor: ...`, `docs: ...`, `chore: ...`.
 - PRs should include: what/why, how to test locally, and screenshots for UI changes.
 - Never commit secrets (`.env`) or generated artifacts (e.g., `frontend/dist/`, `frontend/node_modules/`, `*.db`, Playwright user data).
-
