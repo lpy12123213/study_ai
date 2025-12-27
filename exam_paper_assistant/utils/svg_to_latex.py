@@ -408,6 +408,42 @@ def _is_geometry_like_latex(latex: str) -> bool:
     return score >= 2
 
 
+_COMMANDS_NEED_SPACE = (
+    "odot",
+    "sin",
+    "cos",
+    "tan",
+    "cot",
+    "sec",
+    "csc",
+    "alpha",
+    "beta",
+    "gamma",
+    "delta",
+    "epsilon",
+    "theta",
+    "lambda",
+    "mu",
+    "pi",
+    "rho",
+    "sigma",
+    "phi",
+    "omega",
+    "perp",
+    "angle",
+    "triangle",
+    "times",
+    "cdot",
+    "pm",
+    "mp",
+    "leq",
+    "geq",
+    "neq",
+    "parallel",
+)
+_COMMAND_NEEDS_SPACE_RE = re.compile(r"(\\(?:" + "|".join(_COMMANDS_NEED_SPACE) + r"))(?=[A-Za-z])")
+
+
 def postprocess_latex(latex: str) -> str:
     """
     对转换后的 LaTeX 做轻量后处理：
@@ -447,6 +483,10 @@ def postprocess_latex(latex: str) -> str:
         # P0（点 O）这类：P0\perp... -> PO\perp...（排除 O0 这种索引式写法）
         latex = re.sub(r'(?<=[A-NP-Z])0(?=[^0-9A-Za-z]|$)', 'O', latex)
         latex = re.sub(r'(?<![a-z\\])i(?![a-z])', 'I', latex)
+
+    # 5) 常见 LaTeX 命令与后续字母分隔：
+    #    例如 \sinx -> \sin x，\odotO -> \odot O（避免被 TeX 解析为更长的未知命令）。
+    latex = _COMMAND_NEEDS_SPACE_RE.sub(r"\1 ", latex)
 
     return latex
 
@@ -688,9 +728,9 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
     # 只将非根号的水平线作为分数线
     for i, (x1, y1, x2, y2) in enumerate(all_lines):
         if abs(y1 - y2) < 2 and i not in sqrt_horizontal_lines:
-            # 额外检查：分数线通常有一定宽度（至少10像素）
+            # 额外检查：分数线通常有一定宽度（部分小分数如 1/3 的线很短）
             width = abs(x2 - x1)
-            if width >= 10:
+            if width >= 5:
                 fraction_bars.append(FractionBar(min(x1, x2), max(x1, x2), (y1 + y2) / 2))
 
     def parse_transform_robust(transform_str: str) -> Tuple[float, float, float, float]:
@@ -1037,6 +1077,7 @@ def glyphs_to_latex_advanced(
     svg_lines = svg_lines or []
     used_glyphs: Set[int] = set()
     result_parts = []  # [(x_position, latex_string)]
+    sqrt_parts: List[Tuple[float, float, float, float, str]] = []  # (x, x1, x2, y_anchor, latex)
 
     # 第-1步：检测方程组区域
     cases_regions = detect_cases_regions(glyphs)
@@ -1120,7 +1161,8 @@ def glyphs_to_latex_advanced(
             
             # 确定根号的x位置用于排序
             sqrt_x = sqrt_region.sqrt_glyph.x if sqrt_region.sqrt_glyph else sqrt_region.x1
-            result_parts.append((sqrt_x, f"\\sqrt{{{inner_latex}}}"))
+            sqrt_y = min((g.y for g in sqrt_inner_glyphs), default=sqrt_region.y_top)
+            sqrt_parts.append((sqrt_x, sqrt_region.x1, sqrt_region.x2, sqrt_y, f"\\sqrt{{{inner_latex}}}"))
 
     # 第一步：处理大型运算符及其上下限
     large_ops = [g for g in glyphs if is_large_operator(g.char) and id(g) not in used_glyphs]
@@ -1151,8 +1193,42 @@ def glyphs_to_latex_advanced(
                 processed_fraction_bars.add(id(bar))
     
     remaining_fraction_bars = [bar for bar in fraction_bars if id(bar) not in processed_fraction_bars]
+    consumed_sqrt_parts: Set[int] = set()
     
     if remaining_fraction_bars:
+        def render_fraction_side(side_glyphs: List[Glyph], side_sqrts: List[Tuple[float, str]]) -> str:
+            if not side_glyphs and not side_sqrts:
+                return ""
+
+            items: List[Tuple[float, str, object]] = []
+            for g in side_glyphs:
+                items.append((g.x, "glyph", g))
+            for x, latex in side_sqrts:
+                items.append((x, "latex", latex))
+
+            items.sort(key=lambda t: t[0])
+
+            out: List[str] = []
+            pending: List[Glyph] = []
+
+            for _, kind, obj in items:
+                if kind == "glyph":
+                    pending.append(obj)  # type: ignore[arg-type]
+                    continue
+                if pending:
+                    chunk, chunk_unknown = glyphs_to_latex(pending)
+                    unknown.extend(chunk_unknown)
+                    out.append(chunk)
+                    pending = []
+                out.append(obj)  # type: ignore[arg-type]
+
+            if pending:
+                chunk, chunk_unknown = glyphs_to_latex(pending)
+                unknown.extend(chunk_unknown)
+                out.append(chunk)
+
+            return "".join(out)
+
         for bar in sorted(remaining_fraction_bars, key=lambda b: b.x1):
             numerator = []  # 分子（在分数线上方）
             denominator = []  # 分母（在分数线下方）
@@ -1172,15 +1248,32 @@ def glyphs_to_latex_advanced(
                         used_glyphs.add(id(g))
 
             if numerator or denominator:
-                # 转换分子
-                num_latex, num_unknown = glyphs_to_latex(numerator)
-                unknown.extend(num_unknown)
+                num_sqrts: List[Tuple[float, str]] = []
+                den_sqrts: List[Tuple[float, str]] = []
 
-                # 转换分母
-                den_latex, den_unknown = glyphs_to_latex(denominator)
-                unknown.extend(den_unknown)
+                # 将已解析的根号结构按所在分子/分母归并进来（否则会被当作“独立项”输出）
+                for idx, (sx, sx1, sx2, sy, s_latex) in enumerate(sqrt_parts):
+                    if idx in consumed_sqrt_parts:
+                        continue
+                    # 根号覆盖范围与分数线x范围有重叠
+                    if sx2 < bar.x1 - 5 or sx1 > bar.x2 + 5:
+                        continue
+                    if sy < bar.y - 2:
+                        num_sqrts.append((sx, s_latex))
+                        consumed_sqrt_parts.add(idx)
+                    elif sy > bar.y + 2:
+                        den_sqrts.append((sx, s_latex))
+                        consumed_sqrt_parts.add(idx)
+
+                num_latex = render_fraction_side(numerator, num_sqrts)
+                den_latex = render_fraction_side(denominator, den_sqrts)
 
                 result_parts.append((bar.center_x, f"\\frac{{{num_latex}}}{{{den_latex}}}"))
+
+    # 将未被分数吸收的根号结构输出为普通项
+    for idx, (sx, _, __, ___, s_latex) in enumerate(sqrt_parts):
+        if idx not in consumed_sqrt_parts:
+            result_parts.append((sx, s_latex))
 
     # 第三步：处理剩余的字形
     remaining = [g for g in glyphs if id(g) not in used_glyphs]

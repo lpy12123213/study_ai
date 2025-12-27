@@ -119,8 +119,8 @@ async def verify_with_vision(api_key: str, model: str):
 
         print(f"\n[{i+1}/{len(formula_ids)}] 公式: {fid[:16]}...")
 
-        # 签名识别
-        sig_result, unknown = await svg_url_to_latex(svg_url)
+        # 签名识别（高级模式，支持分数/根号等）
+        sig_result, unknown = await svg_url_to_latex(svg_url, use_advanced=True)
         print(f"  签名识别: {sig_result}")
         if unknown:
             print(f"  未知签名: {unknown}")
@@ -184,8 +184,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="使用视觉模型验证SVG签名识别")
     parser.add_argument("--api-key", default=os.getenv("OPENROUTER_API_KEY", ""),
                         help="OpenRouter API Key")
-    parser.add_argument("--model", default="qwen/qwen3-235b-a22b",
-                        help="视觉模型名称 (默认: qwen/qwen3-235b-a22b)")
+    parser.add_argument("--model", default="qwen/qwen3-vl-8b-instruct",
+                        help="视觉模型名称 (默认: qwen/qwen3-vl-8b-instruct)")
     args = parser.parse_args()
 
     asyncio.run(verify_with_vision(args.api_key, args.model))
