@@ -2,21 +2,7 @@ import { Send, Loader2, Sparkles } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MessageBubble from './MessageBubble';
-
-interface Message {
-  id?: number;
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  tool_calls?: any[];
-  tool_call_id?: string;
-}
-
-interface ToolResult {
-  tool_call_id: string;
-  tool_name: string;
-  result?: any;
-  status: 'pending' | 'running' | 'completed' | 'error';
-}
+import { Message, ToolCall, ToolResult } from '../services/api';
 
 interface Props {
   messages: Message[];
@@ -24,7 +10,7 @@ interface Props {
   onSend: (message: string) => void;
   loading: boolean;
   streamingContent: string;
-  currentToolCalls: any[];
+  currentToolCalls: ToolCall[];
 }
 
 export default function ChatArea({
@@ -108,7 +94,7 @@ export default function ChatArea({
                     content={msg.content}
                     toolCalls={msg.tool_calls}
                     toolResults={toolResults.filter(tr =>
-                      msg.tool_calls?.some((tc: any) => tc.id === tr.tool_call_id)
+                      msg.tool_calls?.some(tc => tc.id === tr.tool_call_id) ?? false
                     )}
                   />
                 </motion.div>

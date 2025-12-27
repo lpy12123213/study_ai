@@ -222,7 +222,7 @@ def chat_with_functions(user_message):
 
 ```bash
 # 启动OpenAI适配器API（端口8001）
-python backend/openai_adapter.py
+python -m uvicorn backend.openai_adapter:app --host 0.0.0.0 --port 8001 --reload
 
 # API将在 http://localhost:8001 运行
 # API文档在 http://localhost:8001/docs

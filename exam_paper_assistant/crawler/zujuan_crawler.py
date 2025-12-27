@@ -921,12 +921,7 @@ class ZujuanCrawler:
         3. 用转换结果填充题目
         """
         try:
-            import sys
-            from pathlib import Path
-            utils_path = str(Path(__file__).parent.parent / "utils")
-            if utils_path not in sys.path:
-                sys.path.insert(0, utils_path)
-            from svg_to_latex import batch_svg_to_latex, load_signatures
+            from utils.svg_to_latex import batch_svg_to_latex, load_signatures
             
             load_signatures()
             
@@ -1214,12 +1209,7 @@ class ZujuanCrawler:
         """
         try:
             # 导入SVG转LaTeX工具
-            import sys
-            from pathlib import Path
-            utils_path = str(Path(__file__).parent.parent / "utils")
-            if utils_path not in sys.path:
-                sys.path.insert(0, utils_path)
-            from svg_to_latex import replace_formulas_with_latex, svg_content_to_latex
+            from utils.svg_to_latex import replace_formulas_with_latex, svg_content_to_latex
 
             # 使用工具替换公式
             # 静态资源域名通常允许较高并发，适当提高并发以显著减少等待时间
@@ -1228,7 +1218,7 @@ class ZujuanCrawler:
             # 如果有未识别的签名，记录到文件用于后续完善签名库
             if unknown_sigs:
                 try:
-                    from unknown_signatures import record_unknown_signatures
+                    from utils.unknown_signatures import record_unknown_signatures
                     # unknown_sigs 格式为 {svg_url: [sig1, sig2, ...]}
                     for svg_url, sigs in unknown_sigs.items():
                         if sigs:

@@ -10,6 +10,7 @@ import {
   deleteConversation,
   getConversationMessages,
   sendChatMessage,
+  ToolCall,
   Conversation,
   Message,
   ToolResult
@@ -25,7 +26,7 @@ export default function App() {
 
   const [chatLoading, setChatLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
-  const [currentToolCalls, setCurrentToolCalls] = useState<any[]>([]);
+  const [currentToolCalls, setCurrentToolCalls] = useState<ToolCall[]>([]);
   const [toolResults, setToolResults] = useState<ToolResult[]>([]);
 
   const [currentSubject, setCurrentSubject] = useState(() => {
@@ -122,39 +123,35 @@ export default function App() {
     setCurrentToolCalls([]);
     setToolResults([]);
 
-    let allToolCalls: any[] = [];
+    let allToolCalls: ToolCall[] = [];
 
     try {
       await sendChatMessage(currentConvId, message, (chunk) => {
-        const { type } = chunk;
-        console.log('[App] Processing chunk:', type, chunk);
-
-        if (type === 'iteration') {
+        if (chunk.type === 'iteration') {
           setStreamingContent(`AI 正在进行第${chunk.round}轮操作...`);
-        } else if (type === 'assistant') {
+          return;
+        }
+
+        if (chunk.type === 'assistant') {
           if (chunk.tool_calls) {
             allToolCalls = [...allToolCalls, ...chunk.tool_calls];
-            const iterationPrefix = chunk.iteration > 1 ? `[第${chunk.iteration}轮] ` : '';
+            const iteration = chunk.iteration ?? 1;
+            const iterationPrefix = iteration > 1 ? `[第${iteration}轮] ` : '';
             setStreamingContent(iterationPrefix + (chunk.content || ''));
             setCurrentToolCalls(allToolCalls);
-            const newResults = chunk.tool_calls.map((tc: any) => ({
+
+            const newResults: ToolResult[] = chunk.tool_calls.map((tc) => ({
               tool_call_id: tc.id,
               tool_name: tc.function.name,
               status: 'pending' as const,
-              iteration: chunk.iteration
+              iteration
             }));
             setToolResults(prev => [...prev, ...newResults]);
-          } else {
-            const assistantMessage: Message = {
-              id: Date.now() + 1,
-              role: 'assistant',
-              content: chunk.content || '',
-              created_at: new Date().toISOString()
-            };
-            setMessages(prev => [...prev, assistantMessage]);
-            setStreamingContent('');
           }
-        } else if (type === 'tool_start') {
+          return;
+        }
+
+        if (chunk.type === 'tool_start') {
           setToolResults(prev =>
             prev.map(tr =>
               tr.tool_call_id === chunk.tool_call_id
@@ -162,7 +159,10 @@ export default function App() {
                 : tr
             )
           );
-        } else if (type === 'tool_result') {
+          return;
+        }
+
+        if (chunk.type === 'tool_result') {
           setToolResults(prev =>
             prev.map(tr =>
               tr.tool_call_id === chunk.tool_call_id
@@ -170,11 +170,20 @@ export default function App() {
                 : tr
             )
           );
-        } else if (type === 'stream_start') {
+          return;
+        }
+
+        if (chunk.type === 'stream_start') {
           setStreamingContent('');
-        } else if (type === 'text_delta') {
+          return;
+        }
+
+        if (chunk.type === 'text_delta') {
           setStreamingContent(prev => prev + (chunk.content || ''));
-        } else if (type === 'assistant_final') {
+          return;
+        }
+
+        if (chunk.type === 'assistant_final') {
           const assistantMessage: Message = {
             id: Date.now() + 1,
             role: 'assistant',
@@ -185,7 +194,10 @@ export default function App() {
           setMessages(prev => [...prev, assistantMessage]);
           setStreamingContent('');
           setCurrentToolCalls([]);
-        } else if (type === 'error') {
+          return;
+        }
+
+        if (chunk.type === 'error') {
           alert(chunk.content || '发生错误');
         }
       }, currentSubject);

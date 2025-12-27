@@ -46,7 +46,7 @@ python database/models.py
 ### 第3步：启动OpenAI适配器API
 
 ```bash
-python backend/openai_adapter.py
+python -m uvicorn backend.openai_adapter:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 服务将在 `http://localhost:8001` 启动。

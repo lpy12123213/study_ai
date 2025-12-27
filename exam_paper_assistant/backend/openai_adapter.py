@@ -1,35 +1,56 @@
 """
-OpenAI Function Calling 适配器
-将爬虫功能暴露为OpenAI Function Calling可以调用的API
+OpenAI Function Calling 适配器。
+
+将爬虫能力暴露为独立的 HTTP API，方便 OpenAI Function Calling / Agents 调用。
 """
+
+from __future__ import annotations
+
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, AsyncIterator, Dict, List, Optional
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
-import sys
-from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent))
+if __package__ is None or __package__ == "":
+    # Allow running as a script: `python backend/openai_adapter.py`
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from crawler.zujuan_crawler import ZujuanCrawler
-from database.models import save_paper, get_paper, list_papers
+from database.models import get_paper, init_db, list_papers, save_paper
 from backend.config import DEFAULT_SUBJECT
 from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
-import asyncio
+
+
+crawler: Optional[ZujuanCrawler] = None
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await init_db()
+    yield
+    global crawler
+    if crawler:
+        await crawler.close()
+
 
 app = FastAPI(
     title="组卷助手 - OpenAI API",
-    description="为OpenAI Codex提供的题目搜索API",
-    version="1.0.0"
+    description="为 OpenAI Function Calling 提供的题目搜索 API",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# 全局爬虫实例
-crawler = None
 
-
-async def get_crawler(subject: str = ""):
-    """获取或创建爬虫实例"""
+async def get_crawler(subject: str = "") -> ZujuanCrawler:
+    """获取或创建爬虫实例（支持学科切换）"""
     global crawler
-    subject = subject or DEFAULT_SUBJECT
+
+    subject = (subject or DEFAULT_SUBJECT).strip()
+    subject = resolve_subject(subject, strict=True)
+
     if crawler is None:
         crawler = ZujuanCrawler(subject=subject)
         await crawler.initialize()
@@ -38,7 +59,6 @@ async def get_crawler(subject: str = ""):
     return crawler
 
 
-# Request/Response模型
 class SearchByKeywordRequest(BaseModel):
     keyword: str
     subject: str = ""
@@ -71,14 +91,9 @@ class CreatePaperRequest(BaseModel):
     question_ids: List[str]
 
 
-# API端点
 @app.post("/api/search-by-keyword")
-async def search_by_keyword(request: SearchByKeywordRequest):
-    """
-    通过关键词搜索题目
-
-    这个API可以被OpenAI Function Calling调用
-    """
+async def search_by_keyword(request: SearchByKeywordRequest) -> Dict[str, Any]:
+    """通过关键词搜索题目（可用于 OpenAI Function Calling）"""
     subject = request.subject or DEFAULT_SUBJECT
     try:
         subject = resolve_subject(subject, edu_level=request.edu_level, strict=True)
@@ -86,8 +101,8 @@ async def search_by_keyword(request: SearchByKeywordRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    crawler = await get_crawler(subject)
-    result = await crawler.search_by_keyword(
+    crawler_instance = await get_crawler(subject)
+    result = await crawler_instance.search_by_keyword(
         keyword=request.keyword,
         subject=subject,
         edu_level=request.edu_level,
@@ -104,20 +119,16 @@ async def search_by_keyword(request: SearchByKeywordRequest):
 
 
 @app.post("/api/search-by-knowledge")
-async def search_by_knowledge(request: SearchByKnowledgeRequest):
-    """
-    通过知识点搜索题目
-
-    这个API可以被OpenAI Function Calling调用
-    """
+async def search_by_knowledge(request: SearchByKnowledgeRequest) -> Dict[str, Any]:
+    """通过知识点搜索题目（可用于 OpenAI Function Calling）"""
     try:
         subject = resolve_subject(request.subject, edu_level=request.edu_level, strict=True)
         difficulty = normalize_difficulty(request.difficulty or DEFAULT_DIFFICULTY, strict=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    crawler = await get_crawler(subject)
-    result = await crawler.search_by_knowledge(
+    crawler_instance = await get_crawler(subject)
+    result = await crawler_instance.search_by_knowledge(
         knowledge_point=request.knowledge_point,
         subject=subject,
         edu_level=request.edu_level,
@@ -134,66 +145,43 @@ async def search_by_knowledge(request: SearchByKnowledgeRequest):
 
 
 @app.post("/api/filter-questions")
-async def filter_questions(request: FilterQuestionsRequest):
-    """
-    筛选题目
-
-    这个API可以被OpenAI Function Calling调用
-    """
-    crawler = await get_crawler()
-    result = await crawler.filter_questions(
+async def filter_questions(request: FilterQuestionsRequest) -> Dict[str, Any]:
+    """筛选题目（可用于 OpenAI Function Calling）"""
+    crawler_instance = await get_crawler()
+    return await crawler_instance.filter_questions(
         question_ids=request.question_ids,
         difficulty=request.difficulty,
         question_type=request.question_type,
-        limit=request.limit
+        limit=request.limit,
     )
-    return result
 
 
 @app.get("/api/question-info/{question_id}")
-async def get_question_info(question_id: str):
-    """
-    获取题目信息
-
-    这个API可以被OpenAI Function Calling调用
-    """
-    crawler = await get_crawler()
-    result = await crawler.get_question_info(question_id)
-    return result
+async def get_question_info(question_id: str) -> Dict[str, Any]:
+    """获取题目信息（可用于 OpenAI Function Calling）"""
+    crawler_instance = await get_crawler()
+    return await crawler_instance.get_question_info(question_id)
 
 
 @app.post("/api/create-paper")
-async def create_paper(request: CreatePaperRequest):
-    """
-    创建试卷
-
-    这个API可以被OpenAI Function Calling调用
-    """
+async def create_paper(request: CreatePaperRequest) -> Dict[str, Any]:
+    """创建试卷（仅保存题目编号，合规）"""
     try:
-        # 将question_ids列表转换为questions列表格式
         questions = [{"question_id": qid} for qid in request.question_ids]
-        paper_id = await save_paper(
-            paper_name=request.paper_name,
-            questions=questions
-        )
-        return {
-            "success": True,
-            "paper_id": paper_id,
-            "message": f"试卷 '{request.paper_name}' 创建成功"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        paper_id = await save_paper(paper_name=request.paper_name, questions=questions)
+        return {"success": True, "paper_id": paper_id, "message": f"试卷 '{request.paper_name}' 创建成功"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/papers")
-async def get_papers(limit: int = 50):
+async def get_papers(limit: int = 50) -> List[dict]:
     """获取试卷列表"""
-    papers = await list_papers(limit=limit)
-    return papers
+    return await list_papers(limit=limit)
 
 
 @app.get("/api/papers/{paper_id}")
-async def get_paper_detail(paper_id: int):
+async def get_paper_detail(paper_id: int) -> dict:
     """获取试卷详情"""
     paper = await get_paper(paper_id)
     if not paper:
@@ -201,24 +189,7 @@ async def get_paper_detail(paper_id: int):
     return paper
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """关闭时清理资源"""
-    global crawler
-    if crawler:
-        await crawler.close()
-
-
 if __name__ == "__main__":
     import uvicorn
 
-    # 初始化数据库
-    from database.models import init_db
-    asyncio.run(init_db())
-
-    uvicorn.run(
-        "openai_adapter:app",
-        host="0.0.0.0",
-        port=8001,
-        reload=True
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)

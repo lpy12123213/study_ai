@@ -15,6 +15,7 @@ from backend.config import (
     API_TIMEOUT
 )
 from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
+from crawler.zujuan_crawler import ZujuanCrawler
 
 # 系统提示词（带学科占位符）
 SYSTEM_PROMPT_TEMPLATE = """你是一个智能组卷助手，具备完全自主的多轮工具调用能力。你可以连续执行多个工具调用，无需用户中间确认，直到完成整个组卷任务。
@@ -307,10 +308,6 @@ class ChatService:
         subject = resolve_subject(subject or self.current_subject, strict=True)
         self.current_subject = subject
         if self.crawler is None:
-            import sys
-            from pathlib import Path
-            sys.path.append(str(Path(__file__).parent.parent))
-            from crawler.zujuan_crawler import ZujuanCrawler
             self.crawler = ZujuanCrawler(subject=subject)
             await self.crawler.initialize()
         elif self.crawler.subject != subject:

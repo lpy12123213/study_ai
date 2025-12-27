@@ -7,7 +7,7 @@
 ## 项目信息
 
 - **项目名称：** exam_paper_assistant（智能组卷辅助系统）
-- **项目位置：** `C:\Users\李\Desktop\study_ai\exam_paper_assistant`
+- **项目位置：** `exam_paper_assistant/`
 - **主要语言：** Python 3.8+
 - **开发者：** 高中生学习项目
 - **用途：** 教育辅助、组卷助手

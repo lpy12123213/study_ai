@@ -1,21 +1,21 @@
 """
 子AI选题服务 - 从候选题目中选择最符合要求的题目
 """
+
+from __future__ import annotations
+
 import json
 import httpx
-import os
 from typing import List, Dict, Any
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# 直接从环境变量读取配置
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-SUB_MODEL = os.getenv("SUB_MODEL", "openai/gpt-4o-mini")
-SUB_MODEL_TEMPERATURE = float(os.getenv("SUB_MODEL_TEMPERATURE", "0.3"))
-SUB_MODEL_MAX_TOKENS = int(os.getenv("SUB_MODEL_MAX_TOKENS", "1000"))
-SUB_AI_TIMEOUT = int(os.getenv("SUB_AI_TIMEOUT", "60"))
+from core.settings import (
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    SUB_AI_TIMEOUT,
+    SUB_MODEL,
+    SUB_MODEL_MAX_TOKENS,
+    SUB_MODEL_TEMPERATURE,
+)
 
 
 async def select_best_question(

@@ -6,17 +6,21 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-sys.path.append(str(Path(__file__).parent.parent))
-from crawler.zujuan_crawler import ZujuanCrawler  # noqa: E402
-from mcp_server.sub_ai_selector import select_best_question  # noqa: E402
-from mcp_server.reviewer import review_questions_with_openrouter  # noqa: E402
-from backend.subjects import (  # noqa: E402
+if __package__ is None or __package__ == "":
+    # Allow running as a script: `python mcp_server/server.py`
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from core.settings import DEFAULT_SUBJECT
+from crawler.zujuan_crawler import ZujuanCrawler
+from mcp_server.sub_ai_selector import select_best_question
+from mcp_server.reviewer import review_questions_with_openrouter
+from backend.subjects import (
     DEFAULT_DIFFICULTY,
     DIFFICULTY_LEVELS,
     EDU_LEVELS,
@@ -32,14 +36,14 @@ class ExamPaperMCPServer:
     def __init__(self):
         self.server = Server("exam-paper-assistant")
         self.crawler: Optional[ZujuanCrawler] = None
-        self.current_subject = "高中数学"  # 当前学科
+        self.current_subject = DEFAULT_SUBJECT  # 当前学科
         self._register_handlers()
 
     def _register_handlers(self):
         """注册 MCP 工具处理器"""
 
         @self.server.list_tools()
-        async def list_tools() -> list[Tool]:
+        async def list_tools() -> List[Tool]:
             return [
                 Tool(
                     name="search_questions_by_keyword",

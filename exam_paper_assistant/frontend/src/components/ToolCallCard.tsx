@@ -4,10 +4,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 interface ToolCallProps {
   toolName: string;
-  arguments: Record<string, any>;
-  result?: any;
+  arguments: Record<string, unknown>;
+  result?: unknown;
   status: 'pending' | 'running' | 'completed' | 'error';
   iteration?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 const toolNameMap: Record<string, string> = {
@@ -32,6 +36,16 @@ export default function ToolCallCard({ toolName, arguments: args, result, status
   const displayName = toolNameMap[toolName] || toolName;
   const iconColor = toolIconColors[toolName] || 'text-primary';
 
+  const argRows: JSX.Element[] = Object.entries(args).map(([key, value]) => {
+    const displayValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    return (
+      <div key={key} className="flex gap-2">
+        <span className="text-primary-light">{key}:</span>
+        <span className="text-slate-400 break-all">{displayValue}</span>
+      </div>
+    );
+  });
+
   const getStatusIcon = () => {
     switch (status) {
       case 'running':
@@ -49,28 +63,40 @@ export default function ToolCallCard({ toolName, arguments: args, result, status
     switch (status) {
       case 'running': return '执行中...';
       case 'completed': return getResultSummary();
-      case 'error': return result?.error || '执行失败';
+      case 'error': {
+        if (isRecord(result) && typeof result.error === 'string') return result.error;
+        return '执行失败';
+      }
       default: return '等待执行';
     }
   };
 
   const getResultSummary = () => {
     if (!result) return '完成';
-    if (toolName === 'search_questions') {
-      const count = result.questions?.length || result.count || 0;
+
+    const rec = isRecord(result) ? result : null;
+
+    if (toolName === 'search_questions' && rec) {
+      const questions = Array.isArray(rec.questions) ? rec.questions : [];
+      const count =
+        questions.length ||
+        (typeof rec.count === 'number' ? rec.count : typeof rec.total === 'number' ? rec.total : 0);
       return `找到 ${count} 道题目`;
     }
-    if (toolName === 'create_paper') {
-      return `试卷已创建`;
-    }
-    if (toolName === 'get_papers') {
-      const count = result.papers?.length || result.count || 0;
+
+    if (toolName === 'create_paper') return '试卷已创建';
+
+    if (toolName === 'get_papers' && rec) {
+      const papers = Array.isArray(rec.papers) ? rec.papers : [];
+      const count = papers.length || (typeof rec.count === 'number' ? rec.count : 0);
       return `共 ${count} 份试卷`;
     }
-    if (toolName === 'batch_get_question_details') {
-      const count = result.results?.length || 0;
-      return `获取 ${count} 题详情`;
+
+    if (toolName === 'batch_get_question_details' && rec) {
+      const results = Array.isArray(rec.results) ? rec.results : [];
+      return `获取 ${results.length} 题详情`;
     }
+
     return '完成';
   };
 
@@ -122,33 +148,33 @@ export default function ToolCallCard({ toolName, arguments: args, result, status
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Input</div>
                 <div className="bg-slate-950/50 rounded-lg p-2.5 text-xs font-mono text-slate-300 border border-white/5 overflow-x-auto">
-                  {Object.entries(args).map(([key, value]) => (
-                    <div key={key} className="flex gap-2">
-                      <span className="text-primary-light">{key}:</span>
-                      <span className="text-slate-400 break-all">
-                        {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                      </span>
-                    </div>
-                  ))}
+                  {argRows}
                 </div>
               </div>
 
               {/* Result */}
-              {result && status === 'completed' && (
+              {status === 'completed' && result != null && (
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 font-semibold">Output</div>
                   <div className="bg-slate-950/50 rounded-lg p-2.5 text-xs font-mono text-slate-300 border border-white/5 max-h-40 overflow-y-auto custom-scrollbar">
-                    {toolName === 'search_questions' && result.questions ? (
+                    {toolName === 'search_questions' && isRecord(result) && Array.isArray(result.questions) ? (
                       <div className="space-y-1">
-                        {result.questions.slice(0, 5).map((q: any, i: number) => (
-                          <div key={i} className="flex gap-2">
-                            <span className="text-accent">#{i + 1}</span>
-                            <span className="text-slate-400">{q.question_id}</span>
-                            <span className="text-slate-500">[{q.difficulty || '未知'}]</span>
+                        {(result.questions as unknown[]).slice(0, 5).map((q, i) => {
+                          const qRec = isRecord(q) ? q : {};
+                          const qid = typeof qRec.question_id === 'string' ? qRec.question_id : 'N/A';
+                          const diff = typeof qRec.difficulty === 'string' ? qRec.difficulty : '未知';
+                          return (
+                            <div key={i} className="flex gap-2">
+                              <span className="text-accent">#{i + 1}</span>
+                              <span className="text-slate-400">{qid}</span>
+                              <span className="text-slate-500">[{diff}]</span>
+                            </div>
+                          );
+                        })}
+                        {(result.questions as unknown[]).length > 5 && (
+                          <div className="text-slate-500 italic pl-1">
+                            ... 还有 {(result.questions as unknown[]).length - 5} 道题目
                           </div>
-                        ))}
-                        {result.questions.length > 5 && (
-                          <div className="text-slate-500 italic pl-1">... 还有 {result.questions.length - 5} 道题目</div>
                         )}
                       </div>
                     ) : (
@@ -161,7 +187,7 @@ export default function ToolCallCard({ toolName, arguments: args, result, status
               )}
 
               {/* Error */}
-              {status === 'error' && result?.error && (
+              {status === 'error' && isRecord(result) && typeof result.error === 'string' && (
                 <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 p-2.5 rounded-lg">
                   {result.error}
                 </div>

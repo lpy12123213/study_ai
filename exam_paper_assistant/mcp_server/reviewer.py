@@ -2,33 +2,31 @@
 审卷人服务 - 使用 AI 对试卷/题目进行审查
 支持 OpenRouter 和 Fireworks AI
 """
+
+from __future__ import annotations
+
 import json
 import httpx
-import os
 from typing import List, Dict, Any
-from dotenv import load_dotenv
 
-load_dotenv()
+from core.settings import (
+    FIREWORKS_API_KEY,
+    FIREWORKS_BASE_URL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    REVIEW_HTTP_REFERER,
+    REVIEW_MAX_STEM_CHARS,
+    REVIEW_MODEL,
+    REVIEW_MODEL_MAX_TOKENS,
+    REVIEW_MODEL_TEMPERATURE,
+    REVIEW_PROVIDER,
+    REVIEW_TIMEOUT,
+    REVIEW_X_TITLE,
+)
 
-# 审卷人供应商配置（openrouter / fireworks）
-REVIEW_PROVIDER = os.getenv("REVIEW_PROVIDER", "fireworks").lower()
-
-# OpenRouter 配置
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-
-# Fireworks AI 配置
-FIREWORKS_API_KEY = os.getenv("FIREWORKS_API_KEY", "")
-FIREWORKS_BASE_URL = os.getenv("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
-
-# 模型配置
-REVIEW_MODEL = os.getenv("REVIEW_MODEL", "accounts/fireworks/models/llama-v3p1-70b-instruct")
-REVIEW_TEMPERATURE = float(os.getenv("REVIEW_MODEL_TEMPERATURE", "0.2"))
-REVIEW_MAX_TOKENS = int(os.getenv("REVIEW_MODEL_MAX_TOKENS", "1800"))
-REVIEW_TIMEOUT = int(os.getenv("REVIEW_TIMEOUT", "90"))
-REVIEW_MAX_STEM_CHARS = int(os.getenv("REVIEW_MAX_STEM_CHARS", "900"))
-REVIEW_HTTP_REFERER = os.getenv("REVIEW_HTTP_REFERER", "http://localhost:8000")
-REVIEW_X_TITLE = os.getenv("REVIEW_X_TITLE", "Exam Paper Assistant - Reviewer")
+# Compatibility aliases (old local variable names in this file).
+REVIEW_TEMPERATURE = REVIEW_MODEL_TEMPERATURE
+REVIEW_MAX_TOKENS = REVIEW_MODEL_MAX_TOKENS
 
 
 def _get_api_config() -> Dict[str, Any]:

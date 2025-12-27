@@ -1,12 +1,9 @@
-# MCP服务器配置文件
-# 用于Claude Desktop配置
-
 {
   "mcpServers": {
     "exam-paper-assistant": {
       "command": "python",
       "args": [
-        "C:\\Users\\李\\Desktop\\study_ai\\exam_paper_assistant\\mcp_server\\server.py"
+        "C:\\path\\to\\exam_paper_assistant\\mcp_server\\server.py"
       ],
       "description": "智能组卷辅助系统MCP服务器"
     }

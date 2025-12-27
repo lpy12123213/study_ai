@@ -2,11 +2,7 @@ import { FileText, Trash2, ExternalLink, Loader2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { getPapers, getPaperDetail, deletePaper, getDownloadLink, Paper, PaperDetail } from '../services/api';
 
-interface Props {
-  onClose?: () => void;
-}
-
-export default function PaperHistory({ onClose: _onClose }: Props) {
+export default function PaperHistory() {
   const [papers, setPapers] = useState<Paper[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);

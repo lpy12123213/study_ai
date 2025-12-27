@@ -1,3 +1,5 @@
 @echo off
-cd /d "C:\Users\李\Desktop\study_ai\exam_paper_assistant"
-"venv\Scripts\python.exe" "mcp_server\server.py"
+chcp 65001 >nul 2>&1
+cd /d "%~dp0"
+call venv\Scripts\activate.bat
+python -m mcp_server.server

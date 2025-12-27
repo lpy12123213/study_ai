@@ -58,7 +58,7 @@ echo "===================================="
 echo ""
 
 # 启动后端（后台）和前端（前台）
-python backend/app.py &
+python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload &
 backend_pid=$!
 (cd frontend && npm run dev)
 kill $backend_pid

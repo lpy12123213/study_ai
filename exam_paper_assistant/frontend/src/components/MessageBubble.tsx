@@ -1,27 +1,12 @@
 import { User, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import ToolCallCard from './ToolCallCard';
-
-interface ToolCall {
-  id: string;
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-interface ToolResult {
-  tool_call_id: string;
-  tool_name: string;
-  result?: any;
-  status: 'pending' | 'running' | 'completed' | 'error';
-  iteration?: number;
-}
+import { ToolCall, ToolResult } from '../services/api';
 
 interface MessageProps {
   role: 'user' | 'assistant' | 'tool';
   content: string;
-  toolCalls?: ToolCall[];
+  toolCalls?: ToolCall[] | null;
   toolResults?: ToolResult[];
   isStreaming?: boolean;
 }
@@ -109,10 +94,15 @@ export default function MessageBubble({
           <div className="mt-3 space-y-2 w-full max-w-2xl">
             {toolCalls.map((tc) => {
               const result = getToolResult(tc.id);
-              let args = {};
+              let args: Record<string, unknown> = {};
               try {
-                args = JSON.parse(tc.function.arguments);
-              } catch { }
+                const parsed: unknown = JSON.parse(tc.function.arguments) as unknown;
+                if (typeof parsed === 'object' && parsed !== null) {
+                  args = parsed as Record<string, unknown>;
+                }
+              } catch {
+                // ignore invalid JSON in tool arguments
+              }
 
               return (
                 <ToolCallCard

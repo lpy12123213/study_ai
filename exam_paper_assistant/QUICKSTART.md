@@ -42,7 +42,7 @@ playwright install chromium
 python database/models.py
 
 # 5. 启动服务
-python backend/app.py
+python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
 # 6. 启动前端（开发模式）
 cd frontend
@@ -69,7 +69,7 @@ npm run dev
     "exam-paper-assistant": {
       "command": "python",
       "args": [
-        "C:\\Users\\李\\Desktop\\study_ai\\exam_paper_assistant\\mcp_server\\server.py"
+        "C:\\path\\to\\exam_paper_assistant\\mcp_server\\server.py"
       ]
     }
   }
@@ -193,7 +193,7 @@ AI会自动：
 netstat -ano | findstr :8000
 
 # 使用其他端口
-python backend/app.py --port 8001
+python -m uvicorn backend.app:app --host 0.0.0.0 --port 8001 --reload
 ```
 
 ### AI无法调用MCP工具

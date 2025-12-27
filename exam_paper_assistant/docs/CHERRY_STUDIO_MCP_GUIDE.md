@@ -91,8 +91,8 @@ cp .env.example .env
 
    ```
    名称: exam-paper-assistant
-   命令: C:\Users\李\Desktop\study_ai\exam_paper_assistant\venv\Scripts\python.exe
-   参数: C:\Users\李\Desktop\study_ai\exam_paper_assistant\mcp_server\server.py
+   命令: C:\path\to\exam_paper_assistant\venv\Scripts\python.exe
+   参数: C:\path\to\exam_paper_assistant\mcp_server\server.py
    ```
 
    **或者使用批处理文件：**
@@ -100,7 +100,7 @@ cp .env.example .env
    ```
    名称: exam-paper-assistant
    命令: cmd
-   参数: /c C:\Users\李\Desktop\study_ai\exam_paper_assistant\start_mcp.bat
+   参数: /c C:\path\to\exam_paper_assistant\start_mcp.bat
    ```
 
 5. **保存并启用**
@@ -123,9 +123,9 @@ Cherry Studio 的 MCP 配置文件通常位于：
 {
   "mcpServers": {
     "exam-paper-assistant": {
-      "command": "C:\\Users\\李\\Desktop\\study_ai\\exam_paper_assistant\\venv\\Scripts\\python.exe",
+      "command": "C:\\path\\to\\exam_paper_assistant\\venv\\Scripts\\python.exe",
       "args": [
-        "C:\\Users\\李\\Desktop\\study_ai\\exam_paper_assistant\\mcp_server\\server.py"
+        "C:\\path\\to\\exam_paper_assistant\\mcp_server\\server.py"
       ],
       "description": "智能组卷辅助系统MCP服务器"
     }
@@ -328,16 +328,16 @@ Cherry Studio 的 MCP 配置文件通常位于：
 **排查步骤**：
 
 1. **检查 Python 路径**
-   ```bash
-   # 确认虚拟环境的 Python 可执行
-   C:\Users\李\Desktop\study_ai\exam_paper_assistant\venv\Scripts\python.exe --version
-   ```
+    ```bash
+    # 确认虚拟环境的 Python 可执行
+    C:\path\to\exam_paper_assistant\venv\Scripts\python.exe --version
+    ```
 
 2. **手动测试 MCP 服务器**
-   ```bash
-   cd C:\Users\李\Desktop\study_ai\exam_paper_assistant
-   venv\Scripts\python.exe mcp_server\server.py
-   ```
+    ```bash
+    cd C:\path\to\exam_paper_assistant
+    venv\Scripts\python.exe mcp_server\server.py
+    ```
    
    如果报错，根据错误信息修复依赖问题。
 

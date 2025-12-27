@@ -50,7 +50,7 @@ python database/models.py
 #### 1. 启动Web后端
 
 ```bash
-python backend/app.py
+python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 访问：http://localhost:8000
