@@ -1,5 +1,5 @@
 import { Plus, ExternalLink } from 'lucide-react';
-import { Question } from '../services/api';
+import type { Question } from '@/api';
 
 interface Props {
   questions: Question[];

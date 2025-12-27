@@ -1,10 +1,4 @@
-import axios from 'axios';
-
-const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
-
-const api = axios.create({
-  baseURL: API_BASE,
-});
+import { apiUrl, axiosClient } from './http';
 
 // ============ 对话相关类型 ============
 
@@ -43,44 +37,32 @@ export interface ToolResult {
   iteration?: number; // 多轮工具调用的轮次
 }
 
-export interface Subject {
-  name: string;
-  short_name: string;
-  bank_id: number;
-  edu_id: number;
-}
-
-type SubjectsResponse = { subjects: Subject[] };
-
-// ============ 学科 API ============
-
-export const getSubjects = async (): Promise<Subject[]> => {
-  const { data } = await api.get<SubjectsResponse>('/api/subjects');
-  return data.subjects;
-};
-
 // ============ 对话 API ============
 
 export const getConversations = async (): Promise<Conversation[]> => {
-  const { data } = await api.get<Conversation[]>('/api/conversations');
+  const { data } = await axiosClient.get<Conversation[]>('/api/conversations');
   return data;
 };
 
 export const createConversation = async (title?: string): Promise<{ id: number; title: string }> => {
-  const { data } = await api.post<{ id: number; title: string }>('/api/conversations', { title });
+  const { data } = await axiosClient.post<{ id: number; title: string }>('/api/conversations', { title });
   return data;
 };
 
 export const deleteConversation = async (id: number): Promise<void> => {
-  await api.delete(`/api/conversations/${id}`);
+  await axiosClient.delete(`/api/conversations/${id}`);
 };
 
 export const getConversationMessages = async (
   id: number
 ): Promise<{ conversation: Conversation; messages: Message[] }> => {
-  const { data } = await api.get<{ conversation: Conversation; messages: Message[] }>(`/api/conversations/${id}/messages`);
+  const { data } = await axiosClient.get<{ conversation: Conversation; messages: Message[] }>(
+    `/api/conversations/${id}/messages`
+  );
   return data;
 };
+
+// ============ Chat SSE Stream ============
 
 export type ChatStreamChunk =
   | {
@@ -127,7 +109,9 @@ export type ChatStreamChunk =
       content: string;
     };
 
-async function* readSseLines(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string, void, unknown> {
+async function* readSseLines(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncGenerator<string, void, unknown> {
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -163,7 +147,7 @@ export const sendChatMessage = async (
   onChunk: (chunk: ChatStreamChunk) => void,
   subject: string = '高中数学'
 ): Promise<void> => {
-  const response = await fetch(`${API_BASE}/api/chat`, {
+  const response = await fetch(apiUrl('/api/chat'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -199,57 +183,3 @@ export const sendChatMessage = async (
   }
 };
 
-// ============ 试卷相关类型 ============
-
-export interface Question {
-  question_id: string;
-  type?: string;
-  difficulty?: string;
-  source_url?: string;
-}
-
-export interface Paper {
-  paper_id: number;
-  paper_name: string;
-  question_count: number;
-  created_at: string;
-}
-
-export interface PaperDetail extends Paper {
-  questions: Question[];
-  analysis?: {
-    difficulty_score: number;
-    radar_data: Array<{ subject: string; A: number; fullMark: number }>;
-    ai_comment: string;
-  };
-}
-
-export interface DownloadLinkResponse {
-  success: boolean;
-  paper_name: string;
-  question_count: number;
-  question_ids: string[];
-  question_links: string[];
-  instructions: string[];
-}
-
-// ============ 试卷 API ============
-
-export const getPapers = async (): Promise<Paper[]> => {
-  const { data } = await api.get<Paper[]>('/api/papers');
-  return data;
-};
-
-export const getPaperDetail = async (id: number): Promise<PaperDetail> => {
-  const { data } = await api.get<PaperDetail>(`/api/papers/${id}`);
-  return data;
-};
-
-export const deletePaper = async (id: number): Promise<void> => {
-  await api.delete(`/api/papers/${id}`);
-};
-
-export const getDownloadLink = async (id: number): Promise<DownloadLinkResponse> => {
-  const { data } = await api.get<DownloadLinkResponse>(`/api/papers/${id}/download-link`);
-  return data;
-};

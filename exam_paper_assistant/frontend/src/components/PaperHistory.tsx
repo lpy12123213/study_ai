@@ -1,6 +1,6 @@
 import { FileText, Trash2, ExternalLink, Loader2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { getPapers, getPaperDetail, deletePaper, getDownloadLink, Paper, PaperDetail } from '../services/api';
+import { deletePaper, getDownloadLink, getPaperDetail, getPapers, type Paper, type PaperDetail } from '@/api';
 
 export default function PaperHistory() {
   const [papers, setPapers] = useState<Paper[]>([]);

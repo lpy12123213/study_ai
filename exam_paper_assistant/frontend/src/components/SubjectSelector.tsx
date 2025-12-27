@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, GraduationCap, Check } from 'lucide-react';
-import { getSubjects, Subject } from '../services/api';
+import { getSubjects, type Subject } from '@/api';
 
 interface Props {
   value: string;

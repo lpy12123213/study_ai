@@ -1,5 +1,5 @@
 import { FileText, Eye, Download, Trash2, RefreshCw } from 'lucide-react';
-import { Paper } from '../services/api';
+import type { Paper } from '@/api';
 
 interface Props {
   papers: Paper[];

@@ -1,12 +1,7 @@
 import { MessageSquarePlus, Trash2, MessageCircle, FileText } from 'lucide-react';
 import { useState } from 'react';
 import PaperHistory from './PaperHistory';
-
-interface Conversation {
-  id: number;
-  title: string;
-  updated_at: string;
-}
+import type { Conversation } from '@/api';
 
 interface Props {
   conversations: Conversation[];

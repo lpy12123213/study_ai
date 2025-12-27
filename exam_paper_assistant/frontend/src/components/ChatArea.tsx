@@ -2,7 +2,7 @@ import { Send, Loader2, Sparkles } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MessageBubble from './MessageBubble';
-import { Message, ToolCall, ToolResult } from '../services/api';
+import type { Message, ToolCall, ToolResult } from '@/api';
 
 interface Props {
   messages: Message[];

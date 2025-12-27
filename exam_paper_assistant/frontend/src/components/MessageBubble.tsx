@@ -1,7 +1,7 @@
 import { User, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import ToolCallCard from './ToolCallCard';
-import { ToolCall, ToolResult } from '../services/api';
+import type { ToolCall, ToolResult } from '@/api';
 
 interface MessageProps {
   role: 'user' | 'assistant' | 'tool';
