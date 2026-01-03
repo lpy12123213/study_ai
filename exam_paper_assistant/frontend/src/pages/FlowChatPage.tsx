@@ -23,7 +23,11 @@ import {
   Bot,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
   GitFork,
+  HelpCircle,
+  Lightbulb,
+  ListChecks,
   MessagesSquare,
   Plus,
   Search,
@@ -47,6 +51,8 @@ import { readSseData } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import type { Message, Subject } from "@/types";
 
+const EPA_GRAPH_MARKER = "[[EPA_GRAPH_V1]]";
+
 type FlowMessageNodeData = {
   role: Message["role"];
   content: string;
@@ -57,6 +63,45 @@ type FlowMessageNodeData = {
 };
 
 type FlowMessageNode = Node<FlowMessageNodeData, "message">;
+
+type TutorNodeKind =
+  | "question"
+  | "answer"
+  | "explanation"
+  | "steps"
+  | "hint"
+  | "example"
+  | "summary";
+
+type FlowTutorNodeData = {
+  kind: TutorNodeKind;
+  title: string;
+  content: string;
+  messageId?: number;
+  onFork?: (messageId: number) => void;
+};
+
+type FlowTutorNode = Node<FlowTutorNodeData, "tutor">;
+
+type FlowNode = FlowMessageNode | FlowTutorNode;
+
+type EpaGraphNodePayload = {
+  id: string;
+  kind: TutorNodeKind;
+  title: string;
+  content: string;
+};
+
+type EpaGraphEdgePayload = {
+  source: string;
+  target: string;
+  label?: string;
+};
+
+type EpaGraphPayload = {
+  nodes: EpaGraphNodePayload[];
+  edges?: EpaGraphEdgePayload[];
+};
 
 function titleFromPrompt(prompt: string): string {
   const trimmed = prompt.trim();
@@ -69,6 +114,172 @@ function formatTime(iso?: string): string {
   const dt = new Date(iso);
   if (Number.isNaN(dt.getTime())) return "";
   return format(dt, "HH:mm");
+}
+
+function stripEpaGraphMarker(text: string): string {
+  const raw = text || "";
+  const idx = raw.indexOf(EPA_GRAPH_MARKER);
+  if (idx === -1) return raw;
+  return raw.slice(0, idx).trimEnd();
+}
+
+function kindLabel(kind: TutorNodeKind): string {
+  switch (kind) {
+    case "question":
+      return "题目";
+    case "answer":
+      return "答案";
+    case "explanation":
+      return "解析";
+    case "steps":
+      return "步骤";
+    case "hint":
+      return "提示";
+    case "example":
+      return "例题";
+    case "summary":
+      return "总结";
+    default:
+      return kind;
+  }
+}
+
+function normalizeKind(kind: unknown): TutorNodeKind | null {
+  if (typeof kind !== "string") return null;
+  const k = kind.trim().toLowerCase();
+  if (
+    k === "question" ||
+    k === "answer" ||
+    k === "explanation" ||
+    k === "steps" ||
+    k === "hint" ||
+    k === "example" ||
+    k === "summary"
+  ) {
+    return k;
+  }
+  return null;
+}
+
+function extractEpaGraphJson(text: string): string | null {
+  const raw = (text || "").trim();
+  if (!raw) return null;
+  const match = raw.match(/```epa-graph\s*([\s\S]*?)```/i);
+  if (!match) return null;
+  const inside = (match[1] || "").trim();
+  if (!inside) return null;
+  return inside;
+}
+
+function sanitizeJsonLike(text: string): string {
+  return text
+    .replace(/^\uFEFF/, "")
+    .replace(/,\s*([}\]])/g, "$1");
+}
+
+function tryParseJson(text: string): unknown | null {
+  try {
+    return JSON.parse(sanitizeJsonLike(text)) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function parseEpaGraphPayload(text: string): EpaGraphPayload | null {
+  const jsonText = extractEpaGraphJson(text);
+  if (!jsonText) return null;
+
+  let parsed = tryParseJson(jsonText);
+  if (!parsed) {
+    const start = jsonText.indexOf("{");
+    const end = jsonText.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      parsed = tryParseJson(jsonText.slice(start, end + 1));
+    }
+  }
+  if (!parsed) return null;
+
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  const rawNodes = obj.nodes;
+  if (!Array.isArray(rawNodes) || rawNodes.length === 0) return null;
+
+  const nodes: EpaGraphNodePayload[] = [];
+  const seenIds = new Set<string>();
+  for (const item of rawNodes) {
+    if (!item || typeof item !== "object") return null;
+    const n = item as Record<string, unknown>;
+    const id = typeof n.id === "string" ? n.id.trim() : "";
+    const kind = normalizeKind(n.kind);
+    const title = typeof n.title === "string" ? n.title : "";
+    let content = "";
+    if (typeof n.content === "string") {
+      content = n.content;
+    } else if (Array.isArray(n.content) && n.content.every((line) => typeof line === "string")) {
+      content = (n.content as string[]).join("\n");
+    }
+    if (!id || !kind) return null;
+    if (seenIds.has(id)) return null;
+    seenIds.add(id);
+    nodes.push({ id, kind, title, content });
+  }
+
+  const rawEdges = obj.edges;
+  const edges: EpaGraphEdgePayload[] = [];
+  if (Array.isArray(rawEdges)) {
+    for (const item of rawEdges) {
+      if (!item || typeof item !== "object") continue;
+      const e = item as Record<string, unknown>;
+      const source = typeof e.source === "string" ? e.source.trim() : "";
+      const target = typeof e.target === "string" ? e.target.trim() : "";
+      if (!source || !target) continue;
+      const label = typeof e.label === "string" ? e.label : undefined;
+      edges.push({ source, target, label });
+    }
+  }
+
+  return { nodes, edges: edges.length ? edges : undefined };
+}
+
+function buildEpaGraphInstruction(subjectName: string): string {
+  return [
+    EPA_GRAPH_MARKER,
+    "你是面向学生的教学助手。请把你的输出整理为一个可视化节点图。",
+    `学科：${subjectName}`,
+    "",
+    "输出要求：",
+    "1) 只输出一个 Markdown 代码块，语言标识必须是 epa-graph",
+    "2) 代码块内容必须是严格 JSON（不要注释、不要尾逗号）",
+    "3) 必须包含 nodes 数组；每个 node：id/kind/title/content",
+    '   kind 只能取：question / answer / explanation / steps / hint / example / summary',
+    '   content 建议用字符串数组（每个元素一行），避免在字符串里出现未转义的换行',
+    "4) 可选 edges 数组；每个 edge：source/target/label（source/target 引用 node.id）",
+    "",
+    "JSON 示例：",
+    "```epa-graph",
+    '{',
+    '  "nodes": [',
+    '    { "id": "q1", "kind": "question", "title": "题目", "content": ["……"] },',
+    '    { "id": "a1", "kind": "answer", "title": "答案", "content": ["……"] },',
+    '    { "id": "e1", "kind": "explanation", "title": "解析", "content": ["……"] }',
+    "  ],",
+    '  "edges": [',
+    '    { "source": "q1", "target": "a1", "label": "答案" },',
+    '    { "source": "q1", "target": "e1", "label": "解析" }',
+    "  ]",
+    "}",
+    "```",
+  ].join("\n");
+}
+
+function buildTutorMessage(args: {
+  prompt: string;
+  subjectName: string;
+  structured: boolean;
+}): string {
+  const p = (args.prompt || "").trim();
+  if (!args.structured) return p;
+  return `${p}\n\n${buildEpaGraphInstruction(args.subjectName)}`;
 }
 
 function FlowMessageNodeView({ data, selected }: NodeProps<FlowMessageNode>) {
@@ -129,6 +340,74 @@ function FlowMessageNodeView({ data, selected }: NodeProps<FlowMessageNode>) {
 
 const MemoFlowMessageNodeView = memo(FlowMessageNodeView);
 
+function FlowTutorNodeView({ data, selected }: NodeProps<FlowTutorNode>) {
+  const label = kindLabel(data.kind);
+  const Icon =
+    data.kind === "question"
+      ? HelpCircle
+      : data.kind === "answer"
+        ? CheckCircle2
+        : data.kind === "hint"
+          ? Lightbulb
+          : data.kind === "steps"
+            ? ListChecks
+            : Bot;
+
+  const canFork = Boolean(data.onFork && data.messageId);
+
+  const accent =
+    data.kind === "question"
+      ? "border-sky-500/40 bg-sky-500/5"
+      : data.kind === "answer"
+        ? "border-emerald-500/40 bg-emerald-500/5"
+        : data.kind === "hint"
+          ? "border-amber-500/40 bg-amber-500/5"
+          : data.kind === "steps"
+            ? "border-violet-500/40 bg-violet-500/5"
+            : "border-border bg-card";
+
+  return (
+    <div
+      className={cn(
+        "relative min-w-[280px] max-w-[520px] rounded-xl border shadow-sm transition-all text-foreground",
+        accent,
+        selected && "ring-2 ring-ring ring-offset-2 ring-offset-background",
+      )}
+    >
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border/50">
+        <Icon className="h-4 w-4" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold truncate">
+            {data.title || label}
+          </div>
+        </div>
+        <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
+          {label}
+        </Badge>
+        {canFork ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 opacity-70 hover:opacity-100"
+            onClick={() => data.onFork?.(data.messageId!)}
+            title="从这里分叉对话"
+          >
+            <GitFork className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="px-4 py-3 text-sm whitespace-pre-wrap">{data.content}</div>
+
+      <Handle type="target" position={Position.Top} className="!bg-muted-foreground !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-muted-foreground !w-3 !h-3" />
+    </div>
+  );
+}
+
+const MemoFlowTutorNodeView = memo(FlowTutorNodeView);
+
 function asConversationId(raw: string | undefined): number | null {
   if (!raw) return null;
   const parsed = Number(raw);
@@ -146,50 +425,198 @@ function nextCanvasY(nodes: Array<{ position: { y: number } }>, fallback: number
   return maxY + 200;
 }
 
+const TUTOR_KIND_ORDER: TutorNodeKind[] = [
+  "question",
+  "answer",
+  "explanation",
+  "steps",
+  "hint",
+  "example",
+  "summary",
+];
+
+function kindRank(kind: TutorNodeKind): number {
+  const idx = TUTOR_KIND_ORDER.indexOf(kind);
+  return idx === -1 ? 999 : idx;
+}
+
+function sortTutorPayloadNodes(nodes: EpaGraphNodePayload[]): EpaGraphNodePayload[] {
+  const sorted = [...nodes];
+  sorted.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || a.id.localeCompare(b.id));
+  return sorted;
+}
+
+function pickRootTutorNode(nodes: EpaGraphNodePayload[]): EpaGraphNodePayload {
+  const q = nodes.find((n) => n.kind === "question");
+  return q ?? nodes[0]!;
+}
+
+function pickExitTutorNode(nodes: EpaGraphNodePayload[]): EpaGraphNodePayload {
+  const summary = nodes.find((n) => n.kind === "summary");
+  if (summary) return summary;
+  const answer = nodes.find((n) => n.kind === "answer");
+  if (answer) return answer;
+  return pickRootTutorNode(nodes);
+}
+
+function buildTutorCluster(args: {
+  payload: EpaGraphPayload;
+  idPrefix: string;
+  origin: { x: number; y: number };
+  messageId?: number;
+  onFork?: (messageId: number) => void;
+}): { nodes: FlowTutorNode[]; edges: Edge[]; rootNodeId: string; exitNodeId: string; height: number } {
+  const sorted = sortTutorPayloadNodes(args.payload.nodes);
+  const nodeIdByPayloadId = new Map<string, string>();
+
+  const colX = [args.origin.x, args.origin.x - 420];
+  const rowGapY = 240;
+
+  const nodes: FlowTutorNode[] = [];
+  for (let idx = 0; idx < sorted.length; idx += 1) {
+    const item = sorted[idx];
+    const nodeId = `${args.idPrefix}-${item.id}`;
+    nodeIdByPayloadId.set(item.id, nodeId);
+    const col = idx % 2;
+    const row = Math.floor(idx / 2);
+
+    nodes.push({
+      id: nodeId,
+      type: "tutor",
+      position: { x: colX[col], y: args.origin.y + row * rowGapY },
+      data: {
+        kind: item.kind,
+        title: item.title,
+        content: item.content,
+        messageId: args.messageId,
+        onFork: args.onFork,
+      },
+    });
+  }
+
+  const rootPayload = pickRootTutorNode(sorted);
+  const exitPayload = pickExitTutorNode(sorted);
+  const rootNodeId = nodeIdByPayloadId.get(rootPayload.id) ?? nodes[0]?.id ?? `${args.idPrefix}-root`;
+  const exitNodeId = nodeIdByPayloadId.get(exitPayload.id) ?? rootNodeId;
+
+  const edges: Edge[] = [];
+  if (args.payload.edges?.length) {
+    for (const e of args.payload.edges) {
+      const source = nodeIdByPayloadId.get(e.source);
+      const target = nodeIdByPayloadId.get(e.target);
+      if (!source || !target) continue;
+      edges.push({
+        id: `edge-${args.idPrefix}-${e.source}-${e.target}`,
+        source,
+        target,
+        label: e.label,
+        animated: false,
+        style: { stroke: "hsl(var(--muted-foreground) / 0.55)" },
+      });
+    }
+  } else {
+    for (const item of sorted) {
+      if (item.id === rootPayload.id) continue;
+      const target = nodeIdByPayloadId.get(item.id);
+      if (!target) continue;
+      edges.push({
+        id: `edge-${args.idPrefix}-${rootPayload.id}-${item.id}`,
+        source: rootNodeId,
+        target,
+        label: kindLabel(item.kind),
+        animated: false,
+        style: { stroke: "hsl(var(--muted-foreground) / 0.55)" },
+      });
+    }
+  }
+
+  const rows = Math.max(1, Math.ceil(sorted.length / 2));
+  const height = rows * rowGapY;
+
+  return { nodes, edges, rootNodeId, exitNodeId, height };
+}
+
 function buildGraphFromMessages(args: {
   messages: Message[];
   showTools: boolean;
   onFork?: (messageId: number) => void;
-}): { nodes: FlowMessageNode[]; edges: Edge[] } {
+}): { nodes: FlowNode[]; edges: Edge[] } {
   const { messages, showTools, onFork } = args;
   const visible = showTools ? messages : messages.filter((m) => m.role !== "tool");
 
-  const nodes: FlowMessageNode[] = [];
+  const nodes: FlowNode[] = [];
   const edges: Edge[] = [];
 
   const startY = 40;
-  const gapY = 200;
+  const messageGapY = 220;
+  const clusterGapY = 140;
+
+  let cursorY = startY;
+  let prevRepId: string | null = null;
 
   for (let idx = 0; idx < visible.length; idx += 1) {
     const m = visible[idx];
-    const id = `msg-${m.id}`;
+
+    if (m.role === "assistant") {
+      const payload = parseEpaGraphPayload(m.content || "");
+      if (payload) {
+        const cluster = buildTutorCluster({
+          payload,
+          idPrefix: `tutor-${m.id}`,
+          origin: { x: 0, y: cursorY },
+          messageId: m.id,
+          onFork,
+        });
+
+        nodes.push(...cluster.nodes);
+        edges.push(...cluster.edges);
+
+        if (prevRepId) {
+          edges.push({
+            id: `edge-turn-${prevRepId}-${cluster.rootNodeId}`,
+            source: prevRepId,
+            target: cluster.rootNodeId,
+            animated: false,
+            style: { stroke: "hsl(var(--muted-foreground) / 0.55)" },
+          });
+        }
+
+        prevRepId = cluster.exitNodeId;
+        cursorY += cluster.height + clusterGapY;
+        continue;
+      }
+    }
 
     const role = m.role;
-    const x = role === "user" ? 420 : role === "assistant" ? 0 : 210;
-    const y = startY + idx * gapY;
+    const nodeId = `msg-${m.id}`;
+    const x = role === "user" ? 680 : role === "assistant" ? 0 : 340;
+    const content = role === "user" ? stripEpaGraphMarker(m.content || "") : m.content || "";
 
     nodes.push({
-      id,
+      id: nodeId,
       type: "message",
-      position: { x, y },
+      position: { x, y: cursorY },
       data: {
         role,
-        content: m.content || "",
+        content,
         created_at: m.created_at,
         messageId: m.id,
         onFork,
       },
     });
 
-    if (idx === 0) continue;
-    const prev = visible[idx - 1];
-    edges.push({
-      id: `edge-msg-${prev.id}-msg-${m.id}`,
-      source: `msg-${prev.id}`,
-      target: id,
-      animated: false,
-      style: { stroke: "hsl(var(--muted-foreground) / 0.55)" },
-    });
+    if (prevRepId) {
+      edges.push({
+        id: `edge-turn-${prevRepId}-${nodeId}`,
+        source: prevRepId,
+        target: nodeId,
+        animated: false,
+        style: { stroke: "hsl(var(--muted-foreground) / 0.55)" },
+      });
+    }
+
+    prevRepId = nodeId;
+    cursorY += messageGapY;
   }
 
   return { nodes, edges };
@@ -231,6 +658,10 @@ export default function FlowChatPage() {
     "epa_sub_model_override",
     "",
   );
+  const [structuredOutput, setStructuredOutput] = useLocalStorageState<boolean>(
+    "epa_flow_structured_output",
+    true,
+  );
 
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useLocalStorageState<boolean>(
     "epa_flow_left_panel_collapsed",
@@ -249,10 +680,13 @@ export default function FlowChatPage() {
   const abortRef = useRef<AbortController | null>(null);
   const hasLocalEditsRef = useRef(false);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<FlowMessageNode>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const nodeTypes = useMemo(() => ({ message: MemoFlowMessageNodeView }), []);
+  const nodeTypes = useMemo(
+    () => ({ message: MemoFlowMessageNodeView, tutor: MemoFlowTutorNodeView }),
+    [],
+  );
 
   const subjectOptions = useMemo(() => {
     const grouped = new Map<number, Subject[]>();
@@ -356,6 +790,12 @@ export default function FlowChatPage() {
     setStreamError(null);
     hasLocalEditsRef.current = true;
 
+    const outboundMessage = buildTutorMessage({
+      prompt,
+      subjectName,
+      structured: structuredOutput,
+    });
+
     let convId = conversationId;
     if (!convId) {
       const created = await createConversation.mutateAsync(titleFromPrompt(prompt));
@@ -374,7 +814,7 @@ export default function FlowChatPage() {
     const userNode: FlowMessageNode = {
       id: localUserId,
       type: "message",
-      position: { x: 420, y },
+      position: { x: 680, y },
       data: {
         role: "user",
         content: prompt,
@@ -387,7 +827,7 @@ export default function FlowChatPage() {
       position: { x: 0, y: y + 200 },
       data: {
         role: "assistant",
-        content: "",
+        content: structuredOutput ? "正在生成节点图…" : "",
         created_at: nowIso,
         isStreaming: true,
       },
@@ -428,7 +868,7 @@ export default function FlowChatPage() {
         signal: controller.signal,
         body: JSON.stringify({
           conversation_id: convId,
-          message: prompt,
+          message: outboundMessage,
           subject: subjectName,
           model: modelOverride.trim() || undefined,
           sub_model: subModelOverride.trim() || undefined,
@@ -453,32 +893,65 @@ export default function FlowChatPage() {
         if (evt.type === "text_delta") {
           const delta = typeof evt.content === "string" ? evt.content : "";
           assistantText += delta;
-          setNodes((prev) =>
-            prev.map((n) =>
-              n.id === localAssistantId
-                ? {
-                    ...n,
-                    data: { ...n.data, content: assistantText, isStreaming: true },
-                  }
-                : n,
-            ),
-          );
+          if (!structuredOutput) {
+            setNodes((prev) =>
+              prev.map((n) => {
+                if (n.id !== localAssistantId) return n;
+                if (n.type !== "message") return n;
+                return {
+                  ...n,
+                  data: { ...n.data, content: assistantText, isStreaming: true },
+                };
+              }),
+            );
+          }
           continue;
         }
 
         if (evt.type === "assistant_final") {
           const finalText = typeof evt.content === "string" ? evt.content : assistantText;
           assistantText = finalText;
-          setNodes((prev) =>
-            prev.map((n) =>
-              n.id === localAssistantId
-                ? {
-                    ...n,
-                    data: { ...n.data, content: finalText, isStreaming: false },
-                  }
-                : n,
-            ),
-          );
+          const payload = parseEpaGraphPayload(finalText);
+          if (payload) {
+            const cluster = buildTutorCluster({
+              payload,
+              idPrefix: `tutor-${localAssistantId}`,
+              origin: { x: 0, y: y + 200 },
+              onFork: convId ? (messageId) => void handleForkFromMessage(messageId) : undefined,
+            });
+
+            setNodes((prev) => [
+              ...prev.filter((n) => n.id !== localAssistantId),
+              ...cluster.nodes,
+            ]);
+            setEdges((prev) => {
+              const filtered = prev.filter(
+                (e) => e.source !== localAssistantId && e.target !== localAssistantId,
+              );
+              return [
+                ...filtered,
+                ...cluster.edges,
+                {
+                  id: `edge-${localUserId}-${cluster.rootNodeId}`,
+                  source: localUserId,
+                  target: cluster.rootNodeId,
+                  animated: true,
+                  style: { stroke: "hsl(var(--primary) / 0.55)" },
+                },
+              ];
+            });
+          } else {
+            setNodes((prev) =>
+              prev.map((n) => {
+                if (n.id !== localAssistantId) return n;
+                if (n.type !== "message") return n;
+                return {
+                  ...n,
+                  data: { ...n.data, content: finalText, isStreaming: false },
+                };
+              }),
+            );
+          }
           continue;
         }
 
@@ -497,9 +970,11 @@ export default function FlowChatPage() {
       abortRef.current = null;
       setIsStreaming(false);
       setNodes((prev) =>
-        prev.map((n) =>
-          n.id === localAssistantId ? { ...n, data: { ...n.data, isStreaming: false } } : n,
-        ),
+        prev.map((n) => {
+          if (n.id !== localAssistantId) return n;
+          if (n.type !== "message") return n;
+          return { ...n, data: { ...n.data, isStreaming: false } };
+        }),
       );
       hasLocalEditsRef.current = false;
 
@@ -827,6 +1302,16 @@ export default function FlowChatPage() {
                 <input
                   type="checkbox"
                   className="h-4 w-4"
+                  checked={structuredOutput}
+                  onChange={(e) => setStructuredOutput(e.target.checked)}
+                />
+                结构化节点输出（Flowith 风格）
+              </label>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
                   checked={showTools}
                   onChange={(e) => setShowTools(e.target.checked)}
                 />
@@ -835,6 +1320,7 @@ export default function FlowChatPage() {
 
               <div className="rounded-lg border bg-background/60 p-3 text-xs text-muted-foreground space-y-1">
                 <div className="font-medium text-foreground">提示</div>
+                <div>开启结构化输出后，AI 会用节点图返回「题目/答案/解析/步骤」等内容。</div>
                 <div>点击节点右上角的分叉按钮可从该消息创建新分支。</div>
                 <div>分支会创建一个新的对话（后端会复制前缀消息）。</div>
               </div>
