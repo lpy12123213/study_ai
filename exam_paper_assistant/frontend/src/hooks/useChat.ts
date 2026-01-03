@@ -47,3 +47,14 @@ export function useUpdateConversationTitle() {
         },
     });
 }
+
+export function useForkConversation() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: ({ id, messageId, title }: { id: number; messageId: number; title?: string }) =>
+            chatApi.forkConversation(id, { message_id: messageId, title }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+        },
+    });
+}

@@ -1,5 +1,5 @@
 import { client } from './client';
-import type { Conversation, ConversationDetail } from '@/types';
+import type { Conversation, ConversationDetail, ForkConversationResponse } from '@/types';
 
 export const chatApi = {
     getAllConversations: async () => {
@@ -27,5 +27,13 @@ export const chatApi = {
 
     deleteConversation: async (id: number) => {
         await client.delete(`/conversations/${id}`);
+    },
+
+    forkConversation: async (id: number, args: { message_id: number; title?: string }) => {
+        const response = await client.post<ForkConversationResponse>(
+            `/conversations/${id}/fork`,
+            args
+        );
+        return response.data;
     },
 };

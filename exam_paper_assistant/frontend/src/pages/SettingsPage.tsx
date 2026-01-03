@@ -19,6 +19,8 @@ const LOCAL_KEYS = [
   "epa_blueprint_right_panel_collapsed",
   "epa_paper_detail_left_panel_collapsed",
   "epa_paper_detail_right_panel_collapsed",
+  "epa_flow_left_panel_collapsed",
+  "epa_flow_right_panel_collapsed",
 ];
 
 const containerVariants: Variants = {

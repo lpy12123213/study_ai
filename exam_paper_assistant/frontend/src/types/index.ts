@@ -44,6 +44,15 @@ export interface Conversation {
   updated_at?: string;
 }
 
+export interface ForkConversationResponse {
+  id: number;
+  title: string;
+  parent_conversation_id?: number;
+  forked_from_message_id?: number;
+  copied_message_count?: number;
+  copied_visible_message_count?: number;
+}
+
 export interface Message {
   id: number;
   role: "user" | "assistant" | "tool";

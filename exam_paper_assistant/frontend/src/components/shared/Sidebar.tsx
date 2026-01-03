@@ -33,8 +33,8 @@ const sidebarItems = [
     icon: MessagesSquare,
   },
   {
-    title: "学习画布",
-    href: "/learn",
+    title: "画布对话",
+    href: "/flow",
     icon: PenTool,
   },
   {

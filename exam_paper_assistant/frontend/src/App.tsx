@@ -5,6 +5,7 @@ import RootLayout from "@/layouts/RootLayout";
 const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
 const BlueprintPage = lazy(() => import("@/pages/BlueprintPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
+const FlowChatPage = lazy(() => import("@/pages/FlowChatPage"));
 const PapersPage = lazy(() => import("@/pages/PapersPage"));
 const PaperDetailPage = lazy(() => import("@/pages/PaperDetailPage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
@@ -45,6 +46,14 @@ function App() {
           element={
             <Suspense fallback={fallback}>
               <ChatPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="flow/:conversationId?"
+          element={
+            <Suspense fallback={fallback}>
+              <FlowChatPage />
             </Suspense>
           }
         />
