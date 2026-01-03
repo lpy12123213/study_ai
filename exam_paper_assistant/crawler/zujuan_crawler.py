@@ -7,7 +7,10 @@
 - 使用 curl + Playwright获取的cookie 获取题目详情
 - 支持导出题目到组卷网题篮（需要登录）
 """
+from __future__ import annotations
+
 import asyncio
+import hashlib
 import html as html_module
 import json
 import os
@@ -15,6 +18,8 @@ import re
 import subprocess
 import time
 import urllib.parse
+from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -127,27 +132,27 @@ def _build_cookie_string(cookies: Dict[str, str]) -> str:
 
 
 _ANTIBOT_COOKIE_KEYS = {"aliyungf_tc", "acw_tc", "acw_sc__v2"}
-_ANTIBOT_CACHE_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    ".cache",
-    "zujuan_antibot_cookies.json",
-)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ANTIBOT_CACHE_FILE = str(_PROJECT_ROOT / ".local" / "cache" / "zujuan_antibot_cookies.json")
+_ANTIBOT_CACHE_FILE_LEGACY = str(_PROJECT_ROOT / ".cache" / "zujuan_antibot_cookies.json")
 _ANTIBOT_CACHE_TTL_SECONDS = 6 * 60 * 60
 
 
 def _load_antibot_cookie_cache() -> str:
     try:
-        if not os.path.exists(_ANTIBOT_CACHE_FILE):
-            return ""
-        with open(_ANTIBOT_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        cookie_str = (data.get("cookies") or "").strip()
-        ts = float(data.get("ts") or 0)
-        if not cookie_str:
-            return ""
-        if ts and (time.time() - ts) > _ANTIBOT_CACHE_TTL_SECONDS:
-            return ""
-        return cookie_str
+        for candidate in (_ANTIBOT_CACHE_FILE, _ANTIBOT_CACHE_FILE_LEGACY):
+            if not os.path.exists(candidate):
+                continue
+            with open(candidate, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            cookie_str = (data.get("cookies") or "").strip()
+            ts = float(data.get("ts") or 0)
+            if not cookie_str:
+                continue
+            if ts and (time.time() - ts) > _ANTIBOT_CACHE_TTL_SECONDS:
+                continue
+            return cookie_str
+        return ""
     except Exception:
         return ""
 
@@ -295,15 +300,152 @@ async def _get_login_session_with_playwright() -> Dict[str, Any]:
 
 
 
-def _parse_base_json(text: str) -> Optional[List[Dict[str, Any]]]:
+def _extract_js_var_json(text: str, var_name: str) -> Optional[str]:
     """
-    /zujuan-api/base 返回 var edu=[...] 形式，这里提取出 JSON。
+    从类似 `var xxx=[...]` / `var xxx={...}` 的 JS 文本中提取出 `xxx` 的 JSON 值。
+
+    说明：/zujuan-api/base 不是纯 JSON，通常会包含 `var edu=[...]` 及其他内容，
+    直接用正则截到末尾会导致 json.loads 失败。这里用简单的括号匹配截取完整值。
     """
-    m = re.search(r"var\s+edu\s*=\s*(\[[\s\S]+)", text)
-    if not m:
+    marker = f"var {var_name}="
+    idx = text.find(marker)
+    if idx < 0:
+        return None
+
+    start = None
+    open_ch = None
+    for ch in ("[", "{"):
+        pos = text.find(ch, idx + len(marker))
+        if pos >= 0 and (start is None or pos < start):
+            start = pos
+            open_ch = ch
+
+    if start is None or open_ch is None:
+        return None
+
+    close_ch = "]" if open_ch == "[" else "}"
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = False
+                continue
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == open_ch:
+            depth += 1
+            continue
+        if ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return None
+
+
+def _parse_base_json(text: str) -> Optional[List[Dict[str, Any]]]:        
+    """解析 /zujuan-api/base 中的 `var edu=[...]`。"""
+    raw = _extract_js_var_json(text, "edu")
+    if not raw:
         return None
     try:
-        return json.loads(m.group(1))
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _parse_province_list_json(text: str) -> Optional[List[Dict[str, Any]]]:
+    """解析 /zujuan-api/base-province 中的 `var province_list=[...]`。"""
+    raw = _extract_js_var_json(text, "province_list")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else None
+    except Exception:
+        return None
+
+
+PROVINCE_UNLIMITED_ALIASES = {
+    "不限",
+    "不限地区",
+    "不限省份",
+    "全国",
+    "全國",
+    "全部",
+    "all",
+    "ALL",
+}
+
+
+def _normalize_province_name(name: str) -> str:
+    """Normalize province names for matching (e.g. 北京市 -> 北京)."""
+    s = re.sub(r"\\s+", "", (name or "").strip())
+    if not s:
+        return ""
+    if s in PROVINCE_UNLIMITED_ALIASES:
+        return "不限"
+    suffixes = [
+        "特别行政区",
+        "特别行政區",
+        "维吾尔自治区",
+        "維吾爾自治區",
+        "壮族自治区",
+        "壯族自治區",
+        "回族自治区",
+        "回族自治區",
+        "自治区",
+        "自治區",
+        "省",
+        "市",
+    ]
+    for suffix in suffixes:
+        if s.endswith(suffix) and len(s) > len(suffix):
+            s = s[: -len(suffix)]
+            break
+    return s
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            return value
+        s = str(value).strip()
+        if not s:
+            return default
+        return int(s)
+    except Exception:
+        return default
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if not s:
+            return None
+        return float(s)
     except Exception:
         return None
 
@@ -320,6 +462,20 @@ class ZujuanCrawler:
         self.user_agent = DEFAULT_USER_AGENT
         self.cookies = cookies  # 用于绕过反爬的cookie
         self.ques_type_map: Dict[str, int] = {}
+        self.learn_grade_map: Dict[str, int] = {}
+        self.learn_grade_id_to_name: Dict[int, str] = {}
+        self.paper_types_by_grade: Dict[int, List[Dict[str, Any]]] = {}
+        self.paper_type_map: Dict[str, int] = {}
+        self.category_map: Dict[str, str] = {}
+        self.textbook_versions: List[Dict[str, str]] = []
+        self.textbook_version_map: Dict[str, str] = {}
+        self.question_types: List[Dict[str, Any]] = []
+        self.provinces: List[Dict[str, Any]] = []
+        self.province_name_to_id: Dict[str, int] = {}
+        self._base_meta_data: Optional[List[Dict[str, Any]]] = None
+        self._bank_meta_loaded_for: Optional[int] = None
+        self._cache: "OrderedDict[str, Tuple[float, float, Any]]" = OrderedDict()
+        self._cache_max_entries = 256
 
         # 学科配置
         self.subject = subject
@@ -346,6 +502,16 @@ class ZujuanCrawler:
         """切换学科"""
         self.subject = subject
         self._load_subject_config()
+        # bankId 变化后，清空与学科绑定的元数据缓存
+        self._bank_meta_loaded_for = None
+        self.learn_grade_map = {}
+        self.learn_grade_id_to_name = {}
+        self.paper_types_by_grade = {}
+        self.paper_type_map = {}
+        self.category_map = {}
+        self.textbook_versions = []
+        self.textbook_version_map = {}
+        self.question_types = []
 
     def _apply_search_constraints(
         self,
@@ -457,21 +623,235 @@ class ZujuanCrawler:
             return
         await self._load_base_meta()
 
+    def _set_provinces_from_list(self, province_list: List[Dict[str, Any]]) -> None:
+        provinces: List[Dict[str, Any]] = []
+        name_to_id: Dict[str, int] = {}
+        seen_ids: set[int] = set()
+
+        for item in province_list or []:
+            if not isinstance(item, dict):
+                continue
+
+            pid = _safe_int(
+                item.get("id")
+                or item.get("ID")
+                or item.get("Id")
+                or item.get("province_id")
+                or item.get("provinceId")
+                or item.get("ProvinceId")
+                or item.get("ProvinceID"),
+                0,
+            )
+            pname = (
+                item.get("name")
+                or item.get("Name")
+                or item.get("province_name")
+                or item.get("provinceName")
+                or ""
+            )
+            pname = str(pname).strip()
+            if not pname:
+                continue
+
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            provinces.append({"id": pid, "name": pname})
+
+            raw_key = re.sub(r"\\s+", "", pname)
+            norm_key = _normalize_province_name(pname)
+            if raw_key:
+                name_to_id[raw_key] = pid
+            if norm_key:
+                name_to_id[norm_key] = pid
+
+        self.provinces = provinces
+        self.province_name_to_id = name_to_id
+
+    async def _ensure_province_meta_loaded(self) -> None:
+        """Load province list used for `province` name resolution."""
+        if self.provinces and self.province_name_to_id:
+            return
+
+        cached = self._cache_get("meta:provinces")
+        if isinstance(cached, list):
+            self._set_provinces_from_list(cached)  # type: ignore[arg-type]
+            return
+
+        if not self.client:
+            return
+
+        try:
+            resp = await self.client.get(f"{self.base_url}/zujuan-api/base-province")
+            data = _parse_province_list_json(resp.text)
+            if not data:
+                return
+            self._cache_set("meta:provinces", data, ttl=12 * 60 * 60)
+            self._set_provinces_from_list(data)
+        except Exception:
+            return
+
+    async def _resolve_province_id(self, province: str) -> Optional[int]:
+        """Resolve a province name (e.g. 北京/北京市) into province_id.
+
+        Returns:
+            - int: resolved province_id (including -1 for "不限")
+            - None: cannot resolve (unknown name or meta unavailable)
+        """
+        raw = (province or "").strip()
+        if not raw:
+            return None
+
+        raw_compact = re.sub(r"\\s+", "", raw)
+        if raw_compact in PROVINCE_UNLIMITED_ALIASES:
+            return -1
+
+        # Allow passing numeric ID via `province` to reduce caller friction.
+        if raw_compact.isdigit():
+            try:
+                return int(raw_compact)
+            except Exception:
+                return None
+
+        norm = _normalize_province_name(raw_compact)
+        if norm == "不限":
+            return -1
+
+        await self._ensure_province_meta_loaded()
+        if not self.province_name_to_id:
+            return None
+
+        if raw_compact in self.province_name_to_id:
+            return self.province_name_to_id[raw_compact]
+        if norm and norm in self.province_name_to_id:
+            return self.province_name_to_id[norm]
+
+        # Fuzzy fallback: compare normalized names.
+        for p in self.provinces or []:
+            pname = (p.get("name") or "").strip()
+            if not pname:
+                continue
+            if _normalize_province_name(pname) == norm:
+                return _safe_int(p.get("id"), 0)
+
+        return None
+
     async def close(self):
         if self.client:
             await self.client.aclose()
             self.client = None
         print("HTTP 客户端已关闭")
 
+    def _cache_get(self, key: str) -> Optional[Any]:
+        item = self._cache.get(key)
+        if not item:
+            return None
+        ts, ttl, value = item
+        if ttl > 0 and (time.time() - ts) > ttl:
+            try:
+                del self._cache[key]
+            except Exception:
+                pass
+            return None
+        try:
+            self._cache.move_to_end(key)
+        except Exception:
+            pass
+        return value
+
+    def _cache_set(self, key: str, value: Any, ttl: float) -> None:
+        try:
+            self._cache[key] = (time.time(), float(ttl or 0), value)
+            self._cache.move_to_end(key)
+            while len(self._cache) > int(self._cache_max_entries or 256):
+                self._cache.popitem(last=False)
+        except Exception:
+            return
+
+    def _find_bank_in_base_meta(self, bank_id: int) -> Optional[Dict[str, Any]]:
+        bank_id = _safe_int(bank_id, 0)
+        if not bank_id or not self._base_meta_data:
+            return None
+        for edu in self._base_meta_data:
+            for bank in edu.get("QuesBankList", []) or []:
+                if _safe_int(bank.get("ID"), 0) == bank_id:
+                    return bank
+        return None
+
+    def _load_bank_meta_from_base(self) -> None:
+        bank_id = _safe_int(getattr(self, "bank_id", 0), 0)
+        if not bank_id or not self._base_meta_data:
+            return
+        if self._bank_meta_loaded_for == bank_id:
+            return
+
+        self.learn_grade_map = {}
+        self.learn_grade_id_to_name = {}
+        self.paper_types_by_grade = {}
+        self.paper_type_map = {}
+        self.category_map = {}
+        self.textbook_versions = []
+        self.textbook_version_map = {}
+        self.question_types = []
+
+        bank = self._find_bank_in_base_meta(bank_id)
+        if not bank:
+            self._bank_meta_loaded_for = bank_id
+            return
+
+        for q in bank.get("QuesTypeList", []) or []:
+            name = (q.get("Name") or "").strip()
+            qid = _safe_int(q.get("ID"), 0)
+            if name and qid:
+                self.question_types.append({"id": qid, "name": name})
+
+        for g in bank.get("LearnGradeList", []) or []:
+            gid = _safe_int(g.get("ID"), 0)
+            gname = (g.get("Name") or "").strip()
+            if gid and gname:
+                self.learn_grade_map[gname] = gid
+                self.learn_grade_id_to_name[gid] = gname
+
+            paper_types = []
+            for p in g.get("PaperTypeList", []) or []:
+                pid = _safe_int(p.get("ID"), 0)
+                pname = (p.get("Name") or "").strip()
+                parent_id = _safe_int(p.get("ParentId") or p.get("ParentID"), 0)
+                if pid and pname:
+                    self.paper_type_map[pname] = pid
+                    paper_types.append({"id": pid, "name": pname, "parent_id": parent_id})
+            if gid and paper_types:
+                self.paper_types_by_grade[gid] = paper_types
+
+        for cat in bank.get("CategoryList", []) or []:
+            cid = _safe_int(cat.get("ID"), 0)
+            cname = (cat.get("Name") or "").strip()
+            if cid and cname:
+                self.category_map[cname] = str(cid)
+                is_default_like = (
+                    cname.endswith("综合库")
+                    or _safe_int(cat.get("Type"), 0) == 1
+                    or _safe_int(cat.get("knowledgeType"), 0) == 1
+                )
+                if is_default_like:
+                    continue
+                # 版本/教材库：常见为 Type=0 且带 qbmId
+                if _safe_int(cat.get("qbmId"), 0) > 0 or _safe_int(cat.get("Type"), 0) == 0:
+                    self.textbook_versions.append({"id": str(cid), "name": cname})
+                    self.textbook_version_map[cname] = str(cid)
+
+        self._bank_meta_loaded_for = bank_id
+
     async def _load_base_meta(self):
-        """获取题型 ID 映射（不同学段共用常见题型名称）。"""
+        """加载 /zujuan-api/base，构建题型、年级、版本等元数据缓存。"""
         if not self.client:
             return
         try:
-            resp = await self.client.get(f"{self.base_url}/zujuan-api/base")
+            resp = await self.client.get(f"{self.base_url}/zujuan-api/base")    
             data = _parse_base_json(resp.text)
             if not data:
                 return
+            self._base_meta_data = data
             # 构建名称 -> ID 映射（简单/常见题型）
             for edu in data:
                 for bank in edu.get("QuesBankList", []):
@@ -479,6 +859,7 @@ class ZujuanCrawler:
                         name = q.get("Name")
                         if name:
                             self.ques_type_map[name] = q.get("ID", 0)
+            self._load_bank_meta_from_base()
         except Exception:
             pass
 
@@ -487,7 +868,13 @@ class ZujuanCrawler:
         调用 /zujuan-api/search SSE，返回推荐的检索参数。
         """
         if not self.client:
-            return {"success": False, "error": "client not initialized"}
+            return {"success": False, "error": "client not initialized"}        
+
+        keyword = (keyword or "").strip()
+        cache_key = f"sse:{keyword}"
+        cached = self._cache_get(cache_key)
+        if isinstance(cached, dict) and cached.get("success") and cached.get("payload"):
+            return cached
 
         url = f"{self.base_url}/zujuan-api/search"
         params = {"query": keyword}
@@ -503,17 +890,150 @@ class ZujuanCrawler:
                 async for line in r.aiter_lines():
                     if not line:
                         continue
-                    if line.startswith("data:") and '"code":200' in line:
+                    if line.startswith("data:") and '"code":200' in line:       
                         try:
                             end_payload = json.loads(line.replace("data:", "").strip())
                             break
                         except Exception:
                             continue
                 if not end_payload:
-                    return {"success": False, "error": "未获取到搜索结果指引"}
-                return {"success": True, "payload": end_payload}
+                    return {"success": False, "error": "未获取到搜索结果指引"}  
+                result = {"success": True, "payload": end_payload}
+                self._cache_set(cache_key, result, ttl=15 * 60)
+                return result
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def _ensure_bank_meta_loaded(self) -> None:
+        if not self.client:
+            return
+        if self._base_meta_data is None:
+            await self._load_base_meta()
+            return
+        self._load_bank_meta_from_base()
+
+    def _resolve_textbook_category_id(self, textbook_version: str) -> str:
+        version = (textbook_version or "").strip()
+        if not version:
+            return ""
+        numeric = _safe_int(version, 0)
+        if numeric > 0:
+            return str(numeric)
+
+        # 精确/包含匹配
+        for name, cid in self.textbook_version_map.items():
+            if version == name:
+                return cid
+        for name, cid in self.textbook_version_map.items():
+            if version in name or name in version:
+                return cid
+
+        # 兜底：在全部分类里找
+        for name, cid in self.category_map.items():
+            if version == name:
+                return cid
+        for name, cid in self.category_map.items():
+            if version in name or name in version:
+                return cid
+        return ""
+
+    def _resolve_learn_grade_id(self, learn_grade: str, learn_grade_id: int = 0) -> int:
+        if _safe_int(learn_grade_id, 0) > 0:
+            return _safe_int(learn_grade_id, 0)
+        name = (learn_grade or "").strip()
+        if not name:
+            return 0
+        as_int = _safe_int(name, 0)
+        if as_int > 0:
+            return as_int
+        if name in self.learn_grade_map:
+            return self.learn_grade_map[name]
+        for gname, gid in self.learn_grade_map.items():
+            if gname and (name in gname or gname in name):
+                return gid
+        return 0
+
+    def _normalize_elective_mode(self, elective_mode: str, exclude_elective: bool) -> str:
+        """
+        elective_mode:
+        - include: 不做选修过滤
+        - exclude: 排除选修/选必
+        - only: 仅保留选修/选必
+        """
+        raw = (elective_mode or "").strip()
+        if raw:
+            lowered = raw.lower()
+            if lowered in {"include", "all", "any"}:
+                return "include"
+            if lowered in {"exclude", "no", "without"}:
+                return "exclude"
+            if lowered in {"only", "require", "must"}:
+                return "only"
+            # 中文兼容
+            if raw in {"不限", "包含", "全部"}:
+                return "include"
+            if raw in {"排除", "不含", "去除", "排除选修", "不含选修"}:
+                return "exclude"
+            if raw in {"仅选修", "只选修", "只要选修", "仅选择性必修"}:
+                return "only"
+        return "exclude" if exclude_elective else "include"
+
+    def _is_question_elective(self, question: Dict[str, Any], markers: List[str]) -> bool:
+        if not markers:
+            markers = ["选修", "选择性必修", "选必"]
+        source = (question.get("source") or "").strip()
+        stem = (question.get("stem") or "").strip()
+        kps = question.get("knowledge_points") or []
+        if isinstance(kps, str):
+            kp_text = kps
+        elif isinstance(kps, list):
+            kp_text = " ".join([str(x) for x in kps if x])
+        else:
+            kp_text = ""
+        haystack = " ".join([source, kp_text, stem])
+        return any(m and (m in haystack) for m in markers)
+
+    def _stem_fingerprint(self, stem: str) -> str:
+        s = (stem or "").strip().lower()
+        if not s:
+            return ""
+        s = re.sub(r"\s+", "", s)
+        # 限制长度避免极端长文本影响性能
+        s = s[:1500]
+        return hashlib.md5(s.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _quality_score(self, question: Dict[str, Any]) -> Tuple[int, List[str]]:
+        stem = (question.get("stem") or "").strip()
+        if not stem:
+            return 0, ["missing_stem"]
+
+        flags: List[str] = []
+        score = 100
+
+        stem_len = len(stem)
+        if stem_len < 20:
+            flags.append("stem_too_short")
+            score -= 70
+        elif stem_len < 60:
+            flags.append("stem_short")
+            score -= 30
+
+        unknown_tokens = len(re.findall(r"\[\?[0-9a-fA-F]{4,}\]", stem))
+        if unknown_tokens > 0:
+            flags.append(f"unknown_tokens:{unknown_tokens}")
+            score -= min(unknown_tokens * 15, 60)
+
+        image_tokens = stem.count("[图片:")
+        if image_tokens > 0:
+            flags.append(f"has_images:{image_tokens}")
+            score -= min(image_tokens * 10, 40)
+
+        if "(需登录查看)" in stem:
+            flags.append("login_required_content")
+            score -= 30
+
+        score = max(0, min(100, score))
+        return score, flags
 
     def _parse_target_from_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -522,14 +1042,34 @@ class ZujuanCrawler:
         示例 url: /gzsx/zsd131011/o2  => pageName=zsd, categoryId=131011
         """
         url_path = payload.get("url", "")
-        m = re.search(r"/[a-z]+/(?P<page>zsd|zj|zh|zs)(?P<cat>\d+)/o\d+", url_path)
+        # 常见两类：
+        # - /gzsx/zsd131011/o2
+        # - /gzyy/zsd0/qt2809o2  (包含 quesType 过滤 qtXXXX)
+        m = re.search(
+            r"/[a-z]+/(?P<page>zsd|zj|zh|zs)(?P<cat>\d+)(?:/qt(?P<qt>\d+))?/?o(?P<order>\d+)",
+            url_path,
+        )
         if not m:
             return None
         page_name = m.group("page")
         cat_id = m.group("cat")
+        qt_id = m.groupdict().get("qt")
+        order_by = m.groupdict().get("order")
         params = payload.get("data", {}).get("params", {})
         bank_id = params.get("bank_id") or params.get("bankId") or 0
-        return {"page_name": page_name, "category_id": cat_id, "bank_id": bank_id}
+        target: Dict[str, Any] = {
+            "page_name": page_name,
+            "category_id": cat_id,
+            "bank_id": bank_id,
+        }
+        if qt_id:
+            target["question_type_id"] = _safe_int(qt_id, 0)
+        if order_by:
+            target["order_by"] = _safe_int(order_by, 0)
+        ques_type_name = (params.get("ques_type") or "").strip()
+        if ques_type_name:
+            target["question_type_name"] = ques_type_name
+        return target
 
     def _difficulty_code(self, difficulty: str) -> int:
         """
@@ -662,20 +1202,65 @@ class ZujuanCrawler:
 
     async def _fallback_question_list(
         self,
+        keyword: str = "",
         limit: int = 20,
         difficulty: str = "",
         question_type: str = "",
+        learn_grade: str = "",
+        learn_grade_id: int = 0,
+        textbook_version: str = "",
         max_pages: int = 3,
+        year: int = 0,
+        province: str = "",
+        province_id: int = -1,
+        paper_type_id: int = 0,
+        term: int = 0,
+        order_by: int = 2,
+        source_contains: str = "",
+        stem_contains: str = "",
+        knowledge_contains: str = "",
+        elective_mode: str = "",
+        elective_keywords: Optional[List[str]] = None,
+        exclude_elective: bool = False,
+        difficulty_value_min: Optional[float] = None,
+        difficulty_value_max: Optional[float] = None,
+        dedup_by_stem: bool = False,
+        min_quality_score: int = 0,
+        with_quality: bool = True,
     ) -> Dict[str, Any]:
         """
         官方 AI 搜索无法解析意图时的兜底：直接访问 question/list。
         使用当前学科配置的 bankId 和 categoryId。
         """
+        limit = _safe_int(limit, 20)
+        limit = max(1, min(50, limit))
+
+        max_pages = _safe_int(max_pages, 3)
+        max_pages = max(1, min(8, max_pages))
+
+        year = _safe_int(year, 0)
+        paper_type_id = _safe_int(paper_type_id, 0)
+        term = _safe_int(term, 0)
+        order_by = _safe_int(order_by, 2)
+
+        if difficulty_value_min is not None:
+            difficulty_value_min = _safe_float(difficulty_value_min)
+        if difficulty_value_max is not None:
+            difficulty_value_max = _safe_float(difficulty_value_max)
+
         if question_type and not self.ques_type_map and self.client is not None:
             await self._ensure_base_meta_loaded()
+        await self._ensure_bank_meta_loaded()
         page_name = "zsd"
         bank_id = self.bank_id
-        category_id = self.category_id
+        category_id = self._resolve_textbook_category_id(textbook_version) or str(self.category_id)
+        resolved_learn_grade_id = self._resolve_learn_grade_id(learn_grade, learn_grade_id)
+        province_id = _safe_int(province_id, -1)
+        province = (province or "").strip()
+        if province and province_id in (-1, 0):
+            resolved = await self._resolve_province_id(province)
+            if resolved is not None:
+                province_id = resolved
 
         all_questions: List[Dict[str, Any]] = []
         debug_pages = []
@@ -687,11 +1272,17 @@ class ZujuanCrawler:
                 cur_page=page_idx,
                 difficulty=difficulty,
                 question_type=question_type,
+                learn_grade_id=resolved_learn_grade_id,
+                year=year,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
                 parse_content=True,
             )
             all_questions.extend(questions)
             debug_pages.append(dbg)
-            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):
+            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):   
                 break
 
         if not all_questions:
@@ -701,17 +1292,79 @@ class ZujuanCrawler:
                 "trace": {"method": "fallback", "pages": debug_pages},
             }
 
+        selected_questions: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        seen_stem_fps: set[str] = set()
+        min_quality_score = _safe_int(min_quality_score, 0)
+
+        for q in all_questions:
+            qid = (q.get("question_id") or "").strip()
+            if not qid or qid in seen_ids:
+                continue
+            seen_ids.add(qid)
+
+            if not self._matches_local_filters(
+                q,
+                source_contains=source_contains,
+                stem_contains=stem_contains,
+                knowledge_contains=knowledge_contains,
+                elective_mode=elective_mode,
+                elective_keywords=elective_keywords,
+                exclude_elective=exclude_elective,
+                year=year,
+                difficulty_value_min=difficulty_value_min,
+                difficulty_value_max=difficulty_value_max,
+            ):
+                continue
+
+            score, flags = self._quality_score(q)
+            if with_quality:
+                q["quality_score"] = score
+                if flags:
+                    q["quality_flags"] = flags
+            if min_quality_score > 0 and score < min_quality_score:
+                continue
+
+            if dedup_by_stem:
+                fp = self._stem_fingerprint(q.get("stem") or "")
+                if fp and fp in seen_stem_fps:
+                    continue
+                if fp:
+                    seen_stem_fps.add(fp)
+
+            selected_questions.append(q)
+            if len(selected_questions) >= limit:
+                break
+
         return {
             "success": True,
-            "keyword": "",
-            "count": len(all_questions[:limit]),
-            "questions": all_questions[:limit],
+            "keyword": keyword,
+            "count": len(selected_questions[:limit]),
+            "questions": selected_questions[:limit],
             "trace": {
                 "method": "fallback",
                 "target": {
                     "page_name": page_name,
                     "bank_id": bank_id,
                     "category_id": category_id,
+                },
+                "filters": {
+                    "learn_grade_id": resolved_learn_grade_id,
+                    "year": _safe_int(year, 0),
+                    "province_id": _safe_int(province_id, -1),
+                    "paper_type_id": _safe_int(paper_type_id, 0),
+                    "term": _safe_int(term, 0),
+                    "order_by": _safe_int(order_by, 2),
+                    "source_contains": (source_contains or "").strip(),
+                    "stem_contains": (stem_contains or "").strip(),
+                    "knowledge_contains": (knowledge_contains or "").strip(),
+                    "exclude_elective": bool(exclude_elective),
+                    "elective_mode": self._normalize_elective_mode(elective_mode, exclude_elective),
+                    "dedup_by_stem": bool(dedup_by_stem),
+                    "min_quality_score": min_quality_score,
+                    "with_quality": bool(with_quality),
+                    "difficulty_value_min": difficulty_value_min,
+                    "difficulty_value_max": difficulty_value_max,
                 },
                 "pages": debug_pages,
             },
@@ -725,6 +1378,13 @@ class ZujuanCrawler:
         cur_page: int = 1,
         difficulty: str = "",
         question_type: str = "",
+        question_type_id: int = 0,
+        learn_grade_id: int = 0,
+        year: int = 0,
+        province_id: int = -1,
+        paper_type_id: int = 0,
+        term: int = 0,
+        order_by: int = 2,
         parse_content: bool = True,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
@@ -744,6 +1404,24 @@ class ZujuanCrawler:
         if not difficulty_codes:
             difficulty_codes = [0]
 
+        year = _safe_int(year, 0)
+        province_id = _safe_int(province_id, -1)
+        paper_type_id = _safe_int(paper_type_id, 0)
+        term = _safe_int(term, 0)
+        order_by = _safe_int(order_by, 2)
+        question_type_id = _safe_int(question_type_id, 0)
+        ques_type_code = question_type_id or self._question_type_code(question_type)
+        learn_grade_id = _safe_int(learn_grade_id, 0)
+
+        cache_key = (
+            f"qlist:{page_name}:{bank_id}:{category_id}:{cur_page}:{difficulty}:"
+            f"{ques_type_code}:{year}:{province_id}:{paper_type_id}:{term}:{order_by}:"
+            f"{learn_grade_id}:{int(parse_content)}"
+        )
+        cached = self._cache_get(cache_key)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            return cached  # type: ignore[return-value]
+
         seen_ids = set()
         all_questions: List[Dict[str, Any]] = []
         total_raw_count = 0
@@ -758,16 +1436,16 @@ class ZujuanCrawler:
                 "categoryId": str(category_id),
                 "canCategoryId": "true",
                 "categoryIds[0]": "0",
-                "quesType": str(self._question_type_code(question_type)),
+                "quesType": str(ques_type_code),
                 "quesDiff": str(diff_code),
-                "quesYear": "0",
-                "paperTypeId": "0",
+                "quesYear": str(year or 0),
+                "paperTypeId": str(paper_type_id or 0),
                 "scenarioizedTypeId": "0",
                 "tagId": "0",
-                "provinceId": "-1",
-                "learngrade": "0",
-                "term": "0",
-                "orderBy": "2",
+                "provinceId": str(province_id),
+                "learngrade": str(learn_grade_id or 0),
+                "term": str(term or 0),
+                "orderBy": str(order_by or 2),
                 "curPage": str(cur_page),
                 "quesAttributeId": "0",
                 "examMethodId": "0",
@@ -833,6 +1511,13 @@ class ZujuanCrawler:
             "returned_count": len(all_questions),
             "page": cur_page,
             "difficulty_mode": "multi" if use_multi else "single",
+            "ques_type_code": ques_type_code,
+            "learn_grade_id": learn_grade_id,
+            "year": year,
+            "province_id": province_id,
+            "paper_type_id": paper_type_id,
+            "term": term,
+            "order_by": order_by,
         }
         if len(sub_requests) > 1:
             debug_info["difficulty_codes"] = difficulty_codes
@@ -840,7 +1525,9 @@ class ZujuanCrawler:
         if errors:
             debug_info["errors"] = errors
 
-        return all_questions, debug_info
+        result = (all_questions, debug_info)
+        self._cache_set(cache_key, result, ttl=8 * 60 if parse_content else 10 * 60)
+        return result
 
     async def _parse_questions_from_html(self, html: str, bank_id: int) -> List[Dict[str, Any]]:
         """
@@ -1007,6 +1694,78 @@ class ZujuanCrawler:
                 if "_stem_html" in questions[idx]:
                     del questions[idx]["_stem_html"]
 
+    def _matches_local_filters(
+        self,
+        question: Dict[str, Any],
+        *,
+        source_contains: str = "",
+        stem_contains: str = "",
+        knowledge_contains: str = "",
+        elective_mode: str = "",
+        elective_keywords: Optional[List[str]] = None,
+        exclude_elective: bool = False,
+        year: int = 0,
+        difficulty_value_min: Optional[float] = None,
+        difficulty_value_max: Optional[float] = None,
+    ) -> bool:
+        source_contains = (source_contains or "").strip()
+        stem_contains = (stem_contains or "").strip()
+        knowledge_contains = (knowledge_contains or "").strip()
+
+        if source_contains:
+            source = (question.get("source") or "").strip()
+            if source_contains.lower() not in source.lower():
+                return False
+
+        if stem_contains:
+            stem = (question.get("stem") or "").strip()
+            if stem_contains.lower() not in stem.lower():
+                return False
+
+        if knowledge_contains:
+            kps = question.get("knowledge_points") or []
+            if isinstance(kps, str):
+                kp_text = kps
+            elif isinstance(kps, list):
+                kp_text = " ".join([str(x) for x in kps if x])
+            else:
+                kp_text = ""
+            if knowledge_contains.lower() not in kp_text.lower():
+                return False
+
+        mode = self._normalize_elective_mode(elective_mode, exclude_elective)
+        if mode != "include":
+            markers = elective_keywords or ["选修", "选择性必修", "选必"]
+            is_elective = self._is_question_elective(question, list(markers))
+            if mode == "exclude" and is_elective:
+                return False
+            if mode == "only" and not is_elective:
+                return False
+
+        year = _safe_int(year, 0)
+        if year > 0:
+            date_str = (question.get("date") or "").strip()
+            if date_str and "/" in date_str:
+                try:
+                    date_year = int(date_str.split("/", 1)[0])
+                    if date_year != year:
+                        return False
+                except Exception:
+                    pass
+
+        if difficulty_value_min is not None or difficulty_value_max is not None:
+            dv = _safe_float(question.get("difficulty_value"))
+            if dv is None:
+                # 不强制要求每道题都带“难度系数”。
+                # 如果题目没有难度系数，则不因该过滤条件被剔除。
+                return True
+            if difficulty_value_min is not None and dv < difficulty_value_min:  
+                return False
+            if difficulty_value_max is not None and dv > difficulty_value_max:  
+                return False
+
+        return True
+
     async def search_by_keyword(
         self,
         keyword: str,
@@ -1015,16 +1774,36 @@ class ZujuanCrawler:
         limit: int = 20,
         difficulty: str = "",
         question_type: str = "",
+        learn_grade: str = "",
+        learn_grade_id: int = 0,
+        textbook_version: str = "",
         max_pages: int = 2,
+        year: int = 0,
+        province: str = "",
+        province_id: int = -1,
+        paper_type_id: int = 0,
+        term: int = 0,
+        order_by: int = 2,
+        source_contains: str = "",
+        stem_contains: str = "",
+        knowledge_contains: str = "",
+        difficulty_value_min: Optional[float] = None,
+        difficulty_value_max: Optional[float] = None,
         require_difficulty: bool = False,
         strict_subject: bool = True,
+        elective_mode: str = "",
+        elective_keywords: Optional[List[str]] = None,
+        exclude_elective: bool = False,
+        dedup_by_stem: bool = False,
+        min_quality_score: int = 0,
+        with_quality: bool = True,
     ) -> Dict[str, Any]:
         """
         关键词搜索（无需登录）：SSE 得到推荐参数 -> question/list 获取完整题目信息。
         返回的 questions 包含题干、难度、知识点等完整信息。
         """
         try:
-            _, difficulty = self._apply_search_constraints(
+            resolved_subject, difficulty = self._apply_search_constraints(
                 subject=subject,
                 edu_level=edu_level,
                 difficulty=difficulty,
@@ -1039,60 +1818,277 @@ class ZujuanCrawler:
                 "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
             }
 
-        base_meta_task = None
-        if question_type and not self.ques_type_map and self.client is not None:
-            # 按需加载题型映射，并与 AI 搜索并行以减少等待
-            base_meta_task = asyncio.create_task(self._ensure_base_meta_loaded())
+        limit = _safe_int(limit, 20)
+        limit = max(1, min(50, limit))
 
-        ai_result = await self._ai_search(keyword)
+        max_pages = _safe_int(max_pages, 2)
+        max_pages = max(1, min(8, max_pages))
+
+        if difficulty_value_min is not None:
+            difficulty_value_min = _safe_float(difficulty_value_min)
+        if difficulty_value_max is not None:
+            difficulty_value_max = _safe_float(difficulty_value_max)
+
+        meta_task = None
+        if (
+            (question_type or "").strip()
+            or (learn_grade or "").strip()
+            or _safe_int(learn_grade_id, 0) > 0
+            or (textbook_version or "").strip()
+        ) and self.client is not None:
+            # 按需加载题型/年级/教材版本映射，并与 AI 搜索并行以减少等待
+            meta_task = asyncio.create_task(self._ensure_bank_meta_loaded())
+
+        province_id = _safe_int(province_id, -1)
+        province = (province or "").strip()
+        if province and province_id in (-1, 0) and self.client is not None:
+            resolved = await self._resolve_province_id(province)
+            if resolved is None:
+                return {
+                    "success": False,
+                    "error": "province_not_found",
+                    "province": province,
+                    "hint": "请先调用 get_available_filters 获取 provinces 或改用 province_id 传参。",
+                }
+            province_id = resolved
+
+        # 站内 SSE 搜索是“全站意图识别”，不带学科时容易跑到其他学科/学段，
+        # strict_subject 模式下自动补齐学科前缀以减少跨学科命中。
+        sse_query = (keyword or "").strip()
+        if strict_subject and resolved_subject:
+            cfg = SUBJECTS.get(resolved_subject) or {}
+            short_name = (cfg.get("short_name") or "").strip()
+            if resolved_subject not in sse_query and (not short_name or short_name not in sse_query):
+                sse_query = f"{resolved_subject} {sse_query}".strip()
+
+        ai_result = await self._ai_search(sse_query)
         if not ai_result.get("success"):
-            if base_meta_task:
-                await base_meta_task
+            if meta_task:
+                await meta_task
             return await self._fallback_question_list(
+                keyword=keyword,
                 limit=limit,
                 difficulty=difficulty,
                 question_type=question_type,
+                learn_grade=learn_grade,
+                learn_grade_id=learn_grade_id,
+                textbook_version=textbook_version,
                 max_pages=max_pages,
+                year=year,
+                province=province,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
+                source_contains=source_contains,
+                stem_contains=stem_contains,
+                knowledge_contains=knowledge_contains,
+                elective_mode=elective_mode,
+                elective_keywords=elective_keywords,
+                exclude_elective=exclude_elective,
+                difficulty_value_min=difficulty_value_min,
+                difficulty_value_max=difficulty_value_max,
+                dedup_by_stem=dedup_by_stem,
+                min_quality_score=min_quality_score,
+                with_quality=with_quality,
             )
 
         payload = ai_result["payload"]
         target = self._parse_target_from_payload(payload)
         if not target:
-            if base_meta_task:
-                await base_meta_task
+            if meta_task:
+                await meta_task
             return await self._fallback_question_list(
+                keyword=keyword,
                 limit=limit,
                 difficulty=difficulty,
                 question_type=question_type,
+                learn_grade=learn_grade,
+                learn_grade_id=learn_grade_id,
+                textbook_version=textbook_version,
                 max_pages=max_pages,
+                year=year,
+                province=province,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
+                source_contains=source_contains,
+                stem_contains=stem_contains,
+                knowledge_contains=knowledge_contains,
+                elective_mode=elective_mode,
+                elective_keywords=elective_keywords,
+                exclude_elective=exclude_elective,
+                difficulty_value_min=difficulty_value_min,
+                difficulty_value_max=difficulty_value_max,
+                dedup_by_stem=dedup_by_stem,
+                min_quality_score=min_quality_score,
+                with_quality=with_quality,
             )
 
-        if base_meta_task:
-            await base_meta_task
+        if meta_task:
+            await meta_task
 
-        all_questions: List[Dict[str, Any]] = []
+        resolved_textbook_category_id = self._resolve_textbook_category_id(textbook_version)
+        resolved_learn_grade_id = self._resolve_learn_grade_id(learn_grade, learn_grade_id)
+
+        # 部分学科会返回 zsd0（未指定知识点/目录），此时用当前学科默认分类兜底，
+        # 避免 categoryId=0 导致的“跟随 cookie 的题库”混入。
+        if _safe_int(target.get("category_id"), 0) == 0 and getattr(self, "category_id", ""):
+            target["category_id_original"] = target.get("category_id")
+            if resolved_textbook_category_id:
+                target["category_id"] = resolved_textbook_category_id
+                target["textbook_version_applied"] = textbook_version
+            else:
+                target["category_id"] = str(self.category_id)
+
+        # 严格学科约束：搜索结果必须落在当前学科 bankId 下。
+        # 组卷网的 /zujuan-api/search（SSE）偶发返回其他学科的 bank_id，导致跨学段混入。
+        expected_bank_id = _safe_int(getattr(self, "bank_id", 0), 0)
+        target_bank_id = _safe_int(target.get("bank_id"), 0)
+        bank_id_for_request = target_bank_id or expected_bank_id
+        bank_id_mismatch = False
+        if strict_subject and expected_bank_id:
+            if target_bank_id and target_bank_id != expected_bank_id:
+                bank_id_mismatch = True
+            bank_id_for_request = expected_bank_id
+            # SSE 给出的 categoryId 通常属于其 bank_id；当 bank 不一致时直接用
+            # 当前学科默认分类，避免无结果/跨库混入。
+            if bank_id_mismatch and getattr(self, "category_id", ""):
+                target["category_id_original"] = target.get("category_id")
+                target["category_id"] = resolved_textbook_category_id or str(self.category_id)
+
+        target["bank_id_expected"] = expected_bank_id
+        target["bank_id_for_request"] = bank_id_for_request
+        if bank_id_mismatch:
+            target["bank_id_mismatch"] = True
+
+        year = _safe_int(year, 0)
+        province_id = _safe_int(province_id, -1)
+        paper_type_id = _safe_int(paper_type_id, 0)
+        term = _safe_int(term, 0)
+        order_by = _safe_int(order_by, 2)
+
+        selected_questions: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        seen_stem_fps: set[str] = set()
         debug_pages = []
+        target_question_type_id = _safe_int(target.get("question_type_id"), 0)
+        question_type_id_for_request = (
+            target_question_type_id if not (question_type or "").strip() else 0
+        )
+        min_quality_score = _safe_int(min_quality_score, 0)
         for page_idx in range(1, max_pages + 1):
             questions, dbg = await self._fetch_question_list(
                 page_name=target["page_name"],
-                bank_id=target["bank_id"],
+                bank_id=bank_id_for_request,
                 category_id=target["category_id"],
                 cur_page=page_idx,
                 difficulty=difficulty,
                 question_type=question_type,
+                question_type_id=question_type_id_for_request,
+                learn_grade_id=resolved_learn_grade_id,
+                year=year,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
                 parse_content=True,  # 解析完整内容
             )
-            all_questions.extend(questions)
+            for q in questions:
+                qid = (q.get("question_id") or "").strip()
+                if not qid or qid in seen_ids:
+                    continue
+                seen_ids.add(qid)
+                if self._matches_local_filters(
+                    q,
+                    source_contains=source_contains,
+                    stem_contains=stem_contains,
+                    knowledge_contains=knowledge_contains,
+                    elective_mode=elective_mode,
+                    elective_keywords=elective_keywords,
+                    exclude_elective=exclude_elective,
+                    year=year,
+                    difficulty_value_min=difficulty_value_min,
+                    difficulty_value_max=difficulty_value_max,
+                ):
+                    score, flags = self._quality_score(q)
+                    if with_quality:
+                        q["quality_score"] = score
+                        if flags:
+                            q["quality_flags"] = flags
+                    if min_quality_score > 0 and score < min_quality_score:
+                        continue
+                    if dedup_by_stem:
+                        fp = self._stem_fingerprint(q.get("stem") or "")
+                        if fp and fp in seen_stem_fps:
+                            continue
+                        if fp:
+                            seen_stem_fps.add(fp)
+                    selected_questions.append(q)
             debug_pages.append(dbg)
-            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):
+            if len(selected_questions) >= limit or (dbg.get("raw_count", 0) == 0):
                 break
+
+        # 如果 SSE 返回了错误学科的 bankId 且强制校正后没有结果，降级到兜底路径：
+        # 直接用当前学科默认 categoryId 拉取，至少保证学科/学段不会混入。
+        if bank_id_mismatch and not selected_questions:
+            return await self._fallback_question_list(
+                keyword=keyword,
+                limit=limit,
+                difficulty=difficulty,
+                question_type=question_type,
+                learn_grade=learn_grade,
+                learn_grade_id=learn_grade_id,
+                textbook_version=textbook_version,
+                max_pages=max_pages,
+                year=year,
+                province=province,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
+                source_contains=source_contains,
+                stem_contains=stem_contains,
+                knowledge_contains=knowledge_contains,
+                elective_mode=elective_mode,
+                elective_keywords=elective_keywords,
+                exclude_elective=exclude_elective,
+                difficulty_value_min=difficulty_value_min,
+                difficulty_value_max=difficulty_value_max,
+                dedup_by_stem=dedup_by_stem,
+                min_quality_score=min_quality_score,
+                with_quality=with_quality,
+            )
 
         return {
             "success": True,
             "keyword": keyword,
-            "count": len(all_questions[:limit]),
-            "questions": all_questions[:limit],
-            "trace": {"target": target, "pages": debug_pages},
+            "count": len(selected_questions[:limit]),
+            "questions": selected_questions[:limit],
+            "trace": {
+                "target": target,
+                "filters": {
+                    "learn_grade_id": resolved_learn_grade_id,
+                    "textbook_version": (textbook_version or "").strip(),
+                    "year": year,
+                    "province_id": province_id,
+                    "paper_type_id": paper_type_id,
+                    "term": term,
+                    "order_by": order_by,
+                    "source_contains": (source_contains or "").strip(),
+                    "stem_contains": (stem_contains or "").strip(),
+                    "knowledge_contains": (knowledge_contains or "").strip(),
+                    "exclude_elective": bool(exclude_elective),
+                    "elective_mode": self._normalize_elective_mode(elective_mode, exclude_elective),
+                    "dedup_by_stem": bool(dedup_by_stem),
+                    "min_quality_score": min_quality_score,
+                    "with_quality": bool(with_quality),
+                    "difficulty_value_min": difficulty_value_min,
+                    "difficulty_value_max": difficulty_value_max,
+                },
+                "pages": debug_pages,
+            },
         }
 
     async def search_by_knowledge(
@@ -1103,9 +2099,29 @@ class ZujuanCrawler:
         limit: int = 20,
         difficulty: str = "",
         question_type: str = "",
+        learn_grade: str = "",
+        learn_grade_id: int = 0,
+        textbook_version: str = "",
         max_pages: int = 2,
+        year: int = 0,
+        province: str = "",
+        province_id: int = -1,
+        paper_type_id: int = 0,
+        term: int = 0,
+        order_by: int = 2,
+        source_contains: str = "",
+        stem_contains: str = "",
+        knowledge_contains: str = "",
+        difficulty_value_min: Optional[float] = None,
+        difficulty_value_max: Optional[float] = None,
         require_difficulty: bool = False,
         strict_subject: bool = True,
+        elective_mode: str = "",
+        elective_keywords: Optional[List[str]] = None,
+        exclude_elective: bool = False,
+        dedup_by_stem: bool = False,
+        min_quality_score: int = 0,
+        with_quality: bool = True,
     ) -> Dict[str, Any]:
         """
         通过知识点搜索（内部复用关键词搜索）。
@@ -1117,10 +2133,456 @@ class ZujuanCrawler:
             limit=limit,
             difficulty=difficulty,
             question_type=question_type,
+            learn_grade=learn_grade,
+            learn_grade_id=learn_grade_id,
+            textbook_version=textbook_version,
             max_pages=max_pages,
+            year=year,
+            province=province,
+            province_id=province_id,
+            paper_type_id=paper_type_id,
+            term=term,
+            order_by=order_by,
+            source_contains=source_contains,
+            stem_contains=stem_contains,
+            knowledge_contains=knowledge_contains,
+            difficulty_value_min=difficulty_value_min,
+            difficulty_value_max=difficulty_value_max,
             require_difficulty=require_difficulty,
             strict_subject=strict_subject,
+            elective_mode=elective_mode,
+            elective_keywords=elective_keywords,
+            exclude_elective=exclude_elective,
+            dedup_by_stem=dedup_by_stem,
+            min_quality_score=min_quality_score,
+            with_quality=with_quality,
         )
+
+    async def get_available_filters(self) -> Dict[str, Any]:
+        """
+        返回当前学科（bankId）下可用的筛选项（年级/试卷类型/教材版本/题型等）。
+        用于 MCP/前端做下拉选择，避免“写死 ID”。
+        """
+        await self._ensure_bank_meta_loaded()
+        await self._ensure_province_meta_loaded()
+
+        grades = [
+            {"id": gid, "name": name}
+            for gid, name in sorted(self.learn_grade_id_to_name.items(), key=lambda x: x[0])
+        ]
+        paper_types_by_grade = {}
+        for gid, paper_types in (self.paper_types_by_grade or {}).items():
+            paper_types_by_grade[str(gid)] = paper_types
+
+        return {
+            "success": True,
+            "subject": getattr(self, "subject", ""),
+            "bank_id": _safe_int(getattr(self, "bank_id", 0), 0),
+            "default_category_id": str(getattr(self, "category_id", "")),
+            "grades": grades,
+            "paper_types_by_grade": paper_types_by_grade,
+            "textbook_versions": list(self.textbook_versions or []),
+            "question_types": list(self.question_types or []),
+            "provinces": list(self.provinces or []),
+            "elective_modes": ["include", "exclude", "only"],
+        }
+
+    async def compose_paper_blueprint(
+        self,
+        blueprint: List[Dict[str, Any]],
+        *,
+        subject: str = "",
+        edu_level: str = "",
+        learn_grade: str = "",
+        learn_grade_id: int = 0,
+        textbook_version: str = "",
+        elective_mode: str = "",
+        elective_keywords: Optional[List[str]] = None,
+        exclude_elective: bool = False,
+        year: int = 0,
+        province: str = "",
+        province_id: int = -1,
+        paper_type_id: int = 0,
+        term: int = 0,
+        order_by: int = 2,
+        max_pages: int = 2,
+        per_slot_expand: int = 3,
+        min_quality_score: int = 0,
+        dedup_by_stem: bool = True,
+        strict_subject: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        根据蓝图（多个“检索槽位”）批量检索并组装题目列表。
+
+        blueprint 每项示例：
+        {
+          "keyword": "阅读理解",
+          "count": 4,
+          "difficulty": "中等",
+          "question_type": "",
+          "source_contains": "",
+          "stem_contains": "",
+          "knowledge_contains": ""
+        }
+        """
+        if not isinstance(blueprint, list) or not blueprint:
+            return {"success": False, "error": "blueprint 不能为空"}
+
+        per_slot_expand = _safe_int(per_slot_expand, 3)
+        per_slot_expand = max(1, min(6, per_slot_expand))
+
+        max_pages_default = _safe_int(max_pages, 2)
+        max_pages_default = max(1, min(8, max_pages_default))
+        max_pages_cap = 8
+
+        min_quality_score = _safe_int(min_quality_score, 0)
+        min_quality_floor = 0
+
+        global_seen_ids: set[str] = set()
+        global_seen_fps: set[str] = set()
+
+        selected_questions: List[Dict[str, Any]] = []
+        sections: List[Dict[str, Any]] = []
+
+        slot_items: List[Dict[str, Any]] = []
+        for idx, slot in enumerate(blueprint):
+            if not isinstance(slot, dict):
+                continue
+
+            slot_keyword = (slot.get("keyword") or "").strip()
+            slot_knowledge_point = (slot.get("knowledge_point") or "").strip()
+            count = _safe_int(slot.get("count"), 0)
+            if count <= 0 or (not slot_keyword and not slot_knowledge_point):
+                continue
+
+            slot_max_pages = _safe_int(slot.get("max_pages"), 0) or max_pages_default
+            slot_max_pages = max(1, min(max_pages_cap, slot_max_pages))
+
+            search_limit = max(count * per_slot_expand, count)
+            search_limit = min(search_limit, 50)
+
+            slot_items.append(
+                {
+                    "index": idx,
+                    "slot": slot,
+                    "keyword": slot_keyword,
+                    "knowledge_point": slot_knowledge_point,
+                    "requested": count,
+                    "difficulty": (slot.get("difficulty") or "").strip(),
+                    "question_type": (slot.get("question_type") or "").strip(),
+                    "source_contains": (slot.get("source_contains") or "").strip(),
+                    "stem_contains": (slot.get("stem_contains") or "").strip(),
+                    "knowledge_contains": (slot.get("knowledge_contains") or "").strip(),
+                    "max_pages": slot_max_pages,
+                    "search_limit": search_limit,
+                }
+            )
+
+        if not slot_items:
+            return {
+                "success": True,
+                "count": 0,
+                "question_ids": [],
+                "sections": [],
+                "questions_preview": [],
+            }
+
+        def _sort_candidates(cands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            cands.sort(key=lambda q: _safe_int(q.get("quality_score"), 0), reverse=True)
+            return cands
+
+        async def _run_slot_search(slot_item: Dict[str, Any], *, slot_max_pages: int) -> Dict[str, Any]:
+            """
+            Fetch a wider candidate pool for a slot.
+
+            Important:
+            - We always fetch with `min_quality_score=0` and `dedup_by_stem=False`,
+              then apply quality/dedup constraints locally in the blueprint composer,
+              so later "auto relax" steps don't need extra network calls (except max_pages).
+            """
+            common_kwargs = dict(
+                subject=subject,
+                edu_level=edu_level,
+                limit=slot_item["search_limit"],
+                difficulty=slot_item["difficulty"],
+                question_type=slot_item["question_type"],
+                learn_grade=learn_grade,
+                learn_grade_id=learn_grade_id,
+                textbook_version=textbook_version,
+                max_pages=slot_max_pages,
+                year=year,
+                province=province,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
+                source_contains=slot_item["source_contains"],
+                stem_contains=slot_item["stem_contains"],
+                knowledge_contains=slot_item["knowledge_contains"],
+                require_difficulty=True,
+                strict_subject=strict_subject,
+                elective_mode=elective_mode,
+                elective_keywords=elective_keywords,
+                exclude_elective=exclude_elective,
+                dedup_by_stem=False,
+                min_quality_score=0,
+                with_quality=True,
+            )
+            if slot_item["keyword"]:
+                return await self.search_by_keyword(keyword=slot_item["keyword"], **common_kwargs)
+            return await self.search_by_knowledge(
+                knowledge_point=slot_item["knowledge_point"], **common_kwargs
+            )
+
+        slot_concurrency = 3
+        sem = asyncio.Semaphore(slot_concurrency)
+
+        async def _prefetch_one(slot_item: Dict[str, Any]) -> Dict[str, Any]:
+            async with sem:
+                result = await _run_slot_search(slot_item, slot_max_pages=slot_item["max_pages"])
+                candidates = list(result.get("questions") or [])
+                _sort_candidates(candidates)
+                return {
+                    "success": bool(result.get("success")),
+                    "error": result.get("error") or "",
+                    "candidates": candidates,
+                    "trace": result.get("trace"),
+                }
+
+        prefetch_results = await asyncio.gather(
+            *[asyncio.create_task(_prefetch_one(s)) for s in slot_items],
+            return_exceptions=True,
+        )
+
+        prefetched_by_index: Dict[int, Dict[str, Any]] = {}
+        for slot_item, res in zip(slot_items, prefetch_results):
+            idx = slot_item["index"]
+            if isinstance(res, Exception):
+                prefetched_by_index[idx] = {
+                    "success": False,
+                    "error": str(res),
+                    "candidates": [],
+                    "trace": None,
+                }
+            else:
+                prefetched_by_index[idx] = res
+
+        def _maybe_fp(question: Dict[str, Any]) -> str:
+            return self._stem_fingerprint(question.get("stem") or "")
+
+        def _select_more(
+            candidates: List[Dict[str, Any]],
+            *,
+            remaining: int,
+            quality_threshold: int,
+            dedup_stem: bool,
+        ) -> List[Dict[str, Any]]:
+            newly: List[Dict[str, Any]] = []
+            for q in candidates:
+                qid = (q.get("question_id") or "").strip()
+                if not qid or qid in global_seen_ids:
+                    continue
+
+                score = _safe_int(q.get("quality_score"), 0)
+                if quality_threshold > 0 and score < quality_threshold:
+                    continue
+
+                fp = _maybe_fp(q)
+                if dedup_stem and fp and fp in global_seen_fps:
+                    continue
+
+                global_seen_ids.add(qid)
+                if fp:
+                    global_seen_fps.add(fp)
+                newly.append(q)
+                if len(newly) >= remaining:
+                    break
+            return newly
+
+        for slot_item in slot_items:
+            idx = slot_item["index"]
+            requested = slot_item["requested"]
+
+            relax_trace: List[Dict[str, Any]] = []
+            slot_selected: List[Dict[str, Any]] = []
+
+            # Start from prefetched candidates if available; if prefetch failed, we can still try in-band later.
+            pre = prefetched_by_index.get(idx) or {}
+            candidates: List[Dict[str, Any]] = list(pre.get("candidates") or [])
+            seen_candidate_ids: set[str] = {
+                (q.get("question_id") or "").strip() for q in candidates if q.get("question_id")
+            }
+
+            # Effective parameters that may be relaxed.
+            slot_max_pages = slot_item["max_pages"]
+            quality_threshold = min_quality_score
+            dedup_stem = bool(dedup_by_stem)
+
+            attempt = 1
+
+            def _trace(action: str, *, fetched: bool, fetch_success: bool, fetch_error: str = "") -> None:
+                relax_trace.append(
+                    {
+                        "attempt": attempt,
+                        "action": action,
+                        "max_pages": slot_max_pages,
+                        "min_quality_score": quality_threshold,
+                        "dedup_by_stem": dedup_stem,
+                        "fetched": fetched,
+                        "fetch_success": fetch_success,
+                        "fetch_error": fetch_error,
+                        "candidate_pool": len(candidates),
+                        "selected_total": len(slot_selected),
+                        "requested": requested,
+                    }
+                )
+
+            # If prefetch failed (or returned empty), fetch once in-band.
+            if not candidates:
+                initial = await _run_slot_search(slot_item, slot_max_pages=slot_max_pages)
+                if not initial.get("success"):
+                    _trace(
+                        "initial_fetch",
+                        fetched=True,
+                        fetch_success=False,
+                        fetch_error=initial.get("error") or "search_failed",
+                    )
+                    sections.append(
+                        {
+                            "index": idx,
+                            "slot": slot_item["slot"],
+                            "success": False,
+                            "error": initial.get("error") or "search_failed",
+                            "requested": requested,
+                            "selected": 0,
+                            "question_ids": [],
+                            "relax_trace": relax_trace,
+                        }
+                    )
+                    continue
+
+                candidates = list(initial.get("questions") or [])
+                _sort_candidates(candidates)
+                seen_candidate_ids = {
+                    (q.get("question_id") or "").strip()
+                    for q in candidates
+                    if q.get("question_id")
+                }
+                _trace("initial_fetch", fetched=True, fetch_success=True)
+                attempt += 1
+
+            # Initial select (strict, no relaxation yet)
+            newly = _select_more(
+                candidates,
+                remaining=requested - len(slot_selected),
+                quality_threshold=quality_threshold,
+                dedup_stem=dedup_stem,
+            )
+            slot_selected.extend(newly)
+            _trace("initial_select", fetched=False, fetch_success=True)
+            attempt += 1
+
+            # 1) Auto-expand max_pages (requires extra network calls).
+            while len(slot_selected) < requested and slot_max_pages < max_pages_cap:
+                next_pages = min(max_pages_cap, slot_max_pages + 2)
+                if next_pages <= slot_max_pages:
+                    break
+                slot_max_pages = next_pages
+
+                expanded = await _run_slot_search(slot_item, slot_max_pages=slot_max_pages)
+                if not expanded.get("success"):
+                    _trace(
+                        "increase_max_pages",
+                        fetched=True,
+                        fetch_success=False,
+                        fetch_error=expanded.get("error") or "search_failed",
+                    )
+                    attempt += 1
+                    break
+
+                added = 0
+                for q in expanded.get("questions") or []:
+                    qid = (q.get("question_id") or "").strip()
+                    if not qid or qid in seen_candidate_ids:
+                        continue
+                    seen_candidate_ids.add(qid)
+                    candidates.append(q)
+                    added += 1
+                _sort_candidates(candidates)
+
+                newly = _select_more(
+                    candidates,
+                    remaining=requested - len(slot_selected),
+                    quality_threshold=quality_threshold,
+                    dedup_stem=dedup_stem,
+                )
+                slot_selected.extend(newly)
+                _trace("increase_max_pages", fetched=True, fetch_success=True)
+                attempt += 1
+
+            # 2) Auto-lower min_quality_score (no network).
+            while len(slot_selected) < requested and quality_threshold > min_quality_floor:
+                quality_threshold = max(min_quality_floor, quality_threshold - 10)
+                newly = _select_more(
+                    candidates,
+                    remaining=requested - len(slot_selected),
+                    quality_threshold=quality_threshold,
+                    dedup_stem=dedup_stem,
+                )
+                slot_selected.extend(newly)
+                _trace("lower_min_quality_score", fetched=False, fetch_success=True)
+                attempt += 1
+
+            # 3) Disable dedup_by_stem for this slot (no network).
+            if len(slot_selected) < requested and dedup_stem:
+                dedup_stem = False
+                newly = _select_more(
+                    candidates,
+                    remaining=requested - len(slot_selected),
+                    quality_threshold=quality_threshold,
+                    dedup_stem=dedup_stem,
+                )
+                slot_selected.extend(newly)
+                _trace("disable_dedup_by_stem", fetched=False, fetch_success=True)
+                attempt += 1
+
+            selected_questions.extend(slot_selected)
+            sections.append(
+                {
+                    "index": idx,
+                    "slot": slot_item["slot"],
+                    "success": True,
+                    "requested": requested,
+                    "selected": len(slot_selected),
+                    "question_ids": [q.get("question_id") for q in slot_selected if q.get("question_id")],
+                    "relax_trace": relax_trace,
+                }
+            )
+
+        question_ids = [q.get("question_id") for q in selected_questions if q.get("question_id")]
+        return {
+            "success": True,
+            "count": len(question_ids),
+            "question_ids": question_ids,
+            "sections": sections,
+            # 返回精简预览，避免输出过大
+            "questions_preview": [
+                {
+                    "question_id": q.get("question_id"),
+                    "type": q.get("type"),
+                    "difficulty": q.get("difficulty"),
+                    "difficulty_value": q.get("difficulty_value"),
+                    "source": q.get("source"),
+                    "date": q.get("date"),
+                    "source_url": q.get("source_url") or (
+                        f"https://zujuan.xkw.com/q/{q.get('question_id')}" if q.get("question_id") else ""
+                    ),
+                    "quality_score": q.get("quality_score"),
+                    "quality_flags": q.get("quality_flags", []),
+                }
+                for q in selected_questions
+            ],
+        }
 
     async def filter_questions(
         self,
@@ -1264,13 +2726,70 @@ class ZujuanCrawler:
 
         return result
 
-    async def get_question_detail(self, question_id: str) -> Dict[str, Any]:
+    async def _replace_formulas_with_inline_svg(self, html: str) -> str:
+        """
+        将HTML中的公式图片替换为内联 SVG（用于前端渲染）。
+
+        说明：
+        - 公式图片通常在 /formula/*.png 下，可替换为对应的 .svg 内容。
+        - 该模式不做 svg->latex 转换，避免转换误差。
+        """
+        formula_pattern = r'<img[^>]*src="([^"]+)"[^>]*>'
+        matches = re.findall(formula_pattern, html)
+        formula_srcs = []
+        for src in matches:
+            if "/formula/" not in src:
+                continue
+            if not src.endswith(".png"):
+                continue
+            formula_srcs.append(src)
+
+        # Preserve order + de-dupe
+        formula_srcs = list(dict.fromkeys(formula_srcs))
+        if not formula_srcs:
+            return html
+
+        svg_map = {}
+        for src in formula_srcs[:20]:
+            resolved = src
+            if resolved.startswith("//"):
+                resolved = f"https:{resolved}"
+            elif resolved.startswith("/"):
+                resolved = f"{self.base_url.rstrip('/')}{resolved}"
+            svg = await self._fetch_formula_svg(resolved)
+            if svg:
+                svg_map[src] = svg
+
+        result = html
+        for src, svg in svg_map.items():
+            img_pattern = f'<img[^>]*src="{re.escape(src)}"[^>]*>'
+            replacement = f'<span class="epa-formula" data-formula-src="{src}">{svg}</span>'
+            result = re.sub(img_pattern, replacement, result)
+
+        return result
+
+    async def get_question_detail(
+        self,
+        question_id: str,
+        *,
+        formula_mode: str = "latex",
+        stem_mode: str = "text",
+    ) -> Dict[str, Any]:
         """
         使用 curl 获取题目详情（httpx会被反爬拦截）。
         返回题目的题干、选项、答案、解析等信息。
-        公式图片会被替换为LaTeX表达式（使用字形签名精确匹配，非OCR）。
+
+        Args:
+            formula_mode:
+                - "latex"（默认）：将公式图片替换为 LaTeX（字形签名精确匹配，非OCR）。
+                - "svg"：将公式图片替换为 SVG（用于 AI/前端渲染，避免 svg2latex 转换误差）。
+            stem_mode:
+                - "text"（默认）：返回 `stem`（纯文本，必要时含 [公式:<svg...>] 标记）。
+                - "html"：额外返回 `stem_html`（HTML 片段，公式为内联 SVG）。
         """
         url = self._question_url(question_id)
+        formula_mode = (formula_mode or "").strip().lower()
+        stem_mode = (stem_mode or "").strip().lower()
 
         try:
             # 使用curl获取页面（在线程池中运行避免阻塞）
@@ -1337,14 +2856,25 @@ class ZujuanCrawler:
             stem_match = re.search(r'<div class="quest-cnt\s*">([\s\S]*?)</div>\s*<div class="quest-exam">', html)
             if stem_match:
                 stem_html = stem_match.group(1)
-                # 将公式图片替换为LaTeX表达式
-                stem_html = await self._replace_formulas_with_latex(stem_html)
-                # 清理HTML标签，保留LaTeX公式
+                if formula_mode == "svg":
+                    if stem_mode == "html":
+                        stem_html = await self._replace_formulas_with_inline_svg(stem_html)
+                    else:
+                        stem_html = await self._replace_formulas_with_svg(stem_html)
+                else:
+                    stem_html = await self._replace_formulas_with_latex(stem_html)
+
+                if stem_mode == "html":
+                    res["stem_html"] = stem_html
+
+                # 清理HTML标签（保留 LaTeX 或 [公式:<svg...>] 标记）
                 stem_text = re.sub(r'<[^>]+>', '', stem_html)
                 stem_text = re.sub(r'\s+', ' ', stem_text).strip()
                 res["stem"] = stem_text[:3000]
             else:
                 res["stem"] = ""
+                if stem_mode == "html":
+                    res["stem_html"] = ""
 
             # 提取知识点
             kp_matches = re.findall(r'class="knowledge-name[^"]*"[^>]*>([^<]+)</a>', html)

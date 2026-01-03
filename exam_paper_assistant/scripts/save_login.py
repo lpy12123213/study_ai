@@ -28,7 +28,11 @@ from playwright.sync_api import sync_playwright
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 ENV_FILE = PROJECT_ROOT / ".env"
 sys.path.append(str(PROJECT_ROOT))
-USER_DATA_DIR = PROJECT_ROOT / ".playwright_zujuan_user_data"
+DEFAULT_USER_DATA_DIR = PROJECT_ROOT / ".local" / "playwright" / "zujuan_user_data"
+LEGACY_USER_DATA_DIR = PROJECT_ROOT / ".playwright_zujuan_user_data"
+USER_DATA_DIR = DEFAULT_USER_DATA_DIR
+if LEGACY_USER_DATA_DIR.exists() and not DEFAULT_USER_DATA_DIR.exists():
+    USER_DATA_DIR = LEGACY_USER_DATA_DIR
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument(
@@ -44,7 +48,7 @@ parser.add_argument(
 parser.add_argument(
     "--user-data-dir",
     default=os.getenv("ZUJUAN_USER_DATA_DIR", "").strip(),
-    help="Playwright 持久化用户数据目录（默认使用项目下 .playwright_zujuan_user_data）",
+    help="Playwright 持久化用户数据目录（默认使用项目下 .local/playwright/zujuan_user_data；兼容旧目录 .playwright_zujuan_user_data）",
 )
 parser.add_argument(
     "--dry-run",

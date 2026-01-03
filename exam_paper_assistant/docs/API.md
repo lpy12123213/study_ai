@@ -176,6 +176,178 @@
 
 ---
 
+## 对话与画布聊天 API
+
+前端“画布式对话”使用以下接口实现：
+
+### 获取对话列表
+
+**GET** `/api/conversations`
+
+**查询参数：**
+- `limit` (integer, 可选): 返回数量限制，默认50
+
+**响应示例：**
+```json
+[
+  {
+    "id": 1,
+    "title": "新对话",
+    "created_at": "2025-01-01T10:00:00",
+    "updated_at": "2025-01-01T10:05:00"
+  }
+]
+```
+
+---
+
+### 创建对话
+
+**POST** `/api/conversations`
+
+**请求体：**
+```json
+{
+  "title": "新对话"
+}
+```
+
+**响应示例：**
+```json
+{
+  "id": 123,
+  "title": "新对话"
+}
+```
+
+---
+
+### 更新对话标题
+
+**PATCH** `/api/conversations/{conv_id}`
+
+**请求体：**
+```json
+{
+  "title": "函数专题 - 分支A"
+}
+```
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "conversation": {
+    "id": 123,
+    "title": "函数专题 - 分支A",
+    "created_at": "2025-01-01T10:00:00",
+    "updated_at": "2025-01-01T10:06:00"
+  }
+}
+```
+
+---
+
+### 删除对话
+
+**DELETE** `/api/conversations/{conv_id}`
+
+**响应示例：**
+```json
+{ "success": true }
+```
+
+---
+
+### 获取对话消息
+
+**GET** `/api/conversations/{conv_id}/messages`
+
+返回对话信息与该对话所有消息（按时间升序）。
+
+**响应示例：**
+```json
+{
+  "conversation": {
+    "id": 123,
+    "title": "新对话",
+    "created_at": "2025-01-01T10:00:00",
+    "updated_at": "2025-01-01T10:05:00"
+  },
+  "messages": [
+    {
+      "id": 1,
+      "role": "user",
+      "content": "帮我组一份函数卷",
+      "tool_calls": null,
+      "tool_call_id": null,
+      "created_at": "2025-01-01T10:00:01"
+    }
+  ]
+}
+```
+
+---
+
+### 分叉对话（创建分支）
+
+**POST** `/api/conversations/{conv_id}/fork`
+
+从父对话的某条消息开始分叉，创建一个新对话，并复制父对话从开头到 `message_id`（包含该条消息）的消息前缀。
+
+**请求体：**
+```json
+{
+  "message_id": 12,
+  "title": "原对话 - 分支"
+}
+```
+
+**响应示例：**
+```json
+{
+  "id": 456,
+  "title": "原对话 - 分支",
+  "parent_conversation_id": 123,
+  "forked_from_message_id": 12,
+  "copied_message_count": 9,
+  "copied_visible_message_count": 6
+}
+```
+
+说明：
+- `copied_visible_message_count` 用于前端画布隐藏“复制的前缀”（避免重复显示），只显示分叉点之后的新消息。
+
+---
+
+### 发送消息（SSE 流式）
+
+**POST** `/api/chat`
+
+**请求体：**
+```json
+{
+  "conversation_id": 123,
+  "message": "再来 10 道中等难度选择题",
+  "subject": "高中数学"
+}
+```
+
+**响应：** `text/event-stream`
+
+后端会持续返回形如 `data: {...}\n\n` 的事件流，直到 `data: [DONE]` 结束。每个 `data` 都是 JSON，至少包含 `type` 字段。
+
+常见 `type`：
+- `iteration`：多轮工具编排的轮次提示
+- `stream_start`：开始输出文本增量
+- `text_delta`：模型输出的增量文本
+- `assistant`：某一轮 assistant 的聚合信息（可能包含 `tool_calls`）
+- `tool_start` / `tool_result`：工具调用过程与结果
+- `assistant_final`：本次回复结束（用于落库）
+- `error`：错误信息
+
+---
+
 ## MCP工具API
 
 以下工具通过MCP协议提供给AI使用：
@@ -346,3 +518,20 @@ curl -X POST http://localhost:8000/api/papers \
   -H "Content-Type: application/json" \
   -d '{"paper_name":"测试试卷","question_ids":["12345","12346"]}'
 ```
+
+## 新增：题目筛选与组卷蓝图
+
+已新增/扩展以下 MCP 能力（用于 AI 侧调用）：
+
+- `get_available_filters`：获取当前学科可用筛选项（年级/教材版本/题型等）
+- `compose_paper_blueprint`：按“组卷蓝图”批量检索并组装题目 ID 列表
+
+并在搜索工具中新增支持：
+
+- `learn_grade/learn_grade_id`（年级硬过滤）
+- `textbook_version`（教材版本/题库分类）
+- `elective_mode/exclude_elective/elective_keywords`（选修过滤三态）
+- `dedup_by_stem`（题干去重）
+- `min_quality_score`（质量阈值；避免明显缺内容/图片占比过高的题）
+
+详情与示例见：`docs/SEARCH_FILTERS_AND_BLUEPRINTS.md`

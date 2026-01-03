@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import hashlib
+import mimetypes
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
+
+import httpx
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
+
+router = APIRouter()
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MEDIA_DIR = PROJECT_ROOT / ".local" / "media"
+
+
+def _normalize_remote_url(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("empty_url")
+    if url.startswith("//"):
+        url = f"https:{url}"
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("invalid_scheme")
+    if not parsed.netloc:
+        raise ValueError("missing_host")
+
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("forbidden_host")
+
+    return url
+
+
+def _pick_extension(url: str, content_type: str) -> str:
+    url_path = urlparse(url).path
+    suffix = Path(url_path).suffix.lower()
+    if suffix and len(suffix) <= 8:
+        # Only allow common image extensions.
+        if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}:
+            return suffix
+
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct in {"image/svg+xml"}:
+        return ".svg"
+    guessed = mimetypes.guess_extension(ct) if ct else None
+    if guessed and guessed.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+        return guessed.lower()
+    return ".bin"
+
+
+def _find_cached_file(media_id: str) -> Optional[Path]:
+    if not MEDIA_DIR.exists():
+        return None
+    for p in MEDIA_DIR.glob(f"{media_id}.*"):
+        if p.is_file():
+            return p
+    return None
+
+
+@router.get("/media/proxy")
+async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> FileResponse:
+    """
+    Fetch a remote media URL and cache it on disk for stable rendering.
+
+    - Returns a cached file if available.
+    - Downloads and stores into `.local/media/` otherwise.
+    """
+    try:
+        normalized = _normalize_remote_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    media_id = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    cached = _find_cached_file(media_id)
+    if cached:
+        return FileResponse(cached)
+
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        follow_redirects=True,
+        headers={"User-Agent": "ExamPaperAssistant/1.0"},
+    ) as client:
+        try:
+            resp = await client.get(normalized)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"fetch_failed_status: {resp.status_code}")
+
+    ext = _pick_extension(normalized, resp.headers.get("content-type") or "")
+    out_path = MEDIA_DIR / f"{media_id}{ext}"
+    out_path.write_bytes(resp.content)
+
+    return FileResponse(out_path)
+

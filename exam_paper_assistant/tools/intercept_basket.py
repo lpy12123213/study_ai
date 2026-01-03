@@ -7,8 +7,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-ARTIFACTS_DIR = ROOT_DIR / "artifacts"
-ARTIFACTS_DIR.mkdir(exist_ok=True)
+ARTIFACTS_DIR = ROOT_DIR / ".local" / "artifacts"
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def intercept_basket_api():

@@ -6,21 +6,30 @@ from __future__ import annotations
 
 import json
 import httpx
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from core.settings import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
+    CHAT_PROVIDER,
+    settings,
     SUB_AI_TIMEOUT,
     SUB_MODEL,
     SUB_MODEL_MAX_TOKENS,
     SUB_MODEL_TEMPERATURE,
 )
 
+def _infer_provider_for_model(model: str) -> str:
+    m = (model or "").strip()
+    if m.startswith("accounts/"):
+        return "fireworks"
+    if "/" in m:
+        return "openrouter"
+    return CHAT_PROVIDER
+
 
 async def select_best_question(
     questions: List[Dict[str, Any]],
-    requirement: str
+    requirement: str,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     使用子AI从候选题目中选择最符合要求的一道
@@ -37,11 +46,20 @@ async def select_best_question(
             "analysis": "各题目分析"
         }
     """
-    if not OPENROUTER_API_KEY:
-        return {"success": False, "error": "未配置API密钥"}
-
     if not questions:
         return {"success": False, "error": "没有候选题目"}
+
+    effective_model = (model or SUB_MODEL).strip() or SUB_MODEL
+    provider = _infer_provider_for_model(effective_model)
+    if provider == "fireworks":
+        base_url = (settings.fireworks_base_url or "").rstrip("/")
+        api_key = (settings.fireworks_api_key or "").strip()
+    else:
+        base_url = (settings.openrouter_base_url or "").rstrip("/")
+        api_key = (settings.openrouter_api_key or "").strip()
+
+    if not api_key:
+        return {"success": False, "error": f"未配置 {provider} API Key（当前模型: {effective_model}）"}
 
     # 构建题目描述文本
     questions_text = ""
@@ -99,17 +117,20 @@ async def select_best_question(
 """
 
     try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if provider == "openrouter":
+            headers["HTTP-Referer"] = "http://localhost:8000"
+            headers["X-Title"] = "Exam Paper Assistant - Sub AI"
+
         async with httpx.AsyncClient(timeout=SUB_AI_TIMEOUT) as client:
             response = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "http://localhost:8000",
-                    "X-Title": "Exam Paper Assistant - Sub AI"
-                },
+                f"{base_url}/chat/completions",
+                headers=headers,
                 json={
-                    "model": SUB_MODEL,
+                    "model": effective_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": SUB_MODEL_TEMPERATURE,
                     "max_tokens": SUB_MODEL_MAX_TOKENS
@@ -133,10 +154,39 @@ async def select_best_question(
                 if json_match:
                     result = json.loads(json_match.group())
 
-                    # 验证并补充信息
-                    selected_idx = result.get("selected_index", 1) - 1
-                    if 0 <= selected_idx < len(questions):
-                        result["selected_question_id"] = questions[selected_idx].get("question_id")
+                    # 验证并补充信息（容错：selected_index 可能为 null / 非数字）
+                    question_ids = [str(q.get("question_id", "")).strip() for q in questions]
+                    id_to_index = {qid: idx for idx, qid in enumerate(question_ids) if qid}
+
+                    selected_question_id_raw = result.get("selected_question_id")
+                    selected_question_id = (
+                        str(selected_question_id_raw).strip()
+                        if selected_question_id_raw is not None
+                        else ""
+                    )
+
+                    selected_idx: int
+                    if selected_question_id and selected_question_id in id_to_index:
+                        selected_idx = id_to_index[selected_question_id]
+                    else:
+                        selected_index_raw = result.get("selected_index", 1)
+                        try:
+                            selected_index = int(selected_index_raw)
+                        except (TypeError, ValueError):
+                            selected_index = 1
+
+                        if selected_index < 1:
+                            selected_index = 1
+                        if selected_index > len(questions):
+                            selected_index = len(questions)
+
+                        selected_idx = selected_index - 1
+                        selected_question_id = question_ids[selected_idx]
+
+                    # Normalize fields for callers
+                    result["selected_index"] = selected_idx + 1
+                    if selected_question_id:
+                        result["selected_question_id"] = selected_question_id
 
                     result["success"] = True
                     return result

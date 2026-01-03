@@ -24,6 +24,7 @@ if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from backend.api.router import api_router
+from backend.crawler_manager import close_crawler
 from database.models import init_db
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +35,7 @@ DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
     yield
+    await close_crawler()
 
 
 def create_app() -> FastAPI:

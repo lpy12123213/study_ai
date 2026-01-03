@@ -16,7 +16,7 @@ router = APIRouter()
 async def create_paper(paper: PaperCreate) -> dict:
     """创建试卷"""
     try:
-        q_dicts = [q.model_dump() for q in paper.questions]
+        q_dicts = paper.to_question_dicts()
         paper_id = await save_paper(paper_name=paper.paper_name, questions=q_dicts)
         return {"success": True, "paper_id": paper_id, "message": f"试卷 '{paper.paper_name}' 创建成功"}
     except Exception as exc:
@@ -61,7 +61,13 @@ async def get_download_link(paper_id: int) -> dict:
         raise HTTPException(status_code=404, detail="试卷不存在")
 
     question_ids = [q["question_id"] for q in paper["questions"]]
-    question_links = [f"https://zujuan.xkw.com/11q{qid}.html" for qid in question_ids]
+    question_links = []
+    for q in paper["questions"]:
+        qid = q.get("question_id")
+        if not qid:
+            continue
+        # Prefer the stored source URL (includes correct bankId), fall back to a canonical URL by question_id.
+        question_links.append(q.get("source_url") or f"https://zujuan.xkw.com/q/{qid}")
 
     return {
         "success": True,
@@ -76,4 +82,3 @@ async def get_download_link(paper_id: int) -> dict:
             "4. 使用组卷网的正规下载功能下载试卷",
         ],
     }
-

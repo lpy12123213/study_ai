@@ -19,6 +19,7 @@ if __package__ is None or __package__ == "":
 from core.settings import DEFAULT_SUBJECT
 from crawler.zujuan_crawler import ZujuanCrawler
 from mcp_server.sub_ai_selector import select_best_question
+from mcp_server.bigmodel_web_search import web_search_with_bigmodel_mcp
 from mcp_server.reviewer import review_questions_with_openrouter
 from backend.subjects import (
     DEFAULT_DIFFICULTY,
@@ -76,6 +77,21 @@ class ExamPaperMCPServer:
                                 "description": "题型（选择题/填空题/解答题等）",
                                 "default": "",
                             },
+                            "learn_grade": {
+                                "type": "string",
+                                "description": "年级筛选（可选，如：高一/高二/高三/七年级等；建议先用 get_available_filters 查看可用年级/ID）",
+                                "default": "",
+                            },
+                            "learn_grade_id": {
+                                "type": "integer",
+                                "description": "年级ID（高级；优先级高于 learn_grade）",
+                                "default": 0,
+                            },
+                            "textbook_version": {
+                                "type": "string",
+                                "description": "教材版本/题库分类（可选，如：人教版/外研版/北师大版；建议先用 get_available_filters 查看可用项）",
+                                "default": "",
+                            },
                             "limit": {
                                 "type": "integer",
                                 "description": "返回结果数量限制",
@@ -83,7 +99,91 @@ class ExamPaperMCPServer:
                             },
                             "max_pages": {
                                 "type": "integer",
-                                "description": "最多翻页数（默认 2 页）",
+                                "description": "最多翻页数（默认 2 页）",       
+                                "default": 2,
+                            },
+                            "year": {
+                                "type": "integer",
+                                "description": "年份过滤（如 2024；0 表示不限）",
+                                "default": 0,
+                            },
+                            "source_contains": {
+                                "type": "string",
+                                "description": "来源包含关键字（如：高考、期末、北京等）",
+                                "default": "",
+                            },
+                            "stem_contains": {
+                                "type": "string",
+                                "description": "题干包含关键字（可选）",
+                                "default": "",
+                            },
+                            "knowledge_contains": {
+                                "type": "string",
+                                "description": "知识点包含关键字（可选）",
+                                "default": "",
+                            },
+                            "exclude_elective": {
+                                "type": "boolean",
+                                "description": "排除包含“选修/选择性必修”等标记的题目（基于来源/知识点/题干启发式过滤）",
+                                "default": False,
+                            },
+                            "elective_mode": {
+                                "type": "string",
+                                "description": "选修过滤模式（include=不限；exclude=排除选修；only=仅选修）。注意：如果同时传 exclude_elective=true 且 elective_mode 为空，则等价于 exclude。",
+                                "enum": ["", "include", "exclude", "only"],
+                                "default": "",
+                            },
+                            "elective_keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "可选：自定义选修识别关键词（默认：选修/选择性必修/选必）",
+                            },
+                            "dedup_by_stem": {
+                                "type": "boolean",
+                                "description": "按题干指纹去重（避免同质题/重复题）",
+                                "default": False,
+                            },
+                            "min_quality_score": {
+                                "type": "integer",
+                                "description": "题目质量分阈值（0-100，越高越严格；会过滤题干过短/公式转换缺失/图片过多等）",
+                                "default": 0,
+                            },
+                            "with_quality": {
+                                "type": "boolean",
+                                "description": "是否在返回结果中附带 quality_score/quality_flags",
+                                "default": True,
+                            },
+                            "difficulty_value_min": {
+                                "type": "number",
+                                "description": "难度系数下限（可选）。注意：系数越小越难；题目没有难度系数时不会被剔除",
+                            },
+                            "difficulty_value_max": {
+                                "type": "number",
+                                "description": "难度系数上限（可选）。注意：系数越小越难；题目没有难度系数时不会被剔除",
+                            },
+                            "province": {
+                                "type": "string",
+                                "description": "地区（可选，如：北京/北京市/全国；建议先用 get_available_filters 查看 provinces；同时传 province_id 时以 province_id 为准）",
+                                "default": "",
+                            },
+                            "province_id": {
+                                "type": "integer",
+                                "description": "地区ID（高级；-1 表示不限）",
+                                "default": -1,
+                            },
+                            "paper_type_id": {
+                                "type": "integer",
+                                "description": "试卷类型ID（高级；0 表示不限）",
+                                "default": 0,
+                            },
+                            "term": {
+                                "type": "integer",
+                                "description": "学期（高级；0 表示不限）",
+                                "default": 0,
+                            },
+                            "order_by": {
+                                "type": "integer",
+                                "description": "排序方式（高级；默认 2）",
                                 "default": 2,
                             },
                         },
@@ -123,6 +223,21 @@ class ExamPaperMCPServer:
                                 "description": "题型（选择题/填空题/解答题等）",
                                 "default": "",
                             },
+                            "learn_grade": {
+                                "type": "string",
+                                "description": "年级筛选（可选，如：高一/高二/高三/七年级等；建议先用 get_available_filters 查看可用年级/ID）",
+                                "default": "",
+                            },
+                            "learn_grade_id": {
+                                "type": "integer",
+                                "description": "年级ID（高级；优先级高于 learn_grade）",
+                                "default": 0,
+                            },
+                            "textbook_version": {
+                                "type": "string",
+                                "description": "教材版本/题库分类（可选，如：人教版/外研版/北师大版；建议先用 get_available_filters 查看可用项）",
+                                "default": "",
+                            },
                             "limit": {
                                 "type": "integer",
                                 "description": "返回结果数量限制",
@@ -130,7 +245,91 @@ class ExamPaperMCPServer:
                             },
                             "max_pages": {
                                 "type": "integer",
-                                "description": "最多翻页数（默认 2 页）",
+                                "description": "最多翻页数（默认 2 页）",       
+                                "default": 2,
+                            },
+                            "year": {
+                                "type": "integer",
+                                "description": "年份过滤（如 2024；0 表示不限）",
+                                "default": 0,
+                            },
+                            "source_contains": {
+                                "type": "string",
+                                "description": "来源包含关键字（如：高考、期末、北京等）",
+                                "default": "",
+                            },
+                            "stem_contains": {
+                                "type": "string",
+                                "description": "题干包含关键字（可选）",
+                                "default": "",
+                            },
+                            "knowledge_contains": {
+                                "type": "string",
+                                "description": "知识点包含关键字（可选）",
+                                "default": "",
+                            },
+                            "exclude_elective": {
+                                "type": "boolean",
+                                "description": "排除包含“选修/选择性必修”等标记的题目（基于来源/知识点/题干启发式过滤）",
+                                "default": False,
+                            },
+                            "elective_mode": {
+                                "type": "string",
+                                "description": "选修过滤模式（include=不限；exclude=排除选修；only=仅选修）。注意：如果同时传 exclude_elective=true 且 elective_mode 为空，则等价于 exclude。",
+                                "enum": ["", "include", "exclude", "only"],
+                                "default": "",
+                            },
+                            "elective_keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "可选：自定义选修识别关键词（默认：选修/选择性必修/选必）",
+                            },
+                            "dedup_by_stem": {
+                                "type": "boolean",
+                                "description": "按题干指纹去重（避免同质题/重复题）",
+                                "default": False,
+                            },
+                            "min_quality_score": {
+                                "type": "integer",
+                                "description": "题目质量分阈值（0-100，越高越严格；会过滤题干过短/公式转换缺失/图片过多等）",
+                                "default": 0,
+                            },
+                            "with_quality": {
+                                "type": "boolean",
+                                "description": "是否在返回结果中附带 quality_score/quality_flags",
+                                "default": True,
+                            },
+                            "difficulty_value_min": {
+                                "type": "number",
+                                "description": "难度系数下限（可选）。注意：系数越小越难；题目没有难度系数时不会被剔除",
+                            },
+                            "difficulty_value_max": {
+                                "type": "number",
+                                "description": "难度系数上限（可选）。注意：系数越小越难；题目没有难度系数时不会被剔除",
+                            },
+                            "province": {
+                                "type": "string",
+                                "description": "地区（可选，如：北京/北京市/全国；建议先用 get_available_filters 查看 provinces；同时传 province_id 时以 province_id 为准）",
+                                "default": "",
+                            },
+                            "province_id": {
+                                "type": "integer",
+                                "description": "地区ID（高级；-1 表示不限）",
+                                "default": -1,
+                            },
+                            "paper_type_id": {
+                                "type": "integer",
+                                "description": "试卷类型ID（高级；0 表示不限）",
+                                "default": 0,
+                            },
+                            "term": {
+                                "type": "integer",
+                                "description": "学期（高级；0 表示不限）",
+                                "default": 0,
+                            },
+                            "order_by": {
+                                "type": "integer",
+                                "description": "排序方式（高级；默认 2）",
                                 "default": 2,
                             },
                         },
@@ -354,6 +553,208 @@ class ExamPaperMCPServer:
                     },
                 ),
                 Tool(
+                    name="get_available_filters",
+                    description="获取当前学科下可用的筛选项（年级/试卷类型/教材版本/题型等），用于下拉选择，避免写死ID。",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "subject": {
+                                "type": "string",
+                                "description": "学科全名（可选，不填则使用当前学科；填写会自动切换）",
+                                "default": "",
+                            },
+                            "edu_level": {
+                                "type": "string",
+                                "description": "学段校验（可选：小学/初中/高中；填写后会严格校验学段与学科匹配）",
+                                "enum": ["小学", "初中", "高中", ""],
+                                "default": "",
+                            },
+                        },
+                        "required": [],
+                    },
+                ),
+                Tool(
+                    name="compose_paper_blueprint",
+                    description="根据“组卷蓝图”批量搜索并组装题目ID列表（支持年级/教材版本/选修过滤/去重/质量阈值/严学科约束）。返回分段选题结果与精简预览。",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "blueprint": {
+                                "type": "array",
+                                "description": "组卷蓝图（多个检索槽位）",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "keyword": {
+                                            "type": "string",
+                                            "description": "关键词（与 knowledge_point 二选一）",
+                                            "default": "",
+                                        },
+                                        "knowledge_point": {
+                                            "type": "string",
+                                            "description": "知识点（与 keyword 二选一）",
+                                            "default": "",
+                                        },
+                                        "count": {
+                                            "type": "integer",
+                                            "description": "本槽位需要的题目数量",
+                                            "default": 1,
+                                        },
+                                        "difficulty": {
+                                            "type": "string",
+                                            "description": "难度（简单/中等/困难；可选）",
+                                            "default": "",
+                                        },
+                                        "question_type": {
+                                            "type": "string",
+                                            "description": "题型（可选）",
+                                            "default": "",
+                                        },
+                                        "source_contains": {
+                                            "type": "string",
+                                            "description": "来源包含（可选）",
+                                            "default": "",
+                                        },
+                                        "stem_contains": {
+                                            "type": "string",
+                                            "description": "题干包含（可选）",
+                                            "default": "",
+                                        },
+                                        "knowledge_contains": {
+                                            "type": "string",
+                                            "description": "知识点包含（可选）",
+                                            "default": "",
+                                        },
+                                        "max_pages": {
+                                            "type": "integer",
+                                            "description": "本槽位最多翻页数（可选，覆盖全局 max_pages）",
+                                            "default": 0,
+                                        },
+                                    },
+                                },
+                            },
+                            "subject": {
+                                "type": "string",
+                                "description": "学科全名（可选，不填则使用当前学科；填写会自动切换）",
+                                "default": "",
+                            },
+                            "edu_level": {
+                                "type": "string",
+                                "description": "学段校验（可选：小学/初中/高中；填写后会严格校验学段与学科匹配）",
+                                "enum": ["小学", "初中", "高中", ""],
+                                "default": "",
+                            },
+                            "learn_grade": {
+                                "type": "string",
+                                "description": "年级名称（可选）",
+                                "default": "",
+                            },
+                            "learn_grade_id": {
+                                "type": "integer",
+                                "description": "年级ID（可选，优先级高于 learn_grade）",
+                                "default": 0,
+                            },
+                            "textbook_version": {
+                                "type": "string",
+                                "description": "教材版本/题库分类（可选）",
+                                "default": "",
+                            },
+                            "elective_mode": {
+                                "type": "string",
+                                "description": "选修过滤模式（include/exclude/only）",
+                                "default": "",
+                            },
+                            "elective_keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "自定义选修识别关键词（可选）",
+                            },
+                            "exclude_elective": {
+                                "type": "boolean",
+                                "description": "兼容旧参数：true 等价于 elective_mode=exclude（当 elective_mode 为空时）",
+                                "default": False,
+                            },
+                            "year": {
+                                "type": "integer",
+                                "description": "年份过滤（可选，0 表示不限）",
+                                "default": 0,
+                            },
+                            "province": {
+                                "type": "string",
+                                "description": "地区（可选，如：北京/北京市/全国；建议先用 get_available_filters 查看 provinces；同时传 province_id 时以 province_id 为准）",
+                                "default": "",
+                            },
+                            "province_id": {
+                                "type": "integer",
+                                "description": "地区ID（可选，-1 表示不限）",
+                                "default": -1,
+                            },
+                            "paper_type_id": {
+                                "type": "integer",
+                                "description": "试卷类型ID（可选，0 表示不限）",
+                                "default": 0,
+                            },
+                            "term": {
+                                "type": "integer",
+                                "description": "学期（可选，0 表示不限）",
+                                "default": 0,
+                            },
+                            "order_by": {
+                                "type": "integer",
+                                "description": "排序方式（可选，默认 2）",
+                                "default": 2,
+                            },
+                            "max_pages": {
+                                "type": "integer",
+                                "description": "全局最多翻页数（默认 2）",
+                                "default": 2,
+                            },
+                            "per_slot_expand": {
+                                "type": "integer",
+                                "description": "每个槽位扩展倍数（先多抓再筛选；默认 3）",
+                                "default": 3,
+                            },
+                            "min_quality_score": {
+                                "type": "integer",
+                                "description": "最小质量分（0-100；0 表示不过滤）",
+                                "default": 0,
+                            },
+                            "dedup_by_stem": {
+                                "type": "boolean",
+                                "description": "按题干去重（避免同质题）",
+                                "default": True,
+                            },
+                            "strict_subject": {
+                                "type": "boolean",
+                                "description": "严学科约束（防止跨学段混入）",
+                                "default": True,
+                            },
+                        },
+                        "required": ["blueprint"],
+                    },
+                ),
+                Tool(
+                    name="web_search",
+                    description="【联网搜索】通过智谱 BigModel 的 MCP Broker（web-search）进行互联网搜索并返回结构化结果。需要在 .env 配置 ZHIPU_API_KEY。",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "搜索关键词/问题"},
+                            "limit": {
+                                "type": "integer",
+                                "description": "返回结果数量（1-10）",
+                                "default": 5,
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "可选：指定 BigModel 模型名（默认读取 ZHIPU_MODEL）",
+                                "default": "",
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                ),
+                Tool(
                     name="diagnose_export",
                     description="""【诊断工具】诊断导出到组卷网功能的问题。
 检查项目：
@@ -422,8 +823,28 @@ class ExamPaperMCPServer:
                         edu_level=edu_level,
                         limit=arguments.get("limit", 10),
                         difficulty=difficulty,
-                        question_type=arguments.get("question_type", ""),
+                        question_type=arguments.get("question_type", ""),       
+                        learn_grade=arguments.get("learn_grade", ""),
+                        learn_grade_id=arguments.get("learn_grade_id", 0),
+                        textbook_version=arguments.get("textbook_version", ""),
                         max_pages=arguments.get("max_pages", 2),
+                        year=arguments.get("year", 0),
+                        province=arguments.get("province", ""),
+                        province_id=arguments.get("province_id", -1),
+                        paper_type_id=arguments.get("paper_type_id", 0),        
+                        term=arguments.get("term", 0),
+                        order_by=arguments.get("order_by", 2),
+                        source_contains=arguments.get("source_contains", ""),   
+                        stem_contains=arguments.get("stem_contains", ""),       
+                        knowledge_contains=arguments.get("knowledge_contains", ""),
+                        exclude_elective=bool(arguments.get("exclude_elective", False)),
+                        elective_mode=arguments.get("elective_mode", ""),
+                        elective_keywords=arguments.get("elective_keywords"),
+                        dedup_by_stem=bool(arguments.get("dedup_by_stem", False)),
+                        min_quality_score=arguments.get("min_quality_score", 0),
+                        with_quality=bool(arguments.get("with_quality", True)),
+                        difficulty_value_min=arguments.get("difficulty_value_min"),
+                        difficulty_value_max=arguments.get("difficulty_value_max"),
                         require_difficulty=True,
                         strict_subject=True,
                     )
@@ -469,8 +890,28 @@ class ExamPaperMCPServer:
                         edu_level=edu_level,
                         limit=arguments.get("limit", 10),
                         difficulty=difficulty,
-                        question_type=arguments.get("question_type", ""),
+                        question_type=arguments.get("question_type", ""),       
+                        learn_grade=arguments.get("learn_grade", ""),
+                        learn_grade_id=arguments.get("learn_grade_id", 0),
+                        textbook_version=arguments.get("textbook_version", ""),
                         max_pages=arguments.get("max_pages", 2),
+                        year=arguments.get("year", 0),
+                        province=arguments.get("province", ""),
+                        province_id=arguments.get("province_id", -1),
+                        paper_type_id=arguments.get("paper_type_id", 0),        
+                        term=arguments.get("term", 0),
+                        order_by=arguments.get("order_by", 2),
+                        source_contains=arguments.get("source_contains", ""),   
+                        stem_contains=arguments.get("stem_contains", ""),       
+                        knowledge_contains=arguments.get("knowledge_contains", ""),
+                        exclude_elective=bool(arguments.get("exclude_elective", False)),
+                        elective_mode=arguments.get("elective_mode", ""),
+                        elective_keywords=arguments.get("elective_keywords"),
+                        dedup_by_stem=bool(arguments.get("dedup_by_stem", False)),
+                        min_quality_score=arguments.get("min_quality_score", 0),
+                        with_quality=bool(arguments.get("with_quality", True)),
+                        difficulty_value_min=arguments.get("difficulty_value_min"),
+                        difficulty_value_max=arguments.get("difficulty_value_max"),
                         require_difficulty=True,
                         strict_subject=True,
                     )
@@ -750,14 +1191,99 @@ class ExamPaperMCPServer:
 
                 elif name == "get_current_subject":
                     # 获取当前学科
-                    config = get_subject_config(self.current_subject)
+                    config = get_subject_config(self.current_subject)     
                     result = {
                         "success": True,
                         "current_subject": self.current_subject,
-                        "short_name": config.get("short_name", ""),
+                        "short_name": config.get("short_name", ""),       
                         "bank_id": config["bank_id"],
                         "edu_id": config["edu_id"]
                     }
+
+                elif name == "get_available_filters":
+                    await ensure_crawler_initialized()
+                    edu_level = (arguments.get("edu_level") or "").strip()
+                    subject_input = (arguments.get("subject") or "").strip()
+                    try:
+                        resolved_subject = resolve_subject(
+                            subject_input or self.current_subject,
+                            edu_level=edu_level,
+                            strict=True,
+                        )
+                    except ValueError as exc:
+                        result = {
+                            "success": False,
+                            "error": str(exc),
+                            "current_subject": self.current_subject,
+                            "available_subjects": list(SUBJECTS.keys()),
+                            "allowed_edu_levels": list(EDU_LEVELS.keys()),
+                        }
+                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                    if resolved_subject != self.current_subject:
+                        self.current_subject = resolved_subject
+                        self.crawler.set_subject(resolved_subject)
+
+                    result = await self.crawler.get_available_filters()
+                    result["current_subject"] = self.current_subject
+
+                elif name == "compose_paper_blueprint":
+                    await ensure_crawler_initialized()
+                    edu_level = (arguments.get("edu_level") or "").strip()
+                    subject_input = (arguments.get("subject") or "").strip()
+                    try:
+                        resolved_subject = resolve_subject(
+                            subject_input or self.current_subject,
+                            edu_level=edu_level,
+                            strict=True,
+                        )
+                    except ValueError as exc:
+                        result = {
+                            "success": False,
+                            "error": str(exc),
+                            "current_subject": self.current_subject,
+                            "available_subjects": list(SUBJECTS.keys()),
+                            "allowed_edu_levels": list(EDU_LEVELS.keys()),
+                        }
+                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+                    if resolved_subject != self.current_subject:
+                        self.current_subject = resolved_subject
+                        self.crawler.set_subject(resolved_subject)
+
+                    result = await self.crawler.compose_paper_blueprint(
+                        blueprint=arguments.get("blueprint") or [],
+                        subject=resolved_subject,
+                        edu_level=edu_level,
+                        learn_grade=arguments.get("learn_grade", ""),
+                        learn_grade_id=arguments.get("learn_grade_id", 0),
+                        textbook_version=arguments.get("textbook_version", ""),
+                        elective_mode=arguments.get("elective_mode", ""),
+                        elective_keywords=arguments.get("elective_keywords"),
+                        exclude_elective=bool(arguments.get("exclude_elective", False)),
+                        year=arguments.get("year", 0),
+                        province=arguments.get("province", ""),
+                        province_id=arguments.get("province_id", -1),
+                        paper_type_id=arguments.get("paper_type_id", 0),
+                        term=arguments.get("term", 0),
+                        order_by=arguments.get("order_by", 2),
+                        max_pages=arguments.get("max_pages", 2),
+                        per_slot_expand=arguments.get("per_slot_expand", 3),
+                        min_quality_score=arguments.get("min_quality_score", 0),
+                        dedup_by_stem=bool(arguments.get("dedup_by_stem", True)),
+                        strict_subject=bool(arguments.get("strict_subject", True)),
+                    )
+                    result["current_subject"] = self.current_subject
+
+                elif name == "web_search":
+                    query = (arguments.get("query") or "").strip()        
+                    limit = arguments.get("limit", 5)
+                    model = (arguments.get("model") or "").strip()        
+                    result = await web_search_with_bigmodel_mcp(
+                        query=query,
+                        limit=limit,
+                        model=model,
+                    )
 
                 elif name == "diagnose_export":
                     # 诊断导出功能

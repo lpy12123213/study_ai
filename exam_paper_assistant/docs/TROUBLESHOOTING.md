@@ -81,7 +81,7 @@ uvicorn backend.app:app --host 0.0.0.0 --port 8001
 
 ```bash
 # 删除旧数据库
-rm exam_papers.db
+rm .local/exam_papers.db  # 兼容旧路径：rm exam_papers.db
 
 # 重新安装sqlalchemy
 pip install sqlalchemy aiosqlite --upgrade

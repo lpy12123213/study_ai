@@ -10,7 +10,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -19,6 +19,12 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Local runtime data (db/cache/artifacts/user-data)
+.local/
+
+# Legacy / backup folders
+frontend_old/
 
 # Frontend build/output
 frontend/dist/

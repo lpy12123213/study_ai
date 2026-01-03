@@ -6,6 +6,9 @@
 
 from core.settings import (  # noqa: F401
     API_TIMEOUT,
+    CHAT_API_KEY,
+    CHAT_BASE_URL,
+    CHAT_PROVIDER,
     DEFAULT_SUBJECT,
     DIFFICULTY_QUERY_MODE,
     MAIN_MODEL,

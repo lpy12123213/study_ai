@@ -6,12 +6,20 @@
 
 ### Windows用户
 
-双击运行 `start.bat`，脚本会自动完成：
+双击运行项目根目录的 `start.bat`（或 `exam_paper_assistant/start.bat`），脚本会自动完成：
 - 创建虚拟环境
 - 安装Python依赖
 - 安装Playwright浏览器
 - 初始化数据库
 - 启动后端与前端开发服务器
+
+停止服务：在同一个窗口按一次 `Ctrl+C`（会自动清理并停止所有已启动的子进程）。
+
+常用命令（命令行运行）：
+- `start.bat setup`：仅安装依赖（不启动服务）
+- `start.bat dev`：启动后端 + 前端（默认）
+- `start.bat all`：启动后端 + 前端 + MCP
+- `start.bat doctor`：运行 smoke checks
 
 ### Linux/macOS用户
 
@@ -19,6 +27,12 @@
 chmod +x start.sh
 ./start.sh
 ```
+
+常用命令：
+- `./start.sh setup`：仅安装依赖（不启动服务）
+- `./start.sh dev`：启动后端 + 前端（默认）
+- `./start.sh all`：启动后端 + 前端 + MCP
+- `./start.sh doctor`：运行 smoke checks
 
 ### 手动安装（可选）
 

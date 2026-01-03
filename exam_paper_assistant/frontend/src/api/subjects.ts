@@ -1,16 +1,10 @@
-import { axiosClient } from './http';
+import { client } from "./client";
+import type { Subject } from "@/types";
 
-export interface Subject {
-  name: string;
-  short_name: string;
-  bank_id: number;
-  edu_id: number;
-}
-
-type SubjectsResponse = { subjects: Subject[] };
-
-export const getSubjects = async (): Promise<Subject[]> => {
-  const { data } = await axiosClient.get<SubjectsResponse>('/api/subjects');
-  return data.subjects;
+export const subjectsApi = {
+  getAll: async () => {
+    const response = await client.get<{ subjects: Subject[] }>("/subjects");
+    return response.data.subjects;
+  },
 };
 

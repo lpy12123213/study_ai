@@ -59,8 +59,10 @@ cp .env.example .env
 
 | 配置项 | 说明 | 示例值 |
 |--------|------|--------|
-| `OPENROUTER_API_KEY` | OpenRouter API密钥 | `sk-or-xxx` |
-| `SUB_MODEL` | 子AI模型 | `openai/gpt-4o-mini` |
+| `CHAT_PROVIDER` | 对话模型供应商（`openrouter` / `fireworks`） | `fireworks` |
+| `FIREWORKS_API_KEY` | Fireworks API密钥（当 `CHAT_PROVIDER=fireworks` 时使用） | `fw-xxx` |
+| `OPENROUTER_API_KEY` | OpenRouter API密钥（当 `CHAT_PROVIDER=openrouter` 时使用） | `sk-or-xxx` |
+| `SUB_MODEL` | 子AI模型 | `accounts/fireworks/models/deepseek-v3p2-thinking` |
 
 ---
 
@@ -406,7 +408,7 @@ DEFAULT_SUBJECT=高中物理
 
 - 查看 `docs/TROUBLESHOOTING.md` 获取更多故障排除信息
 - 查看 `docs/API.md` 了解完整 API 接口
-- 项目数据库位于 `exam_papers.db`
+- 项目数据库位于 `./.local/exam_papers.db`（兼容旧路径：`exam_papers.db`）
 
 ---
 

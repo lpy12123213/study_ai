@@ -2,18 +2,32 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class QuestionItem(BaseModel):
     question_id: str
     type: Optional[str] = ""
     difficulty: Optional[str] = ""
+    knowledge_point: Optional[str] = ""
+    source_url: Optional[str] = ""
 
 
 class PaperCreate(BaseModel):
     paper_name: str
-    questions: List[QuestionItem]
+    questions: Optional[List[QuestionItem]] = None
+    question_ids: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def _validate_questions(self) -> "PaperCreate":
+        if not self.questions and not self.question_ids:
+            raise ValueError("questions_or_question_ids_required")
+        return self
+
+    def to_question_dicts(self) -> List[dict]:
+        if self.questions:
+            return [q.model_dump() for q in self.questions]
+        return [{"question_id": qid} for qid in (self.question_ids or [])]
 
 
 class QuestionInfo(BaseModel):
@@ -43,8 +57,26 @@ class ChatRequest(BaseModel):
     conversation_id: int
     message: str
     subject: Optional[str] = "高中数学"
+    # Optional model overrides (client-side selector).
+    # When omitted/empty, backend defaults from env are used.
+    model: Optional[str] = Field(default=None, max_length=200)
+    sub_model: Optional[str] = Field(default=None, max_length=200)
 
 
 class ConversationCreate(BaseModel):
     title: Optional[str] = "新对话"
 
+
+class ConversationForkRequest(BaseModel):
+    message_id: int
+    title: Optional[str] = None
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class SearchHistoryCreate(BaseModel):
+    search_type: str
+    search_query: str
+    result_count: int

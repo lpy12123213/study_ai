@@ -194,7 +194,7 @@ playwright install chromium --force
 
 ```bash
 # 删除数据库文件重新初始化
-rm exam_papers.db
+rm .local/exam_papers.db  # 兼容旧路径：rm exam_papers.db
 python database/models.py
 ```
 
@@ -220,7 +220,7 @@ python crawler/zujuan_crawler.py
 
 使用SQLite工具查看数据库：
 ```bash
-sqlite3 exam_papers.db
+sqlite3 .local/exam_papers.db  # 兼容旧路径：sqlite3 exam_papers.db
 ```
 
 ## 生产部署

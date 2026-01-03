@@ -236,8 +236,24 @@ curl -X POST http://localhost:8001/api/search-by-keyword \
   -H "Content-Type: application/json" \
   -d '{"keyword":"函数","limit":5}'
 
+# 测试关键词搜索（可选过滤：年份/来源/难度系数范围等）
+curl -X POST http://localhost:8001/api/search-by-keyword \
+  -H "Content-Type: application/json" \
+  -d '{"keyword":"函数","limit":10,"difficulty":"中等","year":2024,"source_contains":"高考","difficulty_value_min":0.4,"difficulty_value_max":0.8}'
+
 # 测试创建试卷
 curl -X POST http://localhost:8001/api/create-paper \
   -H "Content-Type: application/json" \
   -d '{"paper_name":"测试试卷","question_ids":["12345","12346"]}'
 ```
+
+## 新增：筛选项与组卷蓝图接口
+
+OpenAI 适配器（`backend/openai_adapter.py`）已新增并扩展以下能力：
+
+- 同样，主后端（`backend/app.py`，默认端口 `8000`）也暴露 `POST /api/available-filters` 与 `POST /api/compose-blueprint`，便于 Web 前端直接调用（Vite 开发代理 `/api` -> `8000`）。
+- `POST /api/available-filters`：获取当前学科可用筛选项（年级/教材版本/题型等）
+- `POST /api/compose-blueprint`：按“组卷蓝图”批量检索并组装题目 ID 列表
+- `POST /api/search-by-keyword` / `POST /api/search-by-knowledge`：新增支持 `learn_grade/learn_grade_id`、`textbook_version`、`elective_mode`、`dedup_by_stem`、`min_quality_score` 等参数
+
+字段说明与示例见：`docs/SEARCH_FILTERS_AND_BLUEPRINTS.md`

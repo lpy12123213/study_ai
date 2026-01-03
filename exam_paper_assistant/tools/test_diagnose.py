@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-ARTIFACTS_DIR = ROOT_DIR / "artifacts"
-ARTIFACTS_DIR.mkdir(exist_ok=True)
+ARTIFACTS_DIR = ROOT_DIR / ".local" / "artifacts"
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT_DIR))
 
 from mcp_server.server import ExamPaperMCPServer
