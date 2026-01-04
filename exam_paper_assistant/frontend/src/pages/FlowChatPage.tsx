@@ -37,6 +37,7 @@ import {
   Trash2,
   User,
   Wrench,
+  type LucideIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -101,6 +102,13 @@ type EpaGraphEdgePayload = {
 type EpaGraphPayload = {
   nodes: EpaGraphNodePayload[];
   edges?: EpaGraphEdgePayload[];
+};
+
+type QuickPrompt = {
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  prompt: string;
 };
 
 function titleFromPrompt(prompt: string): string {
@@ -679,6 +687,7 @@ export default function FlowChatPage() {
 
   const abortRef = useRef<AbortController | null>(null);
   const hasLocalEditsRef = useRef(false);
+  const draftRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -782,8 +791,66 @@ export default function FlowChatPage() {
     await updateConversationTitle.mutateAsync({ id, title });
   };
 
-  const handleSend = async () => {
-    const prompt = draft.trim();
+  const focusDraft = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      draftRef.current?.focus();
+    });
+  }, []);
+
+  const applyQuickPrompt = useCallback(
+    (prompt: string) => {
+      setStructuredOutput(true);
+      setStreamError(null);
+      setDraft(prompt);
+      focusDraft();
+    },
+    [focusDraft, setStructuredOutput],
+  );
+
+  const quickPrompts = useMemo<QuickPrompt[]>(
+    () => [
+      {
+        title: "讲解题目（答案 + 步骤 + 解析）",
+        description: "粘贴题目，AI 用节点图讲清楚思路。",
+        icon: HelpCircle,
+        prompt: "请用节点图讲解下面这道题，给出：答案、步骤、解析（必要时补充提示）。\n\n题目：\n",
+      },
+      {
+        title: "只给提示（不直接给答案）",
+        description: "先引导学生思考，再逐步推进。",
+        icon: Lightbulb,
+        prompt: "我只需要提示，不要直接给最终答案。请用节点图输出：题目 + 提示（可选：步骤）。\n\n题目：\n",
+      },
+      {
+        title: "一步一步推导（每步一行）",
+        description: "适合过程题/计算题，步骤可复查。",
+        icon: ListChecks,
+        prompt: "请用节点图输出：题目、步骤（每一步一行，标清关键公式/变形理由）、答案（最后给出）。\n\n题目：\n",
+      },
+      {
+        title: "出一道同类型练习题（含解析）",
+        description: `按「${subjectName}」出题，给答案/解析/步骤。`,
+        icon: Plus,
+        prompt: `请出一道${subjectName}同类型练习题（中等难度），并用节点图给出：答案、解析、步骤。\n要求：题目清晰、条件完整。\n`,
+      },
+      {
+        title: "错因分析（易错点 + 纠正）",
+        description: "总结常见误区，避免再踩坑。",
+        icon: MessagesSquare,
+        prompt: "请基于题目给出：常见错误/易错点（至少 3 条）以及对应纠正提示，并用节点图输出。\n\n题目：\n",
+      },
+      {
+        title: "知识点总结（通用方法）",
+        description: "提炼 3–5 条可迁移的方法。",
+        icon: Bot,
+        prompt: "请总结这题涉及的知识点与通用方法，给 3–5 条要点，并用节点图输出（可含 summary）。\n\n题目：\n",
+      },
+    ],
+    [subjectName],
+  );
+
+  const handleSend = async (promptOverride?: string) => {
+    const prompt = (promptOverride ?? draft).trim();
     if (!prompt || isStreaming) return;
 
     setDraft("");
@@ -990,6 +1057,10 @@ export default function FlowChatPage() {
     messagesQuery.data?.conversation?.title ||
     (conversationId ? `对话 #${conversationId}` : "画布对话");
 
+  const messageCount = messagesQuery.data?.messages?.length ?? 0;
+  const showEmptyState =
+    !isStreaming && (!conversationId || (!messagesQuery.isLoading && messageCount === 0));
+
   return (
     <div className="flex h-full bg-background overflow-hidden">
       {/* Conversations */}
@@ -1171,6 +1242,74 @@ export default function FlowChatPage() {
             <Controls />
             <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
 
+            {showEmptyState ? (
+              <Panel position="top-center" className="w-full max-w-3xl mt-6 px-4">
+                <div className="rounded-2xl border bg-background/80 backdrop-blur shadow-sm p-4 pointer-events-auto">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold">Flowith 风格 · 节点图学习</div>
+                      <div className="text-sm text-muted-foreground mt-1">
+                        粘贴题目或提出问题，AI 会用节点图返回「题目/答案/解析/步骤/提示」等内容。
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <Badge variant="secondary" className="h-5 px-1.5 font-normal">
+                          结构化输出：{structuredOutput ? "开" : "关"}
+                        </Badge>
+                        <Badge variant="outline" className="h-5 px-1.5 font-normal">
+                          学科：{subjectName}
+                        </Badge>
+                        {!structuredOutput ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2"
+                            onClick={() => setStructuredOutput(true)}
+                          >
+                            开启结构化
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {!conversationId ? (
+                      <Button type="button" onClick={() => void handleNewConversation()} className="shrink-0 gap-2">
+                        <Plus className="h-4 w-4" />
+                        新建对话
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {quickPrompts.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <Button
+                          key={item.title}
+                          type="button"
+                          variant="outline"
+                          className="h-auto p-3 items-start justify-start gap-3 text-left whitespace-normal"
+                          onClick={() => applyQuickPrompt(item.prompt)}
+                        >
+                          <Icon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-medium leading-5">{item.title}</div>
+                            <div className="text-xs text-muted-foreground mt-1 leading-4">
+                              {item.description}
+                            </div>
+                          </div>
+                        </Button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-3 text-xs text-muted-foreground">
+                    点击上面的模板会自动填入输入框，你可以先改题目再发送。
+                  </div>
+                </div>
+              </Panel>
+            ) : null}
+
             <Panel position="bottom-center" className="w-full max-w-3xl mb-4">
               <div className="rounded-2xl border bg-background/80 backdrop-blur shadow-sm p-3">
                 {streamError ? (
@@ -1181,6 +1320,7 @@ export default function FlowChatPage() {
 
                 <div className="flex gap-2 items-end">
                   <Textarea
+                    ref={draftRef}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder="输入学生问题或指令..."
