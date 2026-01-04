@@ -734,8 +734,8 @@ export default function FlowChatPage() {
   useEffect(() => {
     if (!conversationId) {
       hasLocalEditsRef.current = false;
-      setNodes([]);
-      setEdges([]);
+      setNodes((prev) => (prev.length ? [] : prev));
+      setEdges((prev) => (prev.length ? [] : prev));
       setStreamError(null);
       setIsStreaming(false);
       abortRef.current?.abort();
@@ -1164,7 +1164,7 @@ export default function FlowChatPage() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             nodeTypes={nodeTypes}
-            fitView
+            fitView={nodes.length > 0}
             proOptions={{ hideAttribution: true }}
             className="bg-muted/20"
           >
