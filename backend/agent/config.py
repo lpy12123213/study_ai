@@ -14,8 +14,10 @@ class AgentConfig:
 
     # Context compression
     sliding_window_size: int = 10
-    token_threshold: int = 8000
-    emergency_token_threshold: int = 12000
+    # L2 soft-compaction threshold (requested: 32k tokens)
+    token_threshold: int = 32000
+    # L3 hard-compaction / checkpoint threshold (requested: 48k tokens)
+    emergency_token_threshold: int = 48000
     compressed_history_max: int = 5
     checkpoint_dir: str = "data/checkpoints"
 
