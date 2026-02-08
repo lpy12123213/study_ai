@@ -97,7 +97,34 @@ export async function fetchSSE(
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      let detail = ''
+      try {
+        const contentType = response.headers.get('content-type') || ''
+        if (contentType.includes('application/json')) {
+          const payload = (await response.json()) as any
+          detail =
+            typeof payload?.detail === 'string'
+              ? payload.detail
+              : payload
+                ? JSON.stringify(payload)
+                : ''
+        } else {
+          detail = await response.text()
+        }
+      } catch {
+        // ignore
+      }
+
+      const isStudyMaterials = url.startsWith('/study-materials/')
+      if (isStudyMaterials && (response.status === 404 || response.status === 405)) {
+        const suffix = detail ? ` (${detail})` : ''
+        throw new Error(
+          `后端接口未就绪（${response.status}）。请停止并重启后端（运行 start.bat）后再试。${suffix}`
+        )
+      }
+
+      const suffix = detail ? ` (${detail})` : ''
+      throw new Error(`HTTP error! status: ${response.status}${suffix}`)
     }
 
     const reader = response.body?.getReader()

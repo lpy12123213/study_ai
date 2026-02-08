@@ -89,7 +89,7 @@ export default function LoginPage() {
           <BrandMark size={64} className="mx-auto mb-4" />
           <h1 className="text-2xl font-bold">试卷助手</h1>
           <p className="text-muted-foreground mt-2">
-            AI 驱动的智能组卷与教案生成平台
+            AI 驱动的智能组卷与自学资料生成平台
           </p>
         </div>
 

@@ -5,7 +5,6 @@ import {
   Files,
   LayoutTemplate,
   BookOpen,
-  BookOpenCheck,
   PenTool,
   Settings2,
 } from 'lucide-react'
@@ -17,8 +16,7 @@ import { cn } from '@/lib/utils'
 const navItems = [
   { path: '/chat', label: '对话', icon: MessagesSquare },
   { path: '/blueprint', label: '蓝图组卷', icon: LayoutTemplate },
-  { path: '/lesson-plans', label: '教案生成', icon: BookOpenCheck },
-  { path: '/study-materials', label: '自学资料', icon: BookOpen },
+  { path: '/study-materials', label: '自学资料生成', icon: BookOpen },
   { path: '/papers', label: '试卷管理', icon: Files },
   { path: '/canvas', label: '学习画布', icon: PenTool },
 ]
@@ -32,7 +30,7 @@ export function Header() {
       <Link to="/chat" className="flex items-center gap-2">
         <BrandMark size={32} />
         <div className="leading-tight hidden sm:block">
-          <div className="font-semibold text-sm">试卷助手</div>
+          <div className="font-semibold text-sm">学习助手</div>
           <div className="text-xs text-muted-foreground">Manus 式时间轴</div>
         </div>
       </Link>

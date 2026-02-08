@@ -30,6 +30,8 @@ from backend.database.models import init_db
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
 
+# NOTE: This app includes the new `/api/study-materials/*` routes via `backend/api/router.py`.
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -60,7 +62,10 @@ def create_app() -> FastAPI:
     if assets_path.exists():
         app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
 
-    @app.get("/{full_path:path}")
+    @app.api_route(
+        "/{full_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
     async def serve_spa(full_path: str):
         """
         Serving Single Page Application.

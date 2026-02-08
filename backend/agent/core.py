@@ -141,6 +141,12 @@ class AgentCore:
             if not isinstance(markdown, str):
                 markdown = ""
 
+            archive_path = str(ctx.working_memory.get("archive_path") or "").strip()
+            if not archive_path:
+                saved = ctx.working_memory.get("save_markdown_file")
+                if isinstance(saved, dict):
+                    archive_path = str(saved.get("path") or "").strip()
+
             if not markdown:
                 # Last-resort fallback to something readable.
                 markdown = f"# 自学材料：{user_input}\n\n（生成结果为空，建议重试或提供更具体的描述）\n"
@@ -178,6 +184,7 @@ class AgentCore:
                     "material": {
                         "topic": user_input,
                         "markdown": markdown,
+                        "archive_path": archive_path,
                         "iteration": iteration + 1,
                         "passed": bool(reflection.passed) if reflection else True,
                         "issues": reflection.issues if reflection else [],

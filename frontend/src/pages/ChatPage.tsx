@@ -87,14 +87,14 @@ function WelcomeScreen() {
       <BrandMark size={64} className="mb-6" />
       <h2 className="text-2xl font-bold mb-2">你好！我是试卷助手</h2>
       <p className="text-muted-foreground max-w-md mb-8">
-        我可以帮你搜索题目、组建试卷、生成教案，或者回答任何学科相关的问题。
+        我可以帮你搜索题目、组建试卷、生成自学资料，或者回答任何学科相关的问题。
       </p>
 
       <div className="grid grid-cols-2 gap-3 max-w-xl w-full">
         {[
           { icon: Search, title: '搜索真题', desc: '帮我搜索一些高考数学真题' },
           { icon: FileText, title: '生成试卷', desc: '生成一份初中物理力学测试卷' },
-          { icon: GraduationCap, title: '生成教案', desc: '帮我写一份语文阅读课的教案' },
+          { icon: GraduationCap, title: '生成自学资料', desc: '帮我生成一份“函数单调性”的自学资料' },
           { icon: Sparkles, title: '概念讲解', desc: '解释一下牛顿第三定律' },
         ].map((item) => {
           const Icon = item.icon

@@ -41,45 +41,52 @@ class Planner:
 
         steps = [
             PlanStep(
-                id=sid("retrieve_knowledge"),
-                title="检索知识点要点",
-                tool="retrieve_knowledge",
-                arguments={"topic": topic, "subject": subject, "difficulty": difficulty},
+                id=sid("split_knowledge_points"),
+                title="拆分知识点",
+                tool="split_knowledge_points",
+                arguments={"topic": topic, "subject": subject, "min_points": 3, "max_points": 8},
             ),
             PlanStep(
-                id=sid("search_examples"),
-                title="检索例题",
-                tool="search_examples",
-                arguments={"topic": topic, "subject": subject, "difficulty": difficulty, "limit": 3},
+                id=sid("web_search_knowledge"),
+                title="联网搜索知识点（Exa 优先，智谱兜底）",
+                tool="web_search_knowledge",
+                arguments={"topic": topic, "subject": subject, "limit": 5, "concurrency": 3},
             ),
             PlanStep(
-                id=sid("search_exercises"),
-                title="检索练习题",
-                tool="search_exercises",
-                arguments={"topic": topic, "subject": subject, "difficulty": difficulty, "limit": 10},
+                id=sid("wikipedia_search"),
+                title="Wikipedia 百科检索",
+                tool="wikipedia_search",
+                arguments={"topic": topic, "subject": subject, "lang": "zh", "sentences": 4, "concurrency": 3},
             ),
             PlanStep(
-                id=sid("analyze_topic"),
-                title="分析知识点结构与讲解顺序",
-                tool="analyze_topic",
+                id=sid("search_questions_by_knowledge"),
+                title="题库按知识点检索（例题+练习题）",
+                tool="search_questions_by_knowledge",
+                arguments={
+                    "topic": topic,
+                    "subject": subject,
+                    "difficulty": difficulty,
+                    "examples_limit": 1,
+                    "exercises_limit": 4,
+                    "max_pages": 2,
+                },
+            ),
+            PlanStep(
+                id=sid("aggregate_knowledge"),
+                title="聚合多源资料",
+                tool="aggregate_knowledge",
                 arguments={"topic": topic, "subject": subject},
             ),
             PlanStep(
-                id=sid("generate_explanation"),
-                title="生成知识点讲解",
-                tool="generate_explanation",
-                arguments={"topic": topic, "subject": subject},
+                id=sid("generate_study_material"),
+                title="生成讲解与例题解答",
+                tool="generate_study_material",
+                arguments={"topic": topic, "subject": subject, "max_examples": 1, "max_points": 8},
             ),
             PlanStep(
-                id=sid("generate_solutions"),
-                title="为例题生成分步解答",
-                tool="generate_solutions",
-                arguments={"max_examples": 3},
-            ),
-            PlanStep(
-                id=sid("assemble_markdown"),
-                title="组装最终 Markdown",
-                tool="assemble_markdown",
+                id=sid("assemble_study_archive"),
+                title="组装自学档案 Markdown",
+                tool="assemble_study_archive",
                 arguments={"topic": topic, "subject": subject},
             ),
         ]
@@ -96,6 +103,15 @@ class Planner:
 
         steps.append(
             PlanStep(
+                id=sid("save_markdown_file"),
+                title="保存 Markdown 到文件",
+                tool="save_markdown_file",
+                arguments={"topic": topic, "dir": "study_archives"},
+            )
+        )
+
+        steps.append(
+            PlanStep(
                 id=sid("review_content"),
                 title="内容审查",
                 tool="review_content",
@@ -104,7 +120,7 @@ class Planner:
         )
 
         rationale = (
-            f"计划：检索→分析→生成→组装→审查（学科：{subject}，难度：{difficulty}，例题≈3，练习≈10）"
+            f"计划：拆分→百科/联网→题库→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         )
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
 

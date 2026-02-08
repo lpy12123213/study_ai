@@ -7,7 +7,7 @@ import { useTaskStore } from '@/stores/useTaskStore'
 import { cn } from '@/lib/utils'
 
 // Pages that show the task panel
-const TASK_PANEL_PAGES = ['/chat', '/blueprint', '/lesson-plans', '/study-materials']
+const TASK_PANEL_PAGES = ['/chat', '/blueprint', '/study-materials']
 
 export function ManusLayout() {
   const location = useLocation()

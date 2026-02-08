@@ -16,3 +16,4 @@ lxml>=4.9.3
 python-dotenv>=1.0.0
 httpx>=0.25.2
 openai>=1.0.0
+wikipedia

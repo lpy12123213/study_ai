@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BookOpenCheck,
-  ChevronDown,
   Clock,
   Loader2,
   Plus,
@@ -13,7 +12,6 @@ import {
   User,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
@@ -423,14 +421,6 @@ export default function LessonPlansPage() {
 
   const [input, setInput] = useState('')
 
-  // Optional structured context (used when prompt doesn't include it)
-  const [subject, setSubject] = useState('')
-  const [grade, setGrade] = useState('')
-  const [duration, setDuration] = useState(45)
-  const [objectives, setObjectives] = useState('')
-  const [additional, setAdditional] = useState('')
-  const [showAdvanced, setShowAdvanced] = useState(false)
-
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -492,9 +482,8 @@ export default function LessonPlansPage() {
     // Ensure a lesson-plan conversation is selected
     let conversationId = activeConversationId
     if (!conversationId) {
-      const inferredGrade = extractGradeFromText(prompt) ?? (grade || null)
-      const inferredSubject =
-        extractSubjectFromText(prompt, subjects, inferredGrade) ?? (subject || null)
+      const inferredGrade = extractGradeFromText(prompt)
+      const inferredSubject = extractSubjectFromText(prompt, subjects, inferredGrade)
       const inferredTopic = extractTopicFromText(prompt, inferredSubject, inferredGrade)
 
       conversationId = generateId()
@@ -528,22 +517,14 @@ export default function LessonPlansPage() {
     const existingPlan = useLessonPlanStore.getState().getPlan(conversationId)
 
     const inferredGrade = extractGradeFromText(prompt)
-    const resolvedGrade = (
-      inferredGrade ??
-      (showAdvanced ? grade : existingPlan?.grade ?? grade) ??
-      ''
-    ).trim()
+    const resolvedGrade = (inferredGrade ?? existingPlan?.grade ?? '').trim()
 
     const inferredSubject = extractSubjectFromText(
       prompt,
       subjects,
       resolvedGrade || existingPlan?.grade || null
     )
-    const resolvedSubject = (
-      inferredSubject ??
-      (showAdvanced ? subject : existingPlan?.subject ?? subject) ??
-      ''
-    ).trim()
+    const resolvedSubject = (inferredSubject ?? existingPlan?.subject ?? '').trim()
 
     const inferredTopic = extractTopicFromText(
       prompt,
@@ -553,23 +534,11 @@ export default function LessonPlansPage() {
     const resolvedTopic = (inferredTopic || existingPlan?.title || '').trim()
 
     const resolvedDuration =
-      extractDurationMinutesFromText(prompt) ??
-      (showAdvanced ? duration : existingPlan?.duration ?? duration) ??
-      45
+      extractDurationMinutesFromText(prompt) ?? existingPlan?.duration ?? 45
 
-    const resolvedObjectives = showAdvanced
-      ? objectives
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : existingPlan?.objectives ?? []
+    const resolvedObjectives = existingPlan?.objectives ?? []
 
-    const resolvedAdditional = [
-      showAdvanced ? additional.trim() : '',
-      prompt,
-    ]
-      .filter(Boolean)
-      .join('\n\n')
+    const resolvedAdditional = prompt
 
     const missing: string[] = []
     if (!resolvedSubject) missing.push('学科')
@@ -872,111 +841,14 @@ export default function LessonPlansPage() {
             </Button>
           </div>
 
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="gap-1 text-muted-foreground hover:text-foreground"
-              onClick={() => setShowAdvanced((v) => !v)}
-            >
-              <ChevronDown className={cn('h-4 w-4 transition-transform', showAdvanced && 'rotate-180')} />
-              高级选项
-            </Button>
-
-            {isGenerating && (
+          {isGenerating && (
+            <div className="mt-2 flex justify-end">
               <Badge variant="secondary" className="gap-1">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 生成中…
               </Badge>
-            )}
-          </div>
-
-          <AnimatePresence initial={false}>
-            {showAdvanced && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-xs text-muted-foreground">学科（可选）</label>
-                    <select
-                      value={subject}
-                      onChange={(e) => setSubject(e.target.value)}
-                      className="w-full h-10 mt-1 rounded-md border border-input bg-background px-3"
-                      disabled={isGenerating}
-                    >
-                      <option value="">自动识别</option>
-                      {subjects?.map((s) => (
-                        <option key={s.id} value={s.name}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-muted-foreground">年级（可选）</label>
-                    <select
-                      value={grade}
-                      onChange={(e) => setGrade(e.target.value)}
-                      className="w-full h-10 mt-1 rounded-md border border-input bg-background px-3"
-                      disabled={isGenerating}
-                    >
-                      <option value="">自动识别</option>
-                      {grades.map((g) => (
-                        <option key={g} value={g}>
-                          {g}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-muted-foreground">课时（分钟，可选）</label>
-                    <Input
-                      type="number"
-                      min={15}
-                      max={180}
-                      value={duration}
-                      onChange={(e) => setDuration(parseInt(e.target.value) || 45)}
-                      className="mt-1"
-                      disabled={isGenerating}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-3">
-                  <label className="text-xs text-muted-foreground">
-                    教学目标（每行一个，可选）
-                  </label>
-                  <Textarea
-                    value={objectives}
-                    onChange={(e) => setObjectives(e.target.value)}
-                    placeholder="例如：\n1. 理解概念\n2. 掌握方法\n3. 形成能力"
-                    rows={3}
-                    className="mt-1"
-                    disabled={isGenerating}
-                  />
-                </div>
-
-                <div className="mt-3">
-                  <label className="text-xs text-muted-foreground">补充要求（可选）</label>
-                  <Textarea
-                    value={additional}
-                    onChange={(e) => setAdditional(e.target.value)}
-                    placeholder="例如：更偏互动式教学；包含分层练习与评价方式"
-                    rows={3}
-                    className="mt-1"
-                    disabled={isGenerating}
-                  />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+            </div>
+          )}
         </form>
       </div>
     </div>

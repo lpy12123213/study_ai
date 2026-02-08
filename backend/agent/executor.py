@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -94,6 +98,692 @@ class Executor:
             cleaned.append((penalty, q))
         cleaned.sort(key=lambda x: x[0])
         return [q for _, q in cleaned[: max(1, limit)]]
+
+    async def _tool_split_knowledge_points(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """将主题拆分为多个可检索的子知识点。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        min_points = int(args.get("min_points") or 3)
+        max_points = int(args.get("max_points") or 8)
+        min_points = max(1, min(min_points, 10))
+        max_points = max(min_points, min(max_points, 15))
+
+        def _clean_points(items: List[Any]) -> List[str]:
+            out: List[str] = []
+            seen: set[str] = set()
+            for it in items or []:
+                s = str(it or "").strip()
+                s = re.sub(r"\s+", " ", s)
+                s = s.strip(" -—·•\t\r\n")
+                if not s:
+                    continue
+                if len(s) > 60:
+                    s = s[:60].rstrip() + "…"
+                if s in seen:
+                    continue
+                seen.add(s)
+                out.append(s)
+                if len(out) >= max_points:
+                    break
+            return out
+
+        # LLM-powered split when configured.
+        if LESSON_PLAN_API_KEY:
+            prompt = {
+                "topic": topic,
+                "subject": subject,
+                "instructions": (
+                    "请把 topic 拆分为若干个可用于检索的子知识点（短语级关键词）。\n"
+                    f"- 数量：{min_points} 到 {max_points} 个\n"
+                    "- 每个子知识点尽量具体、互不重复\n"
+                    "- 仅输出严格 JSON（不要 Markdown、不要代码块）\n"
+                    '- JSON 格式：{"knowledge_points": ["...", "..."]}\n'
+                ),
+            }
+            text = await self._call_llm_text(
+                messages=[
+                    {"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                model=self.config.planner_model,
+                temperature=0.2,
+                max_tokens=600,
+            )
+            obj = self._extract_json_obj(text)
+            points = _clean_points(list(obj.get("knowledge_points") or []))
+            if points:
+                return {
+                    "topic": topic,
+                    "subject": subject,
+                    "knowledge_points": points,
+                    "source": "llm",
+                }
+
+        # Heuristic fallback: split by punctuation if user provided a list.
+        raw = re.split(r"[\n,，;；、/|]+", topic)
+        points = _clean_points([x for x in raw if str(x).strip()])
+        if not points:
+            points = [topic] if topic else []
+        points = points[:max_points] if points else []
+        return {
+            "topic": topic,
+            "subject": subject,
+            "knowledge_points": points or ([topic] if topic else []),
+            "source": "heuristic" if points else "fallback",
+            "note": "未配置拆分模型或解析失败，使用启发式拆分。",
+        }
+
+    async def _tool_web_search_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """网络搜索知识点：Exa 优先，智谱 BigModel 兜底。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        limit = int(args.get("limit") or 5)
+        limit = max(1, min(limit, 10))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        from backend.mcp.exa_web_search import exa_search
+        from backend.mcp.bigmodel_web_search import web_search_with_bigmodel_mcp
+
+        async def _search_one(point: str) -> Dict[str, Any]:
+            query = f"{subject} {point}".strip() if subject and subject not in point else point
+
+            # 1) Exa
+            exa = await exa_search(
+                query=query,
+                num_results=limit,
+                use_autoprompt=True,
+                type="neural",
+                include_text=True,
+                text_max_length=1000,
+            )
+            exa_results = exa.get("results") if isinstance(exa, dict) else []
+            if isinstance(exa_results, list) and exa_results:
+                return {
+                    "knowledge_point": point,
+                    "query": query,
+                    "provider": "exa",
+                    "results": exa_results,
+                    "autoprompt_string": exa.get("autoprompt_string") if isinstance(exa, dict) else None,
+                }
+
+            # 2) BigModel MCP broker fallback
+            zhipu = await web_search_with_bigmodel_mcp(query=query, limit=limit)
+            if isinstance(zhipu, dict) and zhipu.get("success") and zhipu.get("results"):
+                return {
+                    "knowledge_point": point,
+                    "query": query,
+                    "provider": str(zhipu.get("provider") or "zhipu-bigmodel-mcp-web-search"),
+                    "results": zhipu.get("results") or [],
+                }
+
+            # 3) Both failed
+            return {
+                "knowledge_point": point,
+                "query": query,
+                "provider": "none",
+                "results": [],
+                "error": (exa.get("error") if isinstance(exa, dict) and exa.get("error") else "")
+                or (zhipu.get("error") if isinstance(zhipu, dict) and zhipu.get("error") else "web search failed"),
+            }
+
+        concurrency = int(args.get("concurrency") or 3)
+        concurrency = max(1, min(concurrency, 5))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded(point: str) -> Dict[str, Any]:
+            async with sem:
+                try:
+                    return await _search_one(point)
+                except Exception as exc:  # pragma: no cover
+                    return {
+                        "knowledge_point": point,
+                        "query": point,
+                        "provider": "none",
+                        "results": [],
+                        "error": str(exc),
+                    }
+
+        items = await asyncio.gather(*[_guarded(p) for p in points])
+        return {"topic": topic, "subject": subject, "limit": limit, "items": items}
+
+    async def _tool_wikipedia_search(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Wikipedia 百科检索（按拆分后的知识点批量查询）。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        lang = str(args.get("lang") or "zh").strip() or "zh"
+        sentences = int(args.get("sentences") or 4)
+        sentences = max(1, min(sentences, 10))
+        max_content_length = int(args.get("max_content_length") or 2000)
+        max_content_length = max(200, min(max_content_length, 8000))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        from backend.mcp.wikipedia_search import wikipedia_search as _wiki
+
+        async def _lookup_one(point: str) -> Dict[str, Any]:
+            query = f"{subject} {point}".strip() if subject and subject not in point else point
+            res = await _wiki(
+                query=query,
+                lang=lang,
+                sentences=sentences,
+                auto_suggest=True,
+                search_results=5,
+                max_content_length=max_content_length,
+            )
+            payload = res if isinstance(res, dict) else {"success": False, "error": "invalid wikipedia response"}
+            payload = dict(payload)
+            payload["knowledge_point"] = point
+            payload["query"] = query
+            return payload
+
+        concurrency = int(args.get("concurrency") or 3)
+        concurrency = max(1, min(concurrency, 5))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded(point: str) -> Dict[str, Any]:
+            async with sem:
+                try:
+                    return await _lookup_one(point)
+                except Exception as exc:  # pragma: no cover
+                    return {"success": False, "knowledge_point": point, "query": point, "error": str(exc), "provider": "wikipedia"}
+
+        items = await asyncio.gather(*[_guarded(p) for p in points])
+        return {"topic": topic, "subject": subject, "lang": lang, "items": items}
+
+    async def _tool_search_questions_by_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """题库检索：按拆分后的知识点批量搜索例题与练习题。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        difficulty = str(args.get("difficulty") or "中等").strip() or "中等"
+        examples_limit = int(args.get("examples_limit") or 1)
+        exercises_limit = int(args.get("exercises_limit") or 4)
+        examples_limit = max(0, min(examples_limit, 3))
+        exercises_limit = max(0, min(exercises_limit, 10))
+        max_pages = int(args.get("max_pages") or 2)
+        max_pages = max(1, min(max_pages, 3))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        crawler = await get_crawler(subject=subject)
+        applied_subject = subject or getattr(crawler, "subject", "")
+
+        items: List[Dict[str, Any]] = []
+        for point in points:
+            fetch_limit = int(args.get("limit") or 0) or max(18, (examples_limit + exercises_limit) * 4)
+            fetch_limit = max(10, min(fetch_limit, 60))
+            try:
+                res = await crawler.search_by_knowledge(
+                    knowledge_point=point,
+                    subject=applied_subject,
+                    limit=fetch_limit,
+                    difficulty=difficulty,
+                    max_pages=max_pages,
+                    dedup_by_stem=True,
+                    min_quality_score=10,
+                    with_quality=True,
+                    strict_subject=True,
+                    require_difficulty=True,
+                )
+                questions = list(res.get("questions") or []) if isinstance(res, dict) else []
+                examples = self._pick_questions(questions, limit=max(1, examples_limit)) if examples_limit else []
+                used_ids = {str(q.get("question_id") or "").strip() for q in examples if isinstance(q, dict)}
+                remaining = [
+                    q
+                    for q in questions
+                    if isinstance(q, dict) and str(q.get("question_id") or "").strip() and str(q.get("question_id") or "").strip() not in used_ids
+                ]
+                exercises = self._pick_questions(remaining, limit=max(1, exercises_limit)) if exercises_limit else []
+                items.append(
+                    {
+                        "knowledge_point": point,
+                        "success": bool(res.get("success")) if isinstance(res, dict) and "success" in res else True,
+                        "difficulty": difficulty,
+                        "examples": examples[:examples_limit] if examples_limit else [],
+                        "exercises": exercises[:exercises_limit] if exercises_limit else [],
+                        "raw_count": len(questions),
+                        "provider": "question-bank",
+                    }
+                )
+            except Exception as exc:  # pragma: no cover
+                items.append(
+                    {
+                        "knowledge_point": point,
+                        "success": False,
+                        "difficulty": difficulty,
+                        "examples": [],
+                        "exercises": [],
+                        "raw_count": 0,
+                        "provider": "question-bank",
+                        "error": str(exc),
+                    }
+                )
+
+        return {
+            "topic": topic,
+            "subject": applied_subject,
+            "difficulty": difficulty,
+            "examples_limit": examples_limit,
+            "exercises_limit": exercises_limit,
+            "items": items,
+        }
+
+    async def _tool_generate_study_material(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """基于聚合数据，为每个知识点生成讲解与例题解答。"""
+
+        aggregated = ctx.working_memory.get("aggregate_knowledge") or ctx.working_memory.get("aggregated")
+        if not isinstance(aggregated, dict):
+            aggregated = {}
+
+        topic = str(args.get("topic") or aggregated.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        sections_in = aggregated.get("items") if isinstance(aggregated.get("items"), list) else []
+
+        max_points = int(args.get("max_points") or 8)
+        max_points = max(1, min(max_points, 15))
+        max_examples = int(args.get("max_examples") or 1)
+        max_examples = max(0, min(max_examples, 2))
+
+        sections: List[Dict[str, Any]] = []
+        for item in (sections_in or [])[:max_points]:
+            if not isinstance(item, dict):
+                continue
+            kp = str(item.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+
+            wiki = item.get("wikipedia") if isinstance(item.get("wikipedia"), dict) else {}
+            web = item.get("web_search") if isinstance(item.get("web_search"), dict) else {}
+            q = item.get("questions") if isinstance(item.get("questions"), dict) else {}
+
+            web_results = web.get("results") if isinstance(web.get("results"), list) else []
+            web_results = [r for r in web_results if isinstance(r, dict)][:3]
+
+            examples = q.get("examples") if isinstance(q.get("examples"), list) else []
+            exercises = q.get("exercises") if isinstance(q.get("exercises"), list) else []
+            examples = [x for x in examples if isinstance(x, dict)][: max_examples or 0]
+            exercises = [x for x in exercises if isinstance(x, dict)][:10]
+
+            # Explanation (LLM if configured; fallback to Wikipedia summary)
+            explanation_md = ""
+            if LESSON_PLAN_API_KEY:
+                payload = {
+                    "topic": topic,
+                    "subject": subject,
+                    "knowledge_point": kp,
+                    "wikipedia": {
+                        "title": wiki.get("title"),
+                        "url": wiki.get("url"),
+                        "summary": wiki.get("summary"),
+                    },
+                    "web_results": [
+                        {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("snippet") or r.get("text")}
+                        for r in web_results
+                    ],
+                    "instructions": (
+                        "请生成该知识点的自学讲解（Markdown），包含：定义/直观理解/关键点/常见误区/方法小结。\n"
+                        "尽量只依据给定的 wikipedia/web_results 信息；若信息不足，请标注“推断/建议”。\n"
+                        "不要输出例题或练习题。"
+                    ),
+                }
+                explanation_md = (
+                    await self._call_llm_text(
+                        messages=[
+                            {"role": "system", "content": "你是严谨的自学资料编写老师，输出必须是Markdown。"},
+                            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                        ],
+                        model=self.config.planner_model,
+                        temperature=0.3,
+                        max_tokens=900,
+                    )
+                ).strip()
+            if not explanation_md:
+                wiki_summary = str(wiki.get("summary") or "").strip()
+                if wiki_summary:
+                    explanation_md = f"**百科摘要**：{wiki_summary}\n"
+                else:
+                    explanation_md = "（未获取到可靠百科摘要；以下内容以题库练习与网络检索为主。）\n"
+
+            # Example solutions
+            solved_examples: List[Dict[str, Any]] = []
+            for ex in examples:
+                stem = str(ex.get("stem") or "").strip()
+                if not stem:
+                    continue
+                sol_md = ""
+                if LESSON_PLAN_API_KEY:
+                    prompt = (
+                        "请为下面例题写出详细分步解答（Markdown）。\n\n"
+                        "要求：\n- 每一步说明在做什么\n- 结论清晰\n\n"
+                        f"题目：\n{stem}\n"
+                    )
+                    sol_md = (
+                        await self._call_llm_text(
+                            messages=[
+                                {"role": "system", "content": "你是严谨的解题老师，输出必须是Markdown。"},
+                                {"role": "user", "content": prompt},
+                            ],
+                            model=self.config.planner_model,
+                            temperature=0.3,
+                            max_tokens=1100,
+                        )
+                    ).strip()
+                if not sol_md:
+                    sol_md = "（未配置模型，无法生成解答。）"
+                solved_examples.append(
+                    {
+                        "question_id": ex.get("question_id"),
+                        "stem": stem,
+                        "solution_markdown": sol_md,
+                        "difficulty": ex.get("difficulty"),
+                        "source": ex.get("source"),
+                    }
+                )
+
+            sections.append(
+                {
+                    "knowledge_point": kp,
+                    "explanation_markdown": explanation_md,
+                    "wikipedia": wiki,
+                    "web_results": web_results,
+                    "examples": solved_examples,
+                    "exercises": exercises,
+                }
+            )
+
+        out = {"topic": topic, "subject": subject, "sections": sections, "generated_at": datetime.now().isoformat(timespec="seconds")}
+        ctx.working_memory["study_material"] = out
+        return out
+
+    async def _tool_assemble_study_archive(self, args: Dict[str, Any], ctx: CompressedContext) -> str:
+        """将生成内容组装为最终自学档案 Markdown。"""
+
+        material = ctx.working_memory.get("generate_study_material")
+        if not isinstance(material, dict):
+            material = ctx.working_memory.get("study_material") if isinstance(ctx.working_memory.get("study_material"), dict) else {}
+
+        topic = str(args.get("topic") or material.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or material.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        sections = material.get("sections") if isinstance(material.get("sections"), list) else []
+
+        def _link(title: str, url: str) -> str:
+            t = (title or "").strip()
+            u = (url or "").strip()
+            if t and u:
+                return f"[{t}]({u})"
+            return t or u
+
+        chinese_nums = "一二三四五六七八九十"
+        lines: List[str] = []
+        lines.append(f"# 自学档案：{topic}")
+        if subject:
+            lines.append("")
+            lines.append(f"> 学科：{subject}")
+        lines.append("")
+
+        # Knowledge points list
+        lines.append("## 知识点拆分")
+        kp_list = [str(s.get("knowledge_point") or "").strip() for s in sections if isinstance(s, dict) and str(s.get("knowledge_point") or "").strip()]
+        if kp_list:
+            for kp in kp_list:
+                lines.append(f"- {kp}")
+        else:
+            lines.append(f"- {topic}")
+        lines.append("")
+
+        for idx, sec in enumerate([s for s in sections if isinstance(s, dict)], start=1):
+            kp = str(sec.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+            num = chinese_nums[idx - 1] if 1 <= idx <= len(chinese_nums) else str(idx)
+            lines.append(f"## {num}、{kp}")
+            lines.append("")
+
+            # 1.1 Wikipedia
+            wiki = sec.get("wikipedia") if isinstance(sec.get("wikipedia"), dict) else {}
+            lines.append("### 1.1 百科定义")
+            lines.append("")
+            wiki_title = str(wiki.get("title") or "").strip()
+            wiki_url = str(wiki.get("url") or "").strip()
+            wiki_summary = str(wiki.get("summary") or "").strip()
+            if wiki_title or wiki_url or wiki_summary:
+                if wiki_title or wiki_url:
+                    lines.append(f"- 词条：{_link(wiki_title, wiki_url)}")
+                if wiki_summary:
+                    lines.append("")
+                    lines.append(wiki_summary)
+            else:
+                lines.append("（未检索到可靠百科词条）")
+            lines.append("")
+
+            # 1.2 Web
+            lines.append("### 1.2 网络资料")
+            lines.append("")
+            web_results = sec.get("web_results") if isinstance(sec.get("web_results"), list) else []
+            web_results = [r for r in web_results if isinstance(r, dict)][:5]
+            if web_results:
+                for r in web_results:
+                    title = str(r.get("title") or "").strip()
+                    url = str(r.get("url") or "").strip()
+                    snippet = str(r.get("snippet") or r.get("text") or "").strip()
+                    line = f"- {_link(title, url)}"
+                    if snippet:
+                        line += f"：{snippet}"
+                    lines.append(line)
+            else:
+                lines.append("（未检索到网络资料或未配置搜索 Key）")
+            lines.append("")
+
+            # 讲解
+            lines.append("### 1.3 知识点讲解")
+            lines.append("")
+            explanation = str(sec.get("explanation_markdown") or "").strip()
+            lines.append(explanation or "（讲解为空）")
+            lines.append("")
+
+            # 例题
+            lines.append("### 1.4 例题精讲（含步骤）")
+            lines.append("")
+            examples = sec.get("examples") if isinstance(sec.get("examples"), list) else []
+            examples = [e for e in examples if isinstance(e, dict)]
+            if examples:
+                for ex_i, ex in enumerate(examples, start=1):
+                    lines.append(f"#### 例题 {ex_i}")
+                    lines.append("")
+                    stem = str(ex.get("stem") or "").strip()
+                    sol = str(ex.get("solution_markdown") or "").strip()
+                    if stem:
+                        lines.append("**题目**：")
+                        lines.append("")
+                        lines.append(stem)
+                        lines.append("")
+                    if sol:
+                        lines.append("**解答**：")
+                        lines.append("")
+                        lines.append(sol)
+                        lines.append("")
+            else:
+                lines.append("（未检索到例题）")
+                lines.append("")
+
+            # 练习题
+            lines.append("### 1.5 练习题（不含答案）")
+            lines.append("")
+            exercises = sec.get("exercises") if isinstance(sec.get("exercises"), list) else []
+            exercises = [e for e in exercises if isinstance(e, dict)]
+            if exercises:
+                for ex_i, ex in enumerate(exercises, start=1):
+                    stem = str(ex.get("stem") or "").strip()
+                    if not stem:
+                        continue
+                    lines.append(f"{ex_i}. {stem}")
+                    lines.append("")
+            else:
+                lines.append("（未检索到练习题）")
+                lines.append("")
+
+        lines.append("---")
+        lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("数据来源：Wikipedia、Exa/智谱联网搜索、题库")
+        lines.append("")
+
+        markdown = "\n".join(lines).strip() + "\n"
+        ctx.working_memory["markdown"] = markdown
+        return markdown
+
+    async def _tool_aggregate_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """聚合：拆分结果 + Wikipedia + Web 搜索 + 题库检索。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        def _map_by_point(blob: Any) -> Dict[str, Any]:
+            if not isinstance(blob, dict):
+                return {}
+            items = blob.get("items")
+            if isinstance(items, list):
+                mapped: Dict[str, Any] = {}
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    kp = str(it.get("knowledge_point") or "").strip()
+                    if not kp:
+                        continue
+                    mapped[kp] = it
+                return mapped
+            # Single-result style payload
+            kp = str(blob.get("knowledge_point") or "").strip()
+            if kp:
+                return {kp: blob}
+            return {}
+
+        web_map = _map_by_point(ctx.working_memory.get("web_search_knowledge"))
+        wiki_map = _map_by_point(ctx.working_memory.get("wikipedia_search"))
+        q_map = _map_by_point(ctx.working_memory.get("search_questions_by_knowledge"))
+
+        aggregated_items: List[Dict[str, Any]] = []
+        for kp in points:
+            aggregated_items.append(
+                {
+                    "knowledge_point": kp,
+                    "wikipedia": wiki_map.get(kp) or {},
+                    "web_search": web_map.get(kp) or {},
+                    "questions": q_map.get(kp) or {},
+                }
+            )
+
+        summary = {
+            "topic": topic,
+            "subject": subject,
+            "knowledge_points": points,
+            "items": aggregated_items,
+            "counts": {
+                "knowledge_points": len(points),
+                "web": len([x for x in web_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
+                "wiki": len([x for x in wiki_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]),
+                "questions": len([x for x in q_map.values() if isinstance(x, dict) and (x.get("questions") or x.get("examples") or x.get("exercises"))]),
+            },
+        }
+        ctx.working_memory["aggregated"] = summary
+        return summary
+
+    async def _tool_save_markdown_file(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """保存最终自学档案到 Markdown 文件。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
+        markdown = args.get("markdown")
+        if not isinstance(markdown, str) or not markdown.strip():
+            markdown = str(ctx.working_memory.get("markdown") or "").strip()
+        if not markdown:
+            # Best-effort: try common keys
+            markdown = str(ctx.working_memory.get("assemble_study_archive") or ctx.working_memory.get("assemble_markdown") or "").strip()
+
+        rel_dir = str(args.get("dir") or "study_archives").strip() or "study_archives"
+
+        # Resolve repo root: backend/agent/executor.py -> repo root
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / rel_dir).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Sanitize Windows-unfriendly characters in filename.
+        safe = re.sub(r'[<>:"/\\\\|?*\\x00-\\x1F]', "_", topic)
+        safe = re.sub(r"\\s+", " ", safe).strip()
+        safe = safe.strip(". ")
+        safe = safe[:80] if len(safe) > 80 else safe
+        if not safe:
+            safe = "study_archive"
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{safe}_{ts}.md"
+        path = out_dir / filename
+
+        try:
+            path.write_text(markdown + ("\n" if not markdown.endswith("\n") else ""), encoding="utf-8")
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "dir": str(out_dir), "filename": filename}
+
+        ctx.working_memory["archive_path"] = str(path)
+        return {
+            "success": True,
+            "path": str(path),
+            "dir": str(out_dir),
+            "filename": filename,
+            "bytes": len((markdown or "").encode("utf-8")),
+        }
 
     async def _tool_retrieve_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         topic = str(args.get("topic") or ctx.current_task).strip()

@@ -132,7 +132,7 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    用于 AI 对话和教案生成功能
+                    用于 AI 对话和自学资料生成功能
                   </p>
                 </div>
               </CardContent>
@@ -211,7 +211,7 @@ export default function SettingsPage() {
                   <div>
                     <h4 className="font-medium">导出数据</h4>
                     <p className="text-sm text-muted-foreground">
-                      导出所有试卷和教案数据
+                      导出所有试卷和自学资料数据
                     </p>
                   </div>
                   <Button variant="outline">导出</Button>

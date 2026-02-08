@@ -32,7 +32,7 @@ const typeIcons: Record<ConversationType, typeof MessagesSquare> = {
 const typeLabels: Record<ConversationType, string> = {
   chat: '对话',
   blueprint: '蓝图',
-  lesson_plan: '教案',
+  lesson_plan: '自学资料',
 }
 
 interface ConversationItemProps {
@@ -65,7 +65,7 @@ function ConversationListItem({
       navigate('/blueprint')
       return
     }
-    navigate('/lesson-plans')
+    navigate('/study-materials')
   }
 
   return (
