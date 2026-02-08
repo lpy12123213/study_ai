@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import html as html_module
 import json
@@ -41,6 +42,16 @@ DEFAULT_USER_AGENT = (
 
 CSRF_TOKEN_PATTERN = re.compile(
     r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', re.IGNORECASE
+)
+
+FORMULA_HASH_PATTERN = re.compile(r"/Upload/formula/([0-9a-f]{32})\.(png|gif|jpg|svg)", re.IGNORECASE)
+FORMULA_IMG_TAG_PATTERN = re.compile(
+    r'<img\b[^>]*\bsrc\s*=\s*(?P<q>[\'"])(?P<src>[^\'"]*/Upload/formula/(?P<hash>[0-9a-f]{32})\.(?:png|gif|jpg|svg)(?:\?[^\'"]*)?)(?P=q)[^>]*>',
+    re.IGNORECASE,
+)
+IMG_TAG_PATTERN = re.compile(
+    r'<img\b[^>]*\bsrc\s*=\s*(?P<q>[\'"])(?P<src>[^\'"]+)(?P=q)[^>]*>',
+    re.IGNORECASE,
 )
 
 
@@ -477,6 +488,19 @@ class ZujuanCrawler:
         self._cache: "OrderedDict[str, Tuple[float, float, Any]]" = OrderedDict()
         self._cache_max_entries = 256
 
+        # /zujuan-api/base: QuesBankList[].courseId / courseIdPy
+        # - courseId: observed as required by /zujuan-api/question/list (visitor mode)
+        # - courseIdPy: used for building referer URLs like /gzsx/zsd{categoryId}/
+        self.course_id: int = 0
+        self.course_id_py: str = ""
+
+        # Formula cache: {hash -> latex}, populated via {hash}.mml (MathML base64) + pandoc.
+        self._formula_cache: "OrderedDict[str, str]" = OrderedDict()
+        self._formula_cache_max_entries = 4096
+        self._formula_inflight: Dict[str, "asyncio.Future[str]"] = {}
+        self._formula_http_sem = asyncio.Semaphore(20)
+        self._formula_pandoc_sem = asyncio.Semaphore(8)
+
         # 学科配置
         self.subject = subject
         self._load_subject_config()
@@ -799,6 +823,11 @@ class ZujuanCrawler:
             self._bank_meta_loaded_for = bank_id
             return
 
+        # QuesBankList[].courseId / courseIdPy are useful for building referer
+        # and required parameters for question/list.
+        self.course_id = _safe_int(bank.get("courseId") or bank.get("courseID"), 0)
+        self.course_id_py = str(bank.get("courseIdPy") or bank.get("courseIDPy") or "").strip()
+
         for q in bank.get("QuesTypeList", []) or []:
             name = (q.get("Name") or "").strip()
             qid = _safe_int(q.get("ID"), 0)
@@ -1028,6 +1057,11 @@ class ZujuanCrawler:
             flags.append(f"has_images:{image_tokens}")
             score -= min(image_tokens * 10, 40)
 
+        formula_placeholders = stem.count("[公式:")
+        if formula_placeholders > 0:
+            flags.append(f"formula_unconverted:{formula_placeholders}")
+            score -= min(formula_placeholders * 15, 60)
+
         if "(需登录查看)" in stem:
             flags.append("login_required_content")
             score -= 30
@@ -1041,27 +1075,46 @@ class ZujuanCrawler:
         示例 payload.data.params: { bank_id, knowledges, ... }
         示例 url: /gzsx/zsd131011/o2  => pageName=zsd, categoryId=131011
         """
-        url_path = payload.get("url", "")
-        # 常见两类：
+        url_path = str(payload.get("url") or "").strip()
+        if not url_path:
+            return None
+
+        # Common variants:
         # - /gzsx/zsd131011/o2
-        # - /gzyy/zsd0/qt2809o2  (包含 quesType 过滤 qtXXXX)
-        m = re.search(
-            r"/[a-z]+/(?P<page>zsd|zj|zh|zs)(?P<cat>\d+)(?:/qt(?P<qt>\d+))?/?o(?P<order>\d+)",
-            url_path,
-        )
+        # - /gzyy/zsd0/qt2809o2   (qt filter packed with order suffix)
+        course_id_py = ""
+        m_course = re.search(r"^/([a-z]+)/", url_path)
+        if m_course:
+            course_id_py = m_course.group(1)
+
+        m = re.search(r"/(zsd|zj|jtff|zhangjie)(\d+)", url_path)
         if not m:
             return None
-        page_name = m.group("page")
-        cat_id = m.group("cat")
-        qt_id = m.groupdict().get("qt")
-        order_by = m.groupdict().get("order")
+        page_name = m.group(1)
+        cat_id = m.group(2)
+
+        qt_id = None
+        m_qt = re.search(r"/qt(\d+)", url_path)
+        if m_qt:
+            qt_id = m_qt.group(1)
+
+        order_by = None
+        m_order = re.search(r"o(\d+)$", url_path)
+        if m_order:
+            order_by = m_order.group(1)
+
         params = payload.get("data", {}).get("params", {})
         bank_id = params.get("bank_id") or params.get("bankId") or 0
+        course_id = params.get("course_id") or params.get("courseId") or 0
         target: Dict[str, Any] = {
             "page_name": page_name,
             "category_id": cat_id,
             "bank_id": bank_id,
         }
+        if course_id:
+            target["course_id"] = course_id
+        if course_id_py:
+            target["course_id_py"] = course_id_py
         if qt_id:
             target["question_type_id"] = _safe_int(qt_id, 0)
         if order_by:
@@ -1375,6 +1428,7 @@ class ZujuanCrawler:
         page_name: str,
         bank_id: int,
         category_id: str,
+        course_id: int = 0,
         cur_page: int = 1,
         difficulty: str = "",
         question_type: str = "",
@@ -1403,6 +1457,9 @@ class ZujuanCrawler:
             difficulty_codes = [code] if code else []
         if not difficulty_codes:
             difficulty_codes = [0]
+        # If "all" is included, keep it as a single code to avoid ambiguous semantics.
+        if 0 in difficulty_codes and len(difficulty_codes) > 1:
+            difficulty_codes = [0]
 
         year = _safe_int(year, 0)
         province_id = _safe_int(province_id, -1)
@@ -1413,8 +1470,12 @@ class ZujuanCrawler:
         ques_type_code = question_type_id or self._question_type_code(question_type)
         learn_grade_id = _safe_int(learn_grade_id, 0)
 
+        # Ensure /zujuan-api/base has been loaded so courseId/courseIdPy are available.
+        await self._ensure_bank_meta_loaded()
+        resolved_course_id = _safe_int(course_id, 0) or _safe_int(getattr(self, "course_id", 0), 0)
+
         cache_key = (
-            f"qlist:{page_name}:{bank_id}:{category_id}:{cur_page}:{difficulty}:"
+            f"qlist:{page_name}:{bank_id}:{resolved_course_id}:{category_id}:{cur_page}:{difficulty}:"
             f"{ques_type_code}:{year}:{province_id}:{paper_type_id}:{term}:{order_by}:"
             f"{learn_grade_id}:{int(parse_content)}"
         )
@@ -1422,82 +1483,105 @@ class ZujuanCrawler:
         if isinstance(cached, tuple) and len(cached) == 2:
             return cached  # type: ignore[return-value]
 
-        seen_ids = set()
-        all_questions: List[Dict[str, Any]] = []
-        total_raw_count = 0
-        sub_requests = []
-        errors = []
+        course_id_py = str(getattr(self, "course_id_py", "") or "").strip()
+        referer_page = (page_name or "").strip() or "zsd"
+        if referer_page in {"zh", "zhangjie"}:
+            referer_page = "zj"
+        referer_url = (
+            f"{self.base_url}/{course_id_py}/{referer_page}{category_id}/"
+            if course_id_py and str(category_id).strip()
+            else f"{self.base_url.rstrip('/')}/"
+        )
 
-        for diff_code in difficulty_codes:
-            data = {
-                "pageName": page_name,
-                "bankId": str(bank_id or 0),
-                "courseId": "0",
-                "categoryId": str(category_id),
-                "canCategoryId": "true",
-                "categoryIds[0]": "0",
-                "quesType": str(ques_type_code),
-                "quesDiff": str(diff_code),
-                "quesYear": str(year or 0),
-                "paperTypeId": str(paper_type_id or 0),
-                "scenarioizedTypeId": "0",
-                "tagId": "0",
-                "provinceId": str(province_id),
-                "learngrade": str(learn_grade_id or 0),
-                "term": str(term or 0),
-                "orderBy": str(order_by or 2),
-                "curPage": str(cur_page),
-                "quesAttributeId": "0",
-                "examMethodId": "0",
-                "isFresh": "0",
-                "catelogTokpointId": "0",
-            }
+        data_fields: List[Tuple[str, str]] = [
+            ("pageName", page_name),
+            ("bankId", str(bank_id or 0)),
+            ("courseId", str(resolved_course_id or 0)),
+            ("categoryId", str(category_id)),
+            ("canCategoryId", "true"),
+            ("categoryIds[0]", "0"),
+            ("quesType", str(ques_type_code)),
+            ("quesYear", str(year or 0)),
+            ("paperTypeId", str(paper_type_id or 0)),
+            ("scenarioizedTypeId", "0"),
+            ("tagId", "0"),
+            ("provinceId", str(province_id)),
+            ("learngrade", str(learn_grade_id or 0)),
+            ("term", str(term or 0)),
+            ("orderBy", str(order_by or 2)),
+            ("curPage", str(cur_page)),
+            ("quesAttributeId", "0"),
+            ("examMethodId", "0"),
+            ("isFresh", "0"),
+            ("catelogTokpointId", "0"),
+        ]
 
-            resp = await self.client.post(
-                f"{self.base_url}/zujuan-api/question/list",
-                data=data,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+        # Prefer multi-select `quesDiffs` when multiple codes are requested.
+        if len(difficulty_codes) <= 1:
+            data_fields.append(("quesDiff", str(difficulty_codes[0] if difficulty_codes else 0)))
+        else:
+            data_fields.append(("quesDiff", "0"))
+            for dc in difficulty_codes:
+                data_fields.append(("quesDiffs", str(_safe_int(dc, 0))))
 
-            try:
-                resp_json = resp.json()
-                html = resp_json.get("data", {}).get("html", "")
-            except Exception:
-                errors.append({"quesDiff": diff_code, "error": "json_parse_failed", "status": resp.status_code})
-                continue
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": referer_url,
+            "User-Agent": self.user_agent,
+        }
 
-            if not html:
-                errors.append({"quesDiff": diff_code, "error": "empty_html", "status": resp.status_code})
-                continue
+        resp = await self.client.post(
+            f"{self.base_url}/zujuan-api/question/list",
+            data=data_fields,
+            headers=headers,
+        )
 
-            if not parse_content:
-                ids = re.findall(r'questionid="(\d+)"', html)
-                total_raw_count += len(ids)
-                for qid in ids:
-                    if qid not in seen_ids:
-                        all_questions.append({"question_id": qid})
-                        seen_ids.add(qid)
-                sub_requests.append({"quesDiff": diff_code, "raw_count": len(ids), "page": cur_page})
-                continue
-
-            questions = await self._parse_questions_from_html(html, bank_id)
-            total_raw_count += len(questions)
-            for q in questions:
-                qid = q.get("question_id")
-                if not qid:
-                    continue
-                if qid not in seen_ids:
-                    all_questions.append(q)
-                    seen_ids.add(qid)
-            sub_requests.append({"quesDiff": diff_code, "raw_count": len(questions), "page": cur_page})
-
-        if not all_questions and errors:
-            return [], {
-                "error": "question_list_failed",
+        try:
+            resp_json = resp.json()
+            html = resp_json.get("data", {}).get("html", "")
+        except Exception:
+            dbg = {
+                "error": "json_parse_failed",
                 "raw_count": 0,
                 "page": cur_page,
-                "details": errors,
+                "status": resp.status_code,
             }
+            self._cache_set(cache_key, ([], dbg), ttl=60)
+            return [], dbg
+
+        if not html:
+            dbg = {
+                "error": "empty_html",
+                "raw_count": 0,
+                "page": cur_page,
+                "status": resp.status_code,
+            }
+            self._cache_set(cache_key, ([], dbg), ttl=60)
+            return [], dbg
+
+        seen_ids: set[str] = set()
+        all_questions: List[Dict[str, Any]] = []
+        total_raw_count = 0
+
+        if not parse_content:
+            ids = re.findall(r'questionid="(\d+)"', html)
+            total_raw_count = len(ids)
+            for qid in ids:
+                qid = str(qid or "").strip()
+                if not qid or qid in seen_ids:
+                    continue
+                seen_ids.add(qid)
+                all_questions.append({"question_id": qid})
+        else:
+            questions = await self._parse_questions_from_html(html, bank_id)
+            total_raw_count = len(questions)
+            for q in questions:
+                qid = str(q.get("question_id") or "").strip()
+                if not qid or qid in seen_ids:
+                    continue
+                seen_ids.add(qid)
+                all_questions.append(q)
 
         # 兜底：若站点未按 quesDiff 过滤（偶发），这里再按解析出的难度文案过滤一次
         accepted_labels = self._requested_difficulty_buckets(difficulty)
@@ -1511,6 +1595,7 @@ class ZujuanCrawler:
             "returned_count": len(all_questions),
             "page": cur_page,
             "difficulty_mode": "multi" if use_multi else "single",
+            "course_id": resolved_course_id,
             "ques_type_code": ques_type_code,
             "learn_grade_id": learn_grade_id,
             "year": year,
@@ -1519,180 +1604,285 @@ class ZujuanCrawler:
             "term": term,
             "order_by": order_by,
         }
-        if len(sub_requests) > 1:
+        if len(difficulty_codes) > 1:
             debug_info["difficulty_codes"] = difficulty_codes
-            debug_info["sub_requests"] = sub_requests
-        if errors:
-            debug_info["errors"] = errors
+            debug_info["difficulty_multi_param"] = "quesDiffs"
 
         result = (all_questions, debug_info)
         self._cache_set(cache_key, result, ttl=8 * 60 if parse_content else 10 * 60)
         return result
 
     async def _parse_questions_from_html(self, html: str, bank_id: int) -> List[Dict[str, Any]]:
+        """Parse `question/list` HTML fragments into structured questions.
+
+        - Prefer DOM parsing (BeautifulSoup) over regex splitting.
+        - Convert formula images via `{hash}.mml` (MathML base64) -> pandoc -> LaTeX.
         """
-        从搜索结果 HTML 解析题目信息，将公式转换为 LaTeX
-        
-        优化：先收集所有公式URL，批量转换，避免每个题目单独请求
-        """
-        questions = []
-        question_stems = []  # 存储(题目索引, 题干HTML)用于批量处理
 
-        # 按题目块分割
-        question_blocks = re.split(r'<div class=" tk-quest-item', html)
+        decoded = html_module.unescape(html or "")
+        if not decoded.strip():
+            return []
 
-        for block in question_blocks[1:]:  # 跳过第一个空块
-            q = {}
+        questions: List[Dict[str, Any]] = []
+        content_fragments: List[Tuple[int, str]] = []
 
-            # 题号
-            qid_match = re.search(r'questionid="(\d+)"', block)
-            if not qid_match:
+        try:
+            from bs4 import BeautifulSoup  # type: ignore
+        except Exception:
+            BeautifulSoup = None  # type: ignore
+
+        if BeautifulSoup is None:
+            # Best-effort fallback: keep only basic fields.
+            question_blocks = re.split(r'<div class=" tk-quest-item', decoded)
+            for block in question_blocks[1:]:
+                qid_match = re.search(r'questionid="(\d+)"', block)
+                if not qid_match:
+                    continue
+                qid = qid_match.group(1)
+                q: Dict[str, Any] = {
+                    "question_id": qid,
+                    "source_url": f"{self.base_url}/{bank_id}q{qid}.html",
+                    "type": "",
+                    "difficulty": "",
+                    "difficulty_value": "",
+                    "knowledge_points": [],
+                    "source": "",
+                    "date": "",
+                }
+                content_fragments.append((len(questions), block))
+                q["_stem_html"] = block
+                questions.append(q)
+
+            if content_fragments:
+                await self._batch_convert_formulas(questions, content_fragments)
+            return questions
+
+        soup = BeautifulSoup(decoded, "lxml")
+
+        RE_PAPER = re.compile(r"/(\d+)p(\d+)\.html")
+        RE_ZSD = re.compile(r"/course(\d+)/zsd(\d+)(/|$)")
+        RE_JTFF = re.compile(r"/course(\d+)/jtff(\d+)(/|$)")
+
+        for root in soup.select("div.tk-quest-item[questionid]"):
+            qid = str(root.get("questionid") or "").strip()
+            if not qid.isdigit():
                 continue
-            q["question_id"] = qid_match.group(1)
-            q["source_url"] = f"{self.base_url}/{bank_id}q{q['question_id']}.html"
 
-            # 题型和难度 (从 info-cnt 解析)
-            info_items = re.findall(r'<span class="info-cnt">\s*([^<]+)\s*</span>', block)
-            if info_items:
-                # 第一个通常是题型，解码 HTML 实体
-                q["type"] = html_module.unescape(info_items[0].strip()) if info_items else ""
-                # 第二个通常是难度
-                if len(info_items) > 1:
-                    diff_text = html_module.unescape(info_items[1].strip())
-                    # 解析难度值，如 "适中(0.65)"
-                    diff_match = re.search(r'([\u4e00-\u9fa5]+)\s*\(?([\\d.]+)?\)?', diff_text)
-                    if diff_match:
-                        q["difficulty"] = diff_match.group(1)
-                        q["difficulty_value"] = diff_match.group(2) if diff_match.group(2) else ""
-                    else:
-                        q["difficulty"] = diff_text
-                        q["difficulty_value"] = ""
+            q: Dict[str, Any] = {
+                "question_id": qid,
+                "type": "",
+                "difficulty": "",
+                "difficulty_value": "",
+                "knowledge_points": [],
+                "source": "",
+                "date": "",
+            }
 
-            # 知识点
-            kp_matches = re.findall(r'class="knowledge-item"[^>]*>([^<]+)</a>', block)
-            q["knowledge_points"] = [html_module.unescape(kp) for kp in kp_matches] if kp_matches else []
+            root_bank_id = _safe_int(root.get("bankid"), 0) or _safe_int(bank_id, 0) or _safe_int(getattr(self, "bank_id", 0), 0)
+            q["source_url"] = f"{self.base_url}/{root_bank_id}q{qid}.html" if root_bank_id else self._question_url(qid)
+            q["question_index"] = _safe_int(root.get("questionindex"), 0)
 
-            # 来源
-            src_match = re.search(r'class="addi-msg ques-src"[^>]*>([^<]+)</a>', block)
-            q["source"] = html_module.unescape(src_match.group(1).strip()) if src_match else ""
+            # Structured meta: addques button carries type/difficulty hints.
+            meta: Dict[str, Any] = {}
+            add_btn = root.select_one("a.addques[quesid]")
+            if add_btn is not None:
+                qyid = _safe_int(add_btn.get("qyid"), 0)
+                qyname = str(add_btn.get("qyname") or "").strip()
+                qdid = _safe_int(add_btn.get("qdid"), 0)
+                qdname = str(add_btn.get("qdname") or "").strip()
+                if qyid or qyname:
+                    meta["ques_type"] = {"id": qyid, "name": qyname}
+                if qdid or qdname:
+                    meta["ques_diff"] = {"id": qdid, "name": qdname}
+                cat_hint_id = _safe_int(add_btn.get("categoryid") or add_btn.get("categoryId"), 0)
+                cat_hint_name = str(add_btn.get("categoryname") or add_btn.get("categoryName") or "").strip()
+                if cat_hint_id or cat_hint_name:
+                    meta["category_hint"] = {"id": cat_hint_id, "name": cat_hint_name}
 
-            # 题干内容 (从 exam-item__cnt 解析)
-            stem_match = re.search(r'<div class="exam-item__cnt[^"]*">([\s\S]*?)</div>\s*<div[^>]*class="exam-item__opt"', block)
-            if stem_match:
-                stem_html = stem_match.group(1)
-                question_stems.append((len(questions), stem_html))
-                q["_stem_html"] = stem_html  # 临时存储
+            info_items = [s.get_text(strip=True) for s in root.select("span.info-cnt") if s.get_text(strip=True)]
+            if meta.get("ques_type", {}).get("name"):
+                q["type"] = str(meta["ques_type"]["name"]).strip()
+            elif info_items:
+                q["type"] = info_items[0]
+
+            if meta.get("ques_diff", {}).get("name"):
+                q["difficulty"] = str(meta["ques_diff"]["name"]).strip()
+            if len(info_items) > 1:
+                diff_text = info_items[1]
+                diff_match = re.search(r"([\u4e00-\u9fa5]+)\s*(?:\((\d+(?:\.\d+)?)\))?", diff_text)
+                if diff_match:
+                    if not q["difficulty"]:
+                        q["difficulty"] = (diff_match.group(1) or "").strip()
+                    if diff_match.group(2):
+                        q["difficulty_value"] = diff_match.group(2)
+
+            if meta:
+                q["meta"] = meta
+
+            # knowledge point names shown in the block.
+            kps = [
+                a.get_text(strip=True)
+                for a in root.select("a.knowledge-item")
+                if a.get_text(strip=True)
+            ]
+            q["knowledge_points"] = kps
+
+            # Source paper link + title.
+            links: Dict[str, Any] = {}
+            src_a = root.select_one("a.ques-src[href]")
+            if src_a is not None:
+                href = str(src_a.get("href") or "").strip()
+                if href:
+                    links["source_paper_url"] = urllib.parse.urljoin(self.base_url, href)
+                    m = RE_PAPER.search(href)
+                    if m:
+                        meta = dict(meta)
+                        meta["source_paper_id"] = _safe_int(m.group(2), 0)
+                        q["meta"] = meta
+                q["source"] = src_a.get_text(strip=True)
+
+            detail_a = root.select_one("a.detail[href]")
+            if detail_a is not None:
+                href = str(detail_a.get("href") or "").strip()
+                if href:
+                    links["detail_url"] = urllib.parse.urljoin(self.base_url, href)
+
+            if links:
+                q["links"] = links
+
+            date_span = root.select_one("span.no-bound")
+            q["date"] = date_span.get_text(strip=True) if date_span else ""
+
+            # Tags: zsd/jtff ids referenced by links.
+            zsd_ids: List[int] = []
+            jtff_ids: List[int] = []
+            for a in root.select("a[href]"):
+                href = str(a.get("href") or "")
+                m = RE_ZSD.search(href)
+                if m:
+                    zsd_ids.append(_safe_int(m.group(2), 0))
+                    continue
+                m = RE_JTFF.search(href)
+                if m:
+                    jtff_ids.append(_safe_int(m.group(2), 0))
+
+            tags: Dict[str, Any] = {}
+            zsd_ids = [x for x in sorted(set(zsd_ids)) if x]
+            jtff_ids = [x for x in sorted(set(jtff_ids)) if x]
+            if zsd_ids:
+                tags["knowledge_zsd_ids"] = zsd_ids
+            if jtff_ids:
+                tags["method_jtff_ids"] = jtff_ids
+            if tags:
+                q["tags"] = tags
+
+            # Content fragment: exam-item__cnt usually contains stem + options.
+            content_node = root.select_one("div.exam-item__cnt") or root.select_one("div.qbody")
+            if content_node is not None:
+                content_html = "".join(str(x) for x in content_node.contents)
             else:
-                q["stem"] = ""
+                content_html = str(root)
+            q["_stem_html"] = content_html
+            content_fragments.append((len(questions), content_html))
 
-            # 日期
-            date_match = re.search(r'<span class="no-bound"[^>]*>(\d{4}/\d{1,2}/\d{1,2})</span>', block)
-            q["date"] = date_match.group(1) if date_match else ""
+            # Formula hashes: keep for downstream filtering/diagnostics.
+            formula_hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(str(root))]
+            formula_hashes = list(dict.fromkeys(formula_hashes))
+            q["has_formula"] = bool(formula_hashes)
+            q["formula_hashes"] = formula_hashes
 
             questions.append(q)
 
-        # 批量处理所有题干中的公式（大幅提升性能）
-        if question_stems:
-            # 合并所有题干HTML，一次性提取所有公式URL
-            await self._batch_convert_formulas(questions, question_stems)
+        if content_fragments:
+            await self._batch_convert_formulas(questions, content_fragments)
 
         return questions
 
     async def _batch_convert_formulas(self, questions: List[Dict[str, Any]], question_stems: List[Tuple[int, str]]) -> None:
         """
-        批量转换所有题目中的公式
-        
-        优化策略：
-        1. 收集所有公式URL
-        2. 一次性批量请求并转换
-        3. 用转换结果填充题目
+        批量转换题面片段中的公式图片为 LaTeX，并生成可用于下游的纯文本 `stem` 字段。
+
+        公式链路（优先）：
+        - `{hash}.mml`（MathML base64 sidecar）→ pandoc → LaTeX
         """
+        if not question_stems:
+            return
+
+        # 1) Collect unique hashes across all fragments.
+        all_hashes: List[str] = []
+        per_fragment_hashes: Dict[int, List[str]] = {}
+        for idx, frag_html in question_stems:
+            raw = frag_html or ""
+            hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
+            hashes = list(dict.fromkeys(hashes))
+            if hashes:
+                per_fragment_hashes[idx] = hashes
+                all_hashes.extend(hashes)
+
+        all_hashes = list(dict.fromkeys(all_hashes))
+
+        # 2) Batch convert hashes to LaTeX (mml -> pandoc).
+        hash_to_latex: Dict[str, str] = {}
+        if all_hashes:
+            latex_list = await asyncio.gather(*[self._get_formula_latex(h) for h in all_hashes], return_exceptions=True)
+            for h, v in zip(all_hashes, latex_list):
+                if isinstance(v, Exception):
+                    continue
+                if isinstance(v, str) and v.strip():
+                    hash_to_latex[h] = v.strip()
+
+        def _replace_formula_imgs(fragment: str) -> str:
+            def _repl(m: re.Match) -> str:
+                h = (m.group("hash") or "").lower()
+                latex = hash_to_latex.get(h, "")
+                if latex:
+                    return latex
+                return f"[公式:{h}]"
+
+            return FORMULA_IMG_TAG_PATTERN.sub(_repl, fragment or "")
+
+        def _replace_other_imgs(fragment: str) -> str:
+            def _repl(m: re.Match) -> str:
+                src = self._resolve_url(m.group("src"))
+                if not src:
+                    return "[图片]"
+                return f"[图片:{src}]"
+
+            return IMG_TAG_PATTERN.sub(_repl, fragment or "")
+
         try:
-            from backend.core.svg_utils.svg_to_latex import batch_svg_to_latex, load_signatures
-            
-            load_signatures()
-            
-            # 收集所有公式URL
-            formula_pattern = r'<img[^>]*src="(https://[^"]+/formula/[^"]+\.png)"[^>]*>'
-            all_png_urls = set()
-            stem_formula_map = {}  # {题目索引: [png_urls]}
-            
-            for idx, stem_html in question_stems:
-                png_urls = re.findall(formula_pattern, stem_html)
-                all_png_urls.update(png_urls)
-                stem_formula_map[idx] = png_urls
-            
-            # 转换为SVG URL并批量获取
-            svg_urls = [url.replace('.png', '.svg') for url in all_png_urls]
-            
-            if svg_urls:
-                # 批量转换，提高并发到30
-                latex_map = await batch_svg_to_latex(svg_urls, concurrency=30, use_advanced=True)
-                
-                # 构建 png_url -> latex 的映射
-                png_to_latex = {}
-                for png_url in all_png_urls:
-                    svg_url = png_url.replace('.png', '.svg')
-                    if svg_url in latex_map:
-                        latex, _ = latex_map[svg_url]
-                        if latex:
-                            png_to_latex[png_url] = latex
+            from bs4 import BeautifulSoup  # type: ignore
+        except Exception:
+            BeautifulSoup = None  # type: ignore
+
+        for idx, stem_html in question_stems:
+            # 3) Replace formulas first, then replace remaining images.
+            converted = _replace_formula_imgs(stem_html or "")
+            converted = _replace_other_imgs(converted)
+
+            # 4) HTML -> text
+            if BeautifulSoup is not None:
+                text = BeautifulSoup(converted, "lxml").get_text("\n", strip=True)
             else:
-                png_to_latex = {}
-            
-            # 用转换结果填充题目
-            for idx, stem_html in question_stems:
-                # 替换公式
-                for png_url in stem_formula_map.get(idx, []):
-                    if png_url in png_to_latex:
-                        latex = png_to_latex[png_url]
-                        # 转义反斜杠
-                        latex_escaped = latex.replace('\\', '\\\\')
-                        img_pattern = f'<img[^>]*src="{re.escape(png_url)}"[^>]*>'
-                        stem_html = re.sub(img_pattern, f'${latex_escaped}$', stem_html)
-                
-                # 保留普通图片链接
-                stem_html = re.sub(
-                    r'<img[^>]*src="([^"]+)"[^>]*>',
-                    r'[图片:\1]',
-                    stem_html
-                )
-                # 清理HTML标签
-                stem_text = re.sub(r'<[^>]+>', '', stem_html)
-                stem_text = html_module.unescape(stem_text)
-                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
-                # 去掉题号前缀
-                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
-                
-                questions[idx]["stem"] = stem_text[:2000]
-                # 删除临时字段
-                if "_stem_html" in questions[idx]:
-                    del questions[idx]["_stem_html"]
-                    
-        except ImportError:
-            # 回退到串行处理
-            for idx, stem_html in question_stems:
-                stem_html = await self._replace_formulas_with_latex(stem_html)
-                stem_html = re.sub(r'<img[^>]*src="([^"]+)"[^>]*>', r'[图片:\1]', stem_html)
-                stem_text = re.sub(r'<[^>]+>', '', stem_html)
-                stem_text = html_module.unescape(stem_text)
-                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
-                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
-                questions[idx]["stem"] = stem_text[:2000]
-                if "_stem_html" in questions[idx]:
-                    del questions[idx]["_stem_html"]
-        except Exception as e:
-            print(f"批量公式转换失败，回退到串行: {e}")
-            for idx, stem_html in question_stems:
-                stem_html = await self._replace_formulas_with_latex(stem_html)
-                stem_html = re.sub(r'<img[^>]*src="([^"]+)"[^>]*>', r'[图片:\1]', stem_html)
-                stem_text = re.sub(r'<[^>]+>', '', stem_html)
-                stem_text = html_module.unescape(stem_text)
-                stem_text = re.sub(r'\s+', ' ', stem_text).strip()
-                stem_text = re.sub(r'^\d+\s*[.．、]\s*', '', stem_text)
-                questions[idx]["stem"] = stem_text[:2000]
-                if "_stem_html" in questions[idx]:
-                    del questions[idx]["_stem_html"]
+                text = re.sub(r"<[^>]+>", "", converted)
+
+            text = html_module.unescape(text or "")
+            text = re.sub(r"[ \t]+", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text)
+            text = text.strip()
+            text = re.sub(r"^\d+\s*[.．、]\s*", "", text)
+
+            # Keep within reasonable size to avoid tool payload bloat.
+            questions[idx]["stem"] = text[:2500]
+
+            frag_hashes = per_fragment_hashes.get(idx) or []
+            if frag_hashes and "formula_hashes" not in questions[idx]:
+                questions[idx]["formula_hashes"] = frag_hashes
+            if frag_hashes and "has_formula" not in questions[idx]:
+                questions[idx]["has_formula"] = True
+
+            if "_stem_html" in questions[idx]:
+                del questions[idx]["_stem_html"]
 
     def _matches_local_filters(
         self,
@@ -1963,6 +2153,14 @@ class ZujuanCrawler:
         if bank_id_mismatch:
             target["bank_id_mismatch"] = True
 
+        expected_course_id = _safe_int(getattr(self, "course_id", 0), 0)
+        target_course_id = _safe_int(target.get("course_id"), 0)
+        course_id_for_request = target_course_id or expected_course_id
+        if bank_id_mismatch and strict_subject:
+            course_id_for_request = expected_course_id
+        if course_id_for_request:
+            target["course_id_for_request"] = course_id_for_request
+
         year = _safe_int(year, 0)
         province_id = _safe_int(province_id, -1)
         paper_type_id = _safe_int(paper_type_id, 0)
@@ -1983,6 +2181,7 @@ class ZujuanCrawler:
                 page_name=target["page_name"],
                 bank_id=bank_id_for_request,
                 category_id=target["category_id"],
+                course_id=course_id_for_request,
                 cur_page=page_idx,
                 difficulty=difficulty,
                 question_type=question_type,
@@ -2644,9 +2843,177 @@ class ZujuanCrawler:
         cmd.append(url)
         return cmd
 
+    def _resolve_url(self, url: str) -> str:
+        u = (url or "").strip()
+        if not u:
+            return ""
+        if u.startswith("//"):
+            return f"https:{u}"
+        if u.startswith("/"):
+            return f"{self.base_url.rstrip('/')}{u}"
+        return u
+
+    def _formula_cache_get(self, formula_hash: str) -> Optional[str]:
+        key = (formula_hash or "").strip().lower()
+        if not key:
+            return None
+        cached = self._formula_cache.get(key)
+        if cached is None:
+            return None
+        try:
+            self._formula_cache.move_to_end(key)
+        except Exception:
+            pass
+        return cached
+
+    def _formula_cache_set(self, formula_hash: str, latex: str) -> None:
+        key = (formula_hash or "").strip().lower()
+        if not key:
+            return
+        self._formula_cache[key] = latex or ""
+        try:
+            self._formula_cache.move_to_end(key)
+            while len(self._formula_cache) > int(self._formula_cache_max_entries or 4096):
+                self._formula_cache.popitem(last=False)
+        except Exception:
+            return
+
+    async def _fetch_formula_mathml(self, formula_hash: str) -> str:
+        """
+        Fetch `{hash}.mml` and decode into MathML XML.
+
+        Observed on zujuan static domain:
+        - `{hash}.mml` body is base64 text
+        - base64-decoded content starts with `<math ...>`
+        """
+        h = (formula_hash or "").strip().lower()
+        if not h or not re.fullmatch(r"[0-9a-f]{32}", h):
+            return ""
+        if not self.client:
+            return ""
+
+        url = f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{h}.mml"
+        async with self._formula_http_sem:
+            resp = await self.client.get(
+                url,
+                headers={
+                    "User-Agent": self.user_agent,
+                    "Referer": f"{self.base_url.rstrip('/')}/",
+                },
+            )
+        if resp.status_code != 200:
+            return ""
+        raw = (resp.content or b"").strip()
+        if not raw:
+            return ""
+
+        # Some variants may already be plain XML.
+        try:
+            as_text = raw.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            as_text = ""
+        if as_text.lstrip().startswith("<math"):
+            return as_text
+
+        try:
+            decoded = base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
+
+        return decoded if "<math" in decoded else ""
+
+    async def _mathml_to_latex_via_pandoc(self, mathml_xml: str) -> str:
+        xml = (mathml_xml or "").strip()
+        if not xml:
+            return ""
+
+        def _run() -> str:
+            try:
+                p = subprocess.run(
+                    ["pandoc", "-f", "html", "-t", "latex"],
+                    input=xml,
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    timeout=20,
+                    check=True,
+                )
+                return (p.stdout or "").strip()
+            except Exception:
+                return ""
+
+        async with self._formula_pandoc_sem:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, _run)
+
+    async def _get_formula_latex(self, formula_hash: str) -> str:
+        h = (formula_hash or "").strip().lower()
+        if not h or not re.fullmatch(r"[0-9a-f]{32}", h):
+            return ""
+
+        cached = self._formula_cache_get(h)
+        if cached is not None:
+            return cached
+
+        inflight = self._formula_inflight.get(h)
+        if inflight is not None:
+            try:
+                return await inflight
+            except Exception:
+                return ""
+
+        loop = asyncio.get_event_loop()
+        fut: "asyncio.Future[str]" = loop.create_future()
+        self._formula_inflight[h] = fut
+        try:
+            mathml = await self._fetch_formula_mathml(h)
+            latex = ""
+            if mathml:
+                latex = (await self._mathml_to_latex_via_pandoc(mathml)).strip()
+            self._formula_cache_set(h, latex)
+            if not fut.done():
+                fut.set_result(latex)
+            return latex
+        except Exception:
+            if not fut.done():
+                fut.set_result("")
+            return ""
+        finally:
+            self._formula_inflight.pop(h, None)
+
+    async def _replace_formulas_with_latex_mml(self, html: str) -> Tuple[str, List[str]]:
+        raw = html or ""
+        hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
+        # Preserve order + de-dupe
+        hashes = list(dict.fromkeys(hashes))
+        if not hashes:
+            return raw, []
+
+        latex_list = await asyncio.gather(*[self._get_formula_latex(h) for h in hashes], return_exceptions=True)
+        hash_to_latex: Dict[str, str] = {}
+        for h, v in zip(hashes, latex_list):
+            if isinstance(v, Exception):
+                continue
+            if isinstance(v, str) and v.strip():
+                hash_to_latex[h] = v.strip()
+
+        def _repl(m: re.Match) -> str:
+            h = (m.group("hash") or "").lower()
+            latex = hash_to_latex.get(h, "")
+            if latex:
+                return latex
+            return f"[公式:{h}]"
+
+        replaced = FORMULA_IMG_TAG_PATTERN.sub(_repl, raw)
+        return replaced, hashes
+
     async def _fetch_formula_svg(self, png_url: str) -> str:
         """获取公式的SVG源码"""
-        svg_url = png_url.replace('.png', '.svg')
+        svg_url = (png_url or "").strip()
+        if not svg_url:
+            return ""
+        if not svg_url.lower().endswith(".svg"):
+            svg_url = re.sub(r"\.(png|gif|jpe?g)(\?.*)?$", ".svg", svg_url, flags=re.IGNORECASE)
         try:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
@@ -2666,9 +3033,17 @@ class ZujuanCrawler:
 
     async def _replace_formulas_with_latex(self, html: str) -> str:
         """
-        将HTML中的公式图片替换为LaTeX表达式
-        使用字形签名精确匹配法（非OCR），精确度高
+        将HTML中的公式图片替换为LaTeX表达式。
+
+        默认优先走 `{hash}.mml`（MathML base64 sidecar）-> pandoc -> LaTeX 的链路；
+        当该链路不可用时，才回退到旧的 SVG 字形签名方案。
         """
+        try:
+            replaced, _hashes = await self._replace_formulas_with_latex_mml(html)
+            return replaced
+        except Exception:
+            pass
+
         try:
             # 导入SVG转LaTeX工具
             from backend.core.svg_utils.svg_to_latex import replace_formulas_with_latex, svg_content_to_latex
@@ -2703,44 +3078,51 @@ class ZujuanCrawler:
 
     async def _replace_formulas_with_svg(self, html: str) -> str:
         """将HTML中的公式图片替换为SVG源码（回退方案）"""
-        # 找到所有公式图片
-        formula_pattern = r'<img[^>]*src="(https://[^"]+/formula/[^"]+\.png)"[^>]*>'
-        matches = list(set(re.findall(formula_pattern, html)))
+        raw = html or ""
+        hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
+        # Preserve order + de-dupe
+        hashes = list(dict.fromkeys(hashes))
+        if not hashes:
+            return raw
 
-        if not matches:
-            return html
+        # Batch fetch svgs (cap to avoid slowing down fallback path too much)
+        hashes = hashes[:20]
+        svg_list = await asyncio.gather(
+            *[
+                self._fetch_formula_svg(f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{h}.svg")
+                for h in hashes
+            ],
+            return_exceptions=True,
+        )
+        hash_to_svg: Dict[str, str] = {}
+        for h, v in zip(hashes, svg_list):
+            if isinstance(v, Exception):
+                continue
+            if isinstance(v, str) and v.lstrip().startswith("<svg"):
+                hash_to_svg[h] = v
 
-        # 批量获取SVG（限制数量避免太慢）
-        svg_map = {}
-        for url in matches[:20]:
-            svg = await self._fetch_formula_svg(url)
+        def _repl(m: re.Match) -> str:
+            h = (m.group("hash") or "").lower()
+            svg = hash_to_svg.get(h, "")
             if svg:
-                svg_map[url] = svg
+                return f"[公式:{svg}]"
+            return f"[公式:{h}]"
 
-        # 替换
-        result = html
-        for png_url, svg in svg_map.items():
-            # 用SVG源码替换img标签，添加标记方便AI识别
-            img_pattern = f'<img[^>]*src="{re.escape(png_url)}"[^>]*>'
-            result = re.sub(img_pattern, f'[公式:{svg}]', result)
-
-        return result
+        return FORMULA_IMG_TAG_PATTERN.sub(_repl, raw)
 
     async def _replace_formulas_with_inline_svg(self, html: str) -> str:
         """
         将HTML中的公式图片替换为内联 SVG（用于前端渲染）。
 
         说明：
-        - 公式图片通常在 /formula/*.png 下，可替换为对应的 .svg 内容。
+        - 公式图片常见路径：`/quesimg/Upload/formula/{hash}.png`，可替换为同名 `.svg` 内容。
         - 该模式不做 svg->latex 转换，避免转换误差。
         """
         formula_pattern = r'<img[^>]*src="([^"]+)"[^>]*>'
         matches = re.findall(formula_pattern, html)
         formula_srcs = []
         for src in matches:
-            if "/formula/" not in src:
-                continue
-            if not src.endswith(".png"):
+            if "/Upload/formula/" not in src:
                 continue
             formula_srcs.append(src)
 
@@ -2781,7 +3163,7 @@ class ZujuanCrawler:
 
         Args:
             formula_mode:
-                - "latex"（默认）：将公式图片替换为 LaTeX（字形签名精确匹配，非OCR）。
+                - "latex"（默认）：将公式图片替换为 LaTeX（优先 `{hash}.mml` MathML sidecar → pandoc；必要时回退 SVG 方案）。
                 - "svg"：将公式图片替换为 SVG（用于 AI/前端渲染，避免 svg2latex 转换误差）。
             stem_mode:
                 - "text"（默认）：返回 `stem`（纯文本，必要时含 [公式:<svg...>] 标记）。
