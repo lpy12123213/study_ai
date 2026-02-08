@@ -23,7 +23,14 @@ class ContextManager:
         self._project_root = Path(__file__).resolve().parents[2]
 
     def _merge_items_by_knowledge_point(self, old: Any, new: Any) -> Any:
-        """Merge tool outputs that follow the `{items:[{knowledge_point:...}, ...]}` convention."""
+        """Merge tool outputs that follow the `{items:[{knowledge_point:...}, ...]}` convention.
+
+        Notes:
+        - When the same knowledge point is produced multiple times (e.g. multi-pass web search),
+          we try to *accumulate* common list fields (results/pages/examples/exercises) instead of
+          overwriting the entire item.
+        - For tools that only output scalar fields, "new wins" still applies.
+        """
 
         if not isinstance(new, dict):
             return new
@@ -43,6 +50,55 @@ class ContextManager:
         if not new_items:
             return new
 
+        def _dedup_list(items: List[Any]) -> List[Any]:
+            out: List[Any] = []
+            seen: set[str] = set()
+            for it in items or []:
+                key = ""
+                if isinstance(it, str):
+                    key = it.strip()
+                elif isinstance(it, dict):
+                    for k in ("url", "question_id", "questionId", "id", "title"):
+                        v = it.get(k)
+                        if isinstance(v, str) and v.strip():
+                            key = f"{k}:{v.strip()}"
+                            break
+                if not key:
+                    try:
+                        key = json.dumps(it, ensure_ascii=False, sort_keys=True)
+                    except Exception:
+                        key = str(it)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(it)
+            return out
+
+        def _merge_kp_item(prev: Dict[str, Any], nxt: Dict[str, Any]) -> Dict[str, Any]:
+            out = dict(prev)
+            for k, v in nxt.items():
+                if k in {"results", "pages", "examples", "exercises"} and isinstance(v, list):
+                    prev_list = out.get(k) if isinstance(out.get(k), list) else []
+                    merged_list = _dedup_list([*prev_list, *v])
+                    cap = {"results": 40, "pages": 8, "examples": 8, "exercises": 20}.get(k, 40)
+                    out[k] = merged_list[:cap]
+                    continue
+
+                if k in {"queries", "query_variants"} and isinstance(v, list):
+                    prev_list = out.get(k) if isinstance(out.get(k), list) else []
+                    out[k] = _dedup_list([*prev_list, *v])[:40]
+                    continue
+
+                # Prefer newer meaningful values; ignore empty placeholders.
+                if v in (None, "", [], {}):
+                    continue
+                out[k] = v
+
+            kp = str(nxt.get("knowledge_point") or prev.get("knowledge_point") or "").strip()
+            if kp:
+                out["knowledge_point"] = kp
+            return out
+
         merged: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
 
@@ -60,7 +116,10 @@ class ContextManager:
                 continue
             if kp not in order:
                 order.append(kp)
-            merged[kp] = it
+            if kp in merged and isinstance(merged.get(kp), dict) and isinstance(it, dict):
+                merged[kp] = _merge_kp_item(merged[kp], it)
+            else:
+                merged[kp] = it
 
         out: Dict[str, Any] = dict(old)
         # Prefer newer top-level metadata (difficulty/subject/etc.), but always rebuild items.
@@ -87,7 +146,7 @@ class ContextManager:
         )
         # Persist the latest tool outputs for downstream steps.
         if result.success:
-            if result.tool in {"web_search_knowledge", "wikipedia_search", "search_questions_by_knowledge"}:
+            if result.tool in {"web_search_knowledge", "browse_web_pages", "wikipedia_search", "search_questions_by_knowledge"}:
                 prev = ctx.working_memory.get(result.tool)
                 ctx.working_memory[result.tool] = self._merge_items_by_knowledge_point(prev, result.output)
             else:

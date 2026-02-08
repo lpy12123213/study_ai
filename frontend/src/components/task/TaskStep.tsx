@@ -68,6 +68,7 @@ const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
   get_user_profile:              { label: '读取用户画像',       icon: User },
   split_knowledge_points:        { label: '拆分知识点',         icon: Layers },
   web_search_knowledge:          { label: '联网搜索资料',       icon: Globe },
+  browse_web_pages:              { label: '浏览网页正文',       icon: Globe },
   wikipedia_search:              { label: '搜索维基百科',       icon: BookOpen },
   search_questions_by_knowledge: { label: '题库检索相关题目',   icon: Search },
   search_questions:              { label: '搜索题目',           icon: Search },
@@ -85,6 +86,7 @@ function extractContext(step: TaskStepType): string | null {
 
   const preferKnowledgePoints = new Set([
     'web_search_knowledge',
+    'browse_web_pages',
     'wikipedia_search',
     'search_questions_by_knowledge',
     'aggregate_knowledge',

@@ -303,6 +303,9 @@ class Executor:
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         limit = int(args.get("limit") or 5)
         limit = max(1, min(limit, 10))
+        query_hint = str(args.get("query_hint") or "").strip()
+        text_max_length = int(args.get("text_max_length") or 2600)
+        text_max_length = max(200, min(text_max_length, 8000))
 
         points: List[str] = []
         provided = args.get("knowledge_points")
@@ -322,7 +325,10 @@ class Executor:
         from backend.mcp.bigmodel_web_search import web_search_with_bigmodel_mcp
 
         async def _search_one(point: str) -> Dict[str, Any]:
-            query = f"{subject} {point}".strip() if subject and subject not in point else point
+            base_query = f"{subject} {point}".strip() if subject and subject not in point else point
+            query = base_query
+            if query_hint:
+                query = f"{query} {query_hint}".strip()
 
             # 1) Exa
             exa = await exa_search(
@@ -331,13 +337,15 @@ class Executor:
                 use_autoprompt=True,
                 type="neural",
                 include_text=True,
-                text_max_length=1000,
+                text_max_length=text_max_length,
             )
             exa_results = exa.get("results") if isinstance(exa, dict) else []
             if isinstance(exa_results, list) and exa_results:
                 return {
                     "knowledge_point": point,
+                    "base_query": base_query,
                     "query": query,
+                    "queries": [query],
                     "provider": "exa",
                     "results": exa_results,
                     "autoprompt_string": exa.get("autoprompt_string") if isinstance(exa, dict) else None,
@@ -348,7 +356,9 @@ class Executor:
             if isinstance(zhipu, dict) and zhipu.get("success") and zhipu.get("results"):
                 return {
                     "knowledge_point": point,
+                    "base_query": base_query,
                     "query": query,
+                    "queries": [query],
                     "provider": str(zhipu.get("provider") or "zhipu-bigmodel-mcp-web-search"),
                     "results": zhipu.get("results") or [],
                 }
@@ -356,7 +366,9 @@ class Executor:
             # 3) Both failed
             return {
                 "knowledge_point": point,
+                "base_query": base_query,
                 "query": query,
+                "queries": [query],
                 "provider": "none",
                 "results": [],
                 "error": (exa.get("error") if isinstance(exa, dict) and exa.get("error") else "")
@@ -381,7 +393,190 @@ class Executor:
                     }
 
         items = await asyncio.gather(*[_guarded(p) for p in points])
-        return {"topic": topic, "subject": subject, "limit": limit, "items": items}
+        return {
+            "topic": topic,
+            "subject": subject,
+            "limit": limit,
+            "query_hint": query_hint,
+            "text_max_length": text_max_length,
+            "items": items,
+        }
+
+    async def _tool_browse_web_pages(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Browse and extract readable text from top web-search results for each knowledge point.
+
+        Best-effort "browseuse" behavior:
+        - Uses prior `web_search_knowledge` outputs in working_memory to pick URLs
+        - Fetches pages via httpx and extracts visible text using BeautifulSoup
+        """
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        top_k = int(args.get("top_k") or 2)
+        top_k = max(1, min(top_k, 5))
+        max_chars = int(args.get("max_chars") or 8000)
+        max_chars = max(800, min(max_chars, 30000))
+        timeout_s = float(args.get("timeout_s") or 18)
+        timeout_s = max(5.0, min(timeout_s, 60.0))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        def _map_by_point(blob: Any) -> Dict[str, Dict[str, Any]]:
+            if not isinstance(blob, dict):
+                return {}
+            items = blob.get("items")
+            if isinstance(items, list):
+                mapped: Dict[str, Dict[str, Any]] = {}
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    kp = str(it.get("knowledge_point") or "").strip()
+                    if kp:
+                        mapped[kp] = it
+                return mapped
+            kp = str(blob.get("knowledge_point") or "").strip()
+            if kp:
+                return {kp: blob}  # type: ignore[return-value]
+            return {}
+
+        web_map = _map_by_point(ctx.working_memory.get("web_search_knowledge"))
+
+        def _extract_urls(results: Any) -> List[str]:
+            if not isinstance(results, list):
+                return []
+            urls: List[str] = []
+            seen: set[str] = set()
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                u = str(r.get("url") or r.get("link") or "").strip()
+                if not u or not u.startswith(("http://", "https://")):
+                    continue
+                key = u.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                urls.append(u)
+                if len(urls) >= max(10, top_k * 3):
+                    break
+            return urls
+
+        async def _fetch_one(url: str, *, client: httpx.AsyncClient) -> Dict[str, Any]:
+            # Skip non-HTML-ish resources.
+            if url.lower().endswith((".pdf", ".zip", ".rar", ".7z")):
+                return {"url": url, "success": False, "error": "unsupported file type"}
+            try:
+                resp = await client.get(url)
+                ct = str(resp.headers.get("content-type") or "").lower()
+                if "application/pdf" in ct:
+                    return {"url": url, "success": False, "error": "pdf not supported", "content_type": ct}
+                html = resp.text or ""
+            except Exception as exc:
+                return {"url": url, "success": False, "error": str(exc)}
+
+            try:
+                from bs4 import BeautifulSoup  # type: ignore
+            except Exception as exc:
+                return {"url": url, "success": False, "error": f"beautifulsoup4 not available: {exc}"}
+
+            try:
+                soup = BeautifulSoup(html, "lxml")
+                for tag in soup(["script", "style", "noscript", "svg"]):
+                    try:
+                        tag.decompose()
+                    except Exception:
+                        pass
+                for tag in soup(["header", "footer", "nav", "aside"]):
+                    try:
+                        tag.decompose()
+                    except Exception:
+                        pass
+
+                title = ""
+                try:
+                    title = str(soup.title.string or "").strip() if soup.title else ""
+                except Exception:
+                    title = ""
+
+                extracted = soup.get_text("\n", strip=True)
+                extracted = re.sub(r"\n{3,}", "\n\n", extracted).strip()
+                if len(extracted) > max_chars:
+                    extracted = extracted[: max_chars - 1].rstrip() + "…"
+
+                return {
+                    "url": url,
+                    "success": True,
+                    "title": title,
+                    "content_type": ct,
+                    "chars": len(extracted),
+                    "text": extracted,
+                }
+            except Exception as exc:
+                return {"url": url, "success": False, "error": f"parse failed: {exc}"}
+
+        concurrency = int(args.get("concurrency") or 2)
+        concurrency = max(1, min(concurrency, 4))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded_fetch(url: str, *, client: httpx.AsyncClient) -> Dict[str, Any]:
+            async with sem:
+                return await _fetch_one(url, client=client)
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        }
+
+        items: List[Dict[str, Any]] = []
+        async with httpx.AsyncClient(timeout=timeout_s, headers=headers, follow_redirects=True) as client:
+            for point in points:
+                web = web_map.get(point) or {}
+                urls = _extract_urls(web.get("results"))
+                urls = urls[: max(0, top_k)]
+
+                if not urls:
+                    items.append(
+                        {
+                            "knowledge_point": point,
+                            "success": False,
+                            "top_k": top_k,
+                            "max_chars": max_chars,
+                            "pages": [],
+                            "error": "no urls from web_search_knowledge",
+                        }
+                    )
+                    continue
+
+                pages = await asyncio.gather(*[_guarded_fetch(u, client=client) for u in urls])
+                ok = [p for p in pages if isinstance(p, dict) and p.get("success")]
+                items.append(
+                    {
+                        "knowledge_point": point,
+                        "success": len(ok) > 0,
+                        "top_k": top_k,
+                        "max_chars": max_chars,
+                        "source": "web_search_knowledge",
+                        "pages": pages,
+                    }
+                )
+
+        return {"topic": topic, "subject": subject, "top_k": top_k, "max_chars": max_chars, "items": items}
 
     async def _tool_wikipedia_search(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """Wikipedia 百科检索（按拆分后的知识点批量查询）。"""
@@ -545,6 +740,12 @@ class Executor:
         max_points = max(1, min(max_points, 15))
         max_examples = int(args.get("max_examples") or 1)
         max_examples = max(0, min(max_examples, 2))
+        max_web_results = int(args.get("max_web_results") or 8)
+        max_web_results = max(3, min(max_web_results, 15))
+        max_web_pages = int(args.get("max_web_pages") or 2)
+        max_web_pages = max(0, min(max_web_pages, 4))
+        max_page_chars = int(args.get("max_page_chars") or 3200)
+        max_page_chars = max(500, min(max_page_chars, 8000))
 
         sections: List[Dict[str, Any]] = []
         for item in (sections_in or [])[:max_points]:
@@ -556,10 +757,16 @@ class Executor:
 
             wiki = item.get("wikipedia") if isinstance(item.get("wikipedia"), dict) else {}
             web = item.get("web_search") if isinstance(item.get("web_search"), dict) else {}
+            pages_blob = item.get("web_pages") if isinstance(item.get("web_pages"), dict) else {}
             q = item.get("questions") if isinstance(item.get("questions"), dict) else {}
 
             web_results = web.get("results") if isinstance(web.get("results"), list) else []
-            web_results = [r for r in web_results if isinstance(r, dict)][:3]
+            web_results = [r for r in web_results if isinstance(r, dict)][:max_web_results]
+
+            web_pages = pages_blob.get("pages") if isinstance(pages_blob.get("pages"), list) else []
+            web_pages = [p for p in web_pages if isinstance(p, dict)]
+            web_pages = [p for p in web_pages if p.get("success") and str(p.get("text") or "").strip()]
+            web_pages = web_pages[:max_web_pages]
 
             examples = q.get("examples") if isinstance(q.get("examples"), list) else []
             exercises = q.get("exercises") if isinstance(q.get("exercises"), list) else []
@@ -569,6 +776,12 @@ class Executor:
             # Explanation (LLM if configured; fallback to Wikipedia summary)
             explanation_md = ""
             if LESSON_PLAN_API_KEY:
+                def _clip_text(text: str, limit_chars: int) -> str:
+                    t = (text or "").strip()
+                    if len(t) <= limit_chars:
+                        return t
+                    return t[: limit_chars - 1].rstrip() + "…"
+
                 payload = {
                     "topic": topic,
                     "subject": subject,
@@ -581,6 +794,14 @@ class Executor:
                     "web_results": [
                         {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("snippet") or r.get("text")}
                         for r in web_results
+                    ],
+                    "web_pages": [
+                        {
+                            "title": p.get("title"),
+                            "url": p.get("url"),
+                            "extract": _clip_text(str(p.get("text") or ""), max_page_chars),
+                        }
+                        for p in web_pages
                     ],
                     "instructions": (
                         "请生成该知识点的自学讲解（Markdown），包含：定义/直观理解/关键点/常见误区/方法小结。\n"
@@ -648,6 +869,7 @@ class Executor:
                     "explanation_markdown": explanation_md,
                     "wikipedia": wiki,
                     "web_results": web_results,
+                    "web_pages": web_pages,
                     "examples": solved_examples,
                     "exercises": exercises,
                 }
@@ -834,6 +1056,7 @@ class Executor:
             return {}
 
         web_map = _map_by_point(ctx.working_memory.get("web_search_knowledge"))
+        browse_map = _map_by_point(ctx.working_memory.get("browse_web_pages"))
         wiki_map = _map_by_point(ctx.working_memory.get("wikipedia_search"))
         q_map = _map_by_point(ctx.working_memory.get("search_questions_by_knowledge"))
 
@@ -844,6 +1067,7 @@ class Executor:
                     "knowledge_point": kp,
                     "wikipedia": wiki_map.get(kp) or {},
                     "web_search": web_map.get(kp) or {},
+                    "web_pages": browse_map.get(kp) or {},
                     "questions": q_map.get(kp) or {},
                 }
             )
@@ -856,6 +1080,7 @@ class Executor:
             "counts": {
                 "knowledge_points": len(points),
                 "web": len([x for x in web_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
+                "pages": len([x for x in browse_map.values() if isinstance(x, dict) and (x.get("pages") or [])]),
                 "wiki": len([x for x in wiki_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]),
                 "questions": len([x for x in q_map.values() if isinstance(x, dict) and (x.get("questions") or x.get("examples") or x.get("exercises"))]),
             },
@@ -1302,4 +1527,3 @@ class Executor:
             ctx.working_memory["markdown"] = revised
             return revised
         return markdown
-

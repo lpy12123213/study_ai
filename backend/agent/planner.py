@@ -29,6 +29,7 @@ _ALLOWED_TOOLS: Dict[str, str] = {
     "revise_markdown": "按审查问题修订 Markdown（可选）",
     "save_markdown_file": "保存 Markdown 到文件",
     "review_content": "内容审查（结构/完整性/可靠性）",
+    "browse_web_pages": "Browse and extract page text (best-effort)",
 }
 
 
@@ -111,9 +112,54 @@ class Planner:
                 id=sid("web_search_knowledge"),
                 title="联网搜索知识点",
                 tool="web_search_knowledge",
-                arguments={"topic": topic, "subject": subject, "limit": 5, "concurrency": 3},
+                arguments={
+                    "topic": topic,
+                    "subject": subject,
+                    "limit": 6,
+                    "text_max_length": 2600,
+                    "query_hint": "定义 概念",
+                    "concurrency": 3,
+                },
                 foreach_knowledge_point=True,
                 thought="为每个知识点检索权威/可用的讲解资料，补足定义与常见结论。",
+            ),
+            PlanStep(
+                id=sid("web_search_knowledge_props"),
+                title="联网搜索知识点（性质/定理/结论）",
+                tool="web_search_knowledge",
+                arguments={
+                    "topic": topic,
+                    "subject": subject,
+                    "limit": 6,
+                    "text_max_length": 2600,
+                    "query_hint": "性质 定理 结论",
+                    "concurrency": 3,
+                },
+                foreach_knowledge_point=True,
+                thought="第二轮检索：补齐性质、常用结论与关键推理线索，为讲解提供更扎实的依据。",
+            ),
+            PlanStep(
+                id=sid("web_search_knowledge_types"),
+                title="联网搜索知识点（题型/方法/易错点）",
+                tool="web_search_knowledge",
+                arguments={
+                    "topic": topic,
+                    "subject": subject,
+                    "limit": 6,
+                    "text_max_length": 2600,
+                    "query_hint": "常见题型 解题方法 易错点",
+                    "concurrency": 3,
+                },
+                foreach_knowledge_point=True,
+                thought="第三轮检索：收集常见题型、套路与易错点，保证自学材料更贴近做题场景。",
+            ),
+            PlanStep(
+                id=sid("browse_web_pages"),
+                title="浏览网页并提取正文（DeepResearch）",
+                tool="browse_web_pages",
+                arguments={"topic": topic, "subject": subject, "top_k": 2, "max_chars": 10000, "concurrency": 2},
+                foreach_knowledge_point=True,
+                thought="打开关键来源页面，提取更长的正文摘录，避免只靠搜索摘要导致信息不完整。",
             ),
             PlanStep(
                 id=sid("wikipedia_search"),
@@ -364,6 +410,7 @@ class Planner:
                 "建议对 web_search_knowledge / wikipedia_search / search_questions_by_knowledge 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
                 "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
                 "控制 steps 数量在 8~25 之间（除非必要）。",
+                "DeepResearch建议：对每个知识点至少做 2~3 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型），然后调用 browse_web_pages 提取网页正文摘录。",
             ],
             "tool_descriptions": tool_desc,
         }
@@ -407,4 +454,3 @@ class Planner:
             iteration=iteration,
             issues=issues if isinstance(issues, list) else None,
         )
-

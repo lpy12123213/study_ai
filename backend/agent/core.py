@@ -205,6 +205,7 @@ class AgentCore:
                             step_args = dict(concrete_step.arguments or {})
                             if concrete_step.tool in {
                                 "web_search_knowledge",
+                                "browse_web_pages",
                                 "wikipedia_search",
                                 "search_questions_by_knowledge",
                                 "aggregate_knowledge",
