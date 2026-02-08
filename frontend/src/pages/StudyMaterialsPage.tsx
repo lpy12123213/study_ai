@@ -60,6 +60,32 @@ function normalizeKnowledgePoints(points: unknown): string[] {
   return out
 }
 
+function extractStepKnowledgePoints(step: TaskStep): string[] {
+  if (step.input && typeof step.input === 'object') {
+    const input = step.input as Record<string, unknown>
+    const fromInput = normalizeKnowledgePoints(input.knowledge_points)
+    if (fromInput.length > 0) return fromInput
+  }
+
+  const title = (step.title || '').trim()
+  const m = title.match(/当前知识点[：:]\s*([^\r\n]+)/)
+  if (m && m[1]) {
+    return normalizeKnowledgePoints([m[1].trim()])
+  }
+  return []
+}
+
+function inferGroupStatus(
+  steps: TaskStep[],
+  fallback?: KnowledgePointStatus,
+): KnowledgePointStatus {
+  if (fallback) return fallback
+  if (steps.some((s) => s.status === 'running')) return 'active'
+  if (steps.some((s) => s.status === 'failed')) return 'failed'
+  if (steps.length > 0 && steps.every((s) => s.status === 'completed')) return 'done'
+  return 'pending'
+}
+
 function KnowledgeProgressHeader({
   points,
   statusByPoint,
@@ -124,7 +150,17 @@ function KnowledgeProgressHeader({
   )
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  knowledgePoints,
+  statusByPoint,
+  currentPoint,
+}: {
+  message: Message
+  knowledgePoints?: string[]
+  statusByPoint?: Record<string, KnowledgePointStatus>
+  currentPoint?: string | null
+}) {
   const isUser = message.role === 'user'
 
   if (isUser) {
@@ -159,15 +195,108 @@ function MessageBubble({ message }: { message: Message }) {
       </div>
 
       {message.steps && message.steps.length > 0 && (
-        <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
-          <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between">
-            <span>思考步骤</span>
-            <span className="tabular-nums">{message.steps.length} 步</span>
-          </div>
-          <div className="p-4 bg-muted/30">
-            <TaskTimeline steps={message.steps} />
-          </div>
-        </div>
+        (() => {
+          const allSteps = message.steps || []
+
+          const byPoint: Record<string, TaskStep[]> = {}
+          const globalSteps: TaskStep[] = []
+          const discoveredOrder: string[] = []
+
+          for (const step of allSteps) {
+            const kps = extractStepKnowledgePoints(step)
+            if (kps.length === 1) {
+              const kp = kps[0]
+              if (!byPoint[kp]) {
+                byPoint[kp] = []
+                discoveredOrder.push(kp)
+              }
+              byPoint[kp].push(step)
+            } else {
+              globalSteps.push(step)
+            }
+          }
+
+          const ordered = [
+            ...(knowledgePoints || []).filter((kp) => kp && byPoint[kp]?.length),
+            ...discoveredOrder.filter((kp) => !(knowledgePoints || []).includes(kp)),
+          ]
+
+          const groups = ordered
+            .map((kp) => ({
+              kp,
+              steps: byPoint[kp] || [],
+              status: inferGroupStatus((byPoint[kp] || []), statusByPoint?.[kp]),
+            }))
+            .filter((g) => g.kp && g.steps.length > 0)
+
+          const badgeVariant = (status: KnowledgePointStatus) => {
+            if (status === 'pending') return 'outline'
+            if (status === 'active') return 'default'
+            if (status === 'failed') return 'destructive'
+            return 'secondary'
+          }
+
+          return (
+            <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
+              <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between">
+                <span>思考步骤（按知识点归档）</span>
+                <span className="tabular-nums">{allSteps.length} 步</span>
+              </div>
+
+              {groups.length > 0 && (
+                <div className="divide-y divide-border">
+                  {groups.map((g) => {
+                    const isCurrent = currentPoint && g.kp === currentPoint
+                    return (
+                      <div key={g.kp}>
+                        <div className="px-4 py-2 flex items-center justify-between gap-3 bg-muted/10">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge variant={badgeVariant(g.status)} className="shrink-0">
+                              {g.status === 'active'
+                                ? '进行中'
+                                : g.status === 'done'
+                                  ? '已完成'
+                                  : g.status === 'failed'
+                                    ? '失败'
+                                    : '待处理'}
+                            </Badge>
+                            <div
+                              className={cn(
+                                'text-sm font-medium truncate',
+                                isCurrent && 'text-primary',
+                              )}
+                              title={g.kp}
+                            >
+                              {g.kp}
+                            </div>
+                          </div>
+                          {isCurrent && (
+                            <div className="text-xs text-muted-foreground shrink-0">当前</div>
+                          )}
+                        </div>
+                        <div className="p-4 bg-muted/30">
+                          <TaskTimeline steps={g.steps} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {globalSteps.length > 0 && (
+                <div className="border-t border-border">
+                  <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between bg-muted/10">
+                    <span>全局步骤</span>
+                    <span className="tabular-nums">{globalSteps.length} 步</span>
+                  </div>
+                  <div className="p-4 bg-muted/30">
+                    <TaskTimeline steps={globalSteps} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()
       )}
     </motion.div>
   )
@@ -595,7 +724,13 @@ export default function StudyMaterialsPage() {
             />
             <AnimatePresence mode="popLayout">
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  knowledgePoints={knowledgePoints}
+                  statusByPoint={knowledgeStatus}
+                  currentPoint={currentKnowledgePoint}
+                />
               ))}
             </AnimatePresence>
 

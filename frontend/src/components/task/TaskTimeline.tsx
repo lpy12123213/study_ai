@@ -16,8 +16,9 @@ function isNoiseStep(step: TaskStep): boolean {
   const t = (step.title || '').trim()
   // Match noise patterns
   if (NOISE_PATTERNS.some((p) => t.includes(p))) return true
-  // Hide overly long "thinking" steps (plans, chains, etc.)
-  if (!step.toolName && t.length > 60) return true
+  // Hide only extremely long non-tool steps (likely raw dumps).
+  // For study-materials, we want to keep "thinking" steps visible.
+  if (!step.toolName && t.length > 600) return true
   return false
 }
 
