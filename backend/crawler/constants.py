@@ -1,0 +1,72 @@
+"""Constants for crawler modules."""
+
+from __future__ import annotations
+
+# Question types
+QUESTION_TYPE_CHOICE = "choice"
+QUESTION_TYPE_MULTIPLE_CHOICE = "multiple_choice"
+QUESTION_TYPE_FILL_BLANK = "fill_blank"
+QUESTION_TYPE_SHORT_ANSWER = "short_answer"
+QUESTION_TYPE_ESSAY = "essay"
+QUESTION_TYPE_CALCULATION = "calculation"
+QUESTION_TYPE_PROOF = "proof"
+QUESTION_TYPE_DRAWING = "drawing"
+
+QUESTION_TYPES = [
+    QUESTION_TYPE_CHOICE,
+    QUESTION_TYPE_MULTIPLE_CHOICE,
+    QUESTION_TYPE_FILL_BLANK,
+    QUESTION_TYPE_SHORT_ANSWER,
+    QUESTION_TYPE_ESSAY,
+    QUESTION_TYPE_CALCULATION,
+    QUESTION_TYPE_PROOF,
+    QUESTION_TYPE_DRAWING,
+]
+
+# Difficulty levels
+DIFFICULTY_EASY = 0.2
+DIFFICULTY_MEDIUM = 0.5
+DIFFICULTY_HARD = 0.8
+
+# Cache settings
+CACHE_TTL_SECONDS = 3600  # 1 hour
+CACHE_MAX_SIZE = 1000
+
+# Rate limiting
+RATE_LIMIT_REQUESTS_PER_SECOND = 2
+RATE_LIMIT_BURST = 5
+
+# Retry settings
+RETRY_DELAYS = [1, 2, 5, 10]  # seconds
+MAX_RETRIES = 3
+
+# HTTP settings
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Subject mappings
+SUBJECT_MATH = "math"
+SUBJECT_CHINESE = "chinese"
+SUBJECT_ENGLISH = "english"
+SUBJECT_PHYSICS = "physics"
+SUBJECT_CHEMISTRY = "chemistry"
+SUBJECT_BIOLOGY = "biology"
+SUBJECT_HISTORY = "history"
+SUBJECT_GEOGRAPHY = "geography"
+SUBJECT_POLITICS = "politics"
+
+SUBJECT_DISPLAY_NAMES = {
+    SUBJECT_MATH: "数学",
+    SUBJECT_CHINESE: "语文",
+    SUBJECT_ENGLISH: "英语",
+    SUBJECT_PHYSICS: "物理",
+    SUBJECT_CHEMISTRY: "化学",
+    SUBJECT_BIOLOGY: "生物",
+    SUBJECT_HISTORY: "历史",
+    SUBJECT_GEOGRAPHY: "地理",
+    SUBJECT_POLITICS: "政治",
+}

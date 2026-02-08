@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+import re
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+from backend.agent.config import AgentConfig
+from backend.agent.types import CompressedContext, PlanStep, ReflectionResult, StepResult, UserProfile
+from backend.core.settings import API_TIMEOUT, LESSON_PLAN_API_KEY, LESSON_PLAN_BASE_URL
+
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+class ContextManager:
+    def __init__(self, *, config: Optional[AgentConfig] = None) -> None:
+        self.config = config or AgentConfig.from_env()
+        self._project_root = Path(__file__).resolve().parents[2]
+
+    def create_context(self, *, user_profile: UserProfile, system_instructions: str, current_task: str) -> CompressedContext:
+        return CompressedContext(
+            user_profile=user_profile,
+            system_instructions=system_instructions,
+            current_task=current_task,
+        )
+
+    def append_message(self, ctx: CompressedContext, *, role: str, content: str) -> None:
+        ctx.recent_messages.append({"role": role, "content": content})
+
+    def on_step_result(self, ctx: CompressedContext, *, step: PlanStep, result: StepResult) -> None:
+        ctx.working_memory.setdefault("step_results", []).append(
+            {"step_id": result.step_id, "tool": result.tool, "success": result.success, "error": result.error}
+        )
+        # Persist the latest tool outputs for downstream steps.
+        if result.success:
+            ctx.working_memory[result.tool] = result.output
+
+    def on_reflection(self, ctx: CompressedContext, reflection: ReflectionResult) -> None:
+        ctx.working_memory["last_reflection"] = {
+            "passed": reflection.passed,
+            "issues": reflection.issues,
+            "suggestions": reflection.suggestions,
+        }
+
+    async def compress_if_needed(self, ctx: CompressedContext) -> None:
+        # Always enforce sliding window first (Level 1 -> Level 2).
+        if len(ctx.recent_messages) > self.config.sliding_window_size:
+            await self._compress_level2(ctx)
+
+        token_est = self.estimate_tokens(ctx)
+        if token_est < self.config.token_threshold:
+            return
+
+        # Soft compaction (Level 2).
+        if token_est < self.config.emergency_token_threshold:
+            await self._compress_level2(ctx)
+            token_est = self.estimate_tokens(ctx)
+            if token_est < self.config.token_threshold:
+                return
+
+        # Hard compaction (Level 3 checkpoint).
+        await self._save_checkpoint(ctx)
+
+    def estimate_tokens(self, ctx: CompressedContext) -> int:
+        total = 0
+        total += self._estimate_tokens_for_text(ctx.system_instructions or "")
+        total += self._estimate_tokens_for_text(ctx.current_task or "")
+        total += self._estimate_tokens_for_text(ctx.checkpoint_summary or "")
+        for m in ctx.compressed_history:
+            total += self._estimate_tokens_for_text(str(m.get("content") or ""))
+        for m in ctx.recent_messages:
+            total += self._estimate_tokens_for_text(str(m.get("content") or ""))
+        # Small overhead for roles/JSON framing.
+        total += 50
+        return max(1, total)
+
+    def _estimate_tokens_for_text(self, text: str) -> int:
+        raw = text or ""
+        if not raw:
+            return 0
+        cjk = len(_CJK_RE.findall(raw))
+        other = max(0, len(raw) - cjk)
+        # Heuristic: CJK ~ 1.5 chars/token; other ~ 4 chars/token.
+        return int(cjk / 1.5 + other / 4) + 1
+
+    async def _compress_level2(self, ctx: CompressedContext) -> None:
+        """Summarize oldest recent messages into a compact summary block."""
+        keep_n = max(1, int(self.config.sliding_window_size))
+        if len(ctx.recent_messages) <= keep_n:
+            return
+
+        to_summarize = ctx.recent_messages[:-keep_n]
+        ctx.recent_messages = ctx.recent_messages[-keep_n:]
+
+        summary = await self._summarize_messages(to_summarize)
+        if summary:
+            ctx.compressed_history.append(
+                {
+                    "role": "summary",
+                    "content": summary,
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
+
+        if len(ctx.compressed_history) > self.config.compressed_history_max:
+            await self._save_checkpoint(ctx)
+
+    async def _save_checkpoint(self, ctx: CompressedContext) -> str:
+        """Persist full context to disk; keep only a checkpoint summary in active context."""
+        checkpoint_dir = self._project_root / self.config.checkpoint_dir
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        fname = f"checkpoint-{ts}-{uuid.uuid4().hex[:8]}.json"
+        path = checkpoint_dir / fname
+
+        payload = json.loads(ctx.to_json())
+        payload["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        payload["token_estimate"] = self.estimate_tokens(ctx)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # Create/refresh checkpoint summary from all compressed blocks + recent window.
+        blocks: List[Dict[str, Any]] = []
+        blocks.extend(ctx.compressed_history)
+        blocks.extend(ctx.recent_messages)
+        summary = await self._summarize_messages(blocks, target_chars=500)
+
+        ctx.checkpoint_file = str(path)
+        ctx.checkpoint_summary = summary or ctx.checkpoint_summary or ""
+        ctx.compressed_history = []
+
+        return str(path)
+
+    async def _summarize_messages(self, messages: List[Dict[str, Any]], *, target_chars: int = 220) -> str:
+        """Summarize messages into a compact, tool-aware memory block."""
+        if not messages:
+            return ""
+
+        # Fallback summarization if LLM isn't configured.
+        if not LESSON_PLAN_API_KEY:
+            parts = []
+            for m in messages[-6:]:
+                role = str(m.get("role") or "unknown")
+                content = str(m.get("content") or "")[:120]
+                if content:
+                    parts.append(f"{role}: {content}")
+            joined = " | ".join(parts)
+            return joined[:target_chars]
+
+        prompt = f"""请将下面的对话/记录压缩为一段简洁摘要（约{target_chars}字左右），保留：\n- 用户主要目标与约束\n- 关键决策（Plan/Act/Reflect）\n- 重要工具调用结果/错误\n\n输出：纯文本摘要（不要Markdown）。\n\n记录：\n{json.dumps(messages, ensure_ascii=False)}\n"""
+
+        headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": self.config.summarizer_model,
+            "messages": [
+                {"role": "system", "content": "你是上下文压缩器，输出必须是纯文本摘要。"},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 400,
+        }
+        async with httpx.AsyncClient(timeout=float(API_TIMEOUT or 120)) as client:
+            resp = await client.post(
+                f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        try:
+            return str(data["choices"][0]["message"]["content"] or "").strip()
+        except Exception:
+            return ""
+

@@ -1,0 +1,18 @@
+# Python dependencies
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+playwright>=1.40.0
+pydantic>=2.5.0
+sqlalchemy>=2.0.23
+aiosqlite>=0.19.0
+mcp>=1.0.0
+PyJWT>=2.8.0
+
+# Web scraping and parsing
+beautifulsoup4>=4.12.2
+lxml>=4.9.3
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.25.2
+openai>=1.0.0

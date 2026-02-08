@@ -20,28 +20,80 @@ wheels/
 .installed.cfg
 *.egg
 
+# Local runtime data (db/cache/artifacts/user-data)
+.local/
+
+# Legacy / backup folders
+frontend_old/
+
+# Frontend build/output
+frontend/dist/
+frontend/node_modules/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
 # Virtual Environment
 venv/
 ENV/
 env/
+.venv
 
 # IDE
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
+*~
 
-# Environment variables
-.env
-.env.local
-
-# Database (uncomment if you want to ignore)
-# *.db
+# Database
+*.db
+*.sqlite
+*.sqlite3
+exam_papers.db
 
 # Logs
 *.log
+logs/
 
-# Temporary files
-nul
+# Environment
+.env
+.env.local
+
+# Playwright
+.playwright/
+.playwright_zujuan_user_data/
+playwright-report/
+test-results/
+backend/crawler/.playwright_data/
+
+# Debug
+debug.png
+*.png
+screenshots/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Cache
+.cache/
+*.cache
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary
+tmp/
+temp/
 *.tmp
-*.temp
+artifacts/
+data/
+archive/
+playground/
+
+# MCP
+mcp_logs/

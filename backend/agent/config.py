@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from backend.core.settings import LESSON_PLAN_MODEL, SUB_MODEL
+
+
+@dataclass(frozen=True)
+class AgentConfig:
+    # Plan-Act-Reflect
+    max_iterations: int = 3
+    parallel_tool_calls: bool = True
+
+    # Context compression
+    sliding_window_size: int = 10
+    token_threshold: int = 8000
+    emergency_token_threshold: int = 12000
+    compressed_history_max: int = 5
+    checkpoint_dir: str = "data/checkpoints"
+
+    # Models
+    planner_model: str = LESSON_PLAN_MODEL
+    summarizer_model: str = SUB_MODEL
+    reflector_model: str = LESSON_PLAN_MODEL
+
+    @classmethod
+    def from_env(cls) -> "AgentConfig":
+        def _get_int(name: str, default: int) -> int:
+            raw = (os.getenv(name) or "").strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        def _get_bool(name: str, default: bool) -> bool:
+            raw = (os.getenv(name) or "").strip().lower()
+            if not raw:
+                return default
+            return raw in {"1", "true", "yes", "y", "on"}
+
+        def _get_str(name: str, default: str) -> str:
+            raw = (os.getenv(name) or "").strip()
+            return raw or default
+
+        return cls(
+            max_iterations=_get_int("AGENT_MAX_ITERATIONS", cls.max_iterations),
+            parallel_tool_calls=_get_bool("AGENT_PARALLEL_TOOL_CALLS", cls.parallel_tool_calls),
+            sliding_window_size=_get_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
+            token_threshold=_get_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
+            emergency_token_threshold=_get_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
+            compressed_history_max=_get_int("AGENT_COMPRESSED_HISTORY_MAX", cls.compressed_history_max),
+            checkpoint_dir=_get_str("AGENT_CHECKPOINT_DIR", cls.checkpoint_dir),
+            planner_model=_get_str("AGENT_PLANNER_MODEL", cls.planner_model),
+            summarizer_model=_get_str("AGENT_SUMMARIZER_MODEL", cls.summarizer_model),
+            reflector_model=_get_str("AGENT_REFLECTOR_MODEL", cls.reflector_model),
+        )
+
+
+# Back-compat with the plan doc snippet.
+AGENT_CONFIG = {
+    "max_iterations": AgentConfig.max_iterations,
+    "parallel_tool_calls": AgentConfig.parallel_tool_calls,
+    "sliding_window_size": AgentConfig.sliding_window_size,
+    "token_threshold": AgentConfig.token_threshold,
+    "checkpoint_dir": AgentConfig.checkpoint_dir,
+    "planner_model": AgentConfig.planner_model,
+    "summarizer_model": AgentConfig.summarizer_model,
+    "reflector_model": AgentConfig.reflector_model,
+}
+

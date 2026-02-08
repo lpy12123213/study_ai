@@ -1,0 +1,110 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+
+type ThemeMode = 'light' | 'dark' | 'system'
+type ResolvedTheme = 'light' | 'dark'
+
+interface ThemeState {
+  theme: ThemeMode
+  resolvedTheme: ResolvedTheme
+  setTheme: (theme: ThemeMode) => void
+  toggleTheme: () => void
+  syncTheme: () => void
+}
+
+function getSystemTheme(): ResolvedTheme {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return 'light'
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function resolveTheme(mode: ThemeMode): ResolvedTheme {
+  return mode === 'system' ? getSystemTheme() : mode
+}
+
+function applyResolvedTheme(theme: ResolvedTheme) {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+  // Improve native form controls / scrollbar color rendering.
+  if (document.documentElement.style.colorScheme !== theme) {
+    document.documentElement.style.colorScheme = theme
+  }
+}
+
+let _systemListenerAttached = false
+function ensureSystemThemeListener(
+  set: (partial: Partial<ThemeState>) => void,
+  get: () => ThemeState
+) {
+  if (_systemListenerAttached) return
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+
+  const mql = window.matchMedia('(prefers-color-scheme: dark)')
+  const onChange = () => {
+    const state = get()
+    if (state.theme !== 'system') return
+    const next = getSystemTheme()
+    if (next === state.resolvedTheme) return
+    set({ resolvedTheme: next })
+    applyResolvedTheme(next)
+  }
+
+  _systemListenerAttached = true
+  if (typeof mql.addEventListener === 'function') {
+    mql.addEventListener('change', onChange)
+  } else {
+    // Safari < 14
+    // eslint-disable-next-line deprecation/deprecation
+    mql.addListener(onChange)
+  }
+}
+
+export const useThemeStore = create<ThemeState>()(
+  persist(
+    (set, get) => {
+      ensureSystemThemeListener(set, get)
+
+      const syncTheme = () => {
+        const state = get()
+        const resolved = resolveTheme(state.theme)
+        if (resolved !== state.resolvedTheme) {
+          set({ resolvedTheme: resolved })
+        }
+        applyResolvedTheme(resolved)
+      }
+
+      const initialMode: ThemeMode = 'system'
+      const initialResolved = resolveTheme(initialMode)
+      applyResolvedTheme(initialResolved)
+
+      return {
+        theme: initialMode,
+        resolvedTheme: initialResolved,
+        setTheme: (theme) => {
+          const resolved = resolveTheme(theme)
+          set({ theme, resolvedTheme: resolved })
+          applyResolvedTheme(resolved)
+        },
+        toggleTheme: () => {
+          const cur = get().theme
+          const next: ThemeMode =
+            cur === 'system' ? 'light' : cur === 'light' ? 'dark' : 'system'
+          const resolved = resolveTheme(next)
+          set({ theme: next, resolvedTheme: resolved })
+          applyResolvedTheme(resolved)
+        },
+        syncTheme,
+      }
+    },
+    {
+      name: 'theme-storage',
+      partialize: (state) => ({ theme: state.theme }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.syncTheme()
+        }
+      },
+    }
+  )
+)

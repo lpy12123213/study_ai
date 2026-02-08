@@ -4,11 +4,13 @@ line-length = 120
 extend-exclude = [
   "venv",
   ".venv",
-  "exam_paper_assistant/venv",
-  "exam_paper_assistant/archive",
-  "exam_paper_assistant/playground",
-  "exam_paper_assistant/artifacts",
-  "exam_paper_assistant/data",
+  ".local",
+  "frontend/node_modules",
+  "frontend/dist",
+  "archive",
+  "playground",
+  "artifacts",
+  "data",
 ]
 
 [tool.ruff.lint]
