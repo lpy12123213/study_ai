@@ -28,6 +28,12 @@ class PlanStep:
     arguments: Dict[str, Any] = field(default_factory=dict)
     depends_on: List[str] = field(default_factory=list)
     parallel_group: str = ""
+    # A short user-facing explanation shown before tool execution.
+    thought: str = ""
+    # Expand this step into multiple steps, one per knowledge point from `split_knowledge_points`.
+    foreach_knowledge_point: bool = False
+    # Optional cap when `foreach_knowledge_point=True` (0 => no cap).
+    foreach_limit: int = 0
 
 
 @dataclass

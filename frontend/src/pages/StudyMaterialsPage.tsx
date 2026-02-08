@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { BookOpen, Loader2, Plus, Send, Sparkles, ChevronDown, ChevronUp } from 'lucide-react'
+import { BookOpen, Loader2, Plus, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
@@ -41,9 +43,89 @@ function toConversationTitle(text: string): string {
   return t.length > 18 ? `${t.slice(0, 18)}…` : t
 }
 
+type KnowledgePointStatus = 'pending' | 'active' | 'done' | 'failed'
+
+function normalizeKnowledgePoints(points: unknown): string[] {
+  if (!Array.isArray(points)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of points) {
+    const text = typeof item === 'string' ? item.trim() : ''
+    if (!text) continue
+    if (seen.has(text)) continue
+    seen.add(text)
+    out.push(text)
+    if (out.length >= 15) break
+  }
+  return out
+}
+
+function KnowledgeProgressHeader({
+  points,
+  statusByPoint,
+  currentPoint,
+}: {
+  points: string[]
+  statusByPoint: Record<string, KnowledgePointStatus>
+  currentPoint: string | null
+}) {
+  if (!points.length) return null
+
+  const total = points.length
+  const done = points.filter((p) => statusByPoint[p] === 'done').length
+  const failed = points.filter((p) => statusByPoint[p] === 'failed').length
+  const percent = total ? Math.round((done / total) * 100) : 0
+
+  const badgeVariant = (status: KnowledgePointStatus) => {
+    if (status === 'pending') return 'outline'
+    if (status === 'active') return 'default'
+    if (status === 'failed') return 'destructive'
+    return 'secondary'
+  }
+
+  return (
+    <div className="sticky top-0 z-10 -mx-4 px-4 pt-2 pb-3 bg-background/75 backdrop-blur border-b border-border">
+      <div className="rounded-xl border border-border bg-card shadow-sm p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-sm font-medium">知识点探索进度</div>
+          <div className="text-xs text-muted-foreground tabular-nums">
+            已探索 {done}/{total}
+            {failed > 0 ? `（失败 ${failed}）` : ''}
+          </div>
+        </div>
+
+        <div className="mt-2">
+          <Progress value={percent} className="h-1.5" />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {points.map((p) => {
+            const status = statusByPoint[p] || 'pending'
+            const isCurrent = currentPoint === p
+            return (
+              <Badge
+                key={p}
+                variant={badgeVariant(status)}
+                className={isCurrent ? 'ring-2 ring-primary/40 ring-offset-2 ring-offset-background' : ''}
+              >
+                {p}
+              </Badge>
+            )
+          })}
+        </div>
+
+        {currentPoint && (
+          <div className="mt-2 text-xs text-muted-foreground">
+            当前探索：<span className="text-foreground">{currentPoint}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
-  const [showSteps, setShowSteps] = useState(false)
 
   if (isUser) {
     return (
@@ -77,32 +159,14 @@ function MessageBubble({ message }: { message: Message }) {
       </div>
 
       {message.steps && message.steps.length > 0 && (
-        <div className="mt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
-            onClick={() => setShowSteps(!showSteps)}
-          >
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            {showSteps ? '隐藏' : '查看'} {message.steps.length} 个思考步骤
-            {showSteps ? <ChevronUp className="h-3 w-3 opacity-50" /> : <ChevronDown className="h-3 w-3 opacity-50" />}
-          </Button>
-
-          <AnimatePresence>
-            {showSteps && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
-              >
-                <div className="p-4 bg-muted/30">
-                   <TaskTimeline steps={message.steps} />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+        <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
+          <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between">
+            <span>思考步骤</span>
+            <span className="tabular-nums">{message.steps.length} 步</span>
+          </div>
+          <div className="p-4 bg-muted/30">
+            <TaskTimeline steps={message.steps} />
+          </div>
         </div>
       )}
     </motion.div>
@@ -153,6 +217,9 @@ export default function StudyMaterialsPage() {
   const [input, setInput] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [knowledgePoints, setKnowledgePoints] = useState<string[]>([])
+  const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, KnowledgePointStatus>>({})
+  const [currentKnowledgePoint, setCurrentKnowledgePoint] = useState<string | null>(null)
 
   const conversations = useConversationStore((state) => state.conversations)
   const currentConversationId = useConversationStore((state) => state.currentConversationId)
@@ -203,6 +270,9 @@ export default function StudyMaterialsPage() {
     setMessages(id, [])
     setInput('')
     setError(null)
+    setKnowledgePoints([])
+    setKnowledgeStatus({})
+    setCurrentKnowledgePoint(null)
   }
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -211,6 +281,11 @@ export default function StudyMaterialsPage() {
     if (!prompt || isGenerating) return
 
     const now = new Date().toISOString()
+
+    // Reset per-run knowledge-point progress (populated after split tool returns)
+    setKnowledgePoints([])
+    setKnowledgeStatus({})
+    setCurrentKnowledgePoint(null)
 
     // Ensure a study-materials conversation is selected (reuse lesson_plan type)
     let conversationId = activeConversationId
@@ -258,6 +333,7 @@ export default function StudyMaterialsPage() {
 
     let runningStepId: string | null = null
     let done = false
+    const stepMeta = new Map<string, { toolName: string; knowledgePoints: string[] }>()
     let assistantSteps: TaskStep[] = []
     let assistantText = ''
     let pendingText = ''
@@ -327,6 +403,20 @@ export default function StudyMaterialsPage() {
           const name = toText(payload?.name) || 'tool'
           const stepId = toText(payload?.step_id)
           const stepTitle = toText(payload?.title)
+
+          const points = normalizeKnowledgePoints((payload as any)?.arguments?.knowledge_points)
+          if (stepId) {
+            stepMeta.set(stepId, { toolName: name, knowledgePoints: points })
+          }
+
+          if (points.length === 1) {
+            const kp = points[0]
+            setCurrentKnowledgePoint(kp)
+            setKnowledgeStatus((prev) => {
+              if (prev[kp] === 'done' || prev[kp] === 'failed') return prev
+              return { ...prev, [kp]: 'active' }
+            })
+          }
           startRunningStep(stepTitle || `调用工具：${name}`, {
             ...(stepId ? { id: stepId } : {}),
             toolName: name,
@@ -343,6 +433,7 @@ export default function StudyMaterialsPage() {
           const out = (payload as any)?.output
           const err = toText(payload?.error)
           const t = new Date().toISOString()
+          const toolName = toText(payload?.name)
 
           updateStep(taskId, stepId, {
             status: success ? 'completed' : 'failed',
@@ -357,6 +448,40 @@ export default function StudyMaterialsPage() {
             error: err || undefined,
           })
           runningStepId = null
+
+          if (toolName === 'split_knowledge_points') {
+            const points = normalizeKnowledgePoints((out as any)?.knowledge_points)
+            if (points.length > 0) {
+              setKnowledgePoints(points)
+              setKnowledgeStatus((prev) => {
+                const next: Record<string, KnowledgePointStatus> = { ...prev }
+                for (const kp of points) {
+                  if (!next[kp]) next[kp] = 'pending'
+                }
+                return next
+              })
+            }
+          }
+
+          // Prefer tracking exploration progress by question-bank searches (best UX when backend calls per point)
+          if (toolName === 'search_questions_by_knowledge') {
+            const meta = stepMeta.get(stepId)
+            const points = meta?.knowledgePoints ?? []
+            if (points.length === 1) {
+              const kp = points[0]
+              setKnowledgeStatus((prev) => ({ ...prev, [kp]: success ? 'done' : 'failed' }))
+              setCurrentKnowledgePoint(null)
+            } else if (points.length > 1) {
+              setKnowledgeStatus((prev) => {
+                const next = { ...prev }
+                for (const kp of points) {
+                  next[kp] = success ? 'done' : 'failed'
+                }
+                return next
+              })
+              setCurrentKnowledgePoint(null)
+            }
+          }
           return
         }
 
@@ -463,6 +588,11 @@ export default function StudyMaterialsPage() {
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
           <div className="max-w-3xl mx-auto py-6">
+            <KnowledgeProgressHeader
+              points={knowledgePoints}
+              statusByPoint={knowledgeStatus}
+              currentPoint={currentKnowledgePoint}
+            />
             <AnimatePresence mode="popLayout">
               {messages.map((m) => (
                 <MessageBubble key={m.id} message={m} />

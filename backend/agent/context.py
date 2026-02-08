@@ -22,6 +22,55 @@ class ContextManager:
         self.config = config or AgentConfig.from_env()
         self._project_root = Path(__file__).resolve().parents[2]
 
+    def _merge_items_by_knowledge_point(self, old: Any, new: Any) -> Any:
+        """Merge tool outputs that follow the `{items:[{knowledge_point:...}, ...]}` convention."""
+
+        if not isinstance(new, dict):
+            return new
+        if not isinstance(old, dict):
+            old = {}
+
+        def _as_items(blob: Dict[str, Any]) -> List[Dict[str, Any]]:
+            if isinstance(blob.get("items"), list):
+                return [x for x in (blob.get("items") or []) if isinstance(x, dict)]
+            kp = str(blob.get("knowledge_point") or "").strip()
+            if kp:
+                return [blob]
+            return []
+
+        old_items = _as_items(old)
+        new_items = _as_items(new)
+        if not new_items:
+            return new
+
+        merged: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+
+        for it in old_items:
+            kp = str(it.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+            merged[kp] = it
+            if kp not in order:
+                order.append(kp)
+
+        for it in new_items:
+            kp = str(it.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+            if kp not in order:
+                order.append(kp)
+            merged[kp] = it
+
+        out: Dict[str, Any] = dict(old)
+        # Prefer newer top-level metadata (difficulty/subject/etc.), but always rebuild items.
+        for k, v in new.items():
+            if k == "items":
+                continue
+            out[k] = v
+        out["items"] = [merged[kp] for kp in order if kp in merged]
+        return out
+
     def create_context(self, *, user_profile: UserProfile, system_instructions: str, current_task: str) -> CompressedContext:
         return CompressedContext(
             user_profile=user_profile,
@@ -38,7 +87,11 @@ class ContextManager:
         )
         # Persist the latest tool outputs for downstream steps.
         if result.success:
-            ctx.working_memory[result.tool] = result.output
+            if result.tool in {"web_search_knowledge", "wikipedia_search", "search_questions_by_knowledge"}:
+                prev = ctx.working_memory.get(result.tool)
+                ctx.working_memory[result.tool] = self._merge_items_by_knowledge_point(prev, result.output)
+            else:
+                ctx.working_memory[result.tool] = result.output
 
     def on_reflection(self, ctx: CompressedContext, reflection: ReflectionResult) -> None:
         ctx.working_memory["last_reflection"] = {

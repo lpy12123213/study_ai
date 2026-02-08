@@ -1,26 +1,10 @@
 import { Outlet, useLocation } from 'react-router-dom'
 import { HistorySidebar } from './HistorySidebar'
-import { TaskPanel } from './TaskPanel'
 import { Header } from './Header'
-import { useTaskStore } from '@/stores/useTaskStore'
 import { cn } from '@/lib/utils'
-
-// Pages that show the task panel
-const TASK_PANEL_PAGES = ['/chat', '/blueprint', '/study-materials', '/lesson-plans']
 
 export function ManusLayout() {
   const location = useLocation()
-  const activeTasks = useTaskStore((state) => state.activeTasks)
-  
-  // Check if current page should show task panel
-  const showTaskPanel = TASK_PANEL_PAGES.some((path) =>
-    location.pathname.startsWith(path)
-  )
-  
-  // Check if there are active running tasks
-  const hasActiveTasks = Array.from(activeTasks.values()).some((steps) =>
-    steps.some((s) => s.status === 'running')
-  )
   
   // Full screen pages (no sidebar)
   const isFullScreenPage = location.pathname.startsWith('/canvas')
@@ -57,13 +41,6 @@ export function ManusLayout() {
             </div>
           </div>
         </main>
-        
-        {/* Right panel - Task timeline */}
-        {showTaskPanel && hasActiveTasks && (
-          <div className="w-[360px] border-l border-border bg-sidebar-background flex-shrink-0">
-            <TaskPanel />
-          </div>
-        )}
       </div>
     </div>
   )
