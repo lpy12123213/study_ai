@@ -6,9 +6,9 @@ import {
   GraduationCap,
   Printer,
   Target,
+  Share2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -26,8 +26,11 @@ export default function LessonPlanDetailPage() {
   if (!plan) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-        <FileText className="h-12 w-12 text-muted-foreground mb-4" />
-        <p className="text-muted-foreground mb-4">教案不存在或已被清理</p>
+        <div className="h-16 w-16 bg-muted rounded-full flex items-center justify-center mb-4">
+           <FileText className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <h3 className="text-lg font-medium mb-2">未找到教案</h3>
+        <p className="text-muted-foreground mb-6">该教案可能已被删除或不存在</p>
         <Button asChild variant="outline">
           <Link to="/lesson-plans">返回列表</Link>
         </Button>
@@ -36,85 +39,91 @@ export default function LessonPlanDetailPage() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="border-b border-border p-4 glass flex items-center justify-between print:hidden">
-        <div className="flex items-center gap-4 min-w-0">
-          <Button variant="ghost" size="icon" asChild>
+    <div className="h-full flex flex-col bg-background">
+      <div className="border-b border-border p-4 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-10 print:hidden">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" asChild className="rounded-full">
             <Link to="/lesson-plans" aria-label="返回">
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeft className="h-5 w-5" />
             </Link>
           </Button>
-          <div className="min-w-0">
-            <h1 className="font-semibold truncate">{plan.title}</h1>
-            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <Badge variant="secondary">{plan.subject}</Badge>
-              <span>{plan.grade}</span>
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                {plan.duration} 分钟
-              </span>
-            </div>
+          <div className="hidden sm:block">
+            <h1 className="font-semibold text-sm">教案详情</h1>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={handlePrint}>
+          <Button variant="outline" size="sm" onClick={handlePrint}>
             <Printer className="h-4 w-4 mr-2" />
             打印
+          </Button>
+          <Button variant="default" size="sm">
+            <Share2 className="h-4 w-4 mr-2" />
+            分享
           </Button>
         </div>
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="max-w-3xl mx-auto p-6 print:p-0">
-          <div className="text-center mb-8 print:mb-4">
-            <div className="inline-flex items-center justify-center h-12 w-12 rounded-2xl bg-foreground text-background mb-4">
-              <GraduationCap className="h-6 w-6" />
+        <div className="max-w-3xl mx-auto p-8 print:p-0">
+          <div className="mb-8 text-center print:mb-6">
+            <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-primary/10 text-primary mb-6 print:hidden">
+              <GraduationCap className="h-8 w-8" />
             </div>
-            <h1 className="text-2xl font-bold mb-2">{plan.title}</h1>
-            <div className="text-muted-foreground">
-              {plan.subject} | {plan.grade} | {plan.duration} 分钟 |{' '}
-              {formatDate(plan.createdAt)}
+            <h1 className="text-3xl font-bold tracking-tight mb-4 text-foreground">{plan.title}</h1>
+            
+            <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
+              <Badge variant="secondary" className="px-3 py-1 text-sm font-normal">{plan.subject}</Badge>
+              <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+              <span>{plan.grade}</span>
+              <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+              <span className="flex items-center gap-1.5">
+                <Clock className="h-4 w-4" />
+                {plan.duration} 分钟
+              </span>
+              <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+              <span>{formatDate(plan.createdAt)}</span>
             </div>
           </div>
 
+          <Separator className="my-8" />
+
           {plan.objectives?.length > 0 && (
-            <Card className="mb-6">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Target className="h-5 w-5" />
-                  教学目标
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ul className="list-disc pl-5 space-y-1 text-sm leading-6">
+            <div className="mb-8">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <Target className="h-5 w-5 text-primary" />
+                教学目标
+              </h2>
+              <div className="bg-muted/30 rounded-xl p-6 border border-border/50">
+                <ul className="space-y-3">
                   {plan.objectives.map((obj, idx) => (
-                    <li key={idx}>{obj}</li>
+                    <li key={idx} className="flex gap-3 text-sm leading-6 text-foreground/90">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+                        {idx + 1}
+                      </span>
+                      <span>{obj}</span>
+                    </li>
                   ))}
                 </ul>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           )}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>教案内容</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="whitespace-pre-wrap text-sm leading-6">
-                {plan.content}
-              </div>
-            </CardContent>
-          </Card>
+          <div>
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" />
+              教学过程
+            </h2>
+            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90 leading-7">
+              <div className="whitespace-pre-wrap">{plan.content}</div>
+            </div>
+          </div>
 
-          <Separator className="my-8 print:hidden" />
-
-          <div className="text-xs text-muted-foreground print:hidden">
-            提示：内容展示为纯文本（保留换行）。如后端返回 HTML/Markdown，可再升级渲染器。
+          <div className="mt-12 pt-8 border-t border-border text-center text-xs text-muted-foreground print:hidden">
+            生成于 {formatDate(plan.createdAt)} · 学习助手 AI 生成
           </div>
         </div>
       </ScrollArea>
     </div>
   )
 }
-

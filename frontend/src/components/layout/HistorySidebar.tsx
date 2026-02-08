@@ -1,24 +1,27 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
   Plus,
   MessagesSquare,
   LayoutTemplate,
   BookOpenCheck,
-  ChevronRight,
+  Search,
+  MoreHorizontal,
   Trash2,
   Play,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
+import { Input } from '@/components/ui/input'
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { cn, groupByDate, generateId } from '@/lib/utils'
 import type { ConversationItem, ConversationType } from '@/types'
@@ -29,17 +32,12 @@ const typeIcons: Record<ConversationType, typeof MessagesSquare> = {
   lesson_plan: BookOpenCheck,
 }
 
-const typeLabels: Record<ConversationType, string> = {
-  chat: '对话',
-  blueprint: '蓝图',
-  lesson_plan: '自学资料',
-}
-
 interface ConversationItemProps {
   item: ConversationItem
   isActive: boolean
   onDelete: (id: string) => void
   onResume: (id: string) => void
+  isCollapsed: boolean
 }
 
 function ConversationListItem({
@@ -47,8 +45,8 @@ function ConversationListItem({
   isActive,
   onDelete,
   onResume,
+  isCollapsed,
 }: ConversationItemProps) {
-  const [showActions, setShowActions] = useState(false)
   const Icon = typeIcons[item.type]
   const navigate = useNavigate()
   const setCurrentConversation = useConversationStore(
@@ -68,76 +66,64 @@ function ConversationListItem({
     navigate('/study-materials')
   }
 
+  if (isCollapsed) {
+    return (
+      <div
+        onClick={handleClick}
+        className={cn(
+          "flex justify-center py-2 rounded-md cursor-pointer transition-colors mb-1",
+          isActive
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+        )}
+        title={item.title}
+      >
+        <Icon className="h-4 w-4" />
+      </div>
+    )
+  }
+
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -10 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -10 }}
-      onMouseEnter={() => setShowActions(true)}
-      onMouseLeave={() => setShowActions(false)}
+    <div
       onClick={handleClick}
       className={cn(
-        "group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors",
+        "group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors text-sm mb-0.5",
         isActive
-          ? "bg-accent text-accent-foreground"
-          : "hover:bg-accent/50"
+          ? "bg-accent text-accent-foreground font-medium"
+          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
       )}
     >
-      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+      <Icon className="h-4 w-4 shrink-0 opacity-70" />
+      <span className="truncate flex-1">{item.title}</span>
       
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm truncate">{item.title}</span>
-          {item.status === 'paused' && (
-            <Badge variant="warning" className="text-xs px-1 py-0">
-              暂停
-            </Badge>
-          )}
-        </div>
-        
-        {/* Progress bar for resumable tasks */}
-        {item.resumable && item.progress !== undefined && item.progress < 100 && (
-          <div className="mt-1 h-1 w-full bg-muted rounded-full overflow-hidden">
-            <div
-              className="h-full bg-foreground/70 transition-all"
-              style={{ width: `${item.progress}%` }}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Actions */}
-      <AnimatePresence>
-        {showActions && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex items-center gap-1"
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => e.stopPropagation()}
           >
-            {item.status === 'paused' && item.resumable && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6"
-                onClick={() => onResume(item.id)}
-              >
-                <Play className="h-3 w-3" />
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-destructive"
-              onClick={() => onDelete(item.id)}
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
+            <MoreHorizontal className="h-3 w-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {item.status === 'paused' && item.resumable && (
+            <DropdownMenuItem onClick={() => onResume(item.id)}>
+              <Play className="mr-2 h-3 w-3" />
+              继续任务
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem 
+            onClick={() => onDelete(item.id)}
+            className="text-destructive focus:text-destructive"
+          >
+            <Trash2 className="mr-2 h-3 w-3" />
+            删除
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   )
 }
 
@@ -146,21 +132,18 @@ export function HistorySidebar() {
   const {
     conversations,
     currentConversationId,
-    filter,
-    setFilter,
     addConversation,
     removeConversation,
     setCurrentConversation,
   } = useConversationStore()
   
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set(['今天', '昨天'])
-  )
+  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Filter conversations
-  const filteredConversations = filter === 'all'
-    ? conversations
-    : conversations.filter((c) => c.type === filter)
+  const filteredConversations = conversations.filter((c) => 
+    c.title.toLowerCase().includes(searchQuery.toLowerCase())
+  )
 
   // Group by date
   const groupedConversations = groupByDate(filteredConversations)
@@ -180,104 +163,89 @@ export function HistorySidebar() {
     navigate(`/chat/${newConversation.id}`)
   }
 
-  const handleDelete = (id: string) => {
-    removeConversation(id)
-  }
-
-  const handleResume = (id: string) => {
-    // Will be implemented with task resumption logic
-    console.log('Resume task:', id)
-  }
-
-  const toggleGroup = (group: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(group)) {
-        next.delete(group)
-      } else {
-        next.add(group)
-      }
-      return next
-    })
-  }
-
   return (
-    <aside className="w-64 border-r border-border glass glass-border flex flex-col">
-      {/* New conversation button */}
-      <div className="p-3">
+    <motion.aside 
+      initial={false}
+      animate={{ width: isCollapsed ? 60 : 260 }}
+      className="border-r border-border bg-sidebar-background flex flex-col relative transition-all duration-300 ease-in-out"
+    >
+      <div className="p-3 flex items-center justify-between">
+        {!isCollapsed && (
+          <Button
+            onClick={handleNewConversation}
+            className="flex-1 justify-start gap-2 bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90 shadow-none"
+            size="sm"
+          >
+            <Plus className="h-4 w-4" />
+            新建对话
+          </Button>
+        )}
+        {isCollapsed && (
+           <Button
+            onClick={handleNewConversation}
+            size="icon"
+            variant="ghost"
+            className="mx-auto h-8 w-8"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        )}
+        
         <Button
-          onClick={handleNewConversation}
-          className="w-full justify-start gap-2"
-          variant="outline"
+          variant="ghost"
+          size="icon"
+          className={cn("h-8 w-8 text-muted-foreground", !isCollapsed && "ml-2")}
+          onClick={() => setIsCollapsed(!isCollapsed)}
         >
-          <Plus className="h-4 w-4" />
-          新建对话
+          {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </Button>
       </div>
 
-      {/* Filter tabs */}
-      <div className="px-3 pb-2 flex gap-1">
-        {(['all', 'chat', 'blueprint', 'lesson_plan'] as const).map((type) => (
-          <Button
-            key={type}
-            variant={filter === type ? 'secondary' : 'ghost'}
-            size="sm"
-            className="text-xs px-2 h-7"
-            onClick={() => setFilter(type)}
-          >
-            {type === 'all' ? '全部' : typeLabels[type]}
-          </Button>
-        ))}
-      </div>
+      {!isCollapsed && (
+        <div className="px-3 pb-2">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input 
+              placeholder="搜索..." 
+              className="h-8 pl-8 bg-sidebar-accent/50 border-sidebar-border focus-visible:ring-sidebar-ring"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
 
-      <Separator />
-
-      {/* Conversation list */}
       <ScrollArea className="flex-1">
         <div className="p-2">
           {Array.from(groupedConversations.entries()).map(([group, items]) => (
-            <Collapsible
-              key={group}
-              open={expandedGroups.has(group)}
-              onOpenChange={() => toggleGroup(group)}
-            >
-              <CollapsibleTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className="w-full justify-between px-2 h-8 text-xs text-muted-foreground hover:text-foreground"
-                >
+            <div key={group} className="mb-4">
+              {!isCollapsed && (
+                <h3 className="px-2 mb-1 text-xs font-medium text-muted-foreground/70">
                   {group}
-                  <ChevronRight
-                    className={cn(
-                      "h-4 w-4 transition-transform",
-                      expandedGroups.has(group) && "rotate-90"
-                    )}
+                </h3>
+              )}
+              <div className="space-y-0.5">
+                {items.map((item) => (
+                  <ConversationListItem
+                    key={item.id}
+                    item={item}
+                    isActive={currentConversationId === item.id}
+                    onDelete={removeConversation}
+                    onResume={() => {}}
+                    isCollapsed={isCollapsed}
                   />
-                </Button>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <AnimatePresence>
-                  {items.map((item) => (
-                    <ConversationListItem
-                      key={item.id}
-                      item={item}
-                      isActive={currentConversationId === item.id}
-                      onDelete={handleDelete}
-                      onResume={handleResume}
-                    />
-                  ))}
-                </AnimatePresence>
-              </CollapsibleContent>
-            </Collapsible>
+                ))}
+              </div>
+            </div>
           ))}
 
-          {filteredConversations.length === 0 && (
-            <div className="text-center text-muted-foreground text-sm py-8">
+          {filteredConversations.length === 0 && !isCollapsed && (
+            <div className="text-center text-muted-foreground text-xs py-8">
               暂无历史记录
             </div>
           )}
         </div>
       </ScrollArea>
-    </aside>
+    </motion.aside>
   )
 }

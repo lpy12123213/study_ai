@@ -8,8 +8,9 @@ import {
   Plus,
   Send,
   Sparkles,
-  Target,
-  User,
+  ArrowRight,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -23,6 +24,8 @@ import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { ConversationItem, Message, Subject, TaskStep } from '@/types'
+
+// ... (keep helper functions: grades, toText, toObjectives, lessonPlanToMarkdown, stripAll, getStageByGrade, extractGradeFromText, extractDurationMinutesFromText, extractSubjectFromText, extractTopicFromText, toConversationTitle)
 
 const grades = [
   '一年级',
@@ -284,28 +287,36 @@ function LessonPlanAttachment({ lessonPlanId }: { lessonPlanId: string }) {
   if (!plan) return null
 
   return (
-    <div className="mt-3 rounded-xl border border-border/80 bg-card/50 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium truncate">{plan.title}</div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="secondary">{plan.subject}</Badge>
-            <span className="inline-flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {plan.duration} 分钟
-            </span>
-            {plan.objectives.length > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <Target className="h-3 w-3" />
-                {plan.objectives.length} 个目标
-              </span>
-            )}
+    <div className="mt-4">
+      <Link to={`/lesson-plans/${plan.id}`} className="block group">
+        <div className="rounded-xl border border-border bg-card p-4 transition-all hover:shadow-md hover:border-primary/50">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                  <BookOpenCheck className="h-4 w-4" />
+                </div>
+                <div className="font-semibold truncate text-foreground">{plan.title}</div>
+              </div>
+              
+              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                <Badge variant="secondary" className="font-normal">{plan.subject}</Badge>
+                <span>{plan.grade}</span>
+                <span className="flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  {plan.duration} 分钟
+                </span>
+              </div>
+            </div>
+            
+            <div className="self-center opacity-0 group-hover:opacity-100 transition-opacity -translate-x-2 group-hover:translate-x-0 duration-200">
+              <Button variant="ghost" size="icon">
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
-        <Button asChild size="sm">
-          <Link to={`/lesson-plans/${plan.id}`}>查看</Link>
-        </Button>
-      </div>
+      </Link>
     </div>
   )
 }
@@ -314,101 +325,105 @@ function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
 
+  if (isUser) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex justify-end mb-6"
+      >
+        <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+          <div className="whitespace-pre-wrap">{message.content}</div>
+        </div>
+      </motion.div>
+    )
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={cn('flex gap-3 mb-4', isUser ? 'flex-row-reverse' : 'flex-row')}
+      className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
     >
-      <div
-        className={cn(
-          'h-8 w-8 rounded-full flex items-center justify-center shrink-0',
-          isUser ? 'bg-primary text-primary-foreground' : 'bg-foreground text-background'
-        )}
-      >
-        {isUser ? (
-          <User className="h-4 w-4" strokeWidth={1.8} />
-        ) : (
-          <Sparkles className="h-4 w-4" strokeWidth={1.8} />
-        )}
+      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
+        <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+          <BrandMark size={12} />
+        </div>
+        <span>学习助手</span>
+      </div>
+      
+      <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
+        <div className="whitespace-pre-wrap">{message.content}</div>
       </div>
 
-      <div
-        className={cn(
-          'max-w-[75%] rounded-2xl px-4 py-3',
-          isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
-        )}
-      >
-        <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+      {message.attachment?.type === 'lesson_plan' && (
+        <LessonPlanAttachment lessonPlanId={message.attachment.lessonPlanId} />
+      )}
 
-        {message.attachment?.type === 'lesson_plan' && (
-          <LessonPlanAttachment lessonPlanId={message.attachment.lessonPlanId} />
-        )}
+      {message.steps && message.steps.length > 0 && (
+        <div className="mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+            onClick={() => setShowSteps(!showSteps)}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            {showSteps ? '隐藏' : '查看'} {message.steps.length} 个思考步骤
+            {showSteps ? <ChevronUp className="h-3 w-3 opacity-50" /> : <ChevronDown className="h-3 w-3 opacity-50" />}
+          </Button>
 
-        {message.steps && message.steps.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-border/50">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 text-xs px-2"
-              onClick={() => setShowSteps(!showSteps)}
-            >
-              <Sparkles className="h-3 w-3 mr-1" />
-              {showSteps ? '隐藏' : '查看'} {message.steps.length} 个执行步骤
-            </Button>
-
-            <AnimatePresence>
-              {showSteps && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="mt-2 overflow-hidden"
-                >
-                  <TaskTimeline steps={message.steps} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-      </div>
+          <AnimatePresence>
+            {showSteps && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
+              >
+                <div className="p-4 bg-muted/30">
+                   <TaskTimeline steps={message.steps} />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
     </motion.div>
   )
 }
 
-function WelcomeScreen() {
+function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => void }) {
   return (
-    <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-      <BrandMark size={64} className="mb-6" />
-      <h2 className="text-2xl font-bold mb-2">教案生成（ChatGPT 对话框 + Manus 时间线）</h2>
-      <p className="text-muted-foreground max-w-md mb-8">
-        直接像 ChatGPT 一样输入你的需求（建议包含学科/年级/课题/课时），右侧与消息内可查看 Manus 式执行时间线。
-      </p>
+    <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+      <div className="mb-10 flex flex-col items-center text-center space-y-6">
+        <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center ring-1 ring-border/50 shadow-sm">
+           <BookOpenCheck className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+        <h2 className="text-2xl font-semibold tracking-tight">教案生成助手</h2>
+        <p className="text-muted-foreground max-w-md">
+           输入你的需求（建议包含学科/年级/课题/课时），我将为你生成一份详细的教学设计。
+        </p>
+      </div>
 
-      <div className="grid grid-cols-2 gap-3 max-w-xl w-full">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
         {[
           { title: '函数与导数', desc: '高二数学：函数单调性与导数应用' },
           { title: '力学实验', desc: '高一物理：验证牛顿第二定律' },
           { title: '文言文阅读', desc: '高一语文：文言文断句与翻译' },
           { title: '化学反应速率', desc: '高二化学：影响反应速率的因素' },
         ].map((item) => (
-          <div
+          <button
             key={item.title}
-            className={cn(
-              'text-left p-4 rounded-xl border border-border/80',
-              'bg-card/50 shadow-sm'
-            )}
+            onClick={() => onExampleClick(item.desc)}
+            className="group relative flex flex-col items-start p-4 h-auto text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
           >
-            <div className="flex items-center gap-2 mb-2">
-              <div className="h-8 w-8 rounded-lg bg-muted/60 flex items-center justify-center ring-1 ring-border/60">
-                <BookOpenCheck className="h-4 w-4 text-foreground/80" strokeWidth={1.8} />
-              </div>
-              <div className="font-medium text-sm">{item.title}</div>
+            <div className="mb-3 rounded-lg bg-muted p-2 group-hover:bg-background transition-colors">
+              <BookOpenCheck className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
             </div>
-            <div className="text-sm text-muted-foreground leading-5">
-              {item.desc}
-            </div>
-          </div>
+            <div className="font-medium text-sm mb-1">{item.title}</div>
+            <div className="text-xs text-muted-foreground line-clamp-2">{item.desc}</div>
+          </button>
         ))}
       </div>
     </div>
@@ -781,33 +796,38 @@ export default function LessonPlansPage() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Top bar */}
-      <div className="border-b border-border p-3 glass flex items-center justify-between">
-        <div className="text-sm font-medium text-muted-foreground">
-          教案生成 · Manus 时间轴
-        </div>
-        <Button variant="outline" size="sm" onClick={handleNewConversation} className="gap-2">
-          <Plus className="h-4 w-4" />
-          新建教案对话
-        </Button>
-      </div>
-
+    <div className="h-full flex flex-col relative">
       {/* Messages */}
       {messages.length === 0 ? (
-        <WelcomeScreen />
+        <WelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4">
-          <div className="max-w-3xl mx-auto">
+        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+          <div className="max-w-3xl mx-auto py-6">
             <AnimatePresence mode="popLayout">
               {messages.map((m) => (
                 <MessageBubble key={m.id} message={m} />
               ))}
             </AnimatePresence>
 
+            {isGenerating && messages[messages.length - 1]?.content === '' && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex gap-3 mb-4 max-w-3xl"
+              >
+                <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                </div>
+                <div className="text-sm text-muted-foreground pt-0.5">
+                   正在生成教案...
+                </div>
+              </motion.div>
+            )}
+
             {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4">
-                <p className="text-sm text-destructive">{error}</p>
+              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                {error}
               </div>
             )}
           </div>
@@ -815,41 +835,60 @@ export default function LessonPlansPage() {
       )}
 
       {/* Composer */}
-      <div className="border-t border-border p-4 glass">
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
-          <div className="relative">
-            <Textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="例如：帮我写一份高中数学高二《函数单调性与导数应用》45分钟教案，偏互动式，包含分层练习与评价方式。（Shift+Enter 换行）"
-              className="min-h-[60px] max-h-[200px] pr-12 resize-none"
-              disabled={isGenerating}
-            />
-            <Button
-              type="submit"
-              size="icon"
-              className="absolute right-2 bottom-2"
-              disabled={!input.trim() || isGenerating}
-            >
-              {isGenerating ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
-
-          {isGenerating && (
-            <div className="mt-2 flex justify-end">
-              <Badge variant="secondary" className="gap-1">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                生成中…
-              </Badge>
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
+        <div className="max-w-3xl mx-auto">
+          <form onSubmit={handleSubmit} className="relative group">
+            <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
+               <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-xl text-muted-foreground hover:text-foreground shrink-0 mb-0.5"
+                onClick={handleNewConversation}
+                title="新建教案"
+               >
+                 <Plus className="h-5 w-5" />
+               </Button>
+               
+               <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="例如：帮我写一份高中数学高二《函数单调性与导数应用》45分钟教案，偏互动式..."
+                className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+                disabled={isGenerating}
+                rows={1}
+                style={{ height: 'auto', overflow: 'hidden' }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                }}
+              />
+              
+              <Button
+                type="submit"
+                size="icon"
+                className={cn(
+                  "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
+                  input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                )}
+                disabled={!input.trim() || isGenerating}
+              >
+                {isGenerating ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+              </Button>
             </div>
-          )}
-        </form>
+          </form>
+          
+          <div className="text-center mt-2 text-[10px] text-muted-foreground/50">
+            教案生成基于 AI 模型，仅供参考。
+          </div>
+        </div>
       </div>
     </div>
   )

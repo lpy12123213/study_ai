@@ -6,78 +6,125 @@ import {
   LayoutTemplate,
   BookOpen,
   PenTool,
-  Settings2,
+  Settings,
+  LogOut,
+  Monitor,
+  Moon,
+  Sun,
 } from 'lucide-react'
 import { BrandMark } from '@/components/shared/BrandMark'
-import { ThemeToggle } from '@/components/shared/ThemeToggle'
-import { Button } from '@/components/ui/button'
+import { useThemeStore } from '@/stores/useThemeStore'
 import { cn } from '@/lib/utils'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+} from '@/components/ui/dropdown-menu'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 
 const navItems = [
   { path: '/chat', label: '对话', icon: MessagesSquare },
   { path: '/blueprint', label: '蓝图组卷', icon: LayoutTemplate },
-  { path: '/study-materials', label: '自学资料生成', icon: BookOpen },
+  { path: '/study-materials', label: '自学资料', icon: BookOpen },
   { path: '/papers', label: '试卷管理', icon: Files },
   { path: '/canvas', label: '学习画布', icon: PenTool },
 ]
 
 export function Header() {
   const location = useLocation()
+  const { setTheme, theme } = useThemeStore()
 
   return (
-    <header className="h-14 border-b border-border glass glass-border flex items-center justify-between px-4">
+    <header className="h-12 border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-50 flex items-center justify-between px-4">
       {/* Logo */}
       <Link to="/chat" className="flex items-center gap-2">
-        <BrandMark size={32} />
-        <div className="leading-tight hidden sm:block">
-          <div className="font-semibold text-sm">学习助手</div>
-          <div className="text-xs text-muted-foreground">Manus 式时间轴</div>
-        </div>
+        <BrandMark size={24} />
+        <span className="font-semibold text-sm tracking-tight">学习助手</span>
       </Link>
 
       {/* Navigation */}
-      <nav className="flex items-center">
-        <div className="relative flex items-center gap-1 rounded-full bg-muted/40 p-1 ring-1 ring-border/60">
-          {navItems.map((item) => {
-            const Icon = item.icon
-            const isActive = location.pathname.startsWith(item.path)
-
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  'relative flex items-center rounded-full px-3 py-1.5 text-sm transition-colors select-none',
-                  isActive
-                    ? 'text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {isActive && (
-                  <motion.span
-                    layoutId="topNavActive"
-                    className="absolute inset-0 rounded-full bg-background/70 shadow-sm"
-                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                  />
-                )}
-                <span className="relative z-10 inline-flex items-center gap-2">
-                  <Icon className="h-4 w-4" strokeWidth={1.8} />
-                  <span className="hidden md:inline">{item.label}</span>
-                </span>
-              </Link>
-            )
-          })}
-        </div>
+      <nav className="flex items-center gap-6">
+        {navItems.map((item) => {
+          const isActive = location.pathname.startsWith(item.path)
+          
+          return (
+            <Link
+              key={item.path}
+              to={item.path}
+              className={cn(
+                'relative py-1.5 text-sm font-medium transition-colors hover:text-foreground/80',
+                isActive ? 'text-foreground' : 'text-muted-foreground'
+              )}
+            >
+              {item.label}
+              {isActive && (
+                <motion.div
+                  layoutId="header-nav-underline"
+                  className="absolute left-0 right-0 -bottom-[13px] h-[2px] bg-foreground"
+                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                />
+              )}
+            </Link>
+          )
+        })}
       </nav>
 
       {/* Right actions */}
       <div className="flex items-center gap-2">
-        <ThemeToggle />
-        <Link to="/settings">
-          <Button variant="ghost" size="icon" className="h-9 w-9">
-            <Settings2 className="h-4 w-4" strokeWidth={1.8} />
-          </Button>
-        </Link>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <div className="cursor-pointer">
+              <Avatar className="h-8 w-8 transition-opacity hover:opacity-80">
+                <AvatarImage src="" />
+                <AvatarFallback className="text-xs">U</AvatarFallback>
+              </Avatar>
+            </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>我的账户</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to="/settings" className="cursor-pointer w-full flex items-center">
+                <Settings className="mr-2 h-4 w-4" />
+                <span>设置</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Monitor className="mr-2 h-4 w-4" />
+                <span>主题</span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={() => setTheme('light')}>
+                  <Sun className="mr-2 h-4 w-4" />
+                  <span>浅色</span>
+                  {theme === 'light' && <span className="ml-auto text-xs">✓</span>}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('dark')}>
+                  <Moon className="mr-2 h-4 w-4" />
+                  <span>深色</span>
+                  {theme === 'dark' && <span className="ml-auto text-xs">✓</span>}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('system')}>
+                  <Monitor className="mr-2 h-4 w-4" />
+                  <span>跟随系统</span>
+                  {theme === 'system' && <span className="ml-auto text-xs">✓</span>}
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:text-destructive">
+              <LogOut className="mr-2 h-4 w-4" />
+              <span>退出登录</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   )

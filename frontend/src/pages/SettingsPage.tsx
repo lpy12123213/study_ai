@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
 import {
   User,
   Key,
@@ -12,18 +11,28 @@ import {
   Monitor,
   Moon,
   Sun,
+  Info
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
+import { cn } from '@/lib/utils'
+
+const tabs = [
+  { id: 'account', label: '账户', icon: User },
+  { id: 'api', label: 'API 配置', icon: Key },
+  { id: 'appearance', label: '外观', icon: Palette },
+  { id: 'data', label: '数据管理', icon: Database },
+  { id: 'about', label: '关于', icon: Info },
+]
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState('account')
   const { user, logout } = useAuthStore()
-  const { theme, resolvedTheme, setTheme } = useThemeStore()
+  const { theme, setTheme } = useThemeStore()
   
   const [apiKey, setApiKey] = useState('')
   const [isSaving, setIsSaving] = useState(false)
@@ -42,209 +51,205 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="h-full p-6 overflow-auto">
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold mb-2">设置</h1>
-          <p className="text-muted-foreground">管理你的账户和应用设置</p>
+    <div className="h-full flex flex-col md:flex-row overflow-hidden bg-background">
+      {/* Sidebar */}
+      <aside className="w-full md:w-64 border-b md:border-b-0 md:border-r border-border bg-muted/30 p-4 md:p-6 overflow-x-auto md:overflow-y-auto flex-shrink-0">
+        <div className="mb-6 hidden md:block">
+          <h1 className="text-2xl font-bold tracking-tight">设置</h1>
+          <p className="text-sm text-muted-foreground mt-1">管理你的账户和应用偏好</p>
         </div>
+        
+        <nav className="flex md:flex-col gap-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap",
+                activeTab === tab.id
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              <tab.icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </aside>
 
-        <div className="space-y-6">
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <User className="h-5 w-5" />
-                  账户信息
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {user ? (
-                  <>
-                    <div className="flex items-center gap-4">
-                      <div className="h-16 w-16 rounded-full bg-foreground text-background ring-1 ring-border/60 flex items-center justify-center text-2xl font-bold">
-                        {user.username.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <h3 className="font-semibold">{user.username}</h3>
-                        {user.email && (
-                          <p className="text-sm text-muted-foreground">{user.email}</p>
-                        )}
-                      </div>
+      {/* Content */}
+      <main className="flex-1 overflow-auto p-6 md:p-10">
+        <div className="max-w-2xl mx-auto space-y-8">
+          {activeTab === 'account' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div>
+                <h2 className="text-lg font-medium">账户信息</h2>
+                <p className="text-sm text-muted-foreground">查看和管理你的个人资料</p>
+              </div>
+              <Separator />
+              {user ? (
+                <div className="space-y-6">
+                  <div className="flex items-center gap-4">
+                    <div className="h-20 w-20 rounded-full bg-primary/10 text-primary flex items-center justify-center text-2xl font-bold">
+                      {user.username.charAt(0).toUpperCase()}
                     </div>
-                    <Separator />
-                    <Button
-                      variant="destructive"
-                      onClick={handleLogout}
-                      className="w-full"
-                    >
+                    <div>
+                      <h3 className="font-semibold text-lg">{user.username}</h3>
+                      {user.email && <p className="text-sm text-muted-foreground">{user.email}</p>}
+                      <Badge variant="outline" className="mt-2">普通用户</Badge>
+                    </div>
+                  </div>
+                  
+                  <div className="pt-4">
+                    <Button variant="destructive" onClick={handleLogout}>
                       <LogOut className="h-4 w-4 mr-2" />
                       退出登录
                     </Button>
-                  </>
-                ) : (
-                  <div className="text-center py-4">
-                    <p className="text-muted-foreground mb-4">未登录</p>
-                    <Button asChild>
-                      <Link to="/login">登录</Link>
-                    </Button>
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          </motion.div>
+                </div>
+              ) : (
+                <div className="text-center py-8 bg-muted/30 rounded-lg border border-dashed">
+                  <p className="text-muted-foreground mb-4">你当前处于访客模式</p>
+                  <Button asChild>
+                    <Link to="/login">登录 / 注册</Link>
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Key className="h-5 w-5" />
-                  API 配置
-                </CardTitle>
-                <CardDescription>
-                  配置 AI 服务的 API 密钥
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
+          {activeTab === 'api' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div>
+                <h2 className="text-lg font-medium">API 配置</h2>
+                <p className="text-sm text-muted-foreground">配置 AI 服务的连接密钥</p>
+              </div>
+              <Separator />
+              <div className="space-y-4">
+                <div className="grid gap-2">
                   <label className="text-sm font-medium">OpenAI API Key</label>
-                  <div className="flex gap-2 mt-1">
+                  <div className="flex gap-2">
                     <Input
                       type="password"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       placeholder="sk-..."
-                      className="flex-1"
+                      className="flex-1 font-mono"
                     />
                     <Button onClick={handleSaveApiKey} disabled={isSaving}>
-                      {isSaving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Save className="h-4 w-4" />
-                      )}
+                      {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                     </Button>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    用于 AI 对话和自学资料生成功能
+                  <p className="text-[13px] text-muted-foreground">
+                    密钥将安全存储在本地浏览器中，不会上传到服务器。
                   </p>
                 </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+              </div>
+            </div>
+          )}
 
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-          >
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Palette className="h-5 w-5" />
-                  外观
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-2">
+          {activeTab === 'appearance' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div>
+                <h2 className="text-lg font-medium">外观</h2>
+                <p className="text-sm text-muted-foreground">自定义界面主题和显示偏好</p>
+              </div>
+              <Separator />
+              <div className="space-y-4">
+                <label className="text-sm font-medium">主题模式</label>
+                <div className="grid grid-cols-3 gap-4">
                   {[
-                    { value: 'system', label: `系统（当前：${resolvedTheme === 'dark' ? '深色' : '浅色'}）`, icon: Monitor },
                     { value: 'light', label: '浅色', icon: Sun },
                     { value: 'dark', label: '深色', icon: Moon },
-                  ].map((option) => {
-                    const Icon = option.icon
-                    return (
-                      <Button
-                        key={option.value}
-                        variant={theme === option.value ? 'default' : 'outline'}
-                        className="flex-1"
-                        onClick={() => setTheme(option.value as 'light' | 'dark' | 'system')}
-                      >
-                        <Icon className="h-4 w-4 mr-2" />
-                        {option.label}
-                      </Button>
-                    )
-                  })}
+                    { value: 'system', label: '跟随系统', icon: Monitor },
+                  ].map((option) => (
+                    <div
+                      key={option.value}
+                      className={cn(
+                        "cursor-pointer rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground",
+                        theme === option.value && "border-primary"
+                      )}
+                      onClick={() => setTheme(option.value as any)}
+                    >
+                      <div className="mb-2 rounded-md bg-background p-2 w-fit border shadow-sm">
+                        <option.icon className="h-5 w-5" />
+                      </div>
+                      <div className="font-medium text-sm">{option.label}</div>
+                    </div>
+                  ))}
                 </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+              </div>
+            </div>
+          )}
 
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-          >
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Database className="h-5 w-5" />
-                  数据管理
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
+          {activeTab === 'data' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div>
+                <h2 className="text-lg font-medium">数据管理</h2>
+                <p className="text-sm text-muted-foreground">管理本地存储的数据</p>
+              </div>
+              <Separator />
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
                   <div>
-                    <h4 className="font-medium">清除本地缓存</h4>
-                    <p className="text-sm text-muted-foreground">
-                      清除浏览器中存储的临时数据
+                    <h4 className="font-medium text-sm">清除本地缓存</h4>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      清除浏览器中存储的所有临时数据和状态
                     </p>
                   </div>
                   <Button
                     variant="outline"
+                    size="sm"
                     onClick={() => {
-                      localStorage.clear()
-                      window.location.reload()
+                      if (confirm('确定要清除所有本地数据吗？此操作不可恢复。')) {
+                        localStorage.clear()
+                        window.location.reload()
+                      }
                     }}
                   >
                     清除
                   </Button>
                 </div>
-                <Separator />
-                <div className="flex items-center justify-between">
+                
+                <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
                   <div>
-                    <h4 className="font-medium">导出数据</h4>
-                    <p className="text-sm text-muted-foreground">
-                      导出所有试卷和自学资料数据
+                    <h4 className="font-medium text-sm">导出所有数据</h4>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      将所有试卷和自学资料导出为 JSON 文件
                     </p>
                   </div>
-                  <Button variant="outline">导出</Button>
+                  <Button variant="outline" size="sm">导出</Button>
                 </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+              </div>
+            </div>
+          )}
 
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4 }}
-          >
-            <Card>
-              <CardHeader>
-                <CardTitle>关于</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">版本</span>
-                    <Badge variant="secondary">0.1.0</Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">构建时间</span>
-                    <span>{new Date().toLocaleDateString('zh-CN')}</span>
-                  </div>
+          {activeTab === 'about' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div>
+                <h2 className="text-lg font-medium">关于</h2>
+                <p className="text-sm text-muted-foreground">应用版本信息</p>
+              </div>
+              <Separator />
+              <div className="space-y-4">
+                <div className="flex justify-between py-2 border-b border-border/50">
+                  <span className="text-sm text-muted-foreground">版本</span>
+                  <span className="text-sm font-medium">0.1.0</span>
                 </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+                <div className="flex justify-between py-2 border-b border-border/50">
+                  <span className="text-sm text-muted-foreground">构建时间</span>
+                  <span className="text-sm font-medium">{new Date().toLocaleDateString('zh-CN')}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-border/50">
+                  <span className="text-sm text-muted-foreground">开发者</span>
+                  <span className="text-sm font-medium">AI Assistant</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
+      </main>
     </div>
   )
 }

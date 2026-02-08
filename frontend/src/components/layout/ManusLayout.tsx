@@ -1,5 +1,4 @@
 import { Outlet, useLocation } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
 import { HistorySidebar } from './HistorySidebar'
 import { TaskPanel } from './TaskPanel'
 import { Header } from './Header'
@@ -7,7 +6,7 @@ import { useTaskStore } from '@/stores/useTaskStore'
 import { cn } from '@/lib/utils'
 
 // Pages that show the task panel
-const TASK_PANEL_PAGES = ['/chat', '/blueprint', '/study-materials']
+const TASK_PANEL_PAGES = ['/chat', '/blueprint', '/study-materials', '/lesson-plans']
 
 export function ManusLayout() {
   const location = useLocation()
@@ -25,17 +24,20 @@ export function ManusLayout() {
   
   // Full screen pages (no sidebar)
   const isFullScreenPage = location.pathname.startsWith('/canvas')
+  
+  // Wide pages (no max-width constraint)
+  const isWidePage = location.pathname.startsWith('/blueprint')
 
   if (isFullScreenPage) {
     return (
-      <div className="h-screen w-screen overflow-hidden">
+      <div className="h-screen w-screen overflow-hidden bg-background text-foreground">
         <Outlet />
       </div>
     )
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-background text-foreground">
       {/* Header */}
       <Header />
       
@@ -45,29 +47,23 @@ export function ManusLayout() {
         <HistorySidebar />
         
         {/* Center - Main content */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden relative bg-background">
           <div className="flex-1 overflow-auto">
-            <Outlet />
+            <div className={cn(
+              "h-full mx-auto",
+              !isWidePage && "max-w-4xl w-full"
+            )}>
+               <Outlet />
+            </div>
           </div>
         </main>
         
         {/* Right panel - Task timeline */}
-        <AnimatePresence mode="wait">
-          {showTaskPanel && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: hasActiveTasks ? 360 : 0, opacity: hasActiveTasks ? 1 : 0 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className={cn(
-                "border-l border-border overflow-hidden",
-                !hasActiveTasks && "hidden"
-              )}
-            >
-              <TaskPanel />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {showTaskPanel && hasActiveTasks && (
+          <div className="w-[360px] border-l border-border bg-sidebar-background flex-shrink-0">
+            <TaskPanel />
+          </div>
+        )}
       </div>
     </div>
   )

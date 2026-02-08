@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { BookOpen, Loader2, Plus, Send, Sparkles, User } from 'lucide-react'
+import { BookOpen, Loader2, Plus, Send, Sparkles, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
@@ -13,7 +13,19 @@ import type { ConversationItem, Message, TaskStep } from '@/types'
 
 type StudyMaterialsAgentEvent =
   | { event: 'thinking'; data: { content?: unknown } }
-  | { event: 'tool_call'; data: { name?: unknown; arguments?: unknown } }
+  | { event: 'tool_call'; data: { step_id?: unknown; name?: unknown; title?: unknown; arguments?: unknown } }
+  | {
+      event: 'tool_result'
+      data: {
+        step_id?: unknown
+        name?: unknown
+        title?: unknown
+        success?: unknown
+        elapsed_ms?: unknown
+        output?: unknown
+        error?: unknown
+      }
+    }
   | { event: 'content'; data: { content?: unknown; section?: unknown } }
   | { event: 'done'; data: { material?: unknown } }
   | { event: 'error'; data: { message?: unknown } }
@@ -33,94 +45,101 @@ function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
 
+  if (isUser) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex justify-end mb-6"
+      >
+        <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+          <div className="whitespace-pre-wrap">{message.content}</div>
+        </div>
+      </motion.div>
+    )
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={cn('flex gap-3 mb-4', isUser ? 'flex-row-reverse' : 'flex-row')}
+      className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
     >
-      <div
-        className={cn(
-          'h-8 w-8 rounded-full flex items-center justify-center shrink-0',
-          isUser ? 'bg-primary text-primary-foreground' : 'bg-foreground text-background'
-        )}
-      >
-        {isUser ? (
-          <User className="h-4 w-4" strokeWidth={1.8} />
-        ) : (
-          <Sparkles className="h-4 w-4" strokeWidth={1.8} />
-        )}
+      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
+        <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+          <BrandMark size={12} />
+        </div>
+        <span>学习助手</span>
+      </div>
+      
+      <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
+        <div className="whitespace-pre-wrap">{message.content}</div>
       </div>
 
-      <div
-        className={cn(
-          'max-w-[75%] rounded-2xl px-4 py-3',
-          isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
-        )}
-      >
-        <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+      {message.steps && message.steps.length > 0 && (
+        <div className="mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+            onClick={() => setShowSteps(!showSteps)}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            {showSteps ? '隐藏' : '查看'} {message.steps.length} 个思考步骤
+            {showSteps ? <ChevronUp className="h-3 w-3 opacity-50" /> : <ChevronDown className="h-3 w-3 opacity-50" />}
+          </Button>
 
-        {message.steps && message.steps.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-border/50">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 text-xs px-2"
-              onClick={() => setShowSteps(!showSteps)}
-            >
-              <Sparkles className="h-3 w-3 mr-1" />
-              {showSteps ? '隐藏' : '查看'} {message.steps.length} 个执行步骤
-            </Button>
-
-            <AnimatePresence>
-              {showSteps && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="mt-2 overflow-hidden"
-                >
-                  <TaskTimeline steps={message.steps} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-      </div>
+          <AnimatePresence>
+            {showSteps && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
+              >
+                <div className="p-4 bg-muted/30">
+                   <TaskTimeline steps={message.steps} />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
     </motion.div>
   )
 }
 
-function WelcomeScreen() {
+function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => void }) {
   return (
-    <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-      <BrandMark size={64} className="mb-6" />
-      <h2 className="text-2xl font-bold mb-2">自学资料生成（对话框 + Manus 时间线）</h2>
-      <p className="text-muted-foreground max-w-md mb-8">
-        直接像 ChatGPT 一样输入你想学的知识点（例如“函数单调性”），系统会自动检索题目、生成讲解与例题步骤，并输出 Markdown。
-      </p>
-      <div className="grid grid-cols-2 gap-3 max-w-xl w-full">
+    <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+      <div className="mb-10 flex flex-col items-center text-center space-y-6">
+        <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center ring-1 ring-border/50 shadow-sm">
+           <BookOpen className="h-10 w-10 text-primary" strokeWidth={1.5} />
+        </div>
+        <h2 className="text-2xl font-semibold tracking-tight">自学资料生成</h2>
+        <p className="text-muted-foreground max-w-md">
+           输入你想学的知识点（例如“函数单调性”），我将为你检索题目、生成讲解与例题步骤。
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
         {[
           { title: '函数单调性', desc: '高中数学：定义法与典型例题' },
           { title: '二次函数最值', desc: '配方法/判别式/图像理解' },
           { title: '受力分析', desc: '受力图、正交分解、常见陷阱' },
           { title: '化学平衡常数', desc: 'K 的表达式、比较与计算' },
         ].map((item) => (
-          <div
+          <button
             key={item.title}
-            className={cn(
-              'text-left p-4 rounded-xl border border-border/80',
-              'bg-card/50 shadow-sm'
-            )}
+            onClick={() => onExampleClick(item.desc)}
+            className="group relative flex flex-col items-start p-4 h-auto text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
           >
-            <div className="flex items-center gap-2 mb-2">
-              <div className="h-8 w-8 rounded-lg bg-muted/60 flex items-center justify-center ring-1 ring-border/60">
-                <BookOpen className="h-4 w-4 text-foreground/80" strokeWidth={1.8} />
-              </div>
-              <div className="font-medium text-sm">{item.title}</div>
+            <div className="mb-3 rounded-lg bg-muted p-2 group-hover:bg-background transition-colors">
+              <BookOpen className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
             </div>
-            <div className="text-sm text-muted-foreground leading-5">{item.desc}</div>
-          </div>
+            <div className="font-medium text-sm mb-1">{item.title}</div>
+            <div className="text-xs text-muted-foreground line-clamp-2">{item.desc}</div>
+          </button>
         ))}
       </div>
     </div>
@@ -267,8 +286,11 @@ export default function StudyMaterialsPage() {
     const startRunningStep = (title: string, extra?: Partial<TaskStep>) => {
       const t = new Date().toISOString()
       if (runningStepId) {
-        updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
-        updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
+        const prev = assistantSteps.find((s) => s.id === runningStepId)
+        if (prev?.status === 'running') {
+          updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
+          updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
+        }
       }
 
       const step: TaskStep = {
@@ -303,8 +325,38 @@ export default function StudyMaterialsPage() {
 
         if (kind === 'tool_call') {
           const name = toText(payload?.name) || 'tool'
-          startRunningStep(`调用工具：${name}`, { toolName: name, input: payload?.arguments })
+          const stepId = toText(payload?.step_id)
+          const stepTitle = toText(payload?.title)
+          startRunningStep(stepTitle || `调用工具：${name}`, {
+            ...(stepId ? { id: stepId } : {}),
+            toolName: name,
+            input: payload?.arguments,
+          })
           updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 40 })
+          return
+        }
+
+        if (kind === 'tool_result') {
+          const stepId = toText(payload?.step_id) || runningStepId || ''
+          if (!stepId) return
+          const success = (payload as any)?.success === true
+          const out = (payload as any)?.output
+          const err = toText(payload?.error)
+          const t = new Date().toISOString()
+
+          updateStep(taskId, stepId, {
+            status: success ? 'completed' : 'failed',
+            endTime: t,
+            output: out,
+            error: err || undefined,
+          })
+          updateAssistantStep(stepId, {
+            status: success ? 'completed' : 'failed',
+            endTime: t,
+            output: out,
+            error: err || undefined,
+          })
+          runningStepId = null
           return
         }
 
@@ -404,55 +456,100 @@ export default function StudyMaterialsPage() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Top bar */}
-      <div className="border-b border-border p-3 glass flex items-center justify-between">
-        <div className="text-sm font-medium text-muted-foreground">
-          自学资料生成 · Manus 时间轴
-        </div>
-        <Button variant="outline" size="sm" onClick={handleNewConversation} className="gap-2">
-          <Plus className="h-4 w-4" />
-          新建自学资料对话
-        </Button>
-      </div>
-
+    <div className="h-full flex flex-col relative">
       {/* Messages */}
       {messages.length === 0 ? (
-        <WelcomeScreen />
+        <WelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4">
-          <div className="max-w-4xl mx-auto">
-            <AnimatePresence initial={false}>
+        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+          <div className="max-w-3xl mx-auto py-6">
+            <AnimatePresence mode="popLayout">
               {messages.map((m) => (
                 <MessageBubble key={m.id} message={m} />
               ))}
             </AnimatePresence>
+
+            {isGenerating && messages[messages.length - 1]?.content === '' && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex gap-3 mb-4 max-w-3xl"
+              >
+                <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                </div>
+                <div className="text-sm text-muted-foreground pt-0.5">
+                   正在生成...
+                </div>
+              </motion.div>
+            )}
+
+            {error && (
+              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                {error}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="border-t border-border glass p-4">
-        <div className="max-w-4xl mx-auto flex gap-3 items-end">
-          <div className="flex-1">
-            <Textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="例如：函数单调性 / 二次函数最值 / 受力分析 / 化学平衡常数…（Enter 发送，Shift+Enter 换行）"
-              className="min-h-[56px] max-h-40 resize-none"
-              disabled={isGenerating}
-            />
-            {error && <div className="mt-2 text-sm text-destructive">出错：{error}</div>}
+      {/* Composer */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
+        <div className="max-w-3xl mx-auto">
+          <form onSubmit={handleSubmit} className="relative group">
+            <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
+               <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-xl text-muted-foreground hover:text-foreground shrink-0 mb-0.5"
+                onClick={handleNewConversation}
+                title="新建对话"
+               >
+                 <Plus className="h-5 w-5" />
+               </Button>
+               
+               <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="例如：函数单调性 / 二次函数最值 / 受力分析..."
+                className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+                disabled={isGenerating}
+                rows={1}
+                style={{ height: 'auto', overflow: 'hidden' }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                }}
+              />
+              
+              <Button
+                type="submit"
+                size="icon"
+                className={cn(
+                  "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
+                  input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                )}
+                disabled={!input.trim() || isGenerating}
+              >
+                {isGenerating ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </form>
+          
+          <div className="text-center mt-2 text-[10px] text-muted-foreground/50">
+            内容由 AI 生成，仅供参考。
           </div>
-          <Button type="submit" disabled={isGenerating || !input.trim()} className="gap-2">
-            {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            发送
-          </Button>
         </div>
-      </form>
+      </div>
     </div>
   )
 }
-

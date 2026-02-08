@@ -7,6 +7,15 @@ import {
   Clock,
   Pause,
   ChevronRight,
+  Globe,
+  BookOpen,
+  Search,
+  Cpu,
+  Database,
+  FileText,
+  User,
+  Layers,
+  Sparkles,
   Wrench,
 } from 'lucide-react'
 import {
@@ -54,10 +63,83 @@ const statusConfig: Record<
   },
 }
 
+/** Map tool names to human-readable titles + icons */
+const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
+  get_user_profile:              { label: '读取用户画像',       icon: User },
+  split_knowledge_points:        { label: '拆分知识点',         icon: Layers },
+  web_search_knowledge:          { label: '联网搜索资料',       icon: Globe },
+  wikipedia_search:              { label: '搜索维基百科',       icon: BookOpen },
+  search_questions_by_knowledge: { label: '题库检索相关题目',   icon: Search },
+  search_questions:              { label: '搜索题目',           icon: Search },
+  aggregate_knowledge:           { label: '聚合知识资料',       icon: Database },
+  generate_study_material:       { label: '生成自学资料',       icon: Sparkles },
+  compose_paper:                 { label: '组合试卷',           icon: FileText },
+  create_paper:                  { label: '创建试卷',           icon: FileText },
+  analyze_paper:                 { label: '分析试卷难度',       icon: Cpu },
+}
+
+/** Extract the current knowledge-point context from step input */
+function extractContext(step: TaskStepType): string | null {
+  if (!step.input || typeof step.input !== 'object') return null
+  const input = step.input as Record<string, unknown>
+
+  const preferKnowledgePoints = new Set([
+    'web_search_knowledge',
+    'wikipedia_search',
+    'search_questions_by_knowledge',
+    'aggregate_knowledge',
+  ])
+
+  const formatKps = (kps: unknown): string | null => {
+    if (!Array.isArray(kps)) return null
+    const uniq = Array.from(
+      new Set(
+        kps
+          .map((x) => (typeof x === 'string' ? x.trim() : ''))
+          .filter((x) => x && x.length < 60)
+      )
+    )
+    if (uniq.length === 0) return null
+    if (uniq.length <= 3) return uniq.join('、')
+    return `${uniq[0]} 等${uniq.length}个`
+  }
+
+  if (step.toolName && preferKnowledgePoints.has(step.toolName)) {
+    const kpCtx = formatKps(input.knowledge_points)
+    if (kpCtx) return kpCtx
+  }
+
+  // Common fields that carry the current topic/knowledge point
+  for (const key of ['topic', 'knowledge_point', 'query', 'keyword', 'term']) {
+    const val = input[key]
+    if (typeof val === 'string' && val.length > 0 && val.length < 80) return val
+  }
+  return null
+}
+
+/** Build a human-readable title for a step */
+function getDisplayTitle(step: TaskStepType): { title: string; ToolIcon: typeof Globe | null } {
+  // If the step has a tool name, use its mapped label
+  if (step.toolName) {
+    const display = TOOL_DISPLAY[step.toolName]
+    if (display) {
+      const ctx = extractContext(step)
+      const label = ctx ? `${display.label}：${ctx}` : display.label
+      return { title: label, ToolIcon: display.icon }
+    }
+    // Fallback: strip "调用工具：" prefix and show tool name naturally
+    return { title: step.toolName.replace(/_/g, ' '), ToolIcon: Wrench }
+  }
+
+  // Non-tool step: strip "调用工具：" if present in the original title
+  const raw = (step.title || '').replace(/^调用工具[：:]\s*/i, '').trim()
+  return { title: raw || step.title, ToolIcon: null }
+}
+
 export function TaskStep({ step, isLast }: TaskStepProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const config = statusConfig[step.status]
-  const Icon = config.icon
+  const StatusIcon = config.icon
 
   // Calculate duration
   const duration =
@@ -65,19 +147,21 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
       ? new Date(step.endTime).getTime() - new Date(step.startTime).getTime()
       : null
 
-  const hasDetails = step.input || step.output || step.error || step.toolName
+  const hasDetails = step.input || step.output || step.error
+
+  const { title, ToolIcon } = getDisplayTitle(step)
 
   return (
     <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-      <div className={cn("relative pl-8", isLast ? "pb-0" : "pb-4")}>
+      <div className={cn("relative pl-8", isLast ? "pb-0" : "pb-3")}>
         {/* Status indicator */}
         <div
           className={cn(
-            "absolute left-0 top-0 h-6 w-6 rounded-full flex items-center justify-center",
+            "absolute left-0 top-1 h-6 w-6 rounded-full flex items-center justify-center",
             config.bgColor
           )}
         >
-          <Icon
+          <StatusIcon
             className={cn(
               "h-3.5 w-3.5",
               config.color,
@@ -87,59 +171,41 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
         </div>
 
         {/* Content */}
-        <div
-          className={cn(
-            "rounded-lg border p-3 transition-colors",
-            step.status === 'running' && "border-foreground/30 bg-foreground/5",
-            step.status === 'failed' && "border-destructive/40 bg-destructive/10",
-            step.status === 'completed' && "border-border bg-card",
-            (step.status === 'pending' || step.status === 'paused') &&
-              "border-border bg-muted/50"
-          )}
-        >
-          <CollapsibleTrigger asChild>
-            <div
-              className={cn(
-                "flex items-start gap-2 cursor-pointer",
-                hasDetails && "hover:opacity-80"
-              )}
-            >
+        <CollapsibleTrigger asChild>
+          <div
+            className={cn(
+              "cursor-pointer select-none",
+              hasDetails && "hover:opacity-80"
+            )}
+          >
+            <div className="flex items-start gap-1.5">
               {/* Expand icon */}
               {hasDetails && (
                 <motion.div
                   animate={{ rotate: isExpanded ? 90 : 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="mt-0.5"
+                  transition={{ duration: 0.15 }}
+                  className="mt-0.5 shrink-0"
                 >
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
                 </motion.div>
               )}
 
               <div className="flex-1 min-w-0">
-                {/* Title */}
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{step.title}</span>
-                  {step.toolName && (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                      <Wrench className="h-3 w-3" />
-                      {step.toolName}
-                    </span>
+                {/* Title with tool icon */}
+                <div className="flex items-center gap-1.5 text-sm leading-5">
+                  {ToolIcon && (
+                    <ToolIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   )}
+                  <span className="font-medium">{title}</span>
                 </div>
 
-                {/* Meta info */}
-                <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                  {step.startTime && (
-                    <span>{formatTime(step.startTime)}</span>
-                  )}
-                  {duration && (
-                    <span className="text-muted-foreground/70">
-                      {formatDuration(duration)}
-                    </span>
-                  )}
+                {/* Meta: time + duration */}
+                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground/70">
+                  {step.startTime && <span>{formatTime(step.startTime)}</span>}
+                  {duration !== null && <span>{formatDuration(duration)}</span>}
                 </div>
 
-                {/* Error preview */}
+                {/* Error preview when collapsed */}
                 {step.error && !isExpanded && (
                   <div className="mt-1 text-xs text-destructive truncate">
                     {step.error}
@@ -147,24 +213,25 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
                 )}
               </div>
             </div>
-          </CollapsibleTrigger>
+          </div>
+        </CollapsibleTrigger>
 
-          {/* Expanded details */}
-          <CollapsibleContent>
-            <AnimatePresence>
-              {isExpanded && hasDetails && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <StepDetail step={step} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </CollapsibleContent>
-        </div>
+        {/* Expanded details */}
+        <CollapsibleContent>
+          <AnimatePresence>
+            {isExpanded && hasDetails && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                className="ml-5"
+              >
+                <StepDetail step={step} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </CollapsibleContent>
 
         {/* Children steps */}
         {step.children && step.children.length > 0 && (

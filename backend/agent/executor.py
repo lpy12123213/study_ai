@@ -128,6 +128,112 @@ class Executor:
                     break
             return out
 
+        def _extract_wiki_headings(content: str) -> List[str]:
+            if not content:
+                return []
+            # Wikipedia plaintext headings often look like: "== 标题 ==" or "=== 标题 ==="
+            headings = re.findall(r"^==+\s*(.+?)\s*==+\s*$", content, flags=re.MULTILINE)
+            cleaned: List[str] = []
+            stop_exact = {
+                "参见",
+                "参考文献",
+                "外部链接",
+                "注释",
+                "延伸阅读",
+                "参考资料",
+                "脚注",
+            }
+            stop_contains = ["参考", "链接", "注释"]
+            for h in headings:
+                s = str(h or "").strip()
+                s = re.sub(r"\s+", " ", s)
+                s = re.sub(r"[（(].*?[）)]", "", s).strip()
+                if not s:
+                    continue
+                if s in stop_exact:
+                    continue
+                if any(x in s for x in stop_contains):
+                    continue
+                if len(s) < 2 or len(s) > 24:
+                    continue
+                cleaned.append(s)
+            return cleaned
+
+        async def _split_from_wikipedia() -> List[str]:
+            """Best-effort: use Wikipedia page structure to derive sub-knowledge points."""
+            try:
+                from backend.mcp.wikipedia_search import wikipedia_search as _wiki
+            except Exception:
+                return []
+
+            q = topic
+            # Provide a small disambiguation hint for math topics.
+            if subject and "数学" in subject and "数学" not in q:
+                q = f"{q} 数学"
+            try:
+                res = await _wiki(
+                    query=q,
+                    lang="zh",
+                    sentences=2,
+                    auto_suggest=True,
+                    search_results=5,
+                    max_content_length=5000,
+                )
+            except Exception:
+                return []
+
+            if not isinstance(res, dict) or not res.get("success"):
+                return []
+
+            content = str(res.get("content") or "")
+            headings = _extract_wiki_headings(content)
+            hits = res.get("search_hits") if isinstance(res.get("search_hits"), list) else []
+            hits = [str(x or "").strip() for x in hits if str(x or "").strip()]
+
+            generic_headings = {"概述", "定义", "性质", "定理", "方法", "应用", "相关概念", "基本概念"}
+            candidates: List[str] = []
+            for h in headings:
+                if h in generic_headings:
+                    candidates.append(f"{topic} {h}")
+                else:
+                    candidates.append(h)
+            # Prefer a few related search hits (often include key terms).
+            candidates.extend(hits[:8])
+            return _clean_points(candidates)
+
+        def _split_by_templates() -> List[str]:
+            """Domain heuristics for common topics when no LLM is configured."""
+            t = topic
+            cands: List[str] = []
+
+            # Projective geometry (射影几何 / 射影)
+            if "射影" in t:
+                cands.extend(
+                    [
+                        "射影空间",
+                        "齐次坐标",
+                        "射影变换",
+                        "交比（射影不变量）",
+                        "对偶原理",
+                        "德萨格定理",
+                        "帕普斯定理",
+                        "消失点与透视投影",
+                        "圆锥曲线的射影性质",
+                    ]
+                )
+
+            # Generic math fallbacks (still searchable)
+            if ("数学" in subject) or ("几何" in t) or ("代数" in t) or ("函数" in t):
+                cands.extend(
+                    [
+                        f"{t} 基本概念",
+                        f"{t} 典型性质",
+                        f"{t} 常见题型",
+                        f"{t} 易错点",
+                    ]
+                )
+            return _clean_points(cands)
+
         # LLM-powered split when configured.
         if LESSON_PLAN_API_KEY:
             prompt = {
@@ -152,7 +258,7 @@ class Executor:
             )
             obj = self._extract_json_obj(text)
             points = _clean_points(list(obj.get("knowledge_points") or []))
-            if points:
+            if len(points) >= min_points:
                 return {
                     "topic": topic,
                     "subject": subject,
@@ -163,15 +269,31 @@ class Executor:
         # Heuristic fallback: split by punctuation if user provided a list.
         raw = re.split(r"[\n,，;；、/|]+", topic)
         points = _clean_points([x for x in raw if str(x).strip()])
-        if not points:
-            points = [topic] if topic else []
-        points = points[:max_points] if points else []
+
+        # If still too few points (single concept), try Wikipedia headings + templates.
+        if len(points) < min_points:
+            wiki_points = await _split_from_wikipedia()
+            points = _clean_points(points + wiki_points)
+
+        if len(points) < min_points:
+            tpl_points = _split_by_templates()
+            points = _clean_points(points + tpl_points)
+
+        if not points and topic:
+            points = [topic]
+
+        # Ensure at least min_points when possible (pad with safe variants).
+        if topic and len(points) < min_points:
+            pads = [topic]
+            pads.extend([f"{topic} 基本概念", f"{topic} 常见题型", f"{topic} 典型例题"])
+            points = _clean_points(points + pads)
+
         return {
             "topic": topic,
             "subject": subject,
             "knowledge_points": points or ([topic] if topic else []),
-            "source": "heuristic" if points else "fallback",
-            "note": "未配置拆分模型或解析失败，使用启发式拆分。",
+            "source": "heuristic+",
+            "note": "未配置拆分模型或拆分不足，使用 Wikipedia 结构 + 规则模板增强拆分。",
         }
 
     async def _tool_web_search_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:

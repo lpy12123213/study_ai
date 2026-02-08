@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, AsyncIterator, Dict, Optional
 
 from backend.agent.config import AgentConfig
@@ -41,6 +42,50 @@ def _chunk_text(text: str, *, chunk_size: int = 500) -> AsyncIterator[str]:
             yield text[i : i + chunk_size]
 
     return _gen()
+
+
+def _clip_for_sse(value: Any, *, depth: int = 0) -> Any:
+    """Best-effort trimming so tool outputs won't overwhelm SSE payloads."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, (bool, int, float)):
+        return value
+
+    if isinstance(value, str):
+        max_len = 1200 if depth == 0 else 800
+        if len(value) <= max_len:
+            return value
+        return value[: max_len - 1].rstrip() + "…"
+
+    if isinstance(value, list):
+        if depth >= 3:
+            return f"[{len(value)} items]"
+        max_items = 10 if depth == 0 else 6
+        clipped = [_clip_for_sse(x, depth=depth + 1) for x in value[:max_items]]
+        if len(value) > max_items:
+            clipped.append(f"…（共 {len(value)} 项）")
+        return clipped
+
+    if isinstance(value, dict):
+        if depth >= 3:
+            return "{...}"
+        out: Dict[str, Any] = {}
+        for k, v in value.items():
+            key = str(k)
+            # Common large fields: keep a smaller preview.
+            if key in {"markdown", "content", "stem", "solution_markdown"} and isinstance(v, str):
+                out[key] = _clip_for_sse(v, depth=depth + 1)
+                continue
+            out[key] = _clip_for_sse(v, depth=depth + 1)
+        return out
+
+    # Fallback: stringify unknown objects (Path, datetime, etc.)
+    try:
+        return str(value)
+    except Exception:
+        return "<unserializable>"
 
 
 class AgentCore:
@@ -105,8 +150,48 @@ class AgentCore:
 
                 for step in plan.steps:
                     self.state = AgentState.WAITING_TOOL
-                    yield agent_event("tool_call", {"name": step.tool, "arguments": step.arguments})
+                    # Enrich multi-point tools with the split result for better UX (and to make
+                    # downstream tools explicitly reflect the current knowledge points).
+                    try:
+                        step_args = dict(step.arguments or {})
+                        if step.tool in {
+                            "web_search_knowledge",
+                            "wikipedia_search",
+                            "search_questions_by_knowledge",
+                            "aggregate_knowledge",
+                        } and "knowledge_points" not in step_args:
+                            split_res = ctx.working_memory.get("split_knowledge_points")
+                            if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                                kps = [
+                                    str(x or "").strip()
+                                    for x in (split_res.get("knowledge_points") or [])
+                                    if str(x or "").strip()
+                                ][:15]
+                                if kps:
+                                    step_args["knowledge_points"] = kps
+                        step.arguments = step_args
+                    except Exception:
+                        # Best-effort only; never block execution.
+                        pass
+                    yield agent_event(
+                        "tool_call",
+                        {"step_id": step.id, "name": step.tool, "title": step.title, "arguments": step.arguments},
+                    )
+                    t0 = time.monotonic()
                     step_result = await self.executor.execute_step(step, context=ctx)
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    yield agent_event(
+                        "tool_result",
+                        {
+                            "step_id": step.id,
+                            "name": step.tool,
+                            "title": step.title,
+                            "success": bool(step_result.success),
+                            "elapsed_ms": elapsed_ms,
+                            "output": _clip_for_sse(step_result.output),
+                            "error": step_result.error,
+                        },
+                    )
                     results.step_results.append(step_result)
                     self.context_manager.on_step_result(ctx, step=step, result=step_result)
                     if (

@@ -1,8 +1,8 @@
-import { motion } from 'framer-motion'
-import { Pause } from 'lucide-react'
+import { Pause, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { Progress } from '@/components/ui/progress'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { ResumeControl } from '@/components/task/ResumeControl'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -46,18 +46,25 @@ export function TaskPanel() {
     return null
   }
 
+  const completedCount = currentSteps.filter((s) => s.status === 'completed').length
+  const totalCount = currentSteps.length || 1
+  const progressPercent = Math.round((completedCount / totalCount) * 100)
+
   return (
-    <div className="w-[360px] h-full flex flex-col glass">
+    <div className="w-full h-full flex flex-col bg-sidebar-background">
       {/* Header */}
       <div className="p-4 border-b border-border">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">任务执行</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold flex items-center gap-2">
+            {!isPaused && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+            任务执行
+          </h3>
           <div className="flex items-center gap-1">
             {isResumable && !isPaused && (
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7"
+                className="h-8 w-8"
                 onClick={handlePause}
               >
                 <Pause className="h-4 w-4" />
@@ -67,33 +74,14 @@ export function TaskPanel() {
         </div>
         
         {/* Progress indicator */}
-        <div className="mt-2">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>
-              {currentSteps.filter((s) => s.status === 'completed').length} / {currentSteps.length} 步骤
+              {completedCount} / {totalCount} 步骤
             </span>
-            <span>
-              {Math.round(
-                (currentSteps.filter((s) => s.status === 'completed').length /
-                  currentSteps.length) *
-                  100
-              )}%
-            </span>
+            <span>{progressPercent}%</span>
           </div>
-          <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-            <motion.div
-              className="h-full bg-foreground/80"
-              initial={{ width: 0 }}
-              animate={{
-                width: `${
-                  (currentSteps.filter((s) => s.status === 'completed').length /
-                    currentSteps.length) *
-                  100
-                }%`,
-              }}
-              transition={{ duration: 0.3 }}
-            />
-          </div>
+          <Progress value={progressPercent} className="h-1.5" />
         </div>
       </div>
 

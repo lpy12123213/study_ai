@@ -2,11 +2,32 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { TaskStep as TaskStepComponent } from './TaskStep'
 import type { TaskStep } from '@/types'
 
+/** Generic boilerplate step titles to hide */
+const NOISE_PATTERNS = [
+  '接收请求',
+  '开始生成',
+  '初始化上下文',
+  '初始化',
+  '计划：',
+  '计划:',
+]
+
+function isNoiseStep(step: TaskStep): boolean {
+  const t = (step.title || '').trim()
+  // Match noise patterns
+  if (NOISE_PATTERNS.some((p) => t.includes(p))) return true
+  // Hide overly long "thinking" steps (plans, chains, etc.)
+  if (!step.toolName && t.length > 60) return true
+  return false
+}
+
 interface TaskTimelineProps {
   steps: TaskStep[]
 }
 
 export function TaskTimeline({ steps }: TaskTimelineProps) {
+  const filtered = steps.filter((s) => !isNoiseStep(s))
+
   return (
     <div className="relative">
       {/* Timeline line */}
@@ -14,7 +35,7 @@ export function TaskTimeline({ steps }: TaskTimelineProps) {
       
       {/* Steps */}
       <AnimatePresence mode="popLayout">
-        {steps.map((step, index) => (
+        {filtered.map((step, index) => (
           <motion.div
             key={step.id}
             initial={{ opacity: 0, y: 20 }}
@@ -24,13 +45,13 @@ export function TaskTimeline({ steps }: TaskTimelineProps) {
           >
             <TaskStepComponent
               step={step}
-              isLast={index === steps.length - 1}
+              isLast={index === filtered.length - 1}
             />
           </motion.div>
         ))}
       </AnimatePresence>
       
-      {steps.length === 0 && (
+      {filtered.length === 0 && (
         <div className="text-center text-muted-foreground text-sm py-8">
           等待任务开始...
         </div>
