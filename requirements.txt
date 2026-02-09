@@ -11,6 +11,7 @@ PyJWT>=2.8.0
 # Web scraping and parsing
 beautifulsoup4>=4.12.2
 lxml>=4.9.3
+markdownify>=0.11.0
 
 # Utilities
 python-dotenv>=1.0.0

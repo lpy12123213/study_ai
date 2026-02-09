@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import asyncio
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -474,7 +476,82 @@ class Executor:
                     break
             return urls
 
+        def _normalize_url_for_fetch(u: str) -> str:
+            raw = (u or "").strip()
+            if not raw:
+                return ""
+            try:
+                parsed = urlparse(raw)
+                host = (parsed.netloc or "").lower()
+                if host == "link.zhihu.com":
+                    qs = parse_qs(parsed.query or "")
+                    target = qs.get("target", [""])[0]
+                    if target:
+                        return unquote(str(target))
+                return raw
+            except Exception:
+                return raw
+
+        def _is_zhihu_url(u: str) -> bool:
+            try:
+                host = (urlparse(u).netloc or "").lower()
+            except Exception:
+                return False
+            return host == "zhihu.com" or host.endswith(".zhihu.com")
+
         async def _fetch_one(url: str, *, client: httpx.AsyncClient) -> Dict[str, Any]:
+            url = _normalize_url_for_fetch(url) or url
+
+            if _is_zhihu_url(url):
+                cookies = (os.getenv("ZHIHU_COOKIES") or "").strip()
+                try:
+                    from backend.mcp.zhihu_fetcher import ZhihuFetcher
+                except Exception as exc:
+                    return {"url": url, "success": False, "error": f"zhihu_fetcher not available: {exc}"}
+
+                try:
+                    zh_timeout = int(max(5.0, min(float(timeout_s), 60.0)))
+                except Exception:
+                    zh_timeout = 30
+
+                fetcher = ZhihuFetcher(cookies=cookies, timeout_seconds=zh_timeout)
+                res = await fetcher.fetch(url)
+                payload = res.to_dict()
+
+                if not bool(payload.get("success")):
+                    out: Dict[str, Any] = {
+                        "url": url,
+                        "success": False,
+                        "provider": "zhihu",
+                        "error": str(payload.get("error") or "fetch_failed"),
+                        "title": str(payload.get("title") or "").strip(),
+                        "author": str(payload.get("author") or "").strip(),
+                        "date": str(payload.get("date") or "").strip(),
+                        "zhihu_type": str(payload.get("type") or "").strip(),
+                    }
+                    out = {k: v for k, v in out.items() if v not in ("", None)}
+                    if out.get("error") == "cookies_required" and not cookies:
+                        out["note"] = "需要登录态：请在环境变量或 .env 配置 ZHIHU_COOKIES"
+                    return out
+
+                text = str(payload.get("content_markdown") or "").strip()
+                if len(text) > max_chars:
+                    text = text[: max_chars - 1].rstrip() + "…"
+
+                out = {
+                    "url": url,
+                    "success": True,
+                    "provider": "zhihu",
+                    "content_type": "text/markdown",
+                    "zhihu_type": str(payload.get("type") or "").strip(),
+                    "title": str(payload.get("title") or "").strip(),
+                    "author": str(payload.get("author") or "").strip(),
+                    "date": str(payload.get("date") or "").strip(),
+                    "chars": len(text),
+                    "text": text,
+                }
+                return {k: v for k, v in out.items() if v not in ("", None)}
+
             # Skip non-HTML-ish resources.
             if url.lower().endswith((".pdf", ".zip", ".rar", ".7z")):
                 return {"url": url, "success": False, "error": "unsupported file type"}
@@ -530,10 +607,15 @@ class Executor:
         concurrency = int(args.get("concurrency") or 2)
         concurrency = max(1, min(concurrency, 4))
         sem = asyncio.Semaphore(concurrency)
+        zhihu_sem = asyncio.Semaphore(min(2, concurrency))
 
         async def _guarded_fetch(url: str, *, client: httpx.AsyncClient) -> Dict[str, Any]:
+            normalized = _normalize_url_for_fetch(url) or url
             async with sem:
-                return await _fetch_one(url, client=client)
+                if _is_zhihu_url(normalized):
+                    async with zhihu_sem:
+                        return await _fetch_one(normalized, client=client)
+                return await _fetch_one(normalized, client=client)
 
         headers = {
             "User-Agent": (
