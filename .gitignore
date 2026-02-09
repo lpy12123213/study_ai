@@ -98,3 +98,12 @@ playground/
 
 # MCP
 mcp_logs/
+
+# Experimental / local-only features (not part of main app)
+backend/api/deepthink.py
+backend/deepthink/
+backend/deepthink_service.py
+frontend/src/api/deepthink.ts
+frontend/src/components/deepthink/
+frontend/src/hooks/useDeepThink.ts
+frontend/src/pages/DeepThinkPage.tsx
