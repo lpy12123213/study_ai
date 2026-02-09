@@ -150,113 +150,164 @@ class AgentCore:
                 self.state = AgentState.ACTING
                 yield agent_event("thinking", {"content": "Act 阶段：执行工具链…"})
 
-                for step in plan.steps:
-                    # Expand `foreach_knowledge_point` steps into per-knowledge-point tool calls.
-                    expanded_steps: List[PlanStep] = []
+                async def _execute_concrete_step(concrete_step: PlanStep) -> AsyncIterator[Dict[str, Any]]:
+                    """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
+
+                    self.state = AgentState.WAITING_TOOL
+
+                    thought = (getattr(concrete_step, "thought", "") or "").strip()
+                    if thought:
+                        yield agent_event("thinking", {"content": thought})
+
+                    # Enrich multi-point tools with the split result for better UX (and to make
+                    # downstream tools explicitly reflect the current knowledge points).
+                    try:
+                        step_args = dict(concrete_step.arguments or {})
+                        if concrete_step.tool in {
+                            "web_search_knowledge",
+                            "browse_web_pages",
+                            "wikipedia_search",
+                            "search_questions_by_knowledge",
+                            "aggregate_knowledge",
+                            "generate_study_material",
+                        } and "knowledge_points" not in step_args:
+                            split_res = ctx.working_memory.get("split_knowledge_points")
+                            if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                                kps = [
+                                    str(x or "").strip()
+                                    for x in (split_res.get("knowledge_points") or [])
+                                    if str(x or "").strip()
+                                ][:15]
+                                if kps:
+                                    step_args["knowledge_points"] = kps
+                        concrete_step.arguments = step_args
+                    except Exception:
+                        # Best-effort only; never block execution.
+                        pass
+
+                    yield agent_event(
+                        "tool_call",
+                        {
+                            "step_id": concrete_step.id,
+                            "name": concrete_step.tool,
+                            "title": concrete_step.title,
+                            "arguments": concrete_step.arguments,
+                        },
+                    )
+                    t0 = time.monotonic()
+                    step_result = await self.executor.execute_step(concrete_step, context=ctx)
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    yield agent_event(
+                        "tool_result",
+                        {
+                            "step_id": concrete_step.id,
+                            "name": concrete_step.tool,
+                            "title": concrete_step.title,
+                            "success": bool(step_result.success),
+                            "elapsed_ms": elapsed_ms,
+                            "output": _clip_for_sse(step_result.output),
+                            "error": step_result.error,
+                        },
+                    )
+                    results.step_results.append(step_result)
+                    self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
+                    if (
+                        step_result.success
+                        and step_result.tool in {"assemble_markdown", "revise_markdown"}
+                        and isinstance(step_result.output, str)
+                        and step_result.output.strip()
+                    ):
+                        results.artifacts["markdown"] = step_result.output.strip()
+
+                def _split_knowledge_points() -> List[str]:
+                    split_res = ctx.working_memory.get("split_knowledge_points") or {}
+                    kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
+                    kps = (
+                        [
+                            str(x or "").strip()
+                            for x in (kps_raw or [])
+                            if isinstance(x, (str, int, float)) and str(x or "").strip()
+                        ]
+                        if isinstance(kps_raw, list)
+                        else []
+                    )
+                    return kps[:15]
+
+                def _expand_foreach(step: PlanStep, *, kp: str) -> PlanStep:
+                    args = dict(getattr(step, "arguments", {}) or {})
+                    args["knowledge_points"] = [kp]
+                    title = f"{step.title}：{kp}" if kp else step.title
+
+                    thought = (getattr(step, "thought", "") or "").strip()
+                    if not thought:
+                        thought = f"执行 {step.tool}：收集并整理该知识点的学习素材。"
+                    if kp:
+                        thought = f"{thought}\n当前知识点：{kp}"
+
+                    return PlanStep(
+                        id=f"{step.id}-{uuid.uuid4().hex[:6]}",
+                        title=title,
+                        tool=step.tool,
+                        arguments=args,
+                        depends_on=list(getattr(step, "depends_on", []) or []),
+                        parallel_group=str(getattr(step, "parallel_group", "") or ""),
+                        thought=thought,
+                    )
+
+                # DFS-style execution for `foreach_knowledge_point` blocks:
+                # - BFS (old): tool-by-tool across all knowledge points
+                # - DFS (new): for each knowledge point, execute the full research chain before moving on
+                steps = list(plan.steps or [])
+                i = 0
+                while i < len(steps):
+                    step = steps[i]
                     if getattr(step, "foreach_knowledge_point", False):
-                        split_res = ctx.working_memory.get("split_knowledge_points") or {}
-                        kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
-                        kps = (
-                            [
-                                str(x or "").strip()
-                                for x in (kps_raw or [])
-                                if isinstance(x, (str, int, float)) and str(x or "").strip()
-                            ]
-                            if isinstance(kps_raw, list)
-                            else []
-                        )
-                        kps = kps[:15]
-                        limit = int(getattr(step, "foreach_limit", 0) or 0)
+                        block: List[PlanStep] = []
+                        while i < len(steps) and getattr(steps[i], "foreach_knowledge_point", False):
+                            block.append(steps[i])
+                            i += 1
+
+                        kps = _split_knowledge_points()
+                        if not kps and user_input:
+                            kps = [user_input]
+
+                        # Respect the smallest positive foreach_limit in this block (if provided).
+                        limits = [int(getattr(s, "foreach_limit", 0) or 0) for s in block]
+                        positive_limits = [x for x in limits if x > 0]
+                        limit = min(positive_limits) if positive_limits else 0
                         if limit > 0:
                             kps = kps[: max(1, limit)]
 
-                        for idx, kp in enumerate(kps, start=1):
-                            args = dict(getattr(step, "arguments", {}) or {})
-                            args["knowledge_points"] = [kp]
-                            title = f"{step.title}：{kp}" if kp else step.title
-                            thought = (getattr(step, "thought", "") or "").strip()
-                            if thought and kp:
-                                thought = f"{thought}\n当前知识点：{kp}"
-                            expanded_steps.append(
-                                PlanStep(
-                                    id=f"{step.id}-{idx}-{uuid.uuid4().hex[:4]}",
-                                    title=title,
-                                    tool=step.tool,
-                                    arguments=args,
-                                    depends_on=list(getattr(step, "depends_on", []) or []),
-                                    parallel_group=str(getattr(step, "parallel_group", "") or ""),
-                                    thought=thought,
-                                )
+                        if not kps:
+                            # Nothing to expand: execute block steps once.
+                            for s in block:
+                                async for evt in _execute_concrete_step(s):
+                                    yield evt
+                            continue
+
+                        for kp in kps:
+                            # Sub-agent markers (kept as "thinking" so UI can display them).
+                            yield agent_event(
+                                "thinking",
+                                {
+                                    "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
+                                },
                             )
+                            for s in block:
+                                concrete = _expand_foreach(s, kp=kp)
+                                async for evt in _execute_concrete_step(concrete):
+                                    yield evt
+                            yield agent_event(
+                                "thinking",
+                                {
+                                    "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
+                                },
+                            )
+                        continue
 
-                    if not expanded_steps:
-                        expanded_steps = [step]
-
-                    for concrete_step in expanded_steps:
-                        self.state = AgentState.WAITING_TOOL
-
-                        thought = (getattr(concrete_step, "thought", "") or "").strip()
-                        if thought:
-                            yield agent_event("thinking", {"content": thought})
-
-                        # Enrich multi-point tools with the split result for better UX (and to make
-                        # downstream tools explicitly reflect the current knowledge points).
-                        try:
-                            step_args = dict(concrete_step.arguments or {})
-                            if concrete_step.tool in {
-                                "web_search_knowledge",
-                                "browse_web_pages",
-                                "wikipedia_search",
-                                "search_questions_by_knowledge",
-                                "aggregate_knowledge",
-                            } and "knowledge_points" not in step_args:
-                                split_res = ctx.working_memory.get("split_knowledge_points")
-                                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                                    kps = [
-                                        str(x or "").strip()
-                                        for x in (split_res.get("knowledge_points") or [])
-                                        if str(x or "").strip()
-                                    ][:15]
-                                    if kps:
-                                        step_args["knowledge_points"] = kps
-                            concrete_step.arguments = step_args
-                        except Exception:
-                            # Best-effort only; never block execution.
-                            pass
-
-                        yield agent_event(
-                            "tool_call",
-                            {
-                                "step_id": concrete_step.id,
-                                "name": concrete_step.tool,
-                                "title": concrete_step.title,
-                                "arguments": concrete_step.arguments,
-                            },
-                        )
-                        t0 = time.monotonic()
-                        step_result = await self.executor.execute_step(concrete_step, context=ctx)
-                        elapsed_ms = int((time.monotonic() - t0) * 1000)
-                        yield agent_event(
-                            "tool_result",
-                            {
-                                "step_id": concrete_step.id,
-                                "name": concrete_step.tool,
-                                "title": concrete_step.title,
-                                "success": bool(step_result.success),
-                                "elapsed_ms": elapsed_ms,
-                                "output": _clip_for_sse(step_result.output),
-                                "error": step_result.error,
-                            },
-                        )
-                        results.step_results.append(step_result)
-                        self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
-                        if (
-                            step_result.success
-                            and step_result.tool in {"assemble_markdown", "revise_markdown"}
-                            and isinstance(step_result.output, str)
-                            and step_result.output.strip()
-                        ):
-                            results.artifacts["markdown"] = step_result.output.strip()
+                    i += 1
+                    async for evt in _execute_concrete_step(step):
+                        yield evt
 
                 self.state = AgentState.REFLECTING
                 yield agent_event("thinking", {"content": "Reflect 阶段：自检与审查…"})
