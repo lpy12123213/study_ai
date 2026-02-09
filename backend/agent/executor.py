@@ -1670,7 +1670,50 @@ class Executor:
 
         lines.append("---")
         lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append("数据来源：Wikipedia/MediaWiki、Exa/智谱联网搜索、StackExchange、GitHub、题库")
+        sources: List[str] = []
+        if ctx.working_memory.get("web_search_knowledge") is not None:
+            sources.append("Exa/智谱联网搜索")
+        if ctx.working_memory.get("search_questions_by_knowledge") is not None:
+            sources.append("题库")
+
+        any_wiki = False
+        any_stackexchange = False
+        any_github = False
+        for sec in [s for s in sections if isinstance(s, dict)]:
+            wiki = sec.get("wikipedia") if isinstance(sec.get("wikipedia"), dict) else {}
+            mw = sec.get("mediawiki") if isinstance(sec.get("mediawiki"), dict) else {}
+            if (
+                str(wiki.get("title") or "").strip()
+                or str(wiki.get("summary") or "").strip()
+                or str(mw.get("title") or "").strip()
+                or str(mw.get("summary") or "").strip()
+            ):
+                any_wiki = True
+
+            se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
+            if isinstance(se.get("results"), list) and any(isinstance(r, dict) for r in (se.get("results") or [])):
+                any_stackexchange = True
+
+            gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
+            if isinstance(gh.get("results"), list) and any(isinstance(r, dict) for r in (gh.get("results") or [])):
+                any_github = True
+
+        if any_wiki:
+            sources.insert(0, "Wikipedia/MediaWiki")
+        if any_stackexchange:
+            sources.append("StackExchange")
+        if any_github:
+            sources.append("GitHub")
+
+        deduped: List[str] = []
+        seen = set()
+        for s in sources:
+            if s in seen:
+                continue
+            seen.add(s)
+            deduped.append(s)
+
+        lines.append("数据来源：" + ("、".join(deduped) if deduped else "（无）"))
         lines.append("")
 
         markdown = "\n".join(lines).strip() + "\n"
@@ -1678,7 +1721,7 @@ class Executor:
         return markdown
 
     async def _tool_aggregate_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
-        """聚合：拆分结果 + Wikipedia + Web 搜索 + 题库检索。"""
+        """聚合：拆分结果 + Web 搜索 + 题库检索（可选：百科/网页正文/问答/GitHub）。"""
 
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
@@ -2190,7 +2233,7 @@ class Executor:
                 sources_ok = bool(wiki_summary or mw_summary) or web_n >= 3 or pages_n >= 1 or se_n >= 1 or gh_n >= 1
                 if enforce_sources and not sources_ok:
                     heuristic_issues.append(
-                        f"知识点「{kp}」资料来源不足：百科/网搜/网页正文/问答/GitHub 均较少；建议增加搜索轮次或调整 query_hint。"
+                        f"知识点「{kp}」资料来源不足：网搜结果偏少；建议增加 web_search_knowledge 轮次或调整 query_hint。"
                     )
 
                 examples_n = _count_list((it.get("questions") or {}), "examples")

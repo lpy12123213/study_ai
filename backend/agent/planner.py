@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import uuid
 from typing import Any, Dict, List, Optional
@@ -20,22 +21,36 @@ from backend.core.settings import (
 )
 
 
-_ALLOWED_TOOLS: Dict[str, str] = {
+def _env_truthy(name: str) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+_CORE_TOOLS: Dict[str, str] = {
     "split_knowledge_points": "把主题拆成多个可检索子知识点（输出 knowledge_points 列表）",
     "web_search_knowledge": "联网搜索知识点（Exa 优先，智谱兜底）",
-    "wikipedia_search": "Wikipedia 百科检索（中文）",
-    "mediawiki_search": "MediaWiki 百科检索（可用于 Wikipedia/Wikibooks/ProofWiki 等）",
-    "stackexchange_search": "StackExchange 问答检索（高质量解释与典型问题）",
-    "github_search": "GitHub 仓库检索（笔记/教程/代码示例等）",
     "search_questions_by_knowledge": "题库按知识点搜题（例题+练习题）",
-    "aggregate_knowledge": "聚合：拆分 + 网搜 + 百科 + 题库",
+    "aggregate_knowledge": "聚合：拆分 + 网搜 + 题库（可选：百科/网页正文/问答/GitHub）",
     "generate_study_material": "生成讲解与例题解答（基于聚合结果）",
     "assemble_study_archive": "组装最终 Markdown（自学档案）",
     "revise_markdown": "按审查问题修订 Markdown（可选）",
     "save_markdown_file": "保存 Markdown 到文件",
     "review_content": "内容审查（结构/完整性/可靠性）",
+}
+
+_EXTRA_TOOLS: Dict[str, str] = {
+    "wikipedia_search": "Wikipedia 百科检索（中文）",
+    "mediawiki_search": "MediaWiki 百科检索（可用于 Wikipedia/Wikibooks/ProofWiki 等）",
+    "stackexchange_search": "StackExchange 问答检索（高质量解释与典型问题）",
+    "github_search": "GitHub 仓库检索（笔记/教程/代码示例等）",
     "browse_web_pages": "Browse and extract page text (best-effort)",
 }
+
+_ALLOWED_TOOLS: Dict[str, str] = dict(_CORE_TOOLS)
+# By default we disable the extra retrieval tools to maximize success rate.
+# Set `STUDY_MATERIALS_ENABLE_EXTRA_TOOLS=1` to re-enable them.
+if _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS"):
+    _ALLOWED_TOOLS.update(_EXTRA_TOOLS)
 
 
 def _difficulty_from_profile(profile: UserProfile) -> str:
@@ -226,81 +241,6 @@ class Planner:
                 thought="第五轮检索：补齐应用场景与典型例子，让自学材料更像“能直接拿来练”。",
             ),
             PlanStep(
-                id=sid("browse_web_pages"),
-                title="浏览网页并提取正文（DeepResearch）",
-                tool="browse_web_pages",
-                arguments={"topic": topic, "subject": subject, "top_k": 3, "max_chars": 16000, "concurrency": 2},
-                foreach_knowledge_point=True,
-                thought="打开关键来源页面，提取更长的正文摘录，避免只靠搜索摘要导致信息不完整。",
-            ),
-            PlanStep(
-                id=sid("wikipedia_search"),
-                title="Wikipedia 百科检索",
-                tool="wikipedia_search",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "lang": "zh",
-                    "sentences": 6,
-                    "max_content_length": 6000,
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="为每个知识点补充百科式定义与关键术语，帮助结构化讲解。",
-            ),
-            PlanStep(
-                id=sid("mediawiki_search"),
-                title="MediaWiki 百科检索（Wikibooks）",
-                tool="mediawiki_search",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "project": "wikibooks",
-                    "lang": "zh",
-                    "sentences": 5,
-                    "max_content_length": 5000,
-                    "search_results": 5,
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="补充 MediaWiki 体系下的教材/讲义式内容来源（例如 Wikibooks），用于对照百科与网搜结果。",
-            ),
-            PlanStep(
-                id=sid("stackexchange_search"),
-                title="StackExchange 问答检索（DeepResearch）",
-                tool="stackexchange_search",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "site": "math.stackexchange",
-                    "limit": 5,
-                    "include_answers": True,
-                    "query_hint": "explain intuition common mistakes",
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="从 StackExchange 采集高质量问答解释与易错点（优先高票回答），增强讲解的“为什么”。",
-            ),
-            PlanStep(
-                id=sid("github_search"),
-                title="GitHub 仓库检索（资料/笔记）",
-                tool="github_search",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "limit": 5,
-                    "query_hint": "notes tutorial lecture",
-                    "sort": "stars",
-                    "order": "desc",
-                    "include_readme": True,
-                    "readme_limit": 1,
-                    "readme_max_chars": 3000,
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="从 GitHub 搜集可能的高质量笔记/教程仓库，作为进一步阅读补充来源。",
-            ),
-            PlanStep(
                 id=sid("search_questions_by_knowledge"),
                 title="题库按知识点检索（例题+练习题）",
                 tool="search_questions_by_knowledge",
@@ -321,7 +261,7 @@ class Planner:
                 tool="aggregate_knowledge",
                 arguments={"topic": topic, "subject": subject},
                 foreach_knowledge_point=True,
-                thought="把百科/网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
+                thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
             ),
             PlanStep(
                 id=sid("generate_study_material"),
@@ -378,7 +318,7 @@ class Planner:
             ]
         )
 
-        rationale = f"计划：拆分→逐点百科/联网→逐点搜题→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+        rationale = f"计划：拆分→逐点网搜→逐点搜题→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
 
     def _parse_llm_plan(
@@ -537,6 +477,25 @@ class Planner:
             )
 
         tool_desc = "\n".join([f"- {k}: {v}" for k, v in _ALLOWED_TOOLS.items()])
+        notes: List[str] = [
+            "必须输出 JSON 对象，不要 Markdown，不要额外解释文字。",
+            "计划必须以 split_knowledge_points 开始。",
+            "建议对 web_search_knowledge / search_questions_by_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
+            "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
+            "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
+            "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
+        ]
+        if "browse_web_pages" in _ALLOWED_TOOLS:
+            notes.extend(
+                [
+                    "DeepResearch建议：对每个知识点做 4~8 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型/证明/应用/易错），然后调用 browse_web_pages 提取网页正文摘录。",
+                    "可选来源：对关键知识点可补充 stackexchange_search（问答解释/易错）、github_search（笔记/教程仓库）、mediawiki_search（Wikibooks/ProofWiki 等）。",
+                ]
+            )
+        else:
+            notes.append(
+                "DeepResearch建议：对每个知识点做 4~8 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型/证明/应用/易错）。"
+            )
         prompt = {
             "task": topic,
             "subject": subject,
@@ -545,16 +504,7 @@ class Planner:
             "iteration": iteration,
             "reflection_issues": issues if isinstance(issues, list) else [],
             "allowed_tools": list(_ALLOWED_TOOLS.keys()),
-            "notes": [
-                "必须输出 JSON 对象，不要 Markdown，不要额外解释文字。",
-                "计划必须以 split_knowledge_points 开始。",
-                "建议对 web_search_knowledge / browse_web_pages / wikipedia_search / search_questions_by_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
-                "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
-                "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
-                "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
-                "DeepResearch建议：对每个知识点做 4~8 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型/证明/应用/易错），然后调用 browse_web_pages 提取网页正文摘录。",
-                "可选来源：对关键知识点可补充 stackexchange_search（问答解释/易错）、github_search（笔记/教程仓库）、mediawiki_search（Wikibooks/ProofWiki 等）。",
-            ],
+            "notes": notes,
             "tool_descriptions": tool_desc,
         }
 
