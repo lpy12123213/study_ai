@@ -12,6 +12,8 @@ Typical base_url examples:
 
 from __future__ import annotations
 
+import asyncio
+import random
 import re
 from typing import Any, Dict, List, Optional
 
@@ -78,9 +80,25 @@ async def _mw_search_titles(
         "format": "json",
         "utf8": "1",
     }
-    resp = await client.get("w/api.php", params=params)
-    resp.raise_for_status()
-    data = resp.json()
+    retry_statuses = {408, 429, 500, 502, 503, 504}
+    last_exc: Optional[Exception] = None
+    data: Any = {}
+
+    for attempt in range(3):
+        try:
+            resp = await client.get("w/api.php", params=params)
+            if resp.status_code in retry_statuses and attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except Exception as exc:
+            last_exc = exc if isinstance(exc, Exception) else Exception(str(exc))
+            if attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+            raise last_exc
 
     hits: List[str] = []
     try:
@@ -122,9 +140,25 @@ async def _mw_fetch_extract(
         "format": "json",
         "utf8": "1",
     }
-    resp = await client.get("w/api.php", params=params)
-    resp.raise_for_status()
-    data = resp.json()
+    retry_statuses = {408, 429, 500, 502, 503, 504}
+    last_exc: Optional[Exception] = None
+    data: Any = {}
+
+    for attempt in range(3):
+        try:
+            resp = await client.get("w/api.php", params=params)
+            if resp.status_code in retry_statuses and attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except Exception as exc:
+            last_exc = exc if isinstance(exc, Exception) else Exception(str(exc))
+            if attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+            raise last_exc
     pages = (data.get("query", {}) or {}).get("pages", {}) or {}
 
     page_obj: Optional[Dict[str, Any]] = None
@@ -233,4 +267,3 @@ async def mediawiki_search(
             }
     except Exception as exc:
         return {"success": False, "query": q, "base_url": base, "error": str(exc), "provider": "mediawiki_api"}
-

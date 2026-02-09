@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -78,18 +80,55 @@ class Planner:
             "max_tokens": int(max_tokens or LESSON_PLAN_MAX_TOKENS or 1400),
             "stream": False,
         }
-        async with httpx.AsyncClient(timeout=float(API_TIMEOUT or 120)) as client:
-            resp = await client.post(
-                f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        try:
-            return str(data["choices"][0]["message"]["content"] or "")
-        except Exception:
-            return ""
+
+        retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+        timeout_s = float(API_TIMEOUT or 120)
+
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+                    resp = await client.post(
+                        f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                if resp.status_code in retry_statuses and attempt < 2:
+                    retry_after = (resp.headers.get("retry-after") or "").strip()
+                    wait_s = 0.0
+                    try:
+                        wait_s = float(retry_after) if retry_after else 0.0
+                    except ValueError:
+                        wait_s = 0.0
+                    if wait_s <= 0:
+                        wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                    await asyncio.sleep(wait_s)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                try:
+                    return str(data["choices"][0]["message"]["content"] or "")
+                except Exception:
+                    return ""
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                if status in retry_statuses and attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ""
+            except (httpx.TimeoutException, httpx.RequestError):
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ""
+            except Exception:
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ""
+
+        return ""
 
     def _fallback_plan(
         self,

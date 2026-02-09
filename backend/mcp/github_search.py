@@ -10,7 +10,9 @@ Notes:
 
 from __future__ import annotations
 
+import asyncio
 import os
+import random
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -61,20 +63,32 @@ async def github_fetch_readme(
     # Raw readme content
     headers["Accept"] = "application/vnd.github.raw"
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=min(max(timeout, 10.0), 60.0),
-            headers=headers,
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(f"{_GITHUB_API_BASE}/repos/{repo}/readme")
+    retry_statuses = {408, 429, 500, 502, 503, 504}
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(max(timeout, 10.0), 60.0),
+                headers=headers,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(f"{_GITHUB_API_BASE}/repos/{repo}/readme")
+
+            if resp.status_code in retry_statuses and attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+
             if resp.status_code in {401, 403, 404}:
                 return {"success": False, "provider": "github", "error": f"readme_unavailable_status_{resp.status_code}"}
+
             resp.raise_for_status()
             text = (resp.text or "").strip()
             return {"success": True, "provider": "github", "full_name": repo, "readme": _clip(text, max_len=max_chars)}
-    except Exception as exc:
-        return {"success": False, "provider": "github", "full_name": repo, "error": str(exc)}
+        except Exception as exc:
+            if attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+            return {"success": False, "provider": "github", "full_name": repo, "error": str(exc)}
 
 
 async def github_search_repositories(
@@ -128,29 +142,45 @@ async def github_search_repositories(
     if not effective_token:
         note = "未配置 GITHUB_TOKEN，可能触发更严格的 GitHub API 速率限制。"
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=min(max(timeout, 10.0), 60.0),
-            headers=_build_headers(token=effective_token),
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(f"{_GITHUB_API_BASE}/search/repositories", params=params)
+    retry_statuses = {408, 429, 500, 502, 503, 504}
+    data: Any = {}
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(max(timeout, 10.0), 60.0),
+                headers=_build_headers(token=effective_token),
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(f"{_GITHUB_API_BASE}/search/repositories", params=params)
+
+            if resp.status_code in retry_statuses and attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+
             if resp.status_code in {401, 403}:
                 # 403 can also mean rate limit; return a readable message.
                 msg = f"GitHub API rejected request (status={resp.status_code})."
                 try:
-                    data = resp.json()
-                    if isinstance(data, dict) and data.get("message"):
-                        msg = str(data.get("message"))
+                    data_err = resp.json()
+                    if isinstance(data_err, dict) and data_err.get("message"):
+                        msg = str(data_err.get("message"))
                 except Exception:
                     pass
                 return {"success": False, "query": q, "provider": "github", "error": msg, "note": note}
+
             resp.raise_for_status()
             data = resp.json()
+            break
+        except Exception as exc:
+            if attempt < 2:
+                await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                continue
+            return {"success": False, "query": q, "provider": "github", "error": str(exc), "note": note}
 
-        items = data.get("items") if isinstance(data, dict) else []
-        if not isinstance(items, list):
-            items = []
+    items = data.get("items") if isinstance(data, dict) else []
+    if not isinstance(items, list):
+        items = []
 
         results: List[Dict[str, Any]] = []
         for it in items[:limit]:
@@ -178,7 +208,3 @@ async def github_search_repositories(
         if note:
             out["note"] = note
         return out
-    except httpx.TimeoutException:
-        return {"success": False, "query": q, "provider": "github", "error": "请求超时", "note": note}
-    except Exception as exc:
-        return {"success": False, "query": q, "provider": "github", "error": str(exc), "note": note}

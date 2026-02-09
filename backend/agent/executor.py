@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 import os
+import random
 import re
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,7 @@ class Executor:
     ) -> str:
         if not LESSON_PLAN_API_KEY:
             return ""
+
         headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
         payload = {
             "model": model,
@@ -59,16 +61,66 @@ class Executor:
             "max_tokens": max_tokens,
             "stream": False,
         }
-        async with httpx.AsyncClient(timeout=float(API_TIMEOUT or 120)) as client:
-            resp = await client.post(
-                f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        try:
-            return str(data["choices"][0]["message"]["content"] or "")
-        except Exception:
-            return ""
+
+        retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+        timeout_s = float(API_TIMEOUT or 120)
+        last_error: str = ""
+
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+                    resp = await client.post(
+                        f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                if resp.status_code in retry_statuses and attempt < 2:
+                    retry_after = (resp.headers.get("retry-after") or "").strip()
+                    wait_s = 0.0
+                    try:
+                        wait_s = float(retry_after) if retry_after else 0.0
+                    except ValueError:
+                        wait_s = 0.0
+                    if wait_s <= 0:
+                        wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                    last_error = f"http_status_{resp.status_code}"
+                    await asyncio.sleep(wait_s)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                try:
+                    return str(data["choices"][0]["message"]["content"] or "")
+                except Exception:
+                    return ""
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                last_error = f"http_status_{status}"
+                if status in retry_statuses and attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ""
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_error = str(exc)
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ""
+            except Exception as exc:  # pragma: no cover (best-effort)
+                last_error = str(exc)
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ""
+
+        # Best-effort: never raise; return empty so callers can fall back.
+        if last_error:
+            try:
+                print(f"[llm] request failed after retries: {last_error}", flush=True)
+            except Exception:
+                pass
+        return ""
 
     def _extract_json_obj(self, text: str) -> Dict[str, Any]:
         raw = (text or "").strip()
@@ -435,6 +487,19 @@ class Executor:
             points = [topic]
         points = points[:15]
 
+        existing_by_kp: Dict[str, Dict[str, Any]] = {}
+        try:
+            prev_blob = ctx.working_memory.get("github_search")
+            if isinstance(prev_blob, dict) and isinstance(prev_blob.get("items"), list):
+                for it in prev_blob.get("items") or []:
+                    if not isinstance(it, dict):
+                        continue
+                    kp = str(it.get("knowledge_point") or "").strip()
+                    if kp:
+                        existing_by_kp[kp] = it
+        except Exception:
+            existing_by_kp = {}
+
         from backend.mcp.github_search import github_fetch_readme, github_search_repositories
 
         async def _search_one(point: str) -> Dict[str, Any]:
@@ -445,6 +510,31 @@ class Executor:
 
             # Bias toward repositories with documentation.
             gh_query = f"{query} in:readme"
+
+            prev = existing_by_kp.get(point) or {}
+            prev_queries = prev.get("queries") if isinstance(prev.get("queries"), list) else []
+            prev_results = prev.get("results") if isinstance(prev.get("results"), list) else []
+            if (prev.get("query") == gh_query or gh_query in prev_queries) and prev_results:
+                # If README enrichment is requested, ensure it already exists for the top few repos.
+                if include_readme and readme_limit > 0:
+                    need_readme = False
+                    for r in prev_results[:readme_limit]:
+                        if not isinstance(r, dict):
+                            continue
+                        if not str(r.get("readme_excerpt") or "").strip():
+                            need_readme = True
+                            break
+                    if not need_readme:
+                        cached = dict(prev)
+                        cached["success"] = True
+                        cached["cache_hit"] = True
+                        return cached
+                else:
+                    cached = dict(prev)
+                    cached["success"] = True
+                    cached["cache_hit"] = True
+                    return cached
+
             res = await github_search_repositories(gh_query, limit=limit, sort=sort, order=order)
             if not isinstance(res, dict) or not res.get("success"):
                 return {
@@ -538,6 +628,19 @@ class Executor:
             points = [topic]
         points = points[:15]
 
+        existing_by_kp: Dict[str, Dict[str, Any]] = {}
+        try:
+            prev_blob = ctx.working_memory.get("stackexchange_search")
+            if isinstance(prev_blob, dict) and isinstance(prev_blob.get("items"), list):
+                for it in prev_blob.get("items") or []:
+                    if not isinstance(it, dict):
+                        continue
+                    kp = str(it.get("knowledge_point") or "").strip()
+                    if kp:
+                        existing_by_kp[kp] = it
+        except Exception:
+            existing_by_kp = {}
+
         from backend.mcp.stackexchange_search import stackexchange_search
 
         async def _search_one(point: str) -> Dict[str, Any]:
@@ -545,6 +648,15 @@ class Executor:
             query = base_query
             if query_hint:
                 query = f"{query} {query_hint}".strip()
+
+            prev = existing_by_kp.get(point) or {}
+            prev_queries = prev.get("queries") if isinstance(prev.get("queries"), list) else []
+            prev_results = prev.get("results") if isinstance(prev.get("results"), list) else []
+            if (prev.get("query") == query or query in prev_queries) and prev_results:
+                cached = dict(prev)
+                cached["success"] = True
+                cached["cache_hit"] = True
+                return cached
 
             res = await stackexchange_search(
                 query=query,
@@ -644,10 +756,31 @@ class Executor:
             points = [topic]
         points = points[:15]
 
+        existing_by_kp: Dict[str, Dict[str, Any]] = {}
+        try:
+            prev_blob = ctx.working_memory.get("mediawiki_search")
+            if isinstance(prev_blob, dict) and isinstance(prev_blob.get("items"), list):
+                for it in prev_blob.get("items") or []:
+                    if not isinstance(it, dict):
+                        continue
+                    kp = str(it.get("knowledge_point") or "").strip()
+                    if kp:
+                        existing_by_kp[kp] = it
+        except Exception:
+            existing_by_kp = {}
+
         from backend.mcp.mediawiki_search import mediawiki_search
 
         async def _lookup_one(point: str) -> Dict[str, Any]:
             query = f"{subject} {point}".strip() if subject and subject not in point else point
+            prev = existing_by_kp.get(point) or {}
+            prev_query = str(prev.get("query") or "").strip()
+            prev_base = str(prev.get("base_url") or "").strip()
+            if prev_query == query and prev_base and prev_base == base_url and str(prev.get("content") or prev.get("summary") or "").strip():
+                cached = dict(prev)
+                cached["success"] = True
+                cached["cache_hit"] = True
+                return cached
             res = await mediawiki_search(
                 query=query,
                 base_url=base_url,
@@ -742,6 +875,10 @@ class Executor:
             return {}
 
         web_map = _map_by_point(ctx.working_memory.get("web_search_knowledge"))
+        gh_map = _map_by_point(ctx.working_memory.get("github_search"))
+        se_map = _map_by_point(ctx.working_memory.get("stackexchange_search"))
+        wiki_map = _map_by_point(ctx.working_memory.get("wikipedia_search"))
+        mw_map = _map_by_point(ctx.working_memory.get("mediawiki_search"))
 
         def _extract_urls(results: Any) -> List[str]:
             if not isinstance(results, list):
@@ -915,8 +1052,36 @@ class Executor:
         items: List[Dict[str, Any]] = []
         async with httpx.AsyncClient(timeout=timeout_s, headers=headers, follow_redirects=True) as client:
             for point in points:
+                urls: List[str] = []
+                seen: set[str] = set()
+
+                def _add_urls(more: List[str]) -> None:
+                    for u in more or []:
+                        key = (u or "").strip().lower()
+                        if not key or key in seen:
+                            continue
+                        seen.add(key)
+                        urls.append(u)
+
                 web = web_map.get(point) or {}
-                urls = _extract_urls(web.get("results"))
+                _add_urls(_extract_urls(web.get("results")))
+
+                se = se_map.get(point) or {}
+                _add_urls(_extract_urls(se.get("results")))
+
+                gh = gh_map.get(point) or {}
+                _add_urls(_extract_urls(gh.get("results")))
+
+                wiki = wiki_map.get(point) or {}
+                wiki_url = str(wiki.get("url") or "").strip()
+                if wiki_url.startswith(("http://", "https://")):
+                    _add_urls([wiki_url])
+
+                mw = mw_map.get(point) or {}
+                mw_url = str(mw.get("url") or "").strip()
+                if mw_url.startswith(("http://", "https://")):
+                    _add_urls([mw_url])
+
                 urls = urls[: max(0, top_k)]
 
                 if not urls:
@@ -927,7 +1092,7 @@ class Executor:
                             "top_k": top_k,
                             "max_chars": max_chars,
                             "pages": [],
-                            "error": "no urls from web_search_knowledge",
+                            "error": "no urls from web/github/stackexchange/wiki sources",
                         }
                     )
                     continue
@@ -1271,7 +1436,7 @@ class Executor:
                         )
                     ).strip()
                 if not sol_md:
-                    sol_md = "（未配置模型，无法生成解答。）"
+                    sol_md = "（模型未配置或调用失败，无法生成解答。）"
                 solved_examples.append(
                     {
                         "question_id": ex.get("question_id"),

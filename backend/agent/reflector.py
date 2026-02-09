@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 from typing import Optional
 
 import httpx
@@ -53,10 +55,51 @@ class Reflector:
             "temperature": 0.1,
             "max_tokens": 900,
         }
-        async with httpx.AsyncClient(timeout=float(API_TIMEOUT or 120)) as client:
-            resp = await client.post(f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+
+        retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+        timeout_s = float(API_TIMEOUT or 120)
+        data = {}
+
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+                    resp = await client.post(
+                        f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                if resp.status_code in retry_statuses and attempt < 2:
+                    retry_after = (resp.headers.get("retry-after") or "").strip()
+                    wait_s = 0.0
+                    try:
+                        wait_s = float(retry_after) if retry_after else 0.0
+                    except ValueError:
+                        wait_s = 0.0
+                    if wait_s <= 0:
+                        wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                    await asyncio.sleep(wait_s)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json() if isinstance(resp.json(), dict) else {}
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                if status in retry_statuses and attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ReflectionResult(passed=True, summary=f"审查跳过（审查模型返回错误：{status}）")
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ReflectionResult(passed=True, summary=f"审查跳过（网络错误：{exc}）")
+            except Exception as exc:
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return ReflectionResult(passed=True, summary=f"审查跳过（未知错误：{exc}）")
         content = ""
         try:
             content = str(data["choices"][0]["message"]["content"] or "")

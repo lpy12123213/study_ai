@@ -10,7 +10,9 @@ Auth:
 
 from __future__ import annotations
 
+import asyncio
 import os
+import random
 import re
 from typing import Any, Dict, List
 
@@ -109,15 +111,30 @@ async def stackexchange_search(
     if _STACKEXCHANGE_KEY:
         params["key"] = _STACKEXCHANGE_KEY
 
+    retry_statuses = {408, 429, 500, 502, 503, 504}
+
     try:
         async with httpx.AsyncClient(
             timeout=min(max(timeout, 10.0), 60.0),
             headers={"User-Agent": "study_ai/1.0 (stackexchange_search)"},
             follow_redirects=True,
         ) as client:
-            resp = await client.get(f"{_STACKEXCHANGE_API_BASE}/search/advanced", params=params)
-            resp.raise_for_status()
-            data = resp.json() if isinstance(resp.json(), dict) else {}
+            data: Any = {}
+            for attempt in range(3):
+                try:
+                    resp = await client.get(f"{_STACKEXCHANGE_API_BASE}/search/advanced", params=params)
+                    if resp.status_code in retry_statuses and attempt < 2:
+                        await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                        continue
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    data = payload if isinstance(payload, dict) else {}
+                    break
+                except Exception:
+                    if attempt < 2:
+                        await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
+                        continue
+                    raise
 
             items = data.get("items") if isinstance(data.get("items"), list) else []
             questions: List[Dict[str, Any]] = [it for it in items if isinstance(it, dict)]
@@ -143,21 +160,40 @@ async def stackexchange_search(
                 if _STACKEXCHANGE_KEY:
                     ans_params["key"] = _STACKEXCHANGE_KEY
                 ids = ";".join([str(x) for x in qids[: min(len(qids), 10)]])
-                ans_resp = await client.get(f"{_STACKEXCHANGE_API_BASE}/questions/{ids}/answers", params=ans_params)
-                if ans_resp.status_code == 200:
-                    ans_data = ans_resp.json() if isinstance(ans_resp.json(), dict) else {}
-                    for a in (ans_data.get("items") or [])[:50]:
-                        if not isinstance(a, dict):
+
+                ans_data: Any = {}
+                for attempt in range(3):
+                    try:
+                        ans_resp = await client.get(
+                            f"{_STACKEXCHANGE_API_BASE}/questions/{ids}/answers",
+                            params=ans_params,
+                        )
+                        if ans_resp.status_code in retry_statuses and attempt < 2:
+                            await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                             continue
-                        try:
-                            qid = int(a.get("question_id") or 0)
-                        except Exception:
-                            qid = 0
-                        if qid <= 0:
+                        if ans_resp.status_code != 200:
+                            break
+                        payload = ans_resp.json()
+                        ans_data = payload if isinstance(payload, dict) else {}
+                        break
+                    except Exception:
+                        if attempt < 2:
+                            await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                             continue
-                        if qid in answers_by_qid:
-                            continue
-                        answers_by_qid[qid] = a
+                        break
+
+                for a in (ans_data.get("items") or [])[:50]:
+                    if not isinstance(a, dict):
+                        continue
+                    try:
+                        qid = int(a.get("question_id") or 0)
+                    except Exception:
+                        qid = 0
+                    if qid <= 0:
+                        continue
+                    if qid in answers_by_qid:
+                        continue
+                    answers_by_qid[qid] = a
 
             results: List[Dict[str, Any]] = []
             for it in questions[:limit]:
@@ -206,4 +242,3 @@ async def stackexchange_search(
             }
     except Exception as exc:
         return {"success": False, "query": q, "site": s, "provider": "stackexchange", "error": str(exc)}
-

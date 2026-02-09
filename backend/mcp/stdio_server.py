@@ -4,6 +4,7 @@ MCP 服务 - 为 AI 提供题目搜索与组卷工具
 import asyncio
 import json
 import os
+import random
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -70,6 +71,7 @@ async def _call_llm_text(
 ) -> str:
     if not LESSON_PLAN_API_KEY:
         return ""
+
     headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": model,
@@ -78,14 +80,44 @@ async def _call_llm_text(
         "max_tokens": max_tokens,
         "stream": False,
     }
-    async with httpx.AsyncClient(timeout=float(API_TIMEOUT or 120)) as client:
-        resp = await client.post(f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-    try:
-        return str(data["choices"][0]["message"]["content"] or "")
-    except Exception:
-        return ""
+
+    retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+    timeout_s = float(API_TIMEOUT or 120)
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+                resp = await client.post(
+                    f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+
+            if resp.status_code in retry_statuses and attempt < 2:
+                retry_after = (resp.headers.get("retry-after") or "").strip()
+                wait_s = 0.0
+                try:
+                    wait_s = float(retry_after) if retry_after else 0.0
+                except ValueError:
+                    wait_s = 0.0
+                if wait_s <= 0:
+                    wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                await asyncio.sleep(wait_s)
+                continue
+
+            resp.raise_for_status()
+            data = resp.json()
+            try:
+                return str(data["choices"][0]["message"]["content"] or "")
+            except Exception:
+                return ""
+        except Exception:
+            if attempt < 2:
+                await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                continue
+            return ""
+
+    return ""
 
 
 def _pick_questions(questions: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
