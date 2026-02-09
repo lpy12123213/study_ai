@@ -1531,21 +1531,54 @@ class ZujuanCrawler:
             "User-Agent": self.user_agent,
         }
 
+        # NOTE: httpx>=0.28 treats an iterable passed to `data=` as a *streaming body*.
+        # For AsyncClient this becomes a SyncByteStream and raises:
+        # "Attempted to send an sync request with an AsyncClient instance."
+        # We therefore pre-encode form fields ourselves.
+        body = urllib.parse.urlencode(data_fields)
+
         resp = await self.client.post(
             f"{self.base_url}/zujuan-api/question/list",
-            data=data_fields,
+            content=body,
             headers=headers,
         )
 
         try:
             resp_json = resp.json()
+            code = str(resp_json.get("code") or "").strip()
+            if code and code not in {"0", "200"}:
+                dbg = {
+                    "error": "api_code_not_ok",
+                    "raw_count": 0,
+                    "page": cur_page,
+                    "status": resp.status_code,
+                    "code": code,
+                }
+                self._cache_set(cache_key, ([], dbg), ttl=60)
+                return [], dbg
             html = resp_json.get("data", {}).get("html", "")
         except Exception:
+            text = ""
+            try:
+                text = (resp.text or "").strip()
+            except Exception:
+                text = ""
+            lowered = text.lower()
+            is_js_challenge = (
+                "<body onload=\"check()\">" in lowered
+                or "alicfw_gfver" in lowered
+                or "aliyun_waf_aa" in lowered
+                or "aliyun_waf_bb" in lowered
+                or "acw_sc__v2" in lowered
+            )
+            is_login_page = "login.css" in lowered or "login-popup.css" in lowered
             dbg = {
-                "error": "json_parse_failed",
+                "error": "js_challenge" if is_js_challenge else ("login_page" if is_login_page else "json_parse_failed"),
                 "raw_count": 0,
                 "page": cur_page,
                 "status": resp.status_code,
+                "content_type": (resp.headers.get("Content-Type") or ""),
+                "body_prefix": text[:200].replace("\r", "").replace("\n", "\\n") if text else "",
             }
             self._cache_set(cache_key, ([], dbg), ttl=60)
             return [], dbg
@@ -1641,6 +1674,7 @@ class ZujuanCrawler:
                 qid = qid_match.group(1)
                 q: Dict[str, Any] = {
                     "question_id": qid,
+                    "bank_id": _safe_int(bank_id, 0) or None,
                     "source_url": f"{self.base_url}/{bank_id}q{qid}.html",
                     "type": "",
                     "difficulty": "",
@@ -1648,6 +1682,7 @@ class ZujuanCrawler:
                     "knowledge_points": [],
                     "source": "",
                     "date": "",
+                    "raw_html_fragment": block,
                 }
                 content_fragments.append((len(questions), block))
                 q["_stem_html"] = block
@@ -1659,9 +1694,11 @@ class ZujuanCrawler:
 
         soup = BeautifulSoup(decoded, "lxml")
 
-        RE_PAPER = re.compile(r"/(\d+)p(\d+)\.html")
-        RE_ZSD = re.compile(r"/course(\d+)/zsd(\d+)(/|$)")
-        RE_JTFF = re.compile(r"/course(\d+)/jtff(\d+)(/|$)")
+        RE_PAPER = re.compile(r"/(\d+)p(\d+)\.html", re.IGNORECASE)
+        # Tag IDs can appear with multiple URL shapes (courseIdPy routes, /course{courseId}/*, etc.).
+        RE_ZSD = re.compile(r"/zsd(\d+)(?:/|$)", re.IGNORECASE)
+        RE_JTFF = re.compile(r"/jtff(\d+)(?:/|$)", re.IGNORECASE)
+        RE_ZJ = re.compile(r"/(?:zj|zhangjie)(\d+)(?:/|$)", re.IGNORECASE)
 
         for root in soup.select("div.tk-quest-item[questionid]"):
             qid = str(root.get("questionid") or "").strip()
@@ -1679,6 +1716,8 @@ class ZujuanCrawler:
             }
 
             root_bank_id = _safe_int(root.get("bankid"), 0) or _safe_int(bank_id, 0) or _safe_int(getattr(self, "bank_id", 0), 0)
+            if root_bank_id:
+                q["bank_id"] = root_bank_id
             q["source_url"] = f"{self.base_url}/{root_bank_id}q{qid}.html" if root_bank_id else self._question_url(qid)
             q["question_index"] = _safe_int(root.get("questionindex"), 0)
 
@@ -1753,28 +1792,46 @@ class ZujuanCrawler:
             date_span = root.select_one("span.no-bound")
             q["date"] = date_span.get_text(strip=True) if date_span else ""
 
-            # Tags: zsd/jtff ids referenced by links.
+            # Tags: aligned category IDs referenced by links (docs/zujuan_crawler/docs/12-category-alignment.md).
             zsd_ids: List[int] = []
             jtff_ids: List[int] = []
+            zj_ids: List[int] = []
+            other_links: List[Dict[str, str]] = []
             for a in root.select("a[href]"):
                 href = str(a.get("href") or "")
                 m = RE_ZSD.search(href)
                 if m:
-                    zsd_ids.append(_safe_int(m.group(2), 0))
+                    zsd_ids.append(_safe_int(m.group(1), 0))
                     continue
                 m = RE_JTFF.search(href)
                 if m:
-                    jtff_ids.append(_safe_int(m.group(2), 0))
+                    jtff_ids.append(_safe_int(m.group(1), 0))
+                    continue
+                m = RE_ZJ.search(href)
+                if m:
+                    zj_ids.append(_safe_int(m.group(1), 0))
+                    continue
+                # Keep unmapped tre* links for later alignment.
+                if "tre" in href:
+                    other_links.append({"href": href, "text": a.get_text(strip=True)})
 
             tags: Dict[str, Any] = {}
             zsd_ids = [x for x in sorted(set(zsd_ids)) if x]
             jtff_ids = [x for x in sorted(set(jtff_ids)) if x]
+            zj_ids = [x for x in sorted(set(zj_ids)) if x]
             if zsd_ids:
                 tags["knowledge_zsd_ids"] = zsd_ids
             if jtff_ids:
                 tags["method_jtff_ids"] = jtff_ids
+            if zj_ids:
+                tags["chapter_zj_ids"] = zj_ids
+            if other_links:
+                tags["other_links"] = other_links
             if tags:
                 q["tags"] = tags
+
+            # Raw HTML fragment (single question block) for downstream parsing/storage.
+            q["raw_html_fragment"] = str(root)
 
             # Content fragment: exam-item__cnt usually contains stem + options.
             content_node = root.select_one("div.exam-item__cnt") or root.select_one("div.qbody")
@@ -1814,6 +1871,9 @@ class ZujuanCrawler:
         for idx, frag_html in question_stems:
             raw = frag_html or ""
             hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
+            raw_fragment = questions[idx].get("raw_html_fragment")
+            if isinstance(raw_fragment, str) and raw_fragment:
+                hashes.extend([h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw_fragment)])
             hashes = list(dict.fromkeys(hashes))
             if hashes:
                 per_fragment_hashes[idx] = hashes
@@ -1859,6 +1919,11 @@ class ZujuanCrawler:
             # 3) Replace formulas first, then replace remaining images.
             converted = _replace_formula_imgs(stem_html or "")
             converted = _replace_other_imgs(converted)
+
+            # Also produce a LaTeX-ified HTML fragment for the full question block when present.
+            raw_fragment = questions[idx].get("raw_html_fragment")
+            if isinstance(raw_fragment, str) and raw_fragment.strip():
+                questions[idx]["latex_html_fragment"] = _replace_formula_imgs(raw_fragment)
 
             # 4) HTML -> text
             if BeautifulSoup is not None:
@@ -2850,6 +2915,10 @@ class ZujuanCrawler:
         if u.startswith("//"):
             return f"https:{u}"
         if u.startswith("/"):
+            # Static assets in list fragments are frequently referenced as absolute paths.
+            # Docs: docs/zujuan_crawler/docs/07-static-assets.md#732-img-src-抽取规则
+            if u.startswith("/quesimg/Upload/"):
+                return f"https://staticzujuan.xkw.com{u}"
             return f"{self.base_url.rstrip('/')}{u}"
         return u
 
@@ -2970,6 +3039,28 @@ class ZujuanCrawler:
             latex = ""
             if mathml:
                 latex = (await self._mathml_to_latex_via_pandoc(mathml)).strip()
+            if not latex:
+                # Fallback: SVG signature conversion (pure python; no pandoc dependency).
+                # This is best-effort and may produce unknown signature placeholders like "[?abcd1234]".
+                try:
+                    from backend.core.svg_utils.svg_to_latex import svg_url_to_latex
+
+                    svg_url = f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{h}.svg"
+                    async with self._formula_http_sem:
+                        svg_latex, unknown = await svg_url_to_latex(svg_url, client=self.client, use_advanced=True)
+                    svg_latex = (svg_latex or "").strip()
+                    if svg_latex:
+                        latex = f"\\({svg_latex}\\)"
+
+                    if unknown:
+                        try:
+                            from backend.core.svg_utils.unknown_signatures import record_unknown_signatures
+
+                            record_unknown_signatures(unknown_sigs=unknown, source_url=svg_url, context=None)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             self._formula_cache_set(h, latex)
             if not fut.done():
                 fut.set_result(latex)
