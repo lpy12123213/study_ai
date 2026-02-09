@@ -963,6 +963,23 @@ class ExamPaperMCPServer:
                     },
                 ),
                 Tool(
+                    name="zhihu_fetch",
+                    description=(
+                        "【知乎抓取】抓取知乎文章/回答/专栏列表并转为 Markdown（最佳努力）。\n"
+                        "支持：zhuanlan.zhihu.com/p/xxx、www.zhihu.com/question/.../answer/...、知乎专栏。\n"
+                        "部分内容可能需要登录态 Cookie；可通过参数 cookies 或环境变量 ZHIHU_COOKIES 提供。"
+                    ),
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "知乎链接（文章/回答/专栏）"},
+                            "cookies": {"type": "string", "description": "可选：登录态 Cookie（优先级高于环境变量）", "default": ""},
+                            "timeout_seconds": {"type": "integer", "description": "请求超时（5-60秒）", "default": 30},
+                        },
+                        "required": ["url"],
+                    },
+                ),
+                Tool(
                     name="diagnose_export",
                     description="""【诊断工具】诊断导出到组卷网功能的问题。
 检查项目：
@@ -1770,6 +1787,26 @@ class ExamPaperMCPServer:
                         limit=limit,
                         model=model,
                     )
+
+                elif name == "zhihu_fetch":
+                    url = (arguments.get("url") or "").strip()
+                    cookies = (arguments.get("cookies") or "").strip() or (os.getenv("ZHIHU_COOKIES") or "").strip()
+                    timeout_seconds = int(arguments.get("timeout_seconds") or 30)
+                    timeout_seconds = max(5, min(timeout_seconds, 60))
+
+                    if not url:
+                        result = {"success": False, "error": "url 不能为空"}
+                    else:
+                        try:
+                            from backend.mcp.zhihu_fetcher import ZhihuFetcher
+
+                            fetcher = ZhihuFetcher(cookies=cookies, timeout_seconds=timeout_seconds)
+                            res = await fetcher.fetch(url, cookies=cookies)
+                            result = res.to_dict()
+                            if result.get("success") is False and result.get("error") == "cookies_required" and not cookies:
+                                result["note"] = "需要登录态：请在环境变量或 .env 配置 ZHIHU_COOKIES，或通过参数 cookies 传入"
+                        except Exception as exc:
+                            result = {"success": False, "error": f"zhihu_fetch failed: {exc}"}
 
                 elif name == "diagnose_export":
                     # 诊断导出功能
