@@ -736,6 +736,19 @@ class Executor:
         subject = str(args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         sections_in = aggregated.get("items") if isinstance(aggregated.get("items"), list) else []
 
+        # Optional: generate only for specified knowledge points (useful when running per-point subagents).
+        requested_points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            requested_points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if requested_points:
+            requested_set = {p for p in requested_points}
+            sections_in = [
+                it
+                for it in (sections_in or [])
+                if isinstance(it, dict) and str(it.get("knowledge_point") or "").strip() in requested_set
+            ]
+
         max_points = int(args.get("max_points") or 8)
         max_points = max(1, min(max_points, 15))
         max_examples = int(args.get("max_examples") or 1)
@@ -875,7 +888,40 @@ class Executor:
                 }
             )
 
-        out = {"topic": topic, "subject": subject, "sections": sections, "generated_at": datetime.now().isoformat(timespec="seconds")}
+        # Merge with prior generated sections so per-knowledge-point runs can accumulate.
+        previous = ctx.working_memory.get("generate_study_material") or ctx.working_memory.get("study_material")
+        prev_sections = previous.get("sections") if isinstance(previous, dict) and isinstance(previous.get("sections"), list) else []
+
+        merged_by_kp: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+
+        for sec in prev_sections:
+            if not isinstance(sec, dict):
+                continue
+            kp = str(sec.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+            if kp not in order:
+                order.append(kp)
+            merged_by_kp[kp] = sec
+
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            kp = str(sec.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+            if kp not in order:
+                order.append(kp)
+            merged_by_kp[kp] = sec
+
+        merged_sections = [merged_by_kp[kp] for kp in order if kp in merged_by_kp]
+        out = {
+            "topic": topic,
+            "subject": subject,
+            "sections": merged_sections,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+        }
         ctx.working_memory["study_material"] = out
         return out
 

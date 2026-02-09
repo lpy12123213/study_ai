@@ -592,23 +592,41 @@ export default function StudyMaterialsPage() {
             }
           }
 
-          // Prefer tracking exploration progress by question-bank searches (best UX when backend calls per point)
-          if (toolName === 'search_questions_by_knowledge') {
-            const meta = stepMeta.get(stepId)
-            const points = meta?.knowledgePoints ?? []
+          const markPoints = (points: string[], status: KnowledgePointStatus) => {
+            if (!points.length) return
+            setKnowledgeStatus((prev) => {
+              const next = { ...prev }
+              for (const kp of points) {
+                next[kp] = status
+              }
+              return next
+            })
+          }
+
+          const meta = stepMeta.get(stepId)
+          const points = meta?.knowledgePoints ?? []
+
+          // Prefer tracking exploration progress by per-knowledge-point generation (most accurate for DFS + subagent runs)
+          if (toolName === 'generate_study_material') {
             if (points.length === 1) {
-              const kp = points[0]
-              setKnowledgeStatus((prev) => ({ ...prev, [kp]: success ? 'done' : 'failed' }))
+              markPoints(points, success ? 'done' : 'failed')
               setCurrentKnowledgePoint(null)
             } else if (points.length > 1) {
-              setKnowledgeStatus((prev) => {
-                const next = { ...prev }
-                for (const kp of points) {
-                  next[kp] = success ? 'done' : 'failed'
-                }
-                return next
-              })
+              markPoints(points, success ? 'done' : 'failed')
               setCurrentKnowledgePoint(null)
+            }
+          }
+
+          // Fallback: if backend only searches questions once per point but generates globally, still show progress.
+          if (toolName === 'search_questions_by_knowledge') {
+            if (points.length === 1) {
+              const kp = points[0]
+              setKnowledgeStatus((prev) => {
+                if (prev[kp] === 'done' || prev[kp] === 'failed') return prev
+                return { ...prev, [kp]: success ? 'done' : 'failed' }
+              })
+            } else if (points.length > 1) {
+              markPoints(points, success ? 'done' : 'failed')
             }
           }
           return
