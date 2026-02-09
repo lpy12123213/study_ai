@@ -404,6 +404,293 @@ class Executor:
             "items": items,
         }
 
+    async def _tool_github_search(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """GitHub 搜索：为每个知识点检索可能的高质量笔记/资料仓库。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        limit = int(args.get("limit") or 5)
+        limit = max(1, min(limit, 10))
+        query_hint = str(args.get("query_hint") or "").strip()
+        sort = str(args.get("sort") or "stars").strip() or "stars"
+        order = str(args.get("order") or "desc").strip() or "desc"
+        include_readme = bool(args.get("include_readme", False))
+        readme_limit = int(args.get("readme_limit") or (2 if include_readme else 0))
+        readme_limit = max(0, min(readme_limit, 3))
+        readme_max_chars = int(args.get("readme_max_chars") or 3000)
+        readme_max_chars = max(200, min(readme_max_chars, 10000))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        from backend.mcp.github_search import github_fetch_readme, github_search_repositories
+
+        async def _search_one(point: str) -> Dict[str, Any]:
+            base_query = f"{subject} {point}".strip() if subject and subject not in point else point
+            query = base_query
+            if query_hint:
+                query = f"{query} {query_hint}".strip()
+
+            # Bias toward repositories with documentation.
+            gh_query = f"{query} in:readme"
+            res = await github_search_repositories(gh_query, limit=limit, sort=sort, order=order)
+            if not isinstance(res, dict) or not res.get("success"):
+                return {
+                    "knowledge_point": point,
+                    "success": False,
+                    "query": gh_query,
+                    "provider": "github",
+                    "results": [],
+                    "error": str((res or {}).get("error") or "github search failed"),
+                    "note": str((res or {}).get("note") or ""),
+                }
+
+            results = res.get("results") or []
+            if include_readme and readme_limit > 0 and isinstance(results, list) and results:
+                enriched: List[Dict[str, Any]] = []
+                for r in results:
+                    enriched.append(r if isinstance(r, dict) else {})
+                for r in enriched[:readme_limit]:
+                    full_name = str(r.get("full_name") or "").strip()
+                    if not full_name:
+                        continue
+                    rd = await github_fetch_readme(full_name, max_chars=readme_max_chars)
+                    if isinstance(rd, dict) and rd.get("success") and rd.get("readme"):
+                        r["readme_excerpt"] = str(rd.get("readme") or "")
+                results = enriched
+
+            out: Dict[str, Any] = {
+                "knowledge_point": point,
+                "success": True,
+                "query": gh_query,
+                "queries": [gh_query],
+                "provider": "github",
+                "results": results,
+                "total_count": res.get("total_count") or 0,
+            }
+            note = str(res.get("note") or "").strip()
+            if note:
+                out["note"] = note
+            return out
+
+        concurrency = int(args.get("concurrency") or 3)
+        concurrency = max(1, min(concurrency, 5))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded(point: str) -> Dict[str, Any]:
+            async with sem:
+                try:
+                    return await _search_one(point)
+                except Exception as exc:  # pragma: no cover
+                    return {
+                        "knowledge_point": point,
+                        "success": False,
+                        "query": point,
+                        "provider": "github",
+                        "results": [],
+                        "error": str(exc),
+                    }
+
+        items = await asyncio.gather(*[_guarded(p) for p in points])
+        return {
+            "topic": topic,
+            "subject": subject,
+            "limit": limit,
+            "query_hint": query_hint,
+            "items": items,
+        }
+
+    async def _tool_stackexchange_search(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """StackExchange 搜索：为每个知识点检索高质量问答解释。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        limit = int(args.get("limit") or 5)
+        limit = max(1, min(limit, 10))
+        query_hint = str(args.get("query_hint") or "").strip()
+        site = str(args.get("site") or "math.stackexchange").strip() or "math.stackexchange"
+        include_answers = bool(args.get("include_answers", True))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        from backend.mcp.stackexchange_search import stackexchange_search
+
+        async def _search_one(point: str) -> Dict[str, Any]:
+            base_query = f"{subject} {point}".strip() if subject and subject not in point else point
+            query = base_query
+            if query_hint:
+                query = f"{query} {query_hint}".strip()
+
+            res = await stackexchange_search(
+                query=query,
+                site=site,
+                limit=limit,
+                include_answers=include_answers,
+                max_question_chars=3200,
+                max_answer_chars=3200,
+            )
+            if not isinstance(res, dict) or not res.get("success"):
+                return {
+                    "knowledge_point": point,
+                    "success": False,
+                    "query": query,
+                    "site": site,
+                    "provider": "stackexchange",
+                    "results": [],
+                    "error": str((res or {}).get("error") or "stackexchange search failed"),
+                }
+            return {
+                "knowledge_point": point,
+                "success": True,
+                "query": query,
+                "queries": [query],
+                "site": site,
+                "provider": "stackexchange",
+                "results": res.get("results") or [],
+            }
+
+        concurrency = int(args.get("concurrency") or 3)
+        concurrency = max(1, min(concurrency, 5))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded(point: str) -> Dict[str, Any]:
+            async with sem:
+                try:
+                    return await _search_one(point)
+                except Exception as exc:  # pragma: no cover
+                    return {
+                        "knowledge_point": point,
+                        "success": False,
+                        "query": point,
+                        "site": site,
+                        "provider": "stackexchange",
+                        "results": [],
+                        "error": str(exc),
+                    }
+
+        items = await asyncio.gather(*[_guarded(p) for p in points])
+        return {
+            "topic": topic,
+            "subject": subject,
+            "site": site,
+            "limit": limit,
+            "query_hint": query_hint,
+            "items": items,
+        }
+
+    async def _tool_mediawiki_search(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """MediaWiki 百科检索（可用于 Wikipedia/Wikibooks/ProofWiki 等 MediaWiki 站点）。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        # Base URL building:
+        # - if base_url provided: use it directly
+        # - else: build from project + lang, e.g. https://zh.wikibooks.org/
+        base_url = str(args.get("base_url") or "").strip()
+        project = str(args.get("project") or "").strip().lower()
+        lang = str(args.get("lang") or "zh").strip() or "zh"
+
+        if not base_url:
+            if project in {"wikipedia", "wikibooks", "wikiversity", "wikisource", "wiktionary"}:
+                domain = "wikipedia.org" if project == "wikipedia" else f"{project}.org"
+                base_url = f"https://{lang}.{domain}/"
+            elif project:
+                base_url = str(project)
+
+        sentences = int(args.get("sentences") or 5)
+        sentences = max(1, min(sentences, 10))
+        search_results = int(args.get("search_results") or 5)
+        search_results = max(1, min(search_results, 10))
+        max_content_length = int(args.get("max_content_length") or 6000)
+        max_content_length = max(200, min(max_content_length, 8000))
+
+        points: List[str] = []
+        provided = args.get("knowledge_points")
+        if isinstance(provided, list):
+            points = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict):
+                kp = split_res.get("knowledge_points")
+                if isinstance(kp, list):
+                    points = [str(x or "").strip() for x in kp if str(x or "").strip()]
+        if not points and topic:
+            points = [topic]
+        points = points[:15]
+
+        from backend.mcp.mediawiki_search import mediawiki_search
+
+        async def _lookup_one(point: str) -> Dict[str, Any]:
+            query = f"{subject} {point}".strip() if subject and subject not in point else point
+            res = await mediawiki_search(
+                query=query,
+                base_url=base_url,
+                sentences=sentences,
+                search_results=search_results,
+                max_content_length=max_content_length,
+            )
+            payload = res if isinstance(res, dict) else {"success": False, "error": "invalid mediawiki response"}
+            payload["knowledge_point"] = point
+            payload["provider"] = payload.get("provider") or "mediawiki_api"
+            return payload
+
+        concurrency = int(args.get("concurrency") or 3)
+        concurrency = max(1, min(concurrency, 5))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _guarded(point: str) -> Dict[str, Any]:
+            async with sem:
+                try:
+                    return await _lookup_one(point)
+                except Exception as exc:  # pragma: no cover
+                    return {
+                        "success": False,
+                        "knowledge_point": point,
+                        "query": point,
+                        "error": str(exc),
+                        "provider": "mediawiki_api",
+                        "base_url": base_url,
+                    }
+
+        items = await asyncio.gather(*[_guarded(p) for p in points])
+        return {
+            "topic": topic,
+            "subject": subject,
+            "base_url": base_url,
+            "project": project,
+            "lang": lang,
+            "sentences": sentences,
+            "search_results": search_results,
+            "max_content_length": max_content_length,
+            "items": items,
+        }
+
     async def _tool_browse_web_pages(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """Browse and extract readable text from top web-search results for each knowledge point.
 
@@ -851,8 +1138,11 @@ class Executor:
                 continue
 
             wiki = item.get("wikipedia") if isinstance(item.get("wikipedia"), dict) else {}
+            mw = item.get("mediawiki") if isinstance(item.get("mediawiki"), dict) else {}
             web = item.get("web_search") if isinstance(item.get("web_search"), dict) else {}
             pages_blob = item.get("web_pages") if isinstance(item.get("web_pages"), dict) else {}
+            gh = item.get("github") if isinstance(item.get("github"), dict) else {}
+            se = item.get("stackexchange") if isinstance(item.get("stackexchange"), dict) else {}
             q = item.get("questions") if isinstance(item.get("questions"), dict) else {}
 
             web_results = web.get("results") if isinstance(web.get("results"), list) else []
@@ -886,6 +1176,12 @@ class Executor:
                         "url": wiki.get("url"),
                         "summary": wiki.get("summary"),
                     },
+                    "mediawiki": {
+                        "title": mw.get("title"),
+                        "url": mw.get("url"),
+                        "summary": mw.get("summary"),
+                        "base_url": mw.get("base_url"),
+                    },
                     "web_results": [
                         {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("snippet") or r.get("text")}
                         for r in web_results
@@ -898,9 +1194,33 @@ class Executor:
                         }
                         for p in web_pages
                     ],
+                    "github_repos": [
+                        {
+                            "full_name": r.get("full_name"),
+                            "url": r.get("url"),
+                            "description": r.get("description"),
+                            "stars": r.get("stars"),
+                            "language": r.get("language"),
+                            "readme_excerpt": _clip_text(str(r.get("readme_excerpt") or ""), max_page_chars),
+                        }
+                        for r in (gh.get("results") if isinstance(gh.get("results"), list) else [])[:10]
+                        if isinstance(r, dict)
+                    ],
+                    "stackexchange": [
+                        {
+                            "title": r.get("title"),
+                            "url": r.get("url"),
+                            "score": r.get("score"),
+                            "tags": r.get("tags"),
+                            "question_text": _clip_text(str(r.get("question_text") or ""), max_page_chars),
+                            "top_answer_text": _clip_text(str(r.get("top_answer_text") or ""), max_page_chars),
+                        }
+                        for r in (se.get("results") if isinstance(se.get("results"), list) else [])[:8]
+                        if isinstance(r, dict)
+                    ],
                     "instructions": (
                         "请生成该知识点的自学讲解（Markdown），包含：定义/直观理解/关键点/常见误区/方法小结。\n"
-                        "尽量只依据给定的 wikipedia/web_results 信息；若信息不足，请标注“推断/建议”。\n"
+                        "尽量只依据给定的 wikipedia/mediawiki/web_results/web_pages/github/stackexchange 信息；若信息不足，请标注“推断/建议”。\n"
                         "不要输出例题或练习题。"
                     ),
                 }
@@ -920,7 +1240,11 @@ class Executor:
                 if wiki_summary:
                     explanation_md = f"**百科摘要**：{wiki_summary}\n"
                 else:
-                    explanation_md = "（未获取到可靠百科摘要；以下内容以题库练习与网络检索为主。）\n"
+                    mw_summary = str(mw.get("summary") or "").strip()
+                    if mw_summary:
+                        explanation_md = f"**MediaWiki 摘要**：{mw_summary}\n"
+                    else:
+                        explanation_md = "（未获取到可靠百科摘要；以下内容以题库练习与网络检索为主。）\n"
 
             # Example solutions
             solved_examples: List[Dict[str, Any]] = []
@@ -963,8 +1287,11 @@ class Executor:
                     "knowledge_point": kp,
                     "explanation_markdown": explanation_md,
                     "wikipedia": wiki,
+                    "mediawiki": mw,
                     "web_results": web_results,
                     "web_pages": web_pages,
+                    "github": gh,
+                    "stackexchange": se,
                     "examples": solved_examples,
                     "exercises": exercises,
                 }
@@ -1053,18 +1380,32 @@ class Executor:
 
             # 1.1 Wikipedia
             wiki = sec.get("wikipedia") if isinstance(sec.get("wikipedia"), dict) else {}
-            lines.append("### 1.1 百科定义")
+            mw = sec.get("mediawiki") if isinstance(sec.get("mediawiki"), dict) else {}
+            lines.append("### 1.1 百科定义（Wikipedia / MediaWiki）")
             lines.append("")
             wiki_title = str(wiki.get("title") or "").strip()
             wiki_url = str(wiki.get("url") or "").strip()
             wiki_summary = str(wiki.get("summary") or "").strip()
+
+            mw_title = str(mw.get("title") or "").strip()
+            mw_url = str(mw.get("url") or "").strip()
+            mw_summary = str(mw.get("summary") or "").strip()
+
             if wiki_title or wiki_url or wiki_summary:
                 if wiki_title or wiki_url:
-                    lines.append(f"- 词条：{_link(wiki_title, wiki_url)}")
+                    lines.append(f"- Wikipedia：{_link(wiki_title, wiki_url)}")
                 if wiki_summary:
                     lines.append("")
                     lines.append(wiki_summary)
-            else:
+            if mw_title or mw_url or mw_summary:
+                if mw_title or mw_url:
+                    lines.append("")
+                    lines.append(f"- MediaWiki：{_link(mw_title, mw_url)}")
+                if mw_summary:
+                    lines.append("")
+                    lines.append(mw_summary)
+
+            if not (wiki_title or wiki_url or wiki_summary or mw_title or mw_url or mw_summary):
                 lines.append("（未检索到可靠百科词条）")
             lines.append("")
 
@@ -1084,6 +1425,34 @@ class Executor:
                     lines.append(line)
             else:
                 lines.append("（未检索到网络资料或未配置搜索 Key）")
+
+            se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
+            se_results = se.get("results") if isinstance(se.get("results"), list) else []
+            se_results = [r for r in se_results if isinstance(r, dict)][:3]
+            if se_results:
+                lines.append("")
+                lines.append("**StackExchange（精选问答）**：")
+                for r in se_results:
+                    title = str(r.get("title") or "").strip()
+                    url = str(r.get("url") or "").strip()
+                    score = r.get("score")
+                    suffix = f"（score={score}）" if isinstance(score, int) else ""
+                    lines.append(f"- {_link(title, url)}{suffix}")
+
+            gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
+            gh_results = gh.get("results") if isinstance(gh.get("results"), list) else []
+            gh_results = [r for r in gh_results if isinstance(r, dict)][:3]
+            if gh_results:
+                lines.append("")
+                lines.append("**GitHub（可能有用的资料仓库）**：")
+                for r in gh_results:
+                    full_name = str(r.get("full_name") or "").strip()
+                    url = str(r.get("url") or "").strip()
+                    desc = str(r.get("description") or "").strip()
+                    line = f"- {_link(full_name or 'repo', url)}"
+                    if desc:
+                        line += f"：{desc}"
+                    lines.append(line)
             lines.append("")
 
             # 讲解
@@ -1136,7 +1505,7 @@ class Executor:
 
         lines.append("---")
         lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append("数据来源：Wikipedia、Exa/智谱联网搜索、题库")
+        lines.append("数据来源：Wikipedia/MediaWiki、Exa/智谱联网搜索、StackExchange、GitHub、题库")
         lines.append("")
 
         markdown = "\n".join(lines).strip() + "\n"
@@ -1186,6 +1555,9 @@ class Executor:
         web_map = _map_by_point(ctx.working_memory.get("web_search_knowledge"))
         browse_map = _map_by_point(ctx.working_memory.get("browse_web_pages"))
         wiki_map = _map_by_point(ctx.working_memory.get("wikipedia_search"))
+        mw_map = _map_by_point(ctx.working_memory.get("mediawiki_search"))
+        gh_map = _map_by_point(ctx.working_memory.get("github_search"))
+        se_map = _map_by_point(ctx.working_memory.get("stackexchange_search"))
         q_map = _map_by_point(ctx.working_memory.get("search_questions_by_knowledge"))
 
         aggregated_items: List[Dict[str, Any]] = []
@@ -1194,8 +1566,11 @@ class Executor:
                 {
                     "knowledge_point": kp,
                     "wikipedia": wiki_map.get(kp) or {},
+                    "mediawiki": mw_map.get(kp) or {},
                     "web_search": web_map.get(kp) or {},
                     "web_pages": browse_map.get(kp) or {},
+                    "github": gh_map.get(kp) or {},
+                    "stackexchange": se_map.get(kp) or {},
                     "questions": q_map.get(kp) or {},
                 }
             )
@@ -1210,6 +1585,9 @@ class Executor:
                 "web": len([x for x in web_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
                 "pages": len([x for x in browse_map.values() if isinstance(x, dict) and (x.get("pages") or [])]),
                 "wiki": len([x for x in wiki_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]),
+                "mediawiki": len([x for x in mw_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]),
+                "github": len([x for x in gh_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
+                "stackexchange": len([x for x in se_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
                 "questions": len([x for x in q_map.values() if isinstance(x, dict) and (x.get("questions") or x.get("examples") or x.get("exercises"))]),
             },
         }

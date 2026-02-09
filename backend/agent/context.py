@@ -146,7 +146,15 @@ class ContextManager:
         )
         # Persist the latest tool outputs for downstream steps.
         if result.success:
-            if result.tool in {"web_search_knowledge", "browse_web_pages", "wikipedia_search", "search_questions_by_knowledge"}:
+            if result.tool in {
+                "web_search_knowledge",
+                "browse_web_pages",
+                "wikipedia_search",
+                "mediawiki_search",
+                "github_search",
+                "stackexchange_search",
+                "search_questions_by_knowledge",
+            }:
                 prev = ctx.working_memory.get(result.tool)
                 ctx.working_memory[result.tool] = self._merge_items_by_knowledge_point(prev, result.output)
             else:
