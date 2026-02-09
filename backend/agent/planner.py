@@ -360,7 +360,7 @@ class Planner:
             return f"{prefix}-{iteration}-{uuid.uuid4().hex[:8]}"
 
         steps: List[PlanStep] = []
-        for idx, item in enumerate(steps_raw[:120]):
+        for idx, item in enumerate(steps_raw[:200]):
             if not isinstance(item, dict):
                 continue
             tool = str(item.get("tool") or "").strip()
@@ -512,7 +512,7 @@ class Planner:
                 "建议对 web_search_knowledge / browse_web_pages / wikipedia_search / search_questions_by_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
                 "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
                 "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
-                "steps 数量允许更长：每个知识点可 6~12 个工具调用；总 steps 可到 120（必要时）。",
+                "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
                 "DeepResearch建议：对每个知识点做 4~8 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型/证明/应用/易错），然后调用 browse_web_pages 提取网页正文摘录。",
                 "可选来源：对关键知识点可补充 stackexchange_search（问答解释/易错）、github_search（笔记/教程仓库）、mediawiki_search（Wikibooks/ProofWiki 等）。",
             ],

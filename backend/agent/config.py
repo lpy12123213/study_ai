@@ -9,7 +9,7 @@ from backend.core.settings import LESSON_PLAN_MODEL, SUB_MODEL
 @dataclass(frozen=True)
 class AgentConfig:
     # Plan-Act-Reflect
-    max_iterations: int = 3
+    max_iterations: int = 5
     parallel_tool_calls: bool = True
 
     # Context compression

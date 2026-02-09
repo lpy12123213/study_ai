@@ -1984,6 +1984,65 @@ class Executor:
         topic = str(args.get("topic") or ctx.current_task).strip()
         markdown = str(ctx.working_memory.get("markdown") or "")
 
+        # Heuristic checks (source coverage) to encourage deep research iterations.
+        # We only fail the review when at least some upstream retrieval worked; otherwise we'd loop
+        # endlessly on missing API keys/network constraints.
+        heuristic_issues: List[str] = []
+        heuristic_suggestions: List[str] = []
+
+        aggregated = ctx.working_memory.get("aggregated") or ctx.working_memory.get("aggregate_knowledge")
+        if isinstance(aggregated, dict) and isinstance(aggregated.get("items"), list):
+            items = [x for x in (aggregated.get("items") or []) if isinstance(x, dict)]
+
+            def _count_list(obj: Any, key: str) -> int:
+                if not isinstance(obj, dict):
+                    return 0
+                v = obj.get(key)
+                return len(v) if isinstance(v, list) else 0
+
+            any_web = any(_count_list(it.get("web_search"), "results") > 0 for it in items)
+            any_wiki = any(
+                str((it.get("wikipedia") or {}).get("summary") or "").strip()
+                or str((it.get("mediawiki") or {}).get("summary") or "").strip()
+                for it in items
+                if isinstance(it, dict)
+            )
+            any_stackexchange = any(_count_list(it.get("stackexchange"), "results") > 0 for it in items)
+
+            enforce_sources = any_web or any_wiki or any_stackexchange
+
+            for it in items:
+                kp = str(it.get("knowledge_point") or "").strip() or "（未命名知识点）"
+
+                wiki_summary = str((it.get("wikipedia") or {}).get("summary") or "").strip()
+                mw_summary = str((it.get("mediawiki") or {}).get("summary") or "").strip()
+
+                web_n = _count_list(it.get("web_search"), "results")
+                pages_n = _count_list(it.get("web_pages"), "pages")
+                se_n = _count_list(it.get("stackexchange"), "results")
+                gh_n = _count_list(it.get("github"), "results")
+
+                sources_ok = bool(wiki_summary or mw_summary) or web_n >= 3 or pages_n >= 1 or se_n >= 1 or gh_n >= 1
+                if enforce_sources and not sources_ok:
+                    heuristic_issues.append(
+                        f"知识点「{kp}」资料来源不足：百科/网搜/网页正文/问答/GitHub 均较少；建议增加搜索轮次或调整 query_hint。"
+                    )
+
+                examples_n = _count_list((it.get("questions") or {}), "examples")
+                exercises_n = _count_list((it.get("questions") or {}), "exercises")
+                if examples_n + exercises_n <= 0:
+                    heuristic_suggestions.append(
+                        f"知识点「{kp}」题库未返回例题/练习题：可提高 max_pages、放宽筛选或换更具体关键词。"
+                    )
+
+        if heuristic_issues:
+            return {
+                "passed": False,
+                "issues": heuristic_issues[:8],
+                "suggestions": heuristic_suggestions[:8],
+                "source": "heuristic",
+            }
+
         if not LESSON_PLAN_API_KEY:
             return {"passed": True, "issues": [], "suggestions": [], "source": "fallback"}
 
