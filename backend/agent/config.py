@@ -11,6 +11,8 @@ class AgentConfig:
     # Plan-Act-Reflect
     max_iterations: int = 5
     parallel_tool_calls: bool = True
+    # SubAgent concurrency for foreach_knowledge_point blocks (study-materials)
+    subagent_concurrency: int = 3
 
     # Context compression
     sliding_window_size: int = 10
@@ -50,6 +52,10 @@ class AgentConfig:
         return cls(
             max_iterations=_get_int("AGENT_MAX_ITERATIONS", cls.max_iterations),
             parallel_tool_calls=_get_bool("AGENT_PARALLEL_TOOL_CALLS", cls.parallel_tool_calls),
+            subagent_concurrency=_get_int(
+                "STUDY_MATERIALS_SUBAGENT_CONCURRENCY",
+                _get_int("AGENT_SUBAGENT_CONCURRENCY", cls.subagent_concurrency),
+            ),
             sliding_window_size=_get_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
             token_threshold=_get_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
             emergency_token_threshold=_get_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),

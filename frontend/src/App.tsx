@@ -1,5 +1,6 @@
 import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { RequireAuth } from '@/components/auth/RequireAuth'
 import { ManusLayout } from '@/components/layout/ManusLayout'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 
@@ -30,8 +31,10 @@ function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<ManusLayout />}>
           <Route index element={<Navigate to="/chat" replace />} />
-          <Route path="chat" element={<ChatPage />} />
-          <Route path="chat/:conversationId" element={<ChatPage />} />
+          <Route element={<RequireAuth />}>
+            <Route path="chat" element={<ChatPage />} />
+            <Route path="chat/:conversationId" element={<ChatPage />} />
+          </Route>
           <Route path="blueprint" element={<BlueprintPage />} />
           <Route path="lesson-plans" element={<LessonPlansPage />} />
           <Route path="lesson-plans/:lessonPlanId" element={<LessonPlanDetailPage />} />

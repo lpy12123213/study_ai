@@ -4,6 +4,10 @@ import type { ConversationItem, ConversationType, Message } from '@/types'
 
 const EMPTY_MESSAGES: Message[] = []
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 interface ConversationState {
   conversations: ConversationItem[]
   currentConversationId: string | null
@@ -118,12 +122,49 @@ export const useConversationStore = create<ConversationState>()(
     }),
     {
       name: 'conversation-storage',
-      partialize: (state) => ({
-        conversations: state.conversations,
-        currentConversationId: state.currentConversationId,
-        filter: state.filter,
-        messagesByConversation: state.messagesByConversation,
-      }),
+      version: 2,
+      migrate: (persistedState: unknown) => {
+        const state = (persistedState || {}) as Partial<ConversationState>
+
+        const conversations = Array.isArray(state.conversations)
+          ? state.conversations.filter((c) => c && c.type !== 'chat')
+          : []
+        const allowedIds = new Set(conversations.map((c) => c.id))
+
+        const rawMessages = isRecord(state.messagesByConversation) ? state.messagesByConversation : {}
+        const messagesByConversation: Record<string, Message[]> = {}
+        for (const [id, messages] of Object.entries(rawMessages)) {
+          if (!allowedIds.has(id)) continue
+          if (Array.isArray(messages)) messagesByConversation[id] = messages as Message[]
+        }
+
+        const currentConversationId =
+          state.currentConversationId && allowedIds.has(state.currentConversationId)
+            ? state.currentConversationId
+            : null
+
+        return {
+          ...state,
+          conversations,
+          currentConversationId,
+          messagesByConversation,
+          filter: (state.filter as any) || 'all',
+        } as ConversationState
+      },
+      partialize: (state) => {
+        const conversations = (state.conversations || []).filter((c) => c.type !== 'chat')
+        const allowedIds = new Set(conversations.map((c) => c.id))
+        const messagesByConversation = Object.fromEntries(
+          Object.entries(state.messagesByConversation || {}).filter(([id]) => allowedIds.has(id))
+        ) as Record<string, Message[]>
+
+        return {
+          conversations,
+          currentConversationId: state.currentConversationId,
+          filter: state.filter,
+          messagesByConversation,
+        }
+      },
     }
   )
 )

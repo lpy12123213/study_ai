@@ -107,6 +107,11 @@ class Settings:
     zhipu_model: str
     zhipu_timeout_seconds: int
 
+    # Metaso AI search (direct API; used by study-materials web_search_knowledge)
+    metaso_api_key: str
+    metaso_base_url: str
+    metaso_timeout_seconds: int
+
     @classmethod
     def from_env(cls) -> "Settings":
         # Load from `.env` (if present) without overriding explicit env vars.
@@ -117,6 +122,11 @@ class Settings:
         fireworks_api_key = _get_str("FIREWORKS_API_KEY", "")
         fireworks_base_url = _get_str("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1").rstrip("/")
         zhipu_base_url = _get_str("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
+        metaso_base_url = _get_str("METASO_BASE_URL", "https://metaso.cn/api/v1").rstrip("/")
+
+        # Metaso API key: prefer METASO_API_KEY; keep legacy alias METASO_API for compatibility.
+        metaso_api_key = _get_str("METASO_API_KEY", _get_str("METASO_API", ""))
+        metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
 
         chat_provider_raw = _get_str("CHAT_PROVIDER", "openrouter").lower()
         chat_provider = chat_provider_raw if chat_provider_raw in {"openrouter", "fireworks"} else "openrouter"
@@ -171,6 +181,9 @@ class Settings:
             zhipu_base_url=zhipu_base_url,
             zhipu_model=_get_str("ZHIPU_MODEL", "glm-4.5"),
             zhipu_timeout_seconds=_get_int("ZHIPU_TIMEOUT", 60),
+            metaso_api_key=metaso_api_key,
+            metaso_base_url=metaso_base_url,
+            metaso_timeout_seconds=metaso_timeout_seconds,
         )
 
     def summary(self) -> Dict[str, Any]:
@@ -190,6 +203,7 @@ class Settings:
             "openrouter_configured": bool(self.openrouter_api_key),
             "fireworks_configured": bool(self.fireworks_api_key),
             "zhipu_configured": bool(self.zhipu_api_key),
+            "metaso_configured": bool(self.metaso_api_key),
         }
 
 
@@ -246,6 +260,11 @@ ZHIPU_API_KEY = settings.zhipu_api_key
 ZHIPU_BASE_URL = settings.zhipu_base_url
 ZHIPU_MODEL = settings.zhipu_model
 ZHIPU_TIMEOUT = settings.zhipu_timeout_seconds
+
+# Metaso AI search settings (direct API)
+METASO_API_KEY = settings.metaso_api_key
+METASO_BASE_URL = settings.metaso_base_url
+METASO_TIMEOUT = settings.metaso_timeout_seconds
 
 
 def get_config_summary() -> Dict[str, Any]:

@@ -1,37 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { BookOpen, Loader2, Plus, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
-import { fetchSSE } from '@/api/client'
+import { fetchSSERequest } from '@/api/client'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { ConversationItem, Message, TaskStep } from '@/types'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 
-type StudyMaterialsAgentEvent =
-  | { event: 'thinking'; data: { content?: unknown } }
-  | { event: 'tool_call'; data: { step_id?: unknown; name?: unknown; title?: unknown; arguments?: unknown } }
-  | {
-      event: 'tool_result'
-      data: {
-        step_id?: unknown
-        name?: unknown
-        title?: unknown
-        success?: unknown
-        elapsed_ms?: unknown
-        output?: unknown
-        error?: unknown
-      }
-    }
-  | { event: 'content'; data: { content?: unknown; section?: unknown } }
-  | { event: 'done'; data: { material?: unknown } }
-  | { event: 'error'; data: { message?: unknown } }
-  | { event: string; data?: unknown }
+type StudyMaterialsAgentEvent = {
+  event: string
+  data?: any
+  seq?: unknown
+  task_id?: unknown
+}
 
 function toText(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -44,6 +44,8 @@ function toConversationTitle(text: string): string {
 }
 
 type KnowledgePointStatus = 'pending' | 'active' | 'done' | 'failed'
+
+type TriState = 'default' | 'on' | 'off'
 
 function normalizeKnowledgePoints(points: unknown): string[] {
   if (!Array.isArray(points)) return []
@@ -191,7 +193,12 @@ function MessageBubble({
       </div>
       
       <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <div className="whitespace-pre-wrap">{message.content}</div>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
+        >
+          {message.content}
+        </ReactMarkdown>
       </div>
 
       {message.steps && message.steps.length > 0 && (
@@ -342,13 +349,22 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
 export default function StudyMaterialsPage() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const streamAbortRef = useRef<AbortController | null>(null)
+  const streamKeyRef = useRef<string | null>(null)
 
   const [input, setInput] = useState('')
-  const [isGenerating, setIsGenerating] = useState(false)
+  const [isGeneratingLocal, setIsGeneratingLocal] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [knowledgePoints, setKnowledgePoints] = useState<string[]>([])
-  const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, KnowledgePointStatus>>({})
-  const [currentKnowledgePoint, setCurrentKnowledgePoint] = useState<string | null>(null)
+
+  // Advanced options (optional; when unset, backend uses `.env` defaults)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [subject, setSubject] = useState('')
+  const [preset, setPreset] = useState<'quick' | 'standard' | 'deep' | 'research' | ''>('')
+  const [requirements, setRequirements] = useState('')
+  const [withQuestions, setWithQuestions] = useState<TriState>('default')
+  const [withDiagrams, setWithDiagrams] = useState<TriState>('default')
+  const [enableExtraTools, setEnableExtraTools] = useState<TriState>('default')
+  const [maxPoints, setMaxPoints] = useState<string>('')
 
   const conversations = useConversationStore((state) => state.conversations)
   const currentConversationId = useConversationStore((state) => state.currentConversationId)
@@ -365,24 +381,465 @@ export default function StudyMaterialsPage() {
     return current?.type === 'lesson_plan' ? currentConversationId : null
   }, [conversations, currentConversationId])
 
+  const activeConversation = useMemo(() => {
+    if (!activeConversationId) return null
+    return conversations.find((c) => c.id === activeConversationId) ?? null
+  }, [conversations, activeConversationId])
+
+  const activeStream = activeConversation?.activeStream
+  const hasResumableStream = Boolean(activeStream?.taskId)
+  const isGenerating = isGeneratingLocal
+
   const messages = useConversationStore((state) =>
     state.getMessages(activeConversationId ?? '')
   )
 
-  const {
-    startTask,
-    addStep,
-    updateStep,
-    completeTask,
-    failTask,
-  } = useTaskStore()
+  const activeAssistantMessage = useMemo(() => {
+    const targetId = activeStream?.assistantMessageId
+    if (targetId) {
+      const found = messages.find((m) => m.id === targetId)
+      if (found) return found
+    }
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i]
+      if (m && m.role === 'assistant') return m
+    }
+
+    return null
+  }, [messages, activeStream?.assistantMessageId])
+
+  const derivedKnowledge = useMemo(() => {
+    const steps = (activeAssistantMessage?.steps || []) as TaskStep[]
+
+    // Prefer the explicit split tool output (stable ordering).
+    let points: string[] = []
+    for (const step of steps) {
+      if (step.toolName !== 'split_knowledge_points') continue
+      if (!step.output || typeof step.output !== 'object') continue
+      const out = step.output as Record<string, unknown>
+      const kps = normalizeKnowledgePoints(out.knowledge_points)
+      if (kps.length > 0) {
+        points = kps
+        break
+      }
+    }
+
+    // Fallback: infer from step inputs/titles.
+    if (!points.length) {
+      const seen = new Set<string>()
+      for (const step of steps) {
+        for (const kp of extractStepKnowledgePoints(step)) {
+          if (!kp || seen.has(kp)) continue
+          seen.add(kp)
+          points.push(kp)
+          if (points.length >= 15) break
+        }
+        if (points.length >= 15) break
+      }
+    }
+
+    const statusByPoint: Record<string, KnowledgePointStatus> = {}
+    for (const kp of points) statusByPoint[kp] = 'pending'
+
+    const ensurePoint = (kp: string) => {
+      if (!kp) return
+      if (!statusByPoint[kp]) statusByPoint[kp] = 'pending'
+      if (!points.includes(kp)) points = [...points, kp]
+    }
+
+    for (const step of steps) {
+      const kps = extractStepKnowledgePoints(step)
+      if (kps.length !== 1) continue
+      const kp = kps[0]
+      if (!kp) continue
+      ensurePoint(kp)
+
+      const tool = step.toolName || ''
+      const st = step.status
+
+      if (tool === 'generate_study_material') {
+        if (st === 'completed') statusByPoint[kp] = 'done'
+        else if (st === 'failed') statusByPoint[kp] = 'failed'
+        else if (st === 'running' && statusByPoint[kp] === 'pending') statusByPoint[kp] = 'active'
+        continue
+      }
+
+      if (st === 'failed' && statusByPoint[kp] !== 'done') statusByPoint[kp] = 'failed'
+      if (st === 'running' && statusByPoint[kp] === 'pending') statusByPoint[kp] = 'active'
+    }
+
+    const currentPoint = points.find((p) => statusByPoint[p] === 'active') || null
+
+    return { points, statusByPoint, currentPoint }
+  }, [activeAssistantMessage?.steps])
 
   useEffect(() => {
     if (!scrollRef.current) return
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages.length])
 
+  const abortActiveStream = useCallback(() => {
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort()
+      streamAbortRef.current = null
+    }
+    streamKeyRef.current = null
+    setIsGeneratingLocal(false)
+  }, [])
+
+  const runStudyMaterialsStream = useCallback((opts: {
+    conversationId: string
+    assistantMessageId: string
+    request: { url: string; method: 'GET' | 'POST'; body?: unknown }
+    localTaskId?: string
+    initialTaskId?: string
+    initialSeq?: number
+    streamKey?: string
+  }) => {
+    const { conversationId, assistantMessageId, request, localTaskId } = opts
+    const controller = new AbortController()
+    const initialSeq = typeof opts.initialSeq === 'number' ? opts.initialSeq : 0
+
+    // Cancel any existing stream before starting a new one.
+    abortActiveStream()
+    streamAbortRef.current = controller
+    streamKeyRef.current = opts.streamKey || null
+
+    let serverTaskId: string | null = (opts.initialTaskId || '').trim() || null
+    let lastSeq = initialSeq
+
+    const existing = useConversationStore
+      .getState()
+      .getMessages(conversationId)
+      .find((m) => m.id === assistantMessageId)
+
+    let assistantSteps: TaskStep[] = Array.isArray(existing?.steps) ? (existing?.steps as TaskStep[]) : []
+    let assistantText = typeof existing?.content === 'string' ? existing!.content : ''
+    let pendingText = ''
+    let flushTimer: number | null = null
+    let done = false
+
+    const flushAssistant = () => {
+      if (!pendingText) return
+      assistantText += pendingText
+      pendingText = ''
+      useConversationStore.getState().updateMessage(conversationId, assistantMessageId, { content: assistantText })
+    }
+
+    const syncSteps = () => {
+      useConversationStore.getState().updateMessage(conversationId, assistantMessageId, { steps: assistantSteps })
+    }
+
+    const upsertAssistantStep = (step: TaskStep) => {
+      const existingStep = assistantSteps.find((s) => s.id === step.id)
+      if (!existingStep) {
+        assistantSteps = [...assistantSteps, step]
+        syncSteps()
+        return
+      }
+      assistantSteps = assistantSteps.map((s) => (s.id === step.id ? { ...s, ...step } : s))
+      syncSteps()
+    }
+
+    const patchAssistantStep = (stepId: string, patch: Partial<TaskStep>) => {
+      const exists = assistantSteps.some((s) => s.id === stepId)
+      if (!exists) {
+        assistantSteps = [
+          ...assistantSteps,
+          {
+            id: stepId,
+            title: patch.title || patch.toolName || '步骤',
+            status: patch.status || 'running',
+            startTime: patch.startTime,
+            endTime: patch.endTime,
+            toolName: patch.toolName,
+            input: patch.input,
+            output: patch.output,
+            error: patch.error,
+          },
+        ]
+        syncSteps()
+        return
+      }
+      assistantSteps = assistantSteps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
+      syncSteps()
+    }
+
+    const recordSeq = (seq: number) => {
+      if (!Number.isFinite(seq) || seq <= lastSeq) return
+      lastSeq = seq
+      if (!serverTaskId) return
+
+      useConversationStore.getState().updateConversation(conversationId, {
+        activeStream: {
+          taskType: 'study_materials',
+          taskId: serverTaskId,
+          assistantMessageId,
+          lastSeq,
+        },
+        resumable: true,
+      })
+    }
+
+    setIsGeneratingLocal(true)
+    setError(null)
+
+    void fetchSSERequest(
+      request.url,
+      {
+        method: request.method,
+        body: request.body,
+        signal: controller.signal,
+      },
+      (data) => {
+        // Ignore events from a previous stream.
+        if (streamAbortRef.current !== controller) return
+
+        const evt = data as StudyMaterialsAgentEvent
+        const kind = typeof evt?.event === 'string' ? evt.event : ''
+        const payload = evt?.data
+        const seqRaw = evt?.seq
+        const seq = typeof seqRaw === 'number' ? seqRaw : typeof seqRaw === 'string' ? Number(seqRaw) : NaN
+        if (Number.isFinite(seq)) recordSeq(seq as number)
+
+        if (kind === 'task_started') {
+          const taskId = toText(payload?.task_id) || toText(evt?.task_id)
+          if (taskId) {
+            serverTaskId = taskId
+            streamKeyRef.current = `${conversationId}:${taskId}`
+            useConversationStore.getState().updateConversation(conversationId, {
+              activeStream: {
+                taskType: 'study_materials',
+                taskId,
+                assistantMessageId,
+                lastSeq: Number.isFinite(seq) ? (seq as number) : 0,
+              },
+              resumable: true,
+              status: 'active',
+              updatedAt: new Date().toISOString(),
+            })
+          }
+          return
+        }
+
+        if (kind === 'ping') {
+          // Keep-alive; nothing to do.
+          return
+        }
+
+        if (kind === 'warning') {
+          const msg = toText(payload?.message)
+          if (msg) setError(msg)
+          return
+        }
+
+        if (kind === 'thinking') {
+          const text = toText(payload?.content) || '思考中…'
+          const t = new Date().toISOString()
+          upsertAssistantStep({
+            id: generateId(),
+            title: text,
+            status: 'completed',
+            startTime: t,
+            endTime: t,
+          })
+          return
+        }
+
+        if (kind === 'tool_call') {
+          const name = toText(payload?.name) || 'tool'
+          const stepId = toText(payload?.step_id) || generateId()
+          const stepTitle = toText(payload?.title)
+          const t = new Date().toISOString()
+
+          const step: TaskStep = {
+            id: stepId,
+            title: stepTitle || `调用工具：${name}`,
+            status: 'running',
+            startTime: t,
+            toolName: name,
+            input: payload?.arguments,
+          }
+
+          upsertAssistantStep(step)
+          if (localTaskId) {
+            useTaskStore.getState().addStep(localTaskId, step)
+          }
+          useConversationStore.getState().updateConversation(conversationId, {
+            updatedAt: new Date().toISOString(),
+            progress: 40,
+          })
+          return
+        }
+
+        if (kind === 'tool_result') {
+          const toolName = toText(payload?.name) || ''
+          const stepId = toText(payload?.step_id)
+          if (!stepId) return
+
+          const success = (payload as any)?.success === true
+          const out = (payload as any)?.output
+          const err = toText(payload?.error)
+          const t = new Date().toISOString()
+
+          patchAssistantStep(stepId, {
+            status: success ? 'completed' : 'failed',
+            endTime: t,
+            output: out,
+            error: err || undefined,
+            toolName: toolName || undefined,
+          })
+
+          if (localTaskId) {
+            useTaskStore.getState().updateStep(localTaskId, stepId, {
+              status: success ? 'completed' : 'failed',
+              endTime: t,
+              output: out,
+              error: err || undefined,
+            })
+          }
+          return
+        }
+
+        if (kind === 'content') {
+          const chunk = toText(payload?.content)
+          if (chunk) {
+            pendingText += chunk
+            if (flushTimer == null) {
+              flushTimer = window.setTimeout(() => {
+                flushTimer = null
+                flushAssistant()
+              }, 60)
+            }
+          }
+          useConversationStore.getState().updateConversation(conversationId, {
+            updatedAt: new Date().toISOString(),
+            progress: 70,
+          })
+          return
+        }
+
+        if (kind === 'done') {
+          done = true
+          if (flushTimer != null) {
+            window.clearTimeout(flushTimer)
+            flushTimer = null
+          }
+          flushAssistant()
+
+          const t = new Date().toISOString()
+          const md = toText(payload?.material?.markdown)
+          if (md) {
+            assistantText = md
+            useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+              content: md,
+              steps: assistantSteps,
+            })
+          }
+
+          useConversationStore.getState().updateConversation(conversationId, {
+            updatedAt: t,
+            status: 'completed',
+            progress: 100,
+            activeStream: undefined,
+            resumable: false,
+          })
+
+          if (localTaskId) {
+            useTaskStore.getState().completeTask(localTaskId)
+          }
+
+          setIsGeneratingLocal(false)
+          return
+        }
+
+        if (kind === 'error') {
+          done = true
+          const msg = toText(payload?.message) || '生成失败'
+          setError(msg)
+
+          if (flushTimer != null) {
+            window.clearTimeout(flushTimer)
+            flushTimer = null
+          }
+          flushAssistant()
+
+          useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+            content: `出错：${msg}`,
+            steps: assistantSteps,
+          })
+
+          useConversationStore.getState().updateConversation(conversationId, {
+            updatedAt: new Date().toISOString(),
+            status: 'active',
+            activeStream: undefined,
+            resumable: false,
+          })
+
+          if (localTaskId) {
+            useTaskStore.getState().failTask(localTaskId, msg)
+          }
+
+          setIsGeneratingLocal(false)
+        }
+      },
+      (err) => {
+        if (streamAbortRef.current !== controller) return
+        if (done) return
+
+        const msg = err.message || '生成失败'
+        setError(msg)
+        if (localTaskId) {
+          useTaskStore.getState().failTask(localTaskId, msg)
+        }
+        useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+          content: `出错：${msg}`,
+          steps: assistantSteps,
+        })
+        // Keep activeStream so the user can refresh/reconnect.
+        setIsGeneratingLocal(false)
+      },
+      () => {
+        if (streamAbortRef.current !== controller) return
+        if (!done) {
+          // Connection closed unexpectedly: keep the task resumable.
+          setIsGeneratingLocal(false)
+        }
+        streamAbortRef.current = null
+      }
+    )
+  }, [abortActiveStream])
+
+  // Resume after refresh: if a conversation has an active stream, reconnect from last seq.
+  useEffect(() => {
+    if (!activeConversationId) return
+    const stream = activeConversation?.activeStream
+    if (!stream?.taskId || !stream.assistantMessageId) return
+
+    const key = `${activeConversationId}:${stream.taskId}`
+    if (streamKeyRef.current === key) return
+    runStudyMaterialsStream({
+      conversationId: activeConversationId,
+      assistantMessageId: stream.assistantMessageId,
+      request: {
+        url: `/study-materials/tasks/${encodeURIComponent(stream.taskId)}/stream?after_seq=${Number(stream.lastSeq || 0)}`,
+        method: 'GET',
+      },
+      initialTaskId: stream.taskId,
+      initialSeq: Number(stream.lastSeq || 0),
+      streamKey: key,
+    })
+  }, [activeConversationId, activeConversation?.activeStream?.taskId, runStudyMaterialsStream])
+
+  useEffect(() => {
+    return () => {
+      abortActiveStream()
+    }
+  }, [abortActiveStream])
+
   const handleNewConversation = () => {
+    abortActiveStream()
     const id = generateId()
     const now = new Date().toISOString()
     const item: ConversationItem = {
@@ -399,9 +856,6 @@ export default function StudyMaterialsPage() {
     setMessages(id, [])
     setInput('')
     setError(null)
-    setKnowledgePoints([])
-    setKnowledgeStatus({})
-    setCurrentKnowledgePoint(null)
   }
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -410,11 +864,6 @@ export default function StudyMaterialsPage() {
     if (!prompt || isGenerating) return
 
     const now = new Date().toISOString()
-
-    // Reset per-run knowledge-point progress (populated after split tool returns)
-    setKnowledgePoints([])
-    setKnowledgeStatus({})
-    setCurrentKnowledgePoint(null)
 
     // Ensure a study-materials conversation is selected (reuse lesson_plan type)
     let conversationId = activeConversationId
@@ -434,8 +883,21 @@ export default function StudyMaterialsPage() {
       setCurrentConversation(conversationId)
       setMessages(conversationId, [])
     } else {
-      updateConversation(conversationId, { updatedAt: now, status: 'active' })
+      updateConversation(conversationId, {
+        title: toConversationTitle(prompt),
+        updatedAt: now,
+        status: 'active',
+        progress: 0,
+        activeStream: undefined,
+        resumable: false,
+      })
     }
+
+    // Starting a new run clears any previous resumable stream state for this conversation.
+    useConversationStore.getState().updateConversation(conversationId, {
+      activeStream: undefined,
+      resumable: false,
+    })
 
     addMessage(conversationId, {
       id: generateId(),
@@ -456,268 +918,47 @@ export default function StudyMaterialsPage() {
       steps: [],
     })
 
-    const taskId = `study-materials-${conversationId}-${Date.now()}`
-    startTask(taskId)
-    setIsGenerating(true)
+    const localTaskId = `study-materials-${conversationId}-${Date.now()}`
+    useTaskStore.getState().startTask(localTaskId)
 
-    let runningStepId: string | null = null
-    let done = false
-    const stepMeta = new Map<string, { toolName: string; knowledgePoints: string[] }>()
-    let assistantSteps: TaskStep[] = []
-    let assistantText = ''
-    let pendingText = ''
-    let flushTimer: number | null = null
-
-    const flushAssistant = () => {
-      if (!pendingText) return
-      assistantText += pendingText
-      pendingText = ''
-      useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-        content: assistantText,
-      })
+    const toOptionalBool = (v: TriState): boolean | undefined => {
+      if (v === 'on') return true
+      if (v === 'off') return false
+      return undefined
     }
 
-    const syncSteps = () => {
-      useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-        steps: assistantSteps,
-      })
+    const body: Record<string, unknown> = { query: prompt }
+    const subjectValue = subject.trim()
+    if (subjectValue) body.subject = subjectValue
+    if (preset) body.preset = preset
+    const requirementsValue = requirements.trim()
+    if (requirementsValue) body.requirements = requirementsValue
+
+    const withQuestionsValue = toOptionalBool(withQuestions)
+    if (withQuestionsValue !== undefined) body.with_questions = withQuestionsValue
+    const withDiagramsValue = toOptionalBool(withDiagrams)
+    if (withDiagramsValue !== undefined) body.with_diagrams = withDiagramsValue
+    const enableExtraToolsValue = toOptionalBool(enableExtraTools)
+    if (enableExtraToolsValue !== undefined) body.enable_extra_tools = enableExtraToolsValue
+
+    const maxPointsRaw = maxPoints.trim()
+    if (maxPointsRaw) {
+      const n = Number(maxPointsRaw)
+      if (Number.isFinite(n) && n > 0) body.max_points = Math.max(1, Math.min(15, Math.floor(n)))
     }
 
-    const updateAssistantStep = (stepId: string, patch: Partial<TaskStep>) => {
-      assistantSteps = assistantSteps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
-      syncSteps()
-    }
-
-    const startRunningStep = (title: string, extra?: Partial<TaskStep>) => {
-      const t = new Date().toISOString()
-      if (runningStepId) {
-        const prev = assistantSteps.find((s) => s.id === runningStepId)
-        if (prev?.status === 'running') {
-          updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
-          updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
-        }
-      }
-
-      const step: TaskStep = {
-        id: generateId(),
-        title,
-        status: 'running',
-        startTime: t,
-        ...extra,
-      }
-      runningStepId = step.id
-      addStep(taskId, step)
-      assistantSteps = [...assistantSteps, step]
-      syncSteps()
-    }
-
-    startRunningStep('接收请求并开始生成…')
-
-    void fetchSSE(
-      '/study-materials/generate',
-      { query: prompt },
-      (data) => {
-        const evt = data as StudyMaterialsAgentEvent
-        const kind = typeof (evt as any)?.event === 'string' ? (evt as any).event : ''
-        const payload = (evt as any)?.data
-
-        if (kind === 'thinking') {
-          const text = toText(payload?.content) || '思考中…'
-          startRunningStep(text)
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 20 })
-          return
-        }
-
-        if (kind === 'tool_call') {
-          const name = toText(payload?.name) || 'tool'
-          const stepId = toText(payload?.step_id)
-          const stepTitle = toText(payload?.title)
-
-          const points = normalizeKnowledgePoints((payload as any)?.arguments?.knowledge_points)
-          if (stepId) {
-            stepMeta.set(stepId, { toolName: name, knowledgePoints: points })
-          }
-
-          if (points.length === 1) {
-            const kp = points[0]
-            setCurrentKnowledgePoint(kp)
-            setKnowledgeStatus((prev) => {
-              if (prev[kp] === 'done' || prev[kp] === 'failed') return prev
-              return { ...prev, [kp]: 'active' }
-            })
-          }
-          startRunningStep(stepTitle || `调用工具：${name}`, {
-            ...(stepId ? { id: stepId } : {}),
-            toolName: name,
-            input: payload?.arguments,
-          })
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 40 })
-          return
-        }
-
-        if (kind === 'tool_result') {
-          const stepId = toText(payload?.step_id) || runningStepId || ''
-          if (!stepId) return
-          const success = (payload as any)?.success === true
-          const out = (payload as any)?.output
-          const err = toText(payload?.error)
-          const t = new Date().toISOString()
-          const toolName = toText(payload?.name)
-
-          updateStep(taskId, stepId, {
-            status: success ? 'completed' : 'failed',
-            endTime: t,
-            output: out,
-            error: err || undefined,
-          })
-          updateAssistantStep(stepId, {
-            status: success ? 'completed' : 'failed',
-            endTime: t,
-            output: out,
-            error: err || undefined,
-          })
-          runningStepId = null
-
-          if (toolName === 'split_knowledge_points') {
-            const points = normalizeKnowledgePoints((out as any)?.knowledge_points)
-            if (points.length > 0) {
-              setKnowledgePoints(points)
-              setKnowledgeStatus((prev) => {
-                const next: Record<string, KnowledgePointStatus> = { ...prev }
-                for (const kp of points) {
-                  if (!next[kp]) next[kp] = 'pending'
-                }
-                return next
-              })
-            }
-          }
-
-          const markPoints = (points: string[], status: KnowledgePointStatus) => {
-            if (!points.length) return
-            setKnowledgeStatus((prev) => {
-              const next = { ...prev }
-              for (const kp of points) {
-                next[kp] = status
-              }
-              return next
-            })
-          }
-
-          const meta = stepMeta.get(stepId)
-          const points = meta?.knowledgePoints ?? []
-
-          // Prefer tracking exploration progress by per-knowledge-point generation (most accurate for DFS + subagent runs)
-          if (toolName === 'generate_study_material') {
-            if (points.length === 1) {
-              markPoints(points, success ? 'done' : 'failed')
-              setCurrentKnowledgePoint(null)
-            } else if (points.length > 1) {
-              markPoints(points, success ? 'done' : 'failed')
-              setCurrentKnowledgePoint(null)
-            }
-          }
-
-          // Fallback: if backend only searches questions once per point but generates globally, still show progress.
-          if (toolName === 'search_questions_by_knowledge') {
-            if (points.length === 1) {
-              const kp = points[0]
-              setKnowledgeStatus((prev) => {
-                if (prev[kp] === 'done' || prev[kp] === 'failed') return prev
-                return { ...prev, [kp]: success ? 'done' : 'failed' }
-              })
-            } else if (points.length > 1) {
-              markPoints(points, success ? 'done' : 'failed')
-            }
-          }
-          return
-        }
-
-        if (kind === 'content') {
-          const chunk = toText(payload?.content)
-          if (chunk) {
-            pendingText += chunk
-            if (flushTimer == null) {
-              flushTimer = window.setTimeout(() => {
-                flushTimer = null
-                flushAssistant()
-              }, 60)
-            }
-          }
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 70 })
-          return
-        }
-
-        if (kind === 'done') {
-          done = true
-          if (flushTimer != null) {
-            window.clearTimeout(flushTimer)
-            flushTimer = null
-          }
-          flushAssistant()
-
-          const t = new Date().toISOString()
-          if (runningStepId) {
-            updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
-            updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
-          }
-
-          const md = toText(payload?.material?.markdown)
-          if (md) {
-            assistantText = md
-            useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-              content: md,
-              steps: assistantSteps,
-            })
-          } else {
-            useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-              content: assistantText,
-              steps: assistantSteps,
-            })
-          }
-
-          updateConversation(conversationId!, {
-            title: toConversationTitle(prompt),
-            updatedAt: t,
-            status: 'completed',
-            progress: 100,
-          })
-
-          completeTask(taskId)
-          setIsGenerating(false)
-          return
-        }
-
-        if (kind === 'error') {
-          done = true
-          const msg = toText(payload?.message) || '生成失败'
-          setError(msg)
-          failTask(taskId, msg)
-          useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-            content: `出错：${msg}`,
-            steps: assistantSteps,
-          })
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), status: 'active' })
-          setIsGenerating(false)
-        }
+    runStudyMaterialsStream({
+      conversationId,
+      assistantMessageId,
+      request: {
+        url: '/study-materials/generate',
+        method: 'POST',
+        body,
       },
-      (err) => {
-        if (done) return
-        const msg = err.message || '生成失败'
-        setError(msg)
-        failTask(taskId, msg)
-        useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-          content: `出错：${msg}`,
-          steps: assistantSteps,
-        })
-        setIsGenerating(false)
-      },
-      () => {
-        if (!done) {
-          completeTask(taskId)
-          setIsGenerating(false)
-        }
-      }
-    )
+      localTaskId,
+      initialSeq: 0,
+      streamKey: `${conversationId}:${assistantMessageId}`,
+    })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -736,18 +977,61 @@ export default function StudyMaterialsPage() {
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
           <div className="max-w-3xl mx-auto py-6">
             <KnowledgeProgressHeader
-              points={knowledgePoints}
-              statusByPoint={knowledgeStatus}
-              currentPoint={currentKnowledgePoint}
+              points={derivedKnowledge.points}
+              statusByPoint={derivedKnowledge.statusByPoint}
+              currentPoint={derivedKnowledge.currentPoint}
             />
+
+            {hasResumableStream && !isGenerating && activeConversationId && activeStream && (
+              <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-muted-foreground">
+                    检测到未完成的生成任务，可继续接收输出（支持刷新恢复）。
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        runStudyMaterialsStream({
+                          conversationId: activeConversationId,
+                          assistantMessageId: activeStream.assistantMessageId,
+                          request: {
+                            url: `/study-materials/tasks/${encodeURIComponent(activeStream.taskId)}/stream?after_seq=${Number(activeStream.lastSeq || 0)}`,
+                            method: 'GET',
+                          },
+                          initialTaskId: activeStream.taskId,
+                          initialSeq: Number(activeStream.lastSeq || 0),
+                          streamKey: `${activeConversationId}:${activeStream.taskId}`,
+                        })
+                      }}
+                    >
+                      继续
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        abortActiveStream()
+                        useConversationStore.getState().updateConversation(activeConversationId, {
+                          activeStream: undefined,
+                          resumable: false,
+                        })
+                      }}
+                    >
+                      放弃
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
             <AnimatePresence mode="popLayout">
               {messages.map((m) => (
                 <MessageBubble
                   key={m.id}
                   message={m}
-                  knowledgePoints={knowledgePoints}
-                  statusByPoint={knowledgeStatus}
-                  currentPoint={currentKnowledgePoint}
+                  knowledgePoints={derivedKnowledge.points}
+                  statusByPoint={derivedKnowledge.statusByPoint}
+                  currentPoint={derivedKnowledge.currentPoint}
                 />
               ))}
             </AnimatePresence>
@@ -780,6 +1064,148 @@ export default function StudyMaterialsPage() {
       {/* Composer */}
       <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
         <div className="max-w-3xl mx-auto">
+          <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  disabled={isGenerating}
+                >
+                  {optionsOpen ? '收起选项' : '高级选项'}
+                </Button>
+              </CollapsibleTrigger>
+              <div className="text-[10px] text-muted-foreground/70">
+                未填写/默认将使用后端配置（.env）
+              </div>
+            </div>
+
+            <CollapsibleContent>
+              <div className="mb-3 rounded-2xl border border-border bg-card/80 backdrop-blur p-3 shadow-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">学科（可选）</div>
+                    <Input
+                      value={subject}
+                      onChange={(e) => setSubject(e.target.value)}
+                      placeholder="例如：高中数学 / 大学物理 / 英语"
+                      disabled={isGenerating}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">生成预设</div>
+                    <Select
+                      value={preset || 'default'}
+                      onValueChange={(v) => {
+                        if (v === 'default') {
+                          setPreset('')
+                          return
+                        }
+                        if (v === 'quick' || v === 'standard' || v === 'deep' || v === 'research') {
+                          setPreset(v)
+                        }
+                      }}
+                      disabled={isGenerating}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="默认（standard）" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">默认（standard）</SelectItem>
+                        <SelectItem value="quick">quick（更快更短）</SelectItem>
+                        <SelectItem value="standard">standard（平衡）</SelectItem>
+                        <SelectItem value="deep">deep（更深更细）</SelectItem>
+                        <SelectItem value="research">research（更研究型）</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">示意图</div>
+                    <Select
+                      value={withDiagrams}
+                      onValueChange={(v) => setWithDiagrams(v as TriState)}
+                      disabled={isGenerating}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="默认" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">默认</SelectItem>
+                        <SelectItem value="on">开启</SelectItem>
+                        <SelectItem value="off">关闭</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">题库（例题/练习）</div>
+                    <Select
+                      value={withQuestions}
+                      onValueChange={(v) => setWithQuestions(v as TriState)}
+                      disabled={isGenerating}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="默认" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">默认</SelectItem>
+                        <SelectItem value="on">开启</SelectItem>
+                        <SelectItem value="off">关闭</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">额外检索工具（百科/问答/GitHub）</div>
+                    <Select
+                      value={enableExtraTools}
+                      onValueChange={(v) => setEnableExtraTools(v as TriState)}
+                      disabled={isGenerating}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="默认" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">默认</SelectItem>
+                        <SelectItem value="on">开启</SelectItem>
+                        <SelectItem value="off">关闭</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-muted-foreground">知识点数量上限（1-15）</div>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={15}
+                      value={maxPoints}
+                      onChange={(e) => setMaxPoints(e.target.value)}
+                      placeholder="留空=默认"
+                      disabled={isGenerating}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <div className="text-xs font-medium text-muted-foreground">额外要求（可选）</div>
+                    <Textarea
+                      value={requirements}
+                      onChange={(e) => setRequirements(e.target.value)}
+                      placeholder="例如：更通俗一些 / 更严谨一些 / 偏直观解释 / 偏推导证明 / 强调常见误区"
+                      className="min-h-[64px] resize-none"
+                      disabled={isGenerating}
+                      rows={2}
+                    />
+                  </div>
+                </div>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+
           <form onSubmit={handleSubmit} className="relative group">
             <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
                <Button

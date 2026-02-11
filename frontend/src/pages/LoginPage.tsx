@@ -1,29 +1,30 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Loader2, UserPlus, ArrowRight } from 'lucide-react'
+import { Loader2, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAuthStore } from '@/stores/useAuthStore'
 import * as authApi from '@/api/auth'
 import { BrandMark } from '@/components/shared/BrandMark'
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const { login: setAuth } = useAuthStore()
+  const location = useLocation()
+  const { login: setAuth, isAuthenticated, token } = useAuthStore()
   
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   
   const [loginUsername, setLoginUsername] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
-  
-  const [registerUsername, setRegisterUsername] = useState('')
-  const [registerEmail, setRegisterEmail] = useState('')
-  const [registerPassword, setRegisterPassword] = useState('')
-  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('')
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) return
+    const next = (location.state as any)?.from || '/chat'
+    navigate(next, { replace: true })
+  }, [isAuthenticated, token, location.state, navigate])
 
   const handleLogin = async (e: React.FormEvent) => {
     e?.preventDefault()
@@ -36,46 +37,13 @@ export default function LoginPage() {
         password: loginPassword,
       })
       setAuth(response.user, response.token)
-      navigate('/chat')
+      const next = (location.state as any)?.from || '/chat'
+      navigate(next, { replace: true })
     } catch (err) {
       setError('登录失败，请检查用户名和密码')
     } finally {
       setIsLoading(false)
     }
-  }
-
-  const handleRegister = async (e: React.FormEvent) => {
-    e?.preventDefault()
-    setError('')
-
-    if (registerPassword !== registerConfirmPassword) {
-      setError('两次输入的密码不一致')
-      return
-    }
-
-    setIsLoading(true)
-
-    try {
-      const response = await authApi.register({
-        username: registerUsername,
-        password: registerPassword,
-        email: registerEmail || undefined,
-      })
-      setAuth(response.user, response.token)
-      navigate('/chat')
-    } catch (err) {
-      setError('注册失败，用户名可能已被使用')
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleGuestLogin = () => {
-    setAuth(
-      { id: 'guest', username: '访客' },
-      'guest-token'
-    )
-    navigate('/chat')
   }
 
   return (
@@ -99,136 +67,53 @@ export default function LoginPage() {
 
         <Card className="border-border/50 shadow-lg">
           <CardContent className="pt-6">
-            <Tabs defaultValue="login">
-              <TabsList className="grid w-full grid-cols-2 mb-6">
-                <TabsTrigger value="login">登录</TabsTrigger>
-                <TabsTrigger value="register">注册</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="login">
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">用户名</label>
-                    <Input
-                      placeholder="请输入用户名"
-                      value={loginUsername}
-                      onChange={(e) => setLoginUsername(e.target.value)}
-                      required
-                      className="bg-muted/30"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">密码</label>
-                    <Input
-                      type="password"
-                      placeholder="请输入密码"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      required
-                      className="bg-muted/30"
-                    />
-                  </div>
-
-                  {error && (
-                    <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-                      {error}
-                    </div>
-                  )}
-
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        登录
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </>
-                    )}
-                  </Button>
-                </form>
-              </TabsContent>
-
-              <TabsContent value="register">
-                <form onSubmit={handleRegister} className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium leading-none">用户名</label>
-                    <Input
-                      placeholder="设置用户名"
-                      value={registerUsername}
-                      onChange={(e) => setRegisterUsername(e.target.value)}
-                      required
-                      className="bg-muted/30"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium leading-none">邮箱 (可选)</label>
-                    <Input
-                      type="email"
-                      placeholder="example@email.com"
-                      value={registerEmail}
-                      onChange={(e) => setRegisterEmail(e.target.value)}
-                      className="bg-muted/30"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium leading-none">密码</label>
-                    <Input
-                      type="password"
-                      placeholder="设置密码"
-                      value={registerPassword}
-                      onChange={(e) => setRegisterPassword(e.target.value)}
-                      required
-                      className="bg-muted/30"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium leading-none">确认密码</label>
-                    <Input
-                      type="password"
-                      placeholder="再次输入密码"
-                      value={registerConfirmPassword}
-                      onChange={(e) => setRegisterConfirmPassword(e.target.value)}
-                      required
-                      className="bg-muted/30"
-                    />
-                  </div>
-
-                  {error && (
-                    <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-                      {error}
-                    </div>
-                  )}
-
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        注册账户
-                        <UserPlus className="ml-2 h-4 w-4" />
-                      </>
-                    )}
-                  </Button>
-                </form>
-              </TabsContent>
-            </Tabs>
-
-            <div className="relative my-8">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-border" />
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                  用户名
+                </label>
+                <Input
+                  placeholder="请输入用户名"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  required
+                  className="bg-muted/30"
+                />
               </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">或者</span>
+              <div className="space-y-2">
+                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                  密码
+                </label>
+                <Input
+                  type="password"
+                  placeholder="请输入密码"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                  className="bg-muted/30"
+                />
               </div>
-            </div>
 
-            <Button
-              variant="outline"
-              className="w-full bg-muted/30 hover:bg-muted/50"
-              onClick={handleGuestLogin}
-            >
-              访客模式体验
-            </Button>
+              {error && (
+                <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+                  {error}
+                </div>
+              )}
+
+              <Button type="submit" className="w-full" disabled={isLoading}>
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    登录
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </>
+                )}
+              </Button>
+            </form>
+            <p className="mt-4 text-xs text-muted-foreground/70">
+              提示：本地默认管理员账号可在 <code>.env</code> 中配置（例如 <code>admin</code> / <code>admin123</code>）。
+            </p>
           </CardContent>
         </Card>
         

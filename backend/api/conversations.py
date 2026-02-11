@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from backend.api.auth import require_auth
 from backend.api.schemas import ConversationCreate, ConversationForkRequest, ConversationUpdate
 from backend.database.models import (
     create_conversation,
@@ -15,7 +16,7 @@ from backend.database.models import (
     update_conversation_title,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.get("/conversations")

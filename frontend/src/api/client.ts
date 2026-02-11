@@ -83,20 +83,52 @@ export async function fetchSSE(
   onError?: (error: Error) => void,
   onComplete?: () => void
 ): Promise<void> {
+  return fetchSSERequest(
+    url,
+    { method: 'POST', body },
+    onMessage,
+    onError,
+    onComplete
+  )
+}
+
+export async function fetchSSERequest(
+  url: string,
+  options: {
+    method?: 'GET' | 'POST'
+    body?: unknown
+    headers?: Record<string, string>
+    signal?: AbortSignal
+  },
+  onMessage: (data: unknown) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void
+): Promise<void> {
   const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`
   const token = useAuthStore.getState().token
 
+  const method = options.method || 'POST'
+  const hasBody = options.body !== undefined && options.body !== null && method !== 'GET'
+
   try {
     const response = await fetch(fullUrl, {
-      method: 'POST',
+      method,
       headers: {
-        'Content-Type': 'application/json',
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
       },
-      body: JSON.stringify(body),
+      ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
+      signal: options.signal,
     })
 
     if (!response.ok) {
+      if (response.status === 401) {
+        useAuthStore.getState().logout()
+        window.location.href = '/login'
+        return
+      }
+
       let detail = ''
       try {
         const contentType = response.headers.get('content-type') || ''
@@ -162,6 +194,11 @@ export async function fetchSSE(
 
     onComplete?.()
   } catch (error) {
+    // Abort is not an "error" for UX purposes.
+    if ((error as any)?.name === 'AbortError') {
+      onComplete?.()
+      return
+    }
     onError?.(error as Error)
   }
 }

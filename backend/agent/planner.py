@@ -17,6 +17,7 @@ from backend.core.settings import (
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_MAX_TOKENS,
+    LESSON_PLAN_PROVIDER,
     LESSON_PLAN_TEMPERATURE,
 )
 
@@ -28,14 +29,17 @@ def _env_truthy(name: str) -> bool:
 
 _CORE_TOOLS: Dict[str, str] = {
     "split_knowledge_points": "把主题拆成多个可检索子知识点（输出 knowledge_points 列表）",
-    "web_search_knowledge": "联网搜索知识点（Exa 优先，智谱兜底）",
-    "search_questions_by_knowledge": "题库按知识点搜题（例题+练习题）",
+    "web_search_knowledge": "联网搜索知识点（Metaso 优先，返回 summary 报告型文本；Exa/智谱可兜底）",
     "aggregate_knowledge": "聚合：拆分 + 网搜 + 题库（可选：百科/网页正文/问答/GitHub）",
-    "generate_study_material": "生成讲解与例题解答（基于聚合结果）",
+    "generate_study_material": "生成概念讲解（可选：示意图）（基于聚合结果）",
     "assemble_study_archive": "组装最终 Markdown（自学档案）",
     "revise_markdown": "按审查问题修订 Markdown（可选）",
     "save_markdown_file": "保存 Markdown 到文件",
     "review_content": "内容审查（结构/完整性/可靠性）",
+}
+
+_QUESTION_TOOLS: Dict[str, str] = {
+    "search_questions_by_knowledge": "题库按知识点搜题（例题+练习题）（默认关闭；可用 STUDY_MATERIALS_ENABLE_QUESTIONS=1 开启）",
 }
 
 _EXTRA_TOOLS: Dict[str, str] = {
@@ -46,11 +50,75 @@ _EXTRA_TOOLS: Dict[str, str] = {
     "browse_web_pages": "Browse and extract page text (best-effort)",
 }
 
-_ALLOWED_TOOLS: Dict[str, str] = dict(_CORE_TOOLS)
-# By default we disable the extra retrieval tools to maximize success rate.
-# Set `STUDY_MATERIALS_ENABLE_EXTRA_TOOLS=1` to re-enable them.
-if _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS"):
-    _ALLOWED_TOOLS.update(_EXTRA_TOOLS)
+def _build_allowed_tools(*, enable_questions: bool, enable_extra_tools: bool) -> Dict[str, str]:
+    tools: Dict[str, str] = dict(_CORE_TOOLS)
+    if enable_questions:
+        tools.update(_QUESTION_TOOLS)
+    if enable_extra_tools:
+        tools.update(_EXTRA_TOOLS)
+    return tools
+
+
+def _normalize_preset(value: str) -> str:
+    """Normalize study-materials presets.
+
+    Supported:
+    - quick: shorter, fewer sources, faster
+    - standard: default
+    - deep: deeper retrieval + longer explanations
+    - research: more research-oriented (multi-pass retrieval + deeper synthesis)
+    """
+
+    v = (value or "").strip().lower()
+    if v in {"quick", "fast", "brief"}:
+        return "quick"
+    if v in {"research", "deepresearch", "deep-research", "researchy"}:
+        return "research"
+    if v in {"deep", "detail", "detailed"}:
+        return "deep"
+    if v in {"standard", "normal", "default"}:
+        return "standard"
+    return ""
+
+
+def _study_options_from_context(context: CompressedContext) -> Dict[str, Any]:
+    opts = context.working_memory.get("study_options")
+    return dict(opts) if isinstance(opts, dict) else {}
+
+
+def _study_flags(context: CompressedContext) -> Dict[str, Any]:
+    """Compute study-materials feature flags from env + per-task options."""
+
+    opts = _study_options_from_context(context)
+    preset = _normalize_preset(str(opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or ""))
+
+    with_q = opts.get("with_questions")
+    enable_questions = bool(with_q) if isinstance(with_q, bool) else _env_truthy("STUDY_MATERIALS_ENABLE_QUESTIONS")
+
+    extra = opts.get("enable_extra_tools")
+    enable_extra_tools = bool(extra) if isinstance(extra, bool) else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
+
+    # Deep preset implies more retrieval options.
+    if preset in {"deep", "research"}:
+        enable_extra_tools = True
+
+    with_diagrams = opts.get("with_diagrams")
+    enable_diagrams = bool(with_diagrams) if isinstance(with_diagrams, bool) else True
+
+    max_points = opts.get("max_points")
+    try:
+        max_points_int = int(max_points) if max_points is not None else 0
+    except Exception:
+        max_points_int = 0
+
+    return {
+        "preset": preset or "standard",
+        "enable_questions": enable_questions,
+        "enable_extra_tools": enable_extra_tools,
+        "enable_diagrams": enable_diagrams,
+        "max_points": max_points_int,
+        "requirements": str(opts.get("requirements") or "").strip(),
+    }
 
 
 def _difficulty_from_profile(profile: UserProfile) -> str:
@@ -88,13 +156,15 @@ class Planner:
             return ""
 
         headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
-        payload = {
+        payload: Dict[str, Any] = {
             "model": self.config.planner_model,
             "messages": messages,
             "temperature": float(LESSON_PLAN_TEMPERATURE or 0.4),
             "max_tokens": int(max_tokens or LESSON_PLAN_MAX_TOKENS or 1400),
             "stream": False,
         }
+        if str(LESSON_PLAN_PROVIDER or "").lower() == "openrouter" and "deepseek" in (self.config.planner_model or "").lower():
+            payload["reasoning"] = {"effort": "medium", "exclude": True}
 
         retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
         timeout_s = float(API_TIMEOUT or 120)
@@ -128,6 +198,13 @@ class Planner:
                     return ""
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                if status in {400, 422} and "reasoning" in payload and attempt == 0:
+                    try:
+                        payload.pop("reasoning", None)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.2)
+                    continue
                 if status in retry_statuses and attempt < 2:
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
@@ -153,140 +230,272 @@ class Planner:
         difficulty: str,
         iteration: int,
         issues: Optional[List[str]],
+        flags: Optional[Dict[str, Any]] = None,
     ) -> ExecutionPlan:
         def sid(prefix: str) -> str:
             return f"{prefix}-{iteration}-{uuid.uuid4().hex[:8]}"
+
+        flags = flags if isinstance(flags, dict) else {}
+        preset = str(flags.get("preset") or "standard").strip().lower() or "standard"
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
+
+        use_questions = bool(flags.get("enable_questions")) if "enable_questions" in flags else _env_truthy("STUDY_MATERIALS_ENABLE_QUESTIONS")
+        enable_extra_tools = bool(flags.get("enable_extra_tools")) if "enable_extra_tools" in flags else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
+        enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
+        requirements = str(flags.get("requirements") or "").strip()
+        max_points_override = 0
+        try:
+            max_points_override = int(flags.get("max_points") or 0)
+        except Exception:
+            max_points_override = 0
+
+        # Preset defaults (balance quality/speed). These can still be overridden per-task via flags.
+        split_min = 2
+        split_max = 8
+        web_limit = 8
+        sub_questions = 4  # how many Metaso /ask sub-questions per knowledge point
+        max_web_pages = 2
+        if preset == "quick":
+            split_min, split_max = 2, 4
+            web_limit = 6
+            sub_questions = 2
+            max_web_pages = 1
+        elif preset == "deep":
+            split_min, split_max = 4, 12
+            web_limit = 10
+            sub_questions = 6
+            max_web_pages = 3
+            enable_extra_tools = True  # deep implies richer retrieval
+        elif preset == "research":
+            # Research mode: fewer points but deeper per-point retrieval + synthesis.
+            split_min, split_max = 3, 8
+            web_limit = 12
+            sub_questions = 6
+            max_web_pages = 4
+            enable_extra_tools = True
+
+        if max_points_override > 0:
+            split_max = max(1, min(max_points_override, 15))
+            split_min = min(split_min, split_max)
+
+        # Research-style multi-pass web search: keep each pass focused so results are diverse and
+        # downstream synthesis is easier (and less copy-pastey).
+        sub_q_pass1 = sub_questions
+        sub_q_pass2 = max(3, min(sub_questions, 4))
+        sub_q_pass3 = max(3, min(sub_questions, 4))
+        if preset in {"deep", "research"}:
+            # One pass with 6 sub-questions is expensive; prefer 2-3 focused passes.
+            sub_q_pass1 = max(3, min(sub_questions, 4))
 
         steps: List[PlanStep] = [
             PlanStep(
                 id=sid("split_knowledge_points"),
                 title="拆分知识点",
                 tool="split_knowledge_points",
-                arguments={"topic": topic, "subject": subject, "min_points": 3, "max_points": 10},
+                # Keep the split compact by default; too many points makes the final archive noisy.
+                arguments={"topic": topic, "subject": subject, "min_points": split_min, "max_points": split_max},
                 thought="先把主题拆成多个可操作的子知识点，后续逐点探索并展示进度。",
             ),
             PlanStep(
                 id=sid("web_search_knowledge"),
-                title="联网搜索知识点",
+                title="联网搜索知识点（报告型摘要）",
                 tool="web_search_knowledge",
                 arguments={
                     "topic": topic,
                     "subject": subject,
-                    "limit": 8,
+                    "limit": web_limit,
                     "text_max_length": 6000,
-                    "query_hint": "定义 概念 入门",
+                    "query_hint": "定义 概念 直观理解 性质 定理 证明 误区 应用",
+                    "scope": "webpage",
+                    "include_summary": True,
                     "concurrency": 3,
+                    # Prefer Metaso /ask (Q&A) over plain /search.
+                    "metaso_mode": "ask",
+                    # SubAgent behavior: decompose the knowledge point into smaller questions before asking.
+                    "decompose": True,
+                    # SubAgent behavior: decompose -> ask. This improves quality and reduces "one big ask".
+                    "sub_questions": sub_q_pass1,
+                    "preset": preset,
                 },
                 foreach_knowledge_point=True,
-                thought="为每个知识点检索权威/可用的讲解资料，补足定义与常见结论。",
-            ),
-            PlanStep(
-                id=sid("web_search_knowledge_props"),
-                title="联网搜索知识点（性质/定理/结论）",
-                tool="web_search_knowledge",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "limit": 8,
-                    "text_max_length": 6000,
-                    "query_hint": "性质 定理 公式 结论",
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="第二轮检索：补齐性质、常用结论与关键推理线索，为讲解提供更扎实的依据。",
-            ),
-            PlanStep(
-                id=sid("web_search_knowledge_types"),
-                title="联网搜索知识点（题型/方法/易错点）",
-                tool="web_search_knowledge",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "limit": 8,
-                    "text_max_length": 6000,
-                    "query_hint": "常见题型 解题方法 套路 易错点",
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="第三轮检索：收集常见题型、套路与易错点，保证自学材料更贴近做题场景。",
-            ),
-            PlanStep(
-                id=sid("web_search_knowledge_proofs"),
-                title="联网搜索知识点（证明/推导/为什么）",
-                tool="web_search_knowledge",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "limit": 6,
-                    "text_max_length": 5200,
-                    "query_hint": "证明 推导 为什么",
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="第四轮检索：补齐“为什么成立”的推导/证明思路，避免讲解停留在背结论。",
-            ),
-            PlanStep(
-                id=sid("web_search_knowledge_apps"),
-                title="联网搜索知识点（应用/例子/训练）",
-                tool="web_search_knowledge",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "limit": 6,
-                    "text_max_length": 5200,
-                    "query_hint": "应用 例子 训练",
-                    "concurrency": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="第五轮检索：补齐应用场景与典型例子，让自学材料更像“能直接拿来练”。",
-            ),
-            PlanStep(
-                id=sid("search_questions_by_knowledge"),
-                title="题库按知识点检索（例题+练习题）",
-                tool="search_questions_by_knowledge",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "difficulty": difficulty,
-                    "examples_limit": 1,
-                    "exercises_limit": 6,
-                    "max_pages": 3,
-                },
-                foreach_knowledge_point=True,
-                thought="为每个知识点搜集高质量例题与练习题，作为讲解与训练材料。",
-            ),
-            PlanStep(
-                id=sid("aggregate_knowledge"),
-                title="聚合多源资料（按知识点）",
-                tool="aggregate_knowledge",
-                arguments={"topic": topic, "subject": subject},
-                foreach_knowledge_point=True,
-                thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
-            ),
-            PlanStep(
-                id=sid("generate_study_material"),
-                title="生成讲解与例题解答（按知识点）",
-                tool="generate_study_material",
-                arguments={
-                    "topic": topic,
-                    "subject": subject,
-                    "max_examples": 1,
-                    "max_points": 1,
-                    "max_web_results": 10,
-                    "max_web_pages": 3,
-                    "max_page_chars": 4200,
-                },
-                foreach_knowledge_point=True,
-                thought="根据聚合素材，为当前知识点生成讲解与例题的详细步骤（作为该知识点的研究报告）。",
-            ),
-            PlanStep(
-                id=sid("assemble_study_archive"),
-                title="组装自学档案 Markdown",
-                tool="assemble_study_archive",
-                arguments={"topic": topic, "subject": subject},
-                thought="将生成内容整理成结构化 Markdown：讲解 → 例题步骤 → 练习题。",
+                thought="为每个知识点检索可用讲解资料，并获取一段 summary 作为“报告型梳理”（概念为主）。",
             ),
         ]
+
+        # Deep/Research preset: do extra focused web passes to improve coverage and reduce hallucination.
+        if preset in {"deep", "research"}:
+            steps.append(
+                PlanStep(
+                    id=sid("web_search_knowledge_proof"),
+                    title="联网搜索知识点（条件/反例/推导）",
+                    tool="web_search_knowledge",
+                    arguments={
+                        "topic": topic,
+                        "subject": subject,
+                        "limit": min(10, web_limit),
+                        "text_max_length": 6000,
+                        "query_hint": "充分必要条件 等价表述 证明 推导 反例 边界条件 易错点 常见错误",
+                        "scope": "webpage",
+                        "include_summary": True,
+                        "concurrency": 3,
+                        "metaso_mode": "ask",
+                        "decompose": True,
+                        "sub_questions": sub_q_pass2,
+                        "preset": preset,
+                    },
+                    foreach_knowledge_point=True,
+                    thought="第二轮网搜：补齐使用条件/边界情况/反例与推导思路，增强严谨性与可迁移性。",
+                )
+            )
+
+        if preset == "research":
+            steps.append(
+                PlanStep(
+                    id=sid("web_search_knowledge_apply"),
+                    title="联网搜索知识点（应用/典型问题）",
+                    tool="web_search_knowledge",
+                    arguments={
+                        "topic": topic,
+                        "subject": subject,
+                        "limit": min(10, web_limit),
+                        "text_max_length": 6000,
+                        "query_hint": "应用场景 典型问题 常见问法 直观图像 题型 关键步骤",
+                        "scope": "webpage",
+                        "include_summary": True,
+                        "concurrency": 3,
+                        "metaso_mode": "ask",
+                        "decompose": True,
+                        "sub_questions": sub_q_pass3,
+                        "preset": preset,
+                    },
+                    foreach_knowledge_point=True,
+                    thought="第三轮网搜：补充应用与典型问题表述，确保“学完能用”。",
+                )
+            )
+
+        if enable_extra_tools:
+            # Extra sources: better variety and deeper understanding. Kept optional for stability/perf.
+            se_site = "math.stackexchange" if ("数学" in subject or "math" in subject.lower()) else "stackoverflow"
+            steps.extend(
+                [
+                    PlanStep(
+                        id=sid("wikipedia_search"),
+                        title="百科检索（Wikipedia）",
+                        tool="wikipedia_search",
+                        arguments={"topic": topic, "subject": subject, "lang": "zh", "sentences": 4, "max_content_length": 2500},
+                        foreach_knowledge_point=True,
+                        thought="补充百科级定义与背景，便于建立直观框架。",
+                    ),
+                    PlanStep(
+                        id=sid("mediawiki_search"),
+                        title="百科检索（MediaWiki）",
+                        tool="mediawiki_search",
+                        # Prefer Wikibooks as a "textbook-like" source; still MediaWiki API.
+                        arguments={
+                            "topic": topic,
+                            "subject": subject,
+                            "project": "wikibooks",
+                            "lang": "zh",
+                            "sentences": 4,
+                            "max_content_length": 2500,
+                        },
+                        foreach_knowledge_point=True,
+                        thought="补充 Wikibooks/ProofWiki 等来源的结构化内容（如可用）。",
+                    ),
+                    PlanStep(
+                        id=sid("stackexchange_search"),
+                        title="问答检索（StackExchange）",
+                        tool="stackexchange_search",
+                        arguments={
+                            "topic": topic,
+                            "subject": subject,
+                            "limit": 4 if preset == "quick" else 6,
+                            "site": se_site,
+                            "include_answers": True,
+                            "query_hint": "intuition proof pitfall",
+                        },
+                        foreach_knowledge_point=True,
+                        thought="补充高质量问答解释与易错点，提升可理解性。",
+                    ),
+                    PlanStep(
+                        id=sid("github_search"),
+                        title="代码/笔记检索（GitHub）",
+                        tool="github_search",
+                        arguments={"topic": topic, "subject": subject, "limit": 5, "include_readme": False},
+                        foreach_knowledge_point=True,
+                        thought="查找教程/笔记仓库，获取更接近“教学表达”的材料线索。",
+                    ),
+                    PlanStep(
+                        id=sid("browse_web_pages"),
+                        title="提取网页正文（节选）",
+                        tool="browse_web_pages",
+                        arguments={"topic": topic, "subject": subject, "top_k": 2 if preset != "quick" else 1, "max_chars": 12000},
+                        foreach_knowledge_point=True,
+                        thought="从检索结果中抽取可读正文片段，用于写作阶段重组表达。",
+                    ),
+                ]
+            )
+
+        if use_questions:
+            steps.append(
+                PlanStep(
+                    id=sid("search_questions_by_knowledge"),
+                    title="题库按知识点检索（例题+练习题）",
+                    tool="search_questions_by_knowledge",
+                    arguments={
+                        "topic": topic,
+                        "subject": subject,
+                        "difficulty": difficulty,
+                        "examples_limit": 1,
+                        "exercises_limit": 6,
+                        "max_pages": 3,
+                    },
+                    foreach_knowledge_point=True,
+                    thought="（可选）为每个知识点搜集例题与练习题；默认关闭以优先保证概念质量。",
+                )
+            )
+
+        steps.extend(
+            [
+                PlanStep(
+                    id=sid("aggregate_knowledge"),
+                    title="聚合多源资料（按知识点）",
+                    tool="aggregate_knowledge",
+                    arguments={"topic": topic, "subject": subject},
+                    foreach_knowledge_point=True,
+                    thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
+                ),
+                PlanStep(
+                    id=sid("generate_study_material"),
+                    title="生成概念讲解（按知识点）",
+                    tool="generate_study_material",
+                    arguments={
+                        "topic": topic,
+                        "subject": subject,
+                        "preset": preset,
+                        "requirements": requirements,
+                        "max_examples": 1 if use_questions else 0,
+                        "max_points": 1,
+                        "max_web_results": 15 if preset == "research" else 12 if preset == "deep" else 10,
+                        # Keep context compact to avoid LLM call failures (context overflow) and improve speed.
+                        "max_web_pages": max_web_pages,
+                        "max_page_chars": 3200 if preset == "research" else 2600,
+                        "with_questions": bool(use_questions),
+                        "with_diagrams": bool(enable_diagrams),
+                    },
+                    foreach_knowledge_point=True,
+                    thought="根据聚合素材，为当前知识点生成概念讲解，并尽量配一张简洁示意图。",
+                ),
+                PlanStep(
+                    id=sid("assemble_study_archive"),
+                    title="组装自学档案 Markdown",
+                    tool="assemble_study_archive",
+                    arguments={"topic": topic, "subject": subject},
+                    thought="将生成内容整理成结构化 Markdown：讲解（含示意图）→ 资料来源。",
+                ),
+            ]
+        )
 
         if iteration > 0 and issues:
             steps.append(
@@ -313,12 +522,15 @@ class Planner:
                     title="内容审查",
                     tool="review_content",
                     arguments={"topic": topic, "subject": subject},
-                    thought="对结构、准确性与练习题质量做最后自检，避免明显错误与空泛表述。",
+                    thought="对结构、准确性与可读性做最后自检，避免明显错误与空泛表述。",
                 ),
             ]
         )
 
-        rationale = f"计划：拆分→逐点网搜→逐点搜题→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+        if use_questions:
+            rationale = f"计划：拆分→逐点网搜→逐点题库→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+        else:
+            rationale = f"计划：拆分→逐点网搜→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
 
     def _parse_llm_plan(
@@ -330,6 +542,8 @@ class Planner:
         difficulty: str,
         iteration: int,
         issues: Optional[List[str]],
+        allowed_tools: Dict[str, str],
+        flags: Optional[Dict[str, Any]] = None,
     ) -> Optional[ExecutionPlan]:
         steps_raw = obj.get("steps")
         if not isinstance(steps_raw, list) or not steps_raw:
@@ -343,7 +557,7 @@ class Planner:
             if not isinstance(item, dict):
                 continue
             tool = str(item.get("tool") or "").strip()
-            if tool not in _ALLOWED_TOOLS:
+            if tool not in allowed_tools:
                 continue
             title = str(item.get("title") or tool).strip() or tool
             arguments = item.get("arguments")
@@ -374,6 +588,14 @@ class Planner:
             return None
 
         # Ensure the plan starts with split_knowledge_points.
+        flags = flags if isinstance(flags, dict) else {}
+        split_max = 8
+        try:
+            split_max = int(flags.get("max_points") or 8)
+        except Exception:
+            split_max = 8
+        split_max = max(1, min(split_max, 15))
+
         if steps[0].tool != "split_knowledge_points":
             steps.insert(
                 0,
@@ -381,7 +603,8 @@ class Planner:
                     id=sid("split_knowledge_points"),
                     title="拆分知识点",
                     tool="split_knowledge_points",
-                    arguments={"topic": topic, "subject": subject, "min_points": 3, "max_points": 10},
+                    # Keep the split compact by default; too many points makes the final archive noisy and slow.
+                    arguments={"topic": topic, "subject": subject, "min_points": 2, "max_points": split_max},
                     thought="先拆分知识点，方便逐点探索并可视化进度。",
                 ),
             )
@@ -393,13 +616,29 @@ class Planner:
             if tool in existing_tools:
                 continue
             if tool == "generate_study_material":
+                preset = str(flags.get("preset") or "standard").strip().lower() or "standard"
+                requirements = str(flags.get("requirements") or "").strip()
+                enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
+                enable_questions = bool(flags.get("enable_questions")) if "enable_questions" in flags else False
                 steps.append(
                     PlanStep(
                         id=sid(tool),
-                        title="生成讲解与例题解答",
+                        title="生成概念讲解",
                         tool=tool,
-                        arguments={"topic": topic, "subject": subject, "max_examples": 1, "max_points": 8},
-                        thought="生成讲解与例题步骤，形成可直接自学的内容。",
+                        arguments={
+                            "topic": topic,
+                            "subject": subject,
+                            "preset": preset,
+                            "requirements": requirements,
+                            "max_examples": 0,
+                            "max_points": 6,
+                            "max_web_results": 10,
+                            "max_web_pages": 2,
+                            "max_page_chars": 2600,
+                            "with_questions": bool(enable_questions),
+                            "with_diagrams": bool(enable_diagrams),
+                        },
+                        thought="生成概念讲解并尽量配图，形成可直接自学的内容。",
                     )
                 )
             elif tool == "assemble_study_archive":
@@ -462,6 +701,11 @@ class Planner:
         topic = (topic or "").strip()
         subject = str(user_profile.preferences.get("subject") or DEFAULT_SUBJECT).strip() or DEFAULT_SUBJECT
         difficulty = _difficulty_from_profile(user_profile)
+        flags = _study_flags(context)
+        allowed_tools = _build_allowed_tools(
+            enable_questions=bool(flags.get("enable_questions")),
+            enable_extra_tools=bool(flags.get("enable_extra_tools")),
+        )
 
         last_reflection = context.working_memory.get("last_reflection") or {}
         issues = last_reflection.get("issues") if isinstance(last_reflection, dict) else None
@@ -474,27 +718,42 @@ class Planner:
                 difficulty=difficulty,
                 iteration=iteration,
                 issues=issues if isinstance(issues, list) else None,
+                flags=flags,
             )
 
-        tool_desc = "\n".join([f"- {k}: {v}" for k, v in _ALLOWED_TOOLS.items()])
+        tool_desc = "\n".join([f"- {k}: {v}" for k, v in allowed_tools.items()])
         notes: List[str] = [
             "必须输出 JSON 对象，不要 Markdown，不要额外解释文字。",
             "计划必须以 split_knowledge_points 开始。",
-            "建议对 web_search_knowledge / search_questions_by_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
+            "建议对 web_search_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
             "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
             "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
             "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
         ]
-        if "browse_web_pages" in _ALLOWED_TOOLS:
+        preset = str(flags.get("preset") or "standard")
+        if preset == "quick":
+            notes.append("当前 preset=quick：优先保证速度与结构清晰，尽量减少额外检索工具与轮次。")
+        elif preset == "deep":
+            notes.append("当前 preset=deep：允许更多检索与更深入讲解；来源不足时可追加检索轮次。")
+            notes.append("建议：对每个知识点至少做 2 轮 web_search_knowledge（第一轮概念/直观，第二轮条件/反例/推导）。")
+        elif preset == "research":
+            notes.append("当前 preset=research：研究型输出（多轮检索 + 更严格的条件/反例/推导覆盖），可能更慢。")
+            notes.append("要求：对每个知识点至少做 3 轮 web_search_knowledge（概念/直观 → 条件/反例/推导 → 应用/典型问题）。")
+
+        requirements = str(flags.get("requirements") or "").strip()
+        if requirements:
+            notes.append(f"额外要求（写作风格/约束）：{requirements[:220]}")
+
+        if "browse_web_pages" in allowed_tools:
             notes.extend(
                 [
-                    "DeepResearch建议：对每个知识点做 4~8 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型/证明/应用/易错），然后调用 browse_web_pages 提取网页正文摘录。",
+                    "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（include_summary=true；query_hint 覆盖：定义/性质/证明/应用/误区），必要时再追加轮次或调用 browse_web_pages 提取网页正文摘录。",
                     "可选来源：对关键知识点可补充 stackexchange_search（问答解释/易错）、github_search（笔记/教程仓库）、mediawiki_search（Wikibooks/ProofWiki 等）。",
                 ]
             )
         else:
             notes.append(
-                "DeepResearch建议：对每个知识点做 4~8 轮 web_search_knowledge（用 query_hint 区分：定义/性质/题型/证明/应用/易错）。"
+                "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（include_summary=true；query_hint 覆盖：定义/性质/证明/应用/误区）；来源不足时再追加轮次。"
             )
         prompt = {
             "task": topic,
@@ -503,7 +762,8 @@ class Planner:
             "ability_score": float(user_profile.ability_score or 0.5),
             "iteration": iteration,
             "reflection_issues": issues if isinstance(issues, list) else [],
-            "allowed_tools": list(_ALLOWED_TOOLS.keys()),
+            "allowed_tools": list(allowed_tools.keys()),
+            "study_flags": flags,
             "notes": notes,
             "tool_descriptions": tool_desc,
         }
@@ -534,6 +794,8 @@ class Planner:
                 difficulty=difficulty,
                 iteration=iteration,
                 issues=issues if isinstance(issues, list) else None,
+                allowed_tools=allowed_tools,
+                flags=flags,
             )
             if parsed is not None:
                 return parsed
@@ -546,4 +808,5 @@ class Planner:
             difficulty=difficulty,
             iteration=iteration,
             issues=issues if isinstance(issues, list) else None,
+            flags=flags,
         )

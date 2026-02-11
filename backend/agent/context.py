@@ -25,7 +25,7 @@ class ContextManager:
         self._project_root = Path(__file__).resolve().parents[2]
 
     def _merge_items_by_knowledge_point(self, old: Any, new: Any) -> Any:
-        """Merge tool outputs that follow the `{items:[{knowledge_point:...}, ...]}` convention.
+        """Merge tool outputs that follow the `{items|sections:[{knowledge_point:...}, ...]}` convention.
 
         Notes:
         - When the same knowledge point is produced multiple times (e.g. multi-pass web search),
@@ -39,18 +39,27 @@ class ContextManager:
         if not isinstance(old, dict):
             old = {}
 
-        def _as_items(blob: Dict[str, Any]) -> List[Dict[str, Any]]:
+        def _extract_entries(blob: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]]]:
             if isinstance(blob.get("items"), list):
-                return [x for x in (blob.get("items") or []) if isinstance(x, dict)]
+                return "items", [x for x in (blob.get("items") or []) if isinstance(x, dict)]
+            if isinstance(blob.get("sections"), list):
+                return "sections", [x for x in (blob.get("sections") or []) if isinstance(x, dict)]
             kp = str(blob.get("knowledge_point") or "").strip()
             if kp:
-                return [blob]
-            return []
+                # Single-entry style payload. Default to the "items" convention.
+                return "items", [blob]
+            return "", []
 
-        old_items = _as_items(old)
-        new_items = _as_items(new)
-        if not new_items:
+        old_key, old_entries = _extract_entries(old)
+        new_key, new_entries = _extract_entries(new)
+        if not new_entries:
             return new
+
+        # Mixing conventions within the same key usually means caller misuse; prefer "new wins".
+        if old_key and new_key and old_key != new_key:
+            return new
+
+        list_key = new_key or old_key or "items"
 
         def _dedup_list(items: List[Any]) -> List[Any]:
             out: List[Any] = []
@@ -79,16 +88,46 @@ class ContextManager:
         def _merge_kp_item(prev: Dict[str, Any], nxt: Dict[str, Any]) -> Dict[str, Any]:
             out = dict(prev)
             for k, v in nxt.items():
-                if k in {"results", "pages", "examples", "exercises"} and isinstance(v, list):
+                # Tools differ in naming; support both the search-style keys and study-materials keys.
+                if k in {"results", "pages", "web_results", "web_pages", "examples", "exercises"} and isinstance(v, list):
                     prev_list = out.get(k) if isinstance(out.get(k), list) else []
                     merged_list = _dedup_list([*prev_list, *v])
-                    cap = {"results": 40, "pages": 8, "examples": 8, "exercises": 20}.get(k, 40)
+                    cap = {
+                        "results": 40,
+                        "pages": 8,
+                        "web_results": 20,
+                        "web_pages": 6,
+                        "examples": 8,
+                        "exercises": 20,
+                    }.get(k, 40)
                     out[k] = merged_list[:cap]
                     continue
 
                 if k in {"queries", "query_variants"} and isinstance(v, list):
                     prev_list = out.get(k) if isinstance(out.get(k), list) else []
                     out[k] = _dedup_list([*prev_list, *v])[:40]
+                    continue
+
+                # Merge multi-pass "summary" notes (common for web_search_knowledge in deep/research mode).
+                if k == "summary" and isinstance(v, str):
+                    new_s = v.strip()
+                    if not new_s:
+                        continue
+                    prev_s = out.get("summary")
+                    prev_s = prev_s.strip() if isinstance(prev_s, str) else ""
+                    if not prev_s:
+                        out["summary"] = new_s
+                        continue
+                    if new_s in prev_s:
+                        continue
+                    if prev_s in new_s:
+                        out["summary"] = new_s
+                        continue
+                    combined = prev_s.rstrip() + "\n\n---\n\n" + new_s.lstrip()
+                    # Keep bounded so the context won't explode.
+                    if len(combined) > 9000:
+                        combined = combined[:8999].rstrip() + "…"
+                    out["summary"] = combined
                     continue
 
                 # Prefer newer meaningful values; ignore empty placeholders.
@@ -104,7 +143,7 @@ class ContextManager:
         merged: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
 
-        for it in old_items:
+        for it in old_entries:
             kp = str(it.get("knowledge_point") or "").strip()
             if not kp:
                 continue
@@ -112,7 +151,7 @@ class ContextManager:
             if kp not in order:
                 order.append(kp)
 
-        for it in new_items:
+        for it in new_entries:
             kp = str(it.get("knowledge_point") or "").strip()
             if not kp:
                 continue
@@ -124,12 +163,12 @@ class ContextManager:
                 merged[kp] = it
 
         out: Dict[str, Any] = dict(old)
-        # Prefer newer top-level metadata (difficulty/subject/etc.), but always rebuild items.
+        # Prefer newer top-level metadata (difficulty/subject/etc.), but always rebuild list entries.
         for k, v in new.items():
-            if k == "items":
+            if k == list_key:
                 continue
             out[k] = v
-        out["items"] = [merged[kp] for kp in order if kp in merged]
+        out[list_key] = [merged[kp] for kp in order if kp in merged]
         return out
 
     def create_context(self, *, user_profile: UserProfile, system_instructions: str, current_task: str) -> CompressedContext:
@@ -156,9 +195,16 @@ class ContextManager:
                 "github_search",
                 "stackexchange_search",
                 "search_questions_by_knowledge",
+                "aggregate_knowledge",
+                # Study-materials generation runs per knowledge point; merge to avoid parallel subagents clobbering.
+                "generate_study_material",
             }:
                 prev = ctx.working_memory.get(result.tool)
-                ctx.working_memory[result.tool] = self._merge_items_by_knowledge_point(prev, result.output)
+                merged = self._merge_items_by_knowledge_point(prev, result.output)
+                ctx.working_memory[result.tool] = merged
+                if result.tool == "generate_study_material":
+                    # Back-compat alias used by some callers.
+                    ctx.working_memory["study_material"] = merged
             else:
                 ctx.working_memory[result.tool] = result.output
 

@@ -5,6 +5,55 @@
 - 基础URL: `http://localhost:8000`
 - 内容类型: `application/json`
 
+## 认证（JWT）
+
+Web UI 的「对话」功能需要登录后才能使用。登录成功后，后端返回 JWT token；调用受保护接口时需要携带：
+
+```
+Authorization: Bearer <access_token>
+```
+
+### 登录
+
+**POST** `/api/auth/login`
+
+**请求体：**
+```json
+{
+  "username": "admin",
+  "password": "admin123"
+}
+```
+
+**响应示例：**
+```json
+{
+  "access_token": "eyJhbGciOi...",
+  "token_type": "bearer",
+  "user_id": "1",
+  "username": "admin",
+  "role": "admin"
+}
+```
+
+### 获取当前用户
+
+**GET** `/api/auth/me`
+
+**响应示例：**
+```json
+{
+  "user_id": "1",
+  "username": "admin",
+  "role": "admin"
+}
+```
+
+### 需要登录的接口（常用）
+
+- `POST /api/chat`（SSE 流式对话）
+- `GET /api/conversations` / `POST /api/conversations` / `DELETE /api/conversations/{id}` 等（对话历史）
+
 ## 端点列表
 
 ### 健康检查
@@ -20,6 +69,60 @@
   "service": "exam-paper-assistant"
 }
 ```
+
+---
+
+## 自学资料（Study Materials）
+
+自学资料生成使用 SSE 流式输出，并支持“任务化 + 刷新续流”：
+
+- 首次发起：`POST /api/study-materials/generate`
+- 刷新/断线后续流：`GET /api/study-materials/tasks/{task_id}/stream?after_seq=...`
+- 查询任务状态：`GET /api/study-materials/tasks/{task_id}`
+
+### 启动生成（SSE）
+
+**POST** `/api/study-materials/generate`
+
+**请求体：**
+```json
+{
+  "query": "微积分：极限与连续",
+  "subject": "高中数学"
+}
+```
+
+**返回：** `text/event-stream`（每条消息是 `data: {...}\n\n` 的 JSON）
+
+**事件要点：**
+- 首个事件为 `task_started`，`data.task_id` 用于续流
+- 后续事件包含 `seq`（单调递增），用于断线后从 `after_seq` 继续
+- 长时间无新事件时会有 `ping` 心跳，避免“无输出假死”
+
+### 续流/重连（SSE）
+
+**GET** `/api/study-materials/tasks/{task_id}/stream?after_seq={last_seq}`
+
+> `after_seq` 传“客户端已处理的最后一个 seq”，后端只会推送更新的事件，避免重复拼接内容。
+
+---
+
+## 媒体（Media）
+
+用于前端渲染图片/示意图（例如自学资料生成的 SVG）。
+
+### 本地生成媒体（示意图）
+
+**GET** `/api/media/generated/{filename}`
+
+- `filename` 为 `sha256hex.ext`（例如 `b1946ac92492d2347c6235b4d2611184a1d5e0....svg`）
+- 当前支持：`.svg/.png/.jpg/.jpeg/.gif/.webp`
+
+### 远程媒体代理（缓存）
+
+**GET** `/api/media/proxy?url={remote_url}`
+
+将远程图片拉取到后端并缓存于 `.local/media/`，用于稳定渲染（避免跨域/链接失效等问题）。
 
 ---
 

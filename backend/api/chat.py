@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from backend.api.auth import require_auth
 from backend.api.schemas import ChatRequest
 from backend.chat_service import chat_service
 from backend.database.models import add_message, get_conversation, get_messages, update_conversation_title
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.post("/chat")

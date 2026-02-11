@@ -1,4 +1,9 @@
-"""Study materials streaming API endpoints."""
+"""Study materials streaming API endpoints.
+
+This router supports **resumable** generation:
+- `POST /api/study-materials/generate` starts a task and streams SSE events
+- `GET  /api/study-materials/tasks/{task_id}/stream` can resume after refresh
+"""
 
 from __future__ import annotations
 
@@ -6,17 +11,21 @@ import json
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from backend.agent.core import AgentCore
 from backend.api.auth import get_current_user
 from backend.api.study_materials_schemas import StudyMaterialsGenerateRequest
+from backend.study_materials.task_manager import StudyMaterialsTaskManager
 
 
 router = APIRouter(prefix="/study-materials", tags=["study-materials"])
 
-_agent = AgentCore()
+_tasks = StudyMaterialsTaskManager(
+    max_tasks=int(os.getenv("STUDY_MATERIALS_MAX_TASKS") or "50"),
+    task_ttl_s=int(os.getenv("STUDY_MATERIALS_TASK_TTL_S") or str(60 * 60)),
+    max_events_per_task=int(os.getenv("STUDY_MATERIALS_TASK_MAX_EVENTS") or "8000"),
+)
 
 
 def _env_truthy(name: str) -> bool:
@@ -33,111 +42,92 @@ def _clip_text(text: str, *, max_chars: int) -> str:
     return t[: max_chars - 1].rstrip() + "…"
 
 
-@router.post("/generate")
-async def generate_study_materials(
-    request: StudyMaterialsGenerateRequest,
-    user: Optional[dict] = Depends(get_current_user),
-):
-    """Generate study materials using Plan-Act-Reflect with streaming SSE."""
+def _sse_headers() -> dict:
+    return {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
 
-    user_id = (user.get("user_id") if user else None) or "anonymous"
-    # Default-on tracing so the backend command line shows tool I/O + assistant output.
-    # Set `STUDY_MATERIALS_TRACE=0` to disable.
-    raw_trace = os.getenv("STUDY_MATERIALS_TRACE")
-    trace = True if raw_trace is None else _env_truthy("STUDY_MATERIALS_TRACE")
-    trace_stream = _env_truthy("STUDY_MATERIALS_TRACE_STREAM")
-    try:
-        max_md_chars = int(os.getenv("STUDY_MATERIALS_TRACE_MARKDOWN_MAX_CHARS") or "8000")
-    except ValueError:
-        max_md_chars = 8000
-    max_md_chars = max(0, min(max_md_chars, 200000))
+
+async def _stream_task(task_id: str, *, after_seq: int) -> StreamingResponse:
+    heartbeat_s = float(os.getenv("STUDY_MATERIALS_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
-        assistant_chunks: list[str] = []
-
-        def _p(line: str) -> None:
-            if not trace:
-                return
-            try:
-                print(line, flush=True)
-            except Exception:
-                pass
-
-        if trace:
-            _p(f"[study-materials] start user_id={user_id} query={request.query!r}")
-
-        async for event in _agent.run(request.query, user_id=user_id):
-            if trace:
-                kind = str(event.get("event") or "")
-                data = event.get("data") if isinstance(event.get("data"), dict) else {}
-
-                if kind == "thinking":
-                    content = str(data.get("content") or "")
-                    _p(f"[study-materials] thinking: {_clip_text(content, max_chars=400)}")
-                elif kind == "tool_call":
-                    name = str(data.get("name") or "")
-                    step_id = str(data.get("step_id") or "")
-                    args = data.get("arguments")
-                    try:
-                        args_json = json.dumps(args, ensure_ascii=False)
-                    except Exception:
-                        args_json = str(args)
-                    _p(
-                        f"[study-materials] tool_call: {name} step_id={step_id} "
-                        f"args={_clip_text(args_json, max_chars=2000)}"
-                    )
-                elif kind == "tool_result":
-                    name = str(data.get("name") or "")
-                    step_id = str(data.get("step_id") or "")
-                    success = bool(data.get("success") is True)
-                    elapsed_ms = data.get("elapsed_ms")
-                    err = str(data.get("error") or "")
-                    out = data.get("output")
-                    try:
-                        out_json = json.dumps(out, ensure_ascii=False)
-                    except Exception:
-                        out_json = str(out)
-                    meta = f"success={success}"
-                    if elapsed_ms is not None:
-                        meta += f" elapsed_ms={elapsed_ms}"
-                    if err:
-                        meta += f" error={_clip_text(err, max_chars=300)}"
-                    _p(
-                        f"[study-materials] tool_result: {name} step_id={step_id} {meta} "
-                        f"output={_clip_text(out_json, max_chars=2000)}"
-                    )
-                elif kind == "content":
-                    chunk = str(data.get("content") or "")
-                    if chunk:
-                        assistant_chunks.append(chunk)
-                        if trace_stream:
-                            try:
-                                print(chunk, end="", flush=True)
-                            except Exception:
-                                pass
-                elif kind == "done":
-                    material = data.get("material") if isinstance(data.get("material"), dict) else {}
-                    md = str(material.get("markdown") or "")
-                    if not md:
-                        md = "".join(assistant_chunks)
-                    archive_path = str(material.get("archive_path") or "")
-                    _p(f"[study-materials] done: archive_path={archive_path!r} markdown_chars={len(md)}")
-                    if max_md_chars > 0 and md:
-                        _p("[study-materials] assistant_markdown:")
-                        _p(_clip_text(md, max_chars=max_md_chars))
-                elif kind == "error":
-                    msg = str(data.get("message") or "")
-                    _p(f"[study-materials] error: {_clip_text(msg, max_chars=800)}")
-
+        async for event in _tasks.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_sse_headers(),
     )
+
+
+@router.post("/generate")
+async def generate_study_materials(
+    request: StudyMaterialsGenerateRequest,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Start a new study-materials generation task and stream events."""
+
+    user_id = (user.get("user_id") if user else None) or "anonymous"
+
+    query = (request.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Empty query")
+
+    subject = (request.subject or "").strip()
+    options = {}
+    if (request.preset or "").strip():
+        options["preset"] = str(request.preset or "").strip()
+    if (request.requirements or "").strip():
+        options["requirements"] = _clip_text(str(request.requirements or "").strip(), max_chars=600)
+    if request.with_questions is not None:
+        options["with_questions"] = bool(request.with_questions)
+    if request.with_diagrams is not None:
+        options["with_diagrams"] = bool(request.with_diagrams)
+    if request.enable_extra_tools is not None:
+        options["enable_extra_tools"] = bool(request.enable_extra_tools)
+    if request.max_points is not None:
+        try:
+            n = int(request.max_points)
+        except Exception:
+            n = 0
+        if n > 0:
+            options["max_points"] = max(1, min(n, 15))
+
+    task = await _tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
+    return await _stream_task(task.task_id, after_seq=0)
+
+
+@router.get("/tasks/{task_id}/stream")
+async def stream_study_materials_task(
+    task_id: str,
+    after_seq: int = Query(0, ge=0),
+):
+    """Resume a running/completed task and replay SSE events after `after_seq`."""
+
+    task = await _tasks.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return await _stream_task(task.task_id, after_seq=after_seq)
+
+
+@router.get("/tasks/{task_id}")
+async def get_study_materials_task(task_id: str):
+    task = await _tasks.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {
+        "task_id": task.task_id,
+        "query": task.query,
+        "user_id": task.user_id,
+        "status": task.status,
+        "error": task.error,
+        "created_at_s": task.created_at_s,
+        "updated_at_s": task.updated_at_s,
+        "first_seq": task.seq_offset + 1,
+        "last_seq": task.last_seq,
+    }
 

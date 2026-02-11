@@ -152,6 +152,13 @@ ZHIPU_API_KEY=your_zhipu_api_key_here
 ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 ZHIPU_MODEL=glm-4.5
 ZHIPU_TIMEOUT=60
+
+# Web UI 登录（JWT）
+# - 对话功能需要登录后才能使用
+JWT_SECRET=dev-jwt-secret-change-me
+JWT_EXPIRE_HOURS=24
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin123
 ```
 
 ### 3. 启动服务
@@ -173,6 +180,7 @@ npm run dev
 
 打开浏览器访问：`http://localhost:3000`
 
+- 「对话」功能需要先登录：点击右上角头像 → 去登录（或直接访问 `/login`）
 - 侧边栏 `蓝图`：可视化配置组卷蓝图并一键生成题目列表/创建试卷
 - 侧边栏 `试卷`：查看已保存的试卷与题目链接
 

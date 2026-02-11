@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import App from './App'
 import './index.css'
+import 'katex/dist/katex.min.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {

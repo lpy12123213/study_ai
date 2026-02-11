@@ -32,6 +32,22 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
+      version: 2,
+      migrate: (persistedState: unknown) => {
+        const state = (persistedState || {}) as Partial<AuthState>
+        const token = typeof state.token === 'string' ? state.token : null
+
+        // Drop legacy "guest" sessions: chat now requires a real JWT login.
+        if (token === 'guest-token') {
+          return { user: null, token: null, isAuthenticated: false }
+        }
+
+        return {
+          ...state,
+          token,
+          isAuthenticated: Boolean(token),
+        }
+      },
     }
   )
 )

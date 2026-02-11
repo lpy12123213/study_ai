@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, Paperclip, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
+import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { useChatStream, useMessages } from '@/hooks/useChat'
 import { cn } from '@/lib/utils'
 import { BrandMark } from '@/components/shared/BrandMark'
+import * as chatApi from '@/api/chat'
 import type { Message } from '@/types'
 
 function MessageBubble({ message }: { message: Message }) {
@@ -114,20 +116,43 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
 
 export default function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
+  const navigate = useNavigate()
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const hydratedConversationIdRef = useRef<string | null>(null)
+  const lastConversationIdRef = useRef<string | undefined>(conversationId)
+  const [isCreatingConversation, setIsCreatingConversation] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
-  const { data: historyMessages } = useMessages(conversationId)
-  const { messages, setMessages, isStreaming, error, sendMessage } = useChatStream(
-    conversationId || 'new'
-  )
+  const { data: historyMessages, isLoading: isHistoryLoading } = useMessages(conversationId)
+  const { messages, setMessages, isStreaming, error, sendMessage } = useChatStream()
 
   useEffect(() => {
-    if (historyMessages) {
-      setMessages(historyMessages)
+    if (!conversationId) return
+    if (!historyMessages) return
+    // Avoid wiping streaming/tool steps on background refetch.
+    if (hydratedConversationIdRef.current === conversationId) return
+    if (isStreaming) return
+
+    hydratedConversationIdRef.current = conversationId
+    setMessages(historyMessages)
+  }, [conversationId, historyMessages, isStreaming, setMessages])
+
+  useEffect(() => {
+    const last = lastConversationIdRef.current
+    if (last && conversationId && last !== conversationId) {
+      hydratedConversationIdRef.current = null
+      setMessages([])
+      setCreateError(null)
     }
-  }, [historyMessages, setMessages])
+    if (last && !conversationId) {
+      hydratedConversationIdRef.current = null
+      setMessages([])
+      setCreateError(null)
+    }
+    lastConversationIdRef.current = conversationId
+  }, [conversationId, setMessages, setCreateError])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -137,10 +162,33 @@ export default function ChatPage() {
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
-    if (!input.trim() || isStreaming) return
+    const text = input.trim()
+    if (!text || isStreaming || isCreatingConversation) return
 
-    sendMessage(input.trim())
     setInput('')
+    setCreateError(null)
+
+    if (conversationId) {
+      sendMessage(conversationId, text)
+      return
+    }
+
+    setIsCreatingConversation(true)
+    chatApi
+      .createConversation({ title: '新对话' })
+      .then((conv) => {
+        const newId = conv.id
+        hydratedConversationIdRef.current = newId
+        navigate(`/chat/${newId}`, { replace: true })
+        sendMessage(newId, text)
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err || 'create_conversation_failed')
+        setCreateError(`创建对话失败：${msg}`)
+      })
+      .finally(() => {
+        setIsCreatingConversation(false)
+      })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -153,7 +201,27 @@ export default function ChatPage() {
   return (
     <div className="h-full flex flex-col relative">
       {messages.length === 0 ? (
-        <WelcomeScreen onExampleClick={(text) => setInput(text)} />
+        conversationId ? (
+          <div className="flex-1 flex items-center justify-center p-8">
+            {isHistoryLoading ? (
+              <LoadingSpinner size="lg" />
+            ) : (
+              <div className="text-sm text-muted-foreground">暂无消息</div>
+            )}
+          </div>
+        ) : (
+          <>
+            <WelcomeScreen onExampleClick={(text) => setInput(text)} />
+            {createError && (
+              <div className="max-w-3xl mx-auto w-full px-4 pb-6">
+                <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 text-sm text-destructive flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                  {createError}
+                </div>
+              </div>
+            )}
+          </>
+        )
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
           <div className="max-w-3xl mx-auto py-6">
@@ -201,14 +269,14 @@ export default function ChatPage() {
                  <Paperclip className="h-5 w-5" />
                </Button>
                
-               <Textarea
+              <Textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="输入消息..."
                 className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
-                disabled={isStreaming}
+                disabled={isStreaming || isCreatingConversation}
                 rows={1}
                 style={{ height: 'auto', overflow: 'hidden' }}
                 onInput={(e) => {
@@ -225,9 +293,9 @@ export default function ChatPage() {
                   "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
                   input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
                 )}
-                disabled={!input.trim() || isStreaming}
+                disabled={!input.trim() || isStreaming || isCreatingConversation}
               >
-                {isStreaming ? (
+                {isStreaming || isCreatingConversation ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Send className="h-4 w-4" />

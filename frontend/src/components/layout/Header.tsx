@@ -1,4 +1,4 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   MessagesSquare,
@@ -13,6 +13,7 @@ import {
   Sun,
 } from 'lucide-react'
 import { BrandMark } from '@/components/shared/BrandMark'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
 import { cn } from '@/lib/utils'
 import {
@@ -38,7 +39,16 @@ const navItems = [
 
 export function Header() {
   const location = useLocation()
+  const navigate = useNavigate()
   const { setTheme, theme } = useThemeStore()
+  const { user, isAuthenticated, logout } = useAuthStore()
+
+  const initials = (user?.username || 'U').slice(0, 1).toUpperCase()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <header className="h-12 border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-50 flex items-center justify-between px-4">
@@ -82,13 +92,21 @@ export function Header() {
             <div className="cursor-pointer">
               <Avatar className="h-8 w-8 transition-opacity hover:opacity-80">
                 <AvatarImage src="" />
-                <AvatarFallback className="text-xs">U</AvatarFallback>
+                <AvatarFallback className="text-xs">{initials}</AvatarFallback>
               </Avatar>
             </div>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>我的账户</DropdownMenuLabel>
+            <DropdownMenuLabel>{isAuthenticated && user ? user.username : '未登录'}</DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {!isAuthenticated && (
+              <DropdownMenuItem asChild>
+                <Link to="/login" className="cursor-pointer w-full flex items-center">
+                  <MessagesSquare className="mr-2 h-4 w-4" />
+                  <span>去登录</span>
+                </Link>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem asChild>
               <Link to="/settings" className="cursor-pointer w-full flex items-center">
                 <Settings className="mr-2 h-4 w-4" />
@@ -119,10 +137,15 @@ export function Header() {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive focus:text-destructive">
-              <LogOut className="mr-2 h-4 w-4" />
-              <span>退出登录</span>
-            </DropdownMenuItem>
+            {isAuthenticated && (
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive cursor-pointer"
+                onClick={handleLogout}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>退出登录</span>
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

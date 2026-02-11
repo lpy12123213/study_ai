@@ -41,6 +41,12 @@ export interface ConversationItem {
   status: ConversationStatus;
   resumable: boolean;
   progress?: number;
+  activeStream?: {
+    taskType: 'study_materials';
+    taskId: string;
+    assistantMessageId: string;
+    lastSeq: number;
+  };
 }
 
 // Message types
@@ -134,6 +140,7 @@ export interface User {
   username: string;
   email?: string;
   avatar?: string;
+  role?: string;
 }
 
 // API Response types

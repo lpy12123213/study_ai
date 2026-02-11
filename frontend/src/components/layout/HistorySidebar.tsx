@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
   Plus,
@@ -23,7 +24,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useConversationStore } from '@/stores/useConversationStore'
-import { cn, groupByDate, generateId } from '@/lib/utils'
+import { useAuthStore } from '@/stores/useAuthStore'
+import { cn, groupByDate } from '@/lib/utils'
+import * as chatApi from '@/api/chat'
 import type { ConversationItem, ConversationType } from '@/types'
 
 const typeIcons: Record<ConversationType, typeof MessagesSquare> = {
@@ -35,7 +38,7 @@ const typeIcons: Record<ConversationType, typeof MessagesSquare> = {
 interface ConversationItemProps {
   item: ConversationItem
   isActive: boolean
-  onDelete: (id: string) => void
+  onDelete: (item: ConversationItem) => void
   onResume: (id: string) => void
   isCollapsed: boolean
 }
@@ -115,7 +118,7 @@ function ConversationListItem({
             </DropdownMenuItem>
           )}
           <DropdownMenuItem 
-            onClick={() => onDelete(item.id)}
+            onClick={() => onDelete(item)}
             className="text-destructive focus:text-destructive"
           >
             <Trash2 className="mr-2 h-3 w-3" />
@@ -129,16 +132,41 @@ function ConversationListItem({
 
 export function HistorySidebar() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const queryClient = useQueryClient()
+  const { isAuthenticated, token } = useAuthStore()
   const {
-    conversations,
     currentConversationId,
-    addConversation,
     removeConversation,
     setCurrentConversation,
   } = useConversationStore()
   
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+
+  const { data: chatConversations = [] } = useQuery({
+    queryKey: ['chatConversations'],
+    queryFn: () => chatApi.getConversations(100),
+    enabled: isAuthenticated && Boolean(token),
+  })
+
+  const deleteChatConversation = useMutation({
+    mutationFn: chatApi.deleteConversation,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chatConversations'] })
+    },
+  })
+
+  const storedConversations = useConversationStore((state) => state.conversations)
+  const localConversations = useMemo(
+    () => (storedConversations || []).filter((c) => c.type !== 'chat'),
+    [storedConversations]
+  )
+
+  const effectiveChatConversations =
+    isAuthenticated && token ? chatConversations : ([] as ConversationItem[])
+
+  const conversations: ConversationItem[] = [...effectiveChatConversations, ...localConversations]
 
   // Filter conversations
   const filteredConversations = conversations.filter((c) => 
@@ -149,18 +177,28 @@ export function HistorySidebar() {
   const groupedConversations = groupByDate(filteredConversations)
 
   const handleNewConversation = () => {
-    const newConversation: ConversationItem = {
-      id: generateId(),
-      title: '新对话',
-      type: 'chat',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      status: 'active',
-      resumable: false,
+    // Route `/chat` will create a new backend conversation lazily on first message.
+    setCurrentConversation(null)
+    navigate('/chat')
+  }
+
+  const activeChatId = (() => {
+    const m = location.pathname.match(/^\/chat\/([^/?#]+)/)
+    return m ? m[1] : null
+  })()
+
+  const effectiveActiveId = activeChatId || currentConversationId
+
+  const handleDeleteConversation = (item: ConversationItem) => {
+    if (item.type === 'chat') {
+      deleteChatConversation.mutate(item.id)
+      if (effectiveActiveId === item.id) {
+        setCurrentConversation(null)
+        navigate('/chat')
+      }
+      return
     }
-    addConversation(newConversation)
-    setCurrentConversation(newConversation.id)
-    navigate(`/chat/${newConversation.id}`)
+    removeConversation(item.id)
   }
 
   return (
@@ -229,8 +267,8 @@ export function HistorySidebar() {
                   <ConversationListItem
                     key={item.id}
                     item={item}
-                    isActive={currentConversationId === item.id}
-                    onDelete={removeConversation}
+                    isActive={effectiveActiveId === item.id}
+                    onDelete={handleDeleteConversation}
                     onResume={() => {}}
                     isCollapsed={isCollapsed}
                   />
