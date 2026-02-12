@@ -8,8 +8,9 @@ from urllib.parse import quote
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from backend.api.auth import require_auth
 from backend.config import DEFAULT_SUBJECT
 from backend.crawler_manager import get_crawler
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
@@ -24,7 +25,7 @@ from backend.database.models import (
     update_canvas_board,
 )
 
-router = APIRouter(prefix="/canvas")
+router = APIRouter(prefix="/canvas", dependencies=[Depends(require_auth)])
 
 
 def _parse_snapshot(raw: str) -> Dict[str, Any]:

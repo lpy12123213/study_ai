@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 
-from backend.api.auth import get_current_user
+from backend.api.auth import get_current_user, require_auth
 from backend.api.lesson_plan_schemas import (
     LessonPlanCreateRequest,
     LessonPlanResponse,
@@ -25,7 +25,7 @@ from backend.lesson_plan_service import (
 )
 from backend.lesson_plan_agent_v2 import generate_lesson_plan_stream
 
-router = APIRouter(prefix="/lesson-plans", tags=["lesson-plans"])
+router = APIRouter(prefix="/lesson-plans", tags=["lesson-plans"], dependencies=[Depends(require_auth)])
 
 
 @router.post("", response_model=LessonPlanResponse)

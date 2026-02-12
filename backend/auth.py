@@ -10,6 +10,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
+import bcrypt
 import jwt
 from dotenv import load_dotenv
 
@@ -25,8 +26,30 @@ def _get_int_env(name: str, default: int) -> int:
         return default
 
 def hash_password(password: str) -> str:
-    """Hash a password using SHA256."""
+    """Hash a password using bcrypt."""
+    return bcrypt.hashpw((password or "").encode(), bcrypt.gensalt()).decode()
+
+
+def _legacy_sha256(password: str) -> str:
+    """Legacy SHA256 hash for migration check only."""
     return hashlib.sha256((password or "").encode()).hexdigest()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against its hash.
+
+    Supports both bcrypt (new) and SHA256 (legacy).
+    If a legacy hash matches, it is automatically upgraded to bcrypt.
+    """
+    # Try bcrypt first (new format starts with $2b$)
+    if password_hash.startswith("$2b$") or password_hash.startswith("$2a$"):
+        return bcrypt.checkpw((password or "").encode(), password_hash.encode())
+
+    # Fallback: legacy SHA256 (64 hex chars)
+    if len(password_hash) == 64:
+        return _legacy_sha256(password) == password_hash
+
+    return False
 
 
 def _load_admin_user() -> Dict[str, Any]:
@@ -57,11 +80,6 @@ _admin_user = _load_admin_user()
 _users: Dict[str, Dict[str, Any]] = {
     _admin_user["username"]: _admin_user,
 }
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a password against its hash."""
-    return hash_password(password) == password_hash
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
@@ -106,12 +124,21 @@ def create_user(username: str, password: str, role: str = "user") -> Optional[Di
 
 
 def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
-    """Authenticate a user with username and password."""
+    """Authenticate a user with username and password.
+
+    Auto-upgrades legacy SHA256 hashes to bcrypt on successful login.
+    """
     user = get_user_by_username(username)
     if not user:
         return None
     if not verify_password(password, user["password_hash"]):
         return None
+
+    # Auto-upgrade legacy SHA256 hash to bcrypt
+    ph = user["password_hash"]
+    if not (ph.startswith("$2b$") or ph.startswith("$2a$")):
+        user["password_hash"] = hash_password(password)
+
     return user
 
 

@@ -217,6 +217,70 @@ def _sanitize_explanation_markdown(markdown: str, *, knowledge_point: str) -> st
     return cleaned
 
 
+def _has_unclosed_code_fence(text: str) -> bool:
+    raw = text or ""
+    return raw.count("```") % 2 == 1
+
+
+def _has_unbalanced_inline_math(text: str) -> bool:
+    raw = text or ""
+    count = 0
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "$":
+            if i + 1 < len(raw) and raw[i + 1] == "$":
+                i += 2
+                continue
+            count += 1
+        i += 1
+    return count % 2 == 1
+
+
+def _looks_truncated_markdown(text: str) -> bool:
+    raw = (text or "").rstrip()
+    if not raw:
+        return False
+    if _has_unclosed_code_fence(raw):
+        return True
+    if raw.count("$$") % 2 == 1:
+        return True
+    if _has_unbalanced_inline_math(raw):
+        return True
+    last = raw[-1]
+    if last in {"-", "—", "(", "（", "[", "{", "=", "+", "*", "/", "\\", "$"}:
+        return True
+    return False
+
+
+def _trim_overlap(prefix: str, addition: str, *, max_check: int = 480) -> str:
+    if not prefix or not addition:
+        return addition
+    p = prefix[-max_check:]
+    a = addition[:max_check]
+    max_k = min(len(p), len(a))
+    for k in range(max_k, 24, -1):
+        if p.endswith(a[:k]):
+            return addition[k:]
+    return addition
+
+
+def _repair_incomplete_markdown(text: str) -> str:
+    raw = (text or "").rstrip()
+    if not raw:
+        return ""
+    if _has_unclosed_code_fence(raw):
+        raw = raw + "\n```"
+    if raw.count("$$") % 2 == 1:
+        raw = raw + "\n$$"
+    if _has_unbalanced_inline_math(raw):
+        raw = raw + "$"
+    return raw
+
+
 def _postprocess_web_search_result(result: Dict[str, Any], *, max_snippet_chars: int = 400) -> Dict[str, Any]:
     out: Dict[str, Any] = dict(result or {})
 
@@ -369,6 +433,205 @@ class Executor:
             except Exception:
                 pass
         return ""
+
+    async def _call_llm_response(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = LESSON_PLAN_TEMPERATURE,
+        max_tokens: int = LESSON_PLAN_MAX_TOKENS,
+        reasoning: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not LESSON_PLAN_API_KEY:
+            return {"content": "", "finish_reason": "", "usage": {}}
+
+        headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if reasoning and str(LESSON_PLAN_PROVIDER or "").lower() == "openrouter":
+            payload["reasoning"] = dict(reasoning)
+
+        retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
+        timeout_s = float(API_TIMEOUT or 120)
+        last_error: str = ""
+
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+                    resp = await client.post(
+                        f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                if resp.status_code in retry_statuses and attempt < 2:
+                    retry_after = (resp.headers.get("retry-after") or "").strip()
+                    wait_s = 0.0
+                    try:
+                        wait_s = float(retry_after) if retry_after else 0.0
+                    except ValueError:
+                        wait_s = 0.0
+                    if wait_s <= 0:
+                        wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                    last_error = f"http_status_{resp.status_code}"
+                    await asyncio.sleep(wait_s)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                content = ""
+                finish_reason = ""
+                usage: Dict[str, Any] = {}
+                try:
+                    choices = data.get("choices")
+                    first = choices[0] if isinstance(choices, list) and choices else {}
+                    if isinstance(first, dict):
+                        msg = first.get("message") if isinstance(first.get("message"), dict) else {}
+                        content = str((msg or {}).get("content") or "")
+                        finish_reason = str(first.get("finish_reason") or "")
+                except Exception:
+                    content = ""
+                    finish_reason = ""
+                if isinstance(data.get("usage"), dict):
+                    usage = dict(data.get("usage") or {})
+                return {"content": content, "finish_reason": finish_reason, "usage": usage}
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                last_error = f"http_status_{status}"
+                if status in {400, 422} and "reasoning" in payload and attempt == 0:
+                    try:
+                        payload.pop("reasoning", None)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.2)
+                    continue
+                if status in retry_statuses and attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return {"content": "", "finish_reason": "", "usage": {}}
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_error = str(exc)
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return {"content": "", "finish_reason": "", "usage": {}}
+            except Exception as exc:  # pragma: no cover (best-effort)
+                last_error = str(exc)
+                if attempt < 2:
+                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                    continue
+                return {"content": "", "finish_reason": "", "usage": {}}
+
+        if last_error:
+            try:
+                print(f"[llm] request failed after retries: {last_error}", flush=True)
+            except Exception:
+                pass
+        return {"content": "", "finish_reason": "", "usage": {}}
+
+    async def _call_llm_markdown_with_continuation(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = LESSON_PLAN_TEMPERATURE,
+        max_tokens: int = LESSON_PLAN_MAX_TOKENS,
+        reasoning: Optional[Dict[str, Any]] = None,
+        continuation_context: Optional[Dict[str, Any]] = None,
+        max_continuations: int = 2,
+    ) -> Dict[str, Any]:
+        res = await self._call_llm_response(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning=reasoning,
+        )
+        content = str(res.get("content") or "").strip()
+        finish_reason = str(res.get("finish_reason") or "").strip().lower()
+        usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
+        conts = 0
+
+        def _is_truncated(text: str, fr: str, usage_obj: Any) -> bool:
+            if (fr or "").strip().lower() == "length":
+                return True
+            if _looks_truncated_markdown(text):
+                return True
+            if isinstance(usage_obj, dict):
+                try:
+                    ct = int(usage_obj.get("completion_tokens") or 0)
+                except Exception:
+                    ct = 0
+                if ct and max_tokens and ct >= int(max_tokens * 0.95):
+                    return True
+            return False
+
+        try:
+            max_continuations = int(max_continuations or 0)
+        except Exception:
+            max_continuations = 0
+        max_continuations = max(0, min(max_continuations, 5))
+
+        ctx_obj = dict(continuation_context) if isinstance(continuation_context, dict) else {}
+        while conts < max_continuations and content and _is_truncated(content, finish_reason, usage):
+            tail = content[-1600:]
+            payload = dict(ctx_obj)
+            payload["existing_markdown_tail"] = tail
+            payload["instructions"] = (
+                "上一次输出疑似被截断。请严格从 existing_markdown_tail 的末尾继续补全。\n"
+                "仅输出需要追加的 Markdown，不要重复前文。\n"
+                "若最后一行是未完成的句子/公式/列表，请先把该行补完再继续。\n"
+                "小节标题从 #### 开始，禁止输出 #/##/###。\n"
+                "不输出参考资料/外部链接，不输出任何 URL；不输出 [[1]] 等证据标记。\n"
+                "数学公式：行内 $...$，独立行 $$...$$。\n"
+            )
+            cont_res = await self._call_llm_response(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是严谨的 Markdown 续写助手，只输出需要追加的内容，不要重复前文。",
+                    },
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning=reasoning,
+            )
+            addition = str(cont_res.get("content") or "").strip()
+            finish_reason = str(cont_res.get("finish_reason") or "").strip().lower()
+            usage = cont_res.get("usage") if isinstance(cont_res.get("usage"), dict) else {}
+            if not addition:
+                break
+            addition = _trim_overlap(content, addition)
+            if not addition.strip():
+                break
+            if not content.endswith("\n") and (
+                addition.startswith("####")
+                or addition.startswith("- ")
+                or addition.startswith("* ")
+                or addition.startswith(">")
+                or addition.startswith("```")
+            ):
+                content = content + "\n"
+            content = (content + addition).rstrip()
+            conts += 1
+
+        if content and _looks_truncated_markdown(content):
+            content = _repair_incomplete_markdown(content)
+
+        return {
+            "content": content,
+            "finish_reason": finish_reason,
+            "usage": usage,
+            "continuations": conts,
+        }
 
     def _extract_json_obj(self, text: str) -> Dict[str, Any]:
         raw = (text or "").strip()
@@ -845,11 +1108,125 @@ class Executor:
             if query_hint:
                 query = f"{query} {query_hint}".strip()
 
+            # Check if Exa Answer should be used (new default)
+            use_exa_answer = _env_truthy("STUDY_MATERIALS_USE_EXA_ANSWER", True)
+            exa_answer_mode = str(args.get("search_mode") or os.getenv("STUDY_MATERIALS_SEARCH_MODE") or "").strip().lower()
+            if exa_answer_mode == "metaso":
+                use_exa_answer = False
+            elif exa_answer_mode == "exa":
+                use_exa_answer = True
+
+            # 0) Exa Answer API (preferred when configured)
+            if use_exa_answer:
+                try:
+                    from backend.mcp.exa_web_search import exa_answer, EXA_API_KEY
+
+                    if EXA_API_KEY:
+                        # Decompose into sub-questions for better coverage
+                        decompose = args.get("decompose")
+                        if decompose is None:
+                            decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
+                        decompose = bool(decompose)
+
+                        sub_questions = [base_query]
+                        if decompose:
+                            sub_questions = await _decompose_sub_questions(knowledge_point=point, base_query=base_query)
+
+                        # Ask Exa for each sub-question
+                        sub_conc = _clamp_int(
+                            args.get("sub_concurrency"),
+                            default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2, default=2, min_value=1, max_value=3),
+                            min_value=1,
+                            max_value=3,
+                        )
+                        sub_sem = asyncio.Semaphore(sub_conc)
+
+                        async def _exa_ask_one(sub_q: str) -> Dict[str, Any]:
+                            async with sub_sem:
+                                return await exa_answer(
+                                    query=sub_q,
+                                    num_results=min(5, limit),
+                                    include_text=True,
+                                    text_max_length=min(1500, text_max_length),
+                                )
+
+                        exa_calls = await asyncio.gather(*[_exa_ask_one(q) for q in sub_questions])
+
+                        cleaned_results: List[Dict[str, Any]] = []
+                        summary_parts: List[str] = []
+                        errors: List[str] = []
+                        queries: List[str] = []
+
+                        for sub_q, res in zip(sub_questions, exa_calls):
+                            queries.append(sub_q)
+
+                            if not isinstance(res, dict) or not res.get("success"):
+                                err = str(res.get("error") or "exa answer failed").strip() if isinstance(res, dict) else "exa answer failed"
+                                errors.append(f"{sub_q}: {err}")
+                                continue
+
+                            ans = _strip_evidence_markers(str(res.get("answer") or "").strip())
+                            if ans:
+                                summary_parts.append(f"【{sub_q}】\n{_clip_text(ans, max_chars=900)}")
+
+                            for c in (res.get("citations") or []):
+                                if not isinstance(c, dict):
+                                    continue
+                                cleaned_results.append(_postprocess_web_search_result({
+                                    "title": c.get("title", ""),
+                                    "url": c.get("url", ""),
+                                    "snippet": c.get("text", ""),
+                                    "published_date": c.get("published_date"),
+                                }))
+
+                        # Deduplicate results by URL
+                        keep_sources = _clamp_int(
+                            args.get("keep_sources"),
+                            default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_KEEP_SOURCES") or limit, default=limit, min_value=3, max_value=15),
+                            min_value=3,
+                            max_value=15,
+                        )
+                        deduped: List[Dict[str, Any]] = []
+                        seen_urls: set[str] = set()
+                        for r in cleaned_results:
+                            url_value = str(r.get("url") or "").strip()
+                            key = url_value or json.dumps(r, ensure_ascii=False, sort_keys=True)
+                            if key in seen_urls:
+                                continue
+                            seen_urls.add(key)
+                            deduped.append(r)
+                            if len(deduped) >= keep_sources:
+                                break
+
+                        summary_value = "\n\n".join(summary_parts).strip()
+
+                        # If we got useful results, return them
+                        if summary_value or deduped:
+                            return {
+                                "knowledge_point": point,
+                                "base_query": base_query,
+                                "query": base_query,
+                                "queries": queries[:12],
+                                "provider": "exa-answer+decompose" if decompose else "exa-answer",
+                                "scope": scope,
+                                "include_summary": True,
+                                "summary": summary_value or "(Exa Answer 未返回摘要)",
+                                "results": deduped,
+                                "sub_questions": sub_questions,
+                                "errors": errors[:6],
+                            }
+
+                        # If Exa failed completely, fall through to Metaso
+                        if errors:
+                            print(f"[web_search] Exa Answer failed for {point}, falling back to Metaso: {errors[:2]}", flush=True)
+                except Exception as exc:
+                    print(f"[web_search] Exa Answer exception for {point}, falling back to Metaso: {exc}", flush=True)
+
             metaso_mode = str(args.get("metaso_mode") or os.getenv("STUDY_MATERIALS_METASO_MODE") or "ask").strip().lower()
             if metaso_mode not in {"ask", "search"}:
                 metaso_mode = "ask"
 
-            # 1) Metaso（preferred）
+            # 1) Metaso（fallback when Exa not configured or failed）
             metaso: Dict[str, Any]
             if metaso_mode == "ask":
                 # Sub-agent behavior: decompose the knowledge point into smaller questions, then ask.
@@ -2064,6 +2441,9 @@ class Executor:
             # Explanation (LLM if configured; fallback to Wikipedia summary)
             explanation_md = ""
             explanation_source = "unknown"
+            explanation_finish_reason = ""
+            explanation_usage: Dict[str, Any] = {}
+            explanation_continuations = 0
             if LESSON_PLAN_API_KEY:
                 def _clip_text(text: str, limit_chars: int) -> str:
                     t = (text or "").strip()
@@ -2072,24 +2452,47 @@ class Executor:
                     return t[: limit_chars - 1].rstrip() + "…"
 
                 template_lines = [
-                    "#### 1) 定义（含符号约定）",
-                    "#### 2) 直观理解（图像/类比，解释“为什么”）",
-                    "#### 3) 关键结论（写清适用条件）",
-                    "#### 4) 常见误区（误区 -> 为什么错 -> 正确表述/反例提示）",
-                    "#### 5) 方法小结（做题/推导时的思路要点）",
+                    "#### 1) 为什么需要它（动机与问题背景）",
+                    "  - 这个概念/方法要解决什么问题？没有它会怎样？",
+                    "  - 用一句话概括它的核心价值",
+                    "#### 2) 定义与核心表述",
+                    "  - 给出精确定义（含符号约定）",
+                    "  - 用「一句话版本」帮助记忆",
+                    "#### 3) 直观理解（类比与图像）",
+                    "  - 用日常生活或已学知识做类比，让读者先建立直觉",
+                    '  - 描述"脑中的画面"：如果要画一张图，应该画什么？',
+                    "  - 解释「为什么是这样」而不仅是「是什么」",
+                    "#### 4) 关键结论与性质",
+                    "  - 列出最重要的 3~6 条结论（写清适用条件）",
+                    "  - 每条结论用**加粗**突出核心表述",
+                    "  - 给出「何时用 / 怎么用」的简要提示",
+                    "#### 5) 常见误区与易错点",
+                    "  - 误区描述 → 为什么会错 → 正确理解 / 反例",
+                    "  - 重点标注「看起来对但实际错」的陷阱",
+                    "#### 6) 解题/应用思路小结",
+                    "  - 遇到相关问题时的思考框架（2~4 步）",
+                    "  - 常用技巧或判断依据",
                 ]
                 if preset in {"deep", "research"}:
                     template_lines.extend(
                         [
-                            "#### 6) 推导/证明思路（若适用，给 3~8 行证明框架/推导骨架）",
-                            "#### 7) 联系与拓展（前置知识/相邻概念/典型应用场景）",
+                            "#### 7) 推导/证明思路",
+                            "  - 给出 3~8 行的证明框架或推导骨架",
+                            "  - 标注关键步骤的「为什么这样做」",
+                            "#### 8) 联系与拓展",
+                            "  - 前置知识：理解本概念需要先掌握什么？",
+                            "  - 相邻概念：与哪些概念容易混淆或有紧密联系？",
+                            "  - 典型应用场景举例",
                         ]
                     )
                 if preset == "research":
                     template_lines.extend(
                         [
-                            "#### 8) 关键例子/反例（用来检验理解，不写成练习题）",
-                            "#### 9) 自检清单（学完应能回答的 5 个问题）",
+                            "#### 9) 关键例子与反例",
+                            "  - 用来检验理解的典型例子（不写成练习题）",
+                            "  - 边界情况或反例：帮助界定概念的适用范围",
+                            "#### 10) 自检清单",
+                            "  - 学完后应能回答的 5 个问题（可用作自我检测）",
                         ]
                     )
 
@@ -2106,26 +2509,39 @@ class Executor:
                 extra_req = f"\n额外写作要求（来自用户）：{requirements}\n" if requirements else ""
 
                 instructions = (
-                    "请生成该知识点的自学讲解（Markdown）。注意：这段内容会被嵌入到已有文档的「### 核心讲解」下面。\n"
+                    "【任务】为知识点生成一份可直接自学的讲解（Markdown），嵌入到「### 核心讲解」下方。\n"
                     "\n"
-                    f"生成预设：{preset}。\n"
+                    f"【生成预设】{preset}\n"
                     f"{length_note}\n"
                     f"{extra_req}"
                     "\n"
-                    "硬性格式要求：\n"
-                    "- 不要输出任何 `#`/`##`/`###` 一级到三级标题；小节标题请从 `####` 开始。\n"
-                    "- 不要输出“参考资料/参考文献/外部链接”等段落；不要输出任何 URL 或 Markdown 链接。\n"
-                    "- 不要输出 `[[1]]` 这类证据标记。\n"
+                    "【写作理念 — 费曼学习法】\n"
+                    "1. 先讲「为什么」：概念要解决什么问题？没有它会怎样？\n"
+                    "2. 类比先行：用日常生活或已学知识建立直觉，再给严格定义\n"
+                    "3. 渐进深入：从最简单情形讲起，逐步添加复杂度\n"
+                    "4. 重点突出：关键结论**加粗**，避免淹没在长段落中\n"
+                    "5. 误区预警：主动指出初学者易错点，说明「为何会错」和「如何避免」\n"
                     "\n"
-                    "目标读者：自学者。请根据 ability_score 自动调整难度（0.0 更基础直观，1.0 更严谨抽象）。\n"
+                    "【目标读者】自学者。根据 ability_score 调整深度：\n"
+                    "  - 0.0~0.3：侧重直观、类比、生活例子，少用抽象符号\n"
+                    "  - 0.4~0.6：直觉与严谨并重，给出完整定义但配合解释\n"
+                    "  - 0.7~1.0：可更严谨抽象，补充推导细节和边界条件\n"
                     "\n"
-                    "请尽量按下面模板输出（允许微调，但不要新增大标题）：\n"
+                    "【模板结构】（允许微调顺序，但保留核心小节）\n"
                     + "\n".join(template_lines)
                     + "\n\n"
-                    "内容要求：数学公式用 LaTeX（行内 $...$，独立行 $$...$$）。\n"
-                    "信息来源：尽量只依据给定的 wikipedia/mediawiki/web_results/web_pages/github/stackexchange；若信息不足，请标注“推断/建议”。\n"
-                    "反抄写：不要逐句复述来源文本；尽量用自己的话重组表达；如需引用，单段引用不超过 20 字。\n"
-                    "不要输出例题或练习题。"
+                    "【硬性格式要求】\n"
+                    "- 小节标题从 `####` 开始，禁止输出 `#`/`##`/`###`\n"
+                    '- 不输出"参考资料/外部链接"段落，不输出任何 URL\n'
+                    "- 不输出 `[[1]]` 等证据标记，不写「根据网页/维基」等过程描述\n"
+                    "- 数学公式：行内 $...$，独立行 $$...$$\n"
+                    "\n"
+                    "【内容质量要求】\n"
+                    "- 原创综合：严禁照抄来源；先消化资料，再用自己的话重组\n"
+                    "- 多源整合：综合多条来源的共同结论，不按来源逐条复述\n"
+                    "- 极短引用：如需引用原句，用引号标注且 ≤20 字，并立即用自己的话解释\n"
+                    "- 信息不足时：明确标注「推断」或「建议」\n"
+                    "- 不输出例题或练习题\n"
                 )
 
                 payload = {
@@ -2193,18 +2609,40 @@ class Executor:
                     ],
                     "instructions": instructions,
                 }
-                explanation_md = (
-                    await self._call_llm_text(
-                        messages=[
-                            {"role": "system", "content": "你是严谨的自学资料编写老师，输出必须是Markdown。"},
-                            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                        ],
-                        model=writer_model,
-                        temperature=0.25,
-                        max_tokens=writer_max_tokens,
-                        reasoning=writer_reasoning,
-                    )
-                ).strip()
+                cont_limit_raw = str(os.getenv("STUDY_MATERIALS_MAX_CONTINUATIONS") or "2").strip()
+                try:
+                    cont_limit = int(cont_limit_raw)
+                except Exception:
+                    cont_limit = 2
+                cont_limit = max(0, min(cont_limit, 5))
+
+                md_res = await self._call_llm_markdown_with_continuation(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一位经验丰富的教育专家，擅长将复杂概念拆解为可自学的清晰讲解。\n"
+                                "你遵循「费曼学习法」：如果不能用简单语言解释清楚，说明还没真正理解。\n"
+                                "你的目标是让读者「恍然大悟」，而非堆砌信息。\n"
+                                "输出必须是 Markdown；严禁照抄来源原文，必须用自己的话重新组织。"
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                    model=writer_model,
+                    temperature=0.25,
+                    max_tokens=writer_max_tokens,
+                    reasoning=writer_reasoning,
+                    continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "preset": preset},
+                    max_continuations=cont_limit,
+                )
+                explanation_md = str(md_res.get("content") or "").strip()
+                explanation_finish_reason = str(md_res.get("finish_reason") or "").strip()
+                explanation_usage = md_res.get("usage") if isinstance(md_res.get("usage"), dict) else {}
+                try:
+                    explanation_continuations = int(md_res.get("continuations") or 0)
+                except Exception:
+                    explanation_continuations = 0
 
                 if not explanation_md:
                     # Retry with a smaller payload to reduce context length / provider issues.
@@ -2224,18 +2662,28 @@ class Executor:
                         "instructions": instructions,
                         "note": "上一次生成返回为空，请基于以上摘要重试生成讲解（仍需输出 Markdown）。",
                     }
-                    explanation_md = (
-                        await self._call_llm_text(
-                            messages=[
-                                {"role": "system", "content": "你是严谨的自学资料编写老师，输出必须是Markdown。"},
-                                {"role": "user", "content": json.dumps(mini_payload, ensure_ascii=False)},
-                            ],
-                            model=writer_model,
-                            temperature=0.25,
-                            max_tokens=writer_max_tokens,
-                            reasoning=writer_reasoning,
-                        )
-                    ).strip()
+                    mini_res = await self._call_llm_markdown_with_continuation(
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，严禁照抄/拼贴来源原文；输出必须是 Markdown。",
+                            },
+                            {"role": "user", "content": json.dumps(mini_payload, ensure_ascii=False)},
+                        ],
+                        model=writer_model,
+                        temperature=0.25,
+                        max_tokens=writer_max_tokens,
+                        reasoning=writer_reasoning,
+                        continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "preset": preset},
+                        max_continuations=cont_limit,
+                    )
+                    explanation_md = str(mini_res.get("content") or "").strip()
+                    explanation_finish_reason = str(mini_res.get("finish_reason") or "").strip()
+                    explanation_usage = mini_res.get("usage") if isinstance(mini_res.get("usage"), dict) else {}
+                    try:
+                        explanation_continuations = int(mini_res.get("continuations") or 0)
+                    except Exception:
+                        explanation_continuations = 0
 
                 if explanation_md:
                     explanation_source = "llm"
@@ -2250,41 +2698,44 @@ class Executor:
                             from backend.mcp.metaso_search import metaso_ask as _metaso_ask
 
                             metaso_template_lines = [
-                                "#### 1) 定义（含符号约定）",
-                                "#### 2) 直观理解（图像/类比，解释“为什么”）",
-                                "#### 3) 关键结论（写清适用条件）",
-                                "#### 4) 常见误区（误区 -> 为什么错 -> 正确表述/反例提示）",
-                                "#### 5) 方法小结（做题/推导时的思路要点）",
+                                "#### 1) 为什么需要它（动机与问题背景）",
+                                "#### 2) 定义与核心表述",
+                                "#### 3) 直观理解（类比与图像）",
+                                "#### 4) 关键结论与性质",
+                                "#### 5) 常见误区与易错点",
+                                "#### 6) 解题/应用思路小结",
                             ]
                             if preset in {"deep", "research"}:
                                 metaso_template_lines.extend(
                                     [
-                                        "#### 6) 推导/证明思路（若适用，给 3~8 行证明框架/推导骨架）",
-                                        "#### 7) 联系与拓展（前置知识/相邻概念/典型应用场景）",
+                                        "#### 7) 推导/证明思路",
+                                        "#### 8) 联系与拓展（前置知识/相邻概念/典型应用）",
                                     ]
                                 )
                             if preset == "research":
                                 metaso_template_lines.extend(
                                     [
-                                        "#### 8) 关键例子/反例（用来检验理解，不写成练习题）",
-                                        "#### 9) 自检清单（学完应能回答的 5 个问题）",
+                                        "#### 9) 关键例子与反例",
+                                        "#### 10) 自检清单（学完应能回答的 5 个问题）",
                                     ]
                                 )
 
                             metaso_prompt_lines = [
                                 f"请为知识点「{kp}」编写可直接自学的讲解（中文 Markdown）。",
-                                f"生成预设：{preset}。",
-                                f"额外要求：{requirements}" if requirements else "",
                                 "",
-                                "硬性要求：",
-                                "- 不要输出任何 #/##/### 标题；小节标题从 #### 开始。",
-                                "- 不要输出“参考资料/参考文献/外部链接”。不要输出任何 URL。",
-                                "- 不要输出 [[1]] 这类证据标记；不要输出过程性叙述（如“根据搜索/证据”）。",
-                                "- 不要逐句复述百科/网页原文，尽量用自己的话重组表达。",
-                                "- 数学公式使用 LaTeX：行内 $...$，独立行 $$...$$。",
-                                "- 不要输出例题或练习题。",
+                                "【写作理念】费曼学习法：先讲为什么需要，再给定义；用类比建立直觉；重点加粗；主动指出误区。",
+                                f"【生成预设】{preset}",
+                                f"【额外要求】{requirements}" if requirements else "",
                                 "",
-                                "模板：",
+                                "【硬性格式要求】",
+                                "- 小节标题从 #### 开始，禁止 #/##/###",
+                                "- 不输出参考资料/外部链接，不输出任何 URL",
+                                "- 不输出 [[1]] 等证据标记，不写过程性叙述",
+                                "- 严禁照抄来源原文，必须用自己的话重组",
+                                "- 数学公式：行内 $...$，独立行 $$...$$",
+                                "- 不输出例题或练习题",
+                                "",
+                                "【模板结构】",
                                 *metaso_template_lines,
                             ]
                             metaso_prompt = "\n".join([x for x in metaso_prompt_lines if str(x or "").strip()]).strip()
@@ -2517,6 +2968,9 @@ JSON 格式必须是：
                     "knowledge_point": kp,
                     "explanation_markdown": explanation_md,
                     "explanation_source": explanation_source,
+                    "explanation_finish_reason": explanation_finish_reason,
+                    "explanation_usage": explanation_usage,
+                    "explanation_continuations": explanation_continuations,
                     "wikipedia": wiki,
                     "mediawiki": mw,
                     "web_provider": web_provider,
@@ -2596,6 +3050,23 @@ JSON 格式必须是：
                 return f"[{t}]({u})"
             return t or u
 
+        refs_by_kp: Dict[str, List[Dict[str, str]]] = {}
+        refs_seen_by_kp: Dict[str, set] = {}
+
+        def _add_ref(*, kp: str, url: str, title: str, source: str) -> None:
+            kp_key = (kp or "").strip()
+            u = (url or "").strip()
+            if not kp_key or not u:
+                return
+            key = u.split("#")[0].rstrip("/")
+            seen = refs_seen_by_kp.setdefault(kp_key, set())
+            if key in seen:
+                return
+            seen.add(key)
+            t = (title or "").strip() or u
+            s = (source or "").strip() or "web"
+            refs_by_kp.setdefault(kp_key, []).append({"url": u, "title": t, "source": s})
+
         chinese_nums = "一二三四五六七八九十"
         lines: List[str] = []
         lines.append(f"# 自学材料：{topic}")
@@ -2659,66 +3130,53 @@ JSON 格式必须是：
                 lines.append(f"> 注：本段讲解未成功使用模型生成（source={explanation_source}），已退回到摘要/兜底内容。若你已配置模型，请稍后重试或更换模型。")
             lines.append("")
 
-            # 参考资料（可选）：仅保留链接 + 极短摘要，避免“资料堆砌”
-            lines.append("### 参考资料（可选）")
-            lines.append("")
-
-            any_ref = False
-
+            # Collect references; they will be rendered once at the end as a bibliography.
             wiki = sec.get("wikipedia") if isinstance(sec.get("wikipedia"), dict) else {}
             mw = sec.get("mediawiki") if isinstance(sec.get("mediawiki"), dict) else {}
             wiki_title = str(wiki.get("title") or "").strip()
             wiki_url = str(wiki.get("url") or "").strip()
             mw_title = str(mw.get("title") or "").strip()
             mw_url = str(mw.get("url") or "").strip()
+            if wiki_url:
+                _add_ref(kp=kp, url=wiki_url, title=wiki_title or "词条", source="Wikipedia")
+            if mw_url:
+                _add_ref(kp=kp, url=mw_url, title=mw_title or "词条", source="MediaWiki")
 
-            if wiki_title or wiki_url:
-                lines.append(f"- Wikipedia：{_link(wiki_title or '词条', wiki_url)}")
-                any_ref = True
-            if mw_title or mw_url:
-                lines.append(f"- MediaWiki：{_link(mw_title or '词条', mw_url)}")
-                any_ref = True
-
+            web_provider = str(sec.get("web_provider") or "").strip()
+            web_source = f"网页检索/{web_provider}" if web_provider else "网页检索"
             web_results = sec.get("web_results") if isinstance(sec.get("web_results"), list) else []
-            web_results = [r for r in web_results if isinstance(r, dict)][:5]
+            web_results = [r for r in web_results if isinstance(r, dict)][:8]
             for r in web_results:
                 title = str(r.get("title") or "").strip()
                 url = str(r.get("url") or "").strip()
-                if title or url:
-                    lines.append(f"- 网页：{_link(title or '链接', url)}")
-                    any_ref = True
+                if url:
+                    _add_ref(kp=kp, url=url, title=title or "网页", source=web_source)
+
+            web_pages = sec.get("web_pages") if isinstance(sec.get("web_pages"), list) else []
+            web_pages = [p for p in web_pages if isinstance(p, dict)][:6]
+            for p in web_pages:
+                title = str(p.get("title") or "").strip()
+                url = str(p.get("url") or "").strip()
+                if url:
+                    _add_ref(kp=kp, url=url, title=title or "网页正文", source="网页正文")
 
             se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
             se_results = se.get("results") if isinstance(se.get("results"), list) else []
-            se_results = [r for r in se_results if isinstance(r, dict)][:3]
+            se_results = [r for r in se_results if isinstance(r, dict)][:6]
             for r in se_results:
                 title = str(r.get("title") or "").strip()
                 url = str(r.get("url") or "").strip()
-                if title or url:
-                    lines.append(f"- StackExchange：{_link(title or '问答', url)}")
-                    any_ref = True
+                if url:
+                    _add_ref(kp=kp, url=url, title=title or "问答", source="StackExchange")
 
             gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
             gh_results = gh.get("results") if isinstance(gh.get("results"), list) else []
-            gh_results = [r for r in gh_results if isinstance(r, dict)][:3]
+            gh_results = [r for r in gh_results if isinstance(r, dict)][:6]
             for r in gh_results:
                 full_name = str(r.get("full_name") or "").strip()
                 url = str(r.get("url") or "").strip()
-                if full_name or url:
-                    lines.append(f"- GitHub：{_link(full_name or 'repo', url)}")
-                    any_ref = True
-
-            web_summary = str(sec.get("web_summary") or "").strip()
-            if web_summary:
-                lines.append("")
-                lines.append("> 网搜摘要（简版）：")
-                lines.append("> " + _clip_text(web_summary, max_chars=400).replace("\n", " ").strip())
-                any_ref = True
-
-            if not any_ref:
-                lines.append("（无）")
-
-            lines.append("")
+                if url:
+                    _add_ref(kp=kp, url=url, title=full_name or "repo", source="GitHub")
 
         lines.append("---")
         lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -2767,6 +3225,42 @@ JSON 格式必须是：
 
         lines.append("数据来源：" + ("、".join(deduped) if deduped else "（无）"))
         lines.append("")
+
+        lines.append("## 参考文献")
+        lines.append("")
+
+        kp_order: List[str] = []
+        seen_kp = set()
+        for kp in (preferred_order or []):
+            if kp in seen_kp:
+                continue
+            seen_kp.add(kp)
+            kp_order.append(kp)
+        for kp in (kp_list or []):
+            if kp in seen_kp:
+                continue
+            seen_kp.add(kp)
+            kp_order.append(kp)
+
+        any_refs = False
+        for kp in kp_order:
+            refs = refs_by_kp.get(kp) or []
+            if not refs:
+                continue
+            any_refs = True
+            lines.append(f"### {kp}")
+            for ref in refs:
+                url = str(ref.get("url") or "").strip()
+                if not url:
+                    continue
+                title = str(ref.get("title") or "").strip() or url
+                source = str(ref.get("source") or "").strip() or "web"
+                lines.append(f"- {url} / {title} / {source}")
+            lines.append("")
+
+        if not any_refs:
+            lines.append("（无）")
+            lines.append("")
 
         markdown = "\n".join(lines).strip() + "\n"
         ctx.working_memory["markdown"] = markdown

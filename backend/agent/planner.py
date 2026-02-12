@@ -98,9 +98,9 @@ def _study_flags(context: CompressedContext) -> Dict[str, Any]:
     extra = opts.get("enable_extra_tools")
     enable_extra_tools = bool(extra) if isinstance(extra, bool) else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
 
-    # Deep preset implies more retrieval options.
-    if preset in {"deep", "research"}:
-        enable_extra_tools = True
+    # Deep preset does not auto-enable extra tools by default
+    # if preset in {"deep", "research"}:
+    #     enable_extra_tools = True
 
     with_diagrams = opts.get("with_diagrams")
     enable_diagrams = bool(with_diagrams) if isinstance(with_diagrams, bool) else True
@@ -266,14 +266,16 @@ class Planner:
             web_limit = 10
             sub_questions = 6
             max_web_pages = 3
-            enable_extra_tools = True  # deep implies richer retrieval
+            # Deep preset does not auto-enable extra tools by default
+            # enable_extra_tools = True  # deep implies richer retrieval
         elif preset == "research":
             # Research mode: fewer points but deeper per-point retrieval + synthesis.
             split_min, split_max = 3, 8
             web_limit = 12
             sub_questions = 6
             max_web_pages = 4
-            enable_extra_tools = True
+            # Research preset does not auto-enable extra tools by default
+            # enable_extra_tools = True
 
         if max_points_override > 0:
             split_max = max(1, min(max_points_override, 15))

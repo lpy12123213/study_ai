@@ -10,7 +10,7 @@ export function ManusLayout() {
   const isFullScreenPage = location.pathname.startsWith('/canvas')
   
   // Wide pages (no max-width constraint)
-  const isWidePage = location.pathname.startsWith('/blueprint')
+  const isWidePage = location.pathname.startsWith('/blueprint') || location.pathname.startsWith('/lesson-plans') || location.pathname.startsWith('/study-materials')
 
   if (isFullScreenPage) {
     return (

@@ -80,6 +80,7 @@ const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
   compose_paper:                 { label: '组合试卷',           icon: FileText },
   create_paper:                  { label: '创建试卷',           icon: FileText },
   analyze_paper:                 { label: '分析试卷难度',       icon: Cpu },
+  research_knowledge_point:      { label: '研究知识点',         icon: Search },
 }
 
 /** Extract the current knowledge-point context from step input */

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from backend.api.auth import require_auth
 from backend.api.crawler_schemas import AvailableFiltersRequest, ComposeBlueprintRequest
 from backend.config import DEFAULT_SUBJECT
 from backend.crawler_manager import get_crawler
 from backend.subjects import resolve_subject
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.post("/available-filters")

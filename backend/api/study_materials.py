@@ -14,12 +14,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from backend.api.auth import get_current_user
+from backend.api.auth import get_current_user, require_auth
 from backend.api.study_materials_schemas import StudyMaterialsGenerateRequest
 from backend.study_materials.task_manager import StudyMaterialsTaskManager
 
 
-router = APIRouter(prefix="/study-materials", tags=["study-materials"])
+router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependencies=[Depends(require_auth)])
 
 _tasks = StudyMaterialsTaskManager(
     max_tasks=int(os.getenv("STUDY_MATERIALS_MAX_TASKS") or "50"),

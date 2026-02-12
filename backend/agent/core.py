@@ -25,16 +25,24 @@ from backend.agent.types import (
 )
 
 
-SYSTEM_INSTRUCTIONS = """你是一位严谨的自学资料编写老师。
-目标：根据学生输入的主题与拆分出的知识点，生成一份可直接自学的 Markdown 学习材料。
+SYSTEM_INSTRUCTIONS = """你是一位经验丰富的教育专家，擅长将复杂概念拆解为可自学的清晰讲解。
 
-硬性要求：
-- 输出必须是 Markdown 纯文本
-- 语言：中文
-- 结构清晰：每个知识点以“概念讲解”为核心，配合必要的示意图（如适用），强调直观理解、关键结论、常见误区与学习建议
-- 先专注概念与理解：暂时不要生成练习题/刷题内容（例题/练习题可以为空或省略）
-- 不要大段照抄百科/网页原文：尽量用自己的话改写；若信息不足，明确标注“推断/建议”
-- 数学公式使用 LaTeX：行内用 $...$，独立行用 $$...$$
+【核心理念】
+你遵循"费曼学习法"：如果不能用简单的语言解释清楚，说明自己还没真正理解。你的目标是让读者"恍然大悟"，而非堆砌信息。
+
+【写作原则】
+1. **先"为什么"再"是什么"**：每个概念先给出动机（为何需要它、解决什么问题），再给定义
+2. **类比优先**：用日常生活或已学知识做类比，建立直觉，再过渡到严格表述
+3. **渐进深入**：从最简单的情形讲起，逐步添加复杂度
+4. **重点突出**：关键结论用加粗或单独成段，避免淹没在长文中
+5. **误区预警**：主动指出初学者易犯的错误，说明为何会错、如何避免
+
+【硬性要求】
+- 输出格式：Markdown 纯文本（中文）
+- 数学公式：行内 $...$，独立行 $$...$$
+- 严禁照抄来源原文：必须用自己的语言重新组织
+- 信息不足时：明确标注「推断」或「建议」
+- 不输出练习题（除非明确要求）
 """
 
 
@@ -184,9 +192,6 @@ class AgentCore:
                 if plan.rationale:
                     yield agent_event("thinking", {"content": plan.rationale})
 
-                self.state = AgentState.ACTING
-                yield agent_event("thinking", {"content": "Act 阶段：执行工具链…"})
-
                 async def _execute_concrete_step(concrete_step: PlanStep) -> AsyncIterator[Dict[str, Any]]:
                     """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
 
@@ -294,6 +299,30 @@ class AgentCore:
                         thought=thought,
                     )
 
+                split_step = None
+                try:
+                    for s in list(plan.steps or []):
+                        if str(getattr(s, "tool", "") or "").strip() == "split_knowledge_points":
+                            split_step = s
+                            break
+                except Exception:
+                    split_step = None
+
+                if split_step is not None:
+                    async for evt in _execute_concrete_step(split_step):
+                        yield evt
+                    try:
+                        plan.steps = [
+                            s
+                            for s in (plan.steps or [])
+                            if str(getattr(s, "tool", "") or "").strip() != "split_knowledge_points"
+                        ]
+                    except Exception:
+                        pass
+
+                self.state = AgentState.ACTING
+                yield agent_event("thinking", {"content": "Act 阶段：执行工具链…"})
+
                 # DFS-style execution for `foreach_knowledge_point` blocks:
                 # - BFS (old): tool-by-tool across all knowledge points
                 # - DFS (new): for each knowledge point, execute the full research chain before moving on
@@ -342,6 +371,13 @@ class AgentCore:
                             for kp in kps:
                                 # Sub-agent markers (kept as "thinking" so UI can display them).
                                 yield agent_event(
+                                    "subagent_start",
+                                    {
+                                        "knowledge_point": kp,
+                                        "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
+                                    },
+                                )
+                                yield agent_event(
                                     "thinking",
                                     {
                                         "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
@@ -351,6 +387,13 @@ class AgentCore:
                                     concrete = _expand_foreach(s, kp=kp)
                                     async for evt in _execute_concrete_step(concrete):
                                         yield evt
+                                yield agent_event(
+                                    "subagent_end",
+                                    {
+                                        "knowledge_point": kp,
+                                        "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
+                                    },
+                                )
                                 yield agent_event(
                                     "thinking",
                                     {
@@ -374,6 +417,15 @@ class AgentCore:
                                 async with sem:
                                     await queue.put(
                                         agent_event(
+                                            "subagent_start",
+                                            {
+                                                "knowledge_point": kp,
+                                                "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
+                                            },
+                                        )
+                                    )
+                                    await queue.put(
+                                        agent_event(
                                             "thinking",
                                             {
                                                 "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
@@ -384,6 +436,15 @@ class AgentCore:
                                         concrete = _expand_foreach(s, kp=kp)
                                         async for evt in _execute_concrete_step(concrete):
                                             await queue.put(evt)
+                                    await queue.put(
+                                        agent_event(
+                                            "subagent_end",
+                                            {
+                                                "knowledge_point": kp,
+                                                "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
+                                            },
+                                        )
+                                    )
                                     await queue.put(
                                         agent_event(
                                             "thinking",
@@ -477,8 +538,9 @@ class AgentCore:
                                     return raw in {"1", "true", "yes", "y", "on"}
 
                                 enable_extra_tools = bool(opts.get("enable_extra_tools")) if isinstance(opts.get("enable_extra_tools"), bool) else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS", False)
-                                if preset in {"deep", "research"}:
-                                    enable_extra_tools = True
+                                # Deep and research presets do not auto-enable extra tools by default
+                                # if preset in {"deep", "research"}:
+                                #     enable_extra_tools = True
 
                                 subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
 

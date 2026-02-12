@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
 from backend.analysis_service import analyze_paper
 from backend.database.models import delete_paper, get_paper, list_papers, save_paper
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.post("/papers", response_model=dict)

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { BookOpen, Loader2, Plus, Send } from 'lucide-react'
+import { BookOpen, GripVertical, Layers, Loader2, Plus, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
-import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -43,8 +42,6 @@ function toConversationTitle(text: string): string {
   return t.length > 18 ? `${t.slice(0, 18)}…` : t
 }
 
-type KnowledgePointStatus = 'pending' | 'active' | 'done' | 'failed'
-
 type TriState = 'default' | 'on' | 'off'
 
 function normalizeKnowledgePoints(points: unknown): string[] {
@@ -77,91 +74,157 @@ function extractStepKnowledgePoints(step: TaskStep): string[] {
   return []
 }
 
-function inferGroupStatus(
-  steps: TaskStep[],
-  fallback?: KnowledgePointStatus,
-): KnowledgePointStatus {
-  if (fallback) return fallback
-  if (steps.some((s) => s.status === 'running')) return 'active'
-  if (steps.some((s) => s.status === 'failed')) return 'failed'
-  if (steps.length > 0 && steps.every((s) => s.status === 'completed')) return 'done'
-  return 'pending'
+// ── SubAgent types and components ───────────────────────────────────
+
+interface SubAgentActivity {
+  knowledgePoint: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  steps: TaskStep[]
 }
 
-function KnowledgeProgressHeader({
-  points,
-  statusByPoint,
-  currentPoint,
+function SubAgentPanel({
+  activities,
+  activeTab,
+  onTabChange,
 }: {
-  points: string[]
-  statusByPoint: Record<string, KnowledgePointStatus>
-  currentPoint: string | null
+  activities: SubAgentActivity[]
+  activeTab: string | null
+  onTabChange: (kp: string) => void
 }) {
-  if (!points.length) return null
+  if (!activities.length) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8 text-muted-foreground text-sm">
+        等待知识点拆分...
+      </div>
+    )
+  }
 
-  const total = points.length
-  const done = points.filter((p) => statusByPoint[p] === 'done').length
-  const failed = points.filter((p) => statusByPoint[p] === 'failed').length
-  const percent = total ? Math.round((done / total) * 100) : 0
+  const selectedKP = activeTab || activities[0]?.knowledgePoint || null
+  const selectedActivity = activities.find((a) => a.knowledgePoint === selectedKP)
 
-  const badgeVariant = (status: KnowledgePointStatus) => {
-    if (status === 'pending') return 'outline'
-    if (status === 'active') return 'default'
-    if (status === 'failed') return 'destructive'
-    return 'secondary'
+  const statusIcon = (status: SubAgentActivity['status']) => {
+    if (status === 'pending') return <div className="h-2 w-2 rounded-full bg-muted-foreground/30" />
+    if (status === 'running') return <Loader2 className="h-3 w-3 animate-spin text-primary" />
+    if (status === 'failed') return <div className="h-2 w-2 rounded-full bg-destructive" />
+    return <div className="h-2 w-2 rounded-full bg-green-500" />
   }
 
   return (
-    <div className="sticky top-0 z-10 -mx-4 px-4 pt-2 pb-3 bg-background/75 backdrop-blur border-b border-border">
-      <div className="rounded-xl border border-border bg-card shadow-sm p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-medium">知识点探索进度</div>
-          <div className="text-xs text-muted-foreground tabular-nums">
-            已探索 {done}/{total}
-            {failed > 0 ? `（失败 ${failed}）` : ''}
-          </div>
-        </div>
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Tab bar */}
+      <div className="flex flex-wrap gap-1 p-2 border-b border-border bg-muted/30 shrink-0">
+        {activities.map((activity) => {
+          const isActive = activity.knowledgePoint === selectedKP
+          return (
+            <button
+              key={activity.knowledgePoint}
+              onClick={() => onTabChange(activity.knowledgePoint)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors',
+                isActive
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+              )}
+            >
+              {statusIcon(activity.status)}
+              <span>{activity.knowledgePoint}</span>
+            </button>
+          )
+        })}
+      </div>
 
-        <div className="mt-2">
-          <Progress value={percent} className="h-1.5" />
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          {points.map((p) => {
-            const status = statusByPoint[p] || 'pending'
-            const isCurrent = currentPoint === p
-            return (
+      {/* Content area */}
+      <div className="flex-1 overflow-auto p-4">
+        {selectedActivity ? (
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              {statusIcon(selectedActivity.status)}
+              <span className="text-sm font-medium">{selectedActivity.knowledgePoint}</span>
               <Badge
-                key={p}
-                variant={badgeVariant(status)}
-                className={isCurrent ? 'ring-2 ring-primary/40 ring-offset-2 ring-offset-background' : ''}
+                variant={
+                  selectedActivity.status === 'running'
+                    ? 'default'
+                    : selectedActivity.status === 'completed'
+                      ? 'secondary'
+                      : selectedActivity.status === 'failed'
+                        ? 'destructive'
+                        : 'outline'
+                }
+                className="text-xs"
               >
-                {p}
+                {selectedActivity.status === 'pending'
+                  ? '待处理'
+                  : selectedActivity.status === 'running'
+                    ? '进行中'
+                    : selectedActivity.status === 'failed'
+                      ? '失败'
+                      : '已完成'}
               </Badge>
-            )
-          })}
-        </div>
+            </div>
 
-        {currentPoint && (
-          <div className="mt-2 text-xs text-muted-foreground">
-            当前探索：<span className="text-foreground">{currentPoint}</span>
+            {selectedActivity.steps.length > 0 ? (
+              <TaskTimeline steps={selectedActivity.steps} />
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                {selectedActivity.status === 'pending'
+                  ? '等待开始...'
+                  : '暂无步骤记录'}
+              </div>
+            )}
           </div>
+        ) : (
+          <div className="text-sm text-muted-foreground">选择一个知识点查看详情</div>
         )}
       </div>
     </div>
   )
 }
 
+function DraggableDivider({ onDrag }: { onDrag: (deltaX: number) => void }) {
+  const dragging = useRef(false)
+  const lastX = useRef(0)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragging.current = true
+    lastX.current = e.clientX
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const dx = ev.clientX - lastX.current
+      lastX.current = ev.clientX
+      onDrag(dx)
+    }
+    const onMouseUp = () => {
+      dragging.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [onDrag])
+
+  return (
+    <div
+      className="w-2 shrink-0 cursor-col-resize flex items-center justify-center group hover:bg-primary/10 transition-colors relative z-10"
+      onMouseDown={onMouseDown}
+      role="separator"
+      aria-orientation="vertical"
+      tabIndex={0}
+    >
+      <GripVertical className="h-5 w-5 text-muted-foreground/30 group-hover:text-primary/50 transition-colors" />
+    </div>
+  )
+}
+
 function MessageBubble({
   message,
-  knowledgePoints,
-  statusByPoint,
-  currentPoint,
 }: {
   message: Message
-  knowledgePoints?: string[]
-  statusByPoint?: Record<string, KnowledgePointStatus>
-  currentPoint?: string | null
 }) {
   const isUser = message.role === 'user'
 
@@ -205,102 +268,28 @@ function MessageBubble({
         (() => {
           const allSteps = message.steps || []
 
-          const byPoint: Record<string, TaskStep[]> = {}
+          // Only show global steps (main agent), subagent steps are shown in the right panel
           const globalSteps: TaskStep[] = []
-          const discoveredOrder: string[] = []
 
           for (const step of allSteps) {
             const kps = extractStepKnowledgePoints(step)
-            if (kps.length === 1) {
-              const kp = kps[0]
-              if (!byPoint[kp]) {
-                byPoint[kp] = []
-                discoveredOrder.push(kp)
-              }
-              byPoint[kp].push(step)
-            } else {
+            // Steps without a specific knowledge point are global (main agent)
+            if (kps.length !== 1) {
               globalSteps.push(step)
             }
           }
 
-          const ordered = [
-            ...(knowledgePoints || []).filter((kp) => kp && byPoint[kp]?.length),
-            ...discoveredOrder.filter((kp) => !(knowledgePoints || []).includes(kp)),
-          ]
-
-          const groups = ordered
-            .map((kp) => ({
-              kp,
-              steps: byPoint[kp] || [],
-              status: inferGroupStatus((byPoint[kp] || []), statusByPoint?.[kp]),
-            }))
-            .filter((g) => g.kp && g.steps.length > 0)
-
-          const badgeVariant = (status: KnowledgePointStatus) => {
-            if (status === 'pending') return 'outline'
-            if (status === 'active') return 'default'
-            if (status === 'failed') return 'destructive'
-            return 'secondary'
-          }
+          if (globalSteps.length === 0) return null
 
           return (
             <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
               <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between">
-                <span>思考步骤（按知识点归档）</span>
-                <span className="tabular-nums">{allSteps.length} 步</span>
+                <span>主流程步骤</span>
+                <span className="tabular-nums">{globalSteps.length} 步</span>
               </div>
-
-              {groups.length > 0 && (
-                <div className="divide-y divide-border">
-                  {groups.map((g) => {
-                    const isCurrent = currentPoint && g.kp === currentPoint
-                    return (
-                      <div key={g.kp}>
-                        <div className="px-4 py-2 flex items-center justify-between gap-3 bg-muted/10">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <Badge variant={badgeVariant(g.status)} className="shrink-0">
-                              {g.status === 'active'
-                                ? '进行中'
-                                : g.status === 'done'
-                                  ? '已完成'
-                                  : g.status === 'failed'
-                                    ? '失败'
-                                    : '待处理'}
-                            </Badge>
-                            <div
-                              className={cn(
-                                'text-sm font-medium truncate',
-                                isCurrent && 'text-primary',
-                              )}
-                              title={g.kp}
-                            >
-                              {g.kp}
-                            </div>
-                          </div>
-                          {isCurrent && (
-                            <div className="text-xs text-muted-foreground shrink-0">当前</div>
-                          )}
-                        </div>
-                        <div className="p-4 bg-muted/30">
-                          <TaskTimeline steps={g.steps} />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {globalSteps.length > 0 && (
-                <div className="border-t border-border">
-                  <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between bg-muted/10">
-                    <span>全局步骤</span>
-                    <span className="tabular-nums">{globalSteps.length} 步</span>
-                  </div>
-                  <div className="p-4 bg-muted/30">
-                    <TaskTimeline steps={globalSteps} />
-                  </div>
-                </div>
-              )}
+              <div className="p-4 bg-muted/30">
+                <TaskTimeline steps={globalSteps} />
+              </div>
             </div>
           )
         })()
@@ -349,12 +338,22 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
 export default function StudyMaterialsPage() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
   const streamKeyRef = useRef<string | null>(null)
 
   const [input, setInput] = useState('')
   const [isGeneratingLocal, setIsGeneratingLocal] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Split pane: left panel width ratio (0.25 to 0.75)
+  const [leftRatio, setLeftRatio] = useState(0.38)
+
+  // SubAgent activities for the right panel
+  const [subAgentActivities, setSubAgentActivities] = useState<SubAgentActivity[]>([])
+
+  // Active tab in SubAgent panel
+  const [activeSubAgentTab, setActiveSubAgentTab] = useState<string | null>(null)
 
   // Advanced options (optional; when unset, backend uses `.env` defaults)
   const [optionsOpen, setOptionsOpen] = useState(false)
@@ -394,86 +393,6 @@ export default function StudyMaterialsPage() {
     state.getMessages(activeConversationId ?? '')
   )
 
-  const activeAssistantMessage = useMemo(() => {
-    const targetId = activeStream?.assistantMessageId
-    if (targetId) {
-      const found = messages.find((m) => m.id === targetId)
-      if (found) return found
-    }
-
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const m = messages[i]
-      if (m && m.role === 'assistant') return m
-    }
-
-    return null
-  }, [messages, activeStream?.assistantMessageId])
-
-  const derivedKnowledge = useMemo(() => {
-    const steps = (activeAssistantMessage?.steps || []) as TaskStep[]
-
-    // Prefer the explicit split tool output (stable ordering).
-    let points: string[] = []
-    for (const step of steps) {
-      if (step.toolName !== 'split_knowledge_points') continue
-      if (!step.output || typeof step.output !== 'object') continue
-      const out = step.output as Record<string, unknown>
-      const kps = normalizeKnowledgePoints(out.knowledge_points)
-      if (kps.length > 0) {
-        points = kps
-        break
-      }
-    }
-
-    // Fallback: infer from step inputs/titles.
-    if (!points.length) {
-      const seen = new Set<string>()
-      for (const step of steps) {
-        for (const kp of extractStepKnowledgePoints(step)) {
-          if (!kp || seen.has(kp)) continue
-          seen.add(kp)
-          points.push(kp)
-          if (points.length >= 15) break
-        }
-        if (points.length >= 15) break
-      }
-    }
-
-    const statusByPoint: Record<string, KnowledgePointStatus> = {}
-    for (const kp of points) statusByPoint[kp] = 'pending'
-
-    const ensurePoint = (kp: string) => {
-      if (!kp) return
-      if (!statusByPoint[kp]) statusByPoint[kp] = 'pending'
-      if (!points.includes(kp)) points = [...points, kp]
-    }
-
-    for (const step of steps) {
-      const kps = extractStepKnowledgePoints(step)
-      if (kps.length !== 1) continue
-      const kp = kps[0]
-      if (!kp) continue
-      ensurePoint(kp)
-
-      const tool = step.toolName || ''
-      const st = step.status
-
-      if (tool === 'generate_study_material') {
-        if (st === 'completed') statusByPoint[kp] = 'done'
-        else if (st === 'failed') statusByPoint[kp] = 'failed'
-        else if (st === 'running' && statusByPoint[kp] === 'pending') statusByPoint[kp] = 'active'
-        continue
-      }
-
-      if (st === 'failed' && statusByPoint[kp] !== 'done') statusByPoint[kp] = 'failed'
-      if (st === 'running' && statusByPoint[kp] === 'pending') statusByPoint[kp] = 'active'
-    }
-
-    const currentPoint = points.find((p) => statusByPoint[p] === 'active') || null
-
-    return { points, statusByPoint, currentPoint }
-  }, [activeAssistantMessage?.steps])
-
   useEffect(() => {
     if (!scrollRef.current) return
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -486,6 +405,16 @@ export default function StudyMaterialsPage() {
     }
     streamKeyRef.current = null
     setIsGeneratingLocal(false)
+  }, [])
+
+  const handleDrag = useCallback((deltaX: number) => {
+    if (!containerRef.current) return
+    const totalWidth = containerRef.current.offsetWidth
+    if (totalWidth <= 0) return
+    setLeftRatio((prev) => {
+      const next = prev + deltaX / totalWidth
+      return Math.max(0.2, Math.min(0.65, next))
+    })
   }, [])
 
   const runStudyMaterialsStream = useCallback((opts: {
@@ -666,6 +595,23 @@ export default function StudyMaterialsPage() {
           if (localTaskId) {
             useTaskStore.getState().addStep(localTaskId, step)
           }
+
+          const stepKps = normalizeKnowledgePoints((payload as any)?.arguments?.knowledge_points)
+          if (stepKps.length === 1) {
+            const kp = stepKps[0]
+            setSubAgentActivities((prev) => {
+              const exists = prev.some((a) => a.knowledgePoint === kp)
+              const base = exists
+                ? prev
+                : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
+              return base.map((a) =>
+                a.knowledgePoint === kp
+                  ? { ...a, steps: [...a.steps, step] }
+                  : a
+              )
+            })
+          }
+
           useConversationStore.getState().updateConversation(conversationId, {
             updatedAt: new Date().toISOString(),
             progress: 40,
@@ -698,6 +644,100 @@ export default function StudyMaterialsPage() {
               output: out,
               error: err || undefined,
             })
+          }
+
+          const updated = assistantSteps.find((s) => s.id === stepId)
+          const kps = updated ? extractStepKnowledgePoints(updated) : []
+          if (kps.length === 1) {
+            const kp = kps[0]
+            setSubAgentActivities((prev) => {
+              const exists = prev.some((a) => a.knowledgePoint === kp)
+              const base = exists
+                ? prev
+                : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
+
+              return base.map((a) => {
+                if (a.knowledgePoint !== kp) return a
+
+                const hasStep = a.steps.some((s) => s.id === stepId)
+                const nextSteps = hasStep
+                  ? a.steps.map((s) =>
+                      s.id === stepId
+                        ? {
+                            ...s,
+                            status: success ? ('completed' as const) : ('failed' as const),
+                            endTime: t,
+                            output: out,
+                            error: err || undefined,
+                          }
+                        : s
+                    )
+                  : updated
+                    ? [...a.steps, updated]
+                    : a.steps
+
+                return {
+                  ...a,
+                  status: success ? a.status : ('failed' as const),
+                  steps: nextSteps,
+                }
+              })
+            })
+          }
+
+          // Initialize subAgentActivities when split_knowledge_points returns
+          if (toolName === 'split_knowledge_points' && out && typeof out === 'object') {
+            const kps = Array.isArray((out as any).knowledge_points)
+              ? ((out as any).knowledge_points as string[])
+              : []
+            if (kps.length > 0) {
+              setSubAgentActivities(
+                kps.map((kp) => ({
+                  knowledgePoint: kp,
+                  status: 'pending' as const,
+                  steps: [],
+                }))
+              )
+            }
+          }
+          return
+        }
+
+        if (kind === 'subagent_start') {
+          const kp = toText(payload?.knowledge_point)
+          if (kp) {
+            setSubAgentActivities((prev) => {
+              const exists = prev.some((a) => a.knowledgePoint === kp)
+              const base = exists
+                ? prev
+                : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
+              return base.map((a) =>
+                a.knowledgePoint === kp ? { ...a, status: 'running' as const } : a
+              )
+            })
+            setActiveSubAgentTab((prev) => prev || kp)
+          }
+          return
+        }
+
+        if (kind === 'subagent_end') {
+          const kp = toText(payload?.knowledge_point)
+          if (kp) {
+            setSubAgentActivities((prev) =>
+              prev.map((a) =>
+                a.knowledgePoint === kp
+                  ? {
+                      ...a,
+                      status: a.status === 'failed' ? ('failed' as const) : ('completed' as const),
+                      steps: a.steps.map((s) =>
+                        s.status === 'running'
+                          ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }
+                          : s
+                      ),
+                    }
+                  : a
+              )
+            )
           }
           return
         }
@@ -856,6 +896,8 @@ export default function StudyMaterialsPage() {
     setMessages(id, [])
     setInput('')
     setError(null)
+    setSubAgentActivities([])
+    setActiveSubAgentTab(null)
   }
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -908,6 +950,8 @@ export default function StudyMaterialsPage() {
 
     setInput('')
     setError(null)
+    setSubAgentActivities([])
+    setActiveSubAgentTab(null)
 
     const assistantMessageId = generateId()
     addMessage(conversationId, {
@@ -968,102 +1012,133 @@ export default function StudyMaterialsPage() {
     }
   }
 
+  const showSplitPane = isGenerating || subAgentActivities.length > 0
+
   return (
-    <div className="h-full flex flex-col relative">
-      {/* Messages */}
-      {messages.length === 0 ? (
+    <div ref={containerRef} className="h-full flex flex-col relative">
+      {/* Messages area (or welcome) */}
+      {messages.length === 0 && !showSplitPane ? (
         <WelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
-          <div className="max-w-3xl mx-auto py-6">
-            <KnowledgeProgressHeader
-              points={derivedKnowledge.points}
-              statusByPoint={derivedKnowledge.statusByPoint}
-              currentPoint={derivedKnowledge.currentPoint}
-            />
-
-            {hasResumableStream && !isGenerating && activeConversationId && activeStream && (
-              <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-muted-foreground">
-                    检测到未完成的生成任务，可继续接收输出（支持刷新恢复）。
+        <div className="flex-1 flex overflow-hidden">
+          {/* ── Left column: Main agent (chat + steps) ── */}
+          <div
+            className="flex flex-col overflow-hidden"
+            style={{ width: showSplitPane ? `${leftRatio * 100}%` : '100%' }}
+          >
+            <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+              <div className="py-6">
+                {hasResumableStream && !isGenerating && activeConversationId && activeStream && (
+                  <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-muted-foreground">
+                        检测到未完成的生成任务，可继续接收输出（支持刷新恢复）。
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            runStudyMaterialsStream({
+                              conversationId: activeConversationId,
+                              assistantMessageId: activeStream.assistantMessageId,
+                              request: {
+                                url: `/study-materials/tasks/${encodeURIComponent(activeStream.taskId)}/stream?after_seq=${Number(activeStream.lastSeq || 0)}`,
+                                method: 'GET',
+                              },
+                              initialTaskId: activeStream.taskId,
+                              initialSeq: Number(activeStream.lastSeq || 0),
+                              streamKey: `${activeConversationId}:${activeStream.taskId}`,
+                            })
+                          }}
+                        >
+                          继续
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            abortActiveStream()
+                            useConversationStore.getState().updateConversation(activeConversationId, {
+                              activeStream: undefined,
+                              resumable: false,
+                            })
+                          }}
+                        >
+                          放弃
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        runStudyMaterialsStream({
-                          conversationId: activeConversationId,
-                          assistantMessageId: activeStream.assistantMessageId,
-                          request: {
-                            url: `/study-materials/tasks/${encodeURIComponent(activeStream.taskId)}/stream?after_seq=${Number(activeStream.lastSeq || 0)}`,
-                            method: 'GET',
-                          },
-                          initialTaskId: activeStream.taskId,
-                          initialSeq: Number(activeStream.lastSeq || 0),
-                          streamKey: `${activeConversationId}:${activeStream.taskId}`,
-                        })
-                      }}
-                    >
-                      继续
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        abortActiveStream()
-                        useConversationStore.getState().updateConversation(activeConversationId, {
-                          activeStream: undefined,
-                          resumable: false,
-                        })
-                      }}
-                    >
-                      放弃
-                    </Button>
+                )}
+
+                <AnimatePresence mode="popLayout">
+                  {messages.map((m) => (
+                    <MessageBubble
+                      key={m.id}
+                      message={m}
+                    />
+                  ))}
+                </AnimatePresence>
+
+                {isGenerating && messages[messages.length - 1]?.content === '' && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex gap-3 mb-4"
+                  >
+                    <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                      <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                    </div>
+                    <div className="text-sm text-muted-foreground pt-0.5">
+                      正在生成...
+                    </div>
+                  </motion.div>
+                )}
+
+                {error && (
+                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                    {error}
                   </div>
-                </div>
+                )}
               </div>
-            )}
-            <AnimatePresence mode="popLayout">
-              {messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  knowledgePoints={derivedKnowledge.points}
-                  statusByPoint={derivedKnowledge.statusByPoint}
-                  currentPoint={derivedKnowledge.currentPoint}
-                />
-              ))}
-            </AnimatePresence>
-
-            {isGenerating && messages[messages.length - 1]?.content === '' && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex gap-3 mb-4 max-w-3xl"
-              >
-                <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
-                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                </div>
-                <div className="text-sm text-muted-foreground pt-0.5">
-                   正在生成...
-                </div>
-              </motion.div>
-            )}
-
-            {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
-                {error}
-              </div>
-            )}
+            </div>
           </div>
+
+          {/* ── Draggable divider ── */}
+          {showSplitPane && <DraggableDivider onDrag={handleDrag} />}
+
+          {/* ── Right column: SubAgent panel ── */}
+          {showSplitPane && (
+            <div
+              className="flex flex-col overflow-hidden border-l border-border bg-muted/20"
+              style={{ width: `${(1 - leftRatio) * 100}%` }}
+            >
+              <div className="px-4 py-3 border-b border-border bg-background/50 backdrop-blur-sm">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Layers className="h-4 w-4 text-primary" />
+                  SubAgent 工作区
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  逐知识点深入研究，为资料提供素材
+                </div>
+              </div>
+              <SubAgentPanel
+                activities={subAgentActivities}
+                activeTab={activeSubAgentTab}
+                onTabChange={setActiveSubAgentTab}
+              />
+            </div>
+          )}
         </div>
       )}
 
-      {/* Composer */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
-        <div className="max-w-3xl mx-auto">
+      {/* ── Composer ── */}
+      <div
+        className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10 pointer-events-none"
+        style={showSplitPane ? { width: `${leftRatio * 100}%` } : undefined}
+      >
+        <div className="max-w-3xl mx-auto pointer-events-auto">
           <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
             <div className="flex items-center justify-between gap-3 mb-2">
               <CollapsibleTrigger asChild>
@@ -1236,21 +1311,30 @@ export default function StudyMaterialsPage() {
                 }}
               />
               
-              <Button
-                type="submit"
-                size="icon"
-                className={cn(
-                  "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
-                  input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-                )}
-                disabled={!input.trim() || isGenerating}
-              >
-                {isGenerating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
+              {isGenerating ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="destructive"
+                  className="h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all"
+                  onClick={abortActiveStream}
+                  title="停止生成"
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={cn(
+                    "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
+                    input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  )}
+                  disabled={!input.trim()}
+                >
                   <Send className="h-4 w-4" />
-                )}
-              </Button>
+                </Button>
+              )}
             </div>
           </form>
           

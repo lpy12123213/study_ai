@@ -14,6 +14,82 @@ EXA_API_KEY = (os.getenv("EXA_API_KEY") or os.getenv("EXA_API") or "").strip()
 EXA_BASE_URL = (os.getenv("EXA_BASE_URL") or "https://api.exa.ai").rstrip("/")
 
 
+async def exa_answer(
+    query: str,
+    num_results: int = 5,
+    include_text: bool = True,
+    text_max_length: int = 1000,
+) -> Dict[str, Any]:
+    """
+    Ask a question and get an AI-generated answer with citations using Exa Answer API.
+
+    Args:
+        query: The question to answer
+        num_results: Number of source results to use (max 10)
+        include_text: Whether to include source text in citations
+        text_max_length: Max length of text content per citation
+
+    Returns:
+        Dict with answer and citations
+    """
+    if not EXA_API_KEY:
+        return {
+            "error": "Exa API key not configured",
+            "answer": "",
+            "citations": [],
+        }
+
+    headers = {
+        "x-api-key": EXA_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    payload: Dict[str, Any] = {
+        "query": query,
+        "numResults": min(num_results, 10),
+    }
+
+    if include_text:
+        payload["text"] = True
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{EXA_BASE_URL}/answer",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            citations = []
+            for c in data.get("citations", []):
+                citations.append({
+                    "title": c.get("title", ""),
+                    "url": c.get("url", ""),
+                    "text": (c.get("text", "") or "")[:text_max_length],
+                    "published_date": c.get("publishedDate"),
+                })
+
+            return {
+                "answer": data.get("answer", ""),
+                "citations": citations,
+                "success": True,
+            }
+    except httpx.HTTPStatusError as e:
+        return {
+            "error": f"Exa Answer API error: {e.response.status_code}",
+            "answer": "",
+            "citations": [],
+        }
+    except Exception as e:
+        return {
+            "error": f"Exa Answer failed: {str(e)}",
+            "answer": "",
+            "citations": [],
+        }
+
+
 async def exa_search(
     query: str,
     num_results: int = 10,

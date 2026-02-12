@@ -9,6 +9,7 @@ API 路由在 `backend/api/` 下；此文件负责：
 
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,9 +49,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS: restrict origins in production; allow localhost for dev.
+    cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+    cors_origins = [o.strip() for o in cors_origins if o.strip()]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

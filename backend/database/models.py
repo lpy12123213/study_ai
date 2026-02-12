@@ -585,7 +585,9 @@ async def list_canvas_boards(limit: int = 50, query: str = "") -> List[dict]:
 
         stmt = select(CanvasBoard).order_by(desc(CanvasBoard.updated_at)).limit(limit)
         if query:
-            stmt = stmt.where(CanvasBoard.title.like(f"%{query}%"))
+            # Escape LIKE wildcards to prevent pattern injection
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            stmt = stmt.where(CanvasBoard.title.like(f"%{escaped}%"))
         result = await session.execute(stmt)
         boards = list(result.scalars().all())
         return [

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -10,7 +10,11 @@ import {
   Sparkles,
   ArrowRight,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  GripVertical,
+  Layers,
+  CheckCircle2,
+  Circle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -25,26 +29,17 @@ import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { ConversationItem, Message, Subject, TaskStep } from '@/types'
 
-// ... (keep helper functions: grades, toText, toObjectives, lessonPlanToMarkdown, stripAll, getStageByGrade, extractGradeFromText, extractDurationMinutesFromText, extractSubjectFromText, extractTopicFromText, toConversationTitle)
-
 const grades = [
-  '一年级',
-  '二年级',
-  '三年级',
-  '四年级',
-  '五年级',
-  '六年级',
-  '七年级',
-  '八年级',
-  '九年级',
-  '高一',
-  '高二',
-  '高三',
+  '一年级', '二年级', '三年级', '四年级', '五年级', '六年级',
+  '七年级', '八年级', '九年级', '高一', '高二', '高三',
 ]
 
 type LessonPlanAgentEvent =
   | { event: 'thinking'; data: { content?: unknown } }
   | { event: 'tool_call'; data: { name?: unknown; arguments?: unknown } }
+  | { event: 'tool_result'; data: { name?: unknown; success?: unknown; output?: unknown } }
+  | { event: 'subagent_start'; data: { knowledge_point?: unknown; index?: unknown; total?: unknown; content?: unknown } }
+  | { event: 'subagent_end'; data: { knowledge_point?: unknown; index?: unknown; total?: unknown; content?: unknown } }
   | { event: 'content'; data: { content?: unknown; section?: unknown } }
   | { event: 'done'; data: { plan?: unknown } }
   | { event: 'error'; data: { message?: unknown } }
@@ -59,9 +54,7 @@ function toObjectives(value: unknown): string[] {
   return value
     .map((item) => {
       if (typeof item === 'string') return item
-      if (item && typeof item === 'object') {
-        return toText((item as any).description)
-      }
+      if (item && typeof item === 'object') return toText((item as any).description)
       return ''
     })
     .filter(Boolean)
@@ -79,6 +72,7 @@ function lessonPlanToMarkdown(plan: unknown, ctx: {
   const sections = Array.isArray(p.sections) ? (p.sections as any[]) : []
   const summary = toText(p.summary)
   const rawContent = toText(p.content)
+  const references = Array.isArray(p.references) ? (p.references as any[]) : []
 
   const lines: string[] = [
     `# ${ctx.title}`,
@@ -115,9 +109,7 @@ function lessonPlanToMarkdown(plan: unknown, ctx: {
       lines.push(`### ${title}${minutes ? `（${minutes} 分钟）` : ''}`, '')
 
       const content = toText(sec?.content)
-      if (content) {
-        lines.push(content, '')
-      }
+      if (content) lines.push(content, '')
 
       const activities = Array.isArray(sec?.activities) ? sec.activities : []
       if (activities.length > 0) {
@@ -149,59 +141,67 @@ function lessonPlanToMarkdown(plan: unknown, ctx: {
     lines.push('## 小结', '', summary, '')
   }
 
+  if (references.length > 0) {
+    lines.push('## 参考文献', '')
+    references.forEach((ref: any, i: number) => {
+      const title = toText(ref?.title) || '未知来源'
+      const url = toText(ref?.url)
+      if (url) {
+        lines.push(`${i + 1}. [${title}](${url})`)
+      } else {
+        lines.push(`${i + 1}. ${title}`)
+      }
+    })
+    lines.push('')
+  }
+
   return lines.join('\n')
 }
 
 function stripAll(haystack: string, needle: string): string {
   if (!needle) return haystack
-  return haystack.split(needle).join('')
+  let result = haystack
+  while (result.includes(needle)) result = result.replace(needle, '')
+  return result
 }
 
 function getStageByGrade(grade: string | null): '小学' | '初中' | '高中' | '' {
   if (!grade) return ''
-  if (grade.startsWith('高')) return '高中'
-  if (grade === '七年级' || grade === '八年级' || grade === '九年级') return '初中'
-  // 一到六年级通常对应小学
-  if (grade.endsWith('年级')) return '小学'
+  const g = grade.trim()
+  if (/^[一二三四五六]年级/.test(g)) return '小学'
+  if (/^[七八九]年级/.test(g)) return '初中'
+  if (/^高[一二三]/.test(g)) return '高中'
   return ''
 }
 
 function extractGradeFromText(text: string): string | null {
-  const t = text || ''
-
-  const senior = t.match(/高[一二三]/)?.[0]
-  if (senior) return senior
-
-  const junior = t.match(/初[一二三]/)?.[0]
-  if (junior === '初一') return '七年级'
-  if (junior === '初二') return '八年级'
-  if (junior === '初三') return '九年级'
-
+  const t = (text || '').trim()
   for (const g of grades) {
     if (t.includes(g)) return g
+  }
+  const m = t.match(/(小学|初中|高中|初一|初二|初三)/)
+  if (m) {
+    const map: Record<string, string> = {
+      '初一': '七年级', '初二': '八年级', '初三': '九年级',
+    }
+    return map[m[1]] || null
   }
   return null
 }
 
 function extractDurationMinutesFromText(text: string): number | null {
-  const t = text || ''
-  const m = t.match(/(\d{1,3})\s*(分钟|min)/i)
+  const m = (text || '').match(/(\d{2,3})\s*(分钟|min)/i)
   if (!m) return null
-  const n = Number(m[1])
-  if (!Number.isFinite(n)) return null
-  if (n < 15 || n > 180) return null
-  return n
+  const n = parseInt(m[1], 10)
+  return n >= 15 && n <= 180 ? n : null
 }
 
 function extractSubjectFromText(
-  text: string,
-  subjects: Subject[] | undefined,
-  grade: string | null
+  text: string, subjects: Subject[] | undefined, grade: string | null
 ): string | null {
   const list = subjects ?? []
   const t = text || ''
 
-  // 1) Exact/contains match against subject names
   const direct = list
     .map((s) => s?.name)
     .filter((name): name is string => typeof name === 'string' && !!name)
@@ -209,24 +209,12 @@ function extractSubjectFromText(
     .sort((a, b) => b.length - a.length)[0]
   if (direct) return direct
 
-  // 2) Alias match (e.g. "数学" -> "高中数学/初中数学/小学数学")
   const stage = getStageByGrade(grade)
-  const stageOrder = stage
-    ? [stage, '高中', '初中', '小学']
-    : ['高中', '初中', '小学']
+  const stageOrder = stage ? [stage, '高中', '初中', '小学'] : ['高中', '初中', '小学']
 
   const aliasKeys = [
-    '语文',
-    '数学',
-    '英语',
-    '物理',
-    '化学',
-    '生物',
-    '政治',
-    '历史',
-    '地理',
-    '道德与法治',
-    '科学',
+    '语文', '数学', '英语', '物理', '化学', '生物',
+    '政治', '历史', '地理', '道德与法治', '科学',
   ]
 
   const alias = aliasKeys.find((k) => t.includes(k))
@@ -237,7 +225,6 @@ function extractSubjectFromText(
     if (list.some((x) => x?.name === c)) return c
   }
 
-  // last fallback: any subject that contains alias
   const fuzzy = list
     .map((s) => s?.name)
     .filter((name): name is string => typeof name === 'string')
@@ -246,21 +233,17 @@ function extractSubjectFromText(
 }
 
 function extractTopicFromText(
-  text: string,
-  subject: string | null,
-  grade: string | null
+  text: string, subject: string | null, grade: string | null
 ): string {
   const raw = (text || '').trim()
   if (!raw) return ''
 
-  // 《...》 or "..." is often used as topic/title
   const book = raw.match(/《([^》]{2,80})》/)?.[1]?.trim()
   if (book) return book
 
   const byKey = raw.match(/(?:课题|主题|标题|topic)\s*[:：]\s*(.+)/i)?.[1]
   if (byKey) return byKey.split('\n')[0].trim()
 
-  // Heuristic: strip subject/grade/duration and common filler words
   let t = raw
   if (subject) t = stripAll(t, subject)
   if (grade) t = stripAll(t, grade)
@@ -281,9 +264,18 @@ function toConversationTitle(text: string): string {
   return t.length > 18 ? `${t.slice(0, 18)}…` : t
 }
 
+// ── SubAgent activity tracking ──────────────────────────────────────
+
+interface SubAgentActivity {
+  knowledgePoint: string
+  status: 'pending' | 'running' | 'completed'
+  steps: TaskStep[]
+}
+
+// ── Small components ────────────────────────────────────────────────
+
 function LessonPlanAttachment({ lessonPlanId }: { lessonPlanId: string }) {
   const plan = useLessonPlanStore((state) => state.getPlan(lessonPlanId))
-
   if (!plan) return null
 
   return (
@@ -298,7 +290,6 @@ function LessonPlanAttachment({ lessonPlanId }: { lessonPlanId: string }) {
                 </div>
                 <div className="font-semibold truncate text-foreground">{plan.title}</div>
               </div>
-              
               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                 <Badge variant="secondary" className="font-normal">{plan.subject}</Badge>
                 <span>{plan.grade}</span>
@@ -308,7 +299,6 @@ function LessonPlanAttachment({ lessonPlanId }: { lessonPlanId: string }) {
                 </span>
               </div>
             </div>
-            
             <div className="self-center opacity-0 group-hover:opacity-100 transition-opacity -translate-x-2 group-hover:translate-x-0 duration-200">
               <Button variant="ghost" size="icon">
                 <ArrowRight className="h-4 w-4" />
@@ -343,7 +333,7 @@ function MessageBubble({ message }: { message: Message }) {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
+      className="flex flex-col gap-2 mb-8 w-full"
     >
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
         <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
@@ -351,7 +341,7 @@ function MessageBubble({ message }: { message: Message }) {
         </div>
         <span>学习助手</span>
       </div>
-      
+
       <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
         <div className="whitespace-pre-wrap">{message.content}</div>
       </div>
@@ -382,7 +372,7 @@ function MessageBubble({ message }: { message: Message }) {
                 className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
               >
                 <div className="p-4 bg-muted/30">
-                   <TaskTimeline steps={message.steps} />
+                  <TaskTimeline steps={message.steps} />
                 </div>
               </motion.div>
             )}
@@ -398,11 +388,11 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
     <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
       <div className="mb-10 flex flex-col items-center text-center space-y-6">
         <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center ring-1 ring-border/50 shadow-sm">
-           <BookOpenCheck className="h-10 w-10 text-primary" strokeWidth={1.5} />
+          <BookOpenCheck className="h-10 w-10 text-primary" strokeWidth={1.5} />
         </div>
         <h2 className="text-2xl font-semibold tracking-tight">教案生成助手</h2>
         <p className="text-muted-foreground max-w-md">
-           输入你的需求（建议包含学科/年级/课题/课时），我将为你生成一份详细的教学设计。
+          输入你的需求（建议包含学科/年级/课题/课时），我将为你生成一份详细的教学设计。
         </p>
       </div>
 
@@ -430,14 +420,136 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
   )
 }
 
-export default function LessonPlansPage() {
+// ── SubAgent Panel (right column) ───────────────────────────────────
+
+function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!scrollRef.current) return
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [activities])
+
+  if (activities.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-sm p-6">
+        <Layers className="h-10 w-10 mb-3 opacity-30" />
+        <p>等待知识点拆分…</p>
+        <p className="text-xs mt-1 opacity-60">SubAgent 将逐个研究每个知识点</p>
+      </div>
+    )
+  }
+
+  return (
+    <div ref={scrollRef} className="h-full overflow-auto p-4 space-y-3">
+      <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-2">
+        <Layers className="h-3.5 w-3.5" />
+        知识点研究进度（{activities.filter((a) => a.status === 'completed').length}/{activities.length}）
+      </div>
+
+      {activities.map((activity, i) => (
+        <motion.div
+          key={activity.knowledgePoint}
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: i * 0.05 }}
+          className={cn(
+            'rounded-lg border p-3 transition-all',
+            activity.status === 'running' && 'border-primary/50 bg-primary/5 shadow-sm',
+            activity.status === 'completed' && 'border-border bg-card',
+            activity.status === 'pending' && 'border-border/50 bg-muted/30 opacity-60',
+          )}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            {activity.status === 'completed' && (
+              <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+            )}
+            {activity.status === 'running' && (
+              <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
+            )}
+            {activity.status === 'pending' && (
+              <Circle className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+            )}
+            <span className="text-sm font-medium truncate">{activity.knowledgePoint}</span>
+          </div>
+
+          {activity.steps.length > 0 && activity.status !== 'pending' && (
+            <div className="ml-6 space-y-1">
+              {activity.steps.map((step) => (
+                <div key={step.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {step.status === 'completed' && <CheckCircle2 className="h-3 w-3 text-green-500/70 shrink-0" />}
+                  {step.status === 'running' && <Loader2 className="h-3 w-3 text-primary animate-spin shrink-0" />}
+                  {step.status === 'pending' && <Circle className="h-3 w-3 opacity-40 shrink-0" />}
+                  <span className="truncate">{step.title}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      ))}
+    </div>
+  )
+}
+
+// ── Draggable divider ───────────────────────────────────────────────
+
+function DraggableDivider({ onDrag }: { onDrag: (deltaX: number) => void }) {
+  const dragging = useRef(false)
+  const lastX = useRef(0)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragging.current = true
+    lastX.current = e.clientX
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const dx = ev.clientX - lastX.current
+      lastX.current = ev.clientX
+      onDrag(dx)
+    }
+    const onMouseUp = () => {
+      dragging.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [onDrag])
+
+  return (
+    <div
+      className="w-2 shrink-0 cursor-col-resize flex items-center justify-center group hover:bg-primary/10 transition-colors relative z-10"
+      onMouseDown={onMouseDown}
+      role="separator"
+      aria-orientation="vertical"
+      tabIndex={0}
+    >
+      <GripVertical className="h-5 w-5 text-muted-foreground/30 group-hover:text-primary/50 transition-colors" />
+    </div>
+  )
+}
+
+// ── Main page component ─────────────────────────────────────────────
+
+function LessonPlansPage() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const [input, setInput] = useState('')
-
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Split pane: left panel width ratio (0.25 to 0.75)
+  const [leftRatio, setLeftRatio] = useState(0.38)
+
+  // SubAgent activities for the right panel
+  const [subAgentActivities, setSubAgentActivities] = useState<SubAgentActivity[]>([])
 
   const { data: subjects } = useSubjects()
 
@@ -450,7 +562,6 @@ export default function LessonPlansPage() {
   const addMessage = useConversationStore((state) => state.addMessage)
 
   const savePlan = useLessonPlanStore((state) => state.savePlan)
-
   const { startTask, addStep, updateStep, completeTask, failTask } = useTaskStore()
 
   const activeConversationId = useMemo(() => {
@@ -467,6 +578,16 @@ export default function LessonPlansPage() {
     if (!scrollRef.current) return
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages.length])
+
+  const handleDrag = useCallback((deltaX: number) => {
+    if (!containerRef.current) return
+    const totalWidth = containerRef.current.offsetWidth
+    if (totalWidth <= 0) return
+    setLeftRatio((prev) => {
+      const next = prev + deltaX / totalWidth
+      return Math.max(0.2, Math.min(0.65, next))
+    })
+  }, [])
 
   const handleNewConversation = () => {
     const id = generateId()
@@ -485,6 +606,7 @@ export default function LessonPlansPage() {
     setMessages(id, [])
     setInput('')
     setError(null)
+    setSubAgentActivities([])
   }
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -494,7 +616,6 @@ export default function LessonPlansPage() {
 
     const now = new Date().toISOString()
 
-    // Ensure a lesson-plan conversation is selected
     let conversationId = activeConversationId
     if (!conversationId) {
       const inferredGrade = extractGradeFromText(prompt)
@@ -528,31 +649,18 @@ export default function LessonPlansPage() {
 
     setInput('')
     setError(null)
+    setSubAgentActivities([])
 
     const existingPlan = useLessonPlanStore.getState().getPlan(conversationId)
 
     const inferredGrade = extractGradeFromText(prompt)
     const resolvedGrade = (inferredGrade ?? existingPlan?.grade ?? '').trim()
-
-    const inferredSubject = extractSubjectFromText(
-      prompt,
-      subjects,
-      resolvedGrade || existingPlan?.grade || null
-    )
+    const inferredSubject = extractSubjectFromText(prompt, subjects, resolvedGrade || existingPlan?.grade || null)
     const resolvedSubject = (inferredSubject ?? existingPlan?.subject ?? '').trim()
-
-    const inferredTopic = extractTopicFromText(
-      prompt,
-      resolvedSubject || null,
-      resolvedGrade || null
-    )
+    const inferredTopic = extractTopicFromText(prompt, resolvedSubject || null, resolvedGrade || null)
     const resolvedTopic = (inferredTopic || existingPlan?.title || '').trim()
-
-    const resolvedDuration =
-      extractDurationMinutesFromText(prompt) ?? existingPlan?.duration ?? 45
-
+    const resolvedDuration = extractDurationMinutesFromText(prompt) ?? existingPlan?.duration ?? 45
     const resolvedObjectives = existingPlan?.objectives ?? []
-
     const resolvedAdditional = prompt
 
     const missing: string[] = []
@@ -568,8 +676,7 @@ export default function LessonPlansPage() {
         content:
           `为了生成教案，我还缺少：${missing.join('、')}。\n\n` +
           `请在消息里包含这些信息，例如：\n` +
-          `“高中数学 高二 《函数单调性与导数应用》 45分钟 教案（互动式/含分层练习）”。\n\n` +
-          `也可以展开下方“高级选项”手动选择。`,
+          `"高中数学 高二 《函数单调性与导数应用》 45分钟 教案（互动式/含分层练习）"。`,
       })
       return
     }
@@ -591,7 +698,6 @@ export default function LessonPlansPage() {
 
     const taskId = `lesson-plan-${conversationId}-${Date.now()}`
     startTask(taskId)
-
     setIsGenerating(true)
 
     let runningStepId: string | null = null
@@ -603,17 +709,20 @@ export default function LessonPlansPage() {
     let pendingText = ''
     let flushTimer: number | null = null
 
+    // Track current subagent index for the right panel
+    let currentSubAgentKP: string | null = null
+
     const flushAssistant = () => {
       if (!pendingText) return
       assistantText += pendingText
       pendingText = ''
-      useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+      useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
         content: assistantText,
       })
     }
 
     const syncSteps = () => {
-      useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+      useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
         steps: assistantSteps,
       })
     }
@@ -629,7 +738,6 @@ export default function LessonPlansPage() {
         updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
         updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
       }
-
       const step: TaskStep = {
         id: generateId(),
         title,
@@ -663,14 +771,116 @@ export default function LessonPlansPage() {
         if (kind === 'thinking') {
           const text = toText(payload?.content) || '思考中…'
           startRunningStep(text)
-          updateConversation(conversationId, { updatedAt: new Date().toISOString(), progress: 20 })
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 20 })
           return
         }
 
         if (kind === 'tool_call') {
           const name = toText(payload?.name) || 'tool'
           startRunningStep(`调用工具：${name}`, { toolName: name, input: payload?.arguments })
-          updateConversation(conversationId, { updatedAt: new Date().toISOString(), progress: 40 })
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 30 })
+
+          // If this is a subagent tool call, add step to the current subagent activity
+          if (currentSubAgentKP) {
+            setSubAgentActivities((prev) =>
+              prev.map((a) =>
+                a.knowledgePoint === currentSubAgentKP
+                  ? {
+                      ...a,
+                      steps: [
+                        ...a.steps,
+                        {
+                          id: generateId(),
+                          title: `调用 ${name}`,
+                          status: 'running' as const,
+                          toolName: name,
+                          startTime: new Date().toISOString(),
+                        },
+                      ],
+                    }
+                  : a
+              )
+            )
+          }
+          return
+        }
+
+        if (kind === 'tool_result') {
+          const name = toText(payload?.name) || 'tool'
+          const output = payload?.output
+
+          // If split_knowledge_points returned, initialize subagent activities
+          if (name === 'split_knowledge_points' && output && typeof output === 'object') {
+            const kps = Array.isArray((output as any).knowledge_points)
+              ? ((output as any).knowledge_points as string[])
+              : []
+            if (kps.length > 0) {
+              setSubAgentActivities(
+                kps.map((kp) => ({
+                  knowledgePoint: kp,
+                  status: 'pending' as const,
+                  steps: [],
+                }))
+              )
+            }
+          }
+
+          // Complete the running step in current subagent
+          if (currentSubAgentKP) {
+            setSubAgentActivities((prev) =>
+              prev.map((a) =>
+                a.knowledgePoint === currentSubAgentKP
+                  ? {
+                      ...a,
+                      steps: a.steps.map((s, idx) =>
+                        idx === a.steps.length - 1 && s.status === 'running'
+                          ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }
+                          : s
+                      ),
+                    }
+                  : a
+              )
+            )
+          }
+          return
+        }
+
+        if (kind === 'subagent_start') {
+          const kp = toText(payload?.knowledge_point)
+          const text = toText(payload?.content) || `研究知识点：${kp}`
+          currentSubAgentKP = kp
+          startRunningStep(text)
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 40 })
+
+          // Mark this activity as running
+          setSubAgentActivities((prev) =>
+            prev.map((a) =>
+              a.knowledgePoint === kp ? { ...a, status: 'running' as const } : a
+            )
+          )
+          return
+        }
+
+        if (kind === 'subagent_end') {
+          const kp = toText(payload?.knowledge_point)
+          currentSubAgentKP = null
+
+          // Mark this activity as completed
+          setSubAgentActivities((prev) =>
+            prev.map((a) =>
+              a.knowledgePoint === kp
+                ? {
+                    ...a,
+                    status: 'completed' as const,
+                    steps: a.steps.map((s) =>
+                      s.status === 'running'
+                        ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }
+                        : s
+                    ),
+                  }
+                : a
+            )
+          )
           return
         }
 
@@ -689,7 +899,7 @@ export default function LessonPlansPage() {
               }, 60)
             }
           }
-          updateConversation(conversationId, { updatedAt: new Date().toISOString(), progress: 70 })
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 70 })
           return
         }
 
@@ -725,7 +935,7 @@ export default function LessonPlansPage() {
           })
 
           savePlan({
-            id: conversationId,
+            id: conversationId!,
             title,
             subject: resolvedSubject,
             grade: resolvedGrade,
@@ -735,13 +945,13 @@ export default function LessonPlansPage() {
             createdAt: t,
           })
 
-          useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+          useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
             content: md,
-            attachment: { type: 'lesson_plan', lessonPlanId: conversationId },
+            attachment: { type: 'lesson_plan', lessonPlanId: conversationId! },
             steps: assistantSteps,
           })
 
-          updateConversation(conversationId, {
+          updateConversation(conversationId!, {
             title,
             updatedAt: t,
             status: 'completed',
@@ -759,12 +969,12 @@ export default function LessonPlansPage() {
           setError(msg)
           failTask(taskId, msg)
 
-          useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+          useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
             content: `出错：${msg}`,
             steps: assistantSteps,
           })
 
-          updateConversation(conversationId, { updatedAt: new Date().toISOString(), status: 'active' })
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), status: 'active' })
           setIsGenerating(false)
         }
       },
@@ -773,7 +983,7 @@ export default function LessonPlansPage() {
         const msg = err.message || '生成失败'
         setError(msg)
         failTask(taskId, msg)
-        useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+        useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
           content: `出错：${msg}`,
           steps: assistantSteps,
         })
@@ -795,62 +1005,96 @@ export default function LessonPlansPage() {
     }
   }
 
+  const showSplitPane = isGenerating || subAgentActivities.length > 0
+
   return (
-    <div className="h-full flex flex-col relative">
-      {/* Messages */}
-      {messages.length === 0 ? (
+    <div ref={containerRef} className="h-full flex flex-col relative">
+      {/* Messages area (or welcome) */}
+      {messages.length === 0 && !showSplitPane ? (
         <WelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
-          <div className="max-w-3xl mx-auto py-6">
-            <AnimatePresence mode="popLayout">
-              {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
-              ))}
-            </AnimatePresence>
+        <div className="flex-1 flex overflow-hidden">
+          {/* ── Left column: Main agent (chat + steps) ── */}
+          <div
+            className="flex flex-col overflow-hidden"
+            style={{ width: showSplitPane ? `${leftRatio * 100}%` : '100%' }}
+          >
+            <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+              <div className="py-6">
+                <AnimatePresence mode="popLayout">
+                  {messages.map((m) => (
+                    <MessageBubble key={m.id} message={m} />
+                  ))}
+                </AnimatePresence>
 
-            {isGenerating && messages[messages.length - 1]?.content === '' && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex gap-3 mb-4 max-w-3xl"
-              >
-                <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
-                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                </div>
-                <div className="text-sm text-muted-foreground pt-0.5">
-                   正在生成教案...
-                </div>
-              </motion.div>
-            )}
+                {isGenerating && messages[messages.length - 1]?.content === '' && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex gap-3 mb-4"
+                  >
+                    <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                      <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                    </div>
+                    <div className="text-sm text-muted-foreground pt-0.5">
+                      正在生成教案...
+                    </div>
+                  </motion.div>
+                )}
 
-            {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
-                {error}
+                {error && (
+                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                    {error}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
+
+          {/* ── Draggable divider ── */}
+          {showSplitPane && <DraggableDivider onDrag={handleDrag} />}
+
+          {/* ── Right column: SubAgent panel ── */}
+          {showSplitPane && (
+            <div
+              className="flex flex-col overflow-hidden border-l border-border bg-muted/20"
+              style={{ width: `${(1 - leftRatio) * 100}%` }}
+            >
+              <div className="px-4 py-3 border-b border-border bg-background/50 backdrop-blur-sm">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Layers className="h-4 w-4 text-primary" />
+                  SubAgent 工作区
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  逐知识点深入研究，为教案提供素材
+                </div>
+              </div>
+              <SubAgentPanel activities={subAgentActivities} />
+            </div>
+          )}
         </div>
       )}
 
-      {/* Composer */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
+      {/* ── Composer ── */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10"
+        style={showSplitPane ? { width: `${leftRatio * 100}%` } : undefined}
+      >
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="relative group">
             <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
-               <Button
+              <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="h-9 w-9 rounded-xl text-muted-foreground hover:text-foreground shrink-0 mb-0.5"
                 onClick={handleNewConversation}
                 title="新建教案"
-               >
-                 <Plus className="h-5 w-5" />
-               </Button>
-               
-               <Textarea
+              >
+                <Plus className="h-5 w-5" />
+              </Button>
+
+              <Textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -861,18 +1105,18 @@ export default function LessonPlansPage() {
                 rows={1}
                 style={{ height: 'auto', overflow: 'hidden' }}
                 onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement;
-                  target.style.height = 'auto';
-                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                  const target = e.target as HTMLTextAreaElement
+                  target.style.height = 'auto'
+                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`
                 }}
               />
-              
+
               <Button
                 type="submit"
                 size="icon"
                 className={cn(
-                  "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
-                  input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
+                  input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
                 )}
                 disabled={!input.trim() || isGenerating}
               >
@@ -884,7 +1128,7 @@ export default function LessonPlansPage() {
               </Button>
             </div>
           </form>
-          
+
           <div className="text-center mt-2 text-[10px] text-muted-foreground/50">
             教案生成基于 AI 模型，仅供参考。
           </div>
@@ -893,3 +1137,5 @@ export default function LessonPlansPage() {
     </div>
   )
 }
+
+export default LessonPlansPage

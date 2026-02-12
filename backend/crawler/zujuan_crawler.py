@@ -3794,6 +3794,23 @@ class ZujuanCrawler:
         try:
             import sys
 
+            # Validate subject against whitelist to prevent command injection
+            try:
+                from backend.core.subjects import SUBJECTS as _VALID_SUBJECTS
+                if self.subject not in _VALID_SUBJECTS:
+                    return {
+                        "success": False,
+                        "error": f"非法学科名称: {self.subject}"
+                    }
+            except ImportError:
+                # Fallback: reject any subject containing shell metacharacters
+                import re as _re
+                if not _re.match(r'^[\u4e00-\u9fff\w]+$', self.subject or ''):
+                    return {
+                        "success": False,
+                        "error": f"学科名称包含非法字符: {self.subject}"
+                    }
+
             project_root = os.path.dirname(os.path.dirname(__file__))
             scripts_dir = os.path.join(project_root, "scripts")
             bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
@@ -3805,16 +3822,20 @@ class ZujuanCrawler:
                     "error": f"登录脚本不存在: {bat_path} / {py_path}"
                 }
 
-            # 使用 pythonw 或 start 命令启动独立窗口（Windows）
+            # Use list form (shell=False) to prevent command injection
             if sys.platform == "win32":
-                # Windows：在新窗口中运行，传入学科名以保存对应 bankId 的登录态
                 if os.path.exists(bat_path):
-                    cmd = f'start "组卷网登录" "{bat_path}" "{self.subject}"'
+                    subprocess.Popen(
+                        [bat_path, self.subject],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    )
                 else:
-                    cmd = f'start "组卷网登录" cmd /c "python \"{py_path}\" --subject \"{self.subject}\""'
-                subprocess.Popen(cmd, shell=True)
+                    subprocess.Popen(
+                        [sys.executable, py_path, "--subject", self.subject],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    )
             else:
-                # Linux/Mac：直接运行
+                # Linux/Mac
                 subprocess.Popen([sys.executable, py_path, "--subject", self.subject])
 
             return {
