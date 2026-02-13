@@ -88,7 +88,7 @@ async def generate_plan(request: LessonPlanGenerateRequest):
             student_level=request.student_level,
             additional_requirements=request.additional_requirements,
         ):
-            yield f"data: {json.dumps(event)}\n\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
     
     return StreamingResponse(
         event_generator(),

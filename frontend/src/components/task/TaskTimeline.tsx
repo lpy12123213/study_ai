@@ -30,11 +30,7 @@ export function TaskTimeline({ steps }: TaskTimelineProps) {
   const filtered = steps.filter((s) => !isNoiseStep(s))
 
   return (
-    <div className="relative">
-      {/* Timeline line */}
-      <div className="absolute left-3 top-0 bottom-0 w-px bg-border" />
-      
-      {/* Steps */}
+    <div className="space-y-1">
       <AnimatePresence mode="popLayout">
         {filtered.map((step, index) => (
           <motion.div

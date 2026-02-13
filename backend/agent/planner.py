@@ -266,26 +266,26 @@ class Planner:
         # Preset defaults (balance quality/speed). These can still be overridden per-task via flags.
         split_min = 2
         split_max = 8
-        web_limit = 10
+        web_limit = 12
         sub_questions = 6  # how many (decomposed) sub-questions per knowledge point
         max_web_pages = 2
         if preset == "quick":
             split_min, split_max = 2, 4
-            web_limit = 7
-            sub_questions = 3
+            web_limit = 8
+            sub_questions = 4
             max_web_pages = 1
         elif preset == "deep":
             split_min, split_max = 4, 12
-            web_limit = 12
-            sub_questions = 8
+            web_limit = 14
+            sub_questions = 10
             max_web_pages = 3
             # Deep preset does not auto-enable extra tools by default
             # enable_extra_tools = True  # deep implies richer retrieval
         elif preset == "research":
             # Research mode: fewer points but deeper per-point retrieval + synthesis.
             split_min, split_max = 3, 8
-            web_limit = 14
-            sub_questions = 8
+            web_limit = 16
+            sub_questions = 12
             max_web_pages = 4
             # Research preset does not auto-enable extra tools by default
             # enable_extra_tools = True
@@ -297,11 +297,11 @@ class Planner:
         # Research-style multi-pass web search: keep each pass focused so results are diverse and
         # downstream synthesis is easier (and less copy-pastey).
         sub_q_pass1 = sub_questions
-        sub_q_pass2 = max(3, min(sub_questions, 4))
-        sub_q_pass3 = max(3, min(sub_questions, 4))
+        sub_q_pass2 = max(4, min(sub_questions, 6))
+        sub_q_pass3 = max(4, min(sub_questions, 6))
         if preset in {"deep", "research"}:
-            # One pass with 6 sub-questions is expensive; prefer 2-3 focused passes.
-            sub_q_pass1 = max(3, min(sub_questions, 4))
+            # Prefer 2-3 focused passes to increase diversity and keep each ask answerable.
+            sub_q_pass1 = max(4, min(sub_questions, 6))
 
         steps: List[PlanStep] = [
             PlanStep(
@@ -490,7 +490,7 @@ class Planner:
                         "max_page_chars": 3200 if preset == "research" else 2600,
                         "with_questions": bool(use_questions),
                         "with_diagrams": bool(enable_diagrams),
-                        "max_diagrams": 4 if preset == "research" else 3 if preset == "deep" else 2 if preset == "standard" else 1,
+                        "max_diagrams": 6 if preset == "research" else 4 if preset == "deep" else 3 if preset == "standard" else 1,
                     },
                     foreach_knowledge_point=True,
                     thought="根据聚合素材，为当前知识点生成概念讲解，并尽量配一张简洁示意图。",
@@ -663,7 +663,7 @@ class Planner:
                             "max_page_chars": 2600,
                             "with_questions": bool(enable_questions),
                             "with_diagrams": bool(enable_diagrams),
-                            "max_diagrams": 4 if preset == "research" else 3 if preset == "deep" else 2 if preset == "standard" else 1,
+                            "max_diagrams": 6 if preset == "research" else 4 if preset == "deep" else 3 if preset == "standard" else 1,
                         },
                         thought="生成概念讲解并尽量配图，形成可直接自学的内容。",
                     )

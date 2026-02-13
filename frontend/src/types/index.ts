@@ -119,9 +119,19 @@ export interface LessonPlan {
   subject: string;
   grade: string;
   objectives: string[];
-  content: string;
   duration: number;
   createdAt: string;
+
+  // Generated document download links (new pipeline).
+  mdUrl?: string;
+  pdfUrl?: string;
+  texUrl?: string;
+  mdFilename?: string;
+  pdfFilename?: string;
+  texFilename?: string;
+
+  // Legacy field: older versions stored the generated Markdown as `content`.
+  content?: string;
 }
 
 // Subject types

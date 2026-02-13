@@ -4,6 +4,7 @@ import {
   Clock,
   FileText,
   GraduationCap,
+  Download,
   Printer,
   Target,
   Share2
@@ -111,11 +112,38 @@ export default function LessonPlanDetailPage() {
 
           <div>
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <FileText className="h-5 w-5 text-primary" />
-              教学过程
+              <Download className="h-5 w-5 text-primary" />
+              下载
             </h2>
-            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground/90 leading-7">
-              <div className="whitespace-pre-wrap">{plan.content}</div>
+
+            <div className="rounded-xl border border-border/50 bg-muted/30 p-6 flex flex-col gap-3">
+              <div className="flex flex-wrap gap-2">
+                {plan.mdUrl ? (
+                  <Button asChild>
+                    <a href={plan.mdUrl} target="_blank" rel="noreferrer" download>
+                      下载 Markdown
+                    </a>
+                  </Button>
+                ) : (
+                  <Button disabled>Markdown 未生成</Button>
+                )}
+
+                {plan.pdfUrl ? (
+                  <Button asChild variant="outline">
+                    <a href={plan.pdfUrl} target="_blank" rel="noreferrer" download>
+                      下载 PDF
+                    </a>
+                  </Button>
+                ) : (
+                  <Button disabled variant="outline">
+                    PDF 未生成
+                  </Button>
+                )}
+              </div>
+
+              <div className="text-xs text-muted-foreground leading-5">
+                页面不展示教案正文，仅提供 Markdown/PDF 下载链接。
+              </div>
             </div>
           </div>
 

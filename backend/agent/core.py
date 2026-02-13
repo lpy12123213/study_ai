@@ -217,7 +217,12 @@ class AgentCore:
                 system_instructions=SYSTEM_INSTRUCTIONS,
                 current_task=user_input,
             )
-            ctx.working_memory["study_options"] = dict(options) if isinstance(options, dict) else {}
+            # Study-materials behavior flags (API can override per request).
+            study_opts = dict(options) if isinstance(options, dict) else {}
+            if "strict_llm" not in study_opts:
+                raw = str(os.getenv("STUDY_MATERIALS_STRICT_LLM") or "1").strip().lower()
+                study_opts["strict_llm"] = raw in {"1", "true", "yes", "y", "on"}
+            ctx.working_memory["study_options"] = study_opts
             self.context_manager.append_message(ctx, role="user", content=user_input)
 
             for iteration in range(self.config.max_iterations):
@@ -229,6 +234,8 @@ class AgentCore:
                     """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
 
                     self.state = AgentState.WAITING_TOOL
+                    if bool(ctx.working_memory.get("_abort_execution")):
+                        return
 
                     thought = (getattr(concrete_step, "thought", "") or "").strip()
                     if thought:
@@ -289,6 +296,31 @@ class AgentCore:
                     )
                     results.step_results.append(step_result)
                     self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
+                    try:
+                        if not step_result.success:
+                            study_opts = ctx.working_memory.get("study_options")
+                            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+                            strict_llm = bool(study_opts.get("strict_llm"))
+
+                            tool_name = str(step_result.tool or concrete_step.tool or "").strip()
+                            err = str(step_result.error or "").strip()
+                            fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
+                            is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
+                            if tool_name in fatal_tools or (strict_llm and is_llm_error):
+                                ctx.working_memory["_abort_execution"] = True
+                                ctx.working_memory["_fatal_error"] = {
+                                    "tool": tool_name,
+                                    "step_id": concrete_step.id,
+                                    "error": err or "unknown_error",
+                                }
+                                yield agent_event(
+                                    "thinking",
+                                    {
+                                        "content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}",
+                                    },
+                                )
+                    except Exception:
+                        pass
                     if (
                         step_result.success
                         and step_result.tool in {"assemble_markdown", "revise_markdown"}
@@ -425,6 +457,8 @@ class AgentCore:
                 steps = list(plan.steps or [])
                 i = 0
                 while i < len(steps):
+                    if bool(ctx.working_memory.get("_abort_execution")):
+                        break
                     step = steps[i]
                     if getattr(step, "foreach_knowledge_point", False):
                         block: List[PlanStep] = []
@@ -838,6 +872,21 @@ class AgentCore:
                                         yield evt
                 # End auto-revise
 
+                if bool(ctx.working_memory.get("_abort_execution")):
+                    fatal = ctx.working_memory.get("_fatal_error")
+                    fatal_msg = ""
+                    if isinstance(fatal, dict):
+                        fatal_msg = str(fatal.get("error") or "").strip()
+                        tool_name = str(fatal.get("tool") or "").strip()
+                        if tool_name:
+                            fatal_msg = f"{tool_name}: {fatal_msg}" if fatal_msg else tool_name
+                    reflection = ReflectionResult(
+                        passed=True,
+                        issues=[fatal_msg] if fatal_msg else ["关键步骤失败，已停止后续执行。"],
+                        summary="执行中断：已停止后续步骤并返回当前可用结果。",
+                    )
+                    break
+
                 self.state = AgentState.REFLECTING
                 yield agent_event("thinking", {"content": "Reflect 阶段：自检与审查…"})
                 reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
@@ -883,10 +932,20 @@ class AgentCore:
                     "arguments": {},
                 },
             )
+
             t0 = time.monotonic()
             try:
                 before_tokens = self.context_manager.estimate_tokens(ctx)
-                await self.context_manager.compress_if_needed(ctx)
+                compress_timeout_s = float(
+                    os.getenv("STUDY_MATERIALS_COMPRESS_TIMEOUT_S")
+                    or os.getenv("AGENT_COMPRESS_TIMEOUT_S")
+                    or "12"
+                )
+                compress_timeout_s = max(2.0, min(compress_timeout_s, 120.0))
+                await asyncio.wait_for(
+                    self.context_manager.compress_if_needed(ctx),
+                    timeout=compress_timeout_s,
+                )
                 after_tokens = self.context_manager.estimate_tokens(ctx)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 yield agent_event(
@@ -928,13 +987,23 @@ class AgentCore:
                     },
                 },
             )
+
             t0 = time.monotonic()
             try:
-                await self.memory_store.record_session(
-                    user_id=user_id,
-                    topic=user_input,
-                    passed=bool(reflection.passed) if reflection else True,
-                    issues=(reflection.issues if reflection else []),
+                profile_timeout_s = float(
+                    os.getenv("STUDY_MATERIALS_PROFILE_TIMEOUT_S")
+                    or os.getenv("AGENT_PROFILE_TIMEOUT_S")
+                    or "5"
+                )
+                profile_timeout_s = max(1.0, min(profile_timeout_s, 60.0))
+                await asyncio.wait_for(
+                    self.memory_store.record_session(
+                        user_id=user_id,
+                        topic=user_input,
+                        passed=bool(reflection.passed) if reflection else True,
+                        issues=(reflection.issues if reflection else []),
+                    ),
+                    timeout=profile_timeout_s,
                 )
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 yield agent_event(
@@ -974,6 +1043,8 @@ class AgentCore:
             md_filename = str(ctx.working_memory.get("md_filename") or "").strip()
             pdf_filename = str(ctx.working_memory.get("pdf_filename") or "").strip()
             tex_filename = str(ctx.working_memory.get("tex_filename") or "").strip()
+            fatal_error = ctx.working_memory.get("_fatal_error")
+            fatal_error = dict(fatal_error) if isinstance(fatal_error, dict) else None
             yield agent_event(
                 "done",
                 {
@@ -989,6 +1060,7 @@ class AgentCore:
                         "iteration": iteration + 1,
                         "passed": bool(reflection.passed) if reflection else True,
                         "issues": reflection.issues if reflection else [],
+                        "error": fatal_error,
                     }
                 },
             )

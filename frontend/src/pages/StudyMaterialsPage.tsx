@@ -282,6 +282,29 @@ function MessageBubble({
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
+          components={{
+            a: ({ node, href, children, ...props }) => {
+              const url = typeof href === 'string' ? href : ''
+              const isGenerated = url.startsWith('/api/media/generated/')
+              const isDownload = isGenerated && /\.(md|pdf|tex)$/i.test(url)
+              const className = isDownload
+                ? 'inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground no-underline hover:bg-primary/90'
+                : 'text-primary underline underline-offset-4 hover:opacity-90'
+
+              return (
+                <a
+                  href={url}
+                  className={className}
+                  target={isDownload ? '_blank' : undefined}
+                  rel={isDownload ? 'noreferrer' : undefined}
+                  download={isDownload ? '' : undefined}
+                  {...props}
+                >
+                  {children}
+                </a>
+              )
+            },
+          }}
         >
           {message.content}
         </ReactMarkdown>
@@ -535,6 +558,11 @@ export default function StudyMaterialsPage() {
     let flushTimer: number | null = null
     let done = false
 
+    // Streaming "thinking" panel (auto-expanded while running, auto-collapsed when finished).
+    let thinkingStepId: string | null = null
+    let thinkingStartTime: string | null = null
+    let thinkingBuffer = ''
+
     const flushAssistant = () => {
       if (!pendingText) return
       assistantText += pendingText
@@ -652,18 +680,39 @@ export default function StudyMaterialsPage() {
         if (kind === 'thinking') {
           const text = toText(payload?.content) || '思考中…'
           const t = new Date().toISOString()
-          upsertAssistantStep({
-            id: generateId(),
-            title: text,
-            status: 'completed',
-            startTime: t,
-            endTime: t,
-          })
+          if (!thinkingStepId) {
+            thinkingStepId = `thinking-${generateId()}`
+            thinkingStartTime = t
+            thinkingBuffer = ''
+            upsertAssistantStep({
+              id: thinkingStepId,
+              title: '思考',
+              status: 'running',
+              startTime: thinkingStartTime,
+              toolName: 'thinking',
+              output: '',
+            })
+          }
+          thinkingBuffer = thinkingBuffer ? `${thinkingBuffer}\n${text}` : text
+          patchAssistantStep(thinkingStepId, { output: thinkingBuffer })
           return
         }
 
         if (kind === 'tool_call') {
           const name = toText(payload?.name) || 'tool'
+
+          // Close the current thinking step when the agent starts executing tools.
+          if (thinkingStepId) {
+            const tThinking = new Date().toISOString()
+            patchAssistantStep(thinkingStepId, { status: 'completed', endTime: tThinking })
+            if (localTaskId) {
+              useTaskStore.getState().updateStep(localTaskId, thinkingStepId, { status: 'completed', endTime: tThinking })
+            }
+            thinkingStepId = null
+            thinkingStartTime = ''
+            thinkingBuffer = ''
+          }
+
           const stepId = toText(payload?.step_id) || generateId()
           const stepTitle = toText(payload?.title)
           const t = new Date().toISOString()
@@ -854,17 +903,30 @@ export default function StudyMaterialsPage() {
           flushAssistant()
 
           const t = new Date().toISOString()
+          if (thinkingStepId) {
+            patchAssistantStep(thinkingStepId, { status: 'completed', endTime: t })
+          }
           const mdUrl = toText(payload?.material?.md_url)
           const pdfUrl = toText(payload?.material?.pdf_url)
-          const content =
-            mdUrl || pdfUrl
-              ? [
-                  '已生成自学资料，可下载：',
-                  '',
-                  mdUrl ? `- Markdown： [下载](${mdUrl})` : '- Markdown： （生成失败或未导出）',
-                  pdfUrl ? `- PDF： [下载](${pdfUrl})` : '- PDF： （生成失败或未编译）',
-                ].join('\n')
-              : assistantText || '已完成生成。'
+          const fatal = payload?.material?.error as any
+          const fatalTool = toText(fatal?.tool)
+          const fatalMsg = toText(fatal?.error)
+          let content = assistantText || '已完成生成。'
+          if (mdUrl || pdfUrl) {
+            const lines: string[] = [
+              '已生成自学资料，可下载：',
+              '',
+              mdUrl ? `- Markdown： [下载 Markdown](${mdUrl})` : '- Markdown： （生成失败或未导出）',
+              pdfUrl ? `- PDF： [下载 PDF](${pdfUrl})` : '- PDF： （生成失败或未编译）',
+            ]
+            if (fatalTool || fatalMsg) {
+              lines.push('')
+              lines.push(`**生成中断**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}`)
+            }
+            content = lines.join('\n')
+          } else if (fatalTool || fatalMsg) {
+            content = [content, '', `**生成中断**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}`].join('\n')
+          }
 
           useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
             content,
@@ -891,6 +953,11 @@ export default function StudyMaterialsPage() {
           done = true
           const msg = toText(payload?.message) || '生成失败'
           setError(msg)
+
+          const t = new Date().toISOString()
+          if (thinkingStepId) {
+            patchAssistantStep(thinkingStepId, { status: 'failed', endTime: t, error: msg })
+          }
 
           if (flushTimer != null) {
             window.clearTimeout(flushTimer)

@@ -320,6 +320,32 @@ class Executor:
     def __init__(self, *, config: Optional[AgentConfig] = None) -> None:
         self.config = config or AgentConfig.from_env()
 
+    @staticmethod
+    def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return bool(default)
+        s = str(value).strip().lower()
+        if s in {"1", "true", "yes", "y", "on"}:
+            return True
+        if s in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+
+    def _strict_llm(self, ctx: CompressedContext, args: Optional[Dict[str, Any]] = None) -> bool:
+        v: Any = None
+        if isinstance(args, dict) and "strict_llm" in args:
+            v = args.get("strict_llm")
+        else:
+            study_opts = ctx.working_memory.get("study_options")
+            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+            v = study_opts.get("strict_llm")
+        if v is None:
+            v = os.getenv("STUDY_MATERIALS_STRICT_LLM")
+        # Default to True (user request: reduce fallbacks, fail fast on LLM errors).
+        return self._coerce_bool(v, default=True)
+
     async def execute_step(self, step: PlanStep, *, context: CompressedContext) -> StepResult:
         tool = (step.tool or "").strip()
         handler = getattr(self, f"_tool_{tool}", None)
@@ -350,9 +376,53 @@ class Executor:
         temperature: float = LESSON_PLAN_TEMPERATURE,
         max_tokens: int = LESSON_PLAN_MAX_TOKENS,
         reasoning: Optional[Dict[str, Any]] = None,
+        raise_on_fail: bool = False,
+        retries: Optional[int] = None,
     ) -> str:
         if not LESSON_PLAN_API_KEY:
+            if raise_on_fail:
+                raise RuntimeError("llm_not_configured")
             return ""
+
+        def _max_retries() -> int:
+            raw = str(
+                retries
+                if retries is not None
+                else os.getenv("STUDY_MATERIALS_LLM_RETRIES")
+                or os.getenv("LESSON_PLAN_LLM_RETRIES")
+                or os.getenv("AGENT_LLM_RETRIES")
+                or "6"
+            ).strip()
+            try:
+                v = int(raw)
+            except Exception:
+                v = 6
+            return max(1, min(v, 10))
+
+        def _resp_error(resp: Optional[httpx.Response]) -> str:
+            if resp is None:
+                return ""
+            msg = ""
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    err = data.get("error")
+                    if isinstance(err, dict):
+                        msg = str(err.get("message") or err.get("detail") or err.get("error") or "").strip()
+                    elif isinstance(err, str):
+                        msg = err.strip()
+                    if not msg:
+                        msg = str(data.get("message") or data.get("detail") or "").strip()
+            except Exception:
+                msg = ""
+            if not msg:
+                try:
+                    msg = str(resp.text or "").strip()
+                except Exception:
+                    msg = ""
+            if msg:
+                msg = msg.replace("\n", " ").strip()
+            return msg[:260]
 
         headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
         payload: Dict[str, Any] = {
@@ -370,8 +440,9 @@ class Executor:
         retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
         timeout_s = float(API_TIMEOUT or 120)
         last_error: str = ""
+        max_retries = _max_retries()
 
-        for attempt in range(3):
+        for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
                     resp = await client.post(
@@ -380,7 +451,7 @@ class Executor:
                         json=payload,
                     )
 
-                if resp.status_code in retry_statuses and attempt < 2:
+                if resp.status_code in retry_statuses and attempt < (max_retries - 1):
                     retry_after = (resp.headers.get("retry-after") or "").strip()
                     wait_s = 0.0
                     try:
@@ -398,9 +469,16 @@ class Executor:
                 try:
                     return str(data["choices"][0]["message"]["content"] or "")
                 except Exception:
+                    last_error = "invalid_response"
+                    if attempt < (max_retries - 1):
+                        await asyncio.sleep(min(3.0, 0.4 + random.random() * 0.8))
+                        continue
+                    if raise_on_fail:
+                        raise RuntimeError(f"llm_invalid_response model={model}")
                     return ""
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                api_msg = _resp_error(exc.response)
                 last_error = f"http_status_{status}"
                 if status in {400, 422} and "reasoning" in payload and attempt == 0:
                     # Some models/providers reject unknown fields. Retry once without `reasoning`.
@@ -410,21 +488,29 @@ class Executor:
                         pass
                     await asyncio.sleep(0.2)
                     continue
-                if status in retry_statuses and attempt < 2:
+                if status in retry_statuses and attempt < (max_retries - 1):
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                if raise_on_fail:
+                    raise RuntimeError(
+                        f"llm_request_failed status={status} model={model} provider={LESSON_PLAN_PROVIDER} msg={api_msg or last_error}"
+                    )
                 return ""
             except (httpx.TimeoutException, httpx.RequestError) as exc:
                 last_error = str(exc)
-                if attempt < 2:
+                if attempt < (max_retries - 1):
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                if raise_on_fail:
+                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
                 return ""
             except Exception as exc:  # pragma: no cover (best-effort)
                 last_error = str(exc)
-                if attempt < 2:
+                if attempt < (max_retries - 1):
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                if raise_on_fail:
+                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
                 return ""
 
         # Best-effort: never raise; return empty so callers can fall back.
@@ -433,6 +519,8 @@ class Executor:
                 print(f"[llm] request failed after retries: {last_error}", flush=True)
             except Exception:
                 pass
+        if raise_on_fail:
+            raise RuntimeError(f"llm_request_failed model={model} err={last_error or 'unknown'}")
         return ""
 
     async def _call_llm_response(
@@ -443,9 +531,53 @@ class Executor:
         temperature: float = LESSON_PLAN_TEMPERATURE,
         max_tokens: int = LESSON_PLAN_MAX_TOKENS,
         reasoning: Optional[Dict[str, Any]] = None,
+        raise_on_fail: bool = False,
+        retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         if not LESSON_PLAN_API_KEY:
+            if raise_on_fail:
+                raise RuntimeError("llm_not_configured")
             return {"content": "", "finish_reason": "", "usage": {}}
+
+        def _max_retries() -> int:
+            raw = str(
+                retries
+                if retries is not None
+                else os.getenv("STUDY_MATERIALS_LLM_RETRIES")
+                or os.getenv("LESSON_PLAN_LLM_RETRIES")
+                or os.getenv("AGENT_LLM_RETRIES")
+                or "6"
+            ).strip()
+            try:
+                v = int(raw)
+            except Exception:
+                v = 6
+            return max(1, min(v, 10))
+
+        def _resp_error(resp: Optional[httpx.Response]) -> str:
+            if resp is None:
+                return ""
+            msg = ""
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    err = data.get("error")
+                    if isinstance(err, dict):
+                        msg = str(err.get("message") or err.get("detail") or err.get("error") or "").strip()
+                    elif isinstance(err, str):
+                        msg = err.strip()
+                    if not msg:
+                        msg = str(data.get("message") or data.get("detail") or "").strip()
+            except Exception:
+                msg = ""
+            if not msg:
+                try:
+                    msg = str(resp.text or "").strip()
+                except Exception:
+                    msg = ""
+            if msg:
+                msg = msg.replace("\n", " ").strip()
+            return msg[:260]
 
         headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
         payload: Dict[str, Any] = {
@@ -461,8 +593,9 @@ class Executor:
         retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
         timeout_s = float(API_TIMEOUT or 120)
         last_error: str = ""
+        max_retries = _max_retries()
 
-        for attempt in range(3):
+        for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
                     resp = await client.post(
@@ -471,7 +604,7 @@ class Executor:
                         json=payload,
                     )
 
-                if resp.status_code in retry_statuses and attempt < 2:
+                if resp.status_code in retry_statuses and attempt < (max_retries - 1):
                     retry_after = (resp.headers.get("retry-after") or "").strip()
                     wait_s = 0.0
                     try:
@@ -504,6 +637,7 @@ class Executor:
                 return {"content": content, "finish_reason": finish_reason, "usage": usage}
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                api_msg = _resp_error(exc.response)
                 last_error = f"http_status_{status}"
                 if status in {400, 422} and "reasoning" in payload and attempt == 0:
                     try:
@@ -512,21 +646,29 @@ class Executor:
                         pass
                     await asyncio.sleep(0.2)
                     continue
-                if status in retry_statuses and attempt < 2:
+                if status in retry_statuses and attempt < (max_retries - 1):
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                if raise_on_fail:
+                    raise RuntimeError(
+                        f"llm_request_failed status={status} model={model} provider={LESSON_PLAN_PROVIDER} msg={api_msg or last_error}"
+                    )
                 return {"content": "", "finish_reason": "", "usage": {}}
             except (httpx.TimeoutException, httpx.RequestError) as exc:
                 last_error = str(exc)
-                if attempt < 2:
+                if attempt < (max_retries - 1):
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                if raise_on_fail:
+                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
                 return {"content": "", "finish_reason": "", "usage": {}}
             except Exception as exc:  # pragma: no cover (best-effort)
                 last_error = str(exc)
-                if attempt < 2:
+                if attempt < (max_retries - 1):
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                if raise_on_fail:
+                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
                 return {"content": "", "finish_reason": "", "usage": {}}
 
         if last_error:
@@ -534,6 +676,8 @@ class Executor:
                 print(f"[llm] request failed after retries: {last_error}", flush=True)
             except Exception:
                 pass
+        if raise_on_fail:
+            raise RuntimeError(f"llm_request_failed model={model} err={last_error or 'unknown'}")
         return {"content": "", "finish_reason": "", "usage": {}}
 
     async def _call_llm_markdown_with_continuation(
@@ -546,6 +690,8 @@ class Executor:
         reasoning: Optional[Dict[str, Any]] = None,
         continuation_context: Optional[Dict[str, Any]] = None,
         max_continuations: int = 2,
+        raise_on_fail: bool = False,
+        retries: Optional[int] = None,
     ) -> Dict[str, Any]:
         res = await self._call_llm_response(
             messages=messages,
@@ -553,6 +699,8 @@ class Executor:
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning=reasoning,
+            raise_on_fail=raise_on_fail,
+            retries=retries,
         )
         content = str(res.get("content") or "").strip()
         finish_reason = str(res.get("finish_reason") or "").strip().lower()
@@ -604,6 +752,8 @@ class Executor:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 reasoning=reasoning,
+                raise_on_fail=raise_on_fail,
+                retries=retries,
             )
             addition = str(cont_res.get("content") or "").strip()
             finish_reason = str(cont_res.get("finish_reason") or "").strip().lower()
@@ -676,6 +826,7 @@ class Executor:
 
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        strict_llm = self._strict_llm(ctx, args)
         min_points = int(args.get("min_points") or 3)
         max_points = int(args.get("max_points") or 8)
         min_points = max(1, min(min_points, 10))
@@ -828,6 +979,7 @@ class Executor:
                 temperature=0.2,
                 max_tokens=600,
                 reasoning={"effort": "medium", "exclude": True} if "deepseek" in (self.config.planner_model or "").lower() else None,
+                raise_on_fail=strict_llm,
             )
             obj = self._extract_json_obj(text)
             points = _clean_points(list(obj.get("knowledge_points") or []))
@@ -838,6 +990,12 @@ class Executor:
                     "knowledge_points": points,
                     "source": "llm",
                 }
+            if strict_llm:
+                raise RuntimeError(
+                    f"llm_split_failed: got={len(points)} min_points={min_points} model={self.config.planner_model}"
+                )
+        elif strict_llm:
+            raise RuntimeError("llm_not_configured")
 
         # Heuristic fallback: split by punctuation if user provided a list.
         raw = re.split(r"[\n,，;；、/|]+", topic)
@@ -874,6 +1032,7 @@ class Executor:
 
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        strict_llm = self._strict_llm(ctx, args)
 
         min_points = int(args.get("min_points") or 2)
         max_points = int(args.get("max_points") or 8)
@@ -914,6 +1073,9 @@ class Executor:
         source = "heuristic"
         note = ""
 
+        if strict_llm and not LESSON_PLAN_API_KEY:
+            raise RuntimeError("llm_not_configured")
+
         if LESSON_PLAN_API_KEY and points:
             model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or self.config.planner_model or "").strip()
             if not model:
@@ -933,24 +1095,41 @@ class Executor:
                     "只输出严格 JSON：{\"knowledge_points\": [...], \"note\": \"...\"}（不要 Markdown，不要多余文字）。",
                 ],
             }
-            text = await self._call_llm_text(
-                messages=[
-                    {"role": "system", "content": "你是严谨的教研员，输出必须是JSON。"},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                model=model,
-                temperature=0.2,
-                max_tokens=700,
-                reasoning=reasoning,
-            )
-            obj = self._extract_json_obj(text)
-            revised = obj.get("knowledge_points")
-            if isinstance(revised, list):
-                cleaned = _clean_points(list(revised))
-                if len(cleaned) >= min_points:
-                    points = cleaned[:max_points]
-                    source = "llm"
-                    note = str(obj.get("note") or "").strip()
+            last_err = ""
+            for attempt in range(3):
+                text = await self._call_llm_text(
+                    messages=[
+                        {"role": "system", "content": "你是严谨的教研员，输出必须是JSON。"},
+                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                    ],
+                    model=model,
+                    temperature=0.2,
+                    max_tokens=700,
+                    reasoning=reasoning,
+                    raise_on_fail=strict_llm,
+                )
+                obj = self._extract_json_obj(text)
+                revised = obj.get("knowledge_points")
+                if isinstance(revised, list):
+                    cleaned = _clean_points(list(revised))
+                    if len(cleaned) >= min_points:
+                        points = cleaned[:max_points]
+                        source = "llm"
+                        note = str(obj.get("note") or "").strip()
+                        break
+                    last_err = f"too_few_points got={len(cleaned)} min={min_points}"
+                    if strict_llm and attempt < 2:
+                        continue
+                else:
+                    last_err = "invalid_json"
+                    if strict_llm and attempt < 2:
+                        continue
+
+                # Non-strict mode: accept heuristic fallback after one attempt.
+                break
+
+            if strict_llm and source != "llm":
+                raise RuntimeError(f"llm_review_failed: {last_err or 'unknown'} model={model}")
 
         if topic and len(points) < min_points:
             pads = [
@@ -1009,6 +1188,9 @@ class Executor:
         include_summary = bool(args.get("include_summary", True))
         text_max_length = int(args.get("text_max_length") or 2600)
         text_max_length = max(200, min(text_max_length, 8000))
+        strict_llm = self._strict_llm(ctx, args)
+        if strict_llm and not LESSON_PLAN_API_KEY:
+            raise RuntimeError("llm_not_configured")
 
         # Study preset helps SubAgent choose better sub-questions and prompt style.
         study_opts = ctx.working_memory.get("study_options")
@@ -1112,8 +1294,8 @@ class Executor:
             # Allow overriding the "thinking" model separately (some providers expose a thinking variant).
             thinking_model = str(
                 os.getenv("STUDY_MATERIALS_THINKING_MODEL")
-                or self.config.summarizer_model
                 or self.config.planner_model
+                or self.config.summarizer_model
             ).strip()
 
             def _maybe_reasoning(model_name: str) -> Optional[Dict[str, Any]]:
@@ -1141,13 +1323,15 @@ class Executor:
 
             sub_n = _clamp_int(
                 args.get("sub_questions"),
-                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=10),
+                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=15),
                 min_value=2,
-                max_value=10,
+                max_value=15,
             )
 
-            # If LLM isn't configured, fall back to a deterministic template split.
+            # If LLM isn't configured, fall back to a deterministic template split (non-strict only).
             if not LESSON_PLAN_API_KEY:
+                if strict_llm:
+                    raise RuntimeError("llm_not_configured")
                 tpl = [
                     f"{knowledge_point} 的定义与符号约定是什么？适用条件是什么？",
                     f"{knowledge_point} 的直观理解/几何意义是什么？",
@@ -1181,39 +1365,53 @@ class Executor:
                 "output_schema": {"sub_questions": ["string"]},
             }
 
-            text = await self._call_llm_text(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是严谨的知识探索助手（面向自学资料）。"
-                            "请先在心里思考如何拆分问题，再只输出 JSON。"
-                        ),
-                    },
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                model=thinking_model,
-                temperature=0.2,
-                max_tokens=500,
-                reasoning=_maybe_reasoning(thinking_model),
-            )
-            obj = self._extract_json_obj(text)
-            items = obj.get("sub_questions")
-            if isinstance(items, list):
-                out = []
-                for it in items:
-                    s = str(it or "").strip()
-                    s = re.sub(r"\s+", " ", s)
-                    if not s:
+            last_err = ""
+            for attempt in range(3):
+                text = await self._call_llm_text(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是严谨的知识探索助手（面向自学资料）。"
+                                "请先在心里思考如何拆分问题，再只输出 JSON。"
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                    ],
+                    model=thinking_model,
+                    temperature=0.2,
+                    max_tokens=500,
+                    reasoning=_maybe_reasoning(thinking_model),
+                    raise_on_fail=strict_llm,
+                )
+                obj = self._extract_json_obj(text)
+                items = obj.get("sub_questions")
+                if isinstance(items, list):
+                    out = []
+                    for it in items:
+                        s = str(it or "").strip()
+                        s = re.sub(r"\s+", " ", s)
+                        if not s:
+                            continue
+                        if len(s) > 120:
+                            s = s[:120].rstrip() + "…"
+                        out.append(s)
+                    # Ensure we always return something usable.
+                    if len(out) >= 2:
+                        return out[:sub_n]
+                    last_err = f"too_few_items got={len(out)}"
+                    if strict_llm and attempt < 2:
                         continue
-                    if len(s) > 120:
-                        s = s[:120].rstrip() + "…"
-                    out.append(s)
-                # Ensure we always return something usable.
-                if len(out) >= 2:
-                    return out[:sub_n]
+                else:
+                    last_err = "invalid_json"
+                    if strict_llm and attempt < 2:
+                        continue
+                break
 
-                # LLM failed to follow schema; use templates as fallback.
+            if strict_llm:
+                raise RuntimeError(f"llm_decompose_failed: {last_err or 'unknown'} model={thinking_model}")
+
+            # LLM failed to follow schema; use templates as fallback.
             tpl = [
                 f"{knowledge_point} 的定义与符号约定是什么？适用条件是什么？",
                 f"{knowledge_point} 的直观理解/几何意义是什么？",
@@ -2478,6 +2676,9 @@ class Executor:
         # Planner already uses these flags; here we also use them to shape writing style/length.
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+        strict_llm = self._strict_llm(ctx, args)
+        if strict_llm and not LESSON_PLAN_API_KEY:
+            raise RuntimeError("llm_not_configured")
         preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
         if preset not in {"quick", "standard", "deep", "research"}:
             preset = "standard"
@@ -2510,8 +2711,12 @@ class Executor:
         max_page_chars = max(500, min(max_page_chars, 8000))
         with_diagrams = bool(args.get("with_diagrams", True))
         with_questions = bool(args.get("with_questions", False))
-        max_diagrams = int(args.get("max_diagrams") or (3 if preset in {"deep", "research"} else 2 if preset == "standard" else 1))
-        max_diagrams = max(0, min(max_diagrams, 6))
+        max_diagrams = int(
+            args.get("max_diagrams")
+            or (4 if preset == "deep" else 6 if preset == "research" else 3 if preset == "standard" else 1)
+        )
+        # Upper bound only; the model is still instructed to output 0~1 unless multiple diagrams truly help.
+        max_diagrams = max(0, min(max_diagrams, 12))
 
         sections: List[Dict[str, Any]] = []
         for item in (sections_in or [])[:max_points]:
@@ -2523,8 +2728,8 @@ class Executor:
 
             writer_model = str(
                 os.getenv("STUDY_MATERIALS_WRITER_MODEL")
-                or self.config.summarizer_model
                 or self.config.planner_model
+                or self.config.summarizer_model
             ).strip()
             writer_reasoning = {"effort": "medium", "exclude": True} if "deepseek" in writer_model.lower() else None
             writer_max_tokens = (
@@ -2663,8 +2868,11 @@ class Executor:
                     "- 数学公式：行内 $...$，独立行 $$...$$\n"
                     "\n"
                     "【内容质量要求】\n"
-                    "- 原创综合：严禁照抄来源；先消化资料，再用自己的话重组\n"
-                    "- 多源整合：综合多条来源的共同结论，不按来源逐条复述\n"
+                    "- 原创综合：严禁照抄任何数据源（包括 MCP 工具返回的搜索摘要、网页正文、维基百科、StackExchange 等）的原文；\n"
+                    "  所有来源仅作为「理解素材」，必须先完全消化，再用你自己的语言重新组织和表达\n"
+                    "- 禁止搬运：不得将搜索结果、网页抓取内容或 API 返回的文本直接粘贴或仅做微小改动后输出；\n"
+                    "  如果发现某段话与来源高度相似，必须彻底改写（换结构、换表述、换例子）\n"
+                    "- 多源整合：综合多条来源的共同结论，不按来源逐条复述，不保留来源的行文结构\n"
                     "- 极短引用：如需引用原句，用引号标注且 ≤20 字，并立即用自己的话解释\n"
                     "- 信息不足时：明确标注「推断」或「建议」\n"
                     "- 不输出例题或练习题\n"
@@ -2750,7 +2958,9 @@ class Executor:
                                 "你是一位经验丰富的教育专家，擅长将复杂概念拆解为可自学的清晰讲解。\n"
                                 "你遵循「费曼学习法」：如果不能用简单语言解释清楚，说明还没真正理解。\n"
                                 "你的目标是让读者「恍然大悟」，而非堆砌信息。\n"
-                                "输出必须是 Markdown；严禁照抄来源原文，必须用自己的话重新组织。"
+                                "输出必须是 Markdown。\n"
+                                "【最高优先级规则】下方 JSON 中的 wikipedia/web_summary/web_results/web_pages/stackexchange 等字段\n"
+                                "仅供你理解知识点，绝对禁止将其原文或近似原文搬入输出。你必须完全用自己的话重写。"
                             ),
                         },
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -2761,6 +2971,7 @@ class Executor:
                     reasoning=writer_reasoning,
                     continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "preset": preset},
                     max_continuations=cont_limit,
+                    raise_on_fail=strict_llm,
                 )
                 explanation_md = str(md_res.get("content") or "").strip()
                 explanation_finish_reason = str(md_res.get("finish_reason") or "").strip()
@@ -2792,7 +3003,7 @@ class Executor:
                         messages=[
                             {
                                 "role": "system",
-                                "content": "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，严禁照抄/拼贴来源原文；输出必须是 Markdown。",
+                                "content": "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，严禁直接搬运或拼贴 MCP/搜索/维基等数据源返回的原文；必须完全用自己的话重新组织。输出必须是 Markdown。",
                             },
                             {"role": "user", "content": json.dumps(mini_payload, ensure_ascii=False)},
                         ],
@@ -2802,6 +3013,7 @@ class Executor:
                         reasoning=writer_reasoning,
                         continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "preset": preset},
                         max_continuations=cont_limit,
+                        raise_on_fail=strict_llm,
                     )
                     explanation_md = str(mini_res.get("content") or "").strip()
                     explanation_finish_reason = str(mini_res.get("finish_reason") or "").strip()
@@ -2857,7 +3069,7 @@ class Executor:
                                 "- 小节标题从 #### 开始，禁止 #/##/###",
                                 "- 不输出参考资料/外部链接，不输出任何 URL",
                                 "- 不输出 [[1]] 等证据标记，不写过程性叙述",
-                                "- 严禁照抄来源原文，必须用自己的话重组",
+                                "- 严禁照抄 MCP/搜索/维基等数据源返回的原文，必须完全用自己的话重新组织和表达",
                                 "- 数学公式：行内 $...$，独立行 $$...$$",
                                 "- 不输出例题或练习题",
                                 "",
@@ -2884,22 +3096,25 @@ class Executor:
 
                 # If the main LLM isn't available or returned empty, prefer Metaso /ask summary notes
                 # (already AI-generated) over a raw encyclopedia excerpt.
-                if web_summary:
-                    explanation_md = web_summary.strip()
-                    explanation_source = web_provider or "web_summary"
-                else:
-                    wiki_summary = str(wiki.get("summary") or "").strip()
-                    if wiki_summary:
-                        explanation_md = f"**百科摘要**：{wiki_summary}\n"
-                        explanation_source = "wikipedia"
+                if not explanation_md:
+                    if strict_llm:
+                        raise RuntimeError(f"llm_generation_failed: empty_explanation knowledge_point={kp}")
+                    if web_summary:
+                        explanation_md = web_summary.strip()
+                        explanation_source = web_provider or "web_summary"
                     else:
-                        mw_summary = str(mw.get("summary") or "").strip()
-                        if mw_summary:
-                            explanation_md = f"**MediaWiki 摘要**：{mw_summary}\n"
-                            explanation_source = "mediawiki"
+                        wiki_summary = str(wiki.get("summary") or "").strip()
+                        if wiki_summary:
+                            explanation_md = f"**百科摘要**：{wiki_summary}\n"
+                            explanation_source = "wikipedia"
                         else:
-                            explanation_md = "（未获取到可靠百科摘要；以下内容以网络检索笔记为主，建议稍后重试生成。）\n"
-                            explanation_source = "fallback"
+                            mw_summary = str(mw.get("summary") or "").strip()
+                            if mw_summary:
+                                explanation_md = f"**MediaWiki 摘要**：{mw_summary}\n"
+                                explanation_source = "mediawiki"
+                            else:
+                                explanation_md = "（未获取到可靠百科摘要；以下内容以网络检索笔记为主，建议稍后重试生成。）\n"
+                                explanation_source = "fallback"
 
             explanation_md = _sanitize_explanation_markdown(explanation_md, knowledge_point=kp)
 
@@ -3197,7 +3412,7 @@ JSON 格式必须是：
             "generated_at": datetime.now().isoformat(timespec="seconds"),
         }
 
-    async def _tool_assemble_study_archive(self, args: Dict[str, Any], ctx: CompressedContext) -> str:
+    async def _tool_assemble_study_archive(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """将生成内容组装为最终自学档案 Markdown。"""
 
         material = ctx.working_memory.get("generate_study_material")
@@ -3284,7 +3499,7 @@ JSON 格式必须是：
 
         lines.append("## 使用方式（建议）")
         lines.append("- 先按「知识点目录」顺序学习；每个知识点优先阅读「核心讲解」。")
-        lines.append("- 「参考资料」用于查证与补充；不建议一开始就通读网页摘要。")
+        lines.append("- 资料来自多轮检索与聚合；建议先读讲解，再按需回查原始材料。")
         lines.append("")
 
         # Knowledge points list
@@ -3413,55 +3628,16 @@ JSON 格式必须是：
 
         lines.append("---")
         lines.append(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        sources: List[str] = []
-        if ctx.working_memory.get("web_search_knowledge") is not None:
-            sources.append("Metaso/联网搜索")
-        if ctx.working_memory.get("search_questions_by_knowledge") is not None:
-            sources.append("题库")
-
-        any_wiki = False
-        any_stackexchange = False
-        any_github = False
-        for sec in [s for s in sections if isinstance(s, dict)]:
-            wiki = sec.get("wikipedia") if isinstance(sec.get("wikipedia"), dict) else {}
-            mw = sec.get("mediawiki") if isinstance(sec.get("mediawiki"), dict) else {}
-            if (
-                str(wiki.get("title") or "").strip()
-                or str(wiki.get("summary") or "").strip()
-                or str(mw.get("title") or "").strip()
-                or str(mw.get("summary") or "").strip()
-            ):
-                any_wiki = True
-
-            se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
-            if isinstance(se.get("results"), list) and any(isinstance(r, dict) for r in (se.get("results") or [])):
-                any_stackexchange = True
-
-            gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
-            if isinstance(gh.get("results"), list) and any(isinstance(r, dict) for r in (gh.get("results") or [])):
-                any_github = True
-
-        if any_wiki:
-            sources.insert(0, "Wikipedia/MediaWiki")
-        if any_stackexchange:
-            sources.append("StackExchange")
-        if any_github:
-            sources.append("GitHub")
-
-        deduped: List[str] = []
-        seen = set()
-        for s in sources:
-            if s in seen:
-                continue
-            seen.add(s)
-            deduped.append(s)
-
-        lines.append("数据来源：" + ("、".join(deduped) if deduped else "（无）"))
         lines.append("")
 
         markdown = "\n".join(lines).strip() + "\n"
         ctx.working_memory["markdown"] = markdown
-        return markdown
+        return {
+            "topic": topic,
+            "subject": subject,
+            "knowledge_points": kp_list[:20] if kp_list else ([topic] if topic else []),
+            "markdown_chars": len(markdown),
+        }
 
     async def _tool_aggregate_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """聚合：拆分结果 + Web 搜索 + 题库检索（可选：百科/网页正文/问答/GitHub）。"""
@@ -3634,6 +3810,10 @@ JSON 格式必须是：
 
         topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        strict_llm = self._strict_llm(ctx, args)
+        # LaTeX export is 100% LLM-dependent; fail fast even if other tools allow fallbacks.
+        if not LESSON_PLAN_API_KEY:
+            raise RuntimeError("llm_not_configured")
 
         markdown = args.get("markdown")
         if not isinstance(markdown, str) or not markdown.strip():
@@ -3646,11 +3826,11 @@ JSON 格式必须是：
         model = str(
             os.getenv("STUDY_MATERIALS_LATEX_MODEL")
             or os.getenv("STUDY_MATERIALS_WRITER_MODEL")
-            or self.config.summarizer_model
             or self.config.planner_model
+            or self.config.summarizer_model
         ).strip()
         if not model:
-            model = self.config.summarizer_model or self.config.planner_model
+            model = self.config.planner_model or self.config.summarizer_model
         reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
         title = f"自学材料：{topic}"
@@ -3703,11 +3883,12 @@ JSON 格式必须是：
                 temperature=0.2,
                 max_tokens=3800,
                 reasoning=reasoning,
+                raise_on_fail=True,
             )
         ).strip()
 
         if not raw:
-            raise ValueError("latex_empty")
+            raise RuntimeError("llm_empty_response")
 
         # Strip code fences if any.
         if raw.startswith("```"):
@@ -3755,6 +3936,10 @@ JSON 格式必须是：
 
         topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        strict_llm = self._strict_llm(ctx, args)
+        # LaTeX refining is LLM-dependent; fail fast to avoid cascading "latex_missing" errors.
+        if not LESSON_PLAN_API_KEY:
+            raise RuntimeError("llm_not_configured")
 
         tex = args.get("latex")
         if not isinstance(tex, str) or not tex.strip():
@@ -3762,9 +3947,9 @@ JSON 格式必须是：
         if not tex:
             raise ValueError("latex_missing")
 
-        model = str(os.getenv("STUDY_MATERIALS_LATEX_MODEL") or self.config.summarizer_model or self.config.planner_model).strip()
+        model = str(os.getenv("STUDY_MATERIALS_LATEX_MODEL") or self.config.planner_model or self.config.summarizer_model).strip()
         if not model:
-            model = self.config.summarizer_model or self.config.planner_model
+            model = self.config.planner_model or self.config.summarizer_model
         reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
         prompt = {
@@ -3790,11 +3975,12 @@ JSON 格式必须是：
                 temperature=0.2,
                 max_tokens=3800,
                 reasoning=reasoning,
+                raise_on_fail=True,
             )
         ).strip()
 
         if not refined:
-            raise ValueError("latex_empty")
+            raise RuntimeError("llm_empty_response")
 
         if refined.startswith("```"):
             first_newline = refined.find("\n")
@@ -3850,7 +4036,7 @@ JSON 格式必须是：
 
         # Copy local generated images referenced by includegraphics into build dir.
         try:
-            includes = re.findall(r"\\includegraphics(?:\\[[^\\]]*\\])?\\{([^}]+)\\}", tex)
+            includes = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", tex)
         except Exception:
             includes = []
         copied = 0
@@ -3880,23 +4066,33 @@ JSON 格式必须是：
             except Exception:
                 continue
 
-        # Compile (MiKTeX latexmk/xelatex on Windows; best-effort elsewhere)
+        # Compile with xelatex directly (avoid latexmk dependency on perl on Windows/MiKTeX).
         import subprocess
 
-        cmd = ["latexmk", "-xelatex", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "main.tex"]
-        timeout_s = float(os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or 180)
+        cmd = ["xelatex", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "main.tex"]
+        # First-time MiKTeX compilation may be slow (font cache / on-the-fly package install).
+        timeout_s = float(os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or 600)
         timeout_s = max(30.0, min(timeout_s, 60.0 * 20.0))
 
-        proc = subprocess.run(
-            cmd,
-            cwd=str(build_dir),
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-        if proc.returncode != 0:
-            stderr = (proc.stderr or "").strip()
-            stdout = (proc.stdout or "").strip()
+        proc = None
+        try:
+            # Two passes to resolve references/TOC reliably.
+            for _ in range(2):
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(build_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_s,
+                )
+                if proc.returncode != 0:
+                    break
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"latex_engine_not_found: {exc}")
+
+        if proc is None or proc.returncode != 0:
+            stderr = (getattr(proc, "stderr", "") or "").strip()
+            stdout = (getattr(proc, "stdout", "") or "").strip()
             msg = stderr[-2000:] if stderr else stdout[-2000:]
             raise RuntimeError(f"latex_compile_failed: {msg}")
 
@@ -3929,7 +4125,7 @@ JSON 格式必须是：
             "topic": topic,
             "copied_images": copied,
             "missing_images": missing[:20],
-            "engine": "latexmk-xelatex",
+            "engine": "xelatex",
         }
 
     async def _tool_draw_svg_diagram(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:

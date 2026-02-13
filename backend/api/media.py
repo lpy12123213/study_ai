@@ -95,6 +95,10 @@ async def get_generated_media(filename: str) -> FileResponse:
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="not_found")
 
+    ext = path.suffix.lower().lstrip(".")
+    if ext in {"md", "tex", "pdf"}:
+        # Force "download" behavior for generated documents (avoid opening raw text/PDF in-app).
+        return FileResponse(path, filename=filename)
     return FileResponse(path)
 
 

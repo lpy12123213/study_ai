@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Check,
@@ -24,7 +24,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { StepDetail } from './StepDetail'
-import { cn, formatDuration, formatTime } from '@/lib/utils'
+import { cn, formatDuration } from '@/lib/utils'
 import type { TaskStep as TaskStepType, StepStatus } from '@/types'
 
 interface TaskStepProps {
@@ -65,8 +65,10 @@ const statusConfig: Record<
 
 /** Map tool names to human-readable titles + icons */
 const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
+  thinking:                     { label: '思考',               icon: Cpu },
   get_user_profile:              { label: '读取用户画像',       icon: User },
   split_knowledge_points:        { label: '拆分知识点',         icon: Layers },
+  review_knowledge_points:       { label: '审核知识点',         icon: Layers },
   web_search_knowledge:          { label: '联网搜索资料',       icon: Globe },
   browse_web_pages:              { label: '浏览网页正文',       icon: Globe },
   wikipedia_search:              { label: '搜索维基百科',       icon: BookOpen },
@@ -77,6 +79,14 @@ const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
   search_questions:              { label: '搜索题目',           icon: Search },
   aggregate_knowledge:           { label: '聚合知识资料',       icon: Database },
   generate_study_material:       { label: '生成自学资料',       icon: Sparkles },
+  generate_lesson_plan:         { label: '生成教案',           icon: Sparkles },
+  assemble_study_archive:        { label: '组装 Markdown',      icon: FileText },
+  revise_markdown:               { label: '修订 Markdown',      icon: FileText },
+  save_markdown_file:            { label: '保存 Markdown',      icon: FileText },
+  export_study_markdown:         { label: '导出 Markdown',      icon: FileText },
+  convert_markdown_to_latex:     { label: 'Markdown → LaTeX',   icon: FileText },
+  refine_latex:                  { label: '修订 LaTeX',         icon: FileText },
+  compile_latex_to_pdf:          { label: '编译 PDF',           icon: FileText },
   compose_paper:                 { label: '组合试卷',           icon: FileText },
   create_paper:                  { label: '创建试卷',           icon: FileText },
   analyze_paper:                 { label: '分析试卷难度',       icon: Cpu },
@@ -147,6 +157,7 @@ function getDisplayTitle(step: TaskStepType): { title: string; ToolIcon: typeof 
 
 export function TaskStep({ step, isLast }: TaskStepProps) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const prevStatusRef = useRef(step.status)
   const config = statusConfig[step.status]
   const StatusIcon = config.icon
 
@@ -156,76 +167,71 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
       ? new Date(step.endTime).getTime() - new Date(step.startTime).getTime()
       : null
 
-  const hasDetails = step.input || step.output || step.error
+  const hasDetails =
+    (step.input !== undefined && step.input !== null) ||
+    (step.output !== undefined && step.output !== null) ||
+    !!step.error
 
   const { title, ToolIcon } = getDisplayTitle(step)
 
+  // Auto-expand thinking while it's running, then auto-collapse once it finishes.
+  useEffect(() => {
+    const prev = prevStatusRef.current
+    prevStatusRef.current = step.status
+
+    if (step.toolName !== 'thinking') return
+    if (step.status === 'running') {
+      setIsExpanded(true)
+      return
+    }
+    if (prev === 'running') {
+      setIsExpanded(false)
+    }
+  }, [step.status, step.toolName])
+
   return (
     <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-      <div className={cn("relative pl-8", isLast ? "pb-0" : "pb-3")}>
-        {/* Status indicator */}
-        <div
-          className={cn(
-            "absolute left-0 top-1 h-6 w-6 rounded-full flex items-center justify-center",
-            config.bgColor
-          )}
-        >
-          <StatusIcon
-            className={cn(
-              "h-3.5 w-3.5",
-              config.color,
-              step.status === 'running' && "animate-spin"
-            )}
-          />
-        </div>
-
-        {/* Content */}
+      <div className={cn(isLast ? '' : 'pb-1')}>
         <CollapsibleTrigger asChild>
           <div
             className={cn(
-              "cursor-pointer select-none",
-              hasDetails && "hover:opacity-80"
+              "group flex items-center gap-2 rounded-md px-2 py-1 cursor-pointer select-none",
+              "border border-transparent hover:border-border/60 hover:bg-muted/30",
+              step.status === 'failed' && "border-destructive/20 bg-destructive/5 hover:border-destructive/30 hover:bg-destructive/5"
             )}
           >
-            <div className="flex items-start gap-1.5">
-              {/* Expand icon */}
-              {hasDetails && (
-                <motion.div
-                  animate={{ rotate: isExpanded ? 90 : 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="mt-0.5 shrink-0"
-                >
-                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
-                </motion.div>
+            <StatusIcon
+              className={cn(
+                "h-3.5 w-3.5 shrink-0",
+                config.color,
+                step.status === 'running' && "animate-spin"
               )}
+            />
 
-              <div className="flex-1 min-w-0">
-                {/* Title with tool icon */}
-                <div className="flex items-center gap-1.5 text-sm leading-5">
-                  {ToolIcon && (
-                    <ToolIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  )}
-                  <span className="font-medium">{title}</span>
-                </div>
+            {ToolIcon && (
+              <ToolIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            )}
 
-                {/* Meta: time + duration */}
-                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground/70">
-                  {step.startTime && <span>{formatTime(step.startTime)}</span>}
-                  {duration !== null && <span>{formatDuration(duration)}</span>}
-                </div>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5">
+              {title}
+            </span>
 
-                {/* Error preview when collapsed */}
-                {step.error && !isExpanded && (
-                  <div className="mt-1 text-xs text-destructive truncate">
-                    {step.error}
-                  </div>
-                )}
-              </div>
-            </div>
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+              {duration !== null ? formatDuration(duration) : step.status === 'running' ? '…' : ''}
+            </span>
+
+            {hasDetails && (
+              <motion.div
+                animate={{ rotate: isExpanded ? 90 : 0 }}
+                transition={{ duration: 0.15 }}
+                className="shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </motion.div>
+            )}
           </div>
         </CollapsibleTrigger>
 
-        {/* Expanded details */}
         <CollapsibleContent>
           <AnimatePresence>
             {isExpanded && hasDetails && (
@@ -234,7 +240,7 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.15 }}
-                className="ml-5"
+                className="pl-7 pr-2 pb-2"
               >
                 <StepDetail step={step} />
               </motion.div>
@@ -244,7 +250,7 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
 
         {/* Children steps */}
         {step.children && step.children.length > 0 && (
-          <div className="mt-2 ml-4 border-l border-dashed border-border pl-4">
+          <div className="mt-1 ml-3 border-l border-dashed border-border pl-3">
             {step.children.map((child, idx) => (
               <TaskStep
                 key={child.id}

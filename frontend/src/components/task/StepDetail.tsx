@@ -140,6 +140,25 @@ export function StepDetail({ step }: StepDetailProps) {
     return null
   }
 
+  // Special: thinking stream should show full text (not truncated previews).
+  if (step.toolName === 'thinking') {
+    const text = typeof step.output === 'string' ? step.output : extractText(step.output, 0)
+    return (
+      <div className="mt-2 space-y-2 text-xs">
+        {text && (
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-muted/30 p-2 text-foreground/80 leading-5">
+            {text}
+          </pre>
+        )}
+        {hasError && (
+          <div className="text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+            {step.error}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const inputEntries = hasInput ? flattenToEntries(step.input) : []
   const outputEntries = hasOutput ? flattenToEntries(step.output) : []
 
@@ -190,6 +209,24 @@ export function StepDetail({ step }: StepDetailProps) {
         <div className="text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
           {step.error}
         </div>
+      )}
+
+      {/* Raw payload */}
+      {(hasInput || hasOutput) && (
+        <details className="rounded-md border border-border/40 bg-background/40">
+          <summary className="cursor-pointer px-2 py-1.5 text-[11px] text-muted-foreground/70 select-none">
+            查看原始数据（JSON）
+          </summary>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words p-2 text-[11px] text-foreground/80 leading-5">
+            {(() => {
+              try {
+                return JSON.stringify({ input: step.input, output: step.output }, null, 2)
+              } catch {
+                return '(无法序列化)'
+              }
+            })()}
+          </pre>
+        </details>
       )}
     </div>
   )

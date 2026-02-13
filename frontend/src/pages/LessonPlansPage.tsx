@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import {
   BookOpenCheck,
   Clock,
@@ -36,126 +41,16 @@ const grades = [
 
 type LessonPlanAgentEvent =
   | { event: 'thinking'; data: { content?: unknown } }
-  | { event: 'tool_call'; data: { name?: unknown; arguments?: unknown } }
-  | { event: 'tool_result'; data: { name?: unknown; success?: unknown; output?: unknown } }
+  | { event: 'tool_call'; data: { step_id?: unknown; name?: unknown; title?: unknown; arguments?: unknown } }
+  | { event: 'tool_result'; data: { step_id?: unknown; name?: unknown; title?: unknown; success?: unknown; elapsed_ms?: unknown; output?: unknown; error?: unknown } }
   | { event: 'subagent_start'; data: { knowledge_point?: unknown; index?: unknown; total?: unknown; content?: unknown } }
   | { event: 'subagent_end'; data: { knowledge_point?: unknown; index?: unknown; total?: unknown; content?: unknown } }
-  | { event: 'content'; data: { content?: unknown; section?: unknown } }
-  | { event: 'done'; data: { plan?: unknown } }
+  | { event: 'done'; data: { material?: unknown } }
   | { event: 'error'; data: { message?: unknown } }
   | { event: string; data?: unknown }
 
 function toText(value: unknown): string {
   return typeof value === 'string' ? value : ''
-}
-
-function toObjectives(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((item) => {
-      if (typeof item === 'string') return item
-      if (item && typeof item === 'object') return toText((item as any).description)
-      return ''
-    })
-    .filter(Boolean)
-}
-
-function lessonPlanToMarkdown(plan: unknown, ctx: {
-  title: string
-  subject: string
-  grade: string
-  topic: string
-  durationMinutes: number
-  objectives: string[]
-}): string {
-  const p = (plan && typeof plan === 'object' ? (plan as any) : {}) as any
-  const sections = Array.isArray(p.sections) ? (p.sections as any[]) : []
-  const summary = toText(p.summary)
-  const rawContent = toText(p.content)
-  const references = Array.isArray(p.references) ? (p.references as any[]) : []
-
-  const lines: string[] = [
-    `# ${ctx.title}`,
-    '',
-    '## 课程信息',
-    '',
-    `- **学科**：${ctx.subject || 'N/A'}`,
-    `- **年级**：${ctx.grade || 'N/A'}`,
-    `- **课题**：${ctx.topic || 'N/A'}`,
-    `- **课时**：${ctx.durationMinutes} 分钟`,
-    '',
-    '## 教学目标',
-    '',
-  ]
-
-  if (ctx.objectives.length === 0) {
-    lines.push('- （未填写）')
-  } else {
-    for (const obj of ctx.objectives) {
-      lines.push(`- ${obj}`)
-    }
-  }
-
-  lines.push('', '## 教学环节', '')
-
-  if (sections.length > 0) {
-    for (const sec of sections) {
-      const title = toText(sec?.title) || '未命名环节'
-      const minutes = typeof sec?.duration_minutes === 'number'
-        ? sec.duration_minutes
-        : typeof sec?.durationMinutes === 'number'
-          ? sec.durationMinutes
-          : 0
-      lines.push(`### ${title}${minutes ? `（${minutes} 分钟）` : ''}`, '')
-
-      const content = toText(sec?.content)
-      if (content) lines.push(content, '')
-
-      const activities = Array.isArray(sec?.activities) ? sec.activities : []
-      if (activities.length > 0) {
-        lines.push('**活动**：')
-        for (const act of activities) {
-          const text = toText(act)
-          if (text) lines.push(`- ${text}`)
-        }
-        lines.push('')
-      }
-
-      const resources = Array.isArray(sec?.resources) ? sec.resources : []
-      if (resources.length > 0) {
-        lines.push('**资源**：')
-        for (const res of resources) {
-          const text = toText(res)
-          if (text) lines.push(`- ${text}`)
-        }
-        lines.push('')
-      }
-    }
-  } else if (rawContent) {
-    lines.push(rawContent, '')
-  } else {
-    lines.push('（生成结果未包含环节内容）', '')
-  }
-
-  if (summary) {
-    lines.push('## 小结', '', summary, '')
-  }
-
-  if (references.length > 0) {
-    lines.push('## 参考文献', '')
-    references.forEach((ref: any, i: number) => {
-      const title = toText(ref?.title) || '未知来源'
-      const url = toText(ref?.url)
-      if (url) {
-        lines.push(`${i + 1}. [${title}](${url})`)
-      } else {
-        lines.push(`${i + 1}. ${title}`)
-      }
-    })
-    lines.push('')
-  }
-
-  return lines.join('\n')
 }
 
 function stripAll(haystack: string, needle: string): string {
@@ -343,7 +238,35 @@ function MessageBubble({ message }: { message: Message }) {
       </div>
 
       <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <div className="whitespace-pre-wrap">{message.content}</div>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
+          components={{
+            a: ({ href, children, ...props }) => {
+              const url = typeof href === 'string' ? href : ''
+              const isGenerated = url.startsWith('/api/media/generated/')
+              const isDownload = isGenerated && /\.(md|pdf|tex)$/i.test(url)
+              const className = isDownload
+                ? 'inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground no-underline hover:bg-primary/90'
+                : 'text-primary underline underline-offset-4 hover:opacity-90'
+
+              return (
+                <a
+                  href={url}
+                  className={className}
+                  target={isDownload ? '_blank' : undefined}
+                  rel={isDownload ? 'noreferrer' : undefined}
+                  download={isDownload ? '' : undefined}
+                  {...props}
+                >
+                  {children}
+                </a>
+              )
+            },
+          }}
+        >
+          {message.content}
+        </ReactMarkdown>
       </div>
 
       {message.attachment?.type === 'lesson_plan' && (
@@ -700,26 +623,14 @@ function LessonPlansPage() {
     startTask(taskId)
     setIsGenerating(true)
 
-    let runningStepId: string | null = null
     let done = false
-    let hasContent = false
 
     let assistantSteps: TaskStep[] = []
-    let assistantText = ''
-    let pendingText = ''
-    let flushTimer: number | null = null
+    let thinkingStepId: string | null = null
+    let thinkingBuffer = ''
 
     // Track current subagent index for the right panel
     let currentSubAgentKP: string | null = null
-
-    const flushAssistant = () => {
-      if (!pendingText) return
-      assistantText += pendingText
-      pendingText = ''
-      useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-        content: assistantText,
-      })
-    }
 
     const syncSteps = () => {
       useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
@@ -727,31 +638,15 @@ function LessonPlansPage() {
       })
     }
 
-    const updateAssistantStep = (stepId: string, patch: Partial<TaskStep>) => {
-      assistantSteps = assistantSteps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
-      syncSteps()
-    }
-
-    const startRunningStep = (title: string, extra?: Partial<TaskStep>) => {
-      const t = new Date().toISOString()
-      if (runningStepId) {
-        updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
-        updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
-      }
-      const step: TaskStep = {
-        id: generateId(),
-        title,
-        status: 'running',
-        startTime: t,
-        ...extra,
-      }
-      runningStepId = step.id
-      addStep(taskId, step)
+    const addAssistantStep = (step: TaskStep) => {
       assistantSteps = [...assistantSteps, step]
       syncSteps()
     }
 
-    startRunningStep('接收请求并开始生成…')
+    const patchAssistantStep = (stepId: string, patch: Partial<TaskStep>) => {
+      assistantSteps = assistantSteps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
+      syncSteps()
+    }
 
     void fetchSSE(
       '/lesson-plans/generate',
@@ -770,15 +665,65 @@ function LessonPlansPage() {
 
         if (kind === 'thinking') {
           const text = toText(payload?.content) || '思考中…'
-          startRunningStep(text)
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 20 })
+          const t = new Date().toISOString()
+
+          if (!thinkingStepId) {
+            thinkingStepId = `thinking-${generateId()}`
+            thinkingBuffer = ''
+            const step: TaskStep = {
+              id: thinkingStepId,
+              title: '思考',
+              status: 'running',
+              startTime: t,
+              toolName: 'thinking',
+              output: '',
+            }
+            addAssistantStep(step)
+            addStep(taskId, step)
+          }
+
+          thinkingBuffer = thinkingBuffer ? `${thinkingBuffer}\n${text}` : text
+          patchAssistantStep(thinkingStepId, { output: thinkingBuffer })
+          updateStep(taskId, thinkingStepId, { output: thinkingBuffer })
+
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 15 })
           return
         }
 
         if (kind === 'tool_call') {
           const name = toText(payload?.name) || 'tool'
-          startRunningStep(`调用工具：${name}`, { toolName: name, input: payload?.arguments })
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 30 })
+
+          // Close the current thinking step when the agent starts executing tools.
+          if (thinkingStepId) {
+            const tThinking = new Date().toISOString()
+            patchAssistantStep(thinkingStepId, { status: 'completed', endTime: tThinking })
+            updateStep(taskId, thinkingStepId, { status: 'completed', endTime: tThinking })
+            thinkingStepId = null
+            thinkingBuffer = ''
+          }
+
+          const stepId = toText((payload as any)?.step_id) || generateId()
+          const stepTitle = toText((payload as any)?.title)
+          const t = new Date().toISOString()
+
+          const step: TaskStep = {
+            id: stepId,
+            title: stepTitle || `调用工具：${name}`,
+            status: 'running',
+            startTime: t,
+            toolName: name,
+            input: (payload as any)?.arguments,
+          }
+
+          if (!assistantSteps.some((s) => s.id === stepId)) {
+            addAssistantStep(step)
+            addStep(taskId, step)
+          } else {
+            patchAssistantStep(stepId, step)
+            updateStep(taskId, stepId, step)
+          }
+
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 35 })
 
           // If this is a subagent tool call, add step to the current subagent activity
           if (currentSubAgentKP) {
@@ -790,11 +735,11 @@ function LessonPlansPage() {
                       steps: [
                         ...a.steps,
                         {
-                          id: generateId(),
-                          title: `调用 ${name}`,
+                          id: stepId,
+                          title: stepTitle || `调用 ${name}`,
                           status: 'running' as const,
                           toolName: name,
-                          startTime: new Date().toISOString(),
+                          startTime: t,
                         },
                       ],
                     }
@@ -806,13 +751,37 @@ function LessonPlansPage() {
         }
 
         if (kind === 'tool_result') {
-          const name = toText(payload?.name) || 'tool'
-          const output = payload?.output
+          const toolName = toText((payload as any)?.name) || ''
+          const stepId = toText((payload as any)?.step_id)
+          if (!stepId) return
 
-          // If split_knowledge_points returned, initialize subagent activities
-          if (name === 'split_knowledge_points' && output && typeof output === 'object') {
-            const kps = Array.isArray((output as any).knowledge_points)
-              ? ((output as any).knowledge_points as string[])
+          const success = (payload as any)?.success === true
+          const out = (payload as any)?.output
+          const err = toText((payload as any)?.error)
+          const t = new Date().toISOString()
+
+          patchAssistantStep(stepId, {
+            status: success ? 'completed' : 'failed',
+            endTime: t,
+            output: out,
+            error: err || undefined,
+            toolName: toolName || undefined,
+          })
+          updateStep(taskId, stepId, {
+            status: success ? 'completed' : 'failed',
+            endTime: t,
+            output: out,
+            error: err || undefined,
+          })
+
+          // If split/review produced knowledge points, initialize the right panel list.
+          if (
+            (toolName === 'split_knowledge_points' || toolName === 'review_knowledge_points') &&
+            out &&
+            typeof out === 'object'
+          ) {
+            const kps = Array.isArray((out as any).knowledge_points)
+              ? ((out as any).knowledge_points as string[])
               : []
             if (kps.length > 0) {
               setSubAgentActivities(
@@ -832,9 +801,13 @@ function LessonPlansPage() {
                 a.knowledgePoint === currentSubAgentKP
                   ? {
                       ...a,
-                      steps: a.steps.map((s, idx) =>
-                        idx === a.steps.length - 1 && s.status === 'running'
-                          ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }
+                      steps: a.steps.map((s) =>
+                        s.id === stepId
+                          ? {
+                              ...s,
+                              status: success ? ('completed' as const) : ('failed' as const),
+                              endTime: t,
+                            }
                           : s
                       ),
                     }
@@ -842,15 +815,14 @@ function LessonPlansPage() {
               )
             )
           }
+
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 55 })
           return
         }
 
         if (kind === 'subagent_start') {
           const kp = toText(payload?.knowledge_point)
-          const text = toText(payload?.content) || `研究知识点：${kp}`
-          currentSubAgentKP = kp
-          startRunningStep(text)
-          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 40 })
+          currentSubAgentKP = kp || null
 
           // Mark this activity as running
           setSubAgentActivities((prev) =>
@@ -858,6 +830,8 @@ function LessonPlansPage() {
               a.knowledgePoint === kp ? { ...a, status: 'running' as const } : a
             )
           )
+
+          updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 45 })
           return
         }
 
@@ -881,72 +855,52 @@ function LessonPlansPage() {
                 : a
             )
           )
-          return
-        }
-
-        if (kind === 'content') {
-          if (!hasContent) {
-            hasContent = true
-            startRunningStep('生成教案正文…')
-          }
-          const chunk = toText(payload?.content)
-          if (chunk) {
-            pendingText += chunk
-            if (flushTimer == null) {
-              flushTimer = window.setTimeout(() => {
-                flushTimer = null
-                flushAssistant()
-              }, 60)
-            }
-          }
           updateConversation(conversationId!, { updatedAt: new Date().toISOString(), progress: 70 })
           return
         }
 
         if (kind === 'done') {
           done = true
-          if (flushTimer != null) {
-            window.clearTimeout(flushTimer)
-            flushTimer = null
-          }
-          flushAssistant()
 
           const t = new Date().toISOString()
-          if (runningStepId) {
-            updateStep(taskId, runningStepId, { status: 'completed', endTime: t })
-            updateAssistantStep(runningStepId, { status: 'completed', endTime: t })
+          if (thinkingStepId) {
+            patchAssistantStep(thinkingStepId, { status: 'completed', endTime: t })
+            updateStep(taskId, thinkingStepId, { status: 'completed', endTime: t })
           }
 
-          const planRaw = payload?.plan
-          const title = toText((planRaw as any)?.title) || resolvedTopic || '教案'
+          const material = (payload as any)?.material as any
+          const title = toText(material?.title) || resolvedTopic || '教案'
           const durationMinutes =
-            typeof (planRaw as any)?.duration_minutes === 'number'
-              ? (planRaw as any).duration_minutes
-              : resolvedDuration
-          const planObjectives = toObjectives((planRaw as any)?.objectives)
+            typeof material?.duration_minutes === 'number' ? material.duration_minutes : resolvedDuration
+          const mdUrl = toText(material?.md_url)
+          const pdfUrl = toText(material?.pdf_url)
+          const mdFilename = toText(material?.md_filename)
+          const pdfFilename = toText(material?.pdf_filename)
 
-          const md = lessonPlanToMarkdown(planRaw, {
-            title,
-            subject: resolvedSubject,
-            grade: resolvedGrade,
-            topic: resolvedTopic,
-            durationMinutes,
-            objectives: planObjectives.length > 0 ? planObjectives : resolvedObjectives,
-          })
+          const lines: string[] = [
+            '已生成教案，可下载：',
+            '',
+            mdUrl ? `- Markdown： [下载 Markdown](${mdUrl})` : '- Markdown： （生成失败或未导出）',
+            pdfUrl ? `- PDF： [下载 PDF](${pdfUrl})` : '- PDF： （生成失败或未编译）',
+          ]
+          const content = lines.join('\n')
 
           savePlan({
             id: conversationId!,
             title,
             subject: resolvedSubject,
             grade: resolvedGrade,
-            objectives: planObjectives.length > 0 ? planObjectives : resolvedObjectives,
-            content: md,
+            objectives: resolvedObjectives,
             duration: durationMinutes,
             createdAt: t,
+            mdUrl: mdUrl || undefined,
+            pdfUrl: pdfUrl || undefined,
+            mdFilename: mdFilename || undefined,
+            pdfFilename: pdfFilename || undefined,
           })
 
           useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
-            content: md,
+            content,
             attachment: { type: 'lesson_plan', lessonPlanId: conversationId! },
             steps: assistantSteps,
           })
@@ -969,6 +923,11 @@ function LessonPlansPage() {
           setError(msg)
           failTask(taskId, msg)
 
+          if (thinkingStepId) {
+            const t = new Date().toISOString()
+            patchAssistantStep(thinkingStepId, { status: 'failed', endTime: t, error: msg })
+          }
+
           useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
             content: `出错：${msg}`,
             steps: assistantSteps,
@@ -976,17 +935,26 @@ function LessonPlansPage() {
 
           updateConversation(conversationId!, { updatedAt: new Date().toISOString(), status: 'active' })
           setIsGenerating(false)
+          return
         }
       },
       (err) => {
         if (done) return
+        done = true
         const msg = err.message || '生成失败'
         setError(msg)
         failTask(taskId, msg)
+
+        if (thinkingStepId) {
+          const t = new Date().toISOString()
+          patchAssistantStep(thinkingStepId, { status: 'failed', endTime: t, error: msg })
+        }
+
         useConversationStore.getState().updateMessage(conversationId!, assistantMessageId, {
           content: `出错：${msg}`,
           steps: assistantSteps,
         })
+        updateConversation(conversationId!, { updatedAt: new Date().toISOString(), status: 'active' })
         setIsGenerating(false)
       },
       () => {
