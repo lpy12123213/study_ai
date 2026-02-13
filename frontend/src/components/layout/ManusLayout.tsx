@@ -12,6 +12,9 @@ export function ManusLayout() {
   // Wide pages (no max-width constraint)
   const isWidePage = location.pathname.startsWith('/blueprint') || location.pathname.startsWith('/lesson-plans') || location.pathname.startsWith('/study-materials')
 
+  const pageManagesOwnScroll =
+    location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/lesson-plans')
+
   if (isFullScreenPage) {
     return (
       <div className="h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -32,7 +35,7 @@ export function ManusLayout() {
         
         {/* Center - Main content */}
         <main className="flex-1 flex flex-col overflow-hidden relative bg-background">
-          <div className="flex-1 overflow-auto">
+          <div className={cn('flex-1 min-h-0', pageManagesOwnScroll ? 'overflow-hidden' : 'overflow-auto')}>
             <div className={cn(
               "h-full mx-auto",
               !isWidePage && "max-w-4xl w-full"

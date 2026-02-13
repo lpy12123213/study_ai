@@ -168,18 +168,32 @@ export function HistorySidebar() {
 
   const conversations: ConversationItem[] = [...effectiveChatConversations, ...localConversations]
 
+  // Scope conversations to the current page so different features don't mix
+  const pageTypeFilter: ConversationType | null = (() => {
+    if (location.pathname.startsWith('/study-materials')) return 'lesson_plan'
+    if (location.pathname.startsWith('/chat')) return 'chat'
+    if (location.pathname.startsWith('/blueprint')) return 'blueprint'
+    return null
+  })()
+
   // Filter conversations
-  const filteredConversations = conversations.filter((c) => 
-    c.title.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const filteredConversations = conversations.filter((c) => {
+    if (pageTypeFilter && c.type !== pageTypeFilter) return false
+    return c.title.toLowerCase().includes(searchQuery.toLowerCase())
+  })
 
   // Group by date
   const groupedConversations = groupByDate(filteredConversations)
 
   const handleNewConversation = () => {
-    // Route `/chat` will create a new backend conversation lazily on first message.
     setCurrentConversation(null)
-    navigate('/chat')
+    if (location.pathname.startsWith('/study-materials')) {
+      navigate('/study-materials')
+    } else if (location.pathname.startsWith('/blueprint')) {
+      navigate('/blueprint')
+    } else {
+      navigate('/chat')
+    }
   }
 
   const activeChatId = (() => {

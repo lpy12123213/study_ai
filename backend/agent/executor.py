@@ -5,6 +5,7 @@ import asyncio
 import os
 import random
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -868,6 +869,129 @@ class Executor:
             "note": "未配置拆分模型或拆分不足，使用 Wikipedia 结构 + 规则模板增强拆分。",
         }
 
+    async def _tool_review_knowledge_points(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """审核并微调知识点列表（去重/补全/粒度调整）。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        min_points = int(args.get("min_points") or 2)
+        max_points = int(args.get("max_points") or 8)
+        min_points = max(1, min(min_points, 10))
+        max_points = max(min_points, min(max_points, 15))
+
+        def _clean_points(items: List[Any]) -> List[str]:
+            out: List[str] = []
+            seen: set[str] = set()
+            for it in items or []:
+                s = str(it or "").strip()
+                s = re.sub(r"\s+", " ", s)
+                s = s.strip(" -—·•\t\r\n")
+                if not s:
+                    continue
+                if len(s) > 60:
+                    s = s[:60].rstrip() + "…"
+                if s in seen:
+                    continue
+                seen.add(s)
+                out.append(s)
+                if len(out) >= max_points:
+                    break
+            return out
+
+        provided = args.get("knowledge_points")
+        points: List[str] = []
+        if isinstance(provided, list):
+            points = _clean_points(list(provided))
+
+        if not points:
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                points = _clean_points(list(split_res.get("knowledge_points") or []))
+
+        original = list(points)
+
+        source = "heuristic"
+        note = ""
+
+        if LESSON_PLAN_API_KEY and points:
+            model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or self.config.planner_model or "").strip()
+            if not model:
+                model = self.config.planner_model
+            reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
+
+            prompt = {
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": points,
+                "requirements": [
+                    f"请审核并微调上述知识点列表，使其更适合『逐点检索 + 逐点生成自学讲解』。",
+                    f"数量要求：{min_points}~{max_points} 个；尽量不超过 {max_points} 个。",
+                    "去重：合并重复/同义项；避免过泛（如“概念”“性质”单独出现）。",
+                    "补全：如明显缺失关键子主题，可补充 1~3 个，但不要发散到无关内容。",
+                    "粒度：短语级关键词，便于搜索与组织讲解；尽量保持原有顺序逻辑。",
+                    "只输出严格 JSON：{\"knowledge_points\": [...], \"note\": \"...\"}（不要 Markdown，不要多余文字）。",
+                ],
+            }
+            text = await self._call_llm_text(
+                messages=[
+                    {"role": "system", "content": "你是严谨的教研员，输出必须是JSON。"},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                model=model,
+                temperature=0.2,
+                max_tokens=700,
+                reasoning=reasoning,
+            )
+            obj = self._extract_json_obj(text)
+            revised = obj.get("knowledge_points")
+            if isinstance(revised, list):
+                cleaned = _clean_points(list(revised))
+                if len(cleaned) >= min_points:
+                    points = cleaned[:max_points]
+                    source = "llm"
+                    note = str(obj.get("note") or "").strip()
+
+        if topic and len(points) < min_points:
+            pads = [
+                topic,
+                f"{topic} 基本概念",
+                f"{topic} 常见题型",
+                f"{topic} 典型例题",
+                f"{topic} 易错点",
+            ]
+            points = _clean_points(points + pads)
+
+        points = points[:max_points] if points else ([topic] if topic else [])
+
+        out = {
+            "topic": topic,
+            "subject": subject,
+            "knowledge_points": points,
+            "source": f"review_{source}",
+        }
+        if note:
+            out["note"] = note
+
+        removed = [x for x in original if x not in points]
+        added = [x for x in points if x not in original]
+        if removed or added:
+            out["changes"] = {"removed": removed[:10], "added": added[:10]}
+
+        # Make the reviewed list the canonical list for downstream foreach execution.
+        try:
+            ctx.working_memory["split_knowledge_points"] = {
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": points,
+                "source": f"review_{source}",
+                "note": note,
+            }
+        except Exception:
+            pass
+
+        return out
+
     async def _tool_web_search_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """网络搜索知识点：Metaso 优先（可返回 summary 报告型文本）。
 
@@ -878,8 +1002,8 @@ class Executor:
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         limit = int(args.get("limit") or 5)
-        # Research preset may want a few more sources; keep a safe upper bound to avoid rate limits.
-        limit = max(1, min(limit, 15))
+        # Allow more per-knowledge-point calls when the user enables deeper presets; keep a safe upper bound.
+        limit = max(1, min(limit, 25))
         query_hint = str(args.get("query_hint") or "").strip()
         scope = str(args.get("scope") or "webpage").strip() or "webpage"
         include_summary = bool(args.get("include_summary", True))
@@ -1017,9 +1141,9 @@ class Executor:
 
             sub_n = _clamp_int(
                 args.get("sub_questions"),
-                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=6),
+                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=10),
                 min_value=2,
-                max_value=6,
+                max_value=10,
             )
 
             # If LLM isn't configured, fall back to a deterministic template split.
@@ -1135,9 +1259,9 @@ class Executor:
                         # Ask Exa for each sub-question
                         sub_conc = _clamp_int(
                             args.get("sub_concurrency"),
-                            default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2, default=2, min_value=1, max_value=3),
+                            default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2, default=2, min_value=1, max_value=4),
                             min_value=1,
-                            max_value=3,
+                            max_value=4,
                         )
                         sub_sem = asyncio.Semaphore(sub_conc)
 
@@ -2386,6 +2510,8 @@ class Executor:
         max_page_chars = max(500, min(max_page_chars, 8000))
         with_diagrams = bool(args.get("with_diagrams", True))
         with_questions = bool(args.get("with_questions", False))
+        max_diagrams = int(args.get("max_diagrams") or (3 if preset in {"deep", "research"} else 2 if preset == "standard" else 1))
+        max_diagrams = max(0, min(max_diagrams, 6))
 
         sections: List[Dict[str, Any]] = []
         for item in (sections_in or [])[:max_points]:
@@ -2778,7 +2904,59 @@ class Executor:
             explanation_md = _sanitize_explanation_markdown(explanation_md, knowledge_point=kp)
 
             diagram: Dict[str, Any] = {}
-            if with_diagrams and LESSON_PLAN_API_KEY:
+            existing_diagrams: List[Dict[str, Any]] = []
+            try:
+                diagrams_blob = ctx.working_memory.get("diagrams")
+                entries: List[Dict[str, Any]] = []
+                if isinstance(diagrams_blob, dict):
+                    if isinstance(diagrams_blob.get("items"), list):
+                        entries = [x for x in (diagrams_blob.get("items") or []) if isinstance(x, dict)]
+                    elif isinstance(diagrams_blob.get("sections"), list):
+                        entries = [x for x in (diagrams_blob.get("sections") or []) if isinstance(x, dict)]
+                for it in entries:
+                    kp0 = str(it.get("knowledge_point") or "").strip()
+                    if kp0 != kp:
+                        continue
+                    ds = it.get("diagrams")
+                    if isinstance(ds, list):
+                        existing_diagrams = [d for d in ds if isinstance(d, dict)]
+                    break
+            except Exception:
+                existing_diagrams = []
+
+            def _store_extra_diagram(diagram_obj: Dict[str, Any]) -> None:
+                try:
+                    blob = ctx.working_memory.get("diagrams")
+                    if not isinstance(blob, dict):
+                        blob = {}
+                    items = blob.get("items")
+                    if not isinstance(items, list):
+                        items = []
+                    kp_item: Optional[Dict[str, Any]] = None
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        if str(it.get("knowledge_point") or "").strip() == kp:
+                            kp_item = it
+                            break
+                    if kp_item is None:
+                        kp_item = {"knowledge_point": kp, "diagrams": []}
+                        items.append(kp_item)
+                    dlist = kp_item.get("diagrams")
+                    if not isinstance(dlist, list):
+                        dlist = []
+                    filename = str(diagram_obj.get("filename") or "").strip()
+                    if filename and any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
+                        return
+                    dlist.append(diagram_obj)
+                    kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-25:]
+                    blob["items"] = [x for x in items if isinstance(x, dict)]
+                    ctx.working_memory["diagrams"] = blob
+                except Exception:
+                    return
+
+            need_diagrams = max(0, int(max_diagrams) - len(existing_diagrams))
+            if with_diagrams and LESSON_PLAN_API_KEY and need_diagrams > 0:
                 try:
                     context_hints = {
                         "topic": topic,
@@ -2788,11 +2966,13 @@ class Executor:
                         "wikipedia_summary": _clip_text(str(wiki.get("summary") or ""), 600) if wiki.get("summary") else "",
                         "mediawiki_summary": _clip_text(str(mw.get("summary") or ""), 600) if mw.get("summary") else "",
                     }
-                    prompt = f"""你是数学教学绘图助手。请为知识点「{kp}」生成一张“示意图”的 SVG 规范（JSON），用于帮助理解概念。
+                    prompt = f"""你是数学教学绘图助手。请为知识点「{kp}」生成最多 {need_diagrams} 张“示意图”的 SVG 规范（JSON），用于帮助理解概念。
 
 只输出 JSON 对象，不要输出 Markdown、不要输出代码块。
 
-你可以使用这些字段（都可选）：
+请输出严格 JSON：{{"diagrams":[{{...}},{{...}}]}}，其中 diagrams 是数组；若不需要画图请输出 {{"diagrams":[]}}。
+
+每张图可以使用这些字段（都可选）：
 {{"width":560,"height":320,"padding":24,
   "points":{{"A":[80,240],"B":[440,240],"C":[260,90]}},
   "segments":[["A","B"],{{"from":"B","to":"C","extend":false}},{{"from":"A","to":"C","extend":true,"dash":"6,4"}}],
@@ -2805,7 +2985,8 @@ class Executor:
 要求：
 1) 图形要和「{kp}」强相关，尽量简洁，点/线数量少但表达清楚。
 2) 坐标范围：x∈[0,width], y∈[0,height]（SVG 坐标，y 向下）。
-3) points ≤ 12，segments ≤ 16；不要画复杂背景、不要画大段文字。
+3) 每张图 points ≤ 12，segments ≤ 16；不要画复杂背景、不要画大段文字。
+4) 图的数量不必凑满：只有确实能帮助理解时才输出多张；否则输出 0~1 张即可。
 
 可参考信息（可能为空）：
 {json.dumps(context_hints, ensure_ascii=False)}
@@ -2824,16 +3005,35 @@ class Executor:
                         )
                     ).strip()
 
-                    spec = self._extract_json_obj(raw)
-                    if spec:
+                    obj = self._extract_json_obj(raw)
+                    specs = obj.get("diagrams")
+                    specs_list: List[Dict[str, Any]] = []
+                    if isinstance(specs, list):
+                        specs_list = [s for s in specs if isinstance(s, dict)]
+                    elif isinstance(obj, dict) and obj:
+                        specs_list = [obj]
+
+                    for spec in specs_list[:need_diagrams]:
                         draw_res = await self._tool_draw_svg_diagram({"spec": spec, "alt": f"{kp} 示意图"}, ctx)
-                        if isinstance(draw_res, dict) and draw_res.get("success"):
+                        if not (isinstance(draw_res, dict) and draw_res.get("success")):
+                            continue
+                        d_obj = {
+                            "knowledge_point": kp,
+                            "kind": "draw_svg_diagram",
+                            "url": str(draw_res.get("url") or "").strip(),
+                            "markdown": str(draw_res.get("markdown") or "").strip(),
+                            "filename": str(draw_res.get("filename") or "").strip(),
+                            "media_id": str(draw_res.get("media_id") or "").strip(),
+                            "caption": str(spec.get("caption") or "").strip(),
+                        }
+                        _store_extra_diagram(d_obj)
+                        if not diagram:
                             diagram = {
-                                "url": str(draw_res.get("url") or "").strip(),
-                                "markdown": str(draw_res.get("markdown") or "").strip(),
-                                "filename": str(draw_res.get("filename") or "").strip(),
-                                "media_id": str(draw_res.get("media_id") or "").strip(),
-                                "caption": str(spec.get("caption") or "").strip(),
+                                "url": d_obj.get("url"),
+                                "markdown": d_obj.get("markdown"),
+                                "filename": d_obj.get("filename"),
+                                "media_id": d_obj.get("media_id"),
+                                "caption": d_obj.get("caption"),
                             }
                 except Exception:
                     diagram = {}
@@ -3115,7 +3315,40 @@ JSON 格式必须是：
             diagram_blob = sec.get("diagram") if isinstance(sec.get("diagram"), dict) else {}
             diagram_md = str(diagram_blob.get("markdown") or "").strip()
             diagram_caption = str(diagram_blob.get("caption") or "").strip()
-            if diagram_md:
+            diagram_url = str(diagram_blob.get("url") or "").strip()
+
+            diagrams_blob = ctx.working_memory.get("diagrams")
+            extra_diagrams: List[Dict[str, Any]] = []
+            if isinstance(diagrams_blob, dict):
+                entries: List[Dict[str, Any]] = []
+                if isinstance(diagrams_blob.get("items"), list):
+                    entries = [x for x in (diagrams_blob.get("items") or []) if isinstance(x, dict)]
+                elif isinstance(diagrams_blob.get("sections"), list):
+                    entries = [x for x in (diagrams_blob.get("sections") or []) if isinstance(x, dict)]
+                for it in entries:
+                    if str(it.get("knowledge_point") or "").strip() != kp:
+                        continue
+                    ds = it.get("diagrams")
+                    if isinstance(ds, list):
+                        extra_diagrams = [d for d in ds if isinstance(d, dict)]
+                    break
+
+            extra_urls: set[str] = set()
+            for d in extra_diagrams[:8]:
+                md = str(d.get("markdown") or "").strip()
+                if not md:
+                    continue
+                u = str(d.get("url") or "").strip()
+                if u:
+                    extra_urls.add(u)
+                cap = str(d.get("caption") or "").strip()
+                lines.append(md)
+                if cap:
+                    lines.append("")
+                    lines.append(f"> 图注：{cap}")
+                lines.append("")
+
+            if diagram_md and (not diagram_url or diagram_url not in extra_urls):
                 lines.append(diagram_md)
                 if diagram_caption:
                     lines.append("")
@@ -3225,42 +3458,6 @@ JSON 格式必须是：
 
         lines.append("数据来源：" + ("、".join(deduped) if deduped else "（无）"))
         lines.append("")
-
-        lines.append("## 参考文献")
-        lines.append("")
-
-        kp_order: List[str] = []
-        seen_kp = set()
-        for kp in (preferred_order or []):
-            if kp in seen_kp:
-                continue
-            seen_kp.add(kp)
-            kp_order.append(kp)
-        for kp in (kp_list or []):
-            if kp in seen_kp:
-                continue
-            seen_kp.add(kp)
-            kp_order.append(kp)
-
-        any_refs = False
-        for kp in kp_order:
-            refs = refs_by_kp.get(kp) or []
-            if not refs:
-                continue
-            any_refs = True
-            lines.append(f"### {kp}")
-            for ref in refs:
-                url = str(ref.get("url") or "").strip()
-                if not url:
-                    continue
-                title = str(ref.get("title") or "").strip() or url
-                source = str(ref.get("source") or "").strip() or "web"
-                lines.append(f"- {url} / {title} / {source}")
-            lines.append("")
-
-        if not any_refs:
-            lines.append("（无）")
-            lines.append("")
 
         markdown = "\n".join(lines).strip() + "\n"
         ctx.working_memory["markdown"] = markdown
@@ -3392,6 +3589,349 @@ JSON 格式必须是：
             "bytes": len((markdown or "").encode("utf-8")),
         }
 
+    async def _tool_export_study_markdown(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """将最终 Markdown 发布为可下载文件（写入 `.local/media/generated/`）。"""
+
+        markdown = args.get("markdown")
+        if not isinstance(markdown, str) or not markdown.strip():
+            markdown = str(ctx.working_memory.get("markdown") or "").strip()
+        if not markdown:
+            markdown = str(ctx.working_memory.get("assemble_study_archive") or "").strip()
+        if not markdown:
+            raise ValueError("markdown_empty")
+
+        data = (markdown + ("\n" if not markdown.endswith("\n") else "")).encode("utf-8")
+
+        import hashlib
+
+        sha = hashlib.sha256(data).hexdigest()
+        filename = f"{sha}.md"
+        url = f"/api/media/generated/{filename}"
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+
+        if not out_path.exists():
+            out_path.write_bytes(data)
+
+        try:
+            ctx.working_memory["md_url"] = url
+            ctx.working_memory["md_filename"] = filename
+        except Exception:
+            pass
+
+        return {
+            "md_url": url,
+            "filename": filename,
+            "sha256": sha,
+            "bytes": len(data),
+        }
+
+    async def _tool_convert_markdown_to_latex(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """用 LLM 把 Markdown 转成 ElegantBook LaTeX，并发布为可下载 .tex。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        markdown = args.get("markdown")
+        if not isinstance(markdown, str) or not markdown.strip():
+            markdown = str(ctx.working_memory.get("markdown") or "").strip()
+        if not markdown:
+            markdown = str(ctx.working_memory.get("assemble_study_archive") or "").strip()
+        if not markdown:
+            raise ValueError("markdown_empty")
+
+        model = str(
+            os.getenv("STUDY_MATERIALS_LATEX_MODEL")
+            or os.getenv("STUDY_MATERIALS_WRITER_MODEL")
+            or self.config.summarizer_model
+            or self.config.planner_model
+        ).strip()
+        if not model:
+            model = self.config.summarizer_model or self.config.planner_model
+        reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
+
+        title = f"自学材料：{topic}"
+        if subject and subject not in title:
+            title = f"{subject}｜{title}"
+
+        template = (
+            r"\documentclass[lang=cn]{elegantbook}" "\n"
+            r"\usepackage{amsmath,amssymb}" "\n"
+            r"\usepackage{graphicx}" "\n"
+            r"\usepackage{hyperref}" "\n"
+            r"\usepackage{booktabs,longtable}" "\n"
+            r"\usepackage{xcolor}" "\n"
+            r"\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}" "\n"
+            r"\title{" + title.replace("{", "\\{").replace("}", "\\}") + r"}" "\n"
+            r"\author{}" "\n"
+            r"\date{\today}" "\n"
+            r"\begin{document}" "\n"
+            r"\maketitle" "\n\n"
+            r"% --- BEGIN_BODY ---" "\n"
+            r"<BODY>" "\n"
+            r"% --- END_BODY ---" "\n\n"
+            r"\end{document}" "\n"
+        )
+
+        prompt = {
+            "topic": topic,
+            "subject": subject,
+            "template": template,
+            "requirements": [
+                "请把下面 Markdown 转为 LaTeX，使用 ElegantBook 模板。",
+                "只输出 LaTeX 源码，不要 Markdown 代码块，不要额外解释。",
+                "必须保留模板结构，仅替换 <BODY> 部分（不要改动 documentclass/preamble）。",
+                "正文用 LaTeX 结构：标题层级 #/##/###/#### 映射为 \\section/\\subsection/\\subsubsection/\\paragraph。",
+                "保留数学公式 $...$ 与 $$...$$，确保括号与环境闭合。",
+                "列表用 itemize/enumerate；代码块用 verbatim；表格必要时可简化。",
+                "图片：只处理 PNG/JPG/JPEG/WebP/GIF/BMP。将 `![](/api/media/generated/xxx.png)` 转为 `\\\\includegraphics[width=0.9\\\\linewidth]{xxx.png}`；遇到 SVG 图片不要插图，改为一句话：`（图略：SVG 见 Markdown 版）`。",
+                "不要输出“参考文献/外部链接/URL 列表”。",
+            ],
+            "markdown": markdown,
+        }
+
+        raw = (
+            await self._call_llm_text(
+                messages=[
+                    {"role": "system", "content": "你是严谨的 LaTeX 排版助手，输出必须是可编译的 LaTeX。"},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                model=model,
+                temperature=0.2,
+                max_tokens=3800,
+                reasoning=reasoning,
+            )
+        ).strip()
+
+        if not raw:
+            raise ValueError("latex_empty")
+
+        # Strip code fences if any.
+        if raw.startswith("```"):
+            first_newline = raw.find("\n")
+            if first_newline != -1:
+                raw = raw[first_newline + 1 :]
+            if raw.endswith("```"):
+                raw = raw[: -3]
+            raw = raw.strip()
+
+        body = raw
+        if "\\begin{document}" in raw:
+            body = raw.split("\\begin{document}", 1)[1]
+            if "\\end{document}" in body:
+                body = body.split("\\end{document}", 1)[0]
+        body = body.strip()
+
+        tex = template.replace("<BODY>", body).strip() + "\n"
+
+        tex_bytes = tex.encode("utf-8")
+        import hashlib
+
+        sha = hashlib.sha256(tex_bytes).hexdigest()
+        filename = f"{sha}.tex"
+        url = f"/api/media/generated/{filename}"
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+        if not out_path.exists():
+            out_path.write_bytes(tex_bytes)
+
+        try:
+            ctx.working_memory["latex_tex"] = tex
+            ctx.working_memory["tex_url"] = url
+            ctx.working_memory["tex_filename"] = filename
+        except Exception:
+            pass
+
+        return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": len(tex_bytes), "model": model}
+
+    async def _tool_refine_latex(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """对 LaTeX 做二次修订，尽量减少编译失败与排版问题。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+
+        tex = args.get("latex")
+        if not isinstance(tex, str) or not tex.strip():
+            tex = str(ctx.working_memory.get("latex_tex") or "").strip()
+        if not tex:
+            raise ValueError("latex_missing")
+
+        model = str(os.getenv("STUDY_MATERIALS_LATEX_MODEL") or self.config.summarizer_model or self.config.planner_model).strip()
+        if not model:
+            model = self.config.summarizer_model or self.config.planner_model
+        reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
+
+        prompt = {
+            "topic": topic,
+            "subject": subject,
+            "requirements": [
+                "下面是一份 LaTeX（ElegantBook）。请在不改变整体结构的前提下修订，使其更容易编译且排版更干净。",
+                "只输出完整 LaTeX 源码（从 \\documentclass 到 \\end{document}），不要 Markdown 代码块，不要解释。",
+                "修复常见问题：未转义的特殊字符（%, _, &, #）、未闭合的环境/括号、错误的图片扩展名（SVG 请改为文字占位而非 includegraphics）。",
+                "数学公式保持原意，确保括号闭合。",
+                "不要输出参考文献/URL 列表。",
+            ],
+            "latex": tex,
+        }
+
+        refined = (
+            await self._call_llm_text(
+                messages=[
+                    {"role": "system", "content": "你是严谨的 LaTeX 修订助手，输出必须可编译。"},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                model=model,
+                temperature=0.2,
+                max_tokens=3800,
+                reasoning=reasoning,
+            )
+        ).strip()
+
+        if not refined:
+            raise ValueError("latex_empty")
+
+        if refined.startswith("```"):
+            first_newline = refined.find("\n")
+            if first_newline != -1:
+                refined = refined[first_newline + 1 :]
+            if refined.endswith("```"):
+                refined = refined[: -3]
+            refined = refined.strip()
+
+        tex_bytes = (refined.strip() + "\n").encode("utf-8")
+        import hashlib
+
+        sha = hashlib.sha256(tex_bytes).hexdigest()
+        filename = f"{sha}.tex"
+        url = f"/api/media/generated/{filename}"
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+        if not out_path.exists():
+            out_path.write_bytes(tex_bytes)
+
+        try:
+            ctx.working_memory["latex_tex"] = refined.strip() + "\n"
+            ctx.working_memory["tex_url"] = url
+            ctx.working_memory["tex_filename"] = filename
+        except Exception:
+            pass
+
+        return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": len(tex_bytes), "model": model}
+
+    async def _tool_compile_latex_to_pdf(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """编译 LaTeX 为 PDF，并发布为可下载文件。"""
+
+        topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
+
+        tex = args.get("latex")
+        if not isinstance(tex, str) or not tex.strip():
+            tex = str(ctx.working_memory.get("latex_tex") or "").strip()
+        if not tex:
+            raise ValueError("latex_missing")
+
+        repo_root = Path(__file__).resolve().parents[2]
+        gen_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        gen_dir.mkdir(parents=True, exist_ok=True)
+
+        build_dir = (repo_root / ".local" / "latex_build" / uuid.uuid4().hex[:12]).resolve()
+        build_dir.mkdir(parents=True, exist_ok=True)
+
+        tex_path = build_dir / "main.tex"
+        tex_path.write_text(tex.strip() + "\n", encoding="utf-8")
+
+        # Copy local generated images referenced by includegraphics into build dir.
+        try:
+            includes = re.findall(r"\\includegraphics(?:\\[[^\\]]*\\])?\\{([^}]+)\\}", tex)
+        except Exception:
+            includes = []
+        copied = 0
+        missing: List[str] = []
+        for inc in includes[:80]:
+            name = str(inc or "").strip()
+            if not name:
+                continue
+            # Strip any path prefixes and keep basename only.
+            base = Path(name).name
+            if not base:
+                continue
+            src = gen_dir / base
+            if not src.exists() or not src.is_file():
+                # Try to resolve /api/media/generated/<file>
+                if base.startswith("generated") and "/" in name:
+                    base2 = name.split("/")[-1]
+                    src = gen_dir / base2
+                if not src.exists() or not src.is_file():
+                    missing.append(base)
+                    continue
+            dst = build_dir / base
+            try:
+                if not dst.exists():
+                    dst.write_bytes(src.read_bytes())
+                copied += 1
+            except Exception:
+                continue
+
+        # Compile (MiKTeX latexmk/xelatex on Windows; best-effort elsewhere)
+        import subprocess
+
+        cmd = ["latexmk", "-xelatex", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "main.tex"]
+        timeout_s = float(os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or 180)
+        timeout_s = max(30.0, min(timeout_s, 60.0 * 20.0))
+
+        proc = subprocess.run(
+            cmd,
+            cwd=str(build_dir),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+        if proc.returncode != 0:
+            stderr = (proc.stderr or "").strip()
+            stdout = (proc.stdout or "").strip()
+            msg = stderr[-2000:] if stderr else stdout[-2000:]
+            raise RuntimeError(f"latex_compile_failed: {msg}")
+
+        pdf_path = build_dir / "main.pdf"
+        if not pdf_path.exists() or not pdf_path.is_file():
+            raise RuntimeError("pdf_missing")
+
+        pdf_bytes = pdf_path.read_bytes()
+
+        import hashlib
+
+        sha = hashlib.sha256(pdf_bytes).hexdigest()
+        filename = f"{sha}.pdf"
+        url = f"/api/media/generated/{filename}"
+        out_path = gen_dir / filename
+        if not out_path.exists():
+            out_path.write_bytes(pdf_bytes)
+
+        try:
+            ctx.working_memory["pdf_url"] = url
+            ctx.working_memory["pdf_filename"] = filename
+        except Exception:
+            pass
+
+        return {
+            "pdf_url": url,
+            "filename": filename,
+            "sha256": sha,
+            "bytes": len(pdf_bytes),
+            "topic": topic,
+            "copied_images": copied,
+            "missing_images": missing[:20],
+            "engine": "latexmk-xelatex",
+        }
+
     async def _tool_draw_svg_diagram(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """Render an SVG diagram and persist it under `.local/media/generated/`.
 
@@ -3445,6 +3985,276 @@ JSON 格式必须是：
             "url": url,
             "markdown": markdown,
             "bytes": len(svg_bytes),
+        }
+
+    async def _tool_plot_function(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
+        alt = str(args.get("alt") or args.get("title") or "plot").strip() or "plot"
+        caption = str(args.get("caption") or spec.get("caption") or "").strip()
+
+        kp = str(args.get("knowledge_point") or "").strip()
+        if not kp:
+            kps = args.get("knowledge_points")
+            if isinstance(kps, list) and kps:
+                kp = str(kps[0] or "").strip()
+        if not kp:
+            kp = str(ctx.current_task or "").strip()
+
+        if not spec:
+            return {"success": False, "error": "spec 不能为空", "knowledge_point": kp}
+
+        from backend.core.plot_tools import render_2d_plot
+
+        try:
+            png_bytes = render_2d_plot(spec)
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "knowledge_point": kp}
+
+        import hashlib
+
+        media_id = hashlib.sha256(png_bytes).hexdigest()
+        filename = f"{media_id}.png"
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+
+        try:
+            if not out_path.exists():
+                out_path.write_bytes(png_bytes)
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
+
+        url = f"/api/media/generated/{filename}"
+        markdown = f"![{alt}]({url})"
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "plot_function",
+            "url": url,
+            "markdown": markdown,
+            "filename": filename,
+            "media_id": media_id,
+            "caption": caption,
+        }
+
+        try:
+            blob = ctx.working_memory.get("diagrams")
+            if not isinstance(blob, dict):
+                blob = {}
+            items = blob.get("items")
+            if not isinstance(items, list):
+                items = []
+            kp_item: Optional[Dict[str, Any]] = None
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if str(it.get("knowledge_point") or "").strip() == kp:
+                    kp_item = it
+                    break
+            if kp_item is None:
+                kp_item = {"knowledge_point": kp, "diagrams": []}
+                items.append(kp_item)
+            dlist = kp_item.get("diagrams")
+            if not isinstance(dlist, list):
+                dlist = []
+            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
+                dlist.append(diagram)
+            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
+            blob["items"] = [x for x in items if isinstance(x, dict)]
+            ctx.working_memory["diagrams"] = blob
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": media_id,
+            "filename": filename,
+            "url": url,
+            "markdown": markdown,
+            "bytes": len(png_bytes),
+        }
+
+    async def _tool_plot_3d(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
+        alt = str(args.get("alt") or args.get("title") or "plot").strip() or "plot"
+        caption = str(args.get("caption") or spec.get("caption") or "").strip()
+
+        kp = str(args.get("knowledge_point") or "").strip()
+        if not kp:
+            kps = args.get("knowledge_points")
+            if isinstance(kps, list) and kps:
+                kp = str(kps[0] or "").strip()
+        if not kp:
+            kp = str(ctx.current_task or "").strip()
+
+        if not spec:
+            return {"success": False, "error": "spec 不能为空", "knowledge_point": kp}
+
+        from backend.core.plot_tools import render_3d_plot
+
+        try:
+            png_bytes = render_3d_plot(spec)
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "knowledge_point": kp}
+
+        import hashlib
+
+        media_id = hashlib.sha256(png_bytes).hexdigest()
+        filename = f"{media_id}.png"
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+
+        try:
+            if not out_path.exists():
+                out_path.write_bytes(png_bytes)
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
+
+        url = f"/api/media/generated/{filename}"
+        markdown = f"![{alt}]({url})"
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "plot_3d",
+            "url": url,
+            "markdown": markdown,
+            "filename": filename,
+            "media_id": media_id,
+            "caption": caption,
+        }
+
+        try:
+            blob = ctx.working_memory.get("diagrams")
+            if not isinstance(blob, dict):
+                blob = {}
+            items = blob.get("items")
+            if not isinstance(items, list):
+                items = []
+            kp_item: Optional[Dict[str, Any]] = None
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if str(it.get("knowledge_point") or "").strip() == kp:
+                    kp_item = it
+                    break
+            if kp_item is None:
+                kp_item = {"knowledge_point": kp, "diagrams": []}
+                items.append(kp_item)
+            dlist = kp_item.get("diagrams")
+            if not isinstance(dlist, list):
+                dlist = []
+            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
+                dlist.append(diagram)
+            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
+            blob["items"] = [x for x in items if isinstance(x, dict)]
+            ctx.working_memory["diagrams"] = blob
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": media_id,
+            "filename": filename,
+            "url": url,
+            "markdown": markdown,
+            "bytes": len(png_bytes),
+        }
+
+    async def _tool_draw_diagram(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
+        alt = str(args.get("alt") or args.get("title") or "diagram").strip() or "diagram"
+        caption = str(args.get("caption") or spec.get("caption") or "").strip()
+
+        kp = str(args.get("knowledge_point") or "").strip()
+        if not kp:
+            kps = args.get("knowledge_points")
+            if isinstance(kps, list) and kps:
+                kp = str(kps[0] or "").strip()
+        if not kp:
+            kp = str(ctx.current_task or "").strip()
+
+        if not spec:
+            return {"success": False, "error": "spec 不能为空", "knowledge_point": kp}
+
+        from backend.core.plot_tools import render_schematic
+
+        try:
+            png_bytes = render_schematic(spec)
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "knowledge_point": kp}
+
+        import hashlib
+
+        media_id = hashlib.sha256(png_bytes).hexdigest()
+        filename = f"{media_id}.png"
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
+
+        try:
+            if not out_path.exists():
+                out_path.write_bytes(png_bytes)
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
+
+        url = f"/api/media/generated/{filename}"
+        markdown = f"![{alt}]({url})"
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "draw_diagram",
+            "url": url,
+            "markdown": markdown,
+            "filename": filename,
+            "media_id": media_id,
+            "caption": caption,
+        }
+
+        try:
+            blob = ctx.working_memory.get("diagrams")
+            if not isinstance(blob, dict):
+                blob = {}
+            items = blob.get("items")
+            if not isinstance(items, list):
+                items = []
+            kp_item: Optional[Dict[str, Any]] = None
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if str(it.get("knowledge_point") or "").strip() == kp:
+                    kp_item = it
+                    break
+            if kp_item is None:
+                kp_item = {"knowledge_point": kp, "diagrams": []}
+                items.append(kp_item)
+            dlist = kp_item.get("diagrams")
+            if not isinstance(dlist, list):
+                dlist = []
+            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
+                dlist.append(diagram)
+            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
+            blob["items"] = [x for x in items if isinstance(x, dict)]
+            ctx.working_memory["diagrams"] = blob
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": media_id,
+            "filename": filename,
+            "url": url,
+            "markdown": markdown,
+            "bytes": len(png_bytes),
         }
 
     async def _tool_retrieve_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:

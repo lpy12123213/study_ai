@@ -147,8 +147,45 @@ class AgentCore:
         try:
             yield agent_event("thinking", {"content": "初始化上下文…"})
             self.state = AgentState.WAITING_TOOL
-            yield agent_event("tool_call", {"name": "get_user_profile", "arguments": {"user_id": user_id}})
-            profile = await self.memory_store.get_user_profile(user_id=user_id)
+            profile_step_id = f"get_user_profile-{uuid.uuid4().hex[:8]}"
+            yield agent_event(
+                "tool_call",
+                {
+                    "step_id": profile_step_id,
+                    "name": "get_user_profile",
+                    "title": "读取用户画像",
+                    "arguments": {"user_id": user_id},
+                },
+            )
+            try:
+                profile = await self.memory_store.get_user_profile(user_id=user_id)
+                yield agent_event(
+                    "tool_result",
+                    {
+                        "step_id": profile_step_id,
+                        "name": "get_user_profile",
+                        "title": "读取用户画像",
+                        "success": True,
+                        "output": {
+                            "user_id": profile.user_id,
+                            "ability_level": profile.ability_level,
+                            "ability_score": profile.ability_score,
+                            "preferences": dict(profile.preferences or {}),
+                        },
+                    },
+                )
+            except Exception as exc:
+                yield agent_event(
+                    "tool_result",
+                    {
+                        "step_id": profile_step_id,
+                        "name": "get_user_profile",
+                        "title": "读取用户画像",
+                        "success": False,
+                        "error": str(exc),
+                    },
+                )
+                raise
 
             # Per-request overrides (e.g., subject selected in the UI). We both:
             # - apply it to this run's in-memory profile for planning/writing
@@ -187,10 +224,6 @@ class AgentCore:
                 results = ActionResults()
                 self.state = AgentState.PLANNING
                 yield agent_event("thinking", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
-
-                plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
-                if plan.rationale:
-                    yield agent_event("thinking", {"content": plan.rationale})
 
                 async def _execute_concrete_step(concrete_step: PlanStep) -> AsyncIterator[Dict[str, Any]]:
                     """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
@@ -264,6 +297,90 @@ class AgentCore:
                     ):
                         results.artifacts["markdown"] = step_result.output.strip()
 
+                # Planner-stage: split knowledge points and do a quick review pass before planning the tool chain.
+                if iteration == 0:
+                    split_res = ctx.working_memory.get("split_knowledge_points")
+                    existing_kps: List[str] = []
+                    if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                        existing_kps = [
+                            str(x or "").strip()
+                            for x in (split_res.get("knowledge_points") or [])
+                            if str(x or "").strip()
+                        ][:15]
+
+                    if not existing_kps:
+                        try:
+                            opts = ctx.working_memory.get("study_options")
+                            opts = dict(opts) if isinstance(opts, dict) else {}
+                        except Exception:
+                            opts = {}
+
+                        preset = str(opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or "").strip().lower()
+                        if preset not in {"quick", "standard", "deep", "research"}:
+                            preset = "standard"
+
+                        split_min, split_max = 2, 8
+                        if preset == "quick":
+                            split_min, split_max = 2, 4
+                        elif preset == "deep":
+                            split_min, split_max = 4, 12
+                        elif preset == "research":
+                            split_min, split_max = 3, 8
+
+                        try:
+                            max_points_override = int(opts.get("max_points") or 0)
+                        except Exception:
+                            max_points_override = 0
+                        if max_points_override > 0:
+                            split_max = max(1, min(max_points_override, 15))
+                            split_min = min(split_min, split_max)
+
+                        subject = str(profile.preferences.get("subject") or "").strip()
+                        split_step = PlanStep(
+                            id=f"split_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
+                            title="拆分知识点",
+                            tool="split_knowledge_points",
+                            arguments={
+                                "topic": user_input,
+                                "subject": subject,
+                                "min_points": split_min,
+                                "max_points": split_max,
+                            },
+                            thought="先拆分知识点，后续才能逐点深挖并展示 SubAgent 进度。",
+                        )
+                        async for evt in _execute_concrete_step(split_step):
+                            yield evt
+
+                        split_res = ctx.working_memory.get("split_knowledge_points")
+                        kps: List[str] = []
+                        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                            kps = [
+                                str(x or "").strip()
+                                for x in (split_res.get("knowledge_points") or [])
+                                if str(x or "").strip()
+                            ][:15]
+
+                        if kps:
+                            review_step = PlanStep(
+                                id=f"review_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
+                                title="审核知识点列表",
+                                tool="review_knowledge_points",
+                                arguments={
+                                    "topic": user_input,
+                                    "subject": subject,
+                                    "knowledge_points": kps,
+                                    "min_points": split_min,
+                                    "max_points": split_max,
+                                },
+                                thought="对拆分结果做去重、补全与粒度调整，避免过泛/重复，减少后续检索浪费。",
+                            )
+                            async for evt in _execute_concrete_step(review_step):
+                                yield evt
+
+                plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
+                if plan.rationale:
+                    yield agent_event("thinking", {"content": plan.rationale})
+
                 def _split_knowledge_points() -> List[str]:
                     split_res = ctx.working_memory.get("split_knowledge_points") or {}
                     kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
@@ -298,27 +415,6 @@ class AgentCore:
                         parallel_group=str(getattr(step, "parallel_group", "") or ""),
                         thought=thought,
                     )
-
-                split_step = None
-                try:
-                    for s in list(plan.steps or []):
-                        if str(getattr(s, "tool", "") or "").strip() == "split_knowledge_points":
-                            split_step = s
-                            break
-                except Exception:
-                    split_step = None
-
-                if split_step is not None:
-                    async for evt in _execute_concrete_step(split_step):
-                        yield evt
-                    try:
-                        plan.steps = [
-                            s
-                            for s in (plan.steps or [])
-                            if str(getattr(s, "tool", "") or "").strip() != "split_knowledge_points"
-                        ]
-                    except Exception:
-                        pass
 
                 self.state = AgentState.ACTING
                 yield agent_event("thinking", {"content": "Act 阶段：执行工具链…"})
@@ -776,18 +872,55 @@ class AgentCore:
                 # Last-resort fallback to something readable.
                 markdown = f"# 自学材料：{user_input}\n\n（生成结果为空，建议重试或提供更具体的描述）\n"
 
-            yield agent_event("thinking", {"content": "输出 Markdown…"})
-            async for chunk in _chunk_text(markdown, chunk_size=600):
-                yield agent_event("content", {"content": chunk, "section": "markdown"})
-
             self.state = AgentState.COMPRESSING
-            yield agent_event("tool_call", {"name": "compress_context", "arguments": {}})
-            await self.context_manager.compress_if_needed(ctx)
-
+            compress_step_id = f"compress_context-{uuid.uuid4().hex[:8]}"
             yield agent_event(
                 "tool_call",
                 {
+                    "step_id": compress_step_id,
+                    "name": "compress_context",
+                    "title": "压缩上下文",
+                    "arguments": {},
+                },
+            )
+            t0 = time.monotonic()
+            try:
+                before_tokens = self.context_manager.estimate_tokens(ctx)
+                await self.context_manager.compress_if_needed(ctx)
+                after_tokens = self.context_manager.estimate_tokens(ctx)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                yield agent_event(
+                    "tool_result",
+                    {
+                        "step_id": compress_step_id,
+                        "name": "compress_context",
+                        "title": "压缩上下文",
+                        "success": True,
+                        "elapsed_ms": elapsed_ms,
+                        "output": {"before_tokens": before_tokens, "after_tokens": after_tokens},
+                    },
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                yield agent_event(
+                    "tool_result",
+                    {
+                        "step_id": compress_step_id,
+                        "name": "compress_context",
+                        "title": "压缩上下文",
+                        "success": False,
+                        "elapsed_ms": elapsed_ms,
+                        "error": str(exc),
+                    },
+                )
+
+            update_step_id = f"update_user_profile-{uuid.uuid4().hex[:8]}"
+            yield agent_event(
+                "tool_call",
+                {
+                    "step_id": update_step_id,
                     "name": "update_user_profile",
+                    "title": "更新用户画像",
                     "arguments": {
                         "user_id": user_id,
                         "topic": user_input,
@@ -795,21 +928,64 @@ class AgentCore:
                     },
                 },
             )
-            await self.memory_store.record_session(
-                user_id=user_id,
-                topic=user_input,
-                passed=bool(reflection.passed) if reflection else True,
-                issues=(reflection.issues if reflection else []),
-            )
+            t0 = time.monotonic()
+            try:
+                await self.memory_store.record_session(
+                    user_id=user_id,
+                    topic=user_input,
+                    passed=bool(reflection.passed) if reflection else True,
+                    issues=(reflection.issues if reflection else []),
+                )
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                yield agent_event(
+                    "tool_result",
+                    {
+                        "step_id": update_step_id,
+                        "name": "update_user_profile",
+                        "title": "更新用户画像",
+                        "success": True,
+                        "elapsed_ms": elapsed_ms,
+                        "output": {
+                            "user_id": user_id,
+                            "topic": user_input,
+                            "passed": bool(reflection.passed) if reflection else True,
+                            "issues_count": len((reflection.issues if reflection else []) or []),
+                        },
+                    },
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                yield agent_event(
+                    "tool_result",
+                    {
+                        "step_id": update_step_id,
+                        "name": "update_user_profile",
+                        "title": "更新用户画像",
+                        "success": False,
+                        "elapsed_ms": elapsed_ms,
+                        "error": str(exc),
+                    },
+                )
 
             self.state = AgentState.COMPLETED
+            md_url = str(ctx.working_memory.get("md_url") or "").strip()
+            pdf_url = str(ctx.working_memory.get("pdf_url") or "").strip()
+            tex_url = str(ctx.working_memory.get("tex_url") or "").strip()
+            md_filename = str(ctx.working_memory.get("md_filename") or "").strip()
+            pdf_filename = str(ctx.working_memory.get("pdf_filename") or "").strip()
+            tex_filename = str(ctx.working_memory.get("tex_filename") or "").strip()
             yield agent_event(
                 "done",
                 {
                     "material": {
                         "topic": user_input,
-                        "markdown": markdown,
                         "archive_path": archive_path,
+                        "md_url": md_url,
+                        "md_filename": md_filename,
+                        "tex_url": tex_url,
+                        "tex_filename": tex_filename,
+                        "pdf_url": pdf_url,
+                        "pdf_filename": pdf_filename,
                         "iteration": iteration + 1,
                         "passed": bool(reflection.passed) if reflection else True,
                         "issues": reflection.issues if reflection else [],

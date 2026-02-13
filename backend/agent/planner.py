@@ -29,13 +29,24 @@ def _env_truthy(name: str) -> bool:
 
 _CORE_TOOLS: Dict[str, str] = {
     "split_knowledge_points": "把主题拆成多个可检索子知识点（输出 knowledge_points 列表）",
+    "review_knowledge_points": "审核并微调知识点列表（去重/补全/粒度调整）",
     "web_search_knowledge": "联网搜索知识点（Metaso 优先，返回 summary 报告型文本；Exa/智谱可兜底）",
     "aggregate_knowledge": "聚合：拆分 + 网搜 + 题库（可选：百科/网页正文/问答/GitHub）",
-    "generate_study_material": "生成概念讲解（可选：示意图）（基于聚合结果）",
+    "generate_study_material": "生成概念讲解（可选：示意图）（基于聚合结果；如已有绘图结果会自动复用）",
     "assemble_study_archive": "组装最终 Markdown（自学档案）",
     "revise_markdown": "按审查问题修订 Markdown（可选）",
     "save_markdown_file": "保存 Markdown 到文件",
+    "export_study_markdown": "将最终 Markdown 发布为可下载文件（返回 md_url）",
+    "convert_markdown_to_latex": "用 LLM 把 Markdown 转成 ElegantBook LaTeX（返回 tex_url）",
+    "refine_latex": "对 LaTeX 做二次修订（结构/公式/图片/编译友好性）",
+    "compile_latex_to_pdf": "编译 LaTeX 为 PDF（返回 pdf_url）",
     "review_content": "内容审查（结构/完整性/可靠性）",
+}
+
+_DRAW_TOOLS: Dict[str, str] = {
+    "plot_function": "绘制二维函数/隐函数图（支持切线、点、注释），输出 PNG",
+    "plot_3d": "绘制三维曲面 z=f(x,y)，输出 PNG",
+    "draw_diagram": "绘制简易示意图（受力/电路/几何/标注等），输出 PNG",
 }
 
 _QUESTION_TOOLS: Dict[str, str] = {
@@ -50,8 +61,10 @@ _EXTRA_TOOLS: Dict[str, str] = {
     "browse_web_pages": "Browse and extract page text (best-effort)",
 }
 
-def _build_allowed_tools(*, enable_questions: bool, enable_extra_tools: bool) -> Dict[str, str]:
+def _build_allowed_tools(*, enable_questions: bool, enable_extra_tools: bool, enable_diagrams: bool) -> Dict[str, str]:
     tools: Dict[str, str] = dict(_CORE_TOOLS)
+    if enable_diagrams:
+        tools.update(_DRAW_TOOLS)
     if enable_questions:
         tools.update(_QUESTION_TOOLS)
     if enable_extra_tools:
@@ -151,7 +164,7 @@ class Planner:
     def __init__(self, *, config: Optional[AgentConfig] = None) -> None:
         self.config = config or AgentConfig.from_env()
 
-    async def _call_planner_llm(self, *, messages: List[Dict[str, str]], max_tokens: int = 1400) -> str:
+    async def _call_planner_llm(self, *, messages: List[Dict[str, str]], max_tokens: int = 2000) -> str:
         if not LESSON_PLAN_API_KEY:
             return ""
 
@@ -253,26 +266,26 @@ class Planner:
         # Preset defaults (balance quality/speed). These can still be overridden per-task via flags.
         split_min = 2
         split_max = 8
-        web_limit = 8
-        sub_questions = 4  # how many Metaso /ask sub-questions per knowledge point
+        web_limit = 10
+        sub_questions = 6  # how many (decomposed) sub-questions per knowledge point
         max_web_pages = 2
         if preset == "quick":
             split_min, split_max = 2, 4
-            web_limit = 6
-            sub_questions = 2
+            web_limit = 7
+            sub_questions = 3
             max_web_pages = 1
         elif preset == "deep":
             split_min, split_max = 4, 12
-            web_limit = 10
-            sub_questions = 6
+            web_limit = 12
+            sub_questions = 8
             max_web_pages = 3
             # Deep preset does not auto-enable extra tools by default
             # enable_extra_tools = True  # deep implies richer retrieval
         elif preset == "research":
             # Research mode: fewer points but deeper per-point retrieval + synthesis.
             split_min, split_max = 3, 8
-            web_limit = 12
-            sub_questions = 6
+            web_limit = 14
+            sub_questions = 8
             max_web_pages = 4
             # Research preset does not auto-enable extra tools by default
             # enable_extra_tools = True
@@ -291,14 +304,6 @@ class Planner:
             sub_q_pass1 = max(3, min(sub_questions, 4))
 
         steps: List[PlanStep] = [
-            PlanStep(
-                id=sid("split_knowledge_points"),
-                title="拆分知识点",
-                tool="split_knowledge_points",
-                # Keep the split compact by default; too many points makes the final archive noisy.
-                arguments={"topic": topic, "subject": subject, "min_points": split_min, "max_points": split_max},
-                thought="先把主题拆成多个可操作的子知识点，后续逐点探索并展示进度。",
-            ),
             PlanStep(
                 id=sid("web_search_knowledge"),
                 title="联网搜索知识点（报告型摘要）",
@@ -485,6 +490,7 @@ class Planner:
                         "max_page_chars": 3200 if preset == "research" else 2600,
                         "with_questions": bool(use_questions),
                         "with_diagrams": bool(enable_diagrams),
+                        "max_diagrams": 4 if preset == "research" else 3 if preset == "deep" else 2 if preset == "standard" else 1,
                     },
                     foreach_knowledge_point=True,
                     thought="根据聚合素材，为当前知识点生成概念讲解，并尽量配一张简洁示意图。",
@@ -520,6 +526,34 @@ class Planner:
                     thought="把最终结果保存为本地 Markdown 文件，便于复习与分享。",
                 ),
                 PlanStep(
+                    id=sid("export_study_markdown"),
+                    title="导出 Markdown 下载文件",
+                    tool="export_study_markdown",
+                    arguments={"topic": topic},
+                    thought="将最终 Markdown 发布为可下载链接，前端仅展示下载入口而不直接渲染全文。",
+                ),
+                PlanStep(
+                    id=sid("convert_markdown_to_latex"),
+                    title="Markdown → LaTeX（ElegantBook）",
+                    tool="convert_markdown_to_latex",
+                    arguments={"topic": topic, "subject": subject},
+                    thought="使用 LLM 将 Markdown 转为 ElegantBook LaTeX，为编译 PDF 做准备。",
+                ),
+                PlanStep(
+                    id=sid("refine_latex"),
+                    title="LaTeX 二次修订",
+                    tool="refine_latex",
+                    arguments={"topic": topic, "subject": subject},
+                    thought="对 LaTeX 进行二次修订，尽量减少编译失败与排版问题。",
+                ),
+                PlanStep(
+                    id=sid("compile_latex_to_pdf"),
+                    title="编译 PDF",
+                    tool="compile_latex_to_pdf",
+                    arguments={"topic": topic},
+                    thought="编译 LaTeX 生成 PDF，并发布为可下载链接。",
+                ),
+                PlanStep(
                     id=sid("review_content"),
                     title="内容审查",
                     tool="review_content",
@@ -530,9 +564,9 @@ class Planner:
         )
 
         if use_questions:
-            rationale = f"计划：拆分→逐点网搜→逐点题库→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+            rationale = f"计划：拆分/审核（已完成）→逐点网搜→逐点题库→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         else:
-            rationale = f"计划：拆分→逐点网搜→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+            rationale = f"计划：拆分/审核（已完成）→逐点网搜→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
 
     def _parse_llm_plan(
@@ -559,6 +593,9 @@ class Planner:
             if not isinstance(item, dict):
                 continue
             tool = str(item.get("tool") or "").strip()
+            # split/review knowledge points are executed before planning; skip them if the model includes.
+            if tool in {"split_knowledge_points", "review_knowledge_points"}:
+                continue
             if tool not in allowed_tools:
                 continue
             title = str(item.get("title") or tool).strip() or tool
@@ -589,30 +626,17 @@ class Planner:
         if not steps:
             return None
 
-        # Ensure the plan starts with split_knowledge_points.
-        flags = flags if isinstance(flags, dict) else {}
-        split_max = 8
-        try:
-            split_max = int(flags.get("max_points") or 8)
-        except Exception:
-            split_max = 8
-        split_max = max(1, min(split_max, 15))
-
-        if steps[0].tool != "split_knowledge_points":
-            steps.insert(
-                0,
-                PlanStep(
-                    id=sid("split_knowledge_points"),
-                    title="拆分知识点",
-                    tool="split_knowledge_points",
-                    # Keep the split compact by default; too many points makes the final archive noisy and slow.
-                    arguments={"topic": topic, "subject": subject, "min_points": 2, "max_points": split_max},
-                    thought="先拆分知识点，方便逐点探索并可视化进度。",
-                ),
-            )
-
         # Ensure essential finishing steps exist.
-        required_tail = ["generate_study_material", "assemble_study_archive", "save_markdown_file", "review_content"]
+        required_tail = [
+            "generate_study_material",
+            "assemble_study_archive",
+            "save_markdown_file",
+            "export_study_markdown",
+            "convert_markdown_to_latex",
+            "refine_latex",
+            "compile_latex_to_pdf",
+            "review_content",
+        ]
         existing_tools = {s.tool for s in steps}
         for tool in required_tail:
             if tool in existing_tools:
@@ -639,6 +663,7 @@ class Planner:
                             "max_page_chars": 2600,
                             "with_questions": bool(enable_questions),
                             "with_diagrams": bool(enable_diagrams),
+                            "max_diagrams": 4 if preset == "research" else 3 if preset == "deep" else 2 if preset == "standard" else 1,
                         },
                         thought="生成概念讲解并尽量配图，形成可直接自学的内容。",
                     )
@@ -661,6 +686,46 @@ class Planner:
                         tool=tool,
                         arguments={"topic": topic, "dir": "study_archives"},
                         thought="保存到本地文件，方便后续复习。",
+                    )
+                )
+            elif tool == "export_study_markdown":
+                steps.append(
+                    PlanStep(
+                        id=sid(tool),
+                        title="导出 Markdown 下载文件",
+                        tool=tool,
+                        arguments={"topic": topic},
+                        thought="发布 Markdown 为下载链接（不在页面渲染全文）。",
+                    )
+                )
+            elif tool == "convert_markdown_to_latex":
+                steps.append(
+                    PlanStep(
+                        id=sid(tool),
+                        title="Markdown → LaTeX（ElegantBook）",
+                        tool=tool,
+                        arguments={"topic": topic, "subject": subject},
+                        thought="将 Markdown 转为 ElegantBook LaTeX，以便编译 PDF。",
+                    )
+                )
+            elif tool == "refine_latex":
+                steps.append(
+                    PlanStep(
+                        id=sid(tool),
+                        title="LaTeX 二次修订",
+                        tool=tool,
+                        arguments={"topic": topic, "subject": subject},
+                        thought="对 LaTeX 做二次修订，减少排版/编译问题。",
+                    )
+                )
+            elif tool == "compile_latex_to_pdf":
+                steps.append(
+                    PlanStep(
+                        id=sid(tool),
+                        title="编译 PDF",
+                        tool=tool,
+                        arguments={"topic": topic},
+                        thought="编译 LaTeX 得到 PDF 并发布下载链接。",
                     )
                 )
             elif tool == "review_content":
@@ -707,6 +772,7 @@ class Planner:
         allowed_tools = _build_allowed_tools(
             enable_questions=bool(flags.get("enable_questions")),
             enable_extra_tools=bool(flags.get("enable_extra_tools")),
+            enable_diagrams=bool(flags.get("enable_diagrams")),
         )
 
         last_reflection = context.working_memory.get("last_reflection") or {}
@@ -726,12 +792,23 @@ class Planner:
         tool_desc = "\n".join([f"- {k}: {v}" for k, v in allowed_tools.items()])
         notes: List[str] = [
             "必须输出 JSON 对象，不要 Markdown，不要额外解释文字。",
-            "计划必须以 split_knowledge_points 开始。",
+            "知识点已在 Plan 阶段前置拆分并审核，计划不需要包含 split_knowledge_points/review_knowledge_points。",
             "建议对 web_search_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
             "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
             "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
             "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
         ]
+        if bool(flags.get("enable_diagrams")):
+            notes.extend(
+                [
+                    "你可以自主决定是否画图，并自行调度绘图工具多次（总计建议 3~12 次，按需要可更多/更少）。",
+                    "绘图工具支持 foreach_knowledge_point=true（推荐用于逐知识点配图）。每次绘图应传入 knowledge_point 或使用 foreach_knowledge_point 让执行器自动注入 knowledge_points=[kp]。",
+                    "plot_function 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"spec\":{\"x_range\":[-5,5],\"y_range\":[-5,5],\"curves\":[{\"expr\":\"sin(x)\",\"label\":\"y=sin x\"}],\"implicit_curves\":[{\"expr\":\"x^2+y^2-1\"}],\"tangent_lines\":[{\"curve_index\":0,\"at_x\":0}]}}",
+                    "plot_3d 参数示例：{\"knowledge_point\":\"...\",\"spec\":{\"expr\":\"sin(x)+cos(y)\",\"x_range\":[-3,3],\"y_range\":[-3,3],\"resolution\":80}}",
+                    "draw_diagram 参数示例：{\"knowledge_point\":\"...\",\"spec\":{\"objects\":[{\"id\":\"A\",\"shape\":\"block\",\"pos\":[0,0],\"size\":[4,2],\"label\":\"物体\"}],\"forces\":[{\"object\":\"A\",\"label\":\"F\",\"direction\":[1,0],\"length\":3.2}],\"annotations\":[{\"text\":\"...\",\"x\":4,\"y\":2,\"arrow_to\":[2,1]}]}}",
+                    "说明：绘图工具会把图片结果累积保存，assemble_study_archive 会自动插入到对应知识点。",
+                ]
+            )
         preset = str(flags.get("preset") or "standard")
         if preset == "quick":
             notes.append("当前 preset=quick：优先保证速度与结构清晰，尽量减少额外检索工具与轮次。")
@@ -786,7 +863,7 @@ class Planner:
                     {"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
-                max_tokens=1400,
+                max_tokens=2000,
             )
             obj = _extract_json_obj(text)
             parsed = self._parse_llm_plan(

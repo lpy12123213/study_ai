@@ -51,7 +51,6 @@ function flattenToEntries(data: unknown): [string, string][] {
       return text.length > 150 ? text.slice(0, 150) + '…' : text
     })
     const entries: [string, string][] = summaries.map((s, i) => [`#${i + 1}`, s])
-    if (data.length > 5) entries.push(['', `… 共 ${data.length} 项`])
     return entries
   }
   if (typeof data === 'object') {

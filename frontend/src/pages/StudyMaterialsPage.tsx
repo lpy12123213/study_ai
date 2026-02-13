@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { BookOpen, GripVertical, Layers, Loader2, Plus, Send, Square } from 'lucide-react'
+import { BookOpen, ChevronLeft, ChevronRight, GripVertical, Layers, Loader2, Plus, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -51,6 +51,9 @@ function normalizeKnowledgePoints(points: unknown): string[] {
   for (const item of points) {
     const text = typeof item === 'string' ? item.trim() : ''
     if (!text) continue
+    if (/^(?:\.\.\.|…)(?:\s*(?:[（(]\s*)?共\s*\d+\s*项(?:\s*[)）])?)?\s*$/u.test(text)) {
+      continue
+    }
     if (seen.has(text)) continue
     seen.add(text)
     out.push(text)
@@ -116,9 +119,12 @@ function SubAgentPanel({
         {activities.map((activity) => {
           const isActive = activity.knowledgePoint === selectedKP
           return (
-            <button
+            <motion.button
               key={activity.knowledgePoint}
               onClick={() => onTabChange(activity.knowledgePoint)}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18 }}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors',
                 isActive
@@ -128,53 +134,70 @@ function SubAgentPanel({
             >
               {statusIcon(activity.status)}
               <span>{activity.knowledgePoint}</span>
-            </button>
+            </motion.button>
           )
         })}
       </div>
 
       {/* Content area */}
-      <div className="flex-1 overflow-auto p-4">
-        {selectedActivity ? (
-          <div>
-            <div className="flex items-center gap-2 mb-4">
-              {statusIcon(selectedActivity.status)}
-              <span className="text-sm font-medium">{selectedActivity.knowledgePoint}</span>
-              <Badge
-                variant={
-                  selectedActivity.status === 'running'
-                    ? 'default'
-                    : selectedActivity.status === 'completed'
-                      ? 'secondary'
+      <div className="flex-1 overflow-auto p-4 min-h-0 overscroll-contain">
+        <AnimatePresence mode="popLayout">
+          {selectedActivity ? (
+            <motion.div
+              key={selectedKP}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="flex items-center gap-2 mb-4">
+                {statusIcon(selectedActivity.status)}
+                <span className="text-sm font-medium">{selectedActivity.knowledgePoint}</span>
+                <Badge
+                  variant={
+                    selectedActivity.status === 'running'
+                      ? 'default'
+                      : selectedActivity.status === 'completed'
+                        ? 'secondary'
+                        : selectedActivity.status === 'failed'
+                          ? 'destructive'
+                          : 'outline'
+                  }
+                  className="text-xs"
+                >
+                  {selectedActivity.status === 'pending'
+                    ? '待处理'
+                    : selectedActivity.status === 'running'
+                      ? '进行中'
                       : selectedActivity.status === 'failed'
-                        ? 'destructive'
-                        : 'outline'
-                }
-                className="text-xs"
-              >
-                {selectedActivity.status === 'pending'
-                  ? '待处理'
-                  : selectedActivity.status === 'running'
-                    ? '进行中'
-                    : selectedActivity.status === 'failed'
-                      ? '失败'
-                      : '已完成'}
-              </Badge>
-            </div>
-
-            {selectedActivity.steps.length > 0 ? (
-              <TaskTimeline steps={selectedActivity.steps} />
-            ) : (
-              <div className="text-sm text-muted-foreground">
-                {selectedActivity.status === 'pending'
-                  ? '等待开始...'
-                  : '暂无步骤记录'}
+                        ? '失败'
+                        : '已完成'}
+                </Badge>
               </div>
-            )}
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground">选择一个知识点查看详情</div>
-        )}
+
+              {selectedActivity.steps.length > 0 ? (
+                <TaskTimeline steps={selectedActivity.steps} />
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  {selectedActivity.status === 'pending'
+                    ? '等待开始...'
+                    : '暂无步骤记录'}
+                </div>
+              )}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="text-sm text-muted-foreground"
+            >
+              选择一个知识点查看详情
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   )
@@ -355,6 +378,8 @@ export default function StudyMaterialsPage() {
   // Active tab in SubAgent panel
   const [activeSubAgentTab, setActiveSubAgentTab] = useState<string | null>(null)
 
+  const [subAgentCollapsed, setSubAgentCollapsed] = useState(false)
+
   // Advanced options (optional; when unset, backend uses `.env` defaults)
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [subject, setSubject] = useState('')
@@ -397,6 +422,67 @@ export default function StudyMaterialsPage() {
     if (!scrollRef.current) return
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages.length])
+
+  const hasSubAgentPane = isGenerating || subAgentActivities.length > 0
+
+  useEffect(() => {
+    if (!hasSubAgentPane) {
+      setSubAgentCollapsed(false)
+    }
+  }, [hasSubAgentPane])
+
+  // Reconstruct subAgentActivities from persisted messages on load / conversation switch
+  useEffect(() => {
+    if (!activeConversationId) return
+    if (isGeneratingLocal) return // don't overwrite while streaming
+
+    const msgs = useConversationStore.getState().getMessages(activeConversationId)
+    const allSteps: TaskStep[] = []
+    for (const m of msgs) {
+      if (m.role === 'assistant' && Array.isArray(m.steps)) {
+        allSteps.push(...m.steps)
+      }
+    }
+    if (allSteps.length === 0) return
+
+    // Find the split_knowledge_points result to get the full KP list
+    let kpList: string[] = []
+    for (const step of allSteps) {
+      if (step.toolName === 'split_knowledge_points' && step.output && typeof step.output === 'object') {
+        const out = step.output as Record<string, unknown>
+        kpList = normalizeKnowledgePoints(out.knowledge_points)
+        if (kpList.length > 0) break
+      }
+    }
+    if (kpList.length === 0) return
+
+    // Collect per-KP steps
+    const kpStepsMap = new Map<string, TaskStep[]>()
+    for (const kp of kpList) kpStepsMap.set(kp, [])
+
+    for (const step of allSteps) {
+      const stepKps = extractStepKnowledgePoints(step)
+      if (stepKps.length === 1 && kpStepsMap.has(stepKps[0])) {
+        kpStepsMap.get(stepKps[0])!.push(step)
+      }
+    }
+
+    const activities: SubAgentActivity[] = kpList.map((kp) => {
+      const steps = kpStepsMap.get(kp) || []
+      let status: SubAgentActivity['status'] = 'pending'
+      if (steps.length > 0) {
+        const hasRunning = steps.some((s) => s.status === 'running')
+        const hasFailed = steps.some((s) => s.status === 'failed')
+        if (hasRunning) status = 'running'
+        else if (hasFailed) status = 'failed'
+        else status = 'completed'
+      }
+      return { knowledgePoint: kp, status, steps }
+    })
+
+    setSubAgentActivities(activities)
+    setActiveSubAgentTab((prev) => prev || kpList[0])
+  }, [activeConversationId, isGeneratingLocal])
 
   const abortActiveStream = useCallback(() => {
     if (streamAbortRef.current) {
@@ -685,11 +771,9 @@ export default function StudyMaterialsPage() {
             })
           }
 
-          // Initialize subAgentActivities when split_knowledge_points returns
-          if (toolName === 'split_knowledge_points' && out && typeof out === 'object') {
-            const kps = Array.isArray((out as any).knowledge_points)
-              ? ((out as any).knowledge_points as string[])
-              : []
+          // Initialize/refresh subAgentActivities when knowledge points are produced/reviewed
+          if ((toolName === 'split_knowledge_points' || toolName === 'review_knowledge_points') && out && typeof out === 'object') {
+            const kps = normalizeKnowledgePoints((out as any).knowledge_points)
             if (kps.length > 0) {
               setSubAgentActivities(
                 kps.map((kp) => ({
@@ -698,6 +782,7 @@ export default function StudyMaterialsPage() {
                   steps: [],
                 }))
               )
+              setActiveSubAgentTab((prev) => prev || kps[0])
             }
           }
           return
@@ -769,14 +854,22 @@ export default function StudyMaterialsPage() {
           flushAssistant()
 
           const t = new Date().toISOString()
-          const md = toText(payload?.material?.markdown)
-          if (md) {
-            assistantText = md
-            useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
-              content: md,
-              steps: assistantSteps,
-            })
-          }
+          const mdUrl = toText(payload?.material?.md_url)
+          const pdfUrl = toText(payload?.material?.pdf_url)
+          const content =
+            mdUrl || pdfUrl
+              ? [
+                  '已生成自学资料，可下载：',
+                  '',
+                  mdUrl ? `- Markdown： [下载](${mdUrl})` : '- Markdown： （生成失败或未导出）',
+                  pdfUrl ? `- PDF： [下载](${pdfUrl})` : '- PDF： （生成失败或未编译）',
+                ].join('\n')
+              : assistantText || '已完成生成。'
+
+          useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+            content,
+            steps: assistantSteps,
+          })
 
           useConversationStore.getState().updateConversation(conversationId, {
             updatedAt: t,
@@ -1012,21 +1105,21 @@ export default function StudyMaterialsPage() {
     }
   }
 
-  const showSplitPane = isGenerating || subAgentActivities.length > 0
+  const showSplitPane = hasSubAgentPane && !subAgentCollapsed
 
   return (
-    <div ref={containerRef} className="h-full flex flex-col relative">
+    <div ref={containerRef} className="h-full flex flex-col relative overflow-hidden min-h-0">
       {/* Messages area (or welcome) */}
-      {messages.length === 0 && !showSplitPane ? (
+      {messages.length === 0 && !hasSubAgentPane ? (
         <WelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
-        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex overflow-hidden min-h-0 relative">
           {/* ── Left column: Main agent (chat + steps) ── */}
           <div
             className="flex flex-col overflow-hidden"
             style={{ width: showSplitPane ? `${leftRatio * 100}%` : '100%' }}
           >
-            <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+            <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32 overscroll-contain min-h-0">
               <div className="py-6">
                 {hasResumableStream && !isGenerating && activeConversationId && activeStream && (
                   <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
@@ -1111,17 +1204,29 @@ export default function StudyMaterialsPage() {
           {/* ── Right column: SubAgent panel ── */}
           {showSplitPane && (
             <div
-              className="flex flex-col overflow-hidden border-l border-border bg-muted/20"
+              className="flex flex-col overflow-hidden border-l border-border bg-muted/20 min-h-0"
               style={{ width: `${(1 - leftRatio) * 100}%` }}
             >
-              <div className="px-4 py-3 border-b border-border bg-background/50 backdrop-blur-sm">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <Layers className="h-4 w-4 text-primary" />
-                  SubAgent 工作区
-                </div>
+              <div className="px-4 py-3 border-b border-border bg-background/50 backdrop-blur-sm flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Layers className="h-4 w-4 text-primary" />
+                    SubAgent 工作区
+                  </div>
                 <div className="text-xs text-muted-foreground mt-0.5">
                   逐知识点深入研究，为资料提供素材
                 </div>
+              </div>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => setSubAgentCollapsed(true)}
+                  title="收起"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
               </div>
               <SubAgentPanel
                 activities={subAgentActivities}
@@ -1129,6 +1234,19 @@ export default function StudyMaterialsPage() {
                 onTabChange={setActiveSubAgentTab}
               />
             </div>
+          )}
+
+          {!showSplitPane && hasSubAgentPane && (
+            <Button
+              type="button"
+              size="icon"
+              variant="secondary"
+              className="absolute right-2 top-3 z-20 h-9 w-9 rounded-full shadow"
+              onClick={() => setSubAgentCollapsed(false)}
+              title="展开 SubAgent"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
           )}
         </div>
       )}
