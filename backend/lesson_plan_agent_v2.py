@@ -35,7 +35,10 @@ from backend.core.settings import (
     LESSON_PLAN_MODEL,
     LESSON_PLAN_PROVIDER,
     LESSON_PLAN_TEMPERATURE,
+    MOONSHOT_API_KEY,
+    MOONSHOT_BASE_URL,
 )
+from backend.core import llm_console
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_DIR = (REPO_ROOT / ".local" / "media" / "generated").resolve()
@@ -56,6 +59,16 @@ SYSTEM_PROMPT = """你是一位资深教育内容设计专家，擅长编写教�
   - summary: 课程小结
 - content 字段中的文字必须是你自己撰写的，不得复制粘贴来源原文
 - 不要输出“参考文献/References/URL 列表”字段（系统会另行处理下载与排版）"""
+
+
+def _lpv2_infinite_max_tokens() -> int:
+    raw = (os.getenv("LESSON_PLAN_V2_MAX_TOKENS") or "").strip()
+    try:
+        v = int(raw) if raw else 0
+    except Exception:
+        v = 0
+    # "Infinite" (requested): use a very large number so generation isn't artificially truncated.
+    return v if v > 0 else 200000
 
 
 def _agent_event(kind: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,10 +120,40 @@ async def _call_llm_text(
     raise_on_fail: bool = True,
     retries: Optional[int] = None,
 ) -> str:
-    if not LESSON_PLAN_API_KEY:
+    provider = str(LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
+    base_url = str(LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
+    api_key = str(LESSON_PLAN_API_KEY or "").strip()
+
+    normalized_model = str(model or "").strip()
+    model_lower = normalized_model.lower()
+    moonshot_key = str(MOONSHOT_API_KEY or "").strip()
+    moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
+
+    if provider == "moonshot" or (
+        provider == "openrouter"
+        and moonshot_key
+        and (model_lower.startswith("moonshotai/") or model_lower.startswith("kimi-") or model_lower.startswith("moonshot-"))
+    ):
+        provider = "moonshot"
+        api_key = moonshot_key or api_key
+        base_url = moonshot_base_url or base_url
+        if "/" in normalized_model:
+            normalized_model = normalized_model.split("/")[-1]
+
+    if not api_key:
         if raise_on_fail:
             raise RuntimeError("llm_not_configured")
         return ""
+
+    req_id_base = f"lpv2-{uuid.uuid4().hex[:8]}"
+
+    def _elapsed_s(start_ts: float) -> float:
+        if not start_ts:
+            return 0.0
+        try:
+            return max(0.0, time.time() - float(start_ts))
+        except Exception:
+            return 0.0
 
     def _max_retries() -> int:
         raw = str(retries if retries is not None else os.getenv("LESSON_PLAN_LLM_RETRIES") or os.getenv("AGENT_LLM_RETRIES") or "6").strip()
@@ -145,26 +188,38 @@ async def _call_llm_text(
         return msg[:260]
 
     payload: Dict[str, Any] = {
-        "model": model,
+        "model": normalized_model,
         "messages": messages,
         "temperature": float(temperature),
         "max_tokens": int(max_tokens),
         "stream": False,
     }
-    if reasoning and str(LESSON_PLAN_PROVIDER or "").lower() == "openrouter":
+    if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+        payload["temperature"] = 1.0
+    if reasoning and provider == "openrouter":
         payload["reasoning"] = dict(reasoning)
 
-    headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
     timeout_s = float(API_TIMEOUT or 120)
     last_error: str = ""
     max_retry = _max_retries()
 
     for attempt in range(max_retry):
+        req_id = f"{req_id_base}-{attempt + 1}"
+        start_ts = llm_console.log_start(
+            req_id=req_id,
+            provider=provider,
+            model=normalized_model,
+            stream=False,
+            temperature=float(payload.get("temperature") or 0.0),
+            max_tokens=int(payload.get("max_tokens") or 0),
+            base_url=base_url,
+        )
         try:
             async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
                 resp = await client.post(
-                    f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                    f"{base_url}/chat/completions",
                     headers=headers,
                     json=payload,
                 )
@@ -179,20 +234,41 @@ async def _call_llm_text(
                 if wait_s <= 0:
                     wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
                 last_error = f"http_status_{resp.status_code}"
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(wait_s)
                 continue
 
             resp.raise_for_status()
             data = resp.json()
             try:
-                return str(data["choices"][0]["message"]["content"] or "")
+                content = str(data["choices"][0]["message"]["content"] or "")
+                finish_reason = ""
+                usage: Dict[str, Any] = {}
+                try:
+                    choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                    finish_reason = str(choice0.get("finish_reason") or "")
+                except Exception:
+                    finish_reason = ""
+                if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                    usage = dict(data.get("usage") or {})
+                if content:
+                    llm_console.log_delta(req_id=req_id, channel="content", text=content)
+                llm_console.log_end(
+                    req_id=req_id,
+                    elapsed_s=_elapsed_s(start_ts),
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    content_chars=len(content),
+                )
+                return content
             except Exception:
                 last_error = "invalid_response"
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 if attempt < (max_retry - 1):
                     await asyncio.sleep(min(3.0, 0.4 + random.random() * 0.8))
                     continue
                 if raise_on_fail:
-                    raise RuntimeError(f"llm_invalid_response model={model}")
+                    raise RuntimeError(f"llm_invalid_response model={normalized_model}")
                 return ""
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code if exc.response is not None else 0
@@ -204,35 +280,42 @@ async def _call_llm_text(
                     payload.pop("reasoning", None)
                 except Exception:
                     pass
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(0.2)
                 continue
             if status in retry_statuses and attempt < (max_retry - 1):
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                 continue
+            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
             if raise_on_fail:
                 raise RuntimeError(
-                    f"llm_request_failed status={status} model={model} provider={LESSON_PLAN_PROVIDER} msg={api_msg or last_error}"
+                    f"llm_request_failed status={status} model={normalized_model} provider={provider} msg={api_msg or last_error}"
                 )
             return ""
         except (httpx.TimeoutException, httpx.RequestError) as exc:
             last_error = str(exc)
             if attempt < (max_retry - 1):
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                 continue
+            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
             if raise_on_fail:
-                raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
+                raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error}")
             return ""
         except Exception as exc:  # pragma: no cover
             last_error = str(exc)
             if attempt < (max_retry - 1):
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                 continue
+            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
             if raise_on_fail:
-                raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
+                raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error}")
             return ""
 
     if raise_on_fail:
-        raise RuntimeError(f"llm_request_failed model={model} err={last_error or 'unknown'}")
+        raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error or 'unknown'}")
     return ""
 
 
@@ -242,7 +325,6 @@ async def _split_knowledge_points(
     """Split topic into sub-knowledge points (LLM only; fail fast on repeated failures)."""
 
     model = str(os.getenv("LESSON_PLAN_SPLIT_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
-    reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
     prompt = {
         "topic": topic,
@@ -264,8 +346,7 @@ async def _split_knowledge_points(
             ],
             model=model,
             temperature=0.2,
-            max_tokens=600,
-            reasoning=reasoning,
+            max_tokens=2400,
             raise_on_fail=True,
         )
         obj = _extract_json_obj(text)
@@ -281,7 +362,6 @@ async def _research_knowledge_point(kp: str, subject: str, topic: str) -> Dict[s
     """Research a single knowledge point (LLM only)."""
 
     model = str(os.getenv("LESSON_PLAN_RESEARCH_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
-    reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
     prompt = {
         "knowledge_point": kp,
@@ -309,8 +389,7 @@ async def _research_knowledge_point(kp: str, subject: str, topic: str) -> Dict[s
             ],
             model=model,
             temperature=0.3,
-            max_tokens=900,
-            reasoning=reasoning,
+            max_tokens=2600,
             raise_on_fail=True,
         )
         obj = _extract_json_obj(text)
@@ -330,7 +409,6 @@ async def _review_knowledge_points(
     max_points: int,
 ) -> List[str]:
     model = str(os.getenv("LESSON_PLAN_KP_REVIEW_MODEL") or os.getenv("LESSON_PLAN_SPLIT_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
-    reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
     prompt = {
         "topic": topic,
@@ -354,8 +432,7 @@ async def _review_knowledge_points(
             ],
             model=model,
             temperature=0.2,
-            max_tokens=700,
-            reasoning=reasoning,
+            max_tokens=2400,
             raise_on_fail=True,
         )
         obj = _extract_json_obj(text)
@@ -385,7 +462,6 @@ async def _generate_lesson_plan_json(
     research_context: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     model = str(os.getenv("LESSON_PLAN_WRITER_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
-    reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
     prompt_parts = [
         f"请为以下课程编写一份 {duration_minutes} 分钟的教案（结构化 JSON）：",
@@ -438,8 +514,7 @@ async def _generate_lesson_plan_json(
             ],
             model=model,
             temperature=float(LESSON_PLAN_TEMPERATURE or 0.7),
-            max_tokens=int(LESSON_PLAN_MAX_TOKENS or 2000),
-            reasoning=reasoning,
+            max_tokens=_lpv2_infinite_max_tokens(),
             raise_on_fail=True,
         )
         obj = _extract_json_obj(text)
@@ -565,7 +640,6 @@ def _publish_generated_text(text: str, *, ext: str) -> Dict[str, Any]:
 
 async def _convert_markdown_to_latex(*, markdown: str, title: str, subject: str) -> str:
     model = str(os.getenv("LESSON_PLAN_LATEX_MODEL") or os.getenv("STUDY_MATERIALS_LATEX_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
-    reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
     safe_title = title.replace("{", "\\{").replace("}", "\\}")
     template = (
@@ -610,8 +684,7 @@ async def _convert_markdown_to_latex(*, markdown: str, title: str, subject: str)
             ],
             model=model,
             temperature=0.2,
-            max_tokens=3800,
-            reasoning=reasoning,
+            max_tokens=_lpv2_infinite_max_tokens(),
             raise_on_fail=True,
         )
     ).strip()
@@ -638,7 +711,6 @@ async def _convert_markdown_to_latex(*, markdown: str, title: str, subject: str)
 
 async def _refine_latex(*, latex: str, topic: str, subject: str, compile_error: str = "") -> str:
     model = str(os.getenv("LESSON_PLAN_LATEX_MODEL") or os.getenv("STUDY_MATERIALS_LATEX_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
-    reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
     reqs = [
         "请对下面 LaTeX 进行修订，使其可以稳定编译且排版合理。",
@@ -658,8 +730,7 @@ async def _refine_latex(*, latex: str, topic: str, subject: str, compile_error: 
             ],
             model=model,
             temperature=0.2,
-            max_tokens=3800,
-            reasoning=reasoning,
+            max_tokens=_lpv2_infinite_max_tokens(),
             raise_on_fail=True,
         )
     ).strip()
@@ -729,7 +800,7 @@ async def generate_lesson_plan_stream(
 ) -> AsyncIterator[Dict[str, Any]]:
     """Generate a lesson plan and export Markdown/PDF (streaming tool events)."""
 
-    if not LESSON_PLAN_API_KEY:
+    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
         yield _agent_event('error', {'message': 'llm_not_configured'})
         return
 

@@ -1,5 +1,7 @@
 from typing import List, Dict, Any
 import os
+import time
+import uuid
 import httpx
 from dotenv import load_dotenv
 
@@ -8,6 +10,8 @@ load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+from backend.core import llm_console
 
 
 def calculate_difficulty_score(questions: List[Dict[str, Any]]) -> float:
@@ -94,6 +98,21 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
 
 请从试卷结构、难度分布、适用对象、答题建议等方面进行简要分析。语言要专业但易懂。"""
 
+    req_id = f"paper-comment-{uuid.uuid4().hex[:8]}"
+    start_ts = llm_console.log_start(
+        req_id=req_id,
+        provider="openrouter",
+        model="x-ai/grok-4.1-fast:free",
+        stream=False,
+        temperature=0.7,
+        max_tokens=300,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    finish_reason = ""
+    usage: Dict[str, Any] = {}
+    content_chars = 0
+    err = ""
+
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
@@ -116,14 +135,45 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
 
             if response.status_code == 200:
                 data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
+                try:
+                    choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                    finish_reason = str(choice0.get("finish_reason") or "")
+                except Exception:
+                    finish_reason = ""
+                if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                    usage = dict(data.get("usage") or {})
+                content = ""
+                try:
+                    content = str(data["choices"][0]["message"]["content"] or "").strip()
+                except Exception:
+                    content = ""
+                if content:
+                    content_chars = len(content)
+                    llm_console.log_delta(req_id=req_id, channel="content", text=content)
+                return content or _fallback_comment(paper_name, q_count, diff_str, type_info)
             else:
+                err = f"http_status_{response.status_code}"
                 print(f"OpenRouter API error: {response.status_code} - {response.text}")
                 return _fallback_comment(paper_name, q_count, diff_str, type_info)
 
     except Exception as e:
+        err = str(e)
         print(f"AI comment generation failed: {e}")
         return _fallback_comment(paper_name, q_count, diff_str, type_info)
+    finally:
+        elapsed_s = 0.0
+        try:
+            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
+        except Exception:
+            elapsed_s = 0.0
+        llm_console.log_end(
+            req_id=req_id,
+            elapsed_s=elapsed_s,
+            finish_reason=finish_reason,
+            usage=usage,
+            content_chars=content_chars,
+            error=err,
+        )
 
 
 def _fallback_comment(paper_name: str, q_count: int, diff_str: str, type_info: str) -> str:

@@ -4,9 +4,12 @@ AI 对话服务 - 使用 OpenAI-compatible API（OpenRouter / Fireworks）实现
 import json
 import re
 import asyncio
+import time
+import uuid
 import httpx
 from typing import List, Dict, Any, AsyncGenerator, Optional
 from backend.core.settings import settings
+from backend.core import llm_console
 from backend.config import (
     CHAT_PROVIDER,
     MAIN_MODEL,
@@ -592,6 +595,10 @@ class ChatService:
         - This enables switching to Fireworks models from the frontend even when the backend default is OpenRouter.
         """
         m = (model or "").strip()
+        ml = m.lower()
+        moonshot_like = ml.startswith("moonshotai/") or ml.startswith("moonshot/") or ml.startswith("kimi-") or ml.startswith("moonshot-")
+        if moonshot_like and (settings.moonshot_api_key or "").strip():
+            return "moonshot"
         if m.startswith("accounts/"):
             return "fireworks"
         if "/" in m:
@@ -611,6 +618,12 @@ class ChatService:
                 "provider": "fireworks",
                 "base_url": (settings.fireworks_base_url or "").rstrip("/"),
                 "api_key": (settings.fireworks_api_key or "").strip(),
+            }
+        if provider == "moonshot":
+            return {
+                "provider": "moonshot",
+                "base_url": (settings.moonshot_base_url or "").rstrip("/"),
+                "api_key": (settings.moonshot_api_key or "").strip(),
             }
         return {
             "provider": "openrouter",
@@ -1219,13 +1232,41 @@ class ChatService:
         if not api_key:
             return {"success": False, "error": f"未配置 {provider} API Key（当前模型: {effective_model}）"}
 
+        normalized_model = effective_model
+        if provider == "moonshot" and "/" in normalized_model:
+            normalized_model = normalized_model.split("/")[-1]
+
+        effective_temperature = float(MAIN_MODEL_TEMPERATURE)
+        if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+            effective_temperature = 1.0
+
+        req_id_base = f"chat-api-{uuid.uuid4().hex[:8]}"
+
+        def _elapsed_s(start_ts: float) -> float:
+            if not start_ts:
+                return 0.0
+            try:
+                return max(0.0, time.time() - float(start_ts))
+            except Exception:
+                return 0.0
+
         for attempt in range(max_retries):
+            req_id = f"{req_id_base}-{attempt + 1}"
+            start_ts = llm_console.log_start(
+                req_id=req_id,
+                provider=provider,
+                model=normalized_model,
+                stream=False,
+                temperature=effective_temperature,
+                max_tokens=int(MAIN_MODEL_MAX_TOKENS),
+                base_url=base_url,
+            )
             try:
                 payload = {
-                    "model": effective_model,
+                    "model": normalized_model,
                     "messages": messages,
                     "max_tokens": MAIN_MODEL_MAX_TOKENS,
-                    "temperature": MAIN_MODEL_TEMPERATURE
+                    "temperature": effective_temperature
                 }
                 if include_tools:
                     payload["tools"] = tools_override if tools_override is not None else TOOLS
@@ -1238,7 +1279,46 @@ class ChatService:
                 )
 
                 if response.status_code == 200:
-                    return {"success": True, "data": response.json()}
+                    data = response.json()
+                    finish_reason = ""
+                    usage = {}
+                    content_text = ""
+                    tool_summary = ""
+                    try:
+                        choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                        finish_reason = str(choice0.get("finish_reason") or "")
+                        msg = choice0.get("message", {}) if isinstance(choice0.get("message"), dict) else {}
+                        content_text = str(msg.get("content") or "")
+                        tool_calls = msg.get("tool_calls")
+                        if isinstance(tool_calls, list) and tool_calls:
+                            names: List[str] = []
+                            for tc in tool_calls:
+                                if not isinstance(tc, dict):
+                                    continue
+                                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                                name = str((fn or {}).get("name") or "").strip()
+                                if name:
+                                    names.append(name)
+                            if names:
+                                tool_summary = "tool_calls: " + ", ".join(names[:8])
+                    except Exception:
+                        finish_reason = ""
+                        content_text = ""
+                        tool_summary = ""
+                    if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                        usage = dict(data.get("usage") or {})
+                    if content_text:
+                        llm_console.log_delta(req_id=req_id, channel="content", text=content_text)
+                    elif tool_summary:
+                        llm_console.log_delta(req_id=req_id, channel="tool", text=tool_summary)
+                    llm_console.log_end(
+                        req_id=req_id,
+                        elapsed_s=_elapsed_s(start_ts),
+                        finish_reason=finish_reason,
+                        usage=usage,
+                        content_chars=len(content_text),
+                    )
+                    return {"success": True, "data": data}
                 else:
                     detail = ""
                     try:
@@ -1260,12 +1340,16 @@ class ChatService:
                         )
                     else:
                         last_error = f"API错误: {response.status_code} (provider={provider}, model={effective_model})"
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error or "")
             except httpx.ConnectError as e:
                 last_error = f"连接失败: {str(e)}"
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
             except httpx.RemoteProtocolError as e:
                 last_error = f"协议错误: {str(e)}"
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
             except Exception as e:
                 last_error = f"请求错误: {str(e)}"
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
 
             # 等待后重试
             if attempt < max_retries - 1:
@@ -1286,13 +1370,45 @@ class ChatService:
             yield {"type": "error", "content": f"未配置 {provider} API Key（当前模型: {effective_model}）"}
             return
 
+        normalized_model = effective_model
+        if provider == "moonshot" and "/" in normalized_model:
+            normalized_model = normalized_model.split("/")[-1]
+
         payload = {
-            "model": effective_model,
+            "model": normalized_model,
             "messages": messages,
             "max_tokens": MAIN_MODEL_MAX_TOKENS,
             "temperature": MAIN_MODEL_TEMPERATURE,
             "stream": True
         }
+
+        effective_temperature = float(payload.get("temperature") or 0.0)
+        if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+            effective_temperature = 1.0
+            payload["temperature"] = effective_temperature
+
+        req_id = f"chat-stream-{uuid.uuid4().hex[:8]}"
+        start_ts = llm_console.log_start(
+            req_id=req_id,
+            provider=provider,
+            model=normalized_model,
+            stream=True,
+            temperature=effective_temperature,
+            max_tokens=int(MAIN_MODEL_MAX_TOKENS),
+            base_url=base_url,
+        )
+        finish_reason = ""
+        usage: Dict[str, Any] = {}
+        content_chars = 0
+        err = ""
+
+        def _elapsed_s() -> float:
+            if not start_ts:
+                return 0.0
+            try:
+                return max(0.0, time.time() - float(start_ts))
+            except Exception:
+                return 0.0
 
         try:
             async with client.stream(
@@ -1333,6 +1449,7 @@ class ChatService:
                             "type": "error",
                             "content": f"API错误: {response.status_code} (provider={provider}, model={effective_model})",
                         }
+                    err = f"http_status_{response.status_code}"
                     return
 
                 async for line in response.aiter_lines():
@@ -1342,14 +1459,33 @@ class ChatService:
                             break
                         try:
                             data = json.loads(data_str)
-                            delta = data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
+                            choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                            delta = choice0.get("delta", {}) if isinstance(choice0.get("delta"), dict) else {}
+                            content = delta.get("content", "") if isinstance(delta.get("content", ""), str) else ""
                             if content:
+                                llm_console.log_delta(req_id=req_id, channel="content", text=content)
+                                content_chars += len(content)
                                 yield {"type": "text_delta", "content": content}
+
+                            fr = choice0.get("finish_reason")
+                            if isinstance(fr, str) and fr:
+                                finish_reason = fr
+                            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                                usage = dict(data.get("usage") or {})
                         except json.JSONDecodeError:
                             continue
         except Exception as e:
+            err = str(e)
             yield {"type": "error", "content": f"流式请求错误: {str(e)}"}
+        finally:
+            llm_console.log_end(
+                req_id=req_id,
+                elapsed_s=_elapsed_s(),
+                finish_reason=finish_reason,
+                usage=usage,
+                content_chars=content_chars,
+                error=err,
+            )
 
     async def chat(
         self,

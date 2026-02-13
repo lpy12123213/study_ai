@@ -145,7 +145,7 @@ class AgentCore:
         reflection: Optional[ReflectionResult] = None
 
         try:
-            yield agent_event("thinking", {"content": "初始化上下文…"})
+            yield agent_event("status", {"content": "初始化上下文…"})
             self.state = AgentState.WAITING_TOOL
             profile_step_id = f"get_user_profile-{uuid.uuid4().hex[:8]}"
             yield agent_event(
@@ -228,7 +228,7 @@ class AgentCore:
             for iteration in range(self.config.max_iterations):
                 results = ActionResults()
                 self.state = AgentState.PLANNING
-                yield agent_event("thinking", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
+                yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
 
                 async def _execute_concrete_step(concrete_step: PlanStep) -> AsyncIterator[Dict[str, Any]]:
                     """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
@@ -239,7 +239,7 @@ class AgentCore:
 
                     thought = (getattr(concrete_step, "thought", "") or "").strip()
                     if thought:
-                        yield agent_event("thinking", {"content": thought})
+                        yield agent_event("status", {"content": thought})
 
                     # Enrich multi-point tools with the split result for better UX (and to make
                     # downstream tools explicitly reflect the current knowledge points).
@@ -279,8 +279,52 @@ class AgentCore:
                             "arguments": concrete_step.arguments,
                         },
                     )
+                    # Run the tool in the background so we can stream intermediate "thinking"
+                    # events produced by the underlying LLM calls (OpenRouter reasoning stream).
                     t0 = time.monotonic()
-                    step_result = await self.executor.execute_step(concrete_step, context=ctx)
+                    event_queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+
+                    async def _emit(evt: Dict[str, Any]) -> None:
+                        if not isinstance(evt, dict):
+                            return
+                        await event_queue.put(evt)
+
+                    tool_task = asyncio.create_task(
+                        self.executor.execute_step(concrete_step, context=ctx, emit_event=_emit)
+                    )
+                    queue_task: "asyncio.Task[Dict[str, Any]]" = asyncio.create_task(event_queue.get())
+
+                    while True:
+                        done, _pending = await asyncio.wait(
+                            {tool_task, queue_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+
+                        if queue_task in done:
+                            try:
+                                evt = queue_task.result()
+                            except Exception:
+                                evt = None
+                            if isinstance(evt, dict) and evt.get("event"):
+                                yield evt
+                            queue_task = asyncio.create_task(event_queue.get())
+                            continue
+
+                        if tool_task in done:
+                            if not queue_task.done():
+                                queue_task.cancel()
+                            break
+
+                    # Drain any remaining buffered events (best-effort).
+                    try:
+                        while True:
+                            evt = event_queue.get_nowait()
+                            if isinstance(evt, dict) and evt.get("event"):
+                                yield evt
+                    except Exception:
+                        pass
+
+                    step_result = await tool_task
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
                     yield agent_event(
                         "tool_result",
@@ -304,6 +348,65 @@ class AgentCore:
 
                             tool_name = str(step_result.tool or concrete_step.tool or "").strip()
                             err = str(step_result.error or "").strip()
+
+                            # LaTeX/PDF compilation can often be fixed by one more "refine LaTeX" round.
+                            # Do a few visible retry rounds (refine -> compile) before treating it as fatal.
+                            if tool_name == "compile_latex_to_pdf":
+                                if not err.startswith("latex_engine_not_found"):
+                                    tex_current = str(ctx.working_memory.get("latex_tex") or "").strip()
+                                    max_rounds_raw = (
+                                        os.getenv("STUDY_MATERIALS_LATEX_COMPILE_ROUNDS")
+                                        or os.getenv("STUDY_MATERIALS_LATEX_MAX_ROUNDS")
+                                        or "3"
+                                    )
+                                    try:
+                                        max_rounds = int(max_rounds_raw)
+                                    except Exception:
+                                        max_rounds = 3
+                                    max_rounds = max(1, min(max_rounds, 6))
+
+                                    try:
+                                        cur_round = int(ctx.working_memory.get("_latex_compile_round") or 1)
+                                    except Exception:
+                                        cur_round = 1
+                                    cur_round = max(1, cur_round)
+
+                                    if tex_current and cur_round < max_rounds:
+                                        next_round = cur_round + 1
+                                        ctx.working_memory["_latex_compile_round"] = next_round
+                                        ctx.working_memory["_latex_last_compile_error"] = err
+
+                                        yield agent_event(
+                                            "status",
+                                            {"content": f"PDF 编译失败，准备第 {next_round} 轮修订与重编译…"},
+                                        )
+
+                                        subject_hint = str(ctx.user_profile.preferences.get("subject") or "").strip()
+                                        refine_step = PlanStep(
+                                            id=f"refine_latex-retry-{uuid.uuid4().hex[:8]}",
+                                            title=f"LaTeX 修订（第{next_round}轮）",
+                                            tool="refine_latex",
+                                            arguments={
+                                                "topic": ctx.current_task,
+                                                "subject": subject_hint,
+                                                "compile_error": err,
+                                            },
+                                            thought="根据编译报错信息修订 LaTeX，提升通过率。",
+                                        )
+                                        async for evt in _execute_concrete_step(refine_step):
+                                            yield evt
+
+                                        compile_step = PlanStep(
+                                            id=f"compile_latex_to_pdf-retry-{uuid.uuid4().hex[:8]}",
+                                            title=f"编译 PDF（第{next_round}轮）",
+                                            tool="compile_latex_to_pdf",
+                                            arguments={"topic": ctx.current_task},
+                                            thought="重新编译修订后的 LaTeX，生成 PDF 下载文件。",
+                                        )
+                                        async for evt in _execute_concrete_step(compile_step):
+                                            yield evt
+                                        return
+
                             fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
                             is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
                             if tool_name in fatal_tools or (strict_llm and is_llm_error):
@@ -314,7 +417,7 @@ class AgentCore:
                                     "error": err or "unknown_error",
                                 }
                                 yield agent_event(
-                                    "thinking",
+                                    "status",
                                     {
                                         "content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}",
                                     },
@@ -411,7 +514,7 @@ class AgentCore:
 
                 plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
                 if plan.rationale:
-                    yield agent_event("thinking", {"content": plan.rationale})
+                    yield agent_event("status", {"content": plan.rationale})
 
                 def _split_knowledge_points() -> List[str]:
                     split_res = ctx.working_memory.get("split_knowledge_points") or {}
@@ -449,7 +552,7 @@ class AgentCore:
                     )
 
                 self.state = AgentState.ACTING
-                yield agent_event("thinking", {"content": "Act 阶段：执行工具链…"})
+                yield agent_event("status", {"content": "Act 阶段：执行工具链…"})
 
                 # DFS-style execution for `foreach_knowledge_point` blocks:
                 # - BFS (old): tool-by-tool across all knowledge points
@@ -499,7 +602,7 @@ class AgentCore:
 
                         if subagent_concurrency <= 1 or len(kps) <= 1:
                             for kp in kps:
-                                # Sub-agent markers (kept as "thinking" so UI can display them).
+                                # Sub-agent markers (separate events + status, so UI can display progress without polluting CoT).
                                 yield agent_event(
                                     "subagent_start",
                                     {
@@ -508,7 +611,7 @@ class AgentCore:
                                     },
                                 )
                                 yield agent_event(
-                                    "thinking",
+                                    "status",
                                     {
                                         "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
                                     },
@@ -525,7 +628,7 @@ class AgentCore:
                                     },
                                 )
                                 yield agent_event(
-                                    "thinking",
+                                    "status",
                                     {
                                         "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
                                     },
@@ -533,7 +636,7 @@ class AgentCore:
                             continue
 
                         yield agent_event(
-                            "thinking",
+                            "status",
                             {
                                 "content": f"SubAgent 并行模式：共 {len(kps)} 个知识点，最大并发 {subagent_concurrency}。",
                             },
@@ -556,7 +659,7 @@ class AgentCore:
                                     )
                                     await queue.put(
                                         agent_event(
-                                            "thinking",
+                                            "status",
                                             {
                                                 "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
                                             },
@@ -577,7 +680,7 @@ class AgentCore:
                                     )
                                     await queue.put(
                                         agent_event(
-                                            "thinking",
+                                            "status",
                                             {
                                                 "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
                                             },
@@ -675,7 +778,7 @@ class AgentCore:
                                 subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
 
                                 yield agent_event(
-                                    "thinking",
+                                    "status",
                                     {
                                         "content": "自动补检索：发现部分知识点资料不足，追加一轮研究型检索（不进入下一轮规划）…\n"
                                         + "\n".join(f"- {kp}" for kp in missing),
@@ -843,7 +946,7 @@ class AgentCore:
                                 markdown = str(ctx.working_memory.get("markdown") or "").strip()
                                 if markdown:
                                     yield agent_event(
-                                        "thinking",
+                                        "status",
                                         {
                                             "content": "自动修订：根据审查意见进行一次快速修订（提升一次通过率）…",
                                         },
@@ -888,18 +991,18 @@ class AgentCore:
                     break
 
                 self.state = AgentState.REFLECTING
-                yield agent_event("thinking", {"content": "Reflect 阶段：自检与审查…"})
+                yield agent_event("status", {"content": "Reflect 阶段：自检与审查…"})
                 reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
 
                 if reflection.summary:
-                    yield agent_event("thinking", {"content": reflection.summary})
+                    yield agent_event("status", {"content": reflection.summary})
 
                 if reflection.passed:
                     break
 
                 self.state = AgentState.ITERATING
                 yield agent_event(
-                    "thinking",
+                    "status",
                     {
                         "content": "发现问题，准备迭代修正…\n"
                         + ("\n".join(f"- {x}" for x in (reflection.issues or [])[:6]) if reflection.issues else ""),

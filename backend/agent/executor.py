@@ -5,16 +5,18 @@ import asyncio
 import os
 import random
 import re
+import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
 from backend.agent.config import AgentConfig
-from backend.agent.types import CompressedContext, PlanStep, StepResult
+from backend.agent.types import CompressedContext, PlanStep, StepResult, agent_event
 from backend.crawler_manager import get_crawler
 from backend.core.settings import (
     API_TIMEOUT,
@@ -25,6 +27,15 @@ from backend.core.settings import (
     LESSON_PLAN_PROVIDER,
     MAIN_MODEL_MAX_TOKENS,
     MAIN_MODEL_TEMPERATURE,
+    MOONSHOT_API_KEY,
+    MOONSHOT_BASE_URL,
+)
+from backend.core import llm_console
+
+
+_emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]]] = ContextVar(
+    "agent_emit_event",
+    default=None,
 )
 
 _PDF_URL_RE = re.compile(r"\.pdf(?:$|[?#])", re.IGNORECASE)
@@ -346,7 +357,13 @@ class Executor:
         # Default to True (user request: reduce fallbacks, fail fast on LLM errors).
         return self._coerce_bool(v, default=True)
 
-    async def execute_step(self, step: PlanStep, *, context: CompressedContext) -> StepResult:
+    async def execute_step(
+        self,
+        step: PlanStep,
+        *,
+        context: CompressedContext,
+        emit_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    ) -> StepResult:
         tool = (step.tool or "").strip()
         handler = getattr(self, f"_tool_{tool}", None)
         if handler is None:
@@ -355,6 +372,7 @@ class Executor:
         timeout_s = float(os.getenv("STUDY_MATERIALS_STEP_TIMEOUT_S") or os.getenv("AGENT_STEP_TIMEOUT_S") or "240")
         timeout_s = max(30.0, min(timeout_s, 60.0 * 30.0))  # clamp to [30s, 30m]
 
+        token = _emit_event_var.set(emit_event)
         try:
             output = await asyncio.wait_for(handler(step.arguments or {}, context), timeout=timeout_s)
             return StepResult(step_id=step.id, tool=tool, success=True, output=output)
@@ -367,6 +385,11 @@ class Executor:
             )
         except Exception as exc:  # pragma: no cover (best-effort safety)
             return StepResult(step_id=step.id, tool=tool, success=False, error=str(exc))
+        finally:
+            try:
+                _emit_event_var.reset(token)
+            except Exception:
+                pass
 
     async def _call_llm_text(
         self,
@@ -376,13 +399,106 @@ class Executor:
         temperature: float = LESSON_PLAN_TEMPERATURE,
         max_tokens: int = LESSON_PLAN_MAX_TOKENS,
         reasoning: Optional[Dict[str, Any]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
         raise_on_fail: bool = False,
         retries: Optional[int] = None,
     ) -> str:
-        if not LESSON_PLAN_API_KEY:
+        provider = str(LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
+        base_url = str(LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
+        api_key = str(LESSON_PLAN_API_KEY or "").strip()
+
+        normalized_model = str(model or "").strip()
+        model_lower = normalized_model.lower()
+        moonshot_key = str(MOONSHOT_API_KEY or "").strip()
+        moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
+
+        if provider == "moonshot" or (
+            provider == "openrouter"
+            and moonshot_key
+            and (model_lower.startswith("moonshotai/") or model_lower.startswith("kimi-") or model_lower.startswith("moonshot-"))
+        ):
+            provider = "moonshot"
+            api_key = moonshot_key or api_key
+            base_url = moonshot_base_url or base_url
+            if "/" in normalized_model:
+                normalized_model = normalized_model.split("/")[-1]
+
+        if not api_key:
             if raise_on_fail:
                 raise RuntimeError("llm_not_configured")
             return ""
+
+        req_id_base = f"exec-text-{uuid.uuid4().hex[:8]}"
+
+        def _elapsed_s(start_ts: float) -> float:
+            if not start_ts:
+                return 0.0
+            try:
+                return max(0.0, time.time() - float(start_ts))
+            except Exception:
+                return 0.0
+
+        def _truthy(raw: str) -> bool:
+            s = (raw or "").strip().lower()
+            return s in {"1", "true", "yes", "y", "on"}
+
+        def _default_reasoning_cfg() -> Optional[Dict[str, Any]]:
+            # Default to enabled (requested: always use "thinking mode" unless explicitly disabled).
+            enabled_raw = (
+                os.getenv("STUDY_MATERIALS_THINKING_MODE")
+                or os.getenv("STUDY_MATERIALS_REASONING")
+                or "1"
+            )
+            if (enabled_raw or "").strip().lower() in {"0", "false", "no", "off"}:
+                return None
+
+            effort_raw = (
+                os.getenv("STUDY_MATERIALS_THINKING_EFFORT")
+                or os.getenv("STUDY_MATERIALS_REASONING_EFFORT")
+                or "xhigh"
+            )
+            effort = (effort_raw or "").strip().lower().replace("-", "").replace("_", "")
+            if effort in {"max", "maximum", "highest"}:
+                effort = "xhigh"
+            allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
+            if effort not in allowed:
+                effort = "xhigh"
+
+            exclude_raw = os.getenv("STUDY_MATERIALS_REASONING_EXCLUDE") or "0"
+            exclude = _truthy(exclude_raw)
+            return {"effort": effort, "exclude": exclude}
+
+        default_reasoning = _default_reasoning_cfg()
+        if reasoning is None:
+            # No call-site override: use env defaults.
+            reasoning = default_reasoning
+        else:
+            # Call-site override should win.
+            if default_reasoning is None:
+                reasoning = dict(reasoning)
+            else:
+                merged = dict(default_reasoning)
+                merged.update(dict(reasoning))
+                reasoning = merged
+
+        stream_reasoning = _truthy(os.getenv("STUDY_MATERIALS_STREAM_REASONING") or os.getenv("AGENT_STREAM_REASONING") or "1")
+
+        async def _emit_thinking_delta(text: str) -> None:
+            cb = _emit_event_var.get()
+            if cb is None:
+                return
+            t = str(text or "")
+            if not t:
+                return
+            # Keep each event small to avoid blowing up the in-memory SSE backlog.
+            max_chars = int(os.getenv("STUDY_MATERIALS_REASONING_EVENT_MAX_CHARS") or "1200")
+            if max_chars <= 0:
+                await cb(agent_event("thinking", {"content": t, "delta": True}))
+                return
+            for i in range(0, len(t), max_chars):
+                chunk = t[i : i + max_chars]
+                if chunk:
+                    await cb(agent_event("thinking", {"content": chunk, "delta": True}))
 
         def _max_retries() -> int:
             raw = str(
@@ -391,12 +507,12 @@ class Executor:
                 else os.getenv("STUDY_MATERIALS_LLM_RETRIES")
                 or os.getenv("LESSON_PLAN_LLM_RETRIES")
                 or os.getenv("AGENT_LLM_RETRIES")
-                or "6"
+                or "3"
             ).strip()
             try:
                 v = int(raw)
             except Exception:
-                v = 6
+                v = 3
             return max(1, min(v, 10))
 
         def _resp_error(resp: Optional[httpx.Response]) -> str:
@@ -424,15 +540,25 @@ class Executor:
                 msg = msg.replace("\n", " ").strip()
             return msg[:260]
 
-        headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        effective_temperature = float(temperature)
+        if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+            # Moonshot kimi models reject temperatures other than 1.0 (HTTP 400).
+            effective_temperature = 1.0
         payload: Dict[str, Any] = {
-            "model": model,
+            "model": normalized_model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "max_tokens": max_tokens,
             "stream": False,
         }
-        if reasoning and str(LESSON_PLAN_PROVIDER or "").lower() == "openrouter":
+        if isinstance(response_format, dict) and response_format:
+            payload["response_format"] = dict(response_format)
+        is_openrouter = provider == "openrouter"
+        if stream_reasoning and provider in {"openrouter", "moonshot"}:
+            payload["stream"] = True
+
+        if reasoning and is_openrouter:
             # OpenRouter supports the `reasoning` field for some models. We keep it optional and
             # best-effort: if the provider/model rejects it, we'll retry without it.
             payload["reasoning"] = dict(reasoning)
@@ -441,15 +567,144 @@ class Executor:
         timeout_s = float(API_TIMEOUT or 120)
         last_error: str = ""
         max_retries = _max_retries()
+        dropped_reasoning = False
+        dropped_response_format = False
+
+        # When streaming, emit reasoning deltas in batches (avoid spamming SSE events).
+        reasoning_emit_chars = int(os.getenv("STUDY_MATERIALS_REASONING_EMIT_CHARS") or "240")
+        if reasoning_emit_chars <= 0:
+            reasoning_emit_chars = 240
+        reasoning_emit_interval_s = float(os.getenv("STUDY_MATERIALS_REASONING_EMIT_INTERVAL_S") or "0.25")
+        reasoning_emit_interval_s = max(0.05, min(reasoning_emit_interval_s, 2.0))
 
         for attempt in range(max_retries):
+            req_id = f"{req_id_base}-{attempt + 1}"
+            start_ts = llm_console.log_start(
+                req_id=req_id,
+                provider=provider,
+                model=normalized_model,
+                stream=bool(payload.get("stream")),
+                temperature=float(payload.get("temperature") or 0.0),
+                max_tokens=int(payload.get("max_tokens") or 0),
+                base_url=base_url,
+            )
             try:
                 async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
-                    resp = await client.post(
-                        f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
+                    url = f"{base_url}/chat/completions"
+
+                    if bool(payload.get("stream")):
+                        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                            if resp.status_code in retry_statuses and attempt < (max_retries - 1):
+                                retry_after = (resp.headers.get("retry-after") or "").strip()
+                                wait_s = 0.0
+                                try:
+                                    wait_s = float(retry_after) if retry_after else 0.0
+                                except ValueError:
+                                    wait_s = 0.0
+                                if wait_s <= 0:
+                                    wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                                last_error = f"http_status_{resp.status_code}"
+                                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                                await asyncio.sleep(wait_s)
+                                continue
+
+                            if resp.status_code != 200:
+                                try:
+                                    await resp.aread()
+                                except Exception:
+                                    pass
+                            resp.raise_for_status()
+
+                            content_parts: List[str] = []
+                            reasoning_buf = ""
+                            finish_reason = ""
+                            usage: Dict[str, Any] = {}
+                            loop = asyncio.get_running_loop()
+                            last_emit_t = loop.time()
+
+                            async for line in resp.aiter_lines():
+                                if not line:
+                                    continue
+                                if line.startswith(":"):
+                                    continue
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].strip()
+                                if not data:
+                                    continue
+                                if data == "[DONE]":
+                                    break
+
+                                try:
+                                    obj = json.loads(data)
+                                except Exception:
+                                    continue
+
+                                choices = obj.get("choices")
+                                if not isinstance(choices, list) or not choices:
+                                    continue
+                                choice0 = choices[0] if isinstance(choices[0], dict) else {}
+                                delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
+
+                                # Reasoning tokens: OpenRouter may emit them in multiple delta fields.
+                                # IMPORTANT: do NOT concatenate multiple fields, or tokens may be duplicated.
+                                r_chunk = ""
+                                details = delta.get("reasoning_details")
+                                if isinstance(details, list) and details:
+                                    text_parts: List[str] = []
+                                    summary_parts: List[str] = []
+                                    for it in details:
+                                        if not isinstance(it, dict):
+                                            continue
+                                        if isinstance(it.get("text"), str) and it.get("text"):
+                                            text_parts.append(str(it.get("text") or ""))
+                                        elif isinstance(it.get("summary"), str) and it.get("summary"):
+                                            summary_parts.append(str(it.get("summary") or ""))
+                                    if text_parts:
+                                        r_chunk = "".join(text_parts)
+                                    elif summary_parts:
+                                        r_chunk = "".join(summary_parts)
+                                elif isinstance(delta.get("reasoning_content"), str):
+                                    r_chunk = str(delta.get("reasoning_content") or "")
+                                elif isinstance(delta.get("reasoning"), str):
+                                    r_chunk = str(delta.get("reasoning") or "")
+
+                                if r_chunk:
+                                    reasoning_buf += r_chunk
+                                    now_t = loop.time()
+                                    if len(reasoning_buf) >= reasoning_emit_chars or (now_t - last_emit_t) >= reasoning_emit_interval_s:
+                                        await _emit_thinking_delta(reasoning_buf)
+                                        llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_buf)
+                                        reasoning_buf = ""
+                                        last_emit_t = now_t
+
+                                c_chunk = delta.get("content")
+                                if isinstance(c_chunk, str) and c_chunk:
+                                    content_parts.append(c_chunk)
+                                    llm_console.log_delta(req_id=req_id, channel="content", text=c_chunk)
+
+                                fr_chunk = choice0.get("finish_reason")
+                                if isinstance(fr_chunk, str) and fr_chunk:
+                                    finish_reason = fr_chunk
+
+                                if isinstance(obj.get("usage"), dict):
+                                    usage = dict(obj.get("usage") or {})
+
+                            if reasoning_buf:
+                                await _emit_thinking_delta(reasoning_buf)
+                                llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_buf)
+
+                            content_text = "".join(content_parts)
+                            llm_console.log_end(
+                                req_id=req_id,
+                                elapsed_s=_elapsed_s(start_ts),
+                                finish_reason=finish_reason,
+                                usage=usage,
+                                content_chars=len(content_text),
+                            )
+                            return content_text
+
+                    resp = await client.post(url, headers=headers, json=payload)
 
                 if resp.status_code in retry_statuses and attempt < (max_retries - 1):
                     retry_after = (resp.headers.get("retry-after") or "").strip()
@@ -461,56 +716,132 @@ class Executor:
                     if wait_s <= 0:
                         wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
                     last_error = f"http_status_{resp.status_code}"
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(wait_s)
                     continue
 
                 resp.raise_for_status()
                 data = resp.json()
                 try:
-                    return str(data["choices"][0]["message"]["content"] or "")
+                    # Best-effort: if the provider returns reasoning in non-stream mode, surface it once.
+                    if stream_reasoning:
+                        try:
+                            msg = data.get("choices", [{}])[0].get("message", {}) if isinstance(data, dict) else {}
+                            reasoning_text = ""
+                            if isinstance(msg, dict):
+                                if isinstance(msg.get("reasoning"), str):
+                                    reasoning_text = str(msg.get("reasoning") or "")
+                                elif isinstance(msg.get("reasoning_content"), str):
+                                    reasoning_text = str(msg.get("reasoning_content") or "")
+                            if reasoning_text:
+                                await _emit_thinking_delta(reasoning_text)
+                                llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_text)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            pass
+                    content_text = str(data["choices"][0]["message"]["content"] or "")
+                    finish_reason = ""
+                    usage: Dict[str, Any] = {}
+                    try:
+                        choices = data.get("choices")
+                        first = choices[0] if isinstance(choices, list) and choices else {}
+                        if isinstance(first, dict):
+                            finish_reason = str(first.get("finish_reason") or "")
+                    except Exception:
+                        finish_reason = ""
+                    if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                        usage = dict(data.get("usage") or {})
+                    if content_text:
+                        llm_console.log_delta(req_id=req_id, channel="content", text=content_text)
+                    llm_console.log_end(
+                        req_id=req_id,
+                        elapsed_s=_elapsed_s(start_ts),
+                        finish_reason=finish_reason,
+                        usage=usage,
+                        content_chars=len(content_text),
+                    )
+                    return content_text
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     last_error = "invalid_response"
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     if attempt < (max_retries - 1):
                         await asyncio.sleep(min(3.0, 0.4 + random.random() * 0.8))
                         continue
                     if raise_on_fail:
-                        raise RuntimeError(f"llm_invalid_response model={model}")
+                        raise RuntimeError(f"llm_invalid_response model={normalized_model}")
                     return ""
+            except asyncio.CancelledError:
+                raise
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
                 api_msg = _resp_error(exc.response)
                 last_error = f"http_status_{status}"
-                if status in {400, 422} and "reasoning" in payload and attempt == 0:
-                    # Some models/providers reject unknown fields. Retry once without `reasoning`.
-                    try:
-                        payload.pop("reasoning", None)
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.2)
-                    continue
+                if status in {400, 422}:
+                    if provider == "moonshot":
+                        msg_l = (api_msg or "").lower()
+                        try:
+                            current_t = float(payload.get("temperature") or 0.0)
+                        except Exception:
+                            current_t = 0.0
+                        if ("temperature" in msg_l and "only 1" in msg_l) and current_t != 1.0:
+                            try:
+                                payload["temperature"] = 1.0
+                            except Exception:
+                                pass
+                            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
+                            await asyncio.sleep(0.2)
+                            continue
+                    # Some models/providers reject unknown fields. Retry after dropping them (once each).
+                    if (not dropped_response_format) and ("response_format" in payload):
+                        try:
+                            payload.pop("response_format", None)
+                        except Exception:
+                            pass
+                        dropped_response_format = True
+                        llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                        await asyncio.sleep(0.2)
+                        continue
+                    if (not dropped_reasoning) and ("reasoning" in payload):
+                        try:
+                            payload.pop("reasoning", None)
+                        except Exception:
+                            pass
+                        dropped_reasoning = True
+                        llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                        await asyncio.sleep(0.2)
+                        continue
                 if status in retry_statuses and attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
                 if raise_on_fail:
                     raise RuntimeError(
-                        f"llm_request_failed status={status} model={model} provider={LESSON_PLAN_PROVIDER} msg={api_msg or last_error}"
+                        f"llm_request_failed status={status} model={normalized_model} provider={provider} msg={api_msg or last_error}"
                     )
                 return ""
             except (httpx.TimeoutException, httpx.RequestError) as exc:
                 last_error = str(exc)
                 if attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 if raise_on_fail:
-                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
+                    raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error}")
                 return ""
             except Exception as exc:  # pragma: no cover (best-effort)
                 last_error = str(exc)
                 if attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 if raise_on_fail:
-                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
+                    raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error}")
                 return ""
 
         # Best-effort: never raise; return empty so callers can fall back.
@@ -520,7 +851,7 @@ class Executor:
             except Exception:
                 pass
         if raise_on_fail:
-            raise RuntimeError(f"llm_request_failed model={model} err={last_error or 'unknown'}")
+            raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error or 'unknown'}")
         return ""
 
     async def _call_llm_response(
@@ -534,10 +865,103 @@ class Executor:
         raise_on_fail: bool = False,
         retries: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if not LESSON_PLAN_API_KEY:
+        provider = str(LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
+        base_url = str(LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
+        api_key = str(LESSON_PLAN_API_KEY or "").strip()
+
+        normalized_model = str(model or "").strip()
+        model_lower = normalized_model.lower()
+        moonshot_key = str(MOONSHOT_API_KEY or "").strip()
+        moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
+
+        if provider == "moonshot" or (
+            provider == "openrouter"
+            and moonshot_key
+            and (model_lower.startswith("moonshotai/") or model_lower.startswith("kimi-") or model_lower.startswith("moonshot-"))
+        ):
+            provider = "moonshot"
+            api_key = moonshot_key or api_key
+            base_url = moonshot_base_url or base_url
+            if "/" in normalized_model:
+                normalized_model = normalized_model.split("/")[-1]
+
+        if not api_key:
             if raise_on_fail:
                 raise RuntimeError("llm_not_configured")
             return {"content": "", "finish_reason": "", "usage": {}}
+
+        req_id_base = f"exec-resp-{uuid.uuid4().hex[:8]}"
+
+        def _elapsed_s(start_ts: float) -> float:
+            if not start_ts:
+                return 0.0
+            try:
+                return max(0.0, time.time() - float(start_ts))
+            except Exception:
+                return 0.0
+
+        def _truthy(raw: str) -> bool:
+            s = (raw or "").strip().lower()
+            return s in {"1", "true", "yes", "y", "on"}
+
+        def _default_reasoning_cfg() -> Optional[Dict[str, Any]]:
+            # Default to enabled (requested: always use "thinking mode" unless explicitly disabled).
+            enabled_raw = (
+                os.getenv("STUDY_MATERIALS_THINKING_MODE")
+                or os.getenv("STUDY_MATERIALS_REASONING")
+                or "1"
+            )
+            if (enabled_raw or "").strip().lower() in {"0", "false", "no", "off"}:
+                return None
+
+            effort_raw = (
+                os.getenv("STUDY_MATERIALS_THINKING_EFFORT")
+                or os.getenv("STUDY_MATERIALS_REASONING_EFFORT")
+                or "xhigh"
+            )
+            effort = (effort_raw or "").strip().lower().replace("-", "").replace("_", "")
+            if effort in {"max", "maximum", "highest"}:
+                effort = "xhigh"
+            allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
+            if effort not in allowed:
+                effort = "xhigh"
+
+            exclude_raw = os.getenv("STUDY_MATERIALS_REASONING_EXCLUDE") or "0"
+            exclude = _truthy(exclude_raw)
+            return {"effort": effort, "exclude": exclude}
+
+        default_reasoning = _default_reasoning_cfg()
+        if reasoning is None:
+            reasoning = default_reasoning
+        else:
+            # Call-site override should win.
+            if default_reasoning is None:
+                reasoning = dict(reasoning)
+            else:
+                merged = dict(default_reasoning)
+                merged.update(dict(reasoning))
+                reasoning = merged
+
+        stream_reasoning = _truthy(
+            os.getenv("STUDY_MATERIALS_STREAM_REASONING") or os.getenv("AGENT_STREAM_REASONING") or "1"
+        )
+
+        async def _emit_thinking_delta(text: str) -> None:
+            cb = _emit_event_var.get()
+            if cb is None:
+                return
+            t = str(text or "")
+            if not t:
+                return
+            # Keep each event small to avoid blowing up the in-memory SSE backlog.
+            max_chars = int(os.getenv("STUDY_MATERIALS_REASONING_EVENT_MAX_CHARS") or "1200")
+            if max_chars <= 0:
+                await cb(agent_event("thinking", {"content": t, "delta": True}))
+                return
+            for i in range(0, len(t), max_chars):
+                chunk = t[i : i + max_chars]
+                if chunk:
+                    await cb(agent_event("thinking", {"content": chunk, "delta": True}))
 
         def _max_retries() -> int:
             raw = str(
@@ -546,12 +970,12 @@ class Executor:
                 else os.getenv("STUDY_MATERIALS_LLM_RETRIES")
                 or os.getenv("LESSON_PLAN_LLM_RETRIES")
                 or os.getenv("AGENT_LLM_RETRIES")
-                or "6"
+                or "3"
             ).strip()
             try:
                 v = int(raw)
             except Exception:
-                v = 6
+                v = 3
             return max(1, min(v, 10))
 
         def _resp_error(resp: Optional[httpx.Response]) -> str:
@@ -579,30 +1003,162 @@ class Executor:
                 msg = msg.replace("\n", " ").strip()
             return msg[:260]
 
-        headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        effective_temperature = float(temperature)
+        if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+            effective_temperature = 1.0
         payload: Dict[str, Any] = {
-            "model": model,
+            "model": normalized_model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "max_tokens": max_tokens,
             "stream": False,
         }
-        if reasoning and str(LESSON_PLAN_PROVIDER or "").lower() == "openrouter":
+        is_openrouter = provider == "openrouter"
+        if stream_reasoning and provider in {"openrouter", "moonshot"}:
+            payload["stream"] = True
+        if reasoning and is_openrouter:
             payload["reasoning"] = dict(reasoning)
 
         retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
         timeout_s = float(API_TIMEOUT or 120)
         last_error: str = ""
         max_retries = _max_retries()
+        dropped_reasoning = False
+
+        # When streaming, emit reasoning deltas in batches (avoid spamming SSE events).
+        reasoning_emit_chars = int(os.getenv("STUDY_MATERIALS_REASONING_EMIT_CHARS") or "240")
+        if reasoning_emit_chars <= 0:
+            reasoning_emit_chars = 240
+        reasoning_emit_interval_s = float(os.getenv("STUDY_MATERIALS_REASONING_EMIT_INTERVAL_S") or "0.25")
+        reasoning_emit_interval_s = max(0.05, min(reasoning_emit_interval_s, 2.0))
 
         for attempt in range(max_retries):
+            req_id = f"{req_id_base}-{attempt + 1}"
+            start_ts = llm_console.log_start(
+                req_id=req_id,
+                provider=provider,
+                model=normalized_model,
+                stream=bool(payload.get("stream")),
+                temperature=float(payload.get("temperature") or 0.0),
+                max_tokens=int(payload.get("max_tokens") or 0),
+                base_url=base_url,
+            )
             try:
                 async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
-                    resp = await client.post(
-                        f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
+                    url = f"{base_url}/chat/completions"
+
+                    if bool(payload.get("stream")):
+                        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                            if resp.status_code in retry_statuses and attempt < (max_retries - 1):
+                                retry_after = (resp.headers.get("retry-after") or "").strip()
+                                wait_s = 0.0
+                                try:
+                                    wait_s = float(retry_after) if retry_after else 0.0
+                                except ValueError:
+                                    wait_s = 0.0
+                                if wait_s <= 0:
+                                    wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                                last_error = f"http_status_{resp.status_code}"
+                                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                                await asyncio.sleep(wait_s)
+                                continue
+
+                            if resp.status_code != 200:
+                                try:
+                                    await resp.aread()
+                                except Exception:
+                                    pass
+                            resp.raise_for_status()
+
+                            content_parts: List[str] = []
+                            reasoning_buf = ""
+                            finish_reason = ""
+                            usage: Dict[str, Any] = {}
+                            loop = asyncio.get_running_loop()
+                            last_emit_t = loop.time()
+
+                            async for line in resp.aiter_lines():
+                                if not line:
+                                    continue
+                                if line.startswith(":"):
+                                    continue
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].strip()
+                                if not data:
+                                    continue
+                                if data == "[DONE]":
+                                    break
+
+                                try:
+                                    obj = json.loads(data)
+                                except Exception:
+                                    continue
+
+                                choices = obj.get("choices")
+                                if not isinstance(choices, list) or not choices:
+                                    continue
+                                choice0 = choices[0] if isinstance(choices[0], dict) else {}
+                                delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
+
+                                r_chunk = ""
+                                details = delta.get("reasoning_details")
+                                if isinstance(details, list) and details:
+                                    text_parts: List[str] = []
+                                    summary_parts: List[str] = []
+                                    for it in details:
+                                        if not isinstance(it, dict):
+                                            continue
+                                        if isinstance(it.get("text"), str) and it.get("text"):
+                                            text_parts.append(str(it.get("text") or ""))
+                                        elif isinstance(it.get("summary"), str) and it.get("summary"):
+                                            summary_parts.append(str(it.get("summary") or ""))
+                                    if text_parts:
+                                        r_chunk = "".join(text_parts)
+                                    elif summary_parts:
+                                        r_chunk = "".join(summary_parts)
+                                elif isinstance(delta.get("reasoning_content"), str):
+                                    r_chunk = str(delta.get("reasoning_content") or "")
+                                elif isinstance(delta.get("reasoning"), str):
+                                    r_chunk = str(delta.get("reasoning") or "")
+
+                                if r_chunk:
+                                    reasoning_buf += r_chunk
+                                    now_t = loop.time()
+                                    if len(reasoning_buf) >= reasoning_emit_chars or (now_t - last_emit_t) >= reasoning_emit_interval_s:
+                                        await _emit_thinking_delta(reasoning_buf)
+                                        llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_buf)
+                                        reasoning_buf = ""
+                                        last_emit_t = now_t
+
+                                c_chunk = delta.get("content")
+                                if isinstance(c_chunk, str) and c_chunk:
+                                    content_parts.append(c_chunk)
+                                    llm_console.log_delta(req_id=req_id, channel="content", text=c_chunk)
+
+                                fr_chunk = choice0.get("finish_reason")
+                                if isinstance(fr_chunk, str) and fr_chunk:
+                                    finish_reason = fr_chunk
+
+                                if isinstance(obj.get("usage"), dict):
+                                    usage = dict(obj.get("usage") or {})
+
+                            if reasoning_buf:
+                                await _emit_thinking_delta(reasoning_buf)
+                                llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_buf)
+
+                            content_text = "".join(content_parts)
+                            llm_console.log_end(
+                                req_id=req_id,
+                                elapsed_s=_elapsed_s(start_ts),
+                                finish_reason=finish_reason,
+                                usage=usage,
+                                content_chars=len(content_text),
+                            )
+                            return {"content": content_text, "finish_reason": finish_reason, "usage": usage}
+
+                    resp = await client.post(url, headers=headers, json=payload)
 
                 if resp.status_code in retry_statuses and attempt < (max_retries - 1):
                     retry_after = (resp.headers.get("retry-after") or "").strip()
@@ -614,11 +1170,31 @@ class Executor:
                     if wait_s <= 0:
                         wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
                     last_error = f"http_status_{resp.status_code}"
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(wait_s)
                     continue
 
                 resp.raise_for_status()
                 data = resp.json()
+
+                # Best-effort: if the provider returns reasoning in non-stream mode, surface it once.
+                if stream_reasoning:
+                    try:
+                        msg = data.get("choices", [{}])[0].get("message", {}) if isinstance(data, dict) else {}
+                        reasoning_text = ""
+                        if isinstance(msg, dict):
+                            if isinstance(msg.get("reasoning"), str):
+                                reasoning_text = str(msg.get("reasoning") or "")
+                            elif isinstance(msg.get("reasoning_content"), str):
+                                reasoning_text = str(msg.get("reasoning_content") or "")
+                        if reasoning_text:
+                            await _emit_thinking_delta(reasoning_text)
+                            llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_text)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        pass
+
                 content = ""
                 finish_reason = ""
                 usage: Dict[str, Any] = {}
@@ -634,41 +1210,75 @@ class Executor:
                     finish_reason = ""
                 if isinstance(data.get("usage"), dict):
                     usage = dict(data.get("usage") or {})
+                if content:
+                    llm_console.log_delta(req_id=req_id, channel="content", text=content)
+                llm_console.log_end(
+                    req_id=req_id,
+                    elapsed_s=_elapsed_s(start_ts),
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    content_chars=len(content),
+                )
                 return {"content": content, "finish_reason": finish_reason, "usage": usage}
+            except asyncio.CancelledError:
+                raise
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
                 api_msg = _resp_error(exc.response)
                 last_error = f"http_status_{status}"
-                if status in {400, 422} and "reasoning" in payload and attempt == 0:
+                if status in {400, 422} and (not dropped_reasoning) and ("reasoning" in payload):
                     try:
                         payload.pop("reasoning", None)
+                        payload["stream"] = False
                     except Exception:
                         pass
+                    dropped_reasoning = True
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(0.2)
                     continue
+                if status in {400, 422} and provider == "moonshot":
+                    msg_l = (api_msg or "").lower()
+                    try:
+                        current_t = float(payload.get("temperature") or 0.0)
+                    except Exception:
+                        current_t = 0.0
+                    if ("temperature" in msg_l and "only 1" in msg_l) and current_t != 1.0:
+                        try:
+                            payload["temperature"] = 1.0
+                        except Exception:
+                            pass
+                        llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
+                        await asyncio.sleep(0.2)
+                        continue
                 if status in retry_statuses and attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
                 if raise_on_fail:
                     raise RuntimeError(
-                        f"llm_request_failed status={status} model={model} provider={LESSON_PLAN_PROVIDER} msg={api_msg or last_error}"
+                        f"llm_request_failed status={status} model={normalized_model} provider={provider} msg={api_msg or last_error}"
                     )
                 return {"content": "", "finish_reason": "", "usage": {}}
             except (httpx.TimeoutException, httpx.RequestError) as exc:
                 last_error = str(exc)
                 if attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 if raise_on_fail:
-                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
+                    raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error}")
                 return {"content": "", "finish_reason": "", "usage": {}}
             except Exception as exc:  # pragma: no cover (best-effort)
                 last_error = str(exc)
                 if attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                     continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 if raise_on_fail:
-                    raise RuntimeError(f"llm_request_failed model={model} err={last_error}")
+                    raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error}")
                 return {"content": "", "finish_reason": "", "usage": {}}
 
         if last_error:
@@ -677,7 +1287,7 @@ class Executor:
             except Exception:
                 pass
         if raise_on_fail:
-            raise RuntimeError(f"llm_request_failed model={model} err={last_error or 'unknown'}")
+            raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error or 'unknown'}")
         return {"content": "", "finish_reason": "", "usage": {}}
 
     async def _call_llm_markdown_with_continuation(
@@ -797,15 +1407,27 @@ class Executor:
             if stripped.endswith("```"):
                 stripped = stripped[: -3]
             raw = stripped.strip()
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start >= 0 and end > start:
-            raw = raw[start : end + 1]
+        # Fast path: whole string is JSON.
         try:
             obj = json.loads(raw)
             return obj if isinstance(obj, dict) else {}
         except Exception:
-            return {}
+            pass
+
+        # Robust path: find the last valid JSON object in the string.
+        try:
+            decoder = json.JSONDecoder()
+            starts = [i for i, ch in enumerate(raw) if ch == "{"]
+            for i in reversed(starts):
+                try:
+                    obj, end = decoder.raw_decode(raw[i:])
+                except Exception:
+                    continue
+                if isinstance(obj, dict):
+                    return obj
+        except Exception:
+            pass
+        return {}
 
     def _pick_questions(self, questions: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
         cleaned: List[Tuple[int, Dict[str, Any]]] = []
@@ -958,7 +1580,7 @@ class Executor:
             return _clean_points(cands)
 
         # LLM-powered split when configured.
-        if LESSON_PLAN_API_KEY:
+        if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
             prompt = {
                 "topic": topic,
                 "subject": subject,
@@ -977,8 +1599,8 @@ class Executor:
                 ],
                 model=self.config.planner_model,
                 temperature=0.2,
-                max_tokens=600,
-                reasoning={"effort": "medium", "exclude": True} if "deepseek" in (self.config.planner_model or "").lower() else None,
+                max_tokens=2400,
+                response_format={"type": "json_object"},
                 raise_on_fail=strict_llm,
             )
             obj = self._extract_json_obj(text)
@@ -1073,14 +1695,13 @@ class Executor:
         source = "heuristic"
         note = ""
 
-        if strict_llm and not LESSON_PLAN_API_KEY:
+        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             raise RuntimeError("llm_not_configured")
 
-        if LESSON_PLAN_API_KEY and points:
+        if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and points:
             model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or self.config.planner_model or "").strip()
             if not model:
                 model = self.config.planner_model
-            reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
 
             prompt = {
                 "topic": topic,
@@ -1104,8 +1725,8 @@ class Executor:
                     ],
                     model=model,
                     temperature=0.2,
-                    max_tokens=700,
-                    reasoning=reasoning,
+                    max_tokens=2400,
+                    response_format={"type": "json_object"},
                     raise_on_fail=strict_llm,
                 )
                 obj = self._extract_json_obj(text)
@@ -1189,7 +1810,7 @@ class Executor:
         text_max_length = int(args.get("text_max_length") or 2600)
         text_max_length = max(200, min(text_max_length, 8000))
         strict_llm = self._strict_llm(ctx, args)
-        if strict_llm and not LESSON_PLAN_API_KEY:
+        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             raise RuntimeError("llm_not_configured")
 
         # Study preset helps SubAgent choose better sub-questions and prompt style.
@@ -1298,38 +1919,15 @@ class Executor:
                 or self.config.summarizer_model
             ).strip()
 
-            def _maybe_reasoning(model_name: str) -> Optional[Dict[str, Any]]:
-                # Opt-in env (preferred): force enable/disable reasoning.
-                enabled_raw = (os.getenv("STUDY_MATERIALS_THINKING_MODE") or os.getenv("STUDY_MATERIALS_REASONING") or "").strip().lower()
-                if enabled_raw in {"0", "false", "no", "off"}:
-                    return None
-
-                effort = (
-                    os.getenv("STUDY_MATERIALS_THINKING_EFFORT")
-                    or os.getenv("STUDY_MATERIALS_REASONING_EFFORT")
-                    or ""
-                ).strip().lower()
-                if not effort:
-                    # Reasonable default for DeepSeek on OpenRouter (best-effort; caller retries without it if rejected).
-                    if "deepseek" in (model_name or "").lower():
-                        effort = "medium"
-
-                if effort not in {"low", "medium", "high"}:
-                    return None
-
-                exclude_raw = (os.getenv("STUDY_MATERIALS_REASONING_EXCLUDE") or "1").strip().lower()
-                exclude = exclude_raw in {"1", "true", "yes", "y", "on"}
-                return {"effort": effort, "exclude": exclude}
-
             sub_n = _clamp_int(
                 args.get("sub_questions"),
-                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=15),
+                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=25),
                 min_value=2,
-                max_value=15,
+                max_value=25,
             )
 
             # If LLM isn't configured, fall back to a deterministic template split (non-strict only).
-            if not LESSON_PLAN_API_KEY:
+            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                 if strict_llm:
                     raise RuntimeError("llm_not_configured")
                 tpl = [
@@ -1380,8 +1978,8 @@ class Executor:
                     ],
                     model=thinking_model,
                     temperature=0.2,
-                    max_tokens=500,
-                    reasoning=_maybe_reasoning(thinking_model),
+                    max_tokens=1600,
+                    response_format={"type": "json_object"},
                     raise_on_fail=strict_llm,
                 )
                 obj = self._extract_json_obj(text)
@@ -2677,7 +3275,7 @@ class Executor:
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
         strict_llm = self._strict_llm(ctx, args)
-        if strict_llm and not LESSON_PLAN_API_KEY:
+        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             raise RuntimeError("llm_not_configured")
         preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
         if preset not in {"quick", "standard", "deep", "research"}:
@@ -2704,9 +3302,9 @@ class Executor:
         max_examples = int(args.get("max_examples") or 1)
         max_examples = max(0, min(max_examples, 2))
         max_web_results = int(args.get("max_web_results") or 8)
-        max_web_results = max(3, min(max_web_results, 15))
+        max_web_results = max(3, min(max_web_results, 25))
         max_web_pages = int(args.get("max_web_pages") or 2)
-        max_web_pages = max(0, min(max_web_pages, 4))
+        max_web_pages = max(0, min(max_web_pages, 8))
         max_page_chars = int(args.get("max_page_chars") or 3200)
         max_page_chars = max(500, min(max_page_chars, 8000))
         with_diagrams = bool(args.get("with_diagrams", True))
@@ -2716,7 +3314,7 @@ class Executor:
             or (4 if preset == "deep" else 6 if preset == "research" else 3 if preset == "standard" else 1)
         )
         # Upper bound only; the model is still instructed to output 0~1 unless multiple diagrams truly help.
-        max_diagrams = max(0, min(max_diagrams, 12))
+        max_diagrams = max(0, min(max_diagrams, 20))
 
         sections: List[Dict[str, Any]] = []
         for item in (sections_in or [])[:max_points]:
@@ -2731,16 +3329,15 @@ class Executor:
                 or self.config.planner_model
                 or self.config.summarizer_model
             ).strip()
-            writer_reasoning = {"effort": "medium", "exclude": True} if "deepseek" in writer_model.lower() else None
-            writer_max_tokens = (
-                900
-                if preset == "quick"
-                else 1400
-                if preset == "standard"
-                else 2300
-                if preset == "research"
-                else 2000
-            )
+            writer_reasoning = None
+            writer_max_tokens_raw = str(os.getenv("STUDY_MATERIALS_WRITER_MAX_TOKENS") or "").strip()
+            try:
+                writer_max_tokens = int(writer_max_tokens_raw) if writer_max_tokens_raw else 0
+            except Exception:
+                writer_max_tokens = 0
+            # "Infinite" (requested): use a very large max_tokens so generation isn't artificially truncated.
+            if writer_max_tokens <= 0:
+                writer_max_tokens = 200000
 
             wiki = item.get("wikipedia") if isinstance(item.get("wikipedia"), dict) else {}
             mw = item.get("mediawiki") if isinstance(item.get("mediawiki"), dict) else {}
@@ -2775,7 +3372,7 @@ class Executor:
             explanation_finish_reason = ""
             explanation_usage: Dict[str, Any] = {}
             explanation_continuations = 0
-            if LESSON_PLAN_API_KEY:
+            if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
                 def _clip_text(text: str, limit_chars: int) -> str:
                     t = (text or "").strip()
                     if len(t) <= limit_chars:
@@ -2943,12 +3540,12 @@ class Executor:
                     ],
                     "instructions": instructions,
                 }
-                cont_limit_raw = str(os.getenv("STUDY_MATERIALS_MAX_CONTINUATIONS") or "2").strip()
+                cont_limit_raw = str(os.getenv("STUDY_MATERIALS_MAX_CONTINUATIONS") or "20").strip()
                 try:
                     cont_limit = int(cont_limit_raw)
                 except Exception:
-                    cont_limit = 2
-                cont_limit = max(0, min(cont_limit, 5))
+                    cont_limit = 20
+                cont_limit = max(0, min(cont_limit, 100))
 
                 md_res = await self._call_llm_markdown_with_continuation(
                     messages=[
@@ -3028,7 +3625,7 @@ class Executor:
             if not explanation_md:
                 # If the main writer LLM isn't configured, optionally fall back to Metaso /ask as a "writer".
                 # This keeps the pipeline AI-powered even when only METASO_API_KEY is available.
-                if not LESSON_PLAN_API_KEY:
+                if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                     fallback_raw = (os.getenv("STUDY_MATERIALS_METASO_WRITER_FALLBACK") or "1").strip().lower()
                     use_metaso_writer = fallback_raw in {"1", "true", "yes", "y", "on"}
                     if use_metaso_writer:
@@ -3171,7 +3768,7 @@ class Executor:
                     return
 
             need_diagrams = max(0, int(max_diagrams) - len(existing_diagrams))
-            if with_diagrams and LESSON_PLAN_API_KEY and need_diagrams > 0:
+            if with_diagrams and (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and need_diagrams > 0:
                 try:
                     context_hints = {
                         "topic": topic,
@@ -3215,8 +3812,8 @@ class Executor:
                             ],
                             model=writer_model,
                             temperature=0.2,
-                            max_tokens=700,
-                            reasoning=writer_reasoning,
+                            max_tokens=1800,
+                            response_format={"type": "json_object"},
                         )
                     ).strip()
 
@@ -3260,7 +3857,7 @@ class Executor:
                 if not stem:
                     continue
                 sol_md = ""
-                if LESSON_PLAN_API_KEY:
+                if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
                     prompt = (
                         "请为下面例题写出详细分步解答（Markdown）。\n\n"
                         "要求：\n- 每一步说明在做什么\n- 结论清晰\n\n"
@@ -3274,7 +3871,7 @@ class Executor:
                             ],
                             model=writer_model,
                             temperature=0.3,
-                            max_tokens=1100,
+                            max_tokens=4000,
                             reasoning=writer_reasoning,
                         )
                     ).strip()
@@ -3307,7 +3904,7 @@ class Executor:
             need_example = bool(with_questions and max_examples > 0 and not solved_examples)
             need_exercises = bool(with_questions and len(have_exercise_stems) < min_exercises)
 
-            if LESSON_PLAN_API_KEY and (need_example or need_exercises):
+            if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and (need_example or need_exercises):
                 example_count = 1 if need_example else 0
                 exercise_count = (min_exercises - len(have_exercise_stems)) if need_exercises else 0
                 exercise_count = max(0, min(exercise_count, 5))
@@ -3343,8 +3940,8 @@ JSON 格式必须是：
                         ],
                         model=writer_model,
                         temperature=0.3,
-                        max_tokens=1400,
-                        reasoning=writer_reasoning,
+                        max_tokens=5000,
+                        response_format={"type": "json_object"},
                     )
                 ).strip()
 
@@ -3812,7 +4409,7 @@ JSON 格式必须是：
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         strict_llm = self._strict_llm(ctx, args)
         # LaTeX export is 100% LLM-dependent; fail fast even if other tools allow fallbacks.
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             raise RuntimeError("llm_not_configured")
 
         markdown = args.get("markdown")
@@ -3831,8 +4428,6 @@ JSON 格式必须是：
         ).strip()
         if not model:
             model = self.config.planner_model or self.config.summarizer_model
-        reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
-
         title = f"自学材料：{topic}"
         if subject and subject not in title:
             title = f"{subject}｜{title}"
@@ -3874,6 +4469,7 @@ JSON 格式必须是：
         }
 
         raw = (
+            # LaTeX bodies can be long; allow overriding output budget to reduce `finish_reason=length`.
             await self._call_llm_text(
                 messages=[
                     {"role": "system", "content": "你是严谨的 LaTeX 排版助手，输出必须是可编译的 LaTeX。"},
@@ -3881,8 +4477,7 @@ JSON 格式必须是：
                 ],
                 model=model,
                 temperature=0.2,
-                max_tokens=3800,
-                reasoning=reasoning,
+                max_tokens=_clamp_int(os.getenv("STUDY_MATERIALS_LATEX_MAX_TOKENS") or 8000, default=8000, min_value=1200, max_value=20000),
                 raise_on_fail=True,
             )
         ).strip()
@@ -3938,7 +4533,7 @@ JSON 格式必须是：
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         strict_llm = self._strict_llm(ctx, args)
         # LaTeX refining is LLM-dependent; fail fast to avoid cascading "latex_missing" errors.
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             raise RuntimeError("llm_not_configured")
 
         tex = args.get("latex")
@@ -3947,11 +4542,13 @@ JSON 格式必须是：
         if not tex:
             raise ValueError("latex_missing")
 
+        compile_error = str(args.get("compile_error") or "").strip()
+        if len(compile_error) > 1800:
+            compile_error = compile_error[:1799].rstrip() + "…"
+
         model = str(os.getenv("STUDY_MATERIALS_LATEX_MODEL") or self.config.planner_model or self.config.summarizer_model).strip()
         if not model:
             model = self.config.planner_model or self.config.summarizer_model
-        reasoning = {"effort": "medium", "exclude": True} if "deepseek" in (model or "").lower() else None
-
         prompt = {
             "topic": topic,
             "subject": subject,
@@ -3961,11 +4558,14 @@ JSON 格式必须是：
                 "修复常见问题：未转义的特殊字符（%, _, &, #）、未闭合的环境/括号、错误的图片扩展名（SVG 请改为文字占位而非 includegraphics）。",
                 "数学公式保持原意，确保括号闭合。",
                 "不要输出参考文献/URL 列表。",
+                "如提供 compile_error，请优先修复该错误（缺包/缺文件/语法错误/未闭合环境等）。",
             ],
             "latex": tex,
+            "compile_error": compile_error,
         }
 
         refined = (
+            # LaTeX sources can be long; allow overriding output budget to reduce `finish_reason=length`.
             await self._call_llm_text(
                 messages=[
                     {"role": "system", "content": "你是严谨的 LaTeX 修订助手，输出必须可编译。"},
@@ -3973,8 +4573,12 @@ JSON 格式必须是：
                 ],
                 model=model,
                 temperature=0.2,
-                max_tokens=3800,
-                reasoning=reasoning,
+                max_tokens=_clamp_int(
+                    os.getenv("STUDY_MATERIALS_LATEX_REFINE_MAX_TOKENS") or os.getenv("STUDY_MATERIALS_LATEX_MAX_TOKENS") or 8000,
+                    default=8000,
+                    min_value=1200,
+                    max_value=20000,
+                ),
                 raise_on_fail=True,
             )
         ).strip()
@@ -4458,7 +5062,7 @@ JSON 格式必须是：
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         difficulty = str(args.get("difficulty") or "中等").strip()
 
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             return {
                 "topic": topic,
                 "subject": subject,
@@ -4477,7 +5081,8 @@ JSON 格式必须是：
             messages=[{"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"}, {"role": "user", "content": prompt}],
             model=self.config.summarizer_model,
             temperature=0.2,
-            max_tokens=900,
+            max_tokens=2600,
+            response_format={"type": "json_object"},
         )
         obj = self._extract_json_obj(text)
         return {
@@ -4554,7 +5159,7 @@ JSON 格式必须是：
         subject = str(args.get("subject") or "").strip()
         knowledge = ctx.working_memory.get("retrieve_knowledge") if isinstance(ctx.working_memory.get("retrieve_knowledge"), dict) else {}
 
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             return {
                 "topic": topic,
                 "subject": subject,
@@ -4580,7 +5185,8 @@ JSON 格式必须是：
             ],
             model=self.config.planner_model,
             temperature=0.2,
-            max_tokens=900,
+            max_tokens=2600,
+            response_format={"type": "json_object"},
         )
         obj = self._extract_json_obj(text)
         return {
@@ -4598,7 +5204,7 @@ JSON 格式必须是：
         knowledge = ctx.working_memory.get("retrieve_knowledge") if isinstance(ctx.working_memory.get("retrieve_knowledge"), dict) else {}
         analysis = ctx.working_memory.get("analyze_topic") if isinstance(ctx.working_memory.get("analyze_topic"), dict) else {}
 
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             return (
                 f"## 一、知识点讲解：{topic}\n\n"
                 "（未配置模型，无法生成详细讲解。你可以先配置 `.env` 中的 `LESSON_PLAN_*` 后重试。）\n"
@@ -4618,7 +5224,7 @@ JSON 格式必须是：
             ],
             model=self.config.planner_model,
             temperature=0.4,
-            max_tokens=1400,
+            max_tokens=6000,
         )
         return text.strip()
 
@@ -4637,7 +5243,7 @@ JSON 格式必须是：
         if not examples:
             return []
 
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
             return [
                 {
                     "question_id": q.get("question_id"),
@@ -4658,7 +5264,7 @@ JSON 格式必须是：
                 ],
                 model=self.config.planner_model,
                 temperature=0.3,
-                max_tokens=1200,
+                max_tokens=4000,
             )
             solutions.append(
                 {
@@ -4798,6 +5404,7 @@ JSON 格式必须是：
     async def _tool_review_content(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         topic = str(args.get("topic") or ctx.current_task).strip()
         markdown = str(ctx.working_memory.get("markdown") or "")
+        strict_llm = self._strict_llm(ctx, args)
 
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
@@ -4871,7 +5478,9 @@ JSON 格式必须是：
                 "source": "heuristic",
             }
 
-        if not LESSON_PLAN_API_KEY:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            if strict_llm:
+                raise RuntimeError("llm_not_configured")
             return {"passed": True, "issues": [], "suggestions": [], "source": "fallback"}
 
         prompt = f"""请审查下面这份自学资料 Markdown，找出：\n1) 逻辑跳跃/不清晰处\n2) 可能的错误或表述不严谨\n3) 建议改进点（最多5条）\n\n要求：输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n\n主题：{topic}\n\nMarkdown:\n{markdown}\n"""
@@ -4882,9 +5491,13 @@ JSON 格式必须是：
             ],
             model=self.config.reflector_model,
             temperature=0.1,
-            max_tokens=900,
+            max_tokens=2600,
+            response_format={"type": "json_object"},
+            raise_on_fail=strict_llm,
         )
         obj = self._extract_json_obj(text)
+        if strict_llm and not obj:
+            raise RuntimeError(f"llm_review_failed: invalid_json model={self.config.reflector_model}")
         return {
             "passed": bool(obj.get("passed")) if "passed" in obj else True,
             "issues": list(obj.get("issues") or []),
@@ -4898,7 +5511,7 @@ JSON 格式必须是：
         if not markdown:
             markdown = str(ctx.working_memory.get("assemble_markdown") or "")
 
-        if not LESSON_PLAN_API_KEY or not markdown:
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) or not markdown:
             return markdown
 
         prompt = {
@@ -4913,7 +5526,7 @@ JSON 格式必须是：
             ],
             model=self.config.planner_model,
             temperature=0.2,
-            max_tokens=1600,
+            max_tokens=8000,
         )
         revised = (text or "").strip()
         if revised:

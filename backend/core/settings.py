@@ -59,6 +59,10 @@ class Settings:
     openrouter_api_key: str
     openrouter_base_url: str
 
+    # Moonshot (official OpenAI-compatible)
+    moonshot_api_key: str
+    moonshot_base_url: str
+
     # Models
     main_model: str
     sub_model: str
@@ -119,6 +123,8 @@ class Settings:
 
         openrouter_api_key = _get_str("OPENROUTER_API_KEY", "")
         base_url = _get_str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+        moonshot_api_key = _get_str("MOONSHOT_API_KEY", _get_str("MOONSHOT_API", ""))
+        moonshot_base_url = _get_str("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/")
         fireworks_api_key = _get_str("FIREWORKS_API_KEY", "")
         fireworks_base_url = _get_str("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1").rstrip("/")
         zhipu_base_url = _get_str("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
@@ -129,16 +135,34 @@ class Settings:
         metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
 
         chat_provider_raw = _get_str("CHAT_PROVIDER", "openrouter").lower()
-        chat_provider = chat_provider_raw if chat_provider_raw in {"openrouter", "fireworks"} else "openrouter"
-        chat_base_url = base_url if chat_provider == "openrouter" else fireworks_base_url
-        chat_api_key = openrouter_api_key if chat_provider == "openrouter" else fireworks_api_key
+        chat_provider = (
+            chat_provider_raw if chat_provider_raw in {"openrouter", "fireworks", "moonshot"} else "openrouter"
+        )
+        if chat_provider == "fireworks":
+            chat_base_url = fireworks_base_url
+            chat_api_key = fireworks_api_key
+        elif chat_provider == "moonshot":
+            chat_base_url = moonshot_base_url
+            chat_api_key = moonshot_api_key
+        else:
+            chat_base_url = base_url
+            chat_api_key = openrouter_api_key
 
         lesson_plan_provider_raw = _get_str("LESSON_PLAN_PROVIDER", chat_provider).lower()
         lesson_plan_provider = (
-            lesson_plan_provider_raw if lesson_plan_provider_raw in {"openrouter", "fireworks"} else chat_provider
+            lesson_plan_provider_raw
+            if lesson_plan_provider_raw in {"openrouter", "fireworks", "moonshot"}
+            else chat_provider
         )
-        lesson_plan_base_url = base_url if lesson_plan_provider == "openrouter" else fireworks_base_url
-        lesson_plan_api_key = openrouter_api_key if lesson_plan_provider == "openrouter" else fireworks_api_key
+        if lesson_plan_provider == "fireworks":
+            lesson_plan_base_url = fireworks_base_url
+            lesson_plan_api_key = fireworks_api_key
+        elif lesson_plan_provider == "moonshot":
+            lesson_plan_base_url = moonshot_base_url
+            lesson_plan_api_key = moonshot_api_key
+        else:
+            lesson_plan_base_url = base_url
+            lesson_plan_api_key = openrouter_api_key
         lesson_plan_model = _get_str("LESSON_PLAN_MODEL", _get_str("MAIN_MODEL", "openai/gpt-5-mini"))
         lesson_plan_concurrency = _get_int("LESSON_PLAN_V2_SUBAGENT_CONCURRENCY", 3)
 
@@ -148,6 +172,8 @@ class Settings:
             chat_base_url=chat_base_url,
             openrouter_api_key=openrouter_api_key,
             openrouter_base_url=base_url,
+            moonshot_api_key=moonshot_api_key,
+            moonshot_base_url=moonshot_base_url,
             main_model=_get_str("MAIN_MODEL", "openai/gpt-5-mini"),
             sub_model=_get_str("SUB_MODEL", "openai/gpt-5-mini"),
             lesson_plan_provider=lesson_plan_provider,
@@ -201,6 +227,7 @@ class Settings:
             "chat_configured": bool(self.chat_api_key),
             "lesson_plan_configured": bool(self.lesson_plan_api_key),
             "openrouter_configured": bool(self.openrouter_api_key),
+            "moonshot_configured": bool(self.moonshot_api_key),
             "fireworks_configured": bool(self.fireworks_api_key),
             "zhipu_configured": bool(self.zhipu_api_key),
             "metaso_configured": bool(self.metaso_api_key),
@@ -217,6 +244,9 @@ CHAT_BASE_URL = settings.chat_base_url
 # Back-compat module-level constants (used widely across the codebase).
 OPENROUTER_API_KEY = settings.openrouter_api_key
 OPENROUTER_BASE_URL = settings.openrouter_base_url
+
+MOONSHOT_API_KEY = settings.moonshot_api_key
+MOONSHOT_BASE_URL = settings.moonshot_base_url
 
 MAIN_MODEL = settings.main_model
 SUB_MODEL = settings.sub_model

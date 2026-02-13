@@ -6,6 +6,8 @@ import json
 import os
 import random
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -27,8 +29,12 @@ from backend.core.settings import (
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_MODEL,
+    LESSON_PLAN_PROVIDER,
+    MOONSHOT_API_KEY,
+    MOONSHOT_BASE_URL,
     SUB_MODEL,
 )
+from backend.core import llm_console
 from backend.crawler.zujuan_crawler import ZujuanCrawler
 from backend.mcp.sub_ai_selector import select_best_question
 from backend.mcp.bigmodel_web_search import web_search_with_bigmodel_mcp
@@ -69,26 +75,68 @@ async def _call_llm_text(
     temperature: float = 0.2,
     max_tokens: int = 1200,
 ) -> str:
-    if not LESSON_PLAN_API_KEY:
+    provider = str(LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
+    base_url = str(LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
+    api_key = str(LESSON_PLAN_API_KEY or "").strip()
+
+    normalized_model = str(model or "").strip()
+    model_lower = normalized_model.lower()
+    moonshot_key = str(MOONSHOT_API_KEY or "").strip()
+    moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
+
+    if provider == "moonshot" or (
+        provider == "openrouter"
+        and moonshot_key
+        and (model_lower.startswith("moonshotai/") or model_lower.startswith("kimi-") or model_lower.startswith("moonshot-"))
+    ):
+        provider = "moonshot"
+        api_key = moonshot_key or api_key
+        base_url = moonshot_base_url or base_url
+        if "/" in normalized_model:
+            normalized_model = normalized_model.split("/")[-1]
+
+    if not api_key:
         return ""
 
-    headers = {"Authorization": f"Bearer {LESSON_PLAN_API_KEY}", "Content-Type": "application/json"}
+    req_id_base = f"mcp-stdio-{uuid.uuid4().hex[:8]}"
+
+    def _elapsed_s(start_ts: float) -> float:
+        if not start_ts:
+            return 0.0
+        try:
+            return max(0.0, time.time() - float(start_ts))
+        except Exception:
+            return 0.0
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
-        "model": model,
+        "model": normalized_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": False,
     }
+    if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+        payload["temperature"] = 1.0
 
     retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
     timeout_s = float(API_TIMEOUT or 120)
 
     for attempt in range(3):
+        req_id = f"{req_id_base}-{attempt + 1}"
+        start_ts = llm_console.log_start(
+            req_id=req_id,
+            provider=provider,
+            model=normalized_model,
+            stream=False,
+            temperature=float(payload.get("temperature") or 0.0),
+            max_tokens=int(payload.get("max_tokens") or 0),
+            base_url=base_url,
+        )
         try:
             async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
                 resp = await client.post(
-                    f"{LESSON_PLAN_BASE_URL.rstrip('/')}/chat/completions",
+                    f"{base_url}/chat/completions",
                     headers=headers,
                     json=payload,
                 )
@@ -102,16 +150,38 @@ async def _call_llm_text(
                     wait_s = 0.0
                 if wait_s <= 0:
                     wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=f"http_status_{resp.status_code}")
                 await asyncio.sleep(wait_s)
                 continue
 
             resp.raise_for_status()
             data = resp.json()
             try:
-                return str(data["choices"][0]["message"]["content"] or "")
+                content = str(data["choices"][0]["message"]["content"] or "")
+                finish_reason = ""
+                usage = {}
+                try:
+                    choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                    finish_reason = str(choice0.get("finish_reason") or "")
+                except Exception:
+                    finish_reason = ""
+                if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                    usage = dict(data.get("usage") or {})
+                if content:
+                    llm_console.log_delta(req_id=req_id, channel="content", text=content)
+                llm_console.log_end(
+                    req_id=req_id,
+                    elapsed_s=_elapsed_s(start_ts),
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    content_chars=len(content),
+                )
+                return content
             except Exception:
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error="invalid_response")
                 return ""
-        except Exception:
+        except Exception as exc:
+            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=str(exc))
             if attempt < 2:
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
                 continue
@@ -1538,7 +1608,7 @@ class ExamPaperMCPServer:
                     difficulty = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip() or DEFAULT_DIFFICULTY
                     if not topic:
                         result = {"success": False, "error": "missing_topic"}
-                    elif not LESSON_PLAN_API_KEY:
+                    elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                         result = {
                             "success": True,
                             "topic": topic,
@@ -1654,7 +1724,7 @@ class ExamPaperMCPServer:
                 elif name == "analyze_topic":
                     topic = (arguments.get("topic") or "").strip()
                     subject_input = (arguments.get("subject") or "").strip()
-                    if not LESSON_PLAN_API_KEY:
+                    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                         result = {
                             "success": True,
                             "topic": topic,
@@ -1698,7 +1768,7 @@ class ExamPaperMCPServer:
                     subject_input = (arguments.get("subject") or "").strip()
                     knowledge = arguments.get("knowledge") if isinstance(arguments.get("knowledge"), dict) else {}
                     analysis = arguments.get("analysis") if isinstance(arguments.get("analysis"), dict) else {}
-                    if not LESSON_PLAN_API_KEY:
+                    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                         result = {
                             "success": True,
                             "markdown": f"## 一、知识点讲解：{topic}\n\n（未配置模型，无法生成详细讲解。）\n",
@@ -1727,7 +1797,7 @@ class ExamPaperMCPServer:
                     stem = (arguments.get("stem") or "").strip()
                     subject_input = (arguments.get("subject") or "").strip()
                     topic = (arguments.get("topic") or "").strip()
-                    if not LESSON_PLAN_API_KEY:
+                    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                         result = {"success": True, "markdown": "（未配置模型，无法生成解答。）", "source": "fallback"}
                     else:
                         prompt = f"""请为下面题目写出详细分步解答（Markdown）。\n\n要求：\n- 每一步说明在做什么\n- 如果题干信息不足，请说明需要补充什么\n\n学科：{subject_input or self.current_subject}\n知识点：{topic or '（未指定）'}\n\n题目：\n{stem}\n"""
@@ -1747,7 +1817,7 @@ class ExamPaperMCPServer:
                     markdown = (arguments.get("markdown") or "").strip()
                     if not markdown:
                         result = {"success": False, "error": "missing_markdown"}
-                    elif not LESSON_PLAN_API_KEY:
+                    elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                         result = {"success": True, "passed": True, "issues": [], "suggestions": [], "source": "fallback"}
                     else:
                         prompt = f"""请审查下面这份自学资料 Markdown，找出：\n1) 逻辑跳跃/不清晰处\n2) 可能的错误或表述不严谨\n3) 建议改进点（最多5条）\n\n要求：输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n\n主题：{topic}\n\nMarkdown:\n{markdown}\n"""
@@ -1788,7 +1858,7 @@ class ExamPaperMCPServer:
                     target_chars = max(80, min(2000, target_chars))
                     if not messages:
                         result = {"success": True, "summary": ""}
-                    elif not LESSON_PLAN_API_KEY:
+                    elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                         parts = []
                         for m in messages[-6:]:
                             role = str((m or {}).get("role") or "unknown")

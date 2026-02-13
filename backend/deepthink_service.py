@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Tuple
 
 import httpx
 
 from backend.core.settings import settings
+from backend.core import llm_console
 from backend.deepthink.prompts import (
     EVALUATOR_SYSTEM_PROMPT_TEMPLATE,
     GENERATOR_SYSTEM_PROMPT_TEMPLATE,
@@ -131,6 +133,21 @@ class DeepThinkService:
         if not api_key:
             return {"success": False, "error": f"未配置 {provider} API Key（当前模型: {model}）"}
 
+        req_id = f"deepthink-{uuid.uuid4().hex[:8]}"
+        start_ts = llm_console.log_start(
+            req_id=req_id,
+            provider=provider,
+            model=model,
+            stream=False,
+            temperature=float(temperature),
+            max_tokens=int(max_tokens),
+            base_url=base_url,
+        )
+        finish_reason = ""
+        usage: Dict[str, Any] = {}
+        content_chars = 0
+        err = ""
+
         payload: Dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -159,10 +176,43 @@ class DeepThinkService:
                 except Exception:
                     detail = (resp.text or "").strip()
                 suffix = f" - {detail[:240]}" if detail else ""
+                err = f"http_status_{resp.status_code}"
                 return {"success": False, "error": f"API错误: {resp.status_code}{suffix} (provider={provider})"}
-            return {"success": True, "data": resp.json(), "provider": provider}
+
+            data = resp.json()
+            try:
+                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                finish_reason = str(choice0.get("finish_reason") or "")
+                msg = choice0.get("message", {}) if isinstance(choice0.get("message"), dict) else {}
+                content_text = str(msg.get("content") or "")
+            except Exception:
+                content_text = ""
+                finish_reason = ""
+
+            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                usage = dict(data.get("usage") or {})
+            if content_text:
+                content_chars = len(content_text)
+                llm_console.log_delta(req_id=req_id, channel="content", text=content_text)
+
+            return {"success": True, "data": data, "provider": provider}
         except Exception as exc:
+            err = str(exc)
             return {"success": False, "error": f"请求错误: {str(exc)}"}
+        finally:
+            elapsed_s = 0.0
+            try:
+                elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
+            except Exception:
+                elapsed_s = 0.0
+            llm_console.log_end(
+                req_id=req_id,
+                elapsed_s=elapsed_s,
+                finish_reason=finish_reason,
+                usage=usage,
+                content_chars=content_chars,
+                error=err,
+            )
 
     async def _propose(
         self,
@@ -298,6 +348,21 @@ class DeepThinkService:
         if provider == "openrouter":
             payload["reasoning"] = {"effort": settings.deepthink_reasoning_effort, "exclude": True}
 
+        req_id = f"deepthink-stream-{uuid.uuid4().hex[:8]}"
+        start_ts = llm_console.log_start(
+            req_id=req_id,
+            provider=provider,
+            model=model,
+            stream=True,
+            temperature=float(payload.get("temperature") or 0.0),
+            max_tokens=int(payload.get("max_tokens") or 0),
+            base_url=base_url,
+        )
+        finish_reason = ""
+        usage: Dict[str, Any] = {}
+        content_chars = 0
+        err = ""
+
         try:
             async with client.stream(
                 "POST",
@@ -324,6 +389,7 @@ class DeepThinkService:
                         detail = ""
                     suffix = f" - {detail[:240]}" if detail else ""
                     yield {"type": "error", "message": f"API错误: {response.status_code}{suffix} (provider={provider})"}
+                    err = f"http_status_{response.status_code}"
                     return
 
                 async for line in response.aiter_lines():
@@ -334,14 +400,38 @@ class DeepThinkService:
                         break
                     try:
                         chunk = json.loads(data_str)
-                        delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                        choice0 = (chunk.get("choices") or [{}])[0] if isinstance(chunk, dict) else {}
+                        delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
                         content = delta.get("content") or ""
                         if content:
+                            llm_console.log_delta(req_id=req_id, channel="content", text=str(content))
+                            content_chars += len(str(content))
                             yield {"type": "answer_delta", "content": content}
+
+                        fr = choice0.get("finish_reason")
+                        if isinstance(fr, str) and fr:
+                            finish_reason = fr
+                        if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
+                            usage = dict(chunk.get("usage") or {})
                     except Exception:
                         continue
         except Exception as exc:
+            err = str(exc)
             yield {"type": "error", "message": f"流式请求错误: {str(exc)}"}
+        finally:
+            elapsed_s = 0.0
+            try:
+                elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
+            except Exception:
+                elapsed_s = 0.0
+            llm_console.log_end(
+                req_id=req_id,
+                elapsed_s=elapsed_s,
+                finish_reason=finish_reason,
+                usage=usage,
+                content_chars=content_chars,
+                error=err,
+            )
 
     async def solve(
         self,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import httpx
+import time
+import uuid
 from typing import Optional, Dict, Any, List
 
 from backend.core.settings import (
@@ -19,6 +21,7 @@ from backend.core.settings import (
     REVIEW_HTTP_REFERER,
     REVIEW_X_TITLE,
 )
+from backend.core import llm_console
 
 
 REVIEW_SYSTEM_PROMPT = """You are an expert educational content reviewer.
@@ -77,6 +80,21 @@ async def review_question(
             "error": f"{REVIEW_PROVIDER} API key not configured",
             "verdict": "ERROR",
         }
+
+    req_id = f"reviewer-{uuid.uuid4().hex[:8]}"
+    start_ts = llm_console.log_start(
+        req_id=req_id,
+        provider=str(REVIEW_PROVIDER or ""),
+        model=str(REVIEW_MODEL or ""),
+        stream=False,
+        temperature=float(REVIEW_MODEL_TEMPERATURE),
+        max_tokens=int(REVIEW_MODEL_MAX_TOKENS),
+        base_url=str(base_url or ""),
+    )
+    finish_reason = ""
+    usage: Dict[str, Any] = {}
+    content_chars = 0
+    err = ""
     
     # Truncate stem if too long
     truncated_stem = stem[:REVIEW_MAX_STEM_CHARS]
@@ -135,25 +153,52 @@ async def review_question(
             )
             response.raise_for_status()
             data = response.json()
+            try:
+                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                finish_reason = str(choice0.get("finish_reason") or "")
+            except Exception:
+                finish_reason = ""
+            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                usage = dict(data.get("usage") or {})
             
             choices = data.get("choices", [])
             if not choices:
+                err = "empty_choices"
                 return {"error": "No response from API", "verdict": "ERROR"}
             
             review_text = choices[0].get("message", {}).get("content", "")
+            if isinstance(review_text, str) and review_text:
+                content_chars = len(review_text)
+                llm_console.log_delta(req_id=req_id, channel="content", text=review_text)
             
             # Parse the review to extract structured data
             return _parse_review(review_text)
     except httpx.HTTPStatusError as e:
+        err = f"http_status_{e.response.status_code}" if e.response is not None else "http_status_error"
         return {
             "error": f"API error: {e.response.status_code}",
             "verdict": "ERROR",
         }
     except Exception as e:
+        err = str(e)
         return {
             "error": f"Review failed: {str(e)}",
             "verdict": "ERROR",
         }
+    finally:
+        elapsed_s = 0.0
+        try:
+            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
+        except Exception:
+            elapsed_s = 0.0
+        llm_console.log_end(
+            req_id=req_id,
+            elapsed_s=elapsed_s,
+            finish_reason=finish_reason,
+            usage=usage,
+            content_chars=content_chars,
+            error=err,
+        )
 
 
 def _parse_review(review_text: str) -> Dict[str, Any]:
@@ -264,6 +309,21 @@ async def review_questions_with_openrouter(
 
     if not questions:
         return {"success": False, "error": "没有题目可供审查"}
+
+    req_id = f"reviewer-batch-{uuid.uuid4().hex[:8]}"
+    start_ts = llm_console.log_start(
+        req_id=req_id,
+        provider=str(api_config.get("provider") or ""),
+        model=str(api_config.get("model") or ""),
+        stream=False,
+        temperature=float(REVIEW_MODEL_TEMPERATURE),
+        max_tokens=int(REVIEW_MODEL_MAX_TOKENS),
+        base_url=str(api_config.get("base_url") or ""),
+    )
+    finish_reason = ""
+    usage: Dict[str, Any] = {}
+    content_chars = 0
+    err = ""
 
     questions_text = ""
     for i, q in enumerate(questions, 1):
@@ -379,6 +439,7 @@ async def review_questions_with_openrouter(
             )
 
             if response.status_code != 200:
+                err = f"http_status_{response.status_code}"
                 return {
                     "success": False,
                     "error": f"API调用失败: {response.status_code}",
@@ -387,9 +448,21 @@ async def review_questions_with_openrouter(
                 }
 
             data = response.json()
+            try:
+                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                finish_reason = str(choice0.get("finish_reason") or "")
+            except Exception:
+                finish_reason = ""
+            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                usage = dict(data.get("usage") or {})
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if not content:
+                err = "empty_content"
                 return {"success": False, "error": "AI 返回空内容", "provider": api_config.get("provider")}
+
+            if isinstance(content, str) and content:
+                content_chars = len(content)
+                llm_console.log_delta(req_id=req_id, channel="content", text=content)
 
             return {
                 "success": True,
@@ -401,14 +474,30 @@ async def review_questions_with_openrouter(
             }
 
     except httpx.TimeoutException:
+        err = "timeout"
         return {
             "success": False,
             "error": f"请求超时（{REVIEW_TIMEOUT}秒）",
             "provider": api_config.get("provider"),
         }
     except Exception as e:
+        err = str(e)
         return {
             "success": False,
             "error": f"请求错误: {str(e)}",
             "provider": api_config.get("provider"),
         }
+    finally:
+        elapsed_s = 0.0
+        try:
+            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
+        except Exception:
+            elapsed_s = 0.0
+        llm_console.log_end(
+            req_id=req_id,
+            elapsed_s=elapsed_s,
+            finish_reason=finish_reason,
+            usage=usage,
+            content_chars=content_chars,
+            error=err,
+        )

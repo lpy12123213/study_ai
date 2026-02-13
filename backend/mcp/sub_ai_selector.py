@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import httpx
+import time
+import uuid
 from typing import List, Dict, Any, Optional
 
 from backend.core.settings import (
@@ -16,9 +18,14 @@ from backend.core.settings import (
     SUB_MODEL_MAX_TOKENS,
     SUB_MODEL_TEMPERATURE,
 )
+from backend.core import llm_console
 
 def _infer_provider_for_model(model: str) -> str:
     m = (model or "").strip()
+    ml = m.lower()
+    moonshot_like = ml.startswith("moonshotai/") or ml.startswith("moonshot/") or ml.startswith("kimi-") or ml.startswith("moonshot-")
+    if moonshot_like and (settings.moonshot_api_key or "").strip():
+        return "moonshot"
     if m.startswith("accounts/"):
         return "fireworks"
     if "/" in m:
@@ -54,12 +61,46 @@ async def select_best_question(
     if provider == "fireworks":
         base_url = (settings.fireworks_base_url or "").rstrip("/")
         api_key = (settings.fireworks_api_key or "").strip()
+    elif provider == "moonshot":
+        base_url = (settings.moonshot_base_url or "").rstrip("/")
+        api_key = (settings.moonshot_api_key or "").strip()
     else:
         base_url = (settings.openrouter_base_url or "").rstrip("/")
         api_key = (settings.openrouter_api_key or "").strip()
 
     if not api_key:
         return {"success": False, "error": f"未配置 {provider} API Key（当前模型: {effective_model}）"}
+
+    normalized_model = effective_model
+    if provider == "moonshot" and "/" in normalized_model:
+        normalized_model = normalized_model.split("/")[-1]
+
+    effective_temperature = float(SUB_MODEL_TEMPERATURE)
+    if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
+        effective_temperature = 1.0
+
+    req_id = f"subai-{uuid.uuid4().hex[:8]}"
+    start_ts = llm_console.log_start(
+        req_id=req_id,
+        provider=provider,
+        model=normalized_model,
+        stream=False,
+        temperature=effective_temperature,
+        max_tokens=int(SUB_MODEL_MAX_TOKENS),
+        base_url=base_url,
+    )
+    finish_reason = ""
+    usage: Dict[str, Any] = {}
+    content_chars = 0
+    err = ""
+
+    def _elapsed_s() -> float:
+        if not start_ts:
+            return 0.0
+        try:
+            return max(0.0, time.time() - float(start_ts))
+        except Exception:
+            return 0.0
 
     # 构建题目描述文本
     questions_text = ""
@@ -130,14 +171,15 @@ async def select_best_question(
                 f"{base_url}/chat/completions",
                 headers=headers,
                 json={
-                    "model": effective_model,
+                    "model": normalized_model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": SUB_MODEL_TEMPERATURE,
+                    "temperature": effective_temperature,
                     "max_tokens": SUB_MODEL_MAX_TOKENS
                 }
             )
 
             if response.status_code != 200:
+                err = f"http_status_{response.status_code}"
                 return {
                     "success": False,
                     "error": f"API调用失败: {response.status_code}",
@@ -146,6 +188,16 @@ async def select_best_question(
 
             data = response.json()
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            try:
+                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
+                finish_reason = str(choice0.get("finish_reason") or "")
+            except Exception:
+                finish_reason = ""
+            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                usage = dict(data.get("usage") or {})
+            if isinstance(content, str) and content:
+                content_chars = len(content)
+                llm_console.log_delta(req_id=req_id, channel="content", text=content)
 
             # 解析JSON响应
             try:
@@ -191,12 +243,14 @@ async def select_best_question(
                     result["success"] = True
                     return result
                 else:
+                    err = "parse_error_no_json"
                     return {
                         "success": False,
                         "error": "无法解析AI响应",
                         "raw_response": content[:500]
                     }
             except json.JSONDecodeError as e:
+                err = f"json_decode_error: {e}"
                 return {
                     "success": False,
                     "error": f"JSON解析失败: {str(e)}",
@@ -204,6 +258,17 @@ async def select_best_question(
                 }
 
     except httpx.TimeoutException:
+        err = "timeout"
         return {"success": False, "error": "请求超时"}
     except Exception as e:
+        err = str(e)
         return {"success": False, "error": f"请求错误: {str(e)}"}
+    finally:
+        llm_console.log_end(
+            req_id=req_id,
+            elapsed_s=_elapsed_s(),
+            finish_reason=finish_reason,
+            usage=usage,
+            content_chars=content_chars,
+            error=err,
+        )
