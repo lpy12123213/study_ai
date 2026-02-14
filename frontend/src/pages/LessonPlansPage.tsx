@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { useSubjects } from '@/hooks/useSubjects'
-import { fetchSSE } from '@/api/client'
+import { fetchSSE, resolveApiResourceUrl } from '@/api/client'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -876,12 +876,14 @@ function LessonPlansPage() {
           const pdfUrl = toText(material?.pdf_url)
           const mdFilename = toText(material?.md_filename)
           const pdfFilename = toText(material?.pdf_filename)
+          const mdHref = mdUrl ? resolveApiResourceUrl(mdUrl) : ''
+          const pdfHref = pdfUrl ? resolveApiResourceUrl(pdfUrl) : ''
 
           const lines: string[] = [
             '已生成教案，可下载：',
             '',
-            mdUrl ? `- Markdown： [下载 Markdown](${mdUrl})` : '- Markdown： （生成失败或未导出）',
-            pdfUrl ? `- PDF： [下载 PDF](${pdfUrl})` : '- PDF： （生成失败或未编译）',
+            mdHref ? `- Markdown： [下载 Markdown](${mdHref})` : '- Markdown： （生成失败或未导出）',
+            pdfHref ? `- PDF： [下载 PDF](${pdfHref})` : '- PDF： （生成失败或未编译）',
           ]
           const content = lines.join('\n')
 

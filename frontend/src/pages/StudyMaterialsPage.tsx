@@ -15,7 +15,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
-import { fetchSSERequest } from '@/api/client'
+import { fetchSSERequest, resolveApiResourceUrl } from '@/api/client'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
@@ -43,6 +43,27 @@ function toConversationTitle(text: string): string {
 }
 
 type TriState = 'default' | 'on' | 'off'
+
+function formatStudyMaterialsError(raw: string): string {
+  const msg = (raw || '').trim()
+  if (!msg) return '生成失败'
+
+  const lower = msg.toLowerCase()
+  if (lower.includes('llm_not_configured')) {
+    return '未配置大模型（API Key）。请先配置后端环境变量并重启后端再试。'
+  }
+  if (lower.includes('llm_request_failed')) {
+    return '大模型请求失败。请稍后重试，或检查 Key/模型名/网络/额度。'
+  }
+  if (lower.includes('markdown_empty')) {
+    return '生成内容为空，请换个问题或补充更多要求后再试。'
+  }
+  if (lower.includes('http error! status: 401') || lower.includes('http error! status: 403')) {
+    return '登录已过期或无权限，请重新登录后重试。'
+  }
+
+  return msg
+}
 
 function normalizeKnowledgePoints(points: unknown): string[] {
   if (!Array.isArray(points)) return []
@@ -424,8 +445,7 @@ export default function StudyMaterialsPage() {
   const activeConversationId = useMemo(() => {
     if (!currentConversationId) return null
     const current = conversations.find((c) => c.id === currentConversationId)
-    // Reuse existing conversation type `lesson_plan` as “自学资料”
-    return current?.type === 'lesson_plan' ? currentConversationId : null
+    return current?.type === 'study_materials' ? currentConversationId : null
   }, [conversations, currentConversationId])
 
   const activeConversation = useMemo(() => {
@@ -672,7 +692,8 @@ export default function StudyMaterialsPage() {
         }
 
         if (kind === 'warning') {
-          const msg = toText(payload?.message)
+          const raw = toText(payload?.message)
+          const msg = raw ? formatStudyMaterialsError(raw) : ''
           if (msg) setError(msg)
           return
         }
@@ -907,25 +928,48 @@ export default function StudyMaterialsPage() {
             patchAssistantStep(thinkingStepId, { status: 'completed', endTime: t })
           }
           const mdUrl = toText(payload?.material?.md_url)
+          const texUrl = toText(payload?.material?.tex_url)
           const pdfUrl = toText(payload?.material?.pdf_url)
+          const mdFilename = toText(payload?.material?.md_filename)
+          const texFilename = toText(payload?.material?.tex_filename)
+          const pdfFilename = toText(payload?.material?.pdf_filename)
           const fatal = payload?.material?.error as any
           const fatalTool = toText(fatal?.tool)
           const fatalMsg = toText(fatal?.error)
-          let content = assistantText || '已完成生成。'
-          if (mdUrl || pdfUrl) {
-            const lines: string[] = [
-              '已生成自学资料，可下载：',
-              '',
-              mdUrl ? `- Markdown： [下载 Markdown](${mdUrl})` : '- Markdown： （生成失败或未导出）',
-              pdfUrl ? `- PDF： [下载 PDF](${pdfUrl})` : '- PDF： （生成失败或未编译）',
-            ]
-            if (fatalTool || fatalMsg) {
-              lines.push('')
-              lines.push(`**生成中断**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}`)
-            }
-            content = lines.join('\n')
-          } else if (fatalTool || fatalMsg) {
-            content = [content, '', `**生成中断**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}`].join('\n')
+
+          const mdHref = mdUrl ? resolveApiResourceUrl(mdUrl) : ''
+          const texHref = texUrl ? resolveApiResourceUrl(texUrl) : ''
+          const pdfHref = pdfUrl ? resolveApiResourceUrl(pdfUrl) : ''
+
+          const downloads: string[] = []
+          if (mdHref || texHref || pdfHref) {
+            downloads.push('---', '## 下载', '')
+            downloads.push(
+              mdHref
+                ? `- Markdown： [${mdFilename ? `下载（${mdFilename}）` : '下载 Markdown'}](${mdHref})`
+                : '- Markdown： （生成失败或未导出）'
+            )
+            downloads.push(
+              texHref
+                ? `- LaTeX： [${texFilename ? `下载（${texFilename}）` : '下载 LaTeX'}](${texHref})`
+                : '- LaTeX： （未生成）'
+            )
+            downloads.push(
+              pdfHref
+                ? `- PDF： [${pdfFilename ? `下载（${pdfFilename}）` : '下载 PDF'}](${pdfHref})`
+                : '- PDF： （生成失败或未编译）'
+            )
+          }
+
+          const interrupt =
+            fatalTool || fatalMsg ? `**生成中断**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}` : ''
+
+          let content = (assistantText || '已完成生成。').trimEnd()
+          if (downloads.length > 0) {
+            content = [content, '', ...downloads].join('\n')
+          }
+          if (interrupt) {
+            content = [content, '', interrupt].join('\n')
           }
 
           useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
@@ -951,7 +995,7 @@ export default function StudyMaterialsPage() {
 
         if (kind === 'error') {
           done = true
-          const msg = toText(payload?.message) || '生成失败'
+          const msg = formatStudyMaterialsError(toText(payload?.message) || '生成失败')
           setError(msg)
 
           const t = new Date().toISOString()
@@ -988,7 +1032,7 @@ export default function StudyMaterialsPage() {
         if (streamAbortRef.current !== controller) return
         if (done) return
 
-        const msg = err.message || '生成失败'
+        const msg = formatStudyMaterialsError(err.message || '生成失败')
         setError(msg)
         if (localTaskId) {
           useTaskStore.getState().failTask(localTaskId, msg)
@@ -1045,7 +1089,7 @@ export default function StudyMaterialsPage() {
     const item: ConversationItem = {
       id,
       title: '新自学资料',
-      type: 'lesson_plan',
+      type: 'study_materials',
       createdAt: now,
       updatedAt: now,
       status: 'active',
@@ -1067,14 +1111,14 @@ export default function StudyMaterialsPage() {
 
     const now = new Date().toISOString()
 
-    // Ensure a study-materials conversation is selected (reuse lesson_plan type)
+    // Ensure a study-materials conversation is selected
     let conversationId = activeConversationId
     if (!conversationId) {
       conversationId = generateId()
       const conversation: ConversationItem = {
         id: conversationId,
         title: toConversationTitle(prompt),
-        type: 'lesson_plan',
+        type: 'study_materials',
         createdAt: now,
         updatedAt: now,
         status: 'active',

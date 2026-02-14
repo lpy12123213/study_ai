@@ -15,10 +15,14 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { formatDate } from '@/lib/utils'
+import { resolveApiResourceUrl } from '@/api/client'
 
 export default function LessonPlanDetailPage() {
   const { lessonPlanId } = useParams<{ lessonPlanId: string }>()
   const plan = useLessonPlanStore((state) => state.getPlan(lessonPlanId ?? ''))
+
+  const mdHref = plan?.mdUrl ? resolveApiResourceUrl(plan.mdUrl) : ''
+  const pdfHref = plan?.pdfUrl ? resolveApiResourceUrl(plan.pdfUrl) : ''
 
   const handlePrint = () => {
     window.print()
@@ -120,7 +124,7 @@ export default function LessonPlanDetailPage() {
               <div className="flex flex-wrap gap-2">
                 {plan.mdUrl ? (
                   <Button asChild>
-                    <a href={plan.mdUrl} target="_blank" rel="noreferrer" download>
+                    <a href={mdHref} target="_blank" rel="noreferrer" download>
                       下载 Markdown
                     </a>
                   </Button>
@@ -130,7 +134,7 @@ export default function LessonPlanDetailPage() {
 
                 {plan.pdfUrl ? (
                   <Button asChild variant="outline">
-                    <a href={plan.pdfUrl} target="_blank" rel="noreferrer" download>
+                    <a href={pdfHref} target="_blank" rel="noreferrer" download>
                       下载 PDF
                     </a>
                   </Button>

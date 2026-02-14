@@ -1,13 +1,13 @@
-"""Lesson Plan Agent V2 - streaming lesson plan generation (Markdown + PDF downloads).
+"""教案智能体 V2 - 流式生成教案（支持 Markdown 和 PDF 下载）。
 
-Flow:
-1) Plan: split knowledge points -> review
-2) SubAgent: research each knowledge point
-3) Write: generate structured lesson plan JSON (原创撰写)
-4) Export: JSON -> Markdown -> (LLM) ElegantBook LaTeX -> PDF
+流程：
+1) 规划：拆分知识点 -> 审阅
+2) 子智能体：研究每个知识点
+3) 撰写：生成结构化教案 JSON（原创内容）
+4) 导出：JSON -> Markdown -> (LLM) ElegantBook LaTeX -> PDF
 
-Notes:
-- UI 不在页面展示全文，只提供 md/pdf 下载链接。
+说明：
+- 界面不显示全文，仅提供 md/pdf 下载链接。
 - LLM 请求失败会自动重试；多次失败则中断并报错（尽量减少兜底）。
 """
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -39,6 +40,7 @@ from backend.core.settings import (
     MOONSHOT_BASE_URL,
 )
 from backend.core import llm_console
+from backend.core.llm_client import cap_max_tokens_for_messages
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_DIR = (REPO_ROOT / ".local" / "media" / "generated").resolve()
@@ -187,11 +189,74 @@ async def _call_llm_text(
         msg = msg.replace("\n", " ").strip() if msg else ""
         return msg[:260]
 
+    def _parse_context_len_error(msg: str) -> int:
+        s = str(msg or "")
+        if not s:
+            return 0
+        m1 = re.search(r"maximum context length is\s+(\d+)\s+tokens", s, flags=re.IGNORECASE)
+        if not m1:
+            return 0
+        try:
+            return int(m1.group(1))
+        except Exception:
+            return 0
+
+    def _parse_input_tokens_error(msg: str) -> int:
+        s = str(msg or "")
+        if not s:
+            return 0
+        m2 = re.search(r"\((\d+)\s+of\s+text\s+input,\s*(\d+)\s+in\s+the\s+output\)", s, flags=re.IGNORECASE)
+        if not m2:
+            return 0
+        try:
+            return int(m2.group(1))
+        except Exception:
+            return 0
+
+    def _estimate_text_tokens(text: str) -> int:
+        t = str(text or "")
+        if not t:
+            return 0
+        cjk = 0
+        for ch in t:
+            o = ord(ch)
+            if (
+                0x4E00 <= o <= 0x9FFF
+                or 0x3400 <= o <= 0x4DBF
+                or 0x3040 <= o <= 0x30FF
+                or 0xAC00 <= o <= 0xD7AF
+            ):
+                cjk += 1
+        ratio = float(cjk) / float(len(t) or 1)
+        if ratio >= 0.25:
+            return int(math.ceil(len(t) / 1.6))
+        return int(math.ceil(len(t) / 4.0))
+
+    def _estimate_messages_tokens(messages_in: List[Dict[str, str]]) -> int:
+        total = 0
+        for m in messages_in or []:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "")
+            content = str(m.get("content") or "")
+            total += 6
+            total += _estimate_text_tokens(role)
+            total += _estimate_text_tokens(content)
+        return int(total)
+
+    requested_max_tokens = int(max_tokens)
+    payload_max_tokens = cap_max_tokens_for_messages(
+        messages=messages,
+        model=normalized_model,
+        requested_max_tokens=requested_max_tokens,
+    )
+    adjusted_for_ctx = payload_max_tokens != requested_max_tokens
+
     payload: Dict[str, Any] = {
         "model": normalized_model,
         "messages": messages,
         "temperature": float(temperature),
-        "max_tokens": int(max_tokens),
+        "max_tokens": int(payload_max_tokens),
         "stream": False,
     }
     if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
@@ -274,15 +339,40 @@ async def _call_llm_text(
             status = exc.response.status_code if exc.response is not None else 0
             api_msg = _resp_error(exc.response)
             last_error = f"http_status_{status}"
-            if status in {400, 422} and "reasoning" in payload and attempt == 0:
-                # Some providers/models reject unknown fields. Retry once without `reasoning`.
-                try:
-                    payload.pop("reasoning", None)
-                except Exception:
-                    pass
-                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
-                await asyncio.sleep(0.2)
-                continue
+            if status in {400, 422}:
+                if provider == "openrouter":
+                    limit = _parse_context_len_error(api_msg)
+                    if limit > 0:
+                        reserve_raw = str(os.getenv("MODEL_CONTEXT_RESERVE_TOKENS") or "").strip()
+                        try:
+                            reserve = int(reserve_raw) if reserve_raw else 1024
+                        except Exception:
+                            reserve = 1024
+                        reserve = max(128, min(reserve, 8192))
+                        in_t = _parse_input_tokens_error(api_msg)
+                        if in_t <= 0:
+                            in_t = _estimate_messages_tokens(messages)
+                        allowed = int(limit - int(in_t) - reserve)
+                        if allowed > 0:
+                            try:
+                                cur = int(payload.get("max_tokens") or 0)
+                            except Exception:
+                                cur = 0
+                            if cur > allowed:
+                                payload["max_tokens"] = int(allowed)
+                                adjusted_for_ctx = True
+                                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
+                                await asyncio.sleep(0.2)
+                                continue
+
+                if "reasoning" in payload and attempt == 0:
+                    try:
+                        payload.pop("reasoning", None)
+                    except Exception:
+                        pass
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                    await asyncio.sleep(0.2)
+                    continue
             if status in retry_statuses and attempt < (max_retry - 1):
                 llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
@@ -331,9 +421,13 @@ async def _split_knowledge_points(
         "subject": subject,
         "requirements": [
             "请把 topic 拆分为若干个可用于教学的子知识点（短语级关键词）。",
-            f"数量：{min_points}~{max_points} 个。",
-            "去重：合并同义/重复项；避免过泛（如“概念”“性质”单独出现）。",
-            "只输出严格 JSON：{\"knowledge_points\": [...]}（不要 Markdown，不要解释）。",
+            f"数量要求：{min_points}~{max_points} 个，尽量覆盖该主题的核心内容。",
+            "粒度要求：每个知识点应具体到可独立讲解的程度，避免过于宽泛（如单独的「概念」「性质」「应用」）。",
+            "去重要求：合并语义相近或重复的知识点，确保列表中无冗余项。",
+            "排序要求：按照教学逻辑顺序排列，从基础概念到进阶应用。",
+            "命名要求：每个知识点用简洁的短语表达（5~20字），便于后续生成教研素材。",
+            "输出格式：只输出严格 JSON，格式为 {\"knowledge_points\": [\"知识点1\", \"知识点2\", ...]}",
+            "注意：不要输出 Markdown 代码块，不要添加任何解释性文字。",
         ],
     }
 
@@ -368,9 +462,12 @@ async def _research_knowledge_point(kp: str, subject: str, topic: str) -> Dict[s
         "subject": subject,
         "topic": topic,
         "requirements": [
-            "请输出严格 JSON（不要 Markdown，不要解释）。",
-            "字段：teaching_points/common_misconceptions/suggested_activities/key_examples（都为字符串数组）。",
-            "每条尽量具体、可直接用于课堂设计；避免空话套话。",
+            "请针对该知识点进行深度教研分析，输出严格 JSON（不要 Markdown 代码块，不要解释性文字）。",
+            "teaching_points（教学要点）：列出 3~6 个核心教学要点，每条应具体说明『教什么』和『怎么教』，避免泛泛而谈。",
+            "common_misconceptions（常见误区）：列出 2~4 个学生容易出现的错误理解或典型错误，并简要说明正确认知。",
+            "suggested_activities（建议活动）：列出 2~4 个可在课堂实施的教学活动，包括活动形式、时长建议、预期效果。",
+            "key_examples（关键例题/案例）：列出 2~4 个典型例题或生活案例，要求具体、可直接用于课堂讲解或练习。",
+            "所有字段均为字符串数组，每条内容应详实、可操作，便于直接融入教案设计。",
         ],
         "output_schema": {
             "teaching_points": ["string"],
@@ -489,17 +586,62 @@ async def _generate_lesson_plan_json(
     prompt_parts.extend(
         [
             "",
-            "重要写作要求：",
-            "1) 所有教案内容必须用你自己的话撰写，严禁照搬任何来源原文",
-            "2) 课程环节要可执行：教师活动/学生活动/资源/板书要点要具体",
-            "3) 教案应覆盖所有知识点（可分配到不同环节）",
-            "4) 不要输出参考文献/URL 列表字段",
+            "=== 写作要求 ===",
             "",
-            "只输出严格 JSON（不要 Markdown 代码块，不要多余文字）。",
-            "输出字段：",
-            "{\"title\":...,\"objectives\":[{\"description\":...,\"type\":\"knowledge|skill|attitude\"}],"
-            "\"sections\":[{\"title\":...,\"duration_minutes\":...,\"content\":...,\"activities\":[...],\"resources\":[...]}],"
-            "\"summary\":...}",
+            "【原创性要求】",
+            "1. 所有教案内容必须用你自己的话撰写，严禁照搬任何来源原文",
+            "2. 可以参考教研资料获取灵感和事实，但必须经过消化吸收后重新组织语言",
+            "3. 避免使用模板化、套话式的表述，内容应具体、有针对性",
+            "",
+            "【教学目标要求】",
+            "1. 目标数量：3~6个，覆盖知识、技能、情感态度三个维度",
+            "2. 每个目标必须具体、可测量、可操作",
+            "3. 使用行为动词描述（如：掌握、理解、运用、分析、评价等）",
+            "4. 目标应与知识点紧密对应，避免空泛表述",
+            "",
+            "【教学环节要求】",
+            "1. 环节划分：建议包含导入、新授、练习、小结等基本环节",
+            "2. 时间分配：每个环节标注具体时长，总时长应等于课时时长",
+            "3. 内容详实：",
+            "   - content字段：详细描述该环节的教学内容、讲解要点、板书设计",
+            "   - 教师活动：具体说明教师在该环节做什么、说什么、如何引导",
+            "   - 学生活动：具体说明学生在该环节做什么、如何参与、预期反馈",
+            "4. activities字段：列出2~4个具体可执行的教学活动，包括：",
+            "   - 活动名称和形式（如：小组讨论、角色扮演、动手实验等）",
+            "   - 活动时长建议",
+            "   - 活动步骤或操作要点",
+            "5. resources字段：列出该环节所需的教学资源，如：",
+            "   - 教具、学具、多媒体素材",
+            "   - 练习题、案例材料",
+            "   - 板书设计要点",
+            "",
+            "【课程小结要求】",
+            "1. 概括本节课的核心知识点和重点难点",
+            "2. 点明学生应掌握的关键技能或方法",
+            "3. 可包含课后作业建议或延伸学习方向",
+            "",
+            "【格式要求】",
+            "1. 只输出严格JSON格式，不要Markdown代码块，不要多余解释文字",
+            "2. 不要输出参考文献/URL列表字段",
+            "3. 确保JSON格式正确，可被直接解析",
+            "",
+            "输出JSON结构：",
+            "{",
+            "  \"title\": \"课程标题\",",
+            "  \"objectives\": [",
+            "    {\"description\": \"具体目标描述\", \"type\": \"knowledge|skill|attitude\"}",
+            "  ],",
+            "  \"sections\": [",
+            "    {",
+            "      \"title\": \"环节名称\",",
+            "      \"duration_minutes\": 数字,",
+            "      \"content\": \"详细教学内容，包括讲解要点、教师活动、学生活动等\",",
+            "      \"activities\": [\"具体活动1\", \"具体活动2\"],",
+            "      \"resources\": [\"所需资源1\", \"所需资源2\"]",
+            "    }",
+            "  ],",
+            "  \"summary\": \"课程小结内容\"",
+            "}",
         ]
     )
 
@@ -715,8 +857,17 @@ async def _refine_latex(*, latex: str, topic: str, subject: str, compile_error: 
     reqs = [
         "请对下面 LaTeX 进行修订，使其可以稳定编译且排版合理。",
         "只输出 LaTeX 源码，不要代码块，不要解释。",
-        "重点：补齐/修正未闭合括号、环境、特殊字符转义；避免未定义命令；避免重复 \\documentclass。",
+        "重点检查并修正以下问题：",
+        "1. 补齐/修正未闭合的括号、花括号、方括号",
+        "2. 检查并修正未闭合的环境（如 \\begin{...} 必须有对应的 \\end{...}）",
+        "3. 特殊字符转义：确保 &, %, $, #, _, {, }, ~, ^ 等字符正确转义",
+        "4. 避免使用未定义的命令或宏",
+        "5. 避免重复的 \\documentclass 声明",
+        "6. 确保数学公式中的括号配对正确",
+        "7. 检查表格环境中的列数与实际内容是否匹配",
+        "8. 确保中文内容使用正确的字体和编码设置",
         "不要输出参考文献/URL 列表。",
+        "不要添加任何注释或说明文字。",
     ]
     if compile_error:
         reqs.append(f"编译错误信息（可能截断）：{compile_error[-1200:]}")

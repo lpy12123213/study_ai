@@ -2,26 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
 import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, PlanStep, ReflectionResult, StepResult, UserProfile
-from backend.core.settings import (
-    API_TIMEOUT,
-    LESSON_PLAN_API_KEY,
-    LESSON_PLAN_BASE_URL,
-    LESSON_PLAN_PROVIDER,
-    MOONSHOT_API_KEY,
-    MOONSHOT_BASE_URL,
-)
-from backend.core import llm_console
+from backend.core.llm_client import chat_completion_text
 
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -316,133 +305,26 @@ class ContextManager:
         if not messages:
             return ""
 
-        provider = str(LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
-        base_url = str(LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
-        api_key = str(LESSON_PLAN_API_KEY or "").strip()
-
-        normalized_model = str(self.config.summarizer_model or "").strip()
-        model_lower = normalized_model.lower()
-        moonshot_key = str(MOONSHOT_API_KEY or "").strip()
-        moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
-
-        if provider == "moonshot" or (
-            provider == "openrouter"
-            and moonshot_key
-            and (model_lower.startswith("moonshotai/") or model_lower.startswith("kimi-") or model_lower.startswith("moonshot-"))
-        ):
-            provider = "moonshot"
-            api_key = moonshot_key or api_key
-            base_url = moonshot_base_url or base_url
-            if "/" in normalized_model:
-                normalized_model = normalized_model.split("/")[-1]
-
-        # Fallback summarization if LLM isn't configured.
-        if not api_key:
-            parts = []
-            for m in messages[-6:]:
-                role = str(m.get("role") or "unknown")
-                content = str(m.get("content") or "")[:120]
-                if content:
-                    parts.append(f"{role}: {content}")
-            joined = " | ".join(parts)
-            return joined[:target_chars]
-
-        req_id_base = f"ctx-sum-{uuid.uuid4().hex[:8]}"
-
-        def _elapsed_s(start_ts: float) -> float:
-            if not start_ts:
-                return 0.0
-            try:
-                return max(0.0, time.time() - float(start_ts))
-            except Exception:
-                return 0.0
-
         prompt = f"""请将下面的对话/记录压缩为一段简洁摘要（约{target_chars}字左右），保留：\n- 用户主要目标与约束\n- 关键决策（Plan/Act/Reflect）\n- 重要工具调用结果/错误\n\n输出：纯文本摘要（不要Markdown）。\n\n记录：\n{json.dumps(messages, ensure_ascii=False)}\n"""
-
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": normalized_model,
-            "messages": [
-                {"role": "system", "content": "你是上下文压缩器，输出必须是纯文本摘要。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 400,
-        }
-        if provider == "moonshot" and normalized_model.lower().startswith("kimi-"):
-            payload["temperature"] = 1.0
-
-        retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
-        timeout_s = float(API_TIMEOUT or 120)
-        last_text = ""
-
-        for attempt in range(3):
-            req_id = f"{req_id_base}-{attempt + 1}"
-            start_ts = llm_console.log_start(
-                req_id=req_id,
-                provider=provider,
-                model=normalized_model,
-                stream=False,
-                temperature=float(payload.get("temperature") or 0.0),
-                max_tokens=int(payload.get("max_tokens") or 0),
-                base_url=base_url,
-            )
+        normalized_model = str(self.config.summarizer_model or "").strip()
+        if normalized_model:
             try:
-                async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
-                    resp = await client.post(
-                        f"{base_url}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
-
-                if resp.status_code in retry_statuses and attempt < 2:
-                    retry_after = (resp.headers.get("retry-after") or "").strip()
-                    wait_s = 0.0
-                    try:
-                        wait_s = float(retry_after) if retry_after else 0.0
-                    except ValueError:
-                        wait_s = 0.0
-                    if wait_s <= 0:
-                        wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
-                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=f"http_status_{resp.status_code}")
-                    await asyncio.sleep(wait_s)
-                    continue
-
-                resp.raise_for_status()
-                data = resp.json()
-                try:
-                    last_text = str(data["choices"][0]["message"]["content"] or "").strip()
-                except Exception:
-                    last_text = ""
-                if last_text:
-                    finish_reason = ""
-                    usage: Dict[str, Any] = {}
-                    try:
-                        choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
-                        finish_reason = str(choice0.get("finish_reason") or "")
-                    except Exception:
-                        finish_reason = ""
-                    if isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                        usage = dict(data.get("usage") or {})
-                    llm_console.log_delta(req_id=req_id, channel="content", text=last_text)
-                    llm_console.log_end(
-                        req_id=req_id,
-                        elapsed_s=_elapsed_s(start_ts),
-                        finish_reason=finish_reason,
-                        usage=usage,
-                        content_chars=len(last_text),
-                    )
-                    return last_text
-                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error="empty_response")
-                return ""
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=str(exc))
-                if attempt < 2:
-                    await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
-                    continue
-                break
+                text = await chat_completion_text(
+                    messages=[
+                        {"role": "system", "content": "你是上下文压缩器，输出必须是纯文本摘要。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model=normalized_model,
+                    temperature=0.2,
+                    max_tokens=400,
+                    retries=3,
+                    req_id_prefix="ctx-sum",
+                )
+                text = str(text or "").strip()
+                if text:
+                    return text
+            except Exception:
+                pass
 
         # Final fallback: never raise; produce a compact local summary.
         parts = []

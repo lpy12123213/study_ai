@@ -122,7 +122,7 @@ export const useConversationStore = create<ConversationState>()(
     }),
     {
       name: 'conversation-storage',
-      version: 2,
+      version: 3,
       migrate: (persistedState: unknown) => {
         const state = (persistedState || {}) as Partial<ConversationState>
 
@@ -138,6 +138,17 @@ export const useConversationStore = create<ConversationState>()(
           if (Array.isArray(messages)) messagesByConversation[id] = messages as Message[]
         }
 
+        // Back-compat: older builds reused `lesson_plan` for “自学资料”。
+        const migratedConversations = conversations.map((c) => {
+          if (!c || c.type !== 'lesson_plan') return c
+          const msgs = messagesByConversation[c.id] || EMPTY_MESSAGES
+          const isStudyMaterials =
+            (c as any)?.activeStream?.taskType === 'study_materials' ||
+            (typeof c.title === 'string' && c.title.includes('新自学资料')) ||
+            msgs.some((m) => typeof m?.content === 'string' && m.content.includes('已生成自学资料'))
+          return isStudyMaterials ? ({ ...c, type: 'study_materials' } as ConversationItem) : c
+        })
+
         const currentConversationId =
           state.currentConversationId && allowedIds.has(state.currentConversationId)
             ? state.currentConversationId
@@ -145,7 +156,7 @@ export const useConversationStore = create<ConversationState>()(
 
         return {
           ...state,
-          conversations,
+          conversations: migratedConversations,
           currentConversationId,
           messagesByConversation,
           filter: (state.filter as any) || 'all',

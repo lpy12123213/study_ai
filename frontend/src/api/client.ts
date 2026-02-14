@@ -3,6 +3,53 @@ import { useAuthStore } from '@/stores/useAuthStore'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
+function isAbsoluteHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
+
+function joinBaseUrl(base: string, path: string): string {
+  const baseValue = String(base || '').trim()
+  const pathValue = String(path || '').trim()
+
+  if (!pathValue) return baseValue
+  if (isAbsoluteHttpUrl(pathValue)) return pathValue
+
+  if (isAbsoluteHttpUrl(baseValue)) {
+    try {
+      const baseUrl = new URL(baseValue.endsWith('/') ? baseValue : `${baseValue}/`)
+      const cleaned = pathValue.startsWith('/') ? pathValue.slice(1) : pathValue
+      return new URL(cleaned, baseUrl).toString()
+    } catch {
+      // fall through to naive join
+    }
+  }
+
+  if (baseValue.endsWith('/') && pathValue.startsWith('/')) {
+    return baseValue + pathValue.slice(1)
+  }
+  if (!baseValue.endsWith('/') && !pathValue.startsWith('/')) {
+    return `${baseValue}/${pathValue}`
+  }
+  return `${baseValue}${pathValue}`
+}
+
+export function resolveApiResourceUrl(resourceUrl: string): string {
+  const value = String(resourceUrl || '').trim()
+  if (!value) return value
+  if (isAbsoluteHttpUrl(value)) return value
+
+  const baseValue = String(API_BASE_URL || '').trim()
+  if (!isAbsoluteHttpUrl(baseValue)) return value
+
+  try {
+    const origin = new URL(baseValue).origin
+    const path = value.startsWith('/') ? value : `/${value}`
+    return new URL(path, origin).toString()
+  } catch {
+    return value
+  }
+}
+
 export const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -43,14 +90,24 @@ export function createSSEConnection(
   onError?: (error: Event) => void,
   onComplete?: () => void
 ): EventSource {
-  const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`
+  const fullUrl = joinBaseUrl(API_BASE_URL, url)
   const token = useAuthStore.getState().token
   
   // Note: EventSource doesn't support custom headers
   // For auth, we'll need to pass token as query param or use fetch-based SSE
-  const eventSource = new EventSource(
-    token ? `${fullUrl}?token=${token}` : fullUrl
-  )
+  let eventUrl = fullUrl
+  if (token) {
+    try {
+      const u = new URL(fullUrl, window.location.origin)
+      u.searchParams.set('token', token)
+      eventUrl = u.toString()
+    } catch {
+      const sep = fullUrl.includes('?') ? '&' : '?'
+      eventUrl = `${fullUrl}${sep}token=${encodeURIComponent(token)}`
+    }
+  }
+
+  const eventSource = new EventSource(eventUrl)
 
   eventSource.onmessage = (event) => {
     try {
@@ -104,7 +161,7 @@ export async function fetchSSERequest(
   onError?: (error: Error) => void,
   onComplete?: () => void
 ): Promise<void> {
-  const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`
+  const fullUrl = joinBaseUrl(API_BASE_URL, url)
   const token = useAuthStore.getState().token
 
   const method = options.method || 'POST'

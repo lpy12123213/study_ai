@@ -6,6 +6,7 @@ import {
   Plus,
   MessagesSquare,
   LayoutTemplate,
+  BookOpen,
   BookOpenCheck,
   Search,
   MoreHorizontal,
@@ -33,6 +34,7 @@ const typeIcons: Record<ConversationType, typeof MessagesSquare> = {
   chat: MessagesSquare,
   blueprint: LayoutTemplate,
   lesson_plan: BookOpenCheck,
+  study_materials: BookOpen,
 }
 
 interface ConversationItemProps {
@@ -64,6 +66,10 @@ function ConversationListItem({
     }
     if (item.type === 'blueprint') {
       navigate('/blueprint')
+      return
+    }
+    if (item.type === 'lesson_plan') {
+      navigate('/lesson-plans')
       return
     }
     navigate('/study-materials')
@@ -170,7 +176,8 @@ export function HistorySidebar() {
 
   // Scope conversations to the current page so different features don't mix
   const pageTypeFilter: ConversationType | null = (() => {
-    if (location.pathname.startsWith('/study-materials')) return 'lesson_plan'
+    if (location.pathname.startsWith('/study-materials')) return 'study_materials'
+    if (location.pathname.startsWith('/lesson-plans')) return 'lesson_plan'
     if (location.pathname.startsWith('/chat')) return 'chat'
     if (location.pathname.startsWith('/blueprint')) return 'blueprint'
     return null
@@ -189,6 +196,8 @@ export function HistorySidebar() {
     setCurrentConversation(null)
     if (location.pathname.startsWith('/study-materials')) {
       navigate('/study-materials')
+    } else if (location.pathname.startsWith('/lesson-plans')) {
+      navigate('/lesson-plans')
     } else if (location.pathname.startsWith('/blueprint')) {
       navigate('/blueprint')
     } else {

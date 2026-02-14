@@ -16,7 +16,7 @@ export interface TaskStep {
 
 export interface ResumableTask {
   taskId: string;
-  taskType: 'blueprint' | 'lesson_plan' | 'chat';
+  taskType: 'blueprint' | 'lesson_plan' | 'study_materials' | 'chat';
   status: 'running' | 'paused' | 'completed' | 'failed';
   currentStep: number;
   totalSteps: number;
@@ -29,7 +29,7 @@ export interface ResumableTask {
 }
 
 // Conversation types
-export type ConversationType = 'chat' | 'blueprint' | 'lesson_plan';
+export type ConversationType = 'chat' | 'blueprint' | 'lesson_plan' | 'study_materials';
 export type ConversationStatus = 'active' | 'completed' | 'paused';
 
 export interface ConversationItem {

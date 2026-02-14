@@ -21,16 +21,16 @@ async def exa_answer(
     text_max_length: int = 1000,
 ) -> Dict[str, Any]:
     """
-    Ask a question and get an AI-generated answer with citations using Exa Answer API.
+    使用 Exa Answer API 提出问题并获取带有引用的 AI 生成答案。
 
     Args:
-        query: The question to answer
-        num_results: Number of source results to use (max 10)
-        include_text: Whether to include source text in citations
-        text_max_length: Max length of text content per citation
+        query: 要回答的问题
+        num_results: 使用的源结果数量（最多 10 个）
+        include_text: 是否在引用中包含源文本
+        text_max_length: 每个引用文本内容的最大长度
 
     Returns:
-        Dict with answer and citations
+        包含答案和引用的字典
     """
     if not EXA_API_KEY:
         return {
@@ -106,25 +106,25 @@ async def exa_search(
     text_max_length: int = 1000,
 ) -> Dict[str, Any]:
     """
-    Search the web using Exa AI.
+    使用 Exa AI 搜索网页。
     
     Args:
-        query: The search query
-        num_results: Number of results to return (max 10)
-        use_autoprompt: Whether to use Exa's autoprompt feature
-        type: Search type - neural, keyword, or auto
-        category: Filter by category (e.g., "news", "research paper")
-        include_domains: List of domains to include
-        exclude_domains: List of domains to exclude
-        start_crawl_date: Filter by crawl date (ISO format)
-        end_crawl_date: Filter by crawl date (ISO format)
-        start_published_date: Filter by published date
-        end_published_date: Filter by published date
-        include_text: Whether to include text content
-        text_max_length: Max length of text content
+        query: 搜索查询字符串
+        num_results: 返回结果数量（最多 10 个）
+        use_autoprompt: 是否使用 Exa 的自动提示功能
+        type: 搜索类型 - neural（神经搜索）、keyword（关键词搜索）或 auto（自动）
+        category: 按类别筛选（如 "news"、"research paper"）
+        include_domains: 要包含的域名列表
+        exclude_domains: 要排除的域名列表
+        start_crawl_date: 按爬取日期筛选（ISO 格式）
+        end_crawl_date: 按爬取日期筛选（ISO 格式）
+        start_published_date: 按发布日期筛选
+        end_published_date: 按发布日期筛选
+        include_text: 是否包含文本内容
+        text_max_length: 文本内容最大长度
     
     Returns:
-        Dict with search results
+        包含搜索结果的字典
     """
     if not EXA_API_KEY:
         return {
@@ -208,17 +208,17 @@ async def exa_find_similar(
     exclude_source_domain: bool = True,
 ) -> Dict[str, Any]:
     """
-    Find similar pages to a given URL using Exa AI.
+    使用 Exa AI 查找与给定 URL 相似的页面。
     
     Args:
-        url: The URL to find similar pages for
-        num_results: Number of results to return
-        include_domains: List of domains to include
-        exclude_domains: List of domains to exclude
-        exclude_source_domain: Whether to exclude the source domain
+        url: 要查找相似页面的 URL
+        num_results: 返回的结果数量
+        include_domains: 要包含的域名列表
+        exclude_domains: 要排除的域名列表
+        exclude_source_domain: 是否排除源域名
     
     Returns:
-        Dict with similar page results
+        包含相似页面结果的字典
     """
     if not EXA_API_KEY:
         return {

@@ -124,6 +124,297 @@ class AgentCore:
 
         self.state: AgentState = AgentState.IDLE
 
+    def _get_split_knowledge_points(self, ctx: CompressedContext) -> List[str]:
+        split_res = ctx.working_memory.get("split_knowledge_points") or {}
+        kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
+        kps = (
+            [
+                str(x or "").strip()
+                for x in (kps_raw or [])
+                if isinstance(x, (str, int, float)) and str(x or "").strip()
+            ]
+            if isinstance(kps_raw, list)
+            else []
+        )
+        return kps[:15]
+
+    def _expand_foreach_step(self, step: PlanStep, *, kp: str) -> PlanStep:
+        args = dict(getattr(step, "arguments", {}) or {})
+        args["knowledge_points"] = [kp]
+        title = f"{step.title}：{kp}" if kp else step.title
+
+        thought = (getattr(step, "thought", "") or "").strip()
+        if not thought:
+            thought = f"执行 {step.tool}：收集并整理该知识点的学习素材。"
+        if kp:
+            thought = f"{thought}\n当前知识点：{kp}"
+
+        return PlanStep(
+            id=f"{step.id}-{uuid.uuid4().hex[:6]}",
+            title=title,
+            tool=step.tool,
+            arguments=args,
+            depends_on=list(getattr(step, "depends_on", []) or []),
+            parallel_group=str(getattr(step, "parallel_group", "") or ""),
+            thought=thought,
+        )
+
+    async def _run_subagent(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        block: List[PlanStep],
+        kp: str,
+        sem: asyncio.Semaphore,
+        queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
+    ) -> None:
+        try:
+            async with sem:
+                await queue.put(
+                    agent_event(
+                        "subagent_start",
+                        {
+                            "knowledge_point": kp,
+                            "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
+                        },
+                    )
+                )
+                await queue.put(
+                    agent_event(
+                        "status",
+                        {
+                            "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
+                        },
+                    )
+                )
+                for s in block:
+                    concrete = self._expand_foreach_step(s, kp=kp)
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=concrete):
+                        await queue.put(evt)
+                await queue.put(
+                    agent_event(
+                        "subagent_end",
+                        {
+                            "knowledge_point": kp,
+                            "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
+                        },
+                    )
+                )
+                await queue.put(
+                    agent_event(
+                        "status",
+                        {
+                            "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
+                        },
+                    )
+                )
+        except Exception as exc:  # pragma: no cover (best-effort safety)
+            await queue.put(agent_event("error", {"message": f"SubAgent 运行失败（{kp}）：{exc}"}))
+        finally:
+            await queue.put(None)
+
+    async def _execute_concrete_step(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        concrete_step: PlanStep,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
+
+        self.state = AgentState.WAITING_TOOL
+        if bool(ctx.working_memory.get("_abort_execution")):
+            return
+
+        thought = (getattr(concrete_step, "thought", "") or "").strip()
+        if thought:
+            yield agent_event("status", {"content": thought})
+
+        # Enrich multi-point tools with the split result for better UX (and to make
+        # downstream tools explicitly reflect the current knowledge points).
+        try:
+            step_args = dict(concrete_step.arguments or {})
+            if concrete_step.tool in {
+                "web_search_knowledge",
+                "browse_web_pages",
+                "wikipedia_search",
+                "mediawiki_search",
+                "github_search",
+                "stackexchange_search",
+                "search_questions_by_knowledge",
+                "aggregate_knowledge",
+                "generate_study_material",
+            } and "knowledge_points" not in step_args:
+                split_res = ctx.working_memory.get("split_knowledge_points")
+                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                    kps = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()][
+                        :15
+                    ]
+                    if kps:
+                        step_args["knowledge_points"] = kps
+            concrete_step.arguments = step_args
+        except Exception:
+            # Best-effort only; never block execution.
+            pass
+
+        yield agent_event(
+            "tool_call",
+            {
+                "step_id": concrete_step.id,
+                "name": concrete_step.tool,
+                "title": concrete_step.title,
+                "arguments": concrete_step.arguments,
+            },
+        )
+        # Run the tool in the background so we can stream intermediate "thinking"
+        # events produced by the underlying LLM calls (OpenRouter reasoning stream).
+        t0 = time.monotonic()
+        event_queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+
+        tool_task = asyncio.create_task(
+            self.executor.execute_step(concrete_step, context=ctx, emit_event=event_queue.put)
+        )
+        queue_task: "asyncio.Task[Dict[str, Any]]" = asyncio.create_task(event_queue.get())
+
+        while True:
+            done, _pending = await asyncio.wait(
+                {tool_task, queue_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if queue_task in done:
+                try:
+                    evt = queue_task.result()
+                except Exception:
+                    evt = None
+                if isinstance(evt, dict) and evt.get("event"):
+                    yield evt
+                queue_task = asyncio.create_task(event_queue.get())
+                continue
+
+            if tool_task in done:
+                if not queue_task.done():
+                    queue_task.cancel()
+                break
+
+        # Drain any remaining buffered events (best-effort).
+        try:
+            while True:
+                evt = event_queue.get_nowait()
+                if isinstance(evt, dict) and evt.get("event"):
+                    yield evt
+        except Exception:
+            pass
+
+        step_result = await tool_task
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        yield agent_event(
+            "tool_result",
+            {
+                "step_id": concrete_step.id,
+                "name": concrete_step.tool,
+                "title": concrete_step.title,
+                "success": bool(step_result.success),
+                "elapsed_ms": elapsed_ms,
+                "output": _clip_for_sse(step_result.output),
+                "error": step_result.error,
+            },
+        )
+        results.step_results.append(step_result)
+        self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
+        try:
+            if not step_result.success:
+                study_opts = ctx.working_memory.get("study_options")
+                study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+                strict_llm = bool(study_opts.get("strict_llm"))
+
+                tool_name = str(step_result.tool or concrete_step.tool or "").strip()
+                err = str(step_result.error or "").strip()
+
+                # LaTeX/PDF compilation can often be fixed by one more "refine LaTeX" round.
+                # Do a few visible retry rounds (refine -> compile) before treating it as fatal.
+                if tool_name == "compile_latex_to_pdf":
+                    if not err.startswith("latex_engine_not_found"):
+                        tex_current = str(ctx.working_memory.get("latex_tex") or "").strip()
+                        max_rounds_raw = (
+                            os.getenv("STUDY_MATERIALS_LATEX_COMPILE_ROUNDS")
+                            or os.getenv("STUDY_MATERIALS_LATEX_MAX_ROUNDS")
+                            or "3"
+                        )
+                        try:
+                            max_rounds = int(max_rounds_raw)
+                        except Exception:
+                            max_rounds = 3
+                        max_rounds = max(1, min(max_rounds, 6))
+
+                        try:
+                            cur_round = int(ctx.working_memory.get("_latex_compile_round") or 1)
+                        except Exception:
+                            cur_round = 1
+                        cur_round = max(1, cur_round)
+
+                        if tex_current and cur_round < max_rounds:
+                            next_round = cur_round + 1
+                            ctx.working_memory["_latex_compile_round"] = next_round
+                            ctx.working_memory["_latex_last_compile_error"] = err
+
+                            yield agent_event(
+                                "status",
+                                {"content": f"PDF 编译失败，准备第 {next_round} 轮修订与重编译…"},
+                            )
+
+                            subject_hint = str(ctx.user_profile.preferences.get("subject") or "").strip()
+                            refine_step = PlanStep(
+                                id=f"refine_latex-retry-{uuid.uuid4().hex[:8]}",
+                                title=f"LaTeX 修订（第{next_round}轮）",
+                                tool="refine_latex",
+                                arguments={
+                                    "topic": ctx.current_task,
+                                    "subject": subject_hint,
+                                    "compile_error": err,
+                                },
+                                thought="根据编译报错信息修订 LaTeX，提升通过率。",
+                            )
+                            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=refine_step):
+                                yield evt
+
+                            compile_step = PlanStep(
+                                id=f"compile_latex_to_pdf-retry-{uuid.uuid4().hex[:8]}",
+                                title=f"编译 PDF（第{next_round}轮）",
+                                tool="compile_latex_to_pdf",
+                                arguments={"topic": ctx.current_task},
+                                thought="重新编译修订后的 LaTeX，生成 PDF 下载文件。",
+                            )
+                            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=compile_step):
+                                yield evt
+                            return
+
+                fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
+                is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
+                if tool_name in fatal_tools or (strict_llm and is_llm_error):
+                    ctx.working_memory["_abort_execution"] = True
+                    ctx.working_memory["_fatal_error"] = {
+                        "tool": tool_name,
+                        "step_id": concrete_step.id,
+                        "error": err or "unknown_error",
+                    }
+                    yield agent_event(
+                        "status",
+                        {
+                            "content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}",
+                        },
+                    )
+        except Exception:
+            pass
+        if (
+            step_result.success
+            and step_result.tool in {"assemble_markdown", "revise_markdown"}
+            and isinstance(step_result.output, str)
+            and step_result.output.strip()
+        ):
+            results.artifacts["markdown"] = step_result.output.strip()
+
     async def run(
         self,
         user_input: str,
@@ -230,208 +521,6 @@ class AgentCore:
                 self.state = AgentState.PLANNING
                 yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
 
-                async def _execute_concrete_step(concrete_step: PlanStep) -> AsyncIterator[Dict[str, Any]]:
-                    """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
-
-                    self.state = AgentState.WAITING_TOOL
-                    if bool(ctx.working_memory.get("_abort_execution")):
-                        return
-
-                    thought = (getattr(concrete_step, "thought", "") or "").strip()
-                    if thought:
-                        yield agent_event("status", {"content": thought})
-
-                    # Enrich multi-point tools with the split result for better UX (and to make
-                    # downstream tools explicitly reflect the current knowledge points).
-                    try:
-                        step_args = dict(concrete_step.arguments or {})
-                        if concrete_step.tool in {
-                            "web_search_knowledge",
-                            "browse_web_pages",
-                            "wikipedia_search",
-                            "mediawiki_search",
-                            "github_search",
-                            "stackexchange_search",
-                            "search_questions_by_knowledge",
-                            "aggregate_knowledge",
-                            "generate_study_material",
-                        } and "knowledge_points" not in step_args:
-                            split_res = ctx.working_memory.get("split_knowledge_points")
-                            if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                                kps = [
-                                    str(x or "").strip()
-                                    for x in (split_res.get("knowledge_points") or [])
-                                    if str(x or "").strip()
-                                ][:15]
-                                if kps:
-                                    step_args["knowledge_points"] = kps
-                        concrete_step.arguments = step_args
-                    except Exception:
-                        # Best-effort only; never block execution.
-                        pass
-
-                    yield agent_event(
-                        "tool_call",
-                        {
-                            "step_id": concrete_step.id,
-                            "name": concrete_step.tool,
-                            "title": concrete_step.title,
-                            "arguments": concrete_step.arguments,
-                        },
-                    )
-                    # Run the tool in the background so we can stream intermediate "thinking"
-                    # events produced by the underlying LLM calls (OpenRouter reasoning stream).
-                    t0 = time.monotonic()
-                    event_queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
-
-                    async def _emit(evt: Dict[str, Any]) -> None:
-                        if not isinstance(evt, dict):
-                            return
-                        await event_queue.put(evt)
-
-                    tool_task = asyncio.create_task(
-                        self.executor.execute_step(concrete_step, context=ctx, emit_event=_emit)
-                    )
-                    queue_task: "asyncio.Task[Dict[str, Any]]" = asyncio.create_task(event_queue.get())
-
-                    while True:
-                        done, _pending = await asyncio.wait(
-                            {tool_task, queue_task},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-
-                        if queue_task in done:
-                            try:
-                                evt = queue_task.result()
-                            except Exception:
-                                evt = None
-                            if isinstance(evt, dict) and evt.get("event"):
-                                yield evt
-                            queue_task = asyncio.create_task(event_queue.get())
-                            continue
-
-                        if tool_task in done:
-                            if not queue_task.done():
-                                queue_task.cancel()
-                            break
-
-                    # Drain any remaining buffered events (best-effort).
-                    try:
-                        while True:
-                            evt = event_queue.get_nowait()
-                            if isinstance(evt, dict) and evt.get("event"):
-                                yield evt
-                    except Exception:
-                        pass
-
-                    step_result = await tool_task
-                    elapsed_ms = int((time.monotonic() - t0) * 1000)
-                    yield agent_event(
-                        "tool_result",
-                        {
-                            "step_id": concrete_step.id,
-                            "name": concrete_step.tool,
-                            "title": concrete_step.title,
-                            "success": bool(step_result.success),
-                            "elapsed_ms": elapsed_ms,
-                            "output": _clip_for_sse(step_result.output),
-                            "error": step_result.error,
-                        },
-                    )
-                    results.step_results.append(step_result)
-                    self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
-                    try:
-                        if not step_result.success:
-                            study_opts = ctx.working_memory.get("study_options")
-                            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-                            strict_llm = bool(study_opts.get("strict_llm"))
-
-                            tool_name = str(step_result.tool or concrete_step.tool or "").strip()
-                            err = str(step_result.error or "").strip()
-
-                            # LaTeX/PDF compilation can often be fixed by one more "refine LaTeX" round.
-                            # Do a few visible retry rounds (refine -> compile) before treating it as fatal.
-                            if tool_name == "compile_latex_to_pdf":
-                                if not err.startswith("latex_engine_not_found"):
-                                    tex_current = str(ctx.working_memory.get("latex_tex") or "").strip()
-                                    max_rounds_raw = (
-                                        os.getenv("STUDY_MATERIALS_LATEX_COMPILE_ROUNDS")
-                                        or os.getenv("STUDY_MATERIALS_LATEX_MAX_ROUNDS")
-                                        or "3"
-                                    )
-                                    try:
-                                        max_rounds = int(max_rounds_raw)
-                                    except Exception:
-                                        max_rounds = 3
-                                    max_rounds = max(1, min(max_rounds, 6))
-
-                                    try:
-                                        cur_round = int(ctx.working_memory.get("_latex_compile_round") or 1)
-                                    except Exception:
-                                        cur_round = 1
-                                    cur_round = max(1, cur_round)
-
-                                    if tex_current and cur_round < max_rounds:
-                                        next_round = cur_round + 1
-                                        ctx.working_memory["_latex_compile_round"] = next_round
-                                        ctx.working_memory["_latex_last_compile_error"] = err
-
-                                        yield agent_event(
-                                            "status",
-                                            {"content": f"PDF 编译失败，准备第 {next_round} 轮修订与重编译…"},
-                                        )
-
-                                        subject_hint = str(ctx.user_profile.preferences.get("subject") or "").strip()
-                                        refine_step = PlanStep(
-                                            id=f"refine_latex-retry-{uuid.uuid4().hex[:8]}",
-                                            title=f"LaTeX 修订（第{next_round}轮）",
-                                            tool="refine_latex",
-                                            arguments={
-                                                "topic": ctx.current_task,
-                                                "subject": subject_hint,
-                                                "compile_error": err,
-                                            },
-                                            thought="根据编译报错信息修订 LaTeX，提升通过率。",
-                                        )
-                                        async for evt in _execute_concrete_step(refine_step):
-                                            yield evt
-
-                                        compile_step = PlanStep(
-                                            id=f"compile_latex_to_pdf-retry-{uuid.uuid4().hex[:8]}",
-                                            title=f"编译 PDF（第{next_round}轮）",
-                                            tool="compile_latex_to_pdf",
-                                            arguments={"topic": ctx.current_task},
-                                            thought="重新编译修订后的 LaTeX，生成 PDF 下载文件。",
-                                        )
-                                        async for evt in _execute_concrete_step(compile_step):
-                                            yield evt
-                                        return
-
-                            fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
-                            is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
-                            if tool_name in fatal_tools or (strict_llm and is_llm_error):
-                                ctx.working_memory["_abort_execution"] = True
-                                ctx.working_memory["_fatal_error"] = {
-                                    "tool": tool_name,
-                                    "step_id": concrete_step.id,
-                                    "error": err or "unknown_error",
-                                }
-                                yield agent_event(
-                                    "status",
-                                    {
-                                        "content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}",
-                                    },
-                                )
-                    except Exception:
-                        pass
-                    if (
-                        step_result.success
-                        and step_result.tool in {"assemble_markdown", "revise_markdown"}
-                        and isinstance(step_result.output, str)
-                        and step_result.output.strip()
-                    ):
-                        results.artifacts["markdown"] = step_result.output.strip()
-
                 # Planner-stage: split knowledge points and do a quick review pass before planning the tool chain.
                 if iteration == 0:
                     split_res = ctx.working_memory.get("split_knowledge_points")
@@ -483,7 +572,7 @@ class AgentCore:
                             },
                             thought="先拆分知识点，后续才能逐点深挖并展示 SubAgent 进度。",
                         )
-                        async for evt in _execute_concrete_step(split_step):
+                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=split_step):
                             yield evt
 
                         split_res = ctx.working_memory.get("split_knowledge_points")
@@ -509,47 +598,12 @@ class AgentCore:
                                 },
                                 thought="对拆分结果做去重、补全与粒度调整，避免过泛/重复，减少后续检索浪费。",
                             )
-                            async for evt in _execute_concrete_step(review_step):
+                            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
                                 yield evt
 
                 plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
                 if plan.rationale:
                     yield agent_event("status", {"content": plan.rationale})
-
-                def _split_knowledge_points() -> List[str]:
-                    split_res = ctx.working_memory.get("split_knowledge_points") or {}
-                    kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
-                    kps = (
-                        [
-                            str(x or "").strip()
-                            for x in (kps_raw or [])
-                            if isinstance(x, (str, int, float)) and str(x or "").strip()
-                        ]
-                        if isinstance(kps_raw, list)
-                        else []
-                    )
-                    return kps[:15]
-
-                def _expand_foreach(step: PlanStep, *, kp: str) -> PlanStep:
-                    args = dict(getattr(step, "arguments", {}) or {})
-                    args["knowledge_points"] = [kp]
-                    title = f"{step.title}：{kp}" if kp else step.title
-
-                    thought = (getattr(step, "thought", "") or "").strip()
-                    if not thought:
-                        thought = f"执行 {step.tool}：收集并整理该知识点的学习素材。"
-                    if kp:
-                        thought = f"{thought}\n当前知识点：{kp}"
-
-                    return PlanStep(
-                        id=f"{step.id}-{uuid.uuid4().hex[:6]}",
-                        title=title,
-                        tool=step.tool,
-                        arguments=args,
-                        depends_on=list(getattr(step, "depends_on", []) or []),
-                        parallel_group=str(getattr(step, "parallel_group", "") or ""),
-                        thought=thought,
-                    )
 
                 self.state = AgentState.ACTING
                 yield agent_event("status", {"content": "Act 阶段：执行工具链…"})
@@ -569,7 +623,7 @@ class AgentCore:
                             block.append(steps[i])
                             i += 1
 
-                        kps = _split_knowledge_points()
+                        kps = self._get_split_knowledge_points(ctx)
                         if not kps and user_input:
                             kps = [user_input]
 
@@ -583,7 +637,7 @@ class AgentCore:
                         if not kps:
                             # Nothing to expand: execute block steps once.
                             for s in block:
-                                async for evt in _execute_concrete_step(s):
+                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=s):
                                     yield evt
                             continue
 
@@ -617,8 +671,8 @@ class AgentCore:
                                     },
                                 )
                                 for s in block:
-                                    concrete = _expand_foreach(s, kp=kp)
-                                    async for evt in _execute_concrete_step(concrete):
+                                    concrete = self._expand_foreach_step(s, kp=kp)
+                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=concrete):
                                         yield evt
                                 yield agent_event(
                                     "subagent_end",
@@ -644,59 +698,19 @@ class AgentCore:
 
                         queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
                         sem = asyncio.Semaphore(subagent_concurrency)
-
-                        async def _run_subagent(kp: str) -> None:
-                            try:
-                                async with sem:
-                                    await queue.put(
-                                        agent_event(
-                                            "subagent_start",
-                                            {
-                                                "knowledge_point": kp,
-                                                "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
-                                            },
-                                        )
-                                    )
-                                    await queue.put(
-                                        agent_event(
-                                            "status",
-                                            {
-                                                "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
-                                            },
-                                        )
-                                    )
-                                    for s in block:
-                                        concrete = _expand_foreach(s, kp=kp)
-                                        async for evt in _execute_concrete_step(concrete):
-                                            await queue.put(evt)
-                                    await queue.put(
-                                        agent_event(
-                                            "subagent_end",
-                                            {
-                                                "knowledge_point": kp,
-                                                "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
-                                            },
-                                        )
-                                    )
-                                    await queue.put(
-                                        agent_event(
-                                            "status",
-                                            {
-                                                "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
-                                            },
-                                        )
-                                    )
-                            except Exception as exc:  # pragma: no cover (best-effort safety)
-                                await queue.put(
-                                    agent_event(
-                                        "error",
-                                        {"message": f"SubAgent 运行失败（{kp}）：{exc}"},
-                                    )
+                        tasks = [
+                            asyncio.create_task(
+                                self._run_subagent(
+                                    ctx=ctx,
+                                    results=results,
+                                    block=block,
+                                    kp=kp,
+                                    sem=sem,
+                                    queue=queue,
                                 )
-                            finally:
-                                await queue.put(None)
-
-                        tasks = [asyncio.create_task(_run_subagent(kp)) for kp in kps]
+                            )
+                            for kp in kps
+                        ]
                         finished = 0
                         while finished < len(tasks):
                             item = await queue.get()
@@ -714,7 +728,7 @@ class AgentCore:
                         continue
 
                     i += 1
-                    async for evt in _execute_concrete_step(step):
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step):
                         yield evt
 
                 # Autonomy boost: if the heuristic reviewer says "sources insufficient", do a bounded
@@ -807,7 +821,7 @@ class AgentCore:
                                     },
                                     thought="为资料不足的知识点追加一轮研究型网搜，补齐条件/反例/推导框架等关键要素。",
                                 )
-                                async for evt in _execute_concrete_step(web_step):
+                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=web_step):
                                     yield evt
 
                                 # 2) Optional extra tools for higher-signal sources.
@@ -827,7 +841,7 @@ class AgentCore:
                                         },
                                         thought="补充百科级定义/背景，提升术语一致性与可信度。",
                                     )
-                                    async for evt in _execute_concrete_step(wiki_step):
+                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=wiki_step):
                                         yield evt
 
                                     se_site = (
@@ -850,7 +864,7 @@ class AgentCore:
                                         },
                                         thought="补充高质量问答解释与易错点，增强“为什么”和“怎么用”。",
                                     )
-                                    async for evt in _execute_concrete_step(se_step):
+                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=se_step):
                                         yield evt
 
                                     browse_step = PlanStep(
@@ -866,7 +880,7 @@ class AgentCore:
                                         },
                                         thought="从新增检索结果中抽取可读正文片段，供写作阶段重组表达。",
                                     )
-                                    async for evt in _execute_concrete_step(browse_step):
+                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=browse_step):
                                         yield evt
 
                                 # 3) Re-aggregate + re-generate only for missing points.
@@ -877,7 +891,7 @@ class AgentCore:
                                     arguments={"topic": user_input, "subject": subject, "knowledge_points": missing},
                                     thought="将新增的检索结果聚合回统一素材池。",
                                 )
-                                async for evt in _execute_concrete_step(agg_step):
+                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=agg_step):
                                     yield evt
 
                                 gen_step = PlanStep(
@@ -899,7 +913,7 @@ class AgentCore:
                                     },
                                     thought="基于补充后的资料，重写资料不足的知识点讲解。",
                                 )
-                                async for evt in _execute_concrete_step(gen_step):
+                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=gen_step):
                                     yield evt
 
                                 assemble_step = PlanStep(
@@ -909,7 +923,7 @@ class AgentCore:
                                     arguments={"topic": user_input, "subject": subject},
                                     thought="将补充后的讲解更新到最终 Markdown。",
                                 )
-                                async for evt in _execute_concrete_step(assemble_step):
+                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=assemble_step):
                                     yield evt
 
                                 # 4) Re-review so reflect phase can pass without a new planning loop.
@@ -920,7 +934,7 @@ class AgentCore:
                                     arguments={"topic": user_input},
                                     thought="补检索后复审，确认来源覆盖已达标。",
                                 )
-                                async for evt in _execute_concrete_step(review_step):
+                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
                                     yield evt
 
                 # One-shot quality: if the reviewer (LLM) finds issues, do a single auto-revise pass
@@ -960,7 +974,7 @@ class AgentCore:
                                         arguments={"issues": issues},
                                         thought="根据审查 issues 快速修订 Markdown（一次性修补明显问题）。",
                                     )
-                                    async for evt in _execute_concrete_step(revise_step):
+                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=revise_step):
                                         yield evt
 
                                     # 2) Re-run review so Reflector can pass without a new planning iteration.
@@ -971,7 +985,7 @@ class AgentCore:
                                         arguments={"topic": user_input},
                                         thought="修订后再次审查，确认问题已解决。",
                                     )
-                                    async for evt in _execute_concrete_step(review_step):
+                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
                                         yield evt
                 # End auto-revise
 

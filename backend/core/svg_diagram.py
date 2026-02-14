@@ -111,19 +111,19 @@ def _extend_line_to_rect(
 
 
 def render_svg_diagram(spec: Dict[str, Any]) -> str:
-    """Render a safe SVG string from a diagram spec.
+    """根据图表规格渲染安全的SVG字符串。
 
-    Supported spec keys (all optional):
-    - width, height, padding
-    - style: stroke, strokeWidth, pointRadius, fontSize, pointFill, pointStroke
-    - background: color string
-    - points: { "A": [x,y], "B": {"x":..,"y":..} }
-    - segments: [ ["A","B"], {"from":"A","to":"B","extend":true,"dash":"5,5"} ]
-    - polygons: [ ["A","B","C"] ]
-    - circles: [ {"center":"O","r":80}, {"center":"O","through":"A"} ]
-    - labels: [ {"point":"A","text":"A","dx":-10,"dy":-10} ]
-    - texts: [ {"x":..,"y":..,"text":"...","fontSize":14} ]
-    - caption: str
+    支持的规格键（均为可选）：
+    - width, height, padding：宽度、高度、内边距
+    - style: stroke, strokeWidth, pointRadius, fontSize, pointFill, pointStroke（样式设置）
+    - background: 背景颜色字符串
+    - points: { "A": [x,y], "B": {"x":..,"y":..} }（点坐标）
+    - segments: [ ["A","B"], {"from":"A","to":"B","extend":true,"dash":"5,5"} ]（线段）
+    - polygons: [ ["A","B","C"] ]（多边形）
+    - circles: [ {"center":"O","r":80}, {"center":"O","through":"A"} ]（圆）
+    - labels: [ {"point":"A","text":"A","dx":-10,"dy":-10} ]（标签）
+    - texts: [ {"x":..,"y":..,"text":"...","fontSize":14} ]（文本）
+    - caption: str（标题/说明）
     """
 
     width = _clamp_int(spec.get("width"), default=560, min_value=200, max_value=1400)
