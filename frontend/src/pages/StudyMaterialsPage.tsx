@@ -583,6 +583,53 @@ export default function StudyMaterialsPage() {
     let thinkingStartTime: string | null = null
     let thinkingBuffer = ''
 
+    let runningSubAgentKP: string | null = null
+    const subThinkingStepIdByKP: Record<string, string> = {}
+    const subThinkingStartTimeByKP: Record<string, string> = {}
+    const subThinkingBufferByKP: Record<string, string> = {}
+
+    const upsertSubAgentStep = (kp: string, step: TaskStep) => {
+      setSubAgentActivities((prev) => {
+        const exists = prev.some((a) => a.knowledgePoint === kp)
+        const base = exists ? prev : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
+        return base.map((a) => {
+          if (a.knowledgePoint !== kp) return a
+          const hasStep = a.steps.some((s) => s.id === step.id)
+          const steps = hasStep ? a.steps.map((s) => (s.id === step.id ? { ...s, ...step } : s)) : [...a.steps, step]
+          return { ...a, steps }
+        })
+      })
+    }
+
+    const patchSubAgentStep = (kp: string, stepId: string, patch: Partial<TaskStep>) => {
+      setSubAgentActivities((prev) =>
+        prev.map((a) => {
+          if (a.knowledgePoint !== kp) return a
+          const hasStep = a.steps.some((s) => s.id === stepId)
+          if (!hasStep) {
+            return {
+              ...a,
+              steps: [
+                ...a.steps,
+                {
+                  id: stepId,
+                  title: patch.title || patch.toolName || '步骤',
+                  status: patch.status || 'running',
+                  startTime: patch.startTime,
+                  endTime: patch.endTime,
+                  toolName: patch.toolName,
+                  input: patch.input,
+                  output: patch.output,
+                  error: patch.error,
+                },
+              ],
+            }
+          }
+          return { ...a, steps: a.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)) }
+        })
+      )
+    }
+
     const flushAssistant = () => {
       if (!pendingText) return
       assistantText += pendingText
@@ -701,6 +748,30 @@ export default function StudyMaterialsPage() {
         if (kind === 'thinking') {
           const text = toText(payload?.content) || '思考中…'
           const t = new Date().toISOString()
+
+          if (runningSubAgentKP) {
+            const kp = runningSubAgentKP
+            if (!subThinkingStepIdByKP[kp]) {
+              subThinkingStepIdByKP[kp] = `thinking-${generateId()}`
+              subThinkingStartTimeByKP[kp] = t
+              subThinkingBufferByKP[kp] = ''
+              upsertSubAgentStep(kp, {
+                id: subThinkingStepIdByKP[kp],
+                title: '思考（子智能体）',
+                status: 'running',
+                startTime: subThinkingStartTimeByKP[kp],
+                toolName: 'thinking',
+                output: '',
+              })
+            }
+
+            subThinkingBufferByKP[kp] = subThinkingBufferByKP[kp]
+              ? `${subThinkingBufferByKP[kp]}\n${text}`
+              : text
+            patchSubAgentStep(kp, subThinkingStepIdByKP[kp], { output: subThinkingBufferByKP[kp] })
+            return
+          }
+
           if (!thinkingStepId) {
             thinkingStepId = `thinking-${generateId()}`
             thinkingStartTime = t
@@ -726,12 +797,6 @@ export default function StudyMaterialsPage() {
           if (thinkingStepId) {
             const tThinking = new Date().toISOString()
             patchAssistantStep(thinkingStepId, { status: 'completed', endTime: tThinking })
-            if (localTaskId) {
-              useTaskStore.getState().updateStep(localTaskId, thinkingStepId, { status: 'completed', endTime: tThinking })
-            }
-            thinkingStepId = null
-            thinkingStartTime = ''
-            thinkingBuffer = ''
           }
 
           const stepId = toText(payload?.step_id) || generateId()
@@ -761,9 +826,7 @@ export default function StudyMaterialsPage() {
                 ? prev
                 : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
               return base.map((a) =>
-                a.knowledgePoint === kp
-                  ? { ...a, steps: [...a.steps, step] }
-                  : a
+                a.knowledgePoint === kp ? { ...a, steps: [...a.steps, step] } : a
               )
             })
           }
@@ -861,11 +924,13 @@ export default function StudyMaterialsPage() {
         if (kind === 'subagent_start') {
           const kp = toText(payload?.knowledge_point)
           if (kp) {
+            runningSubAgentKP = kp
             setSubAgentActivities((prev) => {
               const exists = prev.some((a) => a.knowledgePoint === kp)
               const base = exists
                 ? prev
                 : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
+
               return base.map((a) =>
                 a.knowledgePoint === kp ? { ...a, status: 'running' as const } : a
               )
@@ -878,6 +943,7 @@ export default function StudyMaterialsPage() {
         if (kind === 'subagent_end') {
           const kp = toText(payload?.knowledge_point)
           if (kp) {
+            if (runningSubAgentKP === kp) runningSubAgentKP = null
             setSubAgentActivities((prev) =>
               prev.map((a) =>
                 a.knowledgePoint === kp
@@ -1108,6 +1174,40 @@ export default function StudyMaterialsPage() {
     e?.preventDefault()
     const prompt = input.trim()
     if (!prompt || isGenerating) return
+
+    const normalized = prompt.replace(/\s+/g, '').trim().toLowerCase()
+    const isContinueIntent =
+      normalized === '继续' ||
+      normalized === '接着' ||
+      normalized === '续写' ||
+      normalized === '继续生成' ||
+      normalized === '继续输出' ||
+      normalized === 'continue' ||
+      normalized === 'resume'
+
+    if (isContinueIntent && activeConversationId && activeStream?.taskId && activeStream.assistantMessageId) {
+      const now = new Date().toISOString()
+      addMessage(activeConversationId, {
+        id: generateId(),
+        role: 'user',
+        content: prompt,
+        createdAt: now,
+      })
+      setInput('')
+      setError(null)
+      runStudyMaterialsStream({
+        conversationId: activeConversationId,
+        assistantMessageId: activeStream.assistantMessageId,
+        request: {
+          url: `/study-materials/tasks/${encodeURIComponent(activeStream.taskId)}/stream?after_seq=${Number(activeStream.lastSeq || 0)}`,
+          method: 'GET',
+        },
+        initialTaskId: activeStream.taskId,
+        initialSeq: Number(activeStream.lastSeq || 0),
+        streamKey: `${activeConversationId}:${activeStream.taskId}`,
+      })
+      return
+    }
 
     const now = new Date().toISOString()
 

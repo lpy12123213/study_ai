@@ -26,7 +26,7 @@ from backend.agent.tools.web_search_knowledge import WebSearchKnowledgeToolsMixi
 from backend.agent.tools.wikipedia_search import WikipediaToolsMixin
 from backend.agent.types import CompressedContext, PlanStep, StepResult, agent_event
 from backend.core.llm_client import ChatCompletionResult, chat_completion
-from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_TEMPERATURE
+from backend.core.settings import API_TIMEOUT, LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_TEMPERATURE
 
 
 _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]]] = ContextVar(
@@ -94,7 +94,13 @@ class Executor(
         if handler is None:
             return StepResult(step_id=step.id, tool=tool, success=False, error=f"Unknown tool: {tool}")
 
-        timeout_s = float(os.getenv("STUDY_MATERIALS_STEP_TIMEOUT_S") or os.getenv("AGENT_STEP_TIMEOUT_S") or "240")
+        timeout_raw = (
+            os.getenv("STUDY_MATERIALS_STEP_TIMEOUT_S")
+            or os.getenv("AGENT_STEP_TIMEOUT_S")
+            or os.getenv("API_TIMEOUT")
+            or str(API_TIMEOUT)
+        )
+        timeout_s = float(timeout_raw)
         timeout_s = max(30.0, min(timeout_s, 60.0 * 30.0))  # clamp to [30s, 30m]
 
         token = _emit_event_var.set(emit_event)
@@ -424,9 +430,7 @@ class Executor(
             if not stem or len(stem) < 8:
                 continue
             # Prefer fewer images and reasonable length.
-            penalty = 0
-            penalty += stem.count("[图片:") * 50
-            penalty += max(0, len(stem) - 500) // 20
+            penalty = stem.count("[图片:") * 50 + max(0, len(stem) - 500) // 20
             cleaned.append((penalty, q))
         cleaned.sort(key=lambda x: x[0])
         return [q for _, q in cleaned[: max(1, limit)]]

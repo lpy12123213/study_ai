@@ -1,14 +1,58 @@
 """教案智能体 V2 - 流式生成教案（支持 Markdown 和 PDF 下载）。
 
-流程：
-1) 规划：拆分知识点 -> 审阅
-2) 子智能体：研究每个知识点
-3) 撰写：生成结构化教案 JSON（原创内容）
-4) 导出：JSON -> Markdown -> (LLM) ElegantBook LaTeX -> PDF
+本模块实现了一个多阶段的智能教案生成系统，采用分布式子智能体架构来处理复杂的教学内容创作任务。
 
-说明：
-- 界面不显示全文，仅提供 md/pdf 下载链接。
-- LLM 请求失败会自动重试；多次失败则中断并报错（尽量减少兜底）。
+=== 核心流程 ===
+
+阶段 1 - 规划（Planning）:
+    - 接收用户输入的课程主题、学科、学段等参数
+    - 调用 LLM 将主题拆分为多个可独立研究的知识点
+    - 对拆分结果进行审阅和优化，确保覆盖面和粒度合理
+
+阶段 2 - 研究（Research）:
+    - 为每个知识点启动独立的子智能体
+    - 子智能体可并发执行（并发数由 LESSON_PLAN_V2_SUBAGENT_CONCURRENCY 控制）
+    - 每个子智能体负责：搜索相关资料、提取关键信息、整理成结构化笔记
+    - 研究结果会被缓存以避免重复工作
+
+阶段 3 - 撰写（Writing）:
+    - 汇总所有子智能体的研究成果
+    - 调用 LLM 生成结构化的教案 JSON（包含目标、环节、活动等）
+    - 强调原创性：LLM 被要求用自己的话重新组织内容，不得照搬原文
+
+阶段 4 - 导出（Export）:
+    - JSON -> Markdown: 将结构化数据转换为可读的 Markdown 格式
+    - Markdown -> LaTeX: 使用 LLM 转换为 ElegantBook 模板的 LaTeX 源码
+    - LaTeX -> PDF: 调用 xelatex 编译生成最终的 PDF 文件
+    - 所有生成的文件都会发布到 .local/media/generated/ 目录供下载
+
+=== 技术特性 ===
+
+流式输出:
+    - 支持 SSE（Server-Sent Events）实时推送生成进度
+    - 界面不显示全文内容，仅在完成后提供 md/pdf 下载链接
+
+容错机制:
+    - LLM 请求失败会自动重试（重试次数由 LESSON_PLAN_LLM_RETRIES 控制）
+    - 多次失败后中断并报错，尽量减少静默兜底行为
+    - 支持 strict_llm 模式，在该模式下任何 LLM 错误都会立即失败
+
+配置项:
+    - LESSON_PLAN_MODEL: 使用的 LLM 模型名称
+    - LESSON_PLAN_API_KEY / MOONSHOT_API_KEY: API 密钥
+    - LESSON_PLAN_LATEX_TIMEOUT_S: LaTeX 编译超时时间（秒）
+    - LESSON_PLAN_V2_MAX_TOKENS: 单次生成的最大 token 数
+
+=== 依赖 ===
+
+外部:
+    - xelatex: 用于 LaTeX 到 PDF 的编译（需安装 TeX Live 或类似发行版）
+    - ElegantBook: LaTeX 文档类（需安装对应的 .cls 文件）
+
+内部:
+    - backend.core.settings: 配置常量
+    - backend.core.llm_client: LLM 调用封装
+    - backend.core.llm_console: 调试日志输出
 """
 
 from __future__ import annotations
@@ -36,6 +80,7 @@ from backend.core.settings import (
     LESSON_PLAN_MODEL,
     LESSON_PLAN_PROVIDER,
     LESSON_PLAN_TEMPERATURE,
+    LESSON_PLAN_V2_SUBAGENT_CONCURRENCY,
     MOONSHOT_API_KEY,
     MOONSHOT_BASE_URL,
 )
@@ -1017,7 +1062,28 @@ async def generate_lesson_plan_stream(
         )
 
         # ── Phase 2: SubAgent research per knowledge point ────────────
-        research_results: List[Dict[str, Any]] = []
+        research_results: List[Dict[str, Any]] = [{} for _ in range(len(knowledge_points))]
+
+        try:
+            conc_raw = int(LESSON_PLAN_V2_SUBAGENT_CONCURRENCY or 0)
+        except Exception:
+            conc_raw = 0
+        conc = max(1, min(conc_raw if conc_raw > 0 else 3, 20))
+        sem = asyncio.Semaphore(conc)
+
+        async def _run_one(*, i: int, kp: str, step_id: str) -> Dict[str, Any]:
+            async with sem:
+                t0 = time.monotonic()
+                res = await _research_knowledge_point(kp, subject, topic)
+                return {
+                    "index": i,
+                    "knowledge_point": kp,
+                    "step_id": step_id,
+                    "elapsed_ms": int((time.monotonic() - t0) * 1000),
+                    "result": res,
+                }
+
+        tasks: List[asyncio.Task] = []
         for i, kp in enumerate(knowledge_points):
             yield _agent_event(
                 'subagent_start',
@@ -1039,30 +1105,46 @@ async def generate_lesson_plan_stream(
                     'arguments': {'knowledge_point': kp, 'subject': subject, 'topic': topic},
                 },
             )
-            t0 = time.monotonic()
-            res = await _research_knowledge_point(kp, subject, topic)
-            research_results.append(res)
-            yield _agent_event(
-                'tool_result',
-                {
-                    'step_id': step_id,
-                    'name': 'research_knowledge_point',
-                    'title': f'研究知识点：{kp}',
-                    'success': True,
-                    'elapsed_ms': int((time.monotonic() - t0) * 1000),
-                    'output': {'knowledge_point': kp, 'has_research': bool(res.get('research'))},
-                },
-            )
+            tasks.append(asyncio.create_task(_run_one(i=i, kp=kp, step_id=step_id)))
 
-            yield _agent_event(
-                'subagent_end',
-                {
-                    'knowledge_point': kp,
-                    'index': i,
-                    'total': len(knowledge_points),
-                    'content': f'SubAgent 完成：「{kp}」资料收集完毕',
-                },
-            )
+        try:
+            for fut in asyncio.as_completed(tasks):
+                r = await fut
+                i = int(r.get("index") or 0)
+                kp = str(r.get("knowledge_point") or "")
+                step_id = str(r.get("step_id") or "")
+                elapsed_ms = int(r.get("elapsed_ms") or 0)
+                res = r.get("result") if isinstance(r.get("result"), dict) else {}
+                if 0 <= i < len(research_results):
+                    research_results[i] = res
+
+                yield _agent_event(
+                    'tool_result',
+                    {
+                        'step_id': step_id,
+                        'name': 'research_knowledge_point',
+                        'title': f'研究知识点：{kp}',
+                        'success': True,
+                        'elapsed_ms': elapsed_ms,
+                        'output': {'knowledge_point': kp, 'has_research': bool(res.get('research'))},
+                    },
+                )
+
+                yield _agent_event(
+                    'subagent_end',
+                    {
+                        'knowledge_point': kp,
+                        'index': i,
+                        'total': len(knowledge_points),
+                        'content': f'SubAgent 完成：「{kp}」资料收集完毕',
+                    },
+                )
+        except Exception:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
         # ── Phase 3: Generate lesson plan JSON ────────────────────────
         yield _agent_event('thinking', {'content': '根据收集的资料，撰写教案正文（原创撰写）…'})

@@ -80,3 +80,10 @@ class SearchHistoryCreate(BaseModel):
     search_type: str
     search_query: str
     result_count: int
+
+
+class DeepThinkRequest(BaseModel):
+    """Request body for DeepThink (Tree-of-Thought) endpoint."""
+    question: str
+    subject: Optional[str] = "高中数学"
+    image_url: Optional[str] = None

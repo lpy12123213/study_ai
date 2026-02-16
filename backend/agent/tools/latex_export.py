@@ -28,6 +28,37 @@ _LATEX_BEGIN_DOC = "\\begin{document}"
 _LATEX_END_DOC = "\\end{document}"
 
 
+def _strip_verbatim_like_blocks(text: str) -> str:
+    s = text or ""
+    try:
+        s = re.sub(r"(?s)\\begin\{verbatim\}.*?\\end\{verbatim\}", "", s)
+        s = re.sub(r"(?s)\\begin\{lstlisting\}.*?\\end\{lstlisting\}", "", s)
+        s = re.sub(r"(?s)\\begin\{minted\}.*?\\end\{minted\}", "", s)
+    except Exception:
+        return text or ""
+    return s
+
+
+def _brace_balance(text: str) -> int:
+    bal = 0
+    s = text or ""
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\" and i + 1 < n and s[i + 1] in "{}":
+            i += 2
+            continue
+        if ch == "{":
+            bal += 1
+        elif ch == "}":
+            bal -= 1
+        if bal < 0:
+            return bal
+        i += 1
+    return bal
+
+
 def _strip_code_fences(text: str) -> str:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -103,9 +134,130 @@ def _looks_truncated_latex_chunk(text: str, finish_reason: str, usage: Any, *, m
         return True
     if raw_no_esc.replace("$$", "").count("$") % 2 == 1:
         return True
-    if raw.rstrip().endswith((chr(92), "{", "[", "(", "=", "+", "-", "$")):
+    try:
+        raw_sans_verbatim = _strip_verbatim_like_blocks(raw)
+        if _brace_balance(raw_sans_verbatim) != 0:
+            return True
+    except Exception:
+        pass
+    tail = raw.rstrip()
+    if tail and tail[-1] in {"\\", "{", "[", "(", "=", "+", "-", "$"}:
         return True
     return False
+
+
+def _normalize_latex_text(text: str) -> str:
+    s = text or ""
+    if not s:
+        return ""
+    if s.count("\\n") >= 20 and s.count("\n") <= 3:
+        s = s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        s = re.sub(r"\\\\(begin|end)\{", r"\\\1{", s)
+        s = re.sub(r"\\\\(item)\b", r"\\\1", s)
+        s = re.sub(r"\\\\(section|subsection|subsubsection|paragraph)\b", r"\\\1", s)
+        s = re.sub(r"\\\\(includegraphics)\b", r"\\\1", s)
+        s = re.sub(r"\\\\(textbf|textit|emph|mathrm|mathbf|mathit|mathcal)\b", r"\\\1", s)
+    except Exception:
+        return text or ""
+    return s
+
+
+def _looks_incomplete_latex(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _LATEX_BEGIN_DOC in raw and _LATEX_END_DOC not in raw:
+        return True
+    if _BEGIN_BODY_RE.search(raw) and not _END_BODY_RE.search(raw):
+        return True
+    try:
+        begins = len(re.findall(r"\\begin\{[^}]+\}", raw))
+        ends = len(re.findall(r"\\end\{[^}]+\}", raw))
+        if begins > ends:
+            return True
+    except Exception:
+        pass
+    raw_no_esc = re.sub(r"\\\$", "", raw)
+    if raw_no_esc.count("$$") % 2 == 1:
+        return True
+    if raw_no_esc.replace("$$", "").count("$") % 2 == 1:
+        return True
+    try:
+        raw_sans_verbatim = _strip_verbatim_like_blocks(raw)
+        if _brace_balance(raw_sans_verbatim) != 0:
+            return True
+    except Exception:
+        pass
+    tail = raw.rstrip()
+    if tail and tail[-1] in {"\\", "{", "[", "(", "=", "+", "-", "$"}:
+        return True
+    return False
+
+
+def _auto_fix_latex(text: str) -> str:
+    s = _normalize_latex_text(text)
+    if not s.strip():
+        return ""
+
+    suffix = ""
+    if _LATEX_END_DOC in s:
+        pre, post = s.split(_LATEX_END_DOC, 1)
+        s = pre
+        suffix = _LATEX_END_DOC + post
+
+    s_no_verbatim = ""
+    try:
+        s_no_verbatim = _strip_verbatim_like_blocks(s)
+    except Exception:
+        s_no_verbatim = s
+
+    try:
+        bal = _brace_balance(s_no_verbatim)
+    except Exception:
+        bal = 0
+    if bal > 0:
+        s = s + ("}" * min(bal, 24))
+
+    try:
+        begins = list(re.finditer(r"\\begin\{([^}]+)\}", s))
+        ends = list(re.finditer(r"\\end\{([^}]+)\}", s))
+        if len(begins) > len(ends):
+            stack: List[str] = []
+            for m in re.finditer(r"\\(begin|end)\{([^}]+)\}", s):
+                kind = m.group(1)
+                name = m.group(2)
+                if kind == "begin":
+                    stack.append(name)
+                else:
+                    if stack and stack[-1] == name:
+                        stack.pop()
+                    elif name in stack:
+                        while stack and stack[-1] != name:
+                            stack.pop()
+                        if stack and stack[-1] == name:
+                            stack.pop()
+            if stack:
+                for name in reversed(stack[-24:]):
+                    s = s.rstrip() + "\n\\end{" + name + "}"
+    except Exception:
+        pass
+
+    try:
+        raw_no_esc = re.sub(r"\\\$", "", s)
+        if raw_no_esc.count("$$") % 2 == 1:
+            s = s.rstrip() + "\n$$\n"
+        if raw_no_esc.replace("$$", "").count("$") % 2 == 1:
+            s = s.rstrip() + "$"
+    except Exception:
+        pass
+
+    if suffix:
+        if not s.endswith("\n"):
+            s += "\n"
+        s = s + suffix.lstrip("\n")
+    return s
 
 
 class LatexToolsMixin:
@@ -207,13 +359,13 @@ class LatexToolsMixin:
             max_tokens=max_tokens,
             raise_on_fail=True,
         )
-        raw = str(res.get("content") or "").strip()
+        raw = _normalize_latex_text(str(res.get("content") or "").strip())
         finish_reason = str(res.get("finish_reason") or "").strip().lower()
         usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
         if not raw:
             raise RuntimeError("llm_empty_response")
 
-        body = _extract_latex_body(raw)
+        body = _normalize_latex_text(_extract_latex_body(raw))
         conts = 0
         max_continuations = _clamp_int(
             os.getenv("STUDY_MATERIALS_LATEX_MAX_CONTINUATIONS") or 3,
@@ -221,7 +373,10 @@ class LatexToolsMixin:
             min_value=0,
             max_value=8,
         )
-        while conts < max_continuations and body and _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens):
+        while conts < max_continuations and body and (
+            _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens)
+            or _looks_incomplete_latex(body)
+        ):
             tail = body[-2000:]
             cont_prompt = {
                 "topic": topic,
@@ -241,18 +396,20 @@ class LatexToolsMixin:
                 messages=[
                     {"role": "system", "content": "你是严谨的 LaTeX 续写助手，只输出需要追加的正文 LaTeX，不要重复前文。"},
                     {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
+                    {"role": "assistant", "content": tail},
+                    {"role": "user", "content": "继续。只输出需要追加的正文 LaTeX，不要重复 existing_latex_tail。"},
                 ],
                 model=model,
                 temperature=0.2,
                 max_tokens=max_tokens,
                 raise_on_fail=True,
             )
-            addition_raw = str(cont_res.get("content") or "").strip()
+            addition_raw = _normalize_latex_text(str(cont_res.get("content") or "").strip())
             finish_reason = str(cont_res.get("finish_reason") or "").strip().lower()
             usage = cont_res.get("usage") if isinstance(cont_res.get("usage"), dict) else {}
             if not addition_raw:
                 break
-            addition = _extract_latex_body(addition_raw)
+            addition = _normalize_latex_text(_extract_latex_body(addition_raw))
             if not addition:
                 break
             addition = _trim_overlap(body, addition)
@@ -264,7 +421,8 @@ class LatexToolsMixin:
             raw = addition_raw
             conts += 1
 
-        tex = template.replace("<BODY>", body).strip() + "\n"
+        body = _auto_fix_latex(body).strip()
+        tex = _auto_fix_latex(template.replace("<BODY>", body).strip()) + "\n"
 
         tex_bytes = tex.encode("utf-8")
         import hashlib
@@ -312,6 +470,12 @@ class LatexToolsMixin:
         if not tex:
             raise ValueError("latex_missing")
 
+        tex = _auto_fix_latex(tex).strip() + "\n"
+        try:
+            ctx.working_memory["latex_tex"] = tex
+        except Exception:
+            pass
+
         compile_error = str(args.get("compile_error") or "").strip()
         if len(compile_error) > 1800:
             compile_error = compile_error[:1799].rstrip() + "…"
@@ -334,27 +498,27 @@ class LatexToolsMixin:
             "compile_error": compile_error,
         }
 
-        refined = (
-            # LaTeX sources can be long; allow overriding output budget to reduce `finish_reason=length`.
-            await self._call_llm_text(
-                messages=[
-                    {"role": "system", "content": "你是严谨的 LaTeX 修订助手，输出必须可编译。"},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                model=model,
-                temperature=0.2,
-                max_tokens=_clamp_int(
-                    os.getenv("STUDY_MATERIALS_LATEX_REFINE_MAX_TOKENS")
-                    or os.getenv("STUDY_MATERIALS_LATEX_MAX_TOKENS")
-                    or 8000,
-                    default=8000,
-                    min_value=1200,
-                    max_value=20000,
-                ),
-                raise_on_fail=True,
-            )
-        ).strip()
-
+        refine_max_tokens = _clamp_int(
+            os.getenv("STUDY_MATERIALS_LATEX_REFINE_MAX_TOKENS")
+            or os.getenv("STUDY_MATERIALS_LATEX_MAX_TOKENS")
+            or 8000,
+            default=8000,
+            min_value=1200,
+            max_value=20000,
+        )
+        res = await self._call_llm_response(
+            messages=[
+                {"role": "system", "content": "你是严谨的 LaTeX 修订助手，输出必须可编译。"},
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+            ],
+            model=model,
+            temperature=0.2,
+            max_tokens=refine_max_tokens,
+            raise_on_fail=True,
+        )
+        refined = _normalize_latex_text(str(res.get("content") or "").strip())
+        finish_reason = str(res.get("finish_reason") or "").strip().lower()
+        usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
         if not refined:
             raise RuntimeError("llm_empty_response")
 
@@ -365,6 +529,59 @@ class LatexToolsMixin:
             if refined.endswith("```"):
                 refined = refined[:-3]
             refined = refined.strip()
+
+        conts = 0
+        max_continuations = _clamp_int(
+            os.getenv("STUDY_MATERIALS_LATEX_REFINE_MAX_CONTINUATIONS")
+            or os.getenv("STUDY_MATERIALS_LATEX_MAX_CONTINUATIONS")
+            or 2,
+            default=2,
+            min_value=0,
+            max_value=8,
+        )
+        while conts < max_continuations and refined and (
+            _looks_truncated_latex_chunk(refined, finish_reason, usage, max_tokens=refine_max_tokens)
+            or _looks_incomplete_latex(refined)
+        ):
+            tail = refined[-2000:]
+            cont_prompt = {
+                "topic": topic,
+                "subject": subject,
+                "compile_error": compile_error,
+                "existing_latex_tail": tail,
+                "instructions": [
+                    "上一轮输出疑似被截断。请严格从 existing_latex_tail 的末尾继续补全剩余 LaTeX。",
+                    "仅输出需要追加的 LaTeX，不要重复前文。",
+                    "若 existing_latex_tail 的最后一行/公式/环境未结束，请先补齐闭合再继续。",
+                    "最终必须包含完整可编译的 LaTeX（含 \\end{document}）。",
+                ],
+            }
+            cont_res = await self._call_llm_response(
+                messages=[
+                    {"role": "system", "content": "你是严谨的 LaTeX 续写助手，只输出需要追加的内容，不要重复前文。"},
+                    {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
+                    {"role": "assistant", "content": tail},
+                    {"role": "user", "content": "继续。只输出需要追加的 LaTeX，不要重复 existing_latex_tail。"},
+                ],
+                model=model,
+                temperature=0.2,
+                max_tokens=refine_max_tokens,
+                raise_on_fail=True,
+            )
+            addition = _normalize_latex_text(str(cont_res.get("content") or "").strip())
+            finish_reason = str(cont_res.get("finish_reason") or "").strip().lower()
+            usage = cont_res.get("usage") if isinstance(cont_res.get("usage"), dict) else {}
+            if not addition:
+                break
+            addition = _trim_overlap(refined, addition)
+            if not addition.strip():
+                break
+            if not refined.endswith("\n"):
+                refined = refined + "\n"
+            refined = (refined + addition).rstrip()
+            conts += 1
+
+        refined = _auto_fix_latex(refined).strip()
 
         tex_bytes = (refined.strip() + "\n").encode("utf-8")
         import hashlib
@@ -400,6 +617,12 @@ class LatexToolsMixin:
         if not tex:
             raise ValueError("latex_missing")
 
+        tex = _auto_fix_latex(tex).strip() + "\n"
+        try:
+            ctx.working_memory["latex_tex"] = tex
+        except Exception:
+            pass
+
         repo_root = Path(__file__).resolve().parents[3]
         gen_dir = (repo_root / ".local" / "media" / "generated").resolve()
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -408,7 +631,7 @@ class LatexToolsMixin:
         build_dir.mkdir(parents=True, exist_ok=True)
 
         tex_path = build_dir / "main.tex"
-        tex_path.write_text(tex.strip() + "\n", encoding="utf-8")
+        tex_path.write_text(tex, encoding="utf-8")
 
         # Copy local generated images referenced by includegraphics into build dir.
         try:
@@ -459,6 +682,8 @@ class LatexToolsMixin:
                     cwd=str(build_dir),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=timeout_s,
                 )
                 if proc.returncode != 0:

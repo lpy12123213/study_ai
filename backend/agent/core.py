@@ -235,6 +235,19 @@ class AgentCore:
         # downstream tools explicitly reflect the current knowledge points).
         try:
             step_args = dict(concrete_step.arguments or {})
+            export_kp = str(ctx.working_memory.get("_export_subagent_kp") or "").strip()
+            if (
+                export_kp
+                and concrete_step.tool
+                in {
+                    "export_study_markdown",
+                    "convert_markdown_to_latex",
+                    "refine_latex",
+                    "compile_latex_to_pdf",
+                }
+                and "knowledge_points" not in step_args
+            ):
+                step_args["knowledge_points"] = [export_kp]
             if concrete_step.tool in {
                 "web_search_knowledge",
                 "browse_web_pages",
@@ -612,11 +625,40 @@ class AgentCore:
                 # - BFS (old): tool-by-tool across all knowledge points
                 # - DFS (new): for each knowledge point, execute the full research chain before moving on
                 steps = list(plan.steps or [])
+                export_kp = "导出：LaTeX/PDF"
+                export_open = False
+                export_closed = False
                 i = 0
                 while i < len(steps):
                     if bool(ctx.working_memory.get("_abort_execution")):
                         break
                     step = steps[i]
+                    if (
+                        (not export_open)
+                        and step.tool
+                        in {
+                            "export_study_markdown",
+                            "convert_markdown_to_latex",
+                            "refine_latex",
+                            "compile_latex_to_pdf",
+                        }
+                    ):
+                        export_open = True
+                        try:
+                            ctx.working_memory["_export_subagent_kp"] = export_kp
+                        except Exception:
+                            pass
+                        yield agent_event(
+                            "subagent_start",
+                            {
+                                "knowledge_point": export_kp,
+                                "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。",
+                            },
+                        )
+                        yield agent_event(
+                            "status",
+                            {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"},
+                        )
                     if getattr(step, "foreach_knowledge_point", False):
                         block: List[PlanStep] = []
                         while i < len(steps) and getattr(steps[i], "foreach_knowledge_point", False):
@@ -730,6 +772,42 @@ class AgentCore:
                     i += 1
                     async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step):
                         yield evt
+
+                    if export_open and (not export_closed) and step.tool == "compile_latex_to_pdf":
+                        export_closed = True
+                        try:
+                            ctx.working_memory.pop("_export_subagent_kp", None)
+                        except Exception:
+                            pass
+                        yield agent_event(
+                            "subagent_end",
+                            {
+                                "knowledge_point": export_kp,
+                                "content": "SubAgent 完成：导出与编译结束（LaTeX/PDF）。",
+                            },
+                        )
+                        yield agent_event(
+                            "status",
+                            {"content": "SubAgent 完成：导出与编译结束（LaTeX/PDF）。"},
+                        )
+
+                if export_open and (not export_closed):
+                    export_closed = True
+                    try:
+                        ctx.working_memory.pop("_export_subagent_kp", None)
+                    except Exception:
+                        pass
+                    yield agent_event(
+                        "subagent_end",
+                        {
+                            "knowledge_point": export_kp,
+                            "content": "SubAgent 结束：导出流程提前终止（LaTeX/PDF）。",
+                        },
+                    )
+                    yield agent_event(
+                        "status",
+                        {"content": "SubAgent 结束：导出流程提前终止（LaTeX/PDF）。"},
+                    )
 
                 # Autonomy boost: if the heuristic reviewer says "sources insufficient", do a bounded
                 # extra research pass for the failing knowledge points *within the same iteration*.
