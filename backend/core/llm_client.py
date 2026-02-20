@@ -147,6 +147,45 @@ def _estimate_messages_tokens(messages: List[Dict[str, str]]) -> int:
     return int(total)
 
 
+def _context_input_multiplier() -> float:
+    raw = str(os.getenv("MODEL_CONTEXT_INPUT_MULTIPLIER") or "").strip()
+    try:
+        v = float(raw) if raw else 1.15
+    except Exception:
+        v = 1.15
+    if not math.isfinite(v):
+        v = 1.15
+    return max(1.0, min(v, 2.0))
+
+
+def _context_reserve_tokens(context_length: int) -> int:
+    try:
+        ctx_len = int(context_length)
+    except Exception:
+        ctx_len = 0
+
+    reserve_raw = str(os.getenv("MODEL_CONTEXT_RESERVE_TOKENS") or "").strip()
+    if reserve_raw:
+        try:
+            reserve = int(reserve_raw)
+        except Exception:
+            reserve = 1024
+    else:
+        ratio_raw = str(os.getenv("MODEL_CONTEXT_RESERVE_RATIO") or "").strip()
+        try:
+            ratio = float(ratio_raw) if ratio_raw else 0.015
+        except Exception:
+            ratio = 0.015
+        if not math.isfinite(ratio):
+            ratio = 0.015
+        ratio = max(0.0, min(ratio, 0.2))
+        dyn = int(math.ceil(float(ctx_len) * float(ratio))) if (ctx_len > 0 and ratio > 0) else 0
+        reserve = max(1024, dyn) if dyn > 0 else 1024
+
+    reserve = max(128, min(int(reserve), 8192))
+    return int(reserve)
+
+
 def cap_max_tokens_for_messages(
     *,
     messages: List[Dict[str, str]],
@@ -164,14 +203,12 @@ def cap_max_tokens_for_messages(
     if ctx_len <= 0:
         return req
 
-    reserve_raw = str(os.getenv("MODEL_CONTEXT_RESERVE_TOKENS") or "").strip()
-    try:
-        reserve = int(reserve_raw) if reserve_raw else 1024
-    except Exception:
-        reserve = 1024
-    reserve = max(128, min(reserve, 8192))
+    reserve = _context_reserve_tokens(ctx_len)
 
     in_tokens = _estimate_messages_tokens(messages)
+    mult = _context_input_multiplier()
+    if mult > 1.0:
+        in_tokens = int(math.ceil(float(in_tokens) * float(mult)))
     allowed = int(ctx_len - in_tokens - reserve)
     if allowed <= 0:
         return 1
@@ -228,14 +265,12 @@ def _cap_max_tokens_with_ctx_len(
     if ctx_len <= 0:
         return req
 
-    reserve_raw = str(os.getenv("MODEL_CONTEXT_RESERVE_TOKENS") or "").strip()
-    try:
-        reserve = int(reserve_raw) if reserve_raw else 1024
-    except Exception:
-        reserve = 1024
-    reserve = max(128, min(reserve, 8192))
+    reserve = _context_reserve_tokens(ctx_len)
 
     in_tokens = _estimate_messages_tokens(messages)
+    mult = _context_input_multiplier()
+    if mult > 1.0:
+        in_tokens = int(math.ceil(float(in_tokens) * float(mult)))
     allowed = int(ctx_len - int(in_tokens) - int(reserve))
     if max_completion_tokens:
         try:
@@ -673,29 +708,26 @@ async def chat_completion(
             last_error = f"http_status_{status}"
 
             if status in {400, 422}:
-                if resolved_provider == "openrouter" and (not adjusted_for_ctx):
-                    limit, in_t, _out_t = _parse_context_len_error(api_msg)
-                    if limit > 0:
-                        reserve_raw = str(os.getenv("MODEL_CONTEXT_RESERVE_TOKENS") or "").strip()
+                limit, in_t, _out_t = _parse_context_len_error(api_msg)
+                if limit > 0:
+                    if in_t <= 0:
+                        in_t = _estimate_messages_tokens(messages)
+                        mult = _context_input_multiplier()
+                        if mult > 1.0:
+                            in_t = int(math.ceil(float(in_t) * float(mult)))
+                    reserve = _context_reserve_tokens(limit)
+                    new_allowed = int(limit - int(in_t) - reserve)
+                    if new_allowed > 0:
                         try:
-                            reserve = int(reserve_raw) if reserve_raw else 1024
+                            cur = int(payload.get("max_tokens") or 0)
                         except Exception:
-                            reserve = 1024
-                        reserve = max(128, min(reserve, 8192))
-                        if in_t <= 0:
-                            in_t = _estimate_messages_tokens(messages)
-                        new_allowed = int(limit - int(in_t) - reserve)
-                        if new_allowed > 0:
-                            try:
-                                cur = int(payload.get("max_tokens") or 0)
-                            except Exception:
-                                cur = 0
-                            if cur > new_allowed:
-                                payload["max_tokens"] = int(new_allowed)
-                                adjusted_for_ctx = True
-                                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
-                                await asyncio.sleep(0.2)
-                                continue
+                            cur = 0
+                        if cur > new_allowed:
+                            payload["max_tokens"] = int(new_allowed)
+                            adjusted_for_ctx = True
+                            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
+                            await asyncio.sleep(0.2)
+                            continue
 
                 if resolved_provider == "moonshot":
                     msg_l = (api_msg or "").lower()

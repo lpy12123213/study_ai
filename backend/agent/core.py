@@ -892,7 +892,6 @@ class AgentCore:
                                         "scope": "webpage",
                                         "include_summary": True,
                                         "concurrency": 3,
-                                        "metaso_mode": "ask",
                                         "decompose": True,
                                         "sub_questions": 4 if preset in {"deep", "research"} else 3,
                                         "preset": preset,

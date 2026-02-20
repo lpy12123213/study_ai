@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -279,6 +280,8 @@ class LatexToolsMixin:
         if not markdown:
             raise ValueError("markdown_empty")
 
+        await self._emit_progress(percent=5, stage="解析 Markdown")
+
         model = str(
             os.getenv("STUDY_MATERIALS_LATEX_MODEL")
             or os.getenv("STUDY_MATERIALS_WRITER_MODEL")
@@ -313,6 +316,10 @@ class LatexToolsMixin:
             r"\date{\today}"
             "\n"
             r"\begin{document}"
+            "\n"
+            r"\pagenumbering{arabic}"
+            "\n"
+            r"\setcounter{page}{1}"
             "\n"
             r"\maketitle"
             "\n\n"
@@ -349,84 +356,178 @@ class LatexToolsMixin:
             min_value=1200,
             max_value=20000,
         )
-        res = await self._call_llm_response(
-            messages=[
-                {"role": "system", "content": "你是严谨的 LaTeX 排版助手，输出必须是可编译的 LaTeX。"},
-                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-            ],
-            model=model,
-            temperature=0.2,
-            max_tokens=max_tokens,
-            raise_on_fail=True,
-        )
-        raw = _normalize_latex_text(str(res.get("content") or "").strip())
-        finish_reason = str(res.get("finish_reason") or "").strip().lower()
-        usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
-        if not raw:
-            raise RuntimeError("llm_empty_response")
-
-        body = _normalize_latex_text(_extract_latex_body(raw))
-        conts = 0
         max_continuations = _clamp_int(
             os.getenv("STUDY_MATERIALS_LATEX_MAX_CONTINUATIONS") or 3,
             default=3,
             min_value=0,
             max_value=8,
         )
-        while conts < max_continuations and body and (
-            _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens)
-            or _looks_incomplete_latex(body)
-        ):
-            tail = body[-2000:]
-            cont_prompt = {
-                "topic": topic,
-                "subject": subject,
-                "template": template,
-                "requirements": prompt.get("requirements") or [],
-                "markdown": markdown,
-                "existing_latex_tail": tail,
-                "instructions": [
-                    "上一轮输出疑似被截断。请严格从 existing_latex_tail 的末尾继续补全剩余正文。",
-                    "仅输出需要追加到 <BODY> 的 LaTeX 正文，不要重复前文，不要输出 documentclass/preamble/\\begin{document}/\\end{document}/\\maketitle/BEGIN_BODY/END_BODY。",
-                    "若 existing_latex_tail 的最后一行/公式/环境未结束，请先补齐闭合再继续。",
-                    "不要输出参考文献/外部链接/URL 列表。",
-                ],
-            }
-            cont_res = await self._call_llm_response(
+
+        async def _convert_markdown_to_body(
+            md: str,
+            *,
+            part_index: int,
+            part_total: int,
+            progress_start: int,
+            progress_end: int,
+        ) -> Dict[str, Any]:
+            await self._emit_status(f"调用模型生成 LaTeX（{part_index}/{part_total}）…")
+            p = dict(prompt)
+            p["markdown"] = md
+            res = await self._call_llm_response(
                 messages=[
-                    {"role": "system", "content": "你是严谨的 LaTeX 续写助手，只输出需要追加的正文 LaTeX，不要重复前文。"},
-                    {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
-                    {"role": "assistant", "content": tail},
-                    {"role": "user", "content": "继续。只输出需要追加的正文 LaTeX，不要重复 existing_latex_tail。"},
+                    {"role": "system", "content": "你是严谨的 LaTeX 排版助手，输出必须是可编译的 LaTeX。"},
+                    {"role": "user", "content": json.dumps(p, ensure_ascii=False)},
                 ],
                 model=model,
                 temperature=0.2,
                 max_tokens=max_tokens,
                 raise_on_fail=True,
             )
-            addition_raw = _normalize_latex_text(str(cont_res.get("content") or "").strip())
-            finish_reason = str(cont_res.get("finish_reason") or "").strip().lower()
-            usage = cont_res.get("usage") if isinstance(cont_res.get("usage"), dict) else {}
-            if not addition_raw:
-                break
-            addition = _normalize_latex_text(_extract_latex_body(addition_raw))
-            if not addition:
-                break
-            addition = _trim_overlap(body, addition)
-            if not addition.strip():
-                break
-            if not body.endswith("\n"):
-                body = body + "\n"
-            body = (body + addition).rstrip()
-            raw = addition_raw
-            conts += 1
 
+            span = max(0, int(progress_end) - int(progress_start))
+            p_after_first = int(progress_start) + int(span * 0.7)
+            await self._emit_progress(
+                percent=min(int(progress_end), max(int(progress_start), p_after_first)),
+                stage=f"转换正文（{part_index}/{part_total}）",
+                current=part_index,
+                total=part_total,
+            )
+            raw = _normalize_latex_text(str(res.get("content") or "").strip())
+            finish_reason = str(res.get("finish_reason") or "").strip().lower()
+            usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
+            if not raw:
+                raise RuntimeError("llm_empty_response")
+
+            body = _normalize_latex_text(_extract_latex_body(raw))
+            conts = 0
+            while conts < max_continuations and body and (
+                _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens)
+                or _looks_incomplete_latex(body)
+            ):
+                await self._emit_status(
+                    f"输出疑似被截断，继续补全（{part_index}/{part_total}，续写 {conts + 1}/{max_continuations}）…"
+                )
+                tail = body[-2000:]
+                cont_prompt = {
+                    "topic": topic,
+                    "subject": subject,
+                    "template": template,
+                    "requirements": prompt.get("requirements") or [],
+                    "markdown": md,
+                    "existing_latex_tail": tail,
+                    "instructions": [
+                        "上一轮输出疑似被截断。请严格从 existing_latex_tail 的末尾继续补全剩余正文。",
+                        "仅输出需要追加到 <BODY> 的 LaTeX 正文，不要重复前文，不要输出 documentclass/preamble/\\begin{document}/\\end{document}/\\maketitle/BEGIN_BODY/END_BODY。",
+                        "若 existing_latex_tail 的最后一行/公式/环境未结束，请先补齐闭合再继续。",
+                        "不要输出参考文献/外部链接/URL 列表。",
+                    ],
+                }
+                cont_res = await self._call_llm_response(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "你是严谨的 LaTeX 续写助手，只输出需要追加的正文 LaTeX，不要重复前文。",
+                        },
+                        {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
+                        {"role": "assistant", "content": tail},
+                        {"role": "user", "content": "继续。只输出需要追加的正文 LaTeX，不要重复 existing_latex_tail。"},
+                    ],
+                    model=model,
+                    temperature=0.2,
+                    max_tokens=max_tokens,
+                    raise_on_fail=True,
+                )
+                addition_raw = _normalize_latex_text(str(cont_res.get("content") or "").strip())
+                finish_reason = str(cont_res.get("finish_reason") or "").strip().lower()
+                usage = cont_res.get("usage") if isinstance(cont_res.get("usage"), dict) else {}
+                if not addition_raw:
+                    break
+                addition = _normalize_latex_text(_extract_latex_body(addition_raw))
+                if not addition:
+                    break
+                addition = _trim_overlap(body, addition)
+                if not addition.strip():
+                    break
+                if not body.endswith("\n"):
+                    body = body + "\n"
+                body = (body + addition).rstrip()
+                raw = addition_raw
+                conts += 1
+
+                if span > 0 and max_continuations > 0:
+                    p_now = int(progress_start) + int(span * (0.7 + 0.3 * (conts / max_continuations)))
+                    await self._emit_progress(
+                        percent=min(int(progress_end), max(int(progress_start), p_now)),
+                        stage=f"转换正文（{part_index}/{part_total}）",
+                        current=part_index,
+                        total=part_total,
+                    )
+            body = _auto_fix_latex(body).strip()
+            return {"body": body, "continuations": conts}
+
+        conts_total = 0
+        kp_header_re = re.compile(r"(?m)^##\s+(?:\d+|[一二三四五六七八九十]+)、\s*.+$")
+        matches = list(kp_header_re.finditer(markdown))
+
+        parts: List[str] = []
+        if len(matches) <= 1:
+            parts = [markdown]
+        else:
+            pre = markdown[: matches[0].start()].strip()
+            if pre:
+                parts.append(pre)
+            for j, m in enumerate(matches):
+                start = m.start()
+                end = matches[j + 1].start() if (j + 1) < len(matches) else len(markdown)
+                part = markdown[start:end].strip()
+                if part:
+                    parts.append(part)
+
+        total_parts = max(1, len(parts))
+        if total_parts > 1:
+            await self._emit_status(f"检测到 {total_parts} 段内容，将分段转换以避免截断…")
+        await self._emit_progress(percent=10, stage="准备转换", current=0, total=total_parts)
+
+        bodies: List[str] = []
+        for idx, part in enumerate(parts, start=1):
+            p_start = int(10 + (80 * (idx - 1) / total_parts))
+            p_end = int(10 + (80 * idx / total_parts))
+            await self._emit_progress(
+                percent=p_start,
+                stage=f"转换正文（{idx}/{total_parts}）",
+                current=idx,
+                total=total_parts,
+            )
+            chunk_res = await _convert_markdown_to_body(
+                part,
+                part_index=idx,
+                part_total=total_parts,
+                progress_start=p_start,
+                progress_end=p_end,
+            )
+            b = str(chunk_res.get("body") or "").strip()
+            if b:
+                bodies.append(b)
+            try:
+                conts_total += int(chunk_res.get("continuations") or 0)
+            except Exception:
+                pass
+            await self._emit_progress(
+                percent=p_end,
+                stage=f"转换正文（{idx}/{total_parts}）",
+                current=idx,
+                total=total_parts,
+            )
+
+        body = "\n\n".join([b for b in bodies if b.strip()]).strip()
+
+        await self._emit_progress(percent=92, stage="整理 LaTeX")
         body = _auto_fix_latex(body).strip()
         tex = _auto_fix_latex(template.replace("<BODY>", body).strip()) + "\n"
 
+        await self._emit_progress(percent=96, stage="写入文件")
         tex_bytes = tex.encode("utf-8")
-        import hashlib
-
         sha = hashlib.sha256(tex_bytes).hexdigest()
         filename = f"{sha}.tex"
         url = f"/api/media/generated/{filename}"
@@ -445,13 +546,15 @@ class LatexToolsMixin:
         except Exception:
             pass
 
+        await self._emit_progress(percent=100, stage="完成")
+
         return {
             "tex_url": url,
             "filename": filename,
             "sha256": sha,
             "bytes": len(tex_bytes),
             "model": model,
-            "continuations": conts,
+            "continuations": conts_total,
         }
 
     async def _tool_refine_latex(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
@@ -479,6 +582,30 @@ class LatexToolsMixin:
         compile_error = str(args.get("compile_error") or "").strip()
         if len(compile_error) > 1800:
             compile_error = compile_error[:1799].rstrip() + "…"
+
+        always_refine_raw = str(os.getenv("STUDY_MATERIALS_LATEX_ALWAYS_REFINE") or "0").strip().lower()
+        always_refine = always_refine_raw in {"1", "true", "yes", "y", "on"}
+        if (not compile_error) and (not always_refine):
+            tex_bytes = (tex.strip() + "\n").encode("utf-8")
+            sha = hashlib.sha256(tex_bytes).hexdigest()
+            filename = f"{sha}.tex"
+            url = f"/api/media/generated/{filename}"
+
+            repo_root = Path(__file__).resolve().parents[3]
+            out_dir = (repo_root / ".local" / "media" / "generated").resolve()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / filename
+            if not out_path.exists():
+                out_path.write_bytes(tex_bytes)
+
+            try:
+                ctx.working_memory["latex_tex"] = tex.strip() + "\n"
+                ctx.working_memory["tex_url"] = url
+                ctx.working_memory["tex_filename"] = filename
+            except Exception:
+                pass
+
+            return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": len(tex_bytes), "model": ""}
 
         model = str(os.getenv("STUDY_MATERIALS_LATEX_MODEL") or self.config.planner_model or self.config.summarizer_model).strip()
         if not model:

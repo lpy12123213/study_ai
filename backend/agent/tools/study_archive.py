@@ -81,7 +81,6 @@ class StudyArchiveToolsMixin:
             s = (source or "").strip() or "web"
             refs_by_kp.setdefault(kp_key, []).append({"url": u, "title": t, "source": s})
 
-        chinese_nums = "一二三四五六七八九十"
         lines: List[str] = []
         lines.append(f"# 自学材料：{topic}")
         meta_lines: List[str] = []
@@ -119,7 +118,7 @@ class StudyArchiveToolsMixin:
             kp = str(sec.get("knowledge_point") or "").strip()
             if not kp:
                 continue
-            num = chinese_nums[idx - 1] if 1 <= idx <= len(chinese_nums) else str(idx)
+            num = str(idx)
             lines.append(f"## {num}、{kp}")
             lines.append("")
 

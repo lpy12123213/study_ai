@@ -26,7 +26,7 @@ def _env_truthy(name: str) -> bool:
 _CORE_TOOLS: Dict[str, str] = {
     "split_knowledge_points": "把主题拆成多个可检索子知识点（输出 knowledge_points 列表）",
     "review_knowledge_points": "审核并微调知识点列表（去重/补全/粒度调整）",
-    "web_search_knowledge": "联网搜索知识点（Metaso 优先，返回 summary 报告型文本；Exa/智谱可兜底）",
+    "web_search_knowledge": "联网搜索知识点（Exa 优先；deep/research 可启用 deepresearch 多轮；Metaso/智谱兜底；返回 results 列表 + 可选 summary）",
     "aggregate_knowledge": "聚合：拆分 + 网搜 + 题库（可选：百科/网页正文/问答/GitHub）",
     "generate_study_material": "生成概念讲解（可选：示意图）（基于聚合结果；如已有绘图结果会自动复用）",
     "assemble_study_archive": "组装最终 Markdown（自学档案）",
@@ -259,8 +259,6 @@ class Planner:
                     "scope": "webpage",
                     "include_summary": True,
                     "concurrency": 3,
-                    # Prefer Metaso /ask (Q&A) over plain /search.
-                    "metaso_mode": "ask",
                     # SubAgent behavior: decompose the knowledge point into smaller questions before asking.
                     "decompose": True,
                     # SubAgent behavior: decompose -> ask. This improves quality and reduces "one big ask".
@@ -288,7 +286,6 @@ class Planner:
                         "scope": "webpage",
                         "include_summary": True,
                         "concurrency": 3,
-                        "metaso_mode": "ask",
                         "decompose": True,
                         "sub_questions": sub_q_pass2,
                         "preset": preset,
@@ -313,7 +310,6 @@ class Planner:
                         "scope": "webpage",
                         "include_summary": True,
                         "concurrency": 3,
-                        "metaso_mode": "ask",
                         "decompose": True,
                         "sub_questions": sub_q_pass3,
                         "preset": preset,

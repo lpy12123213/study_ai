@@ -7,15 +7,24 @@ This router supports **resumable** generation:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from backend.agent.executor import Executor
+from backend.agent.types import CompressedContext, PlanStep, UserProfile, agent_event
 from backend.api.auth import get_current_user, require_auth
-from backend.api.study_materials_schemas import StudyMaterialsGenerateRequest
+from backend.api.study_materials_schemas import (
+    StudyMaterialsConvertMarkdownToLatexRequest,
+    StudyMaterialsConvertMarkdownToLatexResponse,
+    StudyMaterialsGenerateRequest,
+)
 from backend.study_materials.task_manager import StudyMaterialsTaskManager
 
 
@@ -99,6 +108,152 @@ async def generate_study_materials(
 
     task = await _tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
     return await _stream_task(task.task_id, after_seq=0)
+
+
+@router.post("/convert-markdown-to-latex", response_model=StudyMaterialsConvertMarkdownToLatexResponse)
+async def convert_markdown_to_latex(
+    request: StudyMaterialsConvertMarkdownToLatexRequest,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    user_id = (user.get("user_id") if user else None) or "anonymous"
+
+    markdown = (request.markdown or "").strip()
+    if not markdown:
+        raise HTTPException(status_code=400, detail="markdown_empty")
+
+    topic = (request.topic or "").strip()
+    subject = (request.subject or "").strip()
+
+    profile = UserProfile(user_id=user_id)
+    if subject:
+        try:
+            profile.preferences["subject"] = subject
+        except Exception:
+            pass
+
+    ctx = CompressedContext(
+        user_profile=profile,
+        system_instructions="",
+        current_task=topic or "study_archive",
+    )
+
+    executor = Executor()
+    try:
+        return await executor._tool_convert_markdown_to_latex(
+            {"markdown": markdown, "topic": topic, "subject": subject},
+            ctx,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/convert-markdown-to-latex/stream")
+async def convert_markdown_to_latex_stream(
+    request: StudyMaterialsConvertMarkdownToLatexRequest,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    user_id = (user.get("user_id") if user else None) or "anonymous"
+
+    markdown = (request.markdown or "").strip()
+    if not markdown:
+        raise HTTPException(status_code=400, detail="markdown_empty")
+
+    topic = (request.topic or "").strip()
+    subject = (request.subject or "").strip()
+
+    profile = UserProfile(user_id=user_id)
+    if subject:
+        try:
+            profile.preferences["subject"] = subject
+        except Exception:
+            pass
+
+    ctx = CompressedContext(
+        user_profile=profile,
+        system_instructions="",
+        current_task=topic or "study_archive",
+    )
+
+    executor = Executor()
+
+    async def event_generator():
+        step_id = f"convert_markdown_to_latex-{uuid.uuid4().hex[:8]}"
+        t0 = time.monotonic()
+
+        try:
+            yield f"data: {json.dumps(agent_event('status', {'content': '开始转换 LaTeX…'}), ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(agent_event('progress', {'percent': 1, 'stage': '准备'}), ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(agent_event('tool_call', {'step_id': step_id, 'name': 'convert_markdown_to_latex', 'title': 'Markdown → LaTeX（ElegantBook）', 'arguments': {'topic': topic, 'subject': subject}}), ensure_ascii=False)}\n\n"
+
+            event_queue: "asyncio.Queue[dict]" = asyncio.Queue()
+
+            async def emit(evt: dict) -> None:
+                if not isinstance(evt, dict):
+                    return
+                kind = str(evt.get("event") or "")
+                if kind in {"status", "progress"}:
+                    await event_queue.put(evt)
+
+            step = PlanStep(
+                id=step_id,
+                title="Markdown → LaTeX（ElegantBook）",
+                tool="convert_markdown_to_latex",
+                arguments={"markdown": markdown, "topic": topic, "subject": subject},
+            )
+
+            tool_task = asyncio.create_task(executor.execute_step(step, context=ctx, emit_event=emit))
+            queue_task: "asyncio.Task[dict]" = asyncio.create_task(event_queue.get())
+
+            while True:
+                done, _pending = await asyncio.wait(
+                    {tool_task, queue_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if queue_task in done:
+                    evt = None
+                    try:
+                        evt = queue_task.result()
+                    except Exception:
+                        evt = None
+                    if isinstance(evt, dict) and evt.get("event"):
+                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                    queue_task = asyncio.create_task(event_queue.get())
+                    continue
+
+                if tool_task in done:
+                    if not queue_task.done():
+                        queue_task.cancel()
+                    break
+
+            try:
+                while True:
+                    evt = event_queue.get_nowait()
+                    if isinstance(evt, dict) and evt.get("event"):
+                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            except Exception:
+                pass
+
+            step_result = await tool_task
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            yield f"data: {json.dumps(agent_event('tool_result', {'step_id': step_id, 'name': 'convert_markdown_to_latex', 'title': 'Markdown → LaTeX（ElegantBook）', 'success': bool(step_result.success), 'elapsed_ms': elapsed_ms, 'output': step_result.output, 'error': step_result.error}), ensure_ascii=False)}\n\n"
+
+            if not step_result.success:
+                msg = str(step_result.error or "convert_failed")
+                yield f"data: {json.dumps(agent_event('error', {'message': msg}), ensure_ascii=False)}\n\n"
+                return
+
+            out = step_result.output if isinstance(step_result.output, dict) else {}
+            yield f"data: {json.dumps(agent_event('progress', {'percent': 100, 'stage': '完成'}), ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(agent_event('done', out), ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps(agent_event('error', {'message': str(exc)}), ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=_sse_headers(),
+    )
 
 
 @router.get("/tasks/{task_id}/stream")

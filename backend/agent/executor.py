@@ -82,6 +82,37 @@ class Executor(
         # Default to True (user request: reduce fallbacks, fail fast on LLM errors).
         return self._coerce_bool(v, default=True)
 
+    async def _emit_event(self, event: str, data: Optional[Dict[str, Any]] = None) -> None:
+        cb = _emit_event_var.get()
+        if cb is None:
+            return
+        try:
+            await cb(agent_event(str(event or ""), dict(data or {})))
+        except Exception:
+            return
+
+    async def _emit_status(self, content: str) -> None:
+        text = str(content or "").strip()
+        if not text:
+            return
+        await self._emit_event("status", {"content": text})
+
+    async def _emit_progress(self, *, percent: int, stage: str = "", current: int = 0, total: int = 0) -> None:
+        p = int(percent or 0)
+        if p < 0:
+            p = 0
+        if p > 100:
+            p = 100
+        payload: Dict[str, Any] = {"percent": p}
+        s = str(stage or "").strip()
+        if s:
+            payload["stage"] = s
+        if int(current or 0) > 0:
+            payload["current"] = int(current)
+        if int(total or 0) > 0:
+            payload["total"] = int(total)
+        await self._emit_event("progress", payload)
+
     async def execute_step(
         self,
         step: PlanStep,

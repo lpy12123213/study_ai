@@ -443,100 +443,104 @@ class StudyMaterialGenerationToolsMixin:
                 if explanation_md:
                     explanation_source = "llm"
 
-            if not explanation_md:
-                # If the main writer LLM isn't configured, optionally fall back to Metaso /ask as a "writer".
-                # This keeps the pipeline AI-powered even when only METASO_API_KEY is available.
-                if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                    fallback_raw = (os.getenv("STUDY_MATERIALS_METASO_WRITER_FALLBACK") or "1").strip().lower()
-                    use_metaso_writer = fallback_raw in {"1", "true", "yes", "y", "on"}
-                    if use_metaso_writer:
-                        try:
-                            from backend.mcp.metaso_search import metaso_ask as _metaso_ask
-
-                            metaso_template_lines = [
-                                "#### 1) 为什么需要它（动机与问题背景）",
-                                "#### 2) 定义与核心表述",
-                                "#### 3) 直观理解（类比与图像）",
-                                "#### 4) 关键结论与性质",
-                                "#### 5) 常见误区与易错点",
-                                "#### 6) 解题/应用思路小结",
-                            ]
-                            if preset in {"deep", "research"}:
-                                metaso_template_lines.extend(
-                                    [
-                                        "#### 7) 推导/证明思路",
-                                        "#### 8) 联系与拓展（前置知识/相邻概念/典型应用）",
-                                    ]
-                                )
-                            if preset == "research":
-                                metaso_template_lines.extend(
-                                    [
-                                        "#### 9) 关键例子与反例",
-                                        "#### 10) 自检清单（学完应能回答的 5 个问题）",
-                                    ]
-                                )
-
-                            metaso_prompt_lines = [
-                                f"请为知识点「{kp}」编写可直接自学的讲解（中文 Markdown）。",
-                                "",
-                                "【写作理念】费曼学习法：先讲为什么需要，再给定义；用类比建立直觉；重点加粗；主动指出误区。",
-                                f"【生成预设】{preset}",
-                                f"【额外要求】{requirements}" if requirements else "",
-                                "",
-                                "【硬性格式要求】",
-                                "- 小节标题从 #### 开始，禁止 #/##/###",
-                                "- 不输出参考资料/外部链接，不输出任何 URL",
-                                "- 不输出 [[1]] 等证据标记，不写过程性叙述",
-                                "- 严禁照抄 MCP/搜索/维基等数据源返回的原文，必须完全用自己的话重新组织和表达",
-                                "- 数学公式：行内 $...$，独立行 $$...$$",
-                                "- 不输出例题或练习题",
-                                "",
-                                "【模板结构】",
-                                *metaso_template_lines,
-                            ]
-                            metaso_prompt = "\n".join([x for x in metaso_prompt_lines if str(x or "").strip()]).strip()
-
-                            fmt = str(os.getenv("METASO_ASK_FORMAT") or "simple").strip() or "simple"
-                            model_hint = str(os.getenv("METASO_ASK_MODEL") or "").strip()
-                            metaso_res = await _metaso_ask(
-                                query=metaso_prompt,
-                                scope="webpage",
-                                size=6,
-                                format=fmt,
-                                model=model_hint,
-                            )
-                            if (
-                                isinstance(metaso_res, dict)
-                                and metaso_res.get("success")
-                                and str(metaso_res.get("answer") or "").strip()
-                            ):
-                                explanation_md = str(metaso_res.get("answer") or "").strip()
-                                explanation_source = "metaso-ask-writer"
-                        except Exception:
-                            # Best-effort fallback only; never block the pipeline.
-                            pass
-
-                # If the main LLM isn't available or returned empty, prefer Metaso /ask summary notes
-                # (already AI-generated) over a raw encyclopedia excerpt.
                 if not explanation_md:
-                    if strict_llm:
-                        raise RuntimeError(f"llm_generation_failed: empty_explanation knowledge_point={kp}")
-                    if web_summary:
-                        explanation_md = web_summary.strip()
-                        explanation_source = web_provider or "web_summary"
-                    else:
-                        wiki_summary = str(wiki.get("summary") or "").strip()
-                        if wiki_summary:
-                            explanation_md = f"**百科摘要**：{wiki_summary}\n"
-                            explanation_source = "wikipedia"
+                    # If the main writer LLM isn't configured, optionally fall back to Metaso /ask as a "writer".
+                    # This keeps the pipeline AI-powered even when only METASO_API_KEY is available.
+                    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+                        fallback_raw = (os.getenv("STUDY_MATERIALS_METASO_WRITER_FALLBACK") or "1").strip().lower()
+                        use_metaso_writer = fallback_raw in {"1", "true", "yes", "y", "on"}
+                        disable_metaso_raw = (os.getenv("STUDY_MATERIALS_DISABLE_METASO") or "0").strip().lower()
+                        disable_metaso = disable_metaso_raw in {"1", "true", "yes", "y", "on"}
+                        if use_metaso_writer and not disable_metaso:
+                            try:
+                                from backend.mcp.metaso_search import metaso_ask as _metaso_ask
+
+                                metaso_template_lines = [
+                                    "#### 1) 为什么需要它（动机与问题背景）",
+                                    "#### 2) 定义与核心表述",
+                                    "#### 3) 直观理解（类比与图像）",
+                                    "#### 4) 关键结论与性质",
+                                    "#### 5) 常见误区与易错点",
+                                    "#### 6) 解题/应用思路小结",
+                                ]
+                                if preset in {"deep", "research"}:
+                                    metaso_template_lines.extend(
+                                        [
+                                            "#### 7) 推导/证明思路",
+                                            "#### 8) 联系与拓展（前置知识/相邻概念/典型应用）",
+                                        ]
+                                    )
+                                if preset == "research":
+                                    metaso_template_lines.extend(
+                                        [
+                                            "#### 9) 关键例子与反例",
+                                            "#### 10) 自检清单（学完应能回答的 5 个问题）",
+                                        ]
+                                    )
+
+                                metaso_prompt_lines = [
+                                    f"请为知识点「{kp}」编写可直接自学的讲解（中文 Markdown）。",
+                                    "",
+                                    "【写作理念】费曼学习法：先讲为什么需要，再给定义；用类比建立直觉；重点加粗；主动指出误区。",
+                                    f"【生成预设】{preset}",
+                                    f"【额外要求】{requirements}" if requirements else "",
+                                    "",
+                                    "【硬性格式要求】",
+                                    "- 小节标题从 #### 开始，禁止 #/##/###",
+                                    "- 不输出参考资料/外部链接，不输出任何 URL",
+                                    "- 不输出 [[1]] 等证据标记，不写过程性叙述",
+                                    "- 严禁照抄 MCP/搜索/维基等数据源返回的原文，必须完全用自己的话重新组织和表达",
+                                    "- 数学公式：行内 $...$，独立行 $$...$$",
+                                    "- 不输出例题或练习题",
+                                    "",
+                                    "【模板结构】",
+                                    *metaso_template_lines,
+                                ]
+                                metaso_prompt = "\n".join(
+                                    [x for x in metaso_prompt_lines if str(x or "").strip()]
+                                ).strip()
+
+                                fmt = str(os.getenv("METASO_ASK_FORMAT") or "simple").strip() or "simple"
+                                model_hint = str(os.getenv("METASO_ASK_MODEL") or "").strip()
+                                metaso_res = await _metaso_ask(
+                                    query=metaso_prompt,
+                                    scope="webpage",
+                                    size=6,
+                                    format=fmt,
+                                    model=model_hint,
+                                )
+                                if (
+                                    isinstance(metaso_res, dict)
+                                    and metaso_res.get("success")
+                                    and str(metaso_res.get("answer") or "").strip()
+                                ):
+                                    explanation_md = str(metaso_res.get("answer") or "").strip()
+                                    explanation_source = "metaso-ask-writer"
+                            except Exception:
+                                # Best-effort fallback only; never block the pipeline.
+                                pass
+
+                    # If the main LLM isn't available or returned empty, prefer Metaso /ask summary notes
+                    # (already AI-generated) over a raw encyclopedia excerpt.
+                    if not explanation_md:
+                        if strict_llm:
+                            raise RuntimeError(f"llm_generation_failed: empty_explanation knowledge_point={kp}")
+                        if web_summary:
+                            explanation_md = web_summary.strip()
+                            explanation_source = web_provider or "web_summary"
                         else:
-                            mw_summary = str(mw.get("summary") or "").strip()
-                            if mw_summary:
-                                explanation_md = f"**MediaWiki 摘要**：{mw_summary}\n"
-                                explanation_source = "mediawiki"
+                            wiki_summary = str(wiki.get("summary") or "").strip()
+                            if wiki_summary:
+                                explanation_md = f"**百科摘要**：{wiki_summary}\n"
+                                explanation_source = "wikipedia"
                             else:
-                                explanation_md = "（未获取到可靠百科摘要；以下内容以网络检索笔记为主，建议稍后重试生成。）\n"
-                                explanation_source = "fallback"
+                                mw_summary = str(mw.get("summary") or "").strip()
+                                if mw_summary:
+                                    explanation_md = f"**MediaWiki 摘要**：{mw_summary}\n"
+                                    explanation_source = "mediawiki"
+                                else:
+                                    explanation_md = "（未获取到可靠百科摘要；以下内容以网络检索笔记为主，建议稍后重试生成。）\n"
+                                    explanation_source = "fallback"
 
             explanation_md = _sanitize_explanation_markdown(explanation_md, knowledge_point=kp)
 

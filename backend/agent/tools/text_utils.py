@@ -107,6 +107,34 @@ def _is_ui_noise_line(line: str) -> bool:
     if ("baidu" in lower or "sogou" in lower) and any(x in s for x in ("©", "版权", "版权所有")):
         return True
 
+    # Cookie / consent banners and sign-in gates are extremely common "junk" around extracted content.
+    if ("cookie" in lower or "cookies" in lower) and len(s) <= 200 and any(
+        tok in lower
+        for tok in (
+            "we use",
+            "use cookies",
+            "policy",
+            "consent",
+            "preferences",
+            "privacy",
+            "使用",
+            "同意",
+            "拒绝",
+            "隐私",
+            "条款",
+            "政策",
+        )
+    ):
+        return True
+    if ("enable javascript" in lower or ("javascript" in lower and "enable" in lower)) and len(s) <= 160:
+        return True
+    if any(tok in lower for tok in ("sign in", "log in", "subscribe")) and len(s) <= 120:
+        return True
+    if any(tok in s for tok in ("验证码", "机器人验证", "请启用JavaScript", "启用JavaScript", "请开启JavaScript")) and len(s) <= 80:
+        return True
+    if any(tok in s for tok in ("登录后", "请登录", "注册后", "注册")) and len(s) <= 60:
+        return True
+
     if any(sub in s for sub in _UI_NOISE_SUBSTRINGS) and len(s) <= 60:
         return True
 
@@ -254,9 +282,24 @@ def _postprocess_web_search_result(result: Dict[str, Any], *, max_snippet_chars:
 
     # Metaso /ask snippets sometimes contain evidence markers like [[1]]; strip them early so the
     # downstream LLM won't copy them into the final study material.
-    for k in ("title", "snippet", "text"):
+    for k in ("title", "snippet", "text", "summary"):
         if isinstance(out.get(k), str) and out.get(k):
             out[k] = _strip_evidence_markers(str(out.get(k) or ""))
+
+    # Normalize Exa highlights (list[str]) into a compact, UI-noise-filtered form.
+    if isinstance(out.get("highlights"), list):
+        cleaned_h: List[str] = []
+        for h in out.get("highlights") or []:
+            if not isinstance(h, str):
+                continue
+            s = _strip_evidence_markers(h)
+            s = _remove_ui_noise(s, max_lines=40)
+            s = _compact_snippet(s, max_chars=260)
+            if s:
+                cleaned_h.append(s)
+            if len(cleaned_h) >= 6:
+                break
+        out["highlights"] = cleaned_h
 
     url = str(out.get("url") or out.get("link") or "").strip()
     if url and not str(out.get("url") or "").strip():
@@ -265,14 +308,25 @@ def _postprocess_web_search_result(result: Dict[str, Any], *, max_snippet_chars:
     if _looks_like_pdf_url(url):
         # Avoid injecting garbled "PDF text" into the archive (common for math formulas).
         out["content_type_hint"] = "application/pdf"
-        out["snippet"] = "[PDF课件]（为避免公式/符号乱码，已省略正文抽取；建议打开链接查看）"
+        pdf_summary = _remove_ui_noise(str(out.get("summary") or ""))
+        if pdf_summary:
+            out["summary"] = _clip_text(_compact_snippet(pdf_summary, max_chars=1200), max_chars=1200)
+            out["snippet"] = _compact_snippet(pdf_summary, max_chars=max_snippet_chars)
+        else:
+            out["snippet"] = "[PDF课件]（为避免公式/符号乱码，已省略正文抽取；建议打开链接查看）"
         out["text"] = ""
         return out
 
     text = _remove_ui_noise(str(out.get("text") or ""))
     snippet = _remove_ui_noise(str(out.get("snippet") or ""))
+    summary = _remove_ui_noise(str(out.get("summary") or ""))
 
-    if not snippet and text:
+    if not snippet and summary:
+        out["snippet"] = _compact_snippet(summary, max_chars=max_snippet_chars)
+    elif not snippet and isinstance(out.get("highlights"), list) and out.get("highlights"):
+        joined = " ".join([str(x or "").strip() for x in (out.get("highlights") or []) if str(x or "").strip()])
+        out["snippet"] = _compact_snippet(joined, max_chars=max_snippet_chars)
+    elif not snippet and text:
         out["snippet"] = _compact_snippet(text, max_chars=max_snippet_chars)
     elif snippet:
         out["snippet"] = _compact_snippet(snippet, max_chars=max_snippet_chars)
@@ -280,4 +334,6 @@ def _postprocess_web_search_result(result: Dict[str, Any], *, max_snippet_chars:
     # Keep the original `text` (if any) but also normalize excessive whitespace.
     if text:
         out["text"] = _clip_text(text, max_chars=8000)
+    if summary:
+        out["summary"] = _clip_text(_compact_snippet(summary, max_chars=1200), max_chars=1200)
     return out

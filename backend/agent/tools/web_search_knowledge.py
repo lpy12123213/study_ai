@@ -4,19 +4,23 @@ import asyncio
 import json
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.agent.types import CompressedContext
-from backend.agent.tools.text_utils import _clip_text, _postprocess_web_search_result, _strip_evidence_markers
+from backend.agent.tools.deep_research import deep_research_exa
+from backend.agent.tools.text_utils import _clip_text, _postprocess_web_search_result
 from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
 
 
 class WebSearchKnowledgeToolsMixin:
     async def _tool_web_search_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
-        """网络搜索知识点：Metaso 优先（可返回 summary 报告型文本）。
+        """网络搜索知识点（Exa 优先，可选 deepresearch 多轮；Metaso/智谱兜底）。
 
-        - 默认使用 Metaso 直接 API（无需额外 MCP 进程）。
-        - 若 Metaso 未配置，则回退到 Exa / BigModel（兼容旧配置）。
+        - search_mode=deepresearch：Exa 多轮检索（breadth/depth）+ 学习要点/追问方向（需要 EXA_API_KEY）
+        - search_mode=exa：Exa 直接搜索（可选拆分子问题），返回“搜索结果列表”
+        - search_mode=metaso：强制使用 Metaso（ask/search），跳过 Exa
+        - 注意：当显式设置 search_mode=exa/deepresearch 时，Exa 失败不会再自动回退到 Metaso
+        - disable_metaso=true 或 STUDY_MATERIALS_DISABLE_METASO=1：禁用 Metaso（含兜底）
         """
 
         topic = str(args.get("topic") or ctx.current_task).strip()
@@ -61,6 +65,12 @@ class WebSearchKnowledgeToolsMixin:
             if not raw:
                 return default
             return raw in {"1", "true", "yes", "y", "on"}
+
+        disable_metaso_raw = args.get("disable_metaso")
+        if disable_metaso_raw is None:
+            disable_metaso = _env_truthy("STUDY_MATERIALS_DISABLE_METASO", False)
+        else:
+            disable_metaso = str(disable_metaso_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
         def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
             try:
@@ -248,29 +258,169 @@ class WebSearchKnowledgeToolsMixin:
             if query_hint:
                 query = f"{query} {query_hint}".strip()
 
-            # Check if Exa Answer should be used (new default)
-            use_exa_answer = _env_truthy("STUDY_MATERIALS_USE_EXA_ANSWER", True)
-            exa_answer_mode = str(args.get("search_mode") or os.getenv("STUDY_MATERIALS_SEARCH_MODE") or "").strip().lower()
-            if exa_answer_mode == "metaso":
-                use_exa_answer = False
-            elif exa_answer_mode == "exa":
-                use_exa_answer = True
+            raw_search_mode = args.get("search_mode")
+            if raw_search_mode is None:
+                raw_search_mode = os.getenv("STUDY_MATERIALS_SEARCH_MODE")
+            raw_search_mode = str(raw_search_mode or "").strip()
+            force_search_mode = bool(raw_search_mode)
 
-            # 0) Exa Answer API (preferred when configured)
-            if use_exa_answer:
+            search_mode = raw_search_mode.lower()
+            if search_mode in {"deep", "research", "deepresearch"}:
+                search_mode = "deepresearch"
+            if not search_mode:
+                search_mode = "deepresearch" if preset in {"deep", "research"} else "exa"
+
+            if disable_metaso and search_mode == "metaso":
+                return {
+                    "knowledge_point": point,
+                    "base_query": base_query,
+                    "query": query,
+                    "queries": [query],
+                    "provider": "none",
+                    "scope": scope,
+                    "include_summary": include_summary,
+                    "results": [],
+                    "error": "metaso_disabled",
+                }
+
+            # 0) Exa Search (direct results). deepresearch => multi-round Exa search inspired by open-deep-research.
+            if search_mode != "metaso":
                 try:
-                    from backend.mcp.exa_web_search import exa_answer, EXA_API_KEY
+                    from backend.mcp.exa_web_search import exa_search, EXA_API_KEY
 
-                    if EXA_API_KEY:
+                    if not EXA_API_KEY:
+                        if force_search_mode:
+                            return {
+                                "knowledge_point": point,
+                                "base_query": base_query,
+                                "query": query,
+                                "queries": [query],
+                                "provider": "exa-deepresearch" if search_mode == "deepresearch" else "exa",
+                                "scope": scope,
+                                "include_summary": include_summary,
+                                "results": [],
+                                "error": "EXA_API_KEY not configured",
+                            }
+                    else:
+                        keep_sources = _clamp_int(
+                            args.get("keep_sources"),
+                            default=_clamp_int(
+                                os.getenv("STUDY_MATERIALS_WEB_KEEP_SOURCES") or limit,
+                                default=limit,
+                                min_value=3,
+                                max_value=40,
+                            ),
+                            min_value=3,
+                            max_value=40,
+                        )
+
+                        if search_mode == "deepresearch":
+                            # Carry over previous calls (avoid repeating queries in multi-pass / multi-round research).
+                            prev_item: Dict[str, Any] = {}
+                            prev = ctx.working_memory.get("web_search_knowledge")
+                            if isinstance(prev, dict):
+                                if isinstance(prev.get("items"), list):
+                                    for it in prev.get("items") or []:
+                                        if not isinstance(it, dict):
+                                            continue
+                                        if str(it.get("knowledge_point") or "").strip() == point:
+                                            prev_item = it
+                                            break
+                                elif str(prev.get("knowledge_point") or "").strip() == point:
+                                    prev_item = prev
+
+                            prev_queries = prev_item.get("queries") if isinstance(prev_item.get("queries"), list) else []
+                            prev_summary = str(prev_item.get("summary") or "").strip()
+
+                            thinking_model = str(
+                                os.getenv("STUDY_MATERIALS_THINKING_MODEL")
+                                or self.config.planner_model
+                                or self.config.summarizer_model
+                            ).strip()
+                            llm_model = thinking_model if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) else ""
+
+                            deep = await deep_research_exa(
+                                call_llm_text=self._call_llm_text,
+                                extract_json_obj=self._extract_json_obj,
+                                strict_llm=strict_llm,
+                                llm_model=llm_model,
+                                knowledge_point=point,
+                                subject=subject,
+                                seed_query=query,
+                                query_hint=query_hint,
+                                preset=preset,
+                                include_summary=include_summary,
+                                text_max_length=text_max_length,
+                                keep_sources=keep_sources,
+                                breadth=args.get("deep_breadth") or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_BREADTH"),
+                                depth=args.get("deep_depth") or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_DEPTH"),
+                                max_queries=args.get("max_queries") or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_MAX_QUERIES"),
+                                per_query_results=args.get("per_query_results")
+                                or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_PER_QUERY_RESULTS"),
+                                concurrency=args.get("deep_concurrency")
+                                or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_CONCURRENCY"),
+                                learnings_per_query=args.get("learnings_per_query")
+                                or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_LEARNINGS_PER_QUERY"),
+                                prev_queries=[str(x or "").strip() for x in prev_queries if str(x or "").strip()],
+                                prev_summary=prev_summary,
+                            )
+                            if isinstance(deep, dict) and deep.get("success") and deep.get("results"):
+                                results_value = deep.get("results") if isinstance(deep.get("results"), list) else []
+                                out: Dict[str, Any] = {
+                                    "knowledge_point": point,
+                                    "base_query": base_query,
+                                    "query": str(deep.get("query") or query or base_query).strip(),
+                                    "queries": list(deep.get("queries") or [])[:40],
+                                    "provider": str(deep.get("provider") or "exa-deepresearch"),
+                                    "scope": scope,
+                                    "include_summary": bool(
+                                        deep.get("include_summary") if "include_summary" in deep else include_summary
+                                    ),
+                                    "summary": str(deep.get("summary") or "").strip(),
+                                    "results": results_value[:keep_sources],
+                                    "learnings": list(deep.get("learnings") or [])[:40],
+                                    "directions": list(deep.get("directions") or [])[:12],
+                                    "errors": list(deep.get("errors") or [])[:6],
+                                    "depth": deep.get("depth"),
+                                    "breadth": deep.get("breadth"),
+                                    "max_queries": deep.get("max_queries"),
+                                }
+                                return {k: v for k, v in out.items() if v not in ("", None, [], {})}
+
                         # Decompose into sub-questions for better coverage
                         decompose = args.get("decompose")
                         if decompose is None:
                             decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
                         decompose = bool(decompose)
 
-                        sub_questions = [base_query]
+                        sub_questions = [query]
                         if decompose:
                             sub_questions = await _decompose_sub_questions(knowledge_point=point, base_query=base_query)
+                            if query_hint:
+                                # Ensure each sub query is nudged by the hint (when it isn't already included).
+                                hinted: List[str] = []
+                                hint_lower = query_hint.lower()
+                                for sq in sub_questions:
+                                    s = str(sq or "").strip()
+                                    if not s:
+                                        continue
+                                    if hint_lower and hint_lower in s.lower():
+                                        hinted.append(s)
+                                    else:
+                                        hinted.append(f"{s} {query_hint}".strip())
+                                sub_questions = hinted or sub_questions
+
+                        per_query_results = _clamp_int(
+                            args.get("per_query_results"),
+                            default=_clamp_int(
+                                os.getenv("STUDY_MATERIALS_EXA_PER_QUERY_RESULTS") or min(5, limit),
+                                default=min(5, limit),
+                                min_value=2,
+                                max_value=10,
+                            ),
+                            min_value=1,
+                            max_value=10,
+                        )
 
                         # Ask Exa for each sub-question
                         sub_conc = _clamp_int(
@@ -283,11 +433,13 @@ class WebSearchKnowledgeToolsMixin:
 
                         async def _exa_ask_one(sub_q: str) -> Dict[str, Any]:
                             async with sub_sem:
-                                return await exa_answer(
+                                return await exa_search(
                                     query=sub_q,
-                                    num_results=min(5, limit),
+                                    num_results=min(per_query_results, 10),
+                                    use_autoprompt=True,
+                                    type="neural",
                                     include_text=True,
-                                    text_max_length=min(1500, text_max_length),
+                                    text_max_length=min(text_max_length, 2600),
                                 )
 
                         exa_calls = await asyncio.gather(*[_exa_ask_one(q) for q in sub_questions])
@@ -300,36 +452,37 @@ class WebSearchKnowledgeToolsMixin:
                         for sub_q, res in zip(sub_questions, exa_calls):
                             queries.append(sub_q)
 
-                            if not isinstance(res, dict) or not res.get("success"):
-                                err = str(res.get("error") or "exa answer failed").strip() if isinstance(res, dict) else "exa answer failed"
+                            raw_results = res.get("results") if isinstance(res, dict) else []
+                            if not isinstance(raw_results, list) or not raw_results:
+                                err = (
+                                    str(res.get("error") or "exa search failed").strip()
+                                    if isinstance(res, dict)
+                                    else "exa search failed"
+                                )
                                 errors.append(f"{sub_q}: {err}")
                                 continue
 
-                            ans = _strip_evidence_markers(str(res.get("answer") or "").strip())
-                            if ans:
-                                summary_parts.append(f"【{sub_q}】\n{_clip_text(ans, max_chars=900)}")
-
-                            for c in (res.get("citations") or []):
-                                if not isinstance(c, dict):
+                            this_results: List[Dict[str, Any]] = []
+                            for r in raw_results:
+                                if not isinstance(r, dict):
                                     continue
-                                cleaned_results.append(
-                                    _postprocess_web_search_result(
-                                        {
-                                            "title": c.get("title", ""),
-                                            "url": c.get("url", ""),
-                                            "snippet": c.get("text", ""),
-                                            "published_date": c.get("published_date"),
-                                        }
-                                    )
-                                )
+                                rr = dict(r)
+                                rr.setdefault("source_query", sub_q)
+                                pr = _postprocess_web_search_result(rr)
+                                cleaned_results.append(pr)
+                                this_results.append(pr)
 
-                        # Deduplicate results by URL
-                        keep_sources = _clamp_int(
-                            args.get("keep_sources"),
-                            default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_KEEP_SOURCES") or limit, default=limit, min_value=3, max_value=15),
-                            min_value=3,
-                            max_value=15,
-                        )
+                            if include_summary and this_results:
+                                top_snips: List[str] = []
+                                for r in this_results[:2]:
+                                    title = str(r.get("title") or "").strip()
+                                    snip = str(r.get("snippet") or "").strip()
+                                    if title and snip:
+                                        top_snips.append(f"- {title}：{_clip_text(snip, max_chars=180)}")
+                                if top_snips:
+                                    summary_parts.append(f"【{sub_q}】\n" + "\n".join(top_snips))
+
+                        # Deduplicate results by URL.
                         deduped: List[Dict[str, Any]] = []
                         seen_urls: set[str] = set()
                         for r in cleaned_results:
@@ -340,190 +493,243 @@ class WebSearchKnowledgeToolsMixin:
                             seen_urls.add(key)
                             deduped.append(r)
                             if len(deduped) >= keep_sources:
-                                break
+                                 break
 
-                        summary_value = "\n\n".join(summary_parts).strip()
+                        summary_value = "\n\n".join(summary_parts).strip() if include_summary else ""
 
                         # If we got useful results, return them
                         if summary_value or deduped:
-                            return {
+                            out = {
                                 "knowledge_point": point,
                                 "base_query": base_query,
-                                "query": base_query,
+                                "query": query,
                                 "queries": queries[:12],
-                                "provider": "exa-answer+decompose" if decompose else "exa-answer",
+                                "provider": "exa-search+decompose" if decompose else "exa-search",
                                 "scope": scope,
-                                "include_summary": True,
-                                "summary": summary_value or "(Exa Answer 未返回摘要)",
+                                "include_summary": include_summary,
+                                "summary": summary_value,
                                 "results": deduped,
                                 "sub_questions": sub_questions,
                                 "errors": errors[:6],
                             }
+                            return {k: v for k, v in out.items() if v not in ("", None, [], {})}
 
                         # If Exa failed completely, fall through to Metaso
                         if errors:
-                            print(f"[web_search] Exa Answer failed for {point}, falling back to Metaso: {errors[:2]}", flush=True)
+                            if force_search_mode:
+                                return {
+                                    "knowledge_point": point,
+                                    "base_query": base_query,
+                                    "query": query,
+                                    "queries": queries[:12],
+                                    "provider": "exa-search+decompose" if decompose else "exa-search",
+                                    "scope": scope,
+                                    "include_summary": include_summary,
+                                    "results": [],
+                                    "errors": errors[:6],
+                                    "error": "exa_search_failed",
+                                }
+
+                            if not disable_metaso:
+                                print(
+                                    f"[web_search] Exa search failed for {point}, falling back to Metaso: {errors[:2]}",
+                                    flush=True,
+                                )
                 except Exception as exc:
-                    print(f"[web_search] Exa Answer exception for {point}, falling back to Metaso: {exc}", flush=True)
+                    if force_search_mode:
+                        return {
+                            "knowledge_point": point,
+                            "base_query": base_query,
+                            "query": query,
+                            "queries": [query],
+                            "provider": "exa-deepresearch" if search_mode == "deepresearch" else "exa",
+                            "scope": scope,
+                            "include_summary": include_summary,
+                            "results": [],
+                            "error": str(exc) or "exa_search_exception",
+                        }
+                    if not disable_metaso:
+                        print(f"[web_search] Exa search exception for {point}, falling back to Metaso: {exc}", flush=True)
 
-            metaso_mode = str(args.get("metaso_mode") or os.getenv("STUDY_MATERIALS_METASO_MODE") or "ask").strip().lower()
-            if metaso_mode not in {"ask", "search"}:
-                metaso_mode = "ask"
+            metaso: Dict[str, Any] = {}
+            if not disable_metaso:
+                metaso_mode = str(args.get("metaso_mode") or os.getenv("STUDY_MATERIALS_METASO_MODE") or "ask").strip().lower()
+                if metaso_mode not in {"ask", "search"}:
+                    metaso_mode = "ask"
 
-            # 1) Metaso（fallback when Exa not configured or failed）
-            metaso: Dict[str, Any]
-            if metaso_mode == "ask":
-                # Sub-agent behavior: decompose the knowledge point into smaller questions, then ask.
-                decompose = args.get("decompose")
-                if decompose is None:
-                    decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
-                decompose = bool(decompose)
+                # 1) Metaso（fallback when Exa not configured or failed）
+                if metaso_mode == "ask":
+                    # Sub-agent behavior: decompose the knowledge point into smaller questions, then ask.
+                    decompose = args.get("decompose")
+                    if decompose is None:
+                        decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
+                    decompose = bool(decompose)
 
-                # How many sources to keep overall (not per sub-question)
-                keep_sources = _clamp_int(
-                    args.get("keep_sources"),
-                    default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_KEEP_SOURCES") or limit, default=limit, min_value=3, max_value=15),
-                    min_value=3,
-                    max_value=15,
-                )
+                    # How many sources to keep overall (not per sub-question)
+                    keep_sources = _clamp_int(
+                        args.get("keep_sources"),
+                        default=_clamp_int(
+                            os.getenv("STUDY_MATERIALS_WEB_KEEP_SOURCES") or limit,
+                            default=limit,
+                            min_value=3,
+                            max_value=40,
+                        ),
+                        min_value=3,
+                        max_value=40,
+                    )
 
-                # Per-sub-question size: keep small because we ask multiple times.
-                sub_size = _clamp_int(
-                    args.get("sub_size"),
-                    default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_SIZE") or min(5, limit), default=min(5, limit), min_value=2, max_value=10),
-                    min_value=2,
-                    max_value=10,
-                )
+                    # Per-sub-question size: keep small because we ask multiple times.
+                    sub_size = _clamp_int(
+                        args.get("sub_size"),
+                        default=_clamp_int(
+                            os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_SIZE") or min(5, limit),
+                            default=min(5, limit),
+                            min_value=2,
+                            max_value=10,
+                        ),
+                        min_value=2,
+                        max_value=10,
+                    )
 
-                metaso_format = str(args.get("metaso_format") or os.getenv("METASO_ASK_FORMAT") or "simple")
-                metaso_model = str(args.get("metaso_model") or os.getenv("METASO_ASK_MODEL") or "")
+                    metaso_format = str(args.get("metaso_format") or os.getenv("METASO_ASK_FORMAT") or "simple")
+                    metaso_model = str(args.get("metaso_model") or os.getenv("METASO_ASK_MODEL") or "")
 
-                sub_questions = [base_query]
-                if decompose:
-                    sub_questions = await _decompose_sub_questions(knowledge_point=point, base_query=base_query)
+                    sub_questions = [base_query]
+                    if decompose:
+                        sub_questions = await _decompose_sub_questions(knowledge_point=point, base_query=base_query)
 
-                # Ask Metaso for each sub-question; cap concurrency to avoid rate-limits.
-                sub_conc = _clamp_int(
-                    args.get("sub_concurrency"),
-                    default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2, default=2, min_value=1, max_value=3),
-                    min_value=1,
-                    max_value=3,
-                )
-                sub_sem = asyncio.Semaphore(sub_conc)
+                    # Ask Metaso for each sub-question; cap concurrency to avoid rate-limits.
+                    sub_conc = _clamp_int(
+                        args.get("sub_concurrency"),
+                        default=_clamp_int(
+                            os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2,
+                            default=2,
+                            min_value=1,
+                            max_value=3,
+                        ),
+                        min_value=1,
+                        max_value=3,
+                    )
+                    sub_sem = asyncio.Semaphore(sub_conc)
 
-                async def _ask_one(sub_q: str) -> Dict[str, Any]:
-                    # Important: we treat Metaso as *retrieval + research notes* here, not the final writer.
-                    # If we ask Metaso to write long paragraphs, downstream LLMs tend to copy them verbatim.
-                    prompt_lines = [
-                        "你是自学资料的研究助理。请输出“可用于写教材的研究笔记”，而不是直接写教材正文。",
-                        "输出要求：",
-                        "1) 中文；分小节输出：定义/符号约定、直观理解、关键结论(含适用条件)、常见误区(含纠正要点或反例提示)、常用方法/解题套路、关键词/同义词(可含英文/符号)。",
-                        "2) 尽量用要点列表；避免长段落；单条建议 ≤ 40 字。",
-                        "3) 不要输出网址/链接；不要输出 [[1]] 这类证据标记；不要输出过程性叙述(如“根据搜索/证据/资料”).",
-                        "4) 不确定处请标注“可能/待核实”，不要编造。",
-                        "5)（研究型）尽量写清：适用条件/边界情况/反例提示；如存在等价表述/充分必要条件请指出。"
-                        if preset in {"deep", "research"}
-                        else "5) 尽量写清适用条件与限制条件。",
-                        "6)（研究型）若适用，请补充 3~8 行推导/证明骨架（不是完整证明）。"
-                        if preset == "research"
-                        else "",
-                        f"知识点：{base_query}",
-                        f"子问题：{sub_q}",
-                    ]
-                    if query_hint:
-                        prompt_lines.append(f"关注要点（关键词）：{query_hint}")
-                    metaso_q = "\n".join(prompt_lines).strip()
+                    async def _ask_one(sub_q: str) -> Dict[str, Any]:
+                        # Important: we treat Metaso as *retrieval + research notes* here, not the final writer.
+                        # If we ask Metaso to write long paragraphs, downstream LLMs tend to copy them verbatim.
+                        prompt_lines = [
+                            "你是自学资料的研究助理。请输出“可用于写教材的研究笔记”，而不是直接写教材正文。",
+                            "输出要求：",
+                            "1) 中文；分小节输出：定义/符号约定、直观理解、关键结论(含适用条件)、常见误区(含纠正要点或反例提示)、常用方法/解题套路、关键词/同义词(可含英文/符号)。",
+                            "2) 尽量用要点列表；避免长段落；单条建议 ≤ 40 字。",
+                            "3) 不要输出网址/链接；不要输出 [[1]] 这类证据标记；不要输出过程性叙述(如“根据搜索/证据/资料”).",
+                            "4) 不确定处请标注“可能/待核实”，不要编造。",
+                            "5)（研究型）尽量写清：适用条件/边界情况/反例提示；如存在等价表述/充分必要条件请指出。"
+                            if preset in {"deep", "research"}
+                            else "5) 尽量写清适用条件与限制条件。",
+                            "6)（研究型）若适用，请补充 3~8 行推导/证明骨架（不是完整证明）。"
+                            if preset == "research"
+                            else "",
+                            f"知识点：{base_query}",
+                            f"子问题：{sub_q}",
+                        ]
+                        if query_hint:
+                            prompt_lines.append(f"关注要点（关键词）：{query_hint}")
+                        metaso_q = "\n".join(prompt_lines).strip()
 
-                    async with sub_sem:
-                        return await metaso_ask(
-                            query=metaso_q,
-                            scope=scope,
-                            size=sub_size,
-                            format=metaso_format,
-                            model=metaso_model,
-                        )
+                        async with sub_sem:
+                            return await metaso_ask(
+                                query=metaso_q,
+                                scope=scope,
+                                size=sub_size,
+                                format=metaso_format,
+                                model=metaso_model,
+                            )
 
-                metaso_calls = await asyncio.gather(*[_ask_one(q) for q in sub_questions])
+                    metaso_calls = await asyncio.gather(*[_ask_one(q) for q in sub_questions])
 
-                cleaned_results: List[Dict[str, Any]] = []
-                summary_parts: List[str] = []
-                errors: List[str] = []
-                queries: List[str] = []
+                    cleaned_results: List[Dict[str, Any]] = []
+                    summary_parts: List[str] = []
+                    errors: List[str] = []
+                    queries: List[str] = []
 
-                for sub_q, res in zip(sub_questions, metaso_calls):
-                    # Track queries for observability/merging.
-                    queries.append(sub_q)
+                    for sub_q, res in zip(sub_questions, metaso_calls):
+                        # Track queries for observability/merging.
+                        queries.append(sub_q)
 
-                    if not isinstance(res, dict) or not res.get("success"):
-                        err = str(res.get("error") or "metaso ask failed").strip() if isinstance(res, dict) else "metaso ask failed"
-                        errors.append(f"{sub_q}: {err}")
-                        continue
+                        if not isinstance(res, dict) or not res.get("success"):
+                            err = (
+                                str(res.get("error") or "metaso ask failed").strip()
+                                if isinstance(res, dict)
+                                else "metaso ask failed"
+                            )
+                            errors.append(f"{sub_q}: {err}")
+                            continue
 
-                    ans = _clean_metaso_answer(str(res.get("answer") or "").strip())
-                    if ans:
-                        # Keep each block compact; downstream will still do its own LLM writing.
-                        summary_parts.append(f"【{sub_q}】\n{_clip_text(ans, max_chars=900)}")
+                        ans = _clean_metaso_answer(str(res.get("answer") or "").strip())
+                        if include_summary and ans:
+                            # Keep each block compact; downstream will still do its own LLM writing.
+                            summary_parts.append(f"【{sub_q}】\n{_clip_text(ans, max_chars=900)}")
 
-                    for r in (res.get("results") or []):
+                        for r in (res.get("results") or []):
+                            if not isinstance(r, dict):
+                                continue
+                            cleaned_results.append(_postprocess_web_search_result(r))
+
+                    # Deduplicate results by URL and keep bounded.
+                    deduped: List[Dict[str, Any]] = []
+                    seen_urls: set[str] = set()
+                    for r in cleaned_results:
+                        url_value = str(r.get("url") or "").strip()
+                        key = url_value or json.dumps(r, ensure_ascii=False, sort_keys=True)
+                        if key in seen_urls:
+                            continue
+                        seen_urls.add(key)
+                        deduped.append(r)
+                        if len(deduped) >= keep_sources:
+                            break
+
+                    summary_value = "\n\n".join(summary_parts).strip() if include_summary else ""
+                    if include_summary and not summary_value and errors:
+                        summary_value = "（Metaso /ask 未返回可用内容：" + "; ".join(errors[:2]) + "）"
+
+                    out = {
+                        "knowledge_point": point,
+                        "base_query": base_query,
+                        "query": base_query,
+                        "queries": queries[:12],
+                        "provider": "metaso-ask+decompose" if decompose else "metaso-ask",
+                        "scope": scope,
+                        "include_summary": include_summary,
+                        "summary": summary_value,
+                        "results": deduped,
+                        "sub_questions": sub_questions,
+                        "errors": errors[:6],
+                    }
+                    return {k: v for k, v in out.items() if v not in ("", None, [], {})}
+
+                # metaso_mode == "search"
+                metaso = await metaso_search(query=query, scope=scope, include_summary=include_summary, size=limit)
+
+                if isinstance(metaso, dict) and metaso.get("success"):
+                    cleaned_results: List[Dict[str, Any]] = []
+                    for r in (metaso.get("results") or []):
                         if not isinstance(r, dict):
                             continue
                         cleaned_results.append(_postprocess_web_search_result(r))
+                    cleaned_results = cleaned_results[: max(1, limit)]
 
-                # Deduplicate results by URL and keep bounded.
-                deduped: List[Dict[str, Any]] = []
-                seen_urls: set[str] = set()
-                for r in cleaned_results:
-                    url_value = str(r.get("url") or "").strip()
-                    key = url_value or json.dumps(r, ensure_ascii=False, sort_keys=True)
-                    if key in seen_urls:
-                        continue
-                    seen_urls.add(key)
-                    deduped.append(r)
-                    if len(deduped) >= keep_sources:
-                        break
+                    summary_value = str(metaso.get("summary") or "").strip()
 
-                summary_value = "\n\n".join(summary_parts).strip()
-                if not summary_value and errors:
-                    summary_value = "（Metaso /ask 未返回可用内容：" + "; ".join(errors[:2]) + "）"
-
-                return {
-                    "knowledge_point": point,
-                    "base_query": base_query,
-                    "query": base_query,
-                    "queries": queries[:12],
-                    "provider": "metaso-ask+decompose" if decompose else "metaso-ask",
-                    "scope": scope,
-                    "include_summary": True,
-                    "summary": summary_value,
-                    "results": deduped,
-                    "sub_questions": sub_questions,
-                    "errors": errors[:6],
-                }
-
-            # metaso_mode == "search"
-            metaso = await metaso_search(query=query, scope=scope, include_summary=include_summary, size=limit)
-
-            if isinstance(metaso, dict) and metaso.get("success"):
-                cleaned_results: List[Dict[str, Any]] = []
-                for r in (metaso.get("results") or []):
-                    if not isinstance(r, dict):
-                        continue
-                    cleaned_results.append(_postprocess_web_search_result(r))
-                cleaned_results = cleaned_results[: max(1, limit)]
-
-                summary_value = str(metaso.get("summary") or "").strip()
-
-                return {
-                    "knowledge_point": point,
-                    "base_query": base_query,
-                    "query": query,
-                    "queries": [query],
-                    "provider": "metaso",
-                    "scope": scope,
-                    "include_summary": include_summary,
-                    "summary": summary_value,
-                    "results": cleaned_results,
-                }
+                    return {
+                        "knowledge_point": point,
+                        "base_query": base_query,
+                        "query": query,
+                        "queries": [query],
+                        "provider": "metaso",
+                        "scope": scope,
+                        "include_summary": include_summary,
+                        "summary": summary_value,
+                        "results": cleaned_results,
+                    }
 
             # 2) Legacy fallback：Exa -> BigModel MCP broker（best-effort）
             try:
@@ -623,4 +829,3 @@ class WebSearchKnowledgeToolsMixin:
             "text_max_length": text_max_length,
             "items": items,
         }
-

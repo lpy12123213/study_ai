@@ -4,7 +4,16 @@ import { BookOpen, ChevronLeft, ChevronRight, GripVertical, Layers, Loader2, Plu
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -434,6 +443,21 @@ export default function StudyMaterialsPage() {
   const [enableExtraTools, setEnableExtraTools] = useState<TriState>('default')
   const [maxPoints, setMaxPoints] = useState<string>('')
 
+  const [latexDialogOpen, setLatexDialogOpen] = useState(false)
+  const [latexFileName, setLatexFileName] = useState('')
+  const [latexTopic, setLatexTopic] = useState('')
+  const [latexSubject, setLatexSubject] = useState('')
+  const [latexMarkdown, setLatexMarkdown] = useState('')
+  const [latexIsConverting, setLatexIsConverting] = useState(false)
+  const [latexError, setLatexError] = useState<string | null>(null)
+  const latexConvertAbortRef = useRef<AbortController | null>(null)
+  const [latexProgressPercent, setLatexProgressPercent] = useState(0)
+  const [latexProgressStage, setLatexProgressStage] = useState('')
+  const [latexTexUrl, setLatexTexUrl] = useState('')
+  const [latexTexFilename, setLatexTexFilename] = useState('')
+  const [latexTexText, setLatexTexText] = useState('')
+  const [latexNotice, setLatexNotice] = useState<string | null>(null)
+
   const conversations = useConversationStore((state) => state.conversations)
   const currentConversationId = useConversationStore((state) => state.currentConversationId)
   const addConversation = useConversationStore((state) => state.addConversation)
@@ -535,6 +559,147 @@ export default function StudyMaterialsPage() {
     streamKeyRef.current = null
     setIsGeneratingLocal(false)
   }, [])
+
+  const openLatexDialog = () => {
+    if (!latexSubject.trim()) setLatexSubject(subject)
+    setLatexDialogOpen(true)
+  }
+
+  const handleLatexFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setLatexError(null)
+    setLatexNotice(null)
+
+    try {
+      const text = await file.text()
+      setLatexMarkdown(text)
+      setLatexFileName(file.name)
+      const inferred = file.name.replace(/\.md$/i, '').trim()
+      if (inferred && !latexTopic.trim()) setLatexTopic(inferred)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '读取文件失败'
+      setLatexError(msg)
+    } finally {
+      e.target.value = ''
+    }
+  }
+
+  const handleConvertToLatex = async () => {
+    const md = (latexMarkdown || '').trim()
+    if (!md || latexIsConverting) return
+
+    if (latexConvertAbortRef.current) {
+      latexConvertAbortRef.current.abort()
+      latexConvertAbortRef.current = null
+    }
+    const controller = new AbortController()
+    latexConvertAbortRef.current = controller
+
+    setLatexIsConverting(true)
+    setLatexError(null)
+    setLatexNotice(null)
+    setLatexProgressPercent(0)
+    setLatexProgressStage('')
+    setLatexTexUrl('')
+    setLatexTexFilename('')
+    setLatexTexText('')
+
+    try {
+      let donePayload: any = null
+
+      await fetchSSERequest(
+        '/study-materials/convert-markdown-to-latex/stream',
+        {
+          method: 'POST',
+          body: {
+            markdown: md,
+            topic: latexTopic.trim(),
+            subject: latexSubject.trim(),
+          },
+          signal: controller.signal,
+        },
+        (data) => {
+          const evt = data as any
+          const kind = typeof evt?.event === 'string' ? evt.event : ''
+          const payload = evt?.data
+
+          if (kind === 'status') {
+            const text = toText(payload?.content)
+            if (text) setLatexProgressStage(text)
+            return
+          }
+
+          if (kind === 'progress') {
+            const percentRaw = payload?.percent
+            const percent =
+              typeof percentRaw === 'number' ? percentRaw : typeof percentRaw === 'string' ? Number(percentRaw) : NaN
+            if (Number.isFinite(percent)) {
+              setLatexProgressPercent(Math.max(0, Math.min(100, percent as number)))
+            }
+            const stage = toText(payload?.stage)
+            if (stage) setLatexProgressStage(stage)
+            return
+          }
+
+          if (kind === 'done') {
+            donePayload = payload
+            return
+          }
+
+          if (kind === 'error') {
+            const msg = formatStudyMaterialsError(toText(payload?.message) || '转换失败')
+            setLatexError(msg)
+            return
+          }
+        },
+        (err) => {
+          const msg = formatStudyMaterialsError(toText((err as any)?.message) || '转换失败')
+          setLatexError(msg)
+        }
+      )
+
+      const texUrl = toText(donePayload?.tex_url)
+      const filename = toText(donePayload?.filename)
+
+      if (!texUrl) {
+        throw new Error('转换失败')
+      }
+
+      setLatexTexUrl(texUrl)
+      setLatexTexFilename(filename)
+
+      setLatexProgressPercent(100)
+      setLatexProgressStage('加载 LaTeX…')
+
+      const href = resolveApiResourceUrl(texUrl)
+      const texRes = await fetch(href)
+      const texText = await texRes.text()
+      setLatexTexText(texText)
+    } catch (err: any) {
+      const msg = toText(err?.message) || '转换失败'
+      setLatexError(formatStudyMaterialsError(msg))
+    } finally {
+      setLatexIsConverting(false)
+      if (latexConvertAbortRef.current === controller) {
+        latexConvertAbortRef.current = null
+      }
+    }
+  }
+
+  const handleCopyLatex = async () => {
+    const tex = (latexTexText || '').trim()
+    if (!tex) return
+    try {
+      await navigator.clipboard.writeText(tex)
+      setLatexNotice('已复制')
+      window.setTimeout(() => setLatexNotice(null), 1600)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '复制失败'
+      setLatexError(msg)
+    }
+  }
 
   const handleDrag = useCallback((deltaX: number) => {
     if (!containerRef.current) return
@@ -1481,8 +1646,20 @@ export default function StudyMaterialsPage() {
                   {optionsOpen ? '收起选项' : '高级选项'}
                 </Button>
               </CollapsibleTrigger>
-              <div className="text-[10px] text-muted-foreground/70">
-                未填写/默认将使用后端配置（.env）
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onClick={openLatexDialog}
+                  disabled={isGenerating}
+                >
+                  MD→LaTeX
+                </Button>
+                <div className="text-[10px] text-muted-foreground/70">
+                  未填写/默认将使用后端配置（.env）
+                </div>
               </div>
             </div>
 
@@ -1672,6 +1849,148 @@ export default function StudyMaterialsPage() {
           </div>
         </div>
       </div>
+
+      <Dialog open={latexDialogOpen} onOpenChange={setLatexDialogOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>Markdown → LaTeX</DialogTitle>
+            <DialogDescription>上传已生成的 Markdown（.md），AI 将转换为可下载的 LaTeX（.tex）。</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">上传 Markdown</div>
+                <Input
+                  type="file"
+                  accept=".md,text/markdown"
+                  onChange={handleLatexFileUpload}
+                  disabled={latexIsConverting}
+                />
+                {latexFileName && <div className="text-[10px] text-muted-foreground">{latexFileName}</div>}
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">标题（可选）</div>
+                <Input
+                  value={latexTopic}
+                  onChange={(e) => setLatexTopic(e.target.value)}
+                  placeholder="用于 LaTeX 标题（可选）"
+                  disabled={latexIsConverting}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">学科（可选）</div>
+                <Input
+                  value={latexSubject}
+                  onChange={(e) => setLatexSubject(e.target.value)}
+                  placeholder="例如：高中数学 / 大学物理"
+                  disabled={latexIsConverting}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-muted-foreground">Markdown 内容</div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setLatexMarkdown('')}
+                  disabled={latexIsConverting || !latexMarkdown}
+                >
+                  清空
+                </Button>
+              </div>
+              <Textarea
+                value={latexMarkdown}
+                onChange={(e) => setLatexMarkdown(e.target.value)}
+                className="min-h-[180px] font-mono text-xs"
+                placeholder="可直接粘贴 Markdown，或通过上方上传 .md 文件"
+                disabled={latexIsConverting}
+              />
+            </div>
+
+            {latexIsConverting && (
+              <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <div className="truncate">{latexProgressStage || '转换中…'}</div>
+                  <div className="shrink-0">{latexProgressPercent}%</div>
+                </div>
+                <Progress value={latexProgressPercent} className="h-2" />
+              </div>
+            )}
+
+            {latexError && (
+              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
+                {latexError}
+              </div>
+            )}
+
+            {latexTexUrl && (
+              <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-xs text-muted-foreground">
+                    {latexTexFilename ? `已生成：${latexTexFilename}` : '已生成 LaTeX'}
+                    {latexNotice ? <span className="ml-2">（{latexNotice}）</span> : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2 text-xs"
+                      onClick={handleCopyLatex}
+                      disabled={!latexTexText}
+                    >
+                      复制 LaTeX
+                    </Button>
+                    <Button asChild size="sm" className="h-8 px-2 text-xs">
+                      <a
+                        href={resolveApiResourceUrl(latexTexUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        download={latexTexFilename || ''}
+                      >
+                        下载 .tex
+                      </a>
+                    </Button>
+                  </div>
+                </div>
+                <Textarea
+                  value={latexTexText}
+                  readOnly
+                  className="min-h-[220px] font-mono text-xs"
+                  placeholder="LaTeX 输出将显示在这里"
+                />
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setLatexDialogOpen(false)}
+              disabled={latexIsConverting}
+            >
+              关闭
+            </Button>
+            <Button
+              type="button"
+              onClick={handleConvertToLatex}
+              disabled={latexIsConverting || !latexMarkdown.trim()}
+            >
+              {latexIsConverting && <Loader2 className="h-4 w-4 animate-spin" />}
+              开始转换
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

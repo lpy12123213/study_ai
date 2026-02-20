@@ -34,6 +34,9 @@ async def exa_answer(
     """
     if not EXA_API_KEY:
         return {
+            "success": False,
+            "provider": "exa",
+            "query": query,
             "error": "Exa API key not configured",
             "answer": "",
             "citations": [],
@@ -75,15 +78,23 @@ async def exa_answer(
                 "answer": data.get("answer", ""),
                 "citations": citations,
                 "success": True,
+                "provider": "exa",
+                "query": query,
             }
     except httpx.HTTPStatusError as e:
         return {
+            "success": False,
+            "provider": "exa",
+            "query": query,
             "error": f"Exa Answer API error: {e.response.status_code}",
             "answer": "",
             "citations": [],
         }
     except Exception as e:
         return {
+            "success": False,
+            "provider": "exa",
+            "query": query,
             "error": f"Exa Answer failed: {str(e)}",
             "answer": "",
             "citations": [],
@@ -94,7 +105,7 @@ async def exa_search(
     query: str,
     num_results: int = 10,
     use_autoprompt: bool = True,
-    type: str = "neural",  # neural, keyword, or auto
+    type: str = "neural",  # neural, fast, auto, deep, or instant (Exa API)
     category: Optional[str] = None,
     include_domains: Optional[List[str]] = None,
     exclude_domains: Optional[List[str]] = None,
@@ -103,7 +114,10 @@ async def exa_search(
     start_published_date: Optional[str] = None,
     end_published_date: Optional[str] = None,
     include_text: bool = True,
+    include_summary: bool = True,
+    include_highlights: bool = True,
     text_max_length: int = 1000,
+    highlights_max_length: int = 1200,
 ) -> Dict[str, Any]:
     """
     使用 Exa AI 搜索网页。
@@ -128,6 +142,9 @@ async def exa_search(
     """
     if not EXA_API_KEY:
         return {
+            "success": False,
+            "provider": "exa",
+            "query": query,
             "error": "Exa API key not configured",
             "results": [],
         }
@@ -160,13 +177,29 @@ async def exa_search(
         payload["endPublishedDate"] = end_published_date
     
     # Contents configuration
+    contents: Dict[str, Any] = {}
     if include_text:
-        payload["contents"] = {
-            "text": {"maxCharacters": text_max_length}
+        # Exa already filters many navigation elements. We still ask for compact text to reduce UI noise.
+        contents["text"] = {
+            "maxCharacters": text_max_length,
+            "verbosity": "compact",
+            # Exa validates section names; keep this list conservative to avoid dropping main content.
+            "excludeSections": ["banner", "navigation", "header", "sidebar", "footer"],
         }
+
+    if include_highlights:
+        contents["highlights"] = {"maxCharacters": max(200, min(int(highlights_max_length or 0), 4000))}
+
+    if include_summary:
+        # Prefer a concise per-page summary; downstream code can use it as the snippet.
+        # The Exa docs describe `summary=True` for a lightweight summary; the API also supports richer configs.
+        contents["summary"] = True
+
+    if contents:
+        payload["contents"] = contents
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{EXA_BASE_URL}/search",
                 headers=headers,
@@ -176,6 +209,9 @@ async def exa_search(
             data = response.json()
             
             return {
+                "success": True,
+                "provider": "exa",
+                "query": query,
                 "results": [
                     {
                         "title": r.get("title", ""),
@@ -183,6 +219,8 @@ async def exa_search(
                         "score": r.get("score", 0),
                         "published_date": r.get("publishedDate"),
                         "text": r.get("text", ""),
+                        "summary": r.get("summary", ""),
+                        "highlights": r.get("highlights") or [],
                     }
                     for r in data.get("results", [])
                 ],
@@ -190,11 +228,17 @@ async def exa_search(
             }
     except httpx.HTTPStatusError as e:
         return {
+            "success": False,
+            "provider": "exa",
+            "query": query,
             "error": f"Exa API error: {e.response.status_code}",
             "results": [],
         }
     except Exception as e:
         return {
+            "success": False,
+            "provider": "exa",
+            "query": query,
             "error": f"Exa search failed: {str(e)}",
             "results": [],
         }

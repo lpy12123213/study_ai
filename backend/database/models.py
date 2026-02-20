@@ -422,6 +422,29 @@ async def delete_conversation(conv_id: int) -> bool:
         return True
 
 
+
+
+async def delete_all_conversations() -> dict:
+    """Delete all chat conversations and their messages.
+
+    Notes:
+    - Only clears `conversations` + `messages` tables; does not touch papers/canvas/etc.
+    - Current DB schema does not scope conversations by user, so this clears everything.
+    """
+    async with async_session_maker() as session:
+        from sqlalchemy import delete, func, select
+
+        conv_result = await session.execute(select(func.count(Conversation.id)))
+        msg_result = await session.execute(select(func.count(Message.id)))
+        conv_count = int(conv_result.scalar() or 0)
+        msg_count = int(msg_result.scalar() or 0)
+
+        # Delete children first to avoid FK issues if SQLite foreign keys are enabled.
+        await session.execute(delete(Message))
+        await session.execute(delete(Conversation))
+        await session.commit()
+
+        return {"conversations": conv_count, "messages": msg_count}
 async def add_message(conv_id: int, role: str, content: str,
                       tool_calls: str = None, tool_call_id: str = None) -> int:
     """添加消息"""

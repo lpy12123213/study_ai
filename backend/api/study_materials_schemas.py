@@ -15,3 +15,18 @@ class StudyMaterialsGenerateRequest(BaseModel):
     enable_extra_tools: Optional[bool] = Field(None, description="可选：是否启用额外检索工具（默认按环境变量）")
     max_points: Optional[int] = Field(None, description="可选：知识点数量上限（1-15）")
 
+
+class StudyMaterialsConvertMarkdownToLatexRequest(BaseModel):
+    markdown: str = Field(..., description="Markdown 源文")
+    topic: str = Field("", description="可选：主题/标题（用于 LaTeX 文档标题）")
+    subject: str = Field("", description="可选：学科全名（如：高中数学）")
+
+
+class StudyMaterialsConvertMarkdownToLatexResponse(BaseModel):
+    tex_url: str = Field(..., description="生成的 .tex 下载链接")
+    filename: str = Field(..., description="生成的 .tex 文件名")
+    sha256: str = Field(..., description="文件 sha256")
+    bytes: int = Field(..., description="文件大小（字节）")
+    model: str = Field("", description="使用的模型")
+    continuations: int = Field(0, description="续写次数")
+
