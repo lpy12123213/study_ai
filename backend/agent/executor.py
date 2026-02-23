@@ -131,8 +131,25 @@ class Executor(
             or os.getenv("API_TIMEOUT")
             or str(API_TIMEOUT)
         )
-        timeout_s = float(timeout_raw)
+        try:
+            timeout_s = float(timeout_raw)
+        except Exception:
+            timeout_s = float(API_TIMEOUT or 120)
         timeout_s = max(30.0, min(timeout_s, 60.0 * 30.0))  # clamp to [30s, 30m]
+
+        # LaTeX export pipeline can involve multiple long LLM calls (chunking + continuations),
+        # so its overall wall-clock time may exceed a generic single-step timeout.
+        if tool in {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}:
+            latex_step_timeout_raw = os.getenv("STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S") or ""
+            try:
+                latex_step_timeout_s = float(latex_step_timeout_raw) if latex_step_timeout_raw.strip() else 0.0
+            except Exception:
+                latex_step_timeout_s = 0.0
+            # Default to the max clamp (30m) unless explicitly configured.
+            if latex_step_timeout_s <= 0:
+                latex_step_timeout_s = 60.0 * 30.0
+            latex_step_timeout_s = max(30.0, min(latex_step_timeout_s, 60.0 * 30.0))
+            timeout_s = max(timeout_s, latex_step_timeout_s)
 
         token = _emit_event_var.set(emit_event)
         try:

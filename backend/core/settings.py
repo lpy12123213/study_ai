@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
@@ -67,6 +68,20 @@ class Settings:
     main_model: str
     sub_model: str
 
+    # DeepThink / Tree-of-Thoughts
+    deepthink_generator_model: str
+    deepthink_generator_temperature: float
+    deepthink_generator_max_tokens: int
+    deepthink_evaluator_model: str
+    deepthink_evaluator_temperature: float
+    deepthink_evaluator_max_tokens: int
+    deepthink_reasoning_effort: str
+    tot_branch_factor: int
+    tot_beam_width: int
+    tot_max_depth: int
+    tot_prune_threshold: float
+    tot_timeout_seconds: int
+
     # Lesson plan / study-materials provider (OpenAI-compatible)
     lesson_plan_provider: str
     lesson_plan_api_key: str
@@ -118,8 +133,19 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        # Load from `.env` (if present) without overriding explicit env vars.
-        load_dotenv(override=False)
+        # Load from repo-root `.env` (if present) without overriding explicit env vars.
+        #
+        # External MCP clients often spawn the stdio server with an arbitrary CWD,
+        # so relying on python-dotenv's default CWD search can miss the project's `.env`.
+        repo_root = Path(__file__).resolve().parents[2]
+        dotenv_path = repo_root / ".env"
+        if not dotenv_path.exists():
+            # Legacy fallback (older setups placed `.env` under `backend/`).
+            dotenv_path = repo_root / "backend" / ".env"
+        if dotenv_path.exists():
+            load_dotenv(dotenv_path=str(dotenv_path), override=False)
+        else:
+            load_dotenv(override=False)
 
         openrouter_api_key = _get_str("OPENROUTER_API_KEY", "")
         base_url = _get_str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
@@ -166,6 +192,22 @@ class Settings:
         lesson_plan_model = _get_str("LESSON_PLAN_MODEL", _get_str("MAIN_MODEL", "openai/gpt-5-mini"))
         lesson_plan_concurrency = _get_int("LESSON_PLAN_V2_SUBAGENT_CONCURRENCY", 3)
 
+        main_model = _get_str("MAIN_MODEL", "openai/gpt-5-mini")
+        deepthink_generator_model = _get_str("DEEPTHINK_GENERATOR_MODEL", main_model)
+        deepthink_evaluator_model = _get_str("DEEPTHINK_EVALUATOR_MODEL", "")
+
+        deepthink_generator_temperature = _get_float("DEEPTHINK_GENERATOR_TEMPERATURE", 0.4)
+        deepthink_generator_max_tokens = _get_int("DEEPTHINK_GENERATOR_MAX_TOKENS", 1400)
+        deepthink_evaluator_temperature = _get_float("DEEPTHINK_EVALUATOR_TEMPERATURE", 0.2)
+        deepthink_evaluator_max_tokens = _get_int("DEEPTHINK_EVALUATOR_MAX_TOKENS", 900)
+        deepthink_reasoning_effort = _get_str("DEEPTHINK_REASONING_EFFORT", "high")
+
+        tot_branch_factor = _get_int("TOT_BRANCH_FACTOR", 3)
+        tot_beam_width = _get_int("TOT_BEAM_WIDTH", 3)
+        tot_max_depth = _get_int("TOT_MAX_DEPTH", 4)
+        tot_prune_threshold = _get_float("TOT_PRUNE_THRESHOLD", 5.0)
+        tot_timeout_seconds = _get_int("TOT_TIMEOUT", 60)
+
         return cls(
             chat_provider=chat_provider,
             chat_api_key=chat_api_key,
@@ -174,8 +216,20 @@ class Settings:
             openrouter_base_url=base_url,
             moonshot_api_key=moonshot_api_key,
             moonshot_base_url=moonshot_base_url,
-            main_model=_get_str("MAIN_MODEL", "openai/gpt-5-mini"),
+            main_model=main_model,
             sub_model=_get_str("SUB_MODEL", "openai/gpt-5-mini"),
+            deepthink_generator_model=deepthink_generator_model,
+            deepthink_generator_temperature=deepthink_generator_temperature,
+            deepthink_generator_max_tokens=deepthink_generator_max_tokens,
+            deepthink_evaluator_model=deepthink_evaluator_model,
+            deepthink_evaluator_temperature=deepthink_evaluator_temperature,
+            deepthink_evaluator_max_tokens=deepthink_evaluator_max_tokens,
+            deepthink_reasoning_effort=deepthink_reasoning_effort,
+            tot_branch_factor=tot_branch_factor,
+            tot_beam_width=tot_beam_width,
+            tot_max_depth=tot_max_depth,
+            tot_prune_threshold=tot_prune_threshold,
+            tot_timeout_seconds=tot_timeout_seconds,
             lesson_plan_provider=lesson_plan_provider,
             lesson_plan_api_key=lesson_plan_api_key,
             lesson_plan_base_url=lesson_plan_base_url,

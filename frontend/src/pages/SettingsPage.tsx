@@ -33,14 +33,17 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('account')
   const { user, logout } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
-  
-  const [apiKey, setApiKey] = useState('')
+
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('settings_api_key') || '')
   const [isSaving, setIsSaving] = useState(false)
 
   const handleSaveApiKey = async () => {
     setIsSaving(true)
-    await new Promise((r) => setTimeout(r, 1000))
-    setIsSaving(false)
+    try {
+      localStorage.setItem('settings_api_key', apiKey)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleLogout = () => {
@@ -58,7 +61,7 @@ export default function SettingsPage() {
           <h1 className="text-2xl font-bold tracking-tight">设置</h1>
           <p className="text-sm text-muted-foreground mt-1">管理你的账户和应用偏好</p>
         </div>
-        
+
         <nav className="flex md:flex-col gap-1">
           {tabs.map((tab) => (
             <button
@@ -100,7 +103,7 @@ export default function SettingsPage() {
                       <Badge variant="outline" className="mt-2">普通用户</Badge>
                     </div>
                   </div>
-                  
+
                   <div className="pt-4">
                     <Button variant="destructive" onClick={handleLogout}>
                       <LogOut className="h-4 w-4 mr-2" />
@@ -211,7 +214,7 @@ export default function SettingsPage() {
                     清除
                   </Button>
                 </div>
-                
+
                 <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
                   <div>
                     <h4 className="font-medium text-sm">导出所有数据</h4>
@@ -219,7 +222,26 @@ export default function SettingsPage() {
                       将所有试卷和自学资料导出为 JSON 文件
                     </p>
                   </div>
-                  <Button variant="outline" size="sm">导出</Button>
+                  <Button variant="outline" size="sm" onClick={() => {
+                    const exportData: Record<string, unknown> = {}
+                    for (let i = 0; i < localStorage.length; i++) {
+                      const key = localStorage.key(i)
+                      if (key) {
+                        try {
+                          exportData[key] = JSON.parse(localStorage.getItem(key) || '')
+                        } catch {
+                          exportData[key] = localStorage.getItem(key)
+                        }
+                      }
+                    }
+                    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = `study-ai-export-${new Date().toISOString().slice(0, 10)}.json`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}>导出</Button>
                 </div>
               </div>
             </div>

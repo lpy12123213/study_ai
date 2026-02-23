@@ -40,9 +40,8 @@ _CORE_TOOLS: Dict[str, str] = {
 }
 
 _DRAW_TOOLS: Dict[str, str] = {
-    "plot_function": "绘制二维函数/隐函数图（支持切线、点、注释），输出 PNG",
-    "plot_3d": "绘制三维曲面 z=f(x,y)，输出 PNG",
-    "draw_diagram": "绘制简易示意图（受力/电路/几何/标注等），输出 PNG",
+    "tikz_to_svg": "使用 LaTeX TikZ 编译生成 SVG 矢量图",
+    "seedream_generate": "使用火山云 Seedream 4.5（ARK images/generations）根据自然语言生成图片",
 }
 
 _QUESTION_TOOLS: Dict[str, str] = {
@@ -741,9 +740,8 @@ class Planner:
                 [
                     "你可以自主决定是否画图，并自行调度绘图工具多次（总计建议 3~12 次，按需要可更多/更少）。",
                     "绘图工具支持 foreach_knowledge_point=true（推荐用于逐知识点配图）。每次绘图应传入 knowledge_point 或使用 foreach_knowledge_point 让执行器自动注入 knowledge_points=[kp]。",
-                    "plot_function 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"spec\":{\"x_range\":[-5,5],\"y_range\":[-5,5],\"curves\":[{\"expr\":\"sin(x)\",\"label\":\"y=sin x\"}],\"implicit_curves\":[{\"expr\":\"x^2+y^2-1\"}],\"tangent_lines\":[{\"curve_index\":0,\"at_x\":0}]}}",
-                    "plot_3d 参数示例：{\"knowledge_point\":\"...\",\"spec\":{\"expr\":\"sin(x)+cos(y)\",\"x_range\":[-3,3],\"y_range\":[-3,3],\"resolution\":80}}",
-                    "draw_diagram 参数示例：{\"knowledge_point\":\"...\",\"spec\":{\"objects\":[{\"id\":\"A\",\"shape\":\"block\",\"pos\":[0,0],\"size\":[4,2],\"label\":\"物体\"}],\"forces\":[{\"object\":\"A\",\"label\":\"F\",\"direction\":[1,0],\"length\":3.2}],\"annotations\":[{\"text\":\"...\",\"x\":4,\"y\":2,\"arrow_to\":[2,1]}]}}",
+                    "tikz_to_svg 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"tikz\":\"\\\\begin{tikzpicture}...\\\\end{tikzpicture}\",\"preamble\":\"\\\\usetikzlibrary{arrows.meta,calc}\"}",
+                    "seedream_generate 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"prompt\":\"一张用于教学的简洁插图：...\",\"size\":\"1024x1024\",\"n\":1}",
                     "说明：绘图工具会把图片结果累积保存，assemble_study_archive 会自动插入到对应知识点。",
                 ]
             )

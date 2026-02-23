@@ -79,7 +79,7 @@ def _is_safe_generated_filename(name: str) -> bool:
         return False
     if any(c not in "0123456789abcdef" for c in stem.lower()):
         return False
-    return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "md", "tex", "pdf"}
+    return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "md", "tex", "pdf"}
 
 
 @router.get("/media/generated/{filename}")

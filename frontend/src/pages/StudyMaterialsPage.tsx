@@ -26,6 +26,7 @@ import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { fetchSSERequest, resolveApiResourceUrl } from '@/api/client'
 import { useConversationStore } from '@/stores/useConversationStore'
+import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { ConversationItem, Message, TaskStep } from '@/types'
@@ -42,13 +43,50 @@ type StudyMaterialsAgentEvent = {
 }
 
 function toText(value: unknown): string {
-  return typeof value === 'string' ? value : ''
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
 }
 
 function toConversationTitle(text: string): string {
   const t = (text || '').trim()
   if (!t) return '新自学资料'
   return t.length > 18 ? `${t.slice(0, 18)}…` : t
+}
+
+type LatexLessonPlanOption = {
+  id: string
+  title?: string
+  subject?: string
+  grade?: string
+  createdAt?: string
+  mdUrl: string
+  mdFilename?: string
+}
+
+function extractMarkdownHref(content: string): string {
+  const text = (content || '').trim()
+  if (!text) return ''
+
+  // Prefer a line mentioning Markdown (lesson-plan success messages include both Markdown and PDF links).
+  const lines = text.split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i] || ''
+    if (!/Markdown/i.test(line)) continue
+    const m = line.match(/\(([^)]+)\)/)
+    if (m && m[1]) return m[1].trim()
+  }
+
+  // Fallback: grab any Markdown link ending with `.md`.
+  const linkRe = /\[[^\]]*\]\(([^)]+)\)/g
+  let match: RegExpExecArray | null
+  while ((match = linkRe.exec(text))) {
+    const url = (match[1] || '').trim()
+    if (!url) continue
+    if (url.toLowerCase().includes('.md')) return url
+  }
+  return ''
 }
 
 type TriState = 'default' | 'on' | 'off'
@@ -444,12 +482,15 @@ export default function StudyMaterialsPage() {
   const [maxPoints, setMaxPoints] = useState<string>('')
 
   const [latexDialogOpen, setLatexDialogOpen] = useState(false)
+  const [latexLessonPlanId, setLatexLessonPlanId] = useState('')
   const [latexFileName, setLatexFileName] = useState('')
   const [latexTopic, setLatexTopic] = useState('')
   const [latexSubject, setLatexSubject] = useState('')
   const [latexMarkdown, setLatexMarkdown] = useState('')
   const [latexIsConverting, setLatexIsConverting] = useState(false)
   const [latexError, setLatexError] = useState<string | null>(null)
+  const latexSourceAbortRef = useRef<AbortController | null>(null)
+  const [latexIsLoadingSource, setLatexIsLoadingSource] = useState(false)
   const latexConvertAbortRef = useRef<AbortController | null>(null)
   const [latexProgressPercent, setLatexProgressPercent] = useState(0)
   const [latexProgressStage, setLatexProgressStage] = useState('')
@@ -459,12 +500,82 @@ export default function StudyMaterialsPage() {
   const [latexNotice, setLatexNotice] = useState<string | null>(null)
 
   const conversations = useConversationStore((state) => state.conversations)
-  const currentConversationId = useConversationStore((state) => state.currentConversationId)
+  const currentConversationId = useConversationStore((state) => state.currentConversationIdByType.study_materials)
   const addConversation = useConversationStore((state) => state.addConversation)
   const setCurrentConversation = useConversationStore((state) => state.setCurrentConversation)
   const updateConversation = useConversationStore((state) => state.updateConversation)
   const setMessages = useConversationStore((state) => state.setMessages)
   const addMessage = useConversationStore((state) => state.addMessage)
+
+  const messagesByConversation = useConversationStore((state) => state.messagesByConversation)
+
+  const lessonPlansById = useLessonPlanStore((state) => state.plansById)
+
+  const latexLessonPlanOptions = useMemo((): LatexLessonPlanOption[] => {
+    const options: LatexLessonPlanOption[] = []
+
+    for (const p of Object.values(lessonPlansById || {})) {
+      const id = toText((p as any)?.id).trim()
+      const mdUrl = toText((p as any)?.mdUrl).trim()
+      if (!id || !mdUrl) continue
+
+      options.push({
+        id,
+        title: toText((p as any)?.title) || undefined,
+        subject: toText((p as any)?.subject) || undefined,
+        grade: toText((p as any)?.grade) || undefined,
+        createdAt: toText((p as any)?.createdAt) || undefined,
+        mdUrl,
+        mdFilename: toText((p as any)?.mdFilename) || undefined,
+      })
+    }
+
+    const seen = new Set(options.map((o) => o.id))
+    for (const c of conversations || []) {
+      if (!c || c.type !== 'lesson_plan') continue
+      const cid = toText(c.id).trim()
+      if (!cid) continue
+      if (seen.has(cid)) continue
+
+      const msgs = (messagesByConversation as any)?.[cid]
+      const list = Array.isArray(msgs) ? (msgs as Message[]) : []
+
+      let mdUrl = ''
+      for (let i = list.length - 1; i >= 0; i--) {
+        const href = extractMarkdownHref(toText(list[i]?.content))
+        if (href) {
+          mdUrl = href
+          break
+        }
+      }
+      if (!mdUrl) continue
+
+      options.push({
+        id: cid,
+        title: toText(c.title) || undefined,
+        createdAt: toText(c.createdAt) || undefined,
+        mdUrl,
+      })
+      seen.add(cid)
+    }
+
+    options.sort((a, b) => {
+      const ta = toText(a.createdAt)
+      const tb = toText(b.createdAt)
+      if (!ta && !tb) return 0
+      if (!ta) return 1
+      if (!tb) return -1
+      return tb.localeCompare(ta)
+    })
+
+    return options
+  }, [lessonPlansById, conversations, messagesByConversation])
+
+  const latexLessonPlanOptionById = useMemo(() => {
+    const out: Record<string, LatexLessonPlanOption> = {}
+    for (const opt of latexLessonPlanOptions) out[opt.id] = opt
+    return out
+  }, [latexLessonPlanOptions])
 
   const activeConversationId = useMemo(() => {
     if (!currentConversationId) return null
@@ -560,35 +671,85 @@ export default function StudyMaterialsPage() {
     setIsGeneratingLocal(false)
   }, [])
 
+  // Sidebar "new conversation" clears the current conversation selection but does not reset
+  // page-local React state. Reset here so the UI is actually clean.
+  useEffect(() => {
+    if (activeConversationId) return
+    abortActiveStream()
+    setInput('')
+    setError(null)
+    setSubAgentActivities([])
+    setActiveSubAgentTab(null)
+  }, [activeConversationId, abortActiveStream])
+
   const openLatexDialog = () => {
     if (!latexSubject.trim()) setLatexSubject(subject)
     setLatexDialogOpen(true)
   }
 
-  const handleLatexFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const handlePickLessonPlanMarkdown = async (planId: string) => {
+    const resolvedId = toText(planId).trim()
+    setLatexLessonPlanId(resolvedId)
+
+    if (latexSourceAbortRef.current) {
+      latexSourceAbortRef.current.abort()
+      latexSourceAbortRef.current = null
+    }
 
     setLatexError(null)
     setLatexNotice(null)
+    setLatexProgressPercent(0)
+    setLatexProgressStage('')
+    setLatexTexUrl('')
+    setLatexTexFilename('')
+    setLatexTexText('')
+    setLatexMarkdown('')
+    setLatexFileName('')
 
-    try {
-      const text = await file.text()
-      setLatexMarkdown(text)
-      setLatexFileName(file.name)
-      const inferred = file.name.replace(/\.md$/i, '').trim()
-      if (inferred && !latexTopic.trim()) setLatexTopic(inferred)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '读取文件失败'
-      setLatexError(msg)
-    } finally {
-      e.target.value = ''
+    if (!resolvedId) return
+
+    const plan = latexLessonPlanOptionById[resolvedId]
+    const mdUrl = toText(plan?.mdUrl)
+    if (!mdUrl) {
+      setLatexError('未找到教案 Markdown，请先在「教案生成」成功生成后再试。')
+      return
     }
+
+    const topic = toText(plan?.title)
+    if (topic) setLatexTopic(topic)
+    const subj = toText(plan?.subject)
+    if (subj) setLatexSubject(subj)
+    setLatexFileName(toText(plan?.mdFilename))
+
+    const controller = new AbortController()
+    latexSourceAbortRef.current = controller
+    setLatexIsLoadingSource(true)
+    try {
+      const href = resolveApiResourceUrl(mdUrl)
+      const res = await fetch(href, { signal: controller.signal })
+      if (!res.ok) {
+        throw new Error(`加载 Markdown 失败（${res.status}）`)
+      }
+      const text = await res.text()
+      setLatexMarkdown(text)
+    } catch (err: any) {
+      const msg = toText(err?.message) || '加载 Markdown 失败'
+      setLatexError(formatStudyMaterialsError(msg))
+    } finally {
+      setLatexIsLoadingSource(false)
+      if (latexSourceAbortRef.current === controller) {
+        latexSourceAbortRef.current = null
+      }
+    }
+  }
+
+  const clearLatexLessonPlanSelection = () => {
+    void handlePickLessonPlanMarkdown('')
   }
 
   const handleConvertToLatex = async () => {
     const md = (latexMarkdown || '').trim()
-    if (!md || latexIsConverting) return
+    if (!md || latexIsConverting || latexIsLoadingSource || !latexLessonPlanId.trim()) return
 
     if (latexConvertAbortRef.current) {
       latexConvertAbortRef.current.abort()
@@ -1327,7 +1488,7 @@ export default function StudyMaterialsPage() {
       resumable: false,
     }
     addConversation(item)
-    setCurrentConversation(id)
+    setCurrentConversation(id, 'study_materials')
     setMessages(id, [])
     setInput('')
     setError(null)
@@ -1391,7 +1552,7 @@ export default function StudyMaterialsPage() {
         progress: 0,
       }
       addConversation(conversation)
-      setCurrentConversation(conversationId)
+      setCurrentConversation(conversationId, 'study_materials')
       setMessages(conversationId, [])
     } else {
       updateConversation(conversationId, {
@@ -1854,20 +2015,50 @@ export default function StudyMaterialsPage() {
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Markdown → LaTeX</DialogTitle>
-            <DialogDescription>上传已生成的 Markdown（.md），AI 将转换为可下载的 LaTeX（.tex）。</DialogDescription>
+            <DialogDescription>从「教案成功生成」的 Markdown 中选择，AI 将转换为可下载的 LaTeX（.tex）。</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <div className="text-xs font-medium text-muted-foreground">上传 Markdown</div>
-                <Input
-                  type="file"
-                  accept=".md,text/markdown"
-                  onChange={handleLatexFileUpload}
-                  disabled={latexIsConverting}
-                />
-                {latexFileName && <div className="text-[10px] text-muted-foreground">{latexFileName}</div>}
+                <div className="text-xs font-medium text-muted-foreground">选择教案 Markdown</div>
+                <Select
+                  value={latexLessonPlanId}
+                  onValueChange={(v) => void handlePickLessonPlanMarkdown(v)}
+                  disabled={latexIsConverting || latexIsLoadingSource}
+                >
+                  <SelectTrigger>
+                    <SelectValue
+                      placeholder={latexLessonPlanOptions.length > 0 ? '请选择…' : '暂无可选教案（请先生成教案）'}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {latexLessonPlanOptions.length === 0 ? (
+                      <SelectItem value="__empty" disabled>
+                        暂无可选教案（请先生成教案）
+                      </SelectItem>
+                    ) : (
+                      latexLessonPlanOptions.filter((p: any) => toText(p?.id).trim().length > 0).map((p: any) => (
+                        <SelectItem key={toText(p?.id).trim()} value={toText(p?.id).trim()}>
+                          {(toText(p?.title) || '教案') +
+                            (toText(p?.subject) ? ` · ${toText(p?.subject)}` : '') +
+                            (toText(p?.grade) ? ` · ${toText(p?.grade)}` : '')}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {latexFileName ? `文件：${latexFileName}` : null}
+                  </div>
+                  {latexIsLoadingSource ? (
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      加载中
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1899,18 +2090,18 @@ export default function StudyMaterialsPage() {
                   variant="ghost"
                   size="sm"
                   className="h-7 px-2 text-xs"
-                  onClick={() => setLatexMarkdown('')}
-                  disabled={latexIsConverting || !latexMarkdown}
+                  onClick={clearLatexLessonPlanSelection}
+                  disabled={latexIsConverting || latexIsLoadingSource || (!latexLessonPlanId && !latexMarkdown)}
                 >
-                  清空
+                  清除选择
                 </Button>
               </div>
               <Textarea
                 value={latexMarkdown}
-                onChange={(e) => setLatexMarkdown(e.target.value)}
                 className="min-h-[180px] font-mono text-xs"
-                placeholder="可直接粘贴 Markdown，或通过上方上传 .md 文件"
-                disabled={latexIsConverting}
+                placeholder="请先选择一个已成功生成的教案 Markdown"
+                readOnly
+                disabled={latexIsConverting || latexIsLoadingSource}
               />
             </div>
 
@@ -1983,7 +2174,7 @@ export default function StudyMaterialsPage() {
             <Button
               type="button"
               onClick={handleConvertToLatex}
-              disabled={latexIsConverting || !latexMarkdown.trim()}
+              disabled={latexIsConverting || latexIsLoadingSource || !latexLessonPlanId || !latexMarkdown.trim()}
             >
               {latexIsConverting && <Loader2 className="h-4 w-4 animate-spin" />}
               开始转换

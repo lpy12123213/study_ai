@@ -402,7 +402,7 @@ async def update_conversation_title(conv_id: int, title: str) -> bool:
         if not conv:
             return False
         conv.title = title
-        conv.updated_at = datetime.utcnow()
+        conv.updated_at = datetime.now(timezone.utc)
         await session.commit()
         return True
 

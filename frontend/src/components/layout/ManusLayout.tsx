@@ -10,7 +10,12 @@ export function ManusLayout() {
   const isFullScreenPage = location.pathname.startsWith('/canvas')
   
   // Wide pages (no max-width constraint)
-  const isWidePage = location.pathname.startsWith('/blueprint') || location.pathname.startsWith('/lesson-plans') || location.pathname.startsWith('/study-materials')
+  const isWidePage =
+    location.pathname.startsWith('/blueprint') ||
+    location.pathname.startsWith('/lesson-plans') ||
+    location.pathname.startsWith('/study-materials') ||
+    location.pathname.startsWith('/question-evaluate') ||
+    location.pathname.startsWith('/deepthink')
 
   const pageManagesOwnScroll =
     location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/lesson-plans')

@@ -53,7 +53,7 @@ export default function PaperDetailPage() {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6 text-center">
         <div className="h-16 w-16 bg-muted rounded-full flex items-center justify-center mb-4">
-           <FileText className="h-8 w-8 text-muted-foreground" />
+          <FileText className="h-8 w-8 text-muted-foreground" />
         </div>
         <h3 className="text-lg font-medium mb-2">试卷不存在</h3>
         <p className="text-muted-foreground mb-6">加载失败或已被删除</p>
@@ -106,7 +106,7 @@ export default function PaperDetailPage() {
               <FileText className="h-8 w-8" />
             </div>
             <h1 className="text-3xl font-bold tracking-tight mb-4 text-foreground">{paper.name}</h1>
-            
+
             <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
               <Badge variant="secondary" className="px-3 py-1 text-sm font-normal">试卷 #{paper.id}</Badge>
               <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
@@ -124,7 +124,7 @@ export default function PaperDetailPage() {
                   AI 智能分析
                 </div>
                 <Badge variant="outline" className="bg-background">
-                  难度系数 {paper.analysis.difficultyScore.toFixed(2)}
+                  难度系数 {Number.isFinite(paper.analysis.difficultyScore) ? paper.analysis.difficultyScore.toFixed(2) : '--'}
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground leading-6">
@@ -159,7 +159,7 @@ export default function PaperDetailPage() {
                       className="group relative pl-6 py-2"
                     >
                       <div className="absolute left-[-5px] top-5 h-2.5 w-2.5 rounded-full border-2 border-background bg-muted-foreground/30 group-hover:bg-primary transition-colors" />
-                      
+
                       <div className="rounded-lg border border-border bg-card p-4 transition-all hover:shadow-sm">
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0">

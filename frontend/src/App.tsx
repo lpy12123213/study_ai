@@ -15,6 +15,8 @@ const PaperDetailPage = lazy(() => import('@/pages/PaperDetailPage'))
 const CanvasPage = lazy(() => import('@/pages/CanvasPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const LoginPage = lazy(() => import('@/pages/LoginPage'))
+const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
+const DeepThinkPage = lazy(() => import('@/pages/DeepThinkPage'))
 
 function PageLoader() {
   return (
@@ -39,6 +41,8 @@ function App() {
           <Route path="lesson-plans" element={<LessonPlansPage />} />
           <Route path="lesson-plans/:lessonPlanId" element={<LessonPlanDetailPage />} />
           <Route path="study-materials" element={<StudyMaterialsPage />} />
+          <Route path="deepthink" element={<DeepThinkPage />} />
+          <Route path="question-evaluate" element={<QuestionEvaluatePage />} />
           <Route path="papers" element={<PapersPage />} />
           <Route path="papers/:paperId" element={<PaperDetailPage />} />
           <Route path="canvas" element={<CanvasPage />} />

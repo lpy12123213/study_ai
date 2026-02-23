@@ -615,26 +615,24 @@ class StudyMaterialGenerationToolsMixin:
                         "只输出 JSON 对象，不要输出 Markdown、不要输出代码块。",
                         "",
                         "请输出严格 JSON：",
-                        '{"diagrams":[{"kind":"plot_function|plot_3d|draw_diagram|svg_diagram","alt":"...","caption":"...","spec":{...}}, ...]}',
+                        '{"diagrams":[{"kind":"tikz_to_svg|seedream_generate","alt":"...","caption":"...","tikz":"...","preamble":"...","prompt":"...","size":"1024x1024","n":1}, ...]}',
                         '若不需要画图请输出 {"diagrams":[]}。',
                         "",
                         "kind 说明：",
-                        "- plot_function：二维函数图（输出 PNG；优先）。",
-                        "- plot_3d：三维曲面图（输出 PNG）。",
-                        "- draw_diagram：通用结构示意图/流程/关系图（输出 PNG）。",
-                        "- svg_diagram：几何示意图（输出 SVG；只有 PNG 不方便表达时再用）。",
+                        "- tikz_to_svg：输出 LaTeX TikZ（优先）→ 编译成 SVG 矢量图。字段：tikz（必须，包含 \\begin{tikzpicture}...\\end{tikzpicture}），preamble（可选，如 \\usetikzlibrary{...}）。",
+                        "- seedream_generate：用自然语言提示词生成图片（适合更具象/真实世界插画）。字段：prompt（必须），size（可选，默认 1024x1024），n（可选，默认 1）。",
                         "",
-                        "spec 示例（可参考，不必拘泥）：",
-                        '1) plot_function：{"x_range":[-5,5],"y_range":[-2,2],"grid":true,"title":"...","curves":[{"expr":"sin(x)","label":"y=sin(x)"}]}',
-                        '2) plot_3d：{"expr":"sin(x*y)","x_range":[-3,3],"y_range":[-3,3],"title":"..."}',
-                        '3) draw_diagram：{"x_range":[-10,10],"y_range":[-6,6],"title":"...","objects":[{"id":"A","shape":"circle","pos":[-4,0],"r":0.35,"label":"A"}],"segments":[[[-4,0],[4,0]]],"annotations":[{"text":"...","x":0,"y":2}]}',
-                        '4) svg_diagram：{"width":560,"height":320,"padding":24,"points":{"A":[80,240],"B":[440,240]},"segments":[["A","B"]],"labels":[{"point":"A","text":"A"}],"texts":[{"x":280,"y":30,"text":"...","anchor":"middle"}]}',
+                        "示例（可参考，不必拘泥）：",
+                        '1) tikz_to_svg：{"kind":"tikz_to_svg","alt":"三角形内角和","caption":"三角形的内角","tikz":"\\begin{tikzpicture}\\draw (0,0)--(4,0)--(1,2)--cycle;\\node at (0.3,0.2){$A$};\\node at (3.7,0.2){$B$};\\node at (1,2.2){$C$};\\end{tikzpicture}","preamble":"\\usetikzlibrary{arrows.meta,calc}"}',
+                        '2) seedream_generate：{"kind":"seedream_generate","alt":"抛物线与焦点","caption":"抛物线的几何直观","prompt":"一张用于高中数学教学的简洁插图：白色背景，展示抛物线、焦点与准线，并用少量清晰标注，风格扁平简洁"}',
                         "",
                         "要求：",
                         f"1) 图必须和「{kp}」强相关，尽量简洁，能独立帮助理解。",
-                        "2) 优先输出 PNG（plot_function/plot_3d/draw_diagram）；只有 PNG 不方便表达时才用 svg_diagram。",
-                        "3) 不要画复杂背景或大段文字；caption 用一句中文即可。",
-                        f"4) 数量不必凑满：0~{need_diagrams} 张均可。",
+                        "2) 一般优先使用 tikz_to_svg；只有不适合用线稿/几何示意表达时才用 seedream_generate。",
+                        "3) TikZ 尽量使用基础绘图命令与常见 tikzlibrary（如 arrows.meta/calc/positioning），避免复杂依赖（如 pgfplots）与外部图片。",
+                        "4) Seedream 的 prompt 用 1~2 句中文，明确主体、关系与风格（教学插图/简洁/白底/少量标注）。",
+                        "5) caption 用一句中文即可。",
+                        f"6) 数量不必凑满：0~{need_diagrams} 张均可。",
                         "",
                         "可参考信息（可能为空）：",
                         json.dumps(context_hints, ensure_ascii=False),
@@ -670,76 +668,62 @@ class StudyMaterialGenerationToolsMixin:
                         caption = str(it.get("caption") or "").strip()
 
                         spec: Dict[str, Any] = it.get("spec") if isinstance(it.get("spec"), dict) else {}
-                        if not spec:
-                            spec = {
-                                k: v
-                                for k, v in it.items()
-                                if k not in {"kind", "type", "alt", "caption"}
-                            }
-                        if not caption:
-                            caption = str(spec.get("caption") or "").strip()
+
+                        def _pick_str(*candidates: Any) -> str:
+                            for v in candidates:
+                                if isinstance(v, str) and v.strip():
+                                    return v.strip()
+                            return ""
 
                         kind = kind_raw
-                        if kind in {"plot", "plot2d", "plot_2d", "function", "function_plot", "plot_function"}:
-                            kind = "plot_function"
-                        elif kind in {"plot3d", "plot_3d", "surface", "surface_plot"}:
-                            kind = "plot_3d"
-                        elif kind in {"draw", "schematic", "diagram", "draw_diagram"}:
-                            kind = "draw_diagram"
-                        elif kind in {"svg", "svg_diagram", "draw_svg_diagram"}:
-                            kind = "svg_diagram"
+                        if kind in {"tikz", "tikz_to_svg", "tikzsvg", "latex", "tikzpicture", "tikz_picture"}:
+                            kind = "tikz_to_svg"
+                        elif kind in {"seedream", "seedream_generate", "image", "text2img", "t2i"}:
+                            kind = "seedream_generate"
                         else:
-                            kind = "svg_diagram"
+                            if _pick_str(it.get("prompt"), spec.get("prompt")):
+                                kind = "seedream_generate"
+                            elif _pick_str(it.get("tikz"), it.get("code"), it.get("latex"), spec.get("tikz")):
+                                kind = "tikz_to_svg"
+                            else:
+                                kind = "tikz_to_svg"
 
                         d_obj: Optional[Dict[str, Any]] = None
-                        if kind == "plot_function":
-                            res = await self._tool_plot_function(
+                        if kind == "seedream_generate":
+                            prompt_text = _pick_str(it.get("prompt"), spec.get("prompt"), it.get("text"))
+                            size = _pick_str(it.get("size"), spec.get("size"))
+                            n = it.get("n") if "n" in it else spec.get("n")
+                            res = await self._tool_seedream_generate(
                                 {
-                                    "spec": spec,
+                                    "prompt": prompt_text,
                                     "alt": alt,
                                     "caption": caption,
+                                    "size": size,
+                                    "n": n,
                                     "knowledge_point": kp,
                                 },
                                 ctx,
                             )
                             if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
                                 d_obj = dict(res.get("diagram") or {})
-                        elif kind == "plot_3d":
-                            res = await self._tool_plot_3d(
-                                {
-                                    "spec": spec,
-                                    "alt": alt,
-                                    "caption": caption,
-                                    "knowledge_point": kp,
-                                },
-                                ctx,
-                            )
-                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
-                                d_obj = dict(res.get("diagram") or {})
-                        elif kind == "draw_diagram":
-                            res = await self._tool_draw_diagram(
-                                {
-                                    "spec": spec,
-                                    "alt": alt,
-                                    "caption": caption,
-                                    "knowledge_point": kp,
-                                },
-                                ctx,
-                            )
-                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
-                                d_obj = dict(res.get("diagram") or {})
+                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagrams"), list):
+                                for d in [x for x in (res.get("diagrams") or []) if isinstance(x, dict)][:8]:
+                                    _store_extra_diagram(d)
                         else:
-                            draw_res = await self._tool_draw_svg_diagram({"spec": spec, "alt": alt}, ctx)
-                            if isinstance(draw_res, dict) and draw_res.get("success"):
-                                d_obj = {
-                                    "knowledge_point": kp,
-                                    "kind": "draw_svg_diagram",
-                                    "url": str(draw_res.get("url") or "").strip(),
-                                    "markdown": str(draw_res.get("markdown") or "").strip(),
-                                    "filename": str(draw_res.get("filename") or "").strip(),
-                                    "media_id": str(draw_res.get("media_id") or "").strip(),
+                            tikz_code = _pick_str(it.get("tikz"), it.get("code"), it.get("latex"), spec.get("tikz"))
+                            preamble = _pick_str(it.get("preamble"), spec.get("preamble"))
+                            res = await self._tool_tikz_to_svg(
+                                {
+                                    "tikz": tikz_code,
+                                    "preamble": preamble,
+                                    "alt": alt,
                                     "caption": caption,
-                                }
+                                    "knowledge_point": kp,
+                                },
+                                ctx,
+                            )
+                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
+                                d_obj = dict(res.get("diagram") or {})
 
                         if not (isinstance(d_obj, dict) and str(d_obj.get("url") or "").strip()):
                             continue

@@ -27,7 +27,7 @@ import { Badge } from '@/components/ui/badge'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { useSubjects } from '@/hooks/useSubjects'
-import { fetchSSE, resolveApiResourceUrl } from '@/api/client'
+import { fetchSSERequest, resolveApiResourceUrl } from '@/api/client'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -463,6 +463,7 @@ function LessonPlansPage() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const streamAbortRef = useRef<AbortController | null>(null)
 
   const [input, setInput] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
@@ -477,7 +478,7 @@ function LessonPlansPage() {
   const { data: subjects } = useSubjects()
 
   const conversations = useConversationStore((state) => state.conversations)
-  const currentConversationId = useConversationStore((state) => state.currentConversationId)
+  const currentConversationId = useConversationStore((state) => state.currentConversationIdByType.lesson_plan)
   const addConversation = useConversationStore((state) => state.addConversation)
   const setCurrentConversation = useConversationStore((state) => state.setCurrentConversation)
   const updateConversation = useConversationStore((state) => state.updateConversation)
@@ -502,6 +503,20 @@ function LessonPlansPage() {
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages.length])
 
+  // Sidebar "new conversation" clears the current conversation selection but does not reset
+  // page-local React state. Reset here so the UI is actually clean.
+  useEffect(() => {
+    if (activeConversationId) return
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort()
+      streamAbortRef.current = null
+    }
+    setIsGenerating(false)
+    setInput('')
+    setError(null)
+    setSubAgentActivities([])
+  }, [activeConversationId])
+
   const handleDrag = useCallback((deltaX: number) => {
     if (!containerRef.current) return
     const totalWidth = containerRef.current.offsetWidth
@@ -513,6 +528,12 @@ function LessonPlansPage() {
   }, [])
 
   const handleNewConversation = () => {
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort()
+      streamAbortRef.current = null
+    }
+    setIsGenerating(false)
+
     const id = generateId()
     const now = new Date().toISOString()
     const item: ConversationItem = {
@@ -525,7 +546,7 @@ function LessonPlansPage() {
       resumable: false,
     }
     addConversation(item)
-    setCurrentConversation(id)
+    setCurrentConversation(id, 'lesson_plan')
     setMessages(id, [])
     setInput('')
     setError(null)
@@ -536,6 +557,11 @@ function LessonPlansPage() {
     e?.preventDefault()
     const prompt = input.trim()
     if (!prompt || isGenerating) return
+
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort()
+      streamAbortRef.current = null
+    }
 
     const now = new Date().toISOString()
 
@@ -557,7 +583,7 @@ function LessonPlansPage() {
         progress: 0,
       }
       addConversation(conversation)
-      setCurrentConversation(conversationId)
+      setCurrentConversation(conversationId, 'lesson_plan')
       setMessages(conversationId, [])
     } else {
       updateConversation(conversationId, { updatedAt: now, status: 'active' })
@@ -648,17 +674,25 @@ function LessonPlansPage() {
       syncSteps()
     }
 
-    void fetchSSE(
+    const controller = new AbortController()
+    streamAbortRef.current = controller
+
+    void fetchSSERequest(
       '/lesson-plans/generate',
       {
-        subject: resolvedSubject,
-        grade: resolvedGrade,
-        topic: resolvedTopic,
-        duration_minutes: resolvedDuration,
-        objectives: resolvedObjectives.length > 0 ? resolvedObjectives : undefined,
-        additional_requirements: resolvedAdditional || undefined,
+        method: 'POST',
+        body: {
+          subject: resolvedSubject,
+          grade: resolvedGrade,
+          topic: resolvedTopic,
+          duration_minutes: resolvedDuration,
+          objectives: resolvedObjectives.length > 0 ? resolvedObjectives : undefined,
+          additional_requirements: resolvedAdditional || undefined,
+        },
+        signal: controller.signal,
       },
-      (data) => {
+      (data: unknown) => {
+        if (streamAbortRef.current !== controller) return
         const evt = data as LessonPlanAgentEvent
         const kind = typeof (evt as any)?.event === 'string' ? (evt as any).event : ''
         const payload = (evt as any)?.data
@@ -940,7 +974,9 @@ function LessonPlansPage() {
           return
         }
       },
-      (err) => {
+      (err: Error) => {
+        if (streamAbortRef.current !== controller) return
+        streamAbortRef.current = null
         if (done) return
         done = true
         const msg = err.message || '生成失败'
@@ -960,6 +996,8 @@ function LessonPlansPage() {
         setIsGenerating(false)
       },
       () => {
+        if (streamAbortRef.current !== controller) return
+        streamAbortRef.current = null
         if (!done) {
           completeTask(taskId)
           setIsGenerating(false)

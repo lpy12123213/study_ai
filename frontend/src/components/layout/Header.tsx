@@ -2,9 +2,11 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   MessagesSquare,
+  Brain,
   Files,
   LayoutTemplate,
   BookOpen,
+  Award,
   PenTool,
   Settings,
   LogOut,
@@ -31,8 +33,10 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 
 const navItems = [
   { path: '/chat', label: '对话', icon: MessagesSquare },
+  { path: '/deepthink', label: '深度解题', icon: Brain },
   { path: '/blueprint', label: '蓝图组卷', icon: LayoutTemplate },
   { path: '/study-materials', label: '自学资料', icon: BookOpen },
+  { path: '/question-evaluate', label: '好题鉴别', icon: Award },
   { path: '/papers', label: '试卷管理', icon: Files },
   { path: '/canvas', label: '学习画布', icon: PenTool },
 ]

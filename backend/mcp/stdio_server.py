@@ -1937,11 +1937,19 @@ class ExamPaperMCPServer:
     async def run(self):
         """启动 MCP 服务器（stdio）"""
         async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                self.server.create_initialization_options(),
-            )
+            # MCP stdio protocol requires stdout to be *only* JSON-RPC messages.
+            # This repo has a few legacy `print()` calls (crawler/LLM console) that
+            # would corrupt stdout when the server is used by external MCP clients.
+            original_stdout = sys.stdout
+            try:
+                sys.stdout = sys.stderr
+                await self.server.run(
+                    read_stream,
+                    write_stream,
+                    self.server.create_initialization_options(),
+                )
+            finally:
+                sys.stdout = original_stdout
 
     async def _diagnose_export(self, test_question_id: str = "70287") -> dict:
         """诊断导出功能"""
@@ -1957,7 +1965,7 @@ class ExamPaperMCPServer:
         }
 
         # 1. 检查 .env 文件
-        env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+        env_file = str(Path(__file__).resolve().parents[2] / ".env")
         env_check = {"name": "ENV文件检查", "status": "unknown", "details": {}}
 
         if os.path.exists(env_file):

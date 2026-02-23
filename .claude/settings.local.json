@@ -1,21 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(start.bat)",
-      "Bash(netstat:*)",
-      "Bash(findstr:*)",
-      "Bash(\"C:\\Users\\李\\Desktop\\study_ai\\exam_paper_assistant\\venv\\Scripts\\python.exe\" -c:*)",
-      "Bash(claude mcp add-json:*)",
-      "Bash(claude mcp:*)",
-      "Bash(codex mcp add:*)",
-      "Bash(find:*)",
-      "mcp__playwright-mcp__browser_navigate",
-      "Bash(git init:*)",
-      "Bash(dir:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nInitial commit: 试卷助手项目\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
-    ],
-    "deny": [],
-    "ask": []
+      "Bash(if exist \"C:\\\\Users\\\\李\\\\Desktop\\\\study_ai\\\\.env\" echo EXISTS)",
+      "Bash(test:*)"
+    ]
   }
 }

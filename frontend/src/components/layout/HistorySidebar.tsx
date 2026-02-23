@@ -59,7 +59,9 @@ function ConversationListItem({
   )
 
   const handleClick = () => {
-    setCurrentConversation(item.id)
+    if (item.type !== 'chat') {
+      setCurrentConversation(item.id, item.type)
+    }
     if (item.type === 'chat') {
       navigate(`/chat/${item.id}`)
       return
@@ -142,7 +144,7 @@ export function HistorySidebar() {
   const queryClient = useQueryClient()
   const { isAuthenticated, token } = useAuthStore()
   const {
-    currentConversationId,
+    currentConversationIdByType,
     removeConversation,
     setCurrentConversation,
   } = useConversationStore()
@@ -193,7 +195,9 @@ export function HistorySidebar() {
   const groupedConversations = groupByDate(filteredConversations)
 
   const handleNewConversation = () => {
-    setCurrentConversation(null)
+    if (pageTypeFilter && pageTypeFilter !== 'chat') {
+      setCurrentConversation(null, pageTypeFilter)
+    }
     if (location.pathname.startsWith('/study-materials')) {
       navigate('/study-materials')
     } else if (location.pathname.startsWith('/lesson-plans')) {
@@ -210,13 +214,15 @@ export function HistorySidebar() {
     return m ? m[1] : null
   })()
 
-  const effectiveActiveId = activeChatId || currentConversationId
+  const activeLocalId =
+    pageTypeFilter && pageTypeFilter !== 'chat' ? currentConversationIdByType[pageTypeFilter] : null
+
+  const effectiveActiveId = activeChatId || activeLocalId
 
   const handleDeleteConversation = (item: ConversationItem) => {
     if (item.type === 'chat') {
       deleteChatConversation.mutate(item.id)
       if (effectiveActiveId === item.id) {
-        setCurrentConversation(null)
         navigate('/chat')
       }
       return

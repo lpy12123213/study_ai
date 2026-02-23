@@ -413,11 +413,13 @@ export default function DeepThinkPage() {
                         <SelectValue placeholder="选择学科" />
                       </SelectTrigger>
                       <SelectContent>
-                        {(subjects || []).map((s) => (
-                          <SelectItem key={s.id} value={s.code}>
-                            {s.name}
-                          </SelectItem>
-                        ))}
+                        {(subjects || [])
+                          .filter((s) => (s.code || '').trim().length > 0)
+                          .map((s) => (
+                            <SelectItem key={s.id} value={s.code}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
                         {!subjects?.length && <SelectItem value="高中数学">高中数学</SelectItem>}
                       </SelectContent>
                     </Select>

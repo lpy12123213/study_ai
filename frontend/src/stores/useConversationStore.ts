@@ -8,9 +8,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+type LocalConversationType = Exclude<ConversationType, 'chat'>
+
+const DEFAULT_CURRENT_BY_TYPE: Record<LocalConversationType, string | null> = {
+  blueprint: null,
+  lesson_plan: null,
+  study_materials: null,
+}
+
 interface ConversationState {
   conversations: ConversationItem[]
-  currentConversationId: string | null
+  currentConversationIdByType: Record<LocalConversationType, string | null>
   filter: ConversationType | 'all'
   messagesByConversation: Record<string, Message[]>
   
@@ -18,7 +26,7 @@ interface ConversationState {
   addConversation: (conversation: ConversationItem) => void
   updateConversation: (id: string, data: Partial<ConversationItem>) => void
   removeConversation: (id: string) => void
-  setCurrentConversation: (id: string | null) => void
+  setCurrentConversation: (id: string | null, type: LocalConversationType) => void
   setFilter: (filter: ConversationType | 'all') => void
 
   // Local messages (used by non-chat Manus dialogs, e.g. lesson plans)
@@ -39,7 +47,7 @@ export const useConversationStore = create<ConversationState>()(
   persist(
     (set, get) => ({
       conversations: [],
-      currentConversationId: null,
+      currentConversationIdByType: { ...DEFAULT_CURRENT_BY_TYPE },
       filter: 'all',
       messagesByConversation: {},
 
@@ -60,8 +68,12 @@ export const useConversationStore = create<ConversationState>()(
       removeConversation: (id) =>
         set((state) => ({
           conversations: state.conversations.filter((c) => c.id !== id),
-          currentConversationId:
-            state.currentConversationId === id ? null : state.currentConversationId,
+          currentConversationIdByType: Object.fromEntries(
+            Object.entries(state.currentConversationIdByType).map(([t, cur]) => [
+              t,
+              cur === id ? null : cur,
+            ])
+          ) as ConversationState['currentConversationIdByType'],
           messagesByConversation: (() => {
             const next = { ...state.messagesByConversation }
             delete next[id]
@@ -69,7 +81,13 @@ export const useConversationStore = create<ConversationState>()(
           })(),
         })),
 
-      setCurrentConversation: (id) => set({ currentConversationId: id }),
+      setCurrentConversation: (id, type) =>
+        set((state) => ({
+          currentConversationIdByType: {
+            ...state.currentConversationIdByType,
+            [type]: id,
+          },
+        })),
 
       setFilter: (filter) => set({ filter }),
 
@@ -122,7 +140,7 @@ export const useConversationStore = create<ConversationState>()(
     }),
     {
       name: 'conversation-storage',
-      version: 3,
+      version: 4,
       migrate: (persistedState: unknown) => {
         const state = (persistedState || {}) as Partial<ConversationState>
 
@@ -149,15 +167,37 @@ export const useConversationStore = create<ConversationState>()(
           return isStudyMaterials ? ({ ...c, type: 'study_materials' } as ConversationItem) : c
         })
 
-        const currentConversationId =
-          state.currentConversationId && allowedIds.has(state.currentConversationId)
-            ? state.currentConversationId
-            : null
+        const idToType = new Map<string, LocalConversationType>()
+        for (const c of migratedConversations) {
+          if (c && c.type !== 'chat') idToType.set(c.id, c.type as LocalConversationType)
+        }
+
+        const currentConversationIdByType: Record<LocalConversationType, string | null> = {
+          ...DEFAULT_CURRENT_BY_TYPE,
+        }
+
+        // Newer builds persist per-type selection.
+        const rawByType = (state as any).currentConversationIdByType
+        if (isRecord(rawByType)) {
+          for (const key of Object.keys(DEFAULT_CURRENT_BY_TYPE) as LocalConversationType[]) {
+            const val = rawByType[key]
+            if (typeof val !== 'string' || !allowedIds.has(val)) continue
+            if (idToType.get(val) !== key) continue
+            currentConversationIdByType[key] = val
+          }
+        }
+
+        // Back-compat: older builds stored a single `currentConversationId`.
+        const legacyCurrentId = (state as any).currentConversationId
+        if (typeof legacyCurrentId === 'string' && allowedIds.has(legacyCurrentId)) {
+          const t = idToType.get(legacyCurrentId)
+          if (t) currentConversationIdByType[t] = legacyCurrentId
+        }
 
         return {
           ...state,
           conversations: migratedConversations,
-          currentConversationId,
+          currentConversationIdByType,
           messagesByConversation,
           filter: (state.filter as any) || 'all',
         } as ConversationState
@@ -171,7 +211,7 @@ export const useConversationStore = create<ConversationState>()(
 
         return {
           conversations,
-          currentConversationId: state.currentConversationId,
+          currentConversationIdByType: state.currentConversationIdByType,
           filter: state.filter,
           messagesByConversation,
         }

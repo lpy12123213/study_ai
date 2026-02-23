@@ -29,15 +29,16 @@ export async function getSubjects(): Promise<Subject[]> {
       : []
 
   return list
-    .filter((s): s is BackendSubject & { name: string } => typeof s?.name === 'string')
+    .filter((s): s is BackendSubject & { name: string } => typeof s?.name === 'string' && s.name.trim().length > 0)
     .map((s) => {
-      const shortName = typeof s.short_name === 'string' ? s.short_name : undefined
+      const name = s.name.trim()
+      const shortName = typeof s.short_name === 'string' ? s.short_name.trim() : undefined
       const bankId = typeof s.bank_id === 'number' ? s.bank_id : undefined
       const eduId = typeof s.edu_id === 'number' ? s.edu_id : undefined
       return {
-        id: String(bankId ?? s.name),
-        name: s.name,
-        code: s.name, // use full name as request value
+        id: String(bankId ?? name),
+        name,
+        code: name, // use full name as request value
         shortName,
         bankId,
         eduId,

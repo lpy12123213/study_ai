@@ -50,8 +50,8 @@ function SlotEditor({ slot, onUpdate, onRemove }: SlotEditorProps) {
       <div className="col-span-3 font-medium">{slot.questionType}</div>
       <div className="col-span-3">
         <div className="flex items-center gap-2">
-           <span className="text-xs text-muted-foreground w-8">数量</span>
-           <Input
+          <span className="text-xs text-muted-foreground w-8">数量</span>
+          <Input
             type="number"
             min={1}
             max={50}
@@ -63,8 +63,8 @@ function SlotEditor({ slot, onUpdate, onRemove }: SlotEditorProps) {
       </div>
       <div className="col-span-3">
         <div className="flex items-center gap-2">
-           <span className="text-xs text-muted-foreground w-8">分值</span>
-           <Input
+          <span className="text-xs text-muted-foreground w-8">分值</span>
+          <Input
             type="number"
             min={1}
             max={100}
@@ -108,6 +108,8 @@ export default function BlueprintPage() {
   const [slots, setSlots] = useState<BlueprintSlot[]>([])
   const [blueprintName, setBlueprintName] = useState('')
   const [showQuestionTypes, setShowQuestionTypes] = useState(false)
+  const [gradeId, setGradeId] = useState<string>('')
+  const [textbookVersionId, setTextbookVersionId] = useState<string>('')
 
   const { data: subjects } = useSubjects()
   const { data: filters } = useSubjectFilters(subject || undefined)
@@ -149,7 +151,14 @@ export default function BlueprintPage() {
 
   const handleCompose = () => {
     if (!subject || slots.length === 0) return
-    compose({ subject, slots })
+    compose({
+      subject,
+      slots,
+      filters: {
+        gradeId: gradeId && gradeId !== 'all' ? Number(gradeId) : undefined,
+        textbookVersion: textbookVersionId && textbookVersionId !== 'all' ? textbookVersionId : undefined,
+      },
+    })
   }
 
   const handleSaveBlueprint = () => {
@@ -159,8 +168,8 @@ export default function BlueprintPage() {
   }
 
   const isPaused = checkpoint?.status === 'paused'
-  const progress = taskSteps.length > 0 
-    ? (taskSteps.filter((s) => s.status === 'completed').length / taskSteps.length) * 100 
+  const progress = taskSteps.length > 0
+    ? (taskSteps.filter((s) => s.status === 'completed').length / taskSteps.length) * 100
     : 0
 
   return (
@@ -193,11 +202,13 @@ export default function BlueprintPage() {
                     <SelectValue placeholder="选择学科" />
                   </SelectTrigger>
                   <SelectContent>
-                    {subjects?.map((s) => (
-                      <SelectItem key={s.id} value={s.code}>
-                        {s.name}
-                      </SelectItem>
-                    ))}
+                    {(subjects || [])
+                      .filter((s) => (s.code || '').trim().length > 0)
+                      .map((s) => (
+                        <SelectItem key={s.id} value={s.code}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -207,7 +218,7 @@ export default function BlueprintPage() {
                   {filters.grades && (
                     <div>
                       <label className="text-sm font-medium mb-1.5 block">年级</label>
-                      <Select>
+                      <Select value={gradeId} onValueChange={setGradeId}>
                         <SelectTrigger className="w-full">
                           <SelectValue placeholder="全部年级" />
                         </SelectTrigger>
@@ -225,7 +236,7 @@ export default function BlueprintPage() {
                   {filters.textbookVersions && (
                     <div>
                       <label className="text-sm font-medium mb-1.5 block">教材版本</label>
-                      <Select>
+                      <Select value={textbookVersionId} onValueChange={setTextbookVersionId}>
                         <SelectTrigger className="w-full">
                           <SelectValue placeholder="全部版本" />
                         </SelectTrigger>
@@ -272,7 +283,7 @@ export default function BlueprintPage() {
                     />
                   ))}
                 </AnimatePresence>
-                
+
                 {slots.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground text-sm border border-dashed rounded-lg">
                     暂无题型，请添加
@@ -376,7 +387,7 @@ export default function BlueprintPage() {
             <Loader2 className={cn("h-4 w-4", isComposing && "animate-spin")} />
             任务执行
           </h3>
-          
+
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>进度</span>
@@ -388,24 +399,24 @@ export default function BlueprintPage() {
 
         <ScrollArea className="flex-1">
           <div className="p-6">
-             {result ? (
-               <div className="text-center py-10">
-                 <div className="h-16 w-16 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                   <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-400" />
-                 </div>
-                 <h3 className="text-lg font-medium mb-2">组卷完成</h3>
-                 <p className="text-muted-foreground mb-6">
-                   已生成试卷，包含 {result.questions.length} 道题目
-                 </p>
-                 <Button asChild className="gap-2">
-                   <Link to={`/papers/${result.id}`}>
-                     查看试卷 <ArrowRight className="h-4 w-4" />
-                   </Link>
-                 </Button>
-               </div>
-             ) : (
-               <TaskTimeline steps={taskSteps} />
-             )}
+            {result ? (
+              <div className="text-center py-10">
+                <div className="h-16 w-16 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-400" />
+                </div>
+                <h3 className="text-lg font-medium mb-2">组卷完成</h3>
+                <p className="text-muted-foreground mb-6">
+                  已生成试卷，包含 {result.questions.length} 道题目
+                </p>
+                <Button asChild className="gap-2">
+                  <Link to={`/papers/${result.id}`}>
+                    查看试卷 <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <TaskTimeline steps={taskSteps} />
+            )}
           </div>
         </ScrollArea>
       </div>

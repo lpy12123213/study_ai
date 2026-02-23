@@ -13,10 +13,10 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { login: setAuth, isAuthenticated, token } = useAuthStore()
-  
+
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
-  
+
   const [loginUsername, setLoginUsername] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
 
@@ -49,7 +49,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-primary/5 via-background to-background" />
-      
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -116,9 +116,9 @@ export default function LoginPage() {
             </p>
           </CardContent>
         </Card>
-        
+
         <div className="text-center mt-8 text-xs text-muted-foreground/50">
-          © 2024 AI Study Assistant. All rights reserved.
+          © {new Date().getFullYear()} AI Study Assistant. All rights reserved.
         </div>
       </motion.div>
     </div>

@@ -12,8 +12,10 @@ from backend.api.papers import router as papers_router
 from backend.api.subjects import router as subjects_router
 from backend.api.system import router as system_router
 from backend.api.auth import router as auth_router
+from backend.api.deepthink import router as deepthink_router
 from backend.api.lesson_plan import router as lesson_plan_router
 from backend.api.study_materials import router as study_materials_router
+from backend.api.question_evaluate import router as question_evaluate_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(system_router)
@@ -26,5 +28,7 @@ api_router.include_router(subjects_router)
 api_router.include_router(conversations_router)
 api_router.include_router(chat_router)
 api_router.include_router(auth_router)
+api_router.include_router(deepthink_router)
 api_router.include_router(lesson_plan_router)
 api_router.include_router(study_materials_router)
+api_router.include_router(question_evaluate_router)

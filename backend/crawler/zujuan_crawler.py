@@ -90,7 +90,8 @@ async def _get_cookies_with_playwright() -> str:
 
 def _load_env_login() -> Dict[str, Any]:
     """从 .env 文件加载登录信息"""
-    env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    # This file lives under `backend/crawler/`, so repository root is 2 levels up.
+    env_file = str(Path(__file__).resolve().parents[2] / ".env")
 
     if not os.path.exists(env_file):
         return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False}
@@ -1682,7 +1683,6 @@ class ZujuanCrawler:
                     "knowledge_points": [],
                     "source": "",
                     "date": "",
-                    "raw_html_fragment": block,
                 }
                 content_fragments.append((len(questions), block))
                 q["_stem_html"] = block
@@ -1830,9 +1830,6 @@ class ZujuanCrawler:
             if tags:
                 q["tags"] = tags
 
-            # Raw HTML fragment (single question block) for downstream parsing/storage.
-            q["raw_html_fragment"] = str(root)
-
             # Content fragment: exam-item__cnt usually contains stem + options.
             content_node = root.select_one("div.exam-item__cnt") or root.select_one("div.qbody")
             if content_node is not None:
@@ -1871,9 +1868,13 @@ class ZujuanCrawler:
         for idx, frag_html in question_stems:
             raw = frag_html or ""
             hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
-            raw_fragment = questions[idx].get("raw_html_fragment")
-            if isinstance(raw_fragment, str) and raw_fragment:
-                hashes.extend([h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw_fragment)])
+            # Prefer pre-extracted hashes from the full question block when available.
+            existing_hashes = questions[idx].get("formula_hashes")
+            if isinstance(existing_hashes, list):
+                for h in existing_hashes:
+                    hs = str(h or "").strip().lower()
+                    if hs:
+                        hashes.append(hs)
             hashes = list(dict.fromkeys(hashes))
             if hashes:
                 per_fragment_hashes[idx] = hashes
@@ -1920,11 +1921,6 @@ class ZujuanCrawler:
             converted = _replace_formula_imgs(stem_html or "")
             converted = _replace_other_imgs(converted)
 
-            # Also produce a LaTeX-ified HTML fragment for the full question block when present.
-            raw_fragment = questions[idx].get("raw_html_fragment")
-            if isinstance(raw_fragment, str) and raw_fragment.strip():
-                questions[idx]["latex_html_fragment"] = _replace_formula_imgs(raw_fragment)
-
             # 4) HTML -> text
             if BeautifulSoup is not None:
                 text = BeautifulSoup(converted, "lxml").get_text("\n", strip=True)
@@ -1948,6 +1944,10 @@ class ZujuanCrawler:
 
             if "_stem_html" in questions[idx]:
                 del questions[idx]["_stem_html"]
+            # Ensure we never leak HTML fragments in results (MCP/tool payload bloat).
+            for k in ("raw_html_fragment", "latex_html_fragment"):
+                if k in questions[idx]:
+                    del questions[idx][k]
 
     def _matches_local_filters(
         self,
@@ -3811,7 +3811,8 @@ class ZujuanCrawler:
                         "error": f"学科名称包含非法字符: {self.subject}"
                     }
 
-            project_root = os.path.dirname(os.path.dirname(__file__))
+            # This file lives under `backend/crawler/`, so repository root is 2 levels up.
+            project_root = str(Path(__file__).resolve().parents[2])
             scripts_dir = os.path.join(project_root, "scripts")
             bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
             py_path = os.path.join(scripts_dir, "save_login.py")
