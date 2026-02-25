@@ -193,8 +193,14 @@ class ContextManager:
                 "stackexchange_search",
                 "search_questions_by_knowledge",
                 "aggregate_knowledge",
+                "synthesize_sources",
+                "detect_knowledge_type",
+                "generate_outline",
                 # Study-materials generation runs per knowledge point; merge to avoid parallel subagents clobbering.
                 "generate_study_material",
+                "critique_draft",
+                "refine_draft",
+                "generate_diagrams",
             }:
                 prev = ctx.working_memory.get(result.tool)
                 merged = self._merge_items_by_knowledge_point(prev, result.output)

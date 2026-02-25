@@ -78,7 +78,13 @@ const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
   search_questions_by_knowledge: { label: '题库检索相关题目',   icon: Search },
   search_questions:              { label: '搜索题目',           icon: Search },
   aggregate_knowledge:           { label: '聚合知识资料',       icon: Database },
+  synthesize_sources:            { label: '综合源简报',         icon: Database },
+  detect_knowledge_type:         { label: '检测知识类型',       icon: Cpu },
+  generate_outline:              { label: '生成写作大纲',       icon: FileText },
   generate_study_material:       { label: '生成自学资料',       icon: Sparkles },
+  critique_draft:                { label: '自我批判',           icon: Cpu },
+  refine_draft:                  { label: '精炼修订',           icon: FileText },
+  generate_diagrams:             { label: '生成教学配图',       icon: Sparkles },
   generate_lesson_plan:         { label: '生成教案',           icon: Sparkles },
   assemble_study_archive:        { label: '组装 Markdown',      icon: FileText },
   revise_markdown:               { label: '修订 Markdown',      icon: FileText },
@@ -107,6 +113,13 @@ function extractContext(step: TaskStepType): string | null {
     'github_search',
     'search_questions_by_knowledge',
     'aggregate_knowledge',
+    'synthesize_sources',
+    'detect_knowledge_type',
+    'generate_outline',
+    'generate_study_material',
+    'critique_draft',
+    'refine_draft',
+    'generate_diagrams',
   ])
 
   const formatKps = (kps: unknown): string | null => {

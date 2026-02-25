@@ -159,6 +159,80 @@ class AgentCore:
             thought=thought,
         )
 
+    def _chunk_by_parallel_group(self, steps: List[PlanStep]) -> List[List[PlanStep]]:
+        """Chunk contiguous steps that share the same non-empty parallel_group.
+
+        The executor runs each chunk sequentially; chunks with len>=2 are executed concurrently.
+        """
+
+        groups: List[List[PlanStep]] = []
+        i = 0
+        while i < len(steps):
+            pg = str(getattr(steps[i], "parallel_group", "") or "").strip()
+            if not pg:
+                groups.append([steps[i]])
+                i += 1
+                continue
+            chunk: List[PlanStep] = []
+            while i < len(steps):
+                cur_pg = str(getattr(steps[i], "parallel_group", "") or "").strip()
+                if cur_pg != pg:
+                    break
+                chunk.append(steps[i])
+                i += 1
+            groups.append(chunk)
+        return groups
+
+    async def _execute_parallel_steps(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        steps: List[PlanStep],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
+
+        async def _run_one(s: PlanStep) -> None:
+            try:
+                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=s):
+                    await queue.put(evt)
+            except Exception as exc:  # pragma: no cover (best-effort safety)
+                await queue.put(agent_event("error", {"message": f"Parallel step failed ({s.tool}): {exc}"}))
+            finally:
+                await queue.put(None)
+
+        tasks = [asyncio.create_task(_run_one(s)) for s in steps]
+        finished = 0
+        while finished < len(tasks):
+            item = await queue.get()
+            if item is None:
+                finished += 1
+                continue
+            yield item
+
+        for t in tasks:
+            try:
+                await t
+            except Exception:
+                pass
+
+    async def _execute_step_block(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        steps: List[PlanStep],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        for chunk in self._chunk_by_parallel_group(steps):
+            if bool(ctx.working_memory.get("_abort_execution")):
+                return
+            if len(chunk) <= 1:
+                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=chunk[0]):
+                    yield evt
+                continue
+            async for evt in self._execute_parallel_steps(ctx=ctx, results=results, steps=chunk):
+                yield evt
+
     async def _run_subagent(
         self,
         *,
@@ -188,10 +262,9 @@ class AgentCore:
                         },
                     )
                 )
-                for s in block:
-                    concrete = self._expand_foreach_step(s, kp=kp)
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=concrete):
-                        await queue.put(evt)
+                concrete_block = [self._expand_foreach_step(s, kp=kp) for s in block]
+                async for evt in self._execute_step_block(ctx=ctx, results=results, steps=concrete_block):
+                    await queue.put(evt)
                 await queue.put(
                     agent_event(
                         "subagent_end",
@@ -257,7 +330,13 @@ class AgentCore:
                 "stackexchange_search",
                 "search_questions_by_knowledge",
                 "aggregate_knowledge",
+                "synthesize_sources",
+                "detect_knowledge_type",
+                "generate_outline",
                 "generate_study_material",
+                "critique_draft",
+                "refine_draft",
+                "generate_diagrams",
             } and "knowledge_points" not in step_args:
                 split_res = ctx.working_memory.get("split_knowledge_points")
                 if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
@@ -678,9 +757,8 @@ class AgentCore:
 
                         if not kps:
                             # Nothing to expand: execute block steps once.
-                            for s in block:
-                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=s):
-                                    yield evt
+                            async for evt in self._execute_step_block(ctx=ctx, results=results, steps=block):
+                                yield evt
                             continue
 
                         subagent_concurrency = max(1, int(getattr(self.config, "subagent_concurrency", 3) or 3))
@@ -712,10 +790,9 @@ class AgentCore:
                                         "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
                                     },
                                 )
-                                for s in block:
-                                    concrete = self._expand_foreach_step(s, kp=kp)
-                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=concrete):
-                                        yield evt
+                                concrete_block = [self._expand_foreach_step(s, kp=kp) for s in block]
+                                async for evt in self._execute_step_block(ctx=ctx, results=results, steps=concrete_block):
+                                    yield evt
                                 yield agent_event(
                                     "subagent_end",
                                     {

@@ -68,14 +68,14 @@ class AgentConfig:
 
 
 # Back-compat with the plan doc snippet.
+_cfg = AgentConfig.from_env()
 AGENT_CONFIG = {
-    "max_iterations": AgentConfig.max_iterations,
-    "parallel_tool_calls": AgentConfig.parallel_tool_calls,
-    "sliding_window_size": AgentConfig.sliding_window_size,
-    "token_threshold": AgentConfig.token_threshold,
-    "checkpoint_dir": AgentConfig.checkpoint_dir,
-    "planner_model": AgentConfig.planner_model,
-    "summarizer_model": AgentConfig.summarizer_model,
-    "reflector_model": AgentConfig.reflector_model,
+    "max_iterations": _cfg.max_iterations,
+    "parallel_tool_calls": _cfg.parallel_tool_calls,
+    "sliding_window_size": _cfg.sliding_window_size,
+    "token_threshold": _cfg.token_threshold,
+    "checkpoint_dir": _cfg.checkpoint_dir,
+    "planner_model": _cfg.planner_model,
+    "summarizer_model": _cfg.summarizer_model,
+    "reflector_model": _cfg.reflector_model,
 }
-

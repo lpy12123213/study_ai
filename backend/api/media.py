@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import os
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -90,7 +91,9 @@ async def get_generated_media(filename: str) -> FileResponse:
         raise HTTPException(status_code=400, detail="invalid_filename")
 
     path = (GENERATED_DIR / filename).resolve()
-    if GENERATED_DIR.resolve() not in path.parents:
+    try:
+        path.relative_to(GENERATED_DIR.resolve())
+    except Exception:
         raise HTTPException(status_code=400, detail="invalid_path")
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="not_found")
@@ -122,22 +125,60 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
 
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
+    try:
+        max_bytes = int(os.getenv("MEDIA_PROXY_MAX_BYTES") or str(10 * 1024 * 1024))
+    except Exception:
+        max_bytes = 10 * 1024 * 1024
+    max_bytes = max(256 * 1024, min(max_bytes, 200 * 1024 * 1024))
+
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(30.0, connect=10.0),
         follow_redirects=True,
         headers={"User-Agent": "ExamPaperAssistant/1.0"},
     ) as client:
         try:
-            resp = await client.get(normalized)
+            async with client.stream("GET", normalized) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"fetch_failed_status: {resp.status_code}")
+
+                content_len = resp.headers.get("content-length") or ""
+                try:
+                    if content_len.strip() and int(content_len) > max_bytes:
+                        raise HTTPException(status_code=413, detail="media_too_large")
+                except ValueError:
+                    pass
+
+                ext = _pick_extension(normalized, resp.headers.get("content-type") or "")
+                out_path = MEDIA_DIR / f"{media_id}{ext}"
+                tmp_path = MEDIA_DIR / f"{media_id}{ext}.tmp"
+
+                total = 0
+                try:
+                    with tmp_path.open("wb") as f:
+                        async for chunk in resp.aiter_bytes():
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise HTTPException(status_code=413, detail="media_too_large")
+                            f.write(chunk)
+                    tmp_path.replace(out_path)
+                except HTTPException:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    raise
+                except Exception as exc:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
-
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"fetch_failed_status: {resp.status_code}")
-
-    ext = _pick_extension(normalized, resp.headers.get("content-type") or "")
-    out_path = MEDIA_DIR / f"{media_id}{ext}"
-    out_path.write_bytes(resp.content)
 
     return FileResponse(out_path)
 

@@ -28,7 +28,13 @@ _CORE_TOOLS: Dict[str, str] = {
     "review_knowledge_points": "审核并微调知识点列表（去重/补全/粒度调整）",
     "web_search_knowledge": "联网搜索知识点（Exa 优先；deep/research 可启用 deepresearch 多轮；Metaso/智谱兜底；返回 results 列表 + 可选 summary）",
     "aggregate_knowledge": "聚合：拆分 + 网搜 + 题库（可选：百科/网页正文/问答/GitHub）",
-    "generate_study_material": "生成概念讲解（可选：示意图）（基于聚合结果；如已有绘图结果会自动复用）",
+    "synthesize_sources": "源简报：对聚合素材去噪/提炼关键事实/结构化为 writer 友好的 source_brief（写入 source_briefs）",
+    "detect_knowledge_type": "知识类型检测：definition/theorem/algorithm/...（写入 knowledge_types）",
+    "generate_outline": "生成自适应写作大纲：基于 knowledge_type + source_brief（写入 outlines）",
+    "generate_study_material": "生成概念讲解（基于 source_brief + outline；section 级并行写作）",
+    "critique_draft": "自我批判：对草稿多维度打分并给出定向修订指令（写入 critiques）",
+    "refine_draft": "精炼修订：根据 critique 指令对草稿做定向修改（高分可自动跳过）",
+    "generate_diagrams": "生成配图：为知识点规划并渲染教学示意图（TikZ/Seedream），结果写入 diagrams",
     "assemble_study_archive": "组装最终 Markdown（自学档案）",
     "revise_markdown": "按审查问题修订 Markdown（可选）",
     "save_markdown_file": "保存 Markdown 到文件",
@@ -164,15 +170,35 @@ class Planner:
         if not normalized_model:
             return ""
 
+        # Planner calls are user-facing latency bottlenecks. Some providers may occasionally hang
+        # until the global HTTP timeout (API_TIMEOUT). Use a smaller dedicated timeout so we can
+        # quickly fall back to the deterministic plan and keep the UI progressing.
+        timeout_raw = (
+            os.getenv("STUDY_MATERIALS_PLANNER_TIMEOUT_S")
+            or os.getenv("AGENT_PLANNER_TIMEOUT_S")
+            or os.getenv("LESSON_PLAN_PLANNER_TIMEOUT_S")
+            or ""
+        ).strip()
         try:
-            return await chat_completion_text(
-                messages=messages,
-                model=normalized_model,
-                temperature=float(LESSON_PLAN_TEMPERATURE or 0.4),
-                max_tokens=int(max_tokens or LESSON_PLAN_MAX_TOKENS or 1400),
-                retries=3,
-                req_id_prefix="planner",
+            timeout_s = float(timeout_raw) if timeout_raw else 30.0
+        except Exception:
+            timeout_s = 30.0
+        timeout_s = max(10.0, min(timeout_s, 300.0))
+
+        try:
+            return await asyncio.wait_for(
+                chat_completion_text(
+                    messages=messages,
+                    model=normalized_model,
+                    temperature=float(LESSON_PLAN_TEMPERATURE or 0.4),
+                    max_tokens=int(max_tokens or LESSON_PLAN_MAX_TOKENS or 1400),
+                    retries=3,
+                    req_id_prefix="planner",
+                ),
+                timeout=timeout_s,
             )
+        except asyncio.TimeoutError:
+            return ""
         except Exception:
             return ""
 
@@ -411,6 +437,38 @@ class Planner:
                     thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
                 ),
                 PlanStep(
+                    id=sid("synthesize_sources"),
+                    title="综合源简报（按知识点）",
+                    tool="synthesize_sources",
+                    arguments={
+                        "topic": topic,
+                        "subject": subject,
+                        "max_web_results": 10 if preset == "quick" else 12 if preset == "standard" else 14,
+                        "max_web_pages": max_web_pages,
+                        "max_page_chars": 2600 if preset != "research" else 3200,
+                    },
+                    foreach_knowledge_point=True,
+                    parallel_group="kp_prewrite",
+                    thought="对聚合素材去噪并提炼关键事实，生成结构化「源简报」，降低后续写作噪声与上下文长度。",
+                ),
+                PlanStep(
+                    id=sid("detect_knowledge_type"),
+                    title="检测知识类型（按知识点）",
+                    tool="detect_knowledge_type",
+                    arguments={"topic": topic, "subject": subject},
+                    foreach_knowledge_point=True,
+                    parallel_group="kp_prewrite",
+                    thought="判断知识点类型（定义/定理/算法等），为后续自适应大纲与写作提供结构先验。",
+                ),
+                PlanStep(
+                    id=sid("generate_outline"),
+                    title="生成自适应大纲（按知识点）",
+                    tool="generate_outline",
+                    arguments={"topic": topic, "subject": subject, "preset": preset, "requirements": requirements},
+                    foreach_knowledge_point=True,
+                    thought="基于知识类型与源简报生成写作大纲（含验证标准），为分段并行写作做准备。",
+                ),
+                PlanStep(
                     id=sid("generate_study_material"),
                     title="生成概念讲解（按知识点）",
                     tool="generate_study_material",
@@ -426,11 +484,43 @@ class Planner:
                         "max_web_pages": max_web_pages,
                         "max_page_chars": 3200 if preset == "research" else 2600,
                         "with_questions": bool(use_questions),
-                        "with_diagrams": bool(enable_diagrams),
-                        "max_diagrams": 6 if preset == "research" else 4 if preset == "deep" else 3 if preset == "standard" else 1,
+                        # Diagrams are generated in a separate parallel stage (generate_diagrams).
+                        "with_diagrams": False,
                     },
                     foreach_knowledge_point=True,
-                    thought="根据聚合素材，为当前知识点生成概念讲解，并尽量配一张简洁示意图。",
+                    thought="按大纲对当前知识点进行分段并行写作，生成可直接自学的核心讲解草稿。",
+                ),
+                PlanStep(
+                    id=sid("critique_draft"),
+                    title="自我批判（按知识点）",
+                    tool="critique_draft",
+                    arguments={"topic": topic, "subject": subject},
+                    foreach_knowledge_point=True,
+                    parallel_group="kp_postwrite",
+                    thought="对草稿做多维度审查（准确性/清晰度/完整性/原创性/深度匹配），给出可执行修订指令。",
+                ),
+                *(
+                    [
+                        PlanStep(
+                            id=sid("generate_diagrams"),
+                            title="生成教学配图（按知识点）",
+                            tool="generate_diagrams",
+                            arguments={"topic": topic, "subject": subject, "preset": preset},
+                            foreach_knowledge_point=True,
+                            parallel_group="kp_postwrite",
+                            thought="为该知识点生成必要的示意图（与自我批判并行），帮助直观理解。",
+                        )
+                    ]
+                    if enable_diagrams
+                    else []
+                ),
+                PlanStep(
+                    id=sid("refine_draft"),
+                    title="精炼修订（按知识点）",
+                    tool="refine_draft",
+                    arguments={"topic": topic, "subject": subject},
+                    foreach_knowledge_point=True,
+                    thought="根据批判意见对草稿做定向修订（高分则自动跳过）。",
                 ),
                 PlanStep(
                     id=sid("assemble_study_archive"),
@@ -540,7 +630,33 @@ class Planner:
             if not isinstance(arguments, dict):
                 arguments = {}
             thought = str(item.get("thought") or "").strip()
+            parallel_group = str(item.get("parallel_group") or "").strip()
             foreach_kp = bool(item.get("foreach_knowledge_point") or False)
+            # For study-materials, most tools should run per knowledge point to:
+            # - surface progress in the SubAgent panel
+            # - keep each tool call focused (less context, fewer failures)
+            if (
+                tool
+                in {
+                    "web_search_knowledge",
+                    "browse_web_pages",
+                    "wikipedia_search",
+                    "mediawiki_search",
+                    "github_search",
+                    "stackexchange_search",
+                    "search_questions_by_knowledge",
+                    "aggregate_knowledge",
+                    "synthesize_sources",
+                    "detect_knowledge_type",
+                    "generate_outline",
+                    "generate_study_material",
+                    "critique_draft",
+                    "refine_draft",
+                    "generate_diagrams",
+                }
+                and "foreach_knowledge_point" not in item
+            ):
+                foreach_kp = True
             foreach_limit = 0
             try:
                 foreach_limit = int(item.get("foreach_limit") or 0)
@@ -554,6 +670,7 @@ class Planner:
                     title=title,
                     tool=tool,
                     arguments=dict(arguments),
+                    parallel_group=parallel_group,
                     thought=thought,
                     foreach_knowledge_point=foreach_kp,
                     foreach_limit=max(0, foreach_limit),
@@ -586,7 +703,7 @@ class Planner:
                 steps.append(
                     PlanStep(
                         id=sid(tool),
-                        title="生成概念讲解",
+                        title="生成概念讲解（按知识点）",
                         tool=tool,
                         arguments={
                             "topic": topic,
@@ -594,15 +711,16 @@ class Planner:
                             "preset": preset,
                             "requirements": requirements,
                             "max_examples": 0,
-                            "max_points": 6,
+                            "max_points": 1,
                             "max_web_results": 10,
                             "max_web_pages": 2,
                             "max_page_chars": 2600,
                             "with_questions": bool(enable_questions),
-                            "with_diagrams": bool(enable_diagrams),
-                            "max_diagrams": 6 if preset == "research" else 4 if preset == "deep" else 3 if preset == "standard" else 1,
+                            # Diagrams are generated in a separate tool stage (generate_diagrams).
+                            "with_diagrams": False,
                         },
-                        thought="生成概念讲解并尽量配图，形成可直接自学的内容。",
+                        foreach_knowledge_point=True,
+                        thought="为当前知识点生成概念讲解草稿（配图在后续阶段生成）。",
                     )
                 )
             elif tool == "assemble_study_archive":
@@ -676,6 +794,222 @@ class Planner:
                     )
                 )
 
+        # Ensure the new multi-stage study-materials pipeline is visible and executed even when
+        # the planner LLM omits some steps.
+        preset = str(flags.get("preset") or "standard").strip().lower() or "standard"
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
+        requirements = str(flags.get("requirements") or "").strip()
+        enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
+
+        def _find_first(tool_name: str, *, start: int = 0, end: Optional[int] = None) -> int:
+            hi = len(steps) if end is None else max(0, min(int(end), len(steps)))
+            lo = max(0, min(int(start), len(steps)))
+            for j in range(lo, hi):
+                if steps[j].tool == tool_name:
+                    return j
+            return -1
+
+        def _find_last_before(tool_name: str, before: int) -> int:
+            for j in range(min(before - 1, len(steps) - 1), -1, -1):
+                if steps[j].tool == tool_name:
+                    return j
+            return -1
+
+        gen_idx = _find_first("generate_study_material")
+        if gen_idx != -1:
+            # Ensure aggregate exists before generation (writer expects aggregated items).
+            agg_idx = _find_last_before("aggregate_knowledge", gen_idx)
+            if agg_idx == -1:
+                steps.insert(
+                    gen_idx,
+                    PlanStep(
+                        id=sid("aggregate_knowledge"),
+                        title="聚合多源资料（按知识点）",
+                        tool="aggregate_knowledge",
+                        arguments={"topic": topic, "subject": subject},
+                        thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
+                        foreach_knowledge_point=True,
+                    ),
+                )
+                gen_idx += 1
+                agg_idx = gen_idx - 1
+
+            # Pre-write pipeline: synthesize_sources ∥ detect_knowledge_type → generate_outline
+            between_tools = {s.tool for s in steps[agg_idx + 1 : gen_idx]}
+            insert_pos = agg_idx + 1
+            pre_steps: List[PlanStep] = []
+            if "synthesize_sources" not in between_tools:
+                pre_steps.append(
+                    PlanStep(
+                        id=sid("synthesize_sources"),
+                        title="综合源简报（按知识点）",
+                        tool="synthesize_sources",
+                        arguments={"topic": topic, "subject": subject},
+                        parallel_group="kp_prewrite",
+                        thought="对聚合素材去噪并提炼关键事实，生成结构化源简报，降低写作噪声与上下文长度。",
+                        foreach_knowledge_point=True,
+                    )
+                )
+            if "detect_knowledge_type" not in between_tools:
+                pre_steps.append(
+                    PlanStep(
+                        id=sid("detect_knowledge_type"),
+                        title="检测知识类型（按知识点）",
+                        tool="detect_knowledge_type",
+                        arguments={"topic": topic, "subject": subject},
+                        parallel_group="kp_prewrite",
+                        thought="判断知识点类型（定义/定理/算法等），为自适应大纲与写作提供结构先验。",
+                        foreach_knowledge_point=True,
+                    )
+                )
+            if pre_steps:
+                steps[insert_pos:insert_pos] = pre_steps
+                gen_idx += len(pre_steps)
+
+            between_tools = {s.tool for s in steps[agg_idx + 1 : gen_idx]}
+            if "generate_outline" not in between_tools:
+                steps.insert(
+                    gen_idx,
+                    PlanStep(
+                        id=sid("generate_outline"),
+                        title="生成自适应大纲（按知识点）",
+                        tool="generate_outline",
+                        arguments={"topic": topic, "subject": subject, "preset": preset, "requirements": requirements},
+                        thought="基于知识类型与源简报生成写作大纲（含验证标准），为分段并行写作做准备。",
+                        foreach_knowledge_point=True,
+                    ),
+                )
+                gen_idx += 1
+
+            # Ensure diagrams are generated in a dedicated stage (generate_diagrams).
+            try:
+                gen_args = dict(steps[gen_idx].arguments or {})
+                gen_args.setdefault("topic", topic)
+                gen_args.setdefault("subject", subject)
+                gen_args.setdefault("preset", preset)
+                gen_args.setdefault("requirements", requirements)
+                gen_args["with_diagrams"] = False
+                steps[gen_idx].arguments = gen_args
+            except Exception:
+                pass
+
+            # Post-write pipeline: critique_draft ∥ generate_diagrams → refine_draft
+            assemble_idx = _find_first("assemble_study_archive", start=gen_idx + 1)
+            post_end = assemble_idx if assemble_idx != -1 else len(steps)
+            critique_idx = _find_first("critique_draft", start=gen_idx + 1, end=post_end)
+            diagrams_idx = _find_first("generate_diagrams", start=gen_idx + 1, end=post_end) if enable_diagrams else -1
+            refine_idx = _find_first("refine_draft", start=gen_idx + 1, end=post_end)
+
+            if enable_diagrams:
+                if critique_idx == -1 and diagrams_idx == -1:
+                    steps.insert(
+                        gen_idx + 1,
+                        PlanStep(
+                            id=sid("critique_draft"),
+                            title="自我批判（按知识点）",
+                            tool="critique_draft",
+                            arguments={"topic": topic, "subject": subject},
+                            parallel_group="kp_postwrite",
+                            thought="对草稿多维度审查并给出可执行修订指令。",
+                            foreach_knowledge_point=True,
+                        ),
+                    )
+                    steps.insert(
+                        gen_idx + 2,
+                        PlanStep(
+                            id=sid("generate_diagrams"),
+                            title="生成教学配图（按知识点）",
+                            tool="generate_diagrams",
+                            arguments={"topic": topic, "subject": subject, "preset": preset},
+                            parallel_group="kp_postwrite",
+                            thought="为知识点生成必要的示意图（与自我批判并行）。",
+                            foreach_knowledge_point=True,
+                        ),
+                    )
+                    critique_idx = gen_idx + 1
+                    diagrams_idx = gen_idx + 2
+                    post_end += 2
+                elif critique_idx != -1 and diagrams_idx == -1:
+                    try:
+                        steps[critique_idx].parallel_group = "kp_postwrite"
+                    except Exception:
+                        pass
+                    steps.insert(
+                        critique_idx + 1,
+                        PlanStep(
+                            id=sid("generate_diagrams"),
+                            title="生成教学配图（按知识点）",
+                            tool="generate_diagrams",
+                            arguments={"topic": topic, "subject": subject, "preset": preset},
+                            parallel_group="kp_postwrite",
+                            thought="为知识点生成必要的示意图（与自我批判并行）。",
+                            foreach_knowledge_point=True,
+                        ),
+                    )
+                    diagrams_idx = critique_idx + 1
+                    post_end += 1
+                elif critique_idx == -1 and diagrams_idx != -1:
+                    try:
+                        steps[diagrams_idx].parallel_group = "kp_postwrite"
+                    except Exception:
+                        pass
+                    steps.insert(
+                        diagrams_idx,
+                        PlanStep(
+                            id=sid("critique_draft"),
+                            title="自我批判（按知识点）",
+                            tool="critique_draft",
+                            arguments={"topic": topic, "subject": subject},
+                            parallel_group="kp_postwrite",
+                            thought="对草稿多维度审查并给出可执行修订指令。",
+                            foreach_knowledge_point=True,
+                        ),
+                    )
+                    critique_idx = diagrams_idx
+                    diagrams_idx += 1
+                    post_end += 1
+                else:
+                    # Both exist: at least mark them as a parallel group; they only run concurrently
+                    # when they are contiguous (we avoid reordering user-authored plans).
+                    try:
+                        steps[critique_idx].parallel_group = steps[critique_idx].parallel_group or "kp_postwrite"
+                    except Exception:
+                        pass
+                    try:
+                        steps[diagrams_idx].parallel_group = steps[diagrams_idx].parallel_group or "kp_postwrite"
+                    except Exception:
+                        pass
+            else:
+                if critique_idx == -1:
+                    steps.insert(
+                        gen_idx + 1,
+                        PlanStep(
+                            id=sid("critique_draft"),
+                            title="自我批判（按知识点）",
+                            tool="critique_draft",
+                            arguments={"topic": topic, "subject": subject},
+                            thought="对草稿多维度审查并给出可执行修订指令。",
+                            foreach_knowledge_point=True,
+                        ),
+                    )
+                    critique_idx = gen_idx + 1
+                    post_end += 1
+
+            if refine_idx == -1:
+                insert_after = max([x for x in [critique_idx, diagrams_idx] if x != -1] or [gen_idx])
+                steps.insert(
+                    insert_after + 1,
+                    PlanStep(
+                        id=sid("refine_draft"),
+                        title="精炼修订（按知识点）",
+                        tool="refine_draft",
+                        arguments={"topic": topic, "subject": subject},
+                        thought="根据批判意见对草稿做定向修订（高分则跳过）。",
+                        foreach_knowledge_point=True,
+                    ),
+                )
+
         rationale = str(obj.get("rationale") or "").strip()
         if not rationale:
             rationale = f"计划：自主规划（学科：{subject}，难度：{difficulty}）"
@@ -732,6 +1066,7 @@ class Planner:
             "知识点已在 Plan 阶段前置拆分并审核，计划不需要包含 split_knowledge_points/review_knowledge_points。",
             "建议对 web_search_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
             "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
+            "并行建议：可用 parallel_group 标记「互不依赖的连续步骤」并行执行；例如：aggregate_knowledge 后并行 synthesize_sources ∥ detect_knowledge_type；写作后并行 critique_draft ∥ generate_diagrams。",
             "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
             "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
         ]
@@ -739,6 +1074,7 @@ class Planner:
             notes.extend(
                 [
                     "你可以自主决定是否画图，并自行调度绘图工具多次（总计建议 3~12 次，按需要可更多/更少）。",
+                    "推荐：优先调用 generate_diagrams（高层工具，会自动规划并调用 tikz_to_svg/seedream_generate）。",
                     "绘图工具支持 foreach_knowledge_point=true（推荐用于逐知识点配图）。每次绘图应传入 knowledge_point 或使用 foreach_knowledge_point 让执行器自动注入 knowledge_points=[kp]。",
                     "tikz_to_svg 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"tikz\":\"\\\\begin{tikzpicture}...\\\\end{tikzpicture}\",\"preamble\":\"\\\\usetikzlibrary{arrows.meta,calc}\"}",
                     "seedream_generate 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"prompt\":\"一张用于教学的简洁插图：...\",\"size\":\"1024x1024\",\"n\":1}",
@@ -788,7 +1124,7 @@ class Planner:
             "输出 schema:\n"
             '{\n  "rationale": "string",\n  "steps": [\n'
             '    {"id": "optional", "title": "string", "tool": "string", "arguments": {}, '
-            '"thought": "string", "foreach_knowledge_point": false, "foreach_limit": 0}\n'
+            '"parallel_group": "string", "thought": "string", "foreach_knowledge_point": false, "foreach_limit": 0}\n'
             "  ]\n}\n"
             "严格要求：只输出 JSON。"
         )

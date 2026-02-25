@@ -6,6 +6,7 @@ OpenAI Function Calling 适配器。
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +26,7 @@ from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_s
 
 
 crawler: Optional[ZujuanCrawler] = None
+_crawler_lock = asyncio.Lock()
 
 
 @asynccontextmanager
@@ -32,8 +34,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
     yield
     global crawler
-    if crawler:
-        await crawler.close()
+    async with _crawler_lock:
+        if crawler:
+            await crawler.close()
+            crawler = None
 
 
 app = FastAPI(
@@ -51,12 +55,13 @@ async def get_crawler(subject: str = "") -> ZujuanCrawler:
     subject = (subject or DEFAULT_SUBJECT).strip()
     subject = resolve_subject(subject, strict=True)
 
-    if crawler is None:
-        crawler = ZujuanCrawler(subject=subject)
-        await crawler.initialize()
-    elif crawler.subject != subject:
-        crawler.set_subject(subject)
-    return crawler
+    async with _crawler_lock:
+        if crawler is None:
+            crawler = ZujuanCrawler(subject=subject)
+            await crawler.initialize()
+        elif crawler.subject != subject:
+            crawler.set_subject(subject)
+        return crawler
 
 
 class SearchByKeywordRequest(BaseModel):

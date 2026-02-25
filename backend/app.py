@@ -69,7 +69,7 @@ def create_app() -> FastAPI:
 
     @app.api_route(
         "/{full_path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+        methods=["GET", "HEAD"],
     )
     async def serve_spa(full_path: str):
         """
@@ -84,7 +84,9 @@ def create_app() -> FastAPI:
 
         index_path = DIST_PATH / "index.html"
         if index_path.exists():
-            return FileResponse(index_path)
+            # Prevent stale SPA shells after redeploys/builds. Asset files are fingerprinted
+            # (hashed) so they can still be cached safely.
+            return FileResponse(index_path, headers={"Cache-Control": "no-cache, max-age=0, must-revalidate"})
         return {"message": "Frontend not found. Please run 'npm run build' in frontend directory."}
 
     return app

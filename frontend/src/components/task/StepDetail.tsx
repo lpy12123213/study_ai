@@ -106,6 +106,14 @@ const KEY_LABELS: Record<string, string> = {
   source: '来源',
   difficulty: '难度',
   score: '分数',
+  knowledge_type: '知识类型',
+  parallel_group: '并行组',
+  threshold: '阈值',
+  should_refine: '需精炼',
+  issues: '问题',
+  revision_instructions: '修订指令',
+  recommended_sections: '推荐小节',
+  dimensions: '维度评分',
 }
 
 /** Short human-readable purpose per tool */
@@ -119,7 +127,13 @@ const TOOL_PURPOSE: Record<string, string> = {
   github_search: '在 GitHub 上检索可能有用的笔记/教程/讲义仓库，作为进一步阅读补充来源。',
   search_questions_by_knowledge: '按知识点从题库检索例题与练习题，覆盖各子知识点的常见考法。',
   aggregate_knowledge: '将百科、联网搜索、题库结果按知识点聚合，形成结构化素材。',
+  synthesize_sources: '将聚合素材去噪、提炼关键事实，生成结构化“源简报”，减轻后续写作上下文负担。',
+  detect_knowledge_type: '判断知识点类型（定义/定理/算法等），用于自适应大纲与写作重点。',
+  generate_outline: '基于知识类型与源简报生成写作大纲，并给出每节的验证标准。',
   generate_study_material: '基于聚合素材生成“讲解 + 例题分步解答 + 练习题”。',
+  critique_draft: '对草稿进行多维度自我审查（准确性/清晰度/完整性/原创性/深度匹配），输出可执行的修订指令。',
+  refine_draft: '根据自我批判的修订指令做定向精炼（高分草稿可自动跳过）。',
+  generate_diagrams: '为知识点生成教学配图（TikZ/文生图），用于增强直观理解（与批判阶段可并行）。',
   assemble_study_archive: '把各知识点内容整理成最终的 Markdown 自学档案。',
   save_markdown_file: '将生成的 Markdown 保存到本地文件，便于下载与复用。',
   review_content: '对生成内容做自检与审查，发现问题则进入迭代修正。',

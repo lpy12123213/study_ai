@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -285,11 +286,11 @@ class LatexToolsMixin:
         model = str(
             os.getenv("STUDY_MATERIALS_LATEX_MODEL")
             or os.getenv("STUDY_MATERIALS_WRITER_MODEL")
-            or self.config.planner_model
             or self.config.summarizer_model
+            or self.config.planner_model
         ).strip()
         if not model:
-            model = self.config.planner_model or self.config.summarizer_model
+            model = self.config.summarizer_model or self.config.planner_model
         title = f"自学材料：{topic}"
         if subject and subject not in title:
             title = f"{subject}｜{title}"
@@ -363,6 +364,9 @@ class LatexToolsMixin:
             max_value=8,
         )
 
+        # LaTeX conversion is mostly formatting; use minimal reasoning to reduce latency/cost.
+        reasoning_cfg = {"effort": "minimal", "exclude": True}
+
         async def _convert_markdown_to_body(
             md: str,
             *,
@@ -382,6 +386,7 @@ class LatexToolsMixin:
                 model=model,
                 temperature=0.2,
                 max_tokens=max_tokens,
+                reasoning=reasoning_cfg,
                 raise_on_fail=True,
             )
 
@@ -436,6 +441,7 @@ class LatexToolsMixin:
                     model=model,
                     temperature=0.2,
                     max_tokens=max_tokens,
+                    reasoning=reasoning_cfg,
                     raise_on_fail=True,
                 )
                 addition_raw = _normalize_latex_text(str(cont_res.get("content") or "").strip())
@@ -490,35 +496,93 @@ class LatexToolsMixin:
         await self._emit_progress(percent=10, stage="准备转换", current=0, total=total_parts)
 
         bodies: List[str] = []
-        for idx, part in enumerate(parts, start=1):
-            p_start = int(10 + (80 * (idx - 1) / total_parts))
-            p_end = int(10 + (80 * idx / total_parts))
-            await self._emit_progress(
-                percent=p_start,
-                stage=f"转换正文（{idx}/{total_parts}）",
-                current=idx,
-                total=total_parts,
-            )
-            chunk_res = await _convert_markdown_to_body(
-                part,
-                part_index=idx,
-                part_total=total_parts,
-                progress_start=p_start,
-                progress_end=p_end,
-            )
-            b = str(chunk_res.get("body") or "").strip()
-            if b:
-                bodies.append(b)
+        part_concurrency = _clamp_int(
+            os.getenv("STUDY_MATERIALS_LATEX_PART_CONCURRENCY") or 2,
+            default=2,
+            min_value=1,
+            max_value=6,
+        )
+        part_concurrency = min(part_concurrency, total_parts)
+
+        if part_concurrency <= 1 or total_parts <= 1:
+            for idx, part in enumerate(parts, start=1):
+                p_start = int(10 + (80 * (idx - 1) / total_parts))
+                p_end = int(10 + (80 * idx / total_parts))
+                await self._emit_progress(
+                    percent=p_start,
+                    stage=f"转换正文（{idx}/{total_parts}）",
+                    current=idx,
+                    total=total_parts,
+                )
+                chunk_res = await _convert_markdown_to_body(
+                    part,
+                    part_index=idx,
+                    part_total=total_parts,
+                    progress_start=p_start,
+                    progress_end=p_end,
+                )
+                b = str(chunk_res.get("body") or "").strip()
+                if b:
+                    bodies.append(b)
+                try:
+                    conts_total += int(chunk_res.get("continuations") or 0)
+                except Exception:
+                    pass
+                await self._emit_progress(
+                    percent=p_end,
+                    stage=f"转换正文（{idx}/{total_parts}）",
+                    current=idx,
+                    total=total_parts,
+                )
+        else:
+            await self._emit_status(f"将并行转换正文（并发={part_concurrency}）以减少等待…")
+            sem = asyncio.Semaphore(part_concurrency)
+
+            async def _run_part(idx: int, part: str) -> Dict[str, Any]:
+                async with sem:
+                    p_start = int(10 + (80 * (idx - 1) / total_parts))
+                    p_end = int(10 + (80 * idx / total_parts))
+                    await self._emit_progress(
+                        percent=p_start,
+                        stage=f"转换正文（{idx}/{total_parts}）",
+                        current=idx,
+                        total=total_parts,
+                    )
+                    res = await _convert_markdown_to_body(
+                        part,
+                        part_index=idx,
+                        part_total=total_parts,
+                        progress_start=p_start,
+                        progress_end=p_end,
+                    )
+                    await self._emit_progress(
+                        percent=p_end,
+                        stage=f"转换正文（{idx}/{total_parts}）",
+                        current=idx,
+                        total=total_parts,
+                    )
+                    out = dict(res) if isinstance(res, dict) else {}
+                    out["__part_index"] = idx
+                    return out
+
+            tasks = [asyncio.create_task(_run_part(i, p)) for i, p in enumerate(parts, start=1)]
             try:
-                conts_total += int(chunk_res.get("continuations") or 0)
+                part_results = await asyncio.gather(*tasks)
             except Exception:
-                pass
-            await self._emit_progress(
-                percent=p_end,
-                stage=f"转换正文（{idx}/{total_parts}）",
-                current=idx,
-                total=total_parts,
-            )
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                raise
+            part_results.sort(key=lambda x: int(x.get("__part_index") or 0))
+
+            for chunk_res in part_results:
+                b = str(chunk_res.get("body") or "").strip()
+                if b:
+                    bodies.append(b)
+                try:
+                    conts_total += int(chunk_res.get("continuations") or 0)
+                except Exception:
+                    pass
 
         body = "\n\n".join([b for b in bodies if b.strip()]).strip()
 
@@ -607,9 +671,15 @@ class LatexToolsMixin:
 
             return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": len(tex_bytes), "model": ""}
 
-        model = str(os.getenv("STUDY_MATERIALS_LATEX_MODEL") or self.config.planner_model or self.config.summarizer_model).strip()
+        model = str(
+            os.getenv("STUDY_MATERIALS_LATEX_REFINE_MODEL")
+            or os.getenv("STUDY_MATERIALS_LATEX_MODEL")
+            or self.config.summarizer_model
+            or self.config.planner_model
+        ).strip()
         if not model:
-            model = self.config.planner_model or self.config.summarizer_model
+            model = self.config.summarizer_model or self.config.planner_model
+        reasoning_cfg = {"effort": "minimal", "exclude": True}
         prompt = {
             "topic": topic,
             "subject": subject,
@@ -641,6 +711,7 @@ class LatexToolsMixin:
             model=model,
             temperature=0.2,
             max_tokens=refine_max_tokens,
+            reasoning=reasoning_cfg,
             raise_on_fail=True,
         )
         refined = _normalize_latex_text(str(res.get("content") or "").strip())
@@ -693,6 +764,7 @@ class LatexToolsMixin:
                 model=model,
                 temperature=0.2,
                 max_tokens=refine_max_tokens,
+                reasoning=reasoning_cfg,
                 raise_on_fail=True,
             )
             addition = _normalize_latex_text(str(cont_res.get("content") or "").strip())
@@ -855,4 +927,3 @@ class LatexToolsMixin:
             "missing_images": missing[:20],
             "engine": "xelatex",
         }
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -148,6 +149,24 @@ class KnowledgePointsToolsMixin:
 
         # LLM-powered split when configured.
         if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
+            # Use a faster model for small JSON tasks by default; allow override via env.
+            model = str(os.getenv("STUDY_MATERIALS_KP_SPLIT_MODEL") or "").strip()
+            if not model:
+                model = str(getattr(self.config, "summarizer_model", "") or "").strip() or str(
+                    getattr(self.config, "planner_model", "") or ""
+                ).strip()
+
+            timeout_raw = (
+                os.getenv("STUDY_MATERIALS_KP_SPLIT_TIMEOUT_S")
+                or os.getenv("STUDY_MATERIALS_PREPLAN_TIMEOUT_S")
+                or ""
+            ).strip()
+            try:
+                timeout_s = float(timeout_raw) if timeout_raw else 25.0
+            except Exception:
+                timeout_s = 25.0
+            timeout_s = max(5.0, min(timeout_s, 180.0))
+
             prompt = {
                 "topic": topic,
                 "subject": subject,
@@ -159,17 +178,28 @@ class KnowledgePointsToolsMixin:
                     '- JSON 格式：{"knowledge_points": ["...", "..."]}\n'
                 ),
             }
-            text = await self._call_llm_text(
-                messages=[
-                    {"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                model=self.config.planner_model,
-                temperature=0.2,
-                max_tokens=2400,
-                response_format={"type": "json_object"},
-                raise_on_fail=strict_llm,
-            )
+            # Even in strict mode, do not block the whole pipeline if the planner model is slow/hangs.
+            # Fall back to Wikipedia/headings/templates if the call times out or fails.
+            try:
+                text = await asyncio.wait_for(
+                    self._call_llm_text(
+                        messages=[
+                            {"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"},
+                            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                        ],
+                        model=model,
+                        temperature=0.2,
+                        max_tokens=2400,
+                        response_format={"type": "json_object"},
+                        reasoning={"effort": "minimal", "exclude": True},
+                        raise_on_fail=False,
+                    ),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                text = ""
+            except Exception:
+                text = ""
             obj = self._extract_json_obj(text)
             points = _clean_points(list(obj.get("knowledge_points") or []))
             if len(points) >= min_points:
@@ -178,13 +208,9 @@ class KnowledgePointsToolsMixin:
                     "subject": subject,
                     "knowledge_points": points,
                     "source": "llm",
+                    "model": model,
                 }
-            if strict_llm:
-                raise RuntimeError(
-                    f"llm_split_failed: got={len(points)} min_points={min_points} model={self.config.planner_model}"
-                )
-        elif strict_llm:
-            raise RuntimeError("llm_not_configured")
+        # If not configured (or failed), fall back to heuristic split.
 
         # Heuristic fallback: split by punctuation if user provided a list.
         raw = re.split(r"[\n,，;；、/|]+", topic)
@@ -213,7 +239,7 @@ class KnowledgePointsToolsMixin:
             "subject": subject,
             "knowledge_points": points or ([topic] if topic else []),
             "source": "heuristic+",
-            "note": "未配置拆分模型或拆分不足，使用 Wikipedia 结构 + 规则模板增强拆分。",
+            "note": "LLM 拆分不可用/超时/不足，使用 Wikipedia 结构 + 规则模板增强拆分。",
         }
 
     async def _tool_review_knowledge_points(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
@@ -262,13 +288,24 @@ class KnowledgePointsToolsMixin:
         source = "heuristic"
         note = ""
 
-        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-            raise RuntimeError("llm_not_configured")
-
         if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and points:
-            model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or self.config.planner_model or "").strip()
+            # Allow override, but default to a faster model for this small JSON-only task.
+            model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or "").strip()
             if not model:
-                model = self.config.planner_model
+                model = str(getattr(self.config, "summarizer_model", "") or "").strip() or str(
+                    getattr(self.config, "planner_model", "") or ""
+                ).strip()
+
+            timeout_raw = (
+                os.getenv("STUDY_MATERIALS_KP_REVIEW_TIMEOUT_S")
+                or os.getenv("STUDY_MATERIALS_PREPLAN_TIMEOUT_S")
+                or ""
+            ).strip()
+            try:
+                timeout_s = float(timeout_raw) if timeout_raw else 30.0
+            except Exception:
+                timeout_s = 30.0
+            timeout_s = max(5.0, min(timeout_s, 240.0))
 
             prompt = {
                 "topic": topic,
@@ -285,17 +322,28 @@ class KnowledgePointsToolsMixin:
             }
             last_err = ""
             for attempt in range(3):
-                text = await self._call_llm_text(
-                    messages=[
-                        {"role": "system", "content": "你是严谨的教研员，输出必须是JSON。"},
-                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                    ],
-                    model=model,
-                    temperature=0.2,
-                    max_tokens=2400,
-                    response_format={"type": "json_object"},
-                    raise_on_fail=strict_llm,
-                )
+                try:
+                    text = await asyncio.wait_for(
+                        self._call_llm_text(
+                            messages=[
+                                {"role": "system", "content": "你是严谨的教研员，输出必须是JSON。"},
+                                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                            ],
+                            model=model,
+                            temperature=0.2,
+                            max_tokens=2400,
+                            response_format={"type": "json_object"},
+                            reasoning={"effort": "minimal", "exclude": True},
+                            raise_on_fail=False,
+                        ),
+                        timeout=timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    last_err = "timeout"
+                    break
+                except Exception as exc:
+                    last_err = str(exc) or "unknown"
+                    break
                 obj = self._extract_json_obj(text)
                 revised = obj.get("knowledge_points")
                 if isinstance(revised, list):
@@ -306,18 +354,15 @@ class KnowledgePointsToolsMixin:
                         note = str(obj.get("note") or "").strip()
                         break
                     last_err = f"too_few_points got={len(cleaned)} min={min_points}"
-                    if strict_llm and attempt < 2:
-                        continue
                 else:
                     last_err = "invalid_json"
-                    if strict_llm and attempt < 2:
-                        continue
-
-                # Non-strict mode: accept heuristic fallback after one attempt.
+                # Retry once or twice if the model returned invalid JSON/too few points.
+                if attempt < 2:
+                    continue
                 break
 
-            if strict_llm and source != "llm":
-                raise RuntimeError(f"llm_review_failed: {last_err or 'unknown'} model={model}")
+            if source != "llm":
+                note = (note + "；" if note else "") + f"LLM 审核不可用/超时（{last_err or 'unknown'}），已回退为规则清洗。"
 
         if topic and len(points) < min_points:
             pads = [
@@ -358,4 +403,3 @@ class KnowledgePointsToolsMixin:
             pass
 
         return out
-

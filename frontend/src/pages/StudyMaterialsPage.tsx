@@ -57,6 +57,7 @@ function toConversationTitle(text: string): string {
 
 type LatexLessonPlanOption = {
   id: string
+  sourceType?: 'lesson_plan' | 'study_materials'
   title?: string
   subject?: string
   grade?: string
@@ -521,6 +522,7 @@ export default function StudyMaterialsPage() {
 
       options.push({
         id,
+        sourceType: 'lesson_plan',
         title: toText((p as any)?.title) || undefined,
         subject: toText((p as any)?.subject) || undefined,
         grade: toText((p as any)?.grade) || undefined,
@@ -532,7 +534,7 @@ export default function StudyMaterialsPage() {
 
     const seen = new Set(options.map((o) => o.id))
     for (const c of conversations || []) {
-      if (!c || c.type !== 'lesson_plan') continue
+      if (!c || (c.type !== 'lesson_plan' && c.type !== 'study_materials')) continue
       const cid = toText(c.id).trim()
       if (!cid) continue
       if (seen.has(cid)) continue
@@ -552,6 +554,7 @@ export default function StudyMaterialsPage() {
 
       options.push({
         id: cid,
+        sourceType: c.type === 'study_materials' ? 'study_materials' : 'lesson_plan',
         title: toText(c.title) || undefined,
         createdAt: toText(c.createdAt) || undefined,
         mdUrl,
@@ -711,7 +714,7 @@ export default function StudyMaterialsPage() {
     const plan = latexLessonPlanOptionById[resolvedId]
     const mdUrl = toText(plan?.mdUrl)
     if (!mdUrl) {
-      setLatexError('未找到教案 Markdown，请先在「教案生成」成功生成后再试。')
+      setLatexError('未找到 Markdown，请先成功生成内容后再试。')
       return
     }
 
@@ -1353,8 +1356,11 @@ export default function StudyMaterialsPage() {
             )
           }
 
+          const isExportFailure = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf'].includes(fatalTool)
           const interrupt =
-            fatalTool || fatalMsg ? `**生成中断**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}` : ''
+            fatalTool || fatalMsg
+              ? `**${isExportFailure ? 'LaTeX/PDF 导出失败' : '生成中断'}**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}`
+              : ''
 
           let content = (assistantText || '已完成生成。').trimEnd()
           if (downloads.length > 0) {
@@ -2015,13 +2021,13 @@ export default function StudyMaterialsPage() {
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-auto">
           <DialogHeader>
             <DialogTitle>Markdown → LaTeX</DialogTitle>
-            <DialogDescription>从「教案成功生成」的 Markdown 中选择，AI 将转换为可下载的 LaTeX（.tex）。</DialogDescription>
+            <DialogDescription>从已生成的 Markdown（自学资料/教案）中选择，AI 将转换为可下载的 LaTeX（.tex）。</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <div className="text-xs font-medium text-muted-foreground">选择教案 Markdown</div>
+                <div className="text-xs font-medium text-muted-foreground">选择 Markdown 来源</div>
                 <Select
                   value={latexLessonPlanId}
                   onValueChange={(v) => void handlePickLessonPlanMarkdown(v)}
@@ -2029,18 +2035,18 @@ export default function StudyMaterialsPage() {
                 >
                   <SelectTrigger>
                     <SelectValue
-                      placeholder={latexLessonPlanOptions.length > 0 ? '请选择…' : '暂无可选教案（请先生成教案）'}
+                      placeholder={latexLessonPlanOptions.length > 0 ? '请选择…' : '暂无可选 Markdown（请先生成内容）'}
                     />
                   </SelectTrigger>
                   <SelectContent>
                     {latexLessonPlanOptions.length === 0 ? (
                       <SelectItem value="__empty" disabled>
-                        暂无可选教案（请先生成教案）
+                        暂无可选 Markdown（请先生成内容）
                       </SelectItem>
                     ) : (
                       latexLessonPlanOptions.filter((p: any) => toText(p?.id).trim().length > 0).map((p: any) => (
                         <SelectItem key={toText(p?.id).trim()} value={toText(p?.id).trim()}>
-                          {(toText(p?.title) || '教案') +
+                          {(`${p?.sourceType === 'study_materials' ? '自学资料' : '教案'}：${toText(p?.title) || (p?.sourceType === 'study_materials' ? '自学资料' : '教案')}`) +
                             (toText(p?.subject) ? ` · ${toText(p?.subject)}` : '') +
                             (toText(p?.grade) ? ` · ${toText(p?.grade)}` : '')}
                         </SelectItem>
@@ -2099,7 +2105,7 @@ export default function StudyMaterialsPage() {
               <Textarea
                 value={latexMarkdown}
                 className="min-h-[180px] font-mono text-xs"
-                placeholder="请先选择一个已成功生成的教案 Markdown"
+                placeholder="请先选择一个已成功生成的 Markdown"
                 readOnly
                 disabled={latexIsConverting || latexIsLoadingSource}
               />

@@ -35,7 +35,7 @@ EVALUATOR_SYSTEM_PROMPT_TEMPLATE = """你是一位严谨的【{subject}】审题
 3) 可行性：后续是否容易沿着该步骤继续推下去？
 
 严格要求：
-- 你必须只输出严格 JSON（不要输出 Markdown 代码块，不要输出额外解释文字）。
+- 你必须只输出严格 JSON(不要输出 Markdown 代码块，不要输出额外解释文字）。
 - score 取值 0-10（可为小数），越高越好。
 - reasoning 为 1-3 句简短评分理由（不要输出长篇思维链条）。
 - issues 为字符串数组，可为空数组。

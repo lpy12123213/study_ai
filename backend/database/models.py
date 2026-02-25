@@ -1,13 +1,13 @@
 """
 数据库模型 - 只存储题目编号和试卷信息
 """
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, delete, desc, func, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import sessionmaker, relationship, selectinload
 from datetime import datetime
 import json
-from typing import List, Optional
+from typing import AsyncGenerator, List, Optional
 from pathlib import Path
 
 Base = declarative_base()
@@ -157,7 +157,7 @@ async def init_db():
     print("数据库初始化完成")
 
 
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """获取数据库会话"""
     async with async_session_maker() as session:
         yield session
@@ -224,8 +224,6 @@ async def get_paper(paper_id: int) -> dict:
         试卷信息字典
     """
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         # 查询试卷
         result = await session.execute(
             select(Paper).where(Paper.id == paper_id)
@@ -272,9 +270,6 @@ async def list_papers(limit: int = 50) -> List[dict]:
         试卷列表
     """
     async with async_session_maker() as session:
-        from sqlalchemy import select, func
-        from sqlalchemy.orm import selectinload
-
         # 使用 selectinload 预加载关系，避免懒加载问题
         result = await session.execute(
             select(Paper)
@@ -306,8 +301,6 @@ async def delete_paper(paper_id: int) -> bool:
         是否删除成功
     """
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         result = await session.execute(
             select(Paper).where(Paper.id == paper_id)
         )
@@ -355,7 +348,6 @@ async def create_conversation(title: str = "新对话") -> int:
 async def list_conversations(limit: int = 50) -> List[dict]:
     """获取对话列表"""
     async with async_session_maker() as session:
-        from sqlalchemy import select
         result = await session.execute(
             select(Conversation)
             .order_by(Conversation.updated_at.desc())
@@ -376,7 +368,6 @@ async def list_conversations(limit: int = 50) -> List[dict]:
 async def get_conversation(conv_id: int) -> dict:
     """获取单个对话"""
     async with async_session_maker() as session:
-        from sqlalchemy import select
         result = await session.execute(
             select(Conversation).where(Conversation.id == conv_id)
         )
@@ -394,7 +385,6 @@ async def get_conversation(conv_id: int) -> dict:
 async def update_conversation_title(conv_id: int, title: str) -> bool:
     """更新对话标题"""
     async with async_session_maker() as session:
-        from sqlalchemy import select
         result = await session.execute(
             select(Conversation).where(Conversation.id == conv_id)
         )
@@ -402,7 +392,7 @@ async def update_conversation_title(conv_id: int, title: str) -> bool:
         if not conv:
             return False
         conv.title = title
-        conv.updated_at = datetime.now(timezone.utc)
+        conv.updated_at = datetime.utcnow()
         await session.commit()
         return True
 
@@ -410,7 +400,6 @@ async def update_conversation_title(conv_id: int, title: str) -> bool:
 async def delete_conversation(conv_id: int) -> bool:
     """删除对话"""
     async with async_session_maker() as session:
-        from sqlalchemy import select
         result = await session.execute(
             select(Conversation).where(Conversation.id == conv_id)
         )
@@ -432,8 +421,6 @@ async def delete_all_conversations() -> dict:
     - Current DB schema does not scope conversations by user, so this clears everything.
     """
     async with async_session_maker() as session:
-        from sqlalchemy import delete, func, select
-
         conv_result = await session.execute(select(func.count(Conversation.id)))
         msg_result = await session.execute(select(func.count(Message.id)))
         conv_count = int(conv_result.scalar() or 0)
@@ -449,7 +436,6 @@ async def add_message(conv_id: int, role: str, content: str,
                       tool_calls: str = None, tool_call_id: str = None) -> int:
     """添加消息"""
     async with async_session_maker() as session:
-        from sqlalchemy import select
         # 更新对话的更新时间
         result = await session.execute(
             select(Conversation).where(Conversation.id == conv_id)
@@ -474,7 +460,6 @@ async def add_message(conv_id: int, role: str, content: str,
 async def get_messages(conv_id: int) -> List[dict]:
     """获取对话的所有消息"""
     async with async_session_maker() as session:
-        from sqlalchemy import select
         result = await session.execute(
             select(Message)
             .where(Message.conversation_id == conv_id)
@@ -517,8 +502,6 @@ async def fork_conversation(
         raise ValueError("invalid_parent_or_message_id")
 
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         parent_result = await session.execute(
             select(Conversation).where(Conversation.id == parent_conv_id)
         )
@@ -604,8 +587,6 @@ async def list_canvas_boards(limit: int = 50, query: str = "") -> List[dict]:
     query = (query or "").strip()
 
     async with async_session_maker() as session:
-        from sqlalchemy import desc, select
-
         stmt = select(CanvasBoard).order_by(desc(CanvasBoard.updated_at)).limit(limit)
         if query:
             # Escape LIKE wildcards to prevent pattern injection
@@ -629,8 +610,6 @@ async def list_canvas_boards(limit: int = 50, query: str = "") -> List[dict]:
 async def get_canvas_board(board_id: int) -> Optional[dict]:
     """Get a single canvas board (including snapshot)."""
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         result = await session.execute(select(CanvasBoard).where(CanvasBoard.id == int(board_id)))
         board = result.scalar_one_or_none()
         if not board:
@@ -661,8 +640,6 @@ async def update_canvas_board(
         dict: {success, board?, conflict?, error?}
     """
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         result = await session.execute(select(CanvasBoard).where(CanvasBoard.id == int(board_id)))
         board = result.scalar_one_or_none()
         if not board:
@@ -710,8 +687,6 @@ async def update_canvas_board(
 async def create_canvas_board_version(board_id: int) -> dict:
     """Create an immutable version snapshot for a board."""
     async with async_session_maker() as session:
-        from sqlalchemy import desc, select
-
         result = await session.execute(select(CanvasBoard).where(CanvasBoard.id == int(board_id)))
         board = result.scalar_one_or_none()
         if not board:
@@ -754,8 +729,6 @@ async def list_canvas_board_versions(board_id: int, limit: int = 30) -> List[dic
     """List recent version snapshots for a board."""
     limit = max(1, min(int(limit or 30), 200))
     async with async_session_maker() as session:
-        from sqlalchemy import desc, select
-
         result = await session.execute(
             select(CanvasBoardVersion)
             .where(CanvasBoardVersion.board_id == int(board_id))
@@ -777,8 +750,6 @@ async def list_canvas_board_versions(board_id: int, limit: int = 30) -> List[dic
 async def get_canvas_board_version(board_id: int, version_id: int) -> Optional[dict]:
     """Get a specific version snapshot (including snapshot payload)."""
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         result = await session.execute(
             select(CanvasBoardVersion).where(
                 CanvasBoardVersion.board_id == int(board_id),

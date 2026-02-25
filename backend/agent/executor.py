@@ -11,13 +11,18 @@ from backend.agent.tools.aggregation import AggregationToolsMixin
 from backend.agent.tools.browse_web_pages import BrowseWebPagesToolsMixin
 from backend.agent.tools.content_review import ContentReviewToolsMixin
 from backend.agent.tools.diagrams import DiagramToolsMixin
+from backend.agent.tools.diagram_planning import DiagramPlanningToolsMixin
 from backend.agent.tools.exports import ExportToolsMixin
 from backend.agent.tools.github_search import GithubSearchToolsMixin
+from backend.agent.tools.knowledge_type_detection import KnowledgeTypeDetectionToolsMixin
 from backend.agent.tools.knowledge_points import KnowledgePointsToolsMixin
 from backend.agent.tools.latex_export import LatexToolsMixin
 from backend.agent.tools.mediawiki_search import MediaWikiToolsMixin
 from backend.agent.tools.plots import PlotToolsMixin
 from backend.agent.tools.question_bank import QuestionBankToolsMixin
+from backend.agent.tools.refine_draft import RefineDraftToolsMixin
+from backend.agent.tools.self_critique import SelfCritiqueToolsMixin
+from backend.agent.tools.source_synthesis import SourceSynthesisToolsMixin
 from backend.agent.tools.stackexchange_search import StackExchangeToolsMixin
 from backend.agent.tools.study_archive import StudyArchiveToolsMixin
 from backend.agent.tools.study_material_generation import StudyMaterialGenerationToolsMixin
@@ -45,12 +50,17 @@ class Executor(
     WikipediaToolsMixin,
     QuestionBankToolsMixin,
     AggregationToolsMixin,
+    SourceSynthesisToolsMixin,
+    KnowledgeTypeDetectionToolsMixin,
     StudyMaterialGenerationToolsMixin,
+    SelfCritiqueToolsMixin,
+    RefineDraftToolsMixin,
     StudyArchiveToolsMixin,
     ContentReviewToolsMixin,
     ExportToolsMixin,
     LatexToolsMixin,
     DiagramToolsMixin,
+    DiagramPlanningToolsMixin,
     PlotToolsMixin,
 ):
     def __init__(self, *, config: Optional[AgentConfig] = None) -> None:
@@ -145,10 +155,12 @@ class Executor(
                 latex_step_timeout_s = float(latex_step_timeout_raw) if latex_step_timeout_raw.strip() else 0.0
             except Exception:
                 latex_step_timeout_s = 0.0
-            # Default to the max clamp (30m) unless explicitly configured.
+            # Default to the max clamp (30m). Even if configured, keep a sensible minimum
+            # because LaTeX export is typically the slowest stage and otherwise times out
+            # under large documents.
             if latex_step_timeout_s <= 0:
                 latex_step_timeout_s = 60.0 * 30.0
-            latex_step_timeout_s = max(30.0, min(latex_step_timeout_s, 60.0 * 30.0))
+            latex_step_timeout_s = max(60.0 * 5.0, min(latex_step_timeout_s, 60.0 * 30.0))
             timeout_s = max(timeout_s, latex_step_timeout_s)
 
         token = _emit_event_var.set(emit_event)

@@ -31,7 +31,7 @@ class ExportToolsMixin:
 
         # Sanitize Windows-unfriendly characters in filename.
         safe = re.sub(r'[<>:"/\\\\|?*\\x00-\\x1F]', "_", topic)
-        safe = re.sub(r"\\s+", " ", safe).strip()
+        safe = re.sub(r"\s+", " ", safe).strip()
         safe = safe.strip(". ")
         safe = safe[:80] if len(safe) > 80 else safe
         if not safe:

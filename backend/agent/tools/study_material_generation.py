@@ -1,34 +1,166 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
 
 
+def _clip_text(text: str, limit: int) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
+    provided = args.get("knowledge_points")
+    if isinstance(provided, list):
+        pts = [str(x or "").strip() for x in provided if str(x or "").strip()]
+        if pts:
+            return pts[:15]
+
+    split_res = ctx.working_memory.get("split_knowledge_points")
+    if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+        pts = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()]
+        if pts:
+            return pts[:15]
+
+    topic = str(args.get("topic") or ctx.current_task or "").strip()
+    return [topic] if topic else []
+
+
+def _heuristic_knowledge_type(kp: str) -> str:
+    s = (kp or "").strip()
+    if not s:
+        return "concept"
+    if any(x in s for x in ["定理", "命题", "引理", "推论"]):
+        return "theorem"
+    if any(x in s for x in ["算法", "排序", "搜索", "动态规划", "贪心", "回溯"]):
+        return "algorithm"
+    if any(x in s for x in ["实验", "测量", "装置", "观测"]):
+        return "experiment"
+    if any(x in s for x in ["历史", "发展", "人物", "年代", "起源"]):
+        return "history"
+    if any(x in s for x in ["定义", "是什么", "含义"]):
+        return "definition"
+    return "concept"
+
+
+def _default_outline_sections(knowledge_type: str, preset: str) -> List[Dict[str, Any]]:
+    """A deterministic outline fallback used when outline tool isn't called or LLM isn't configured."""
+
+    kt = (knowledge_type or "").strip().lower()
+    if kt not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
+        kt = "concept"
+
+    deep = preset in {"deep", "research"}
+    research = preset == "research"
+
+    def sec(title: str, hints: List[str], verify: List[str]) -> Dict[str, Any]:
+        return {"title": title, "hints": hints[:4], "verify": verify[:5]}
+
+    if kt == "theorem":
+        sections = [
+            sec("定理陈述（先写清条件）", ["用一句话说清楚结论是什么", "把所有适用条件显式写出"], ["出现“条件/结论”拆分", "不遗漏边界条件"]),
+            sec("直观理解（为什么可能成立）", ["用图像/类比解释直觉", "解释结论在极端情况下是否合理"], ["有直观解释，不是纯符号复述"]),
+            sec("条件与边界/反例", ["哪些条件不可缺？缺了会怎样？", "给出典型反例或边界情况"], ["至少1个边界/反例或陷阱"]),
+            sec("证明思路骨架（选读）" if deep else "证明思路（可跳过）", ["给出3~8行推导骨架", "标注关键一步为什么这么做"], ["不要求写满细节，但要可追踪"]),
+            sec("常见误区与易错点", ["列出3个常见误解", "解释为什么会错"], ["至少2条误区（若适用）"]),
+            sec("应用/题型与解题框架", ["遇到题目时怎么用", "常用变形/等价表述"], ["给出可执行的步骤/框架"]),
+        ]
+        if research:
+            sections.append(sec("自检清单", ["列出5个学完应能回答的问题"], ["有可操作自检项"]))
+        return sections
+
+    if kt == "algorithm":
+        sections = [
+            sec("要解决的问题与适用场景", ["这个算法解决什么问题", "输入/输出是什么"], ["说明适用范围"]),
+            sec("核心思想（直觉）", ["一句话概括策略", "用例子说明为什么这样做"], ["有直觉说明"]),
+            sec("步骤/伪代码", ["分步骤列出流程", "关键状态/变量含义"], ["步骤清晰可执行"]),
+            sec("正确性要点（为什么对）", ["说明关键不变式/贪心选择理由"], ["给出正确性理由"]),
+            sec("复杂度与瓶颈", ["时间复杂度/空间复杂度", "最坏/平均情况（如适用）"], ["复杂度明确"]),
+            sec("实现细节与常见坑", ["边界条件", "容易写错的地方"], ["至少2个实现坑"]),
+        ]
+        if deep:
+            sections.append(sec("变体与拓展（选读）", ["有哪些常见变体", "何时选择变体"], ["至少提到1个变体（如适用）"]))
+        return sections
+
+    if kt == "history":
+        sections = [
+            sec("它是什么（一句话概括）", ["先给出结论式摘要"], ["有一句话概括"]),
+            sec("时间线/发展脉络", ["按时间或阶段描述", "点出关键转折"], ["至少3个关键节点"]),
+            sec("关键人物/事件/思想", ["列出核心贡献", "避免八卦式细节"], ["有关键贡献点"]),
+            sec("影响与今天怎么看", ["它解决了什么问题", "留下了什么方法/观点"], ["有影响总结"]),
+        ]
+        return sections
+
+    if kt == "experiment":
+        sections = [
+            sec("实验目的与核心结论", ["要验证/测量什么", "预期观察到什么"], ["目的明确"]),
+            sec("装置与变量", ["装置结构", "自变量/因变量/控制变量"], ["变量划分清晰"]),
+            sec("步骤与数据处理", ["流程步骤", "如何计算/拟合/作图"], ["步骤可复现"]),
+            sec("误差来源与注意事项", ["系统误差/随机误差", "如何减小误差"], ["至少2个误差来源"]),
+        ]
+        return sections
+
+    # concept / definition
+    sections = [
+        sec("为什么需要它（动机）", ["它解决什么问题", "没有它会怎样"], ["有动机说明"]),
+        sec("定义与核心表述", ["给出严格定义/核心公式", "解释每个术语/符号含义"], ["定义清晰且自洽"]),
+        sec("直观理解（类比/图像）", ["用类比帮助理解", "给一个最简单例子"], ["有直觉+例子"]),
+        sec("关键性质/结论", ["列出3~6条性质", "每条写清适用条件（若有）"], ["性质不少于3条（若适用）"]),
+        sec("常见误区与易错点", ["误区→为何错→正确理解"], ["至少2条误区（若适用）"]),
+        sec("应用/解题框架", ["遇到相关问题怎么用", "常用思路2~4步"], ["给出可执行步骤"]),
+    ]
+    if deep:
+        sections.append(sec("推导/证明思路（选读）", ["给出推导骨架或证明框架"], ["有推导骨架（如适用）"]))
+    if research:
+        sections.append(sec("自检清单（选读）", ["列出5个自测问题"], ["有自检项"]))
+    return sections
+
+
+def _first_existing_diagram(ctx: CompressedContext, kp: str) -> Dict[str, Any]:
+    blob = ctx.working_memory.get("diagrams")
+    if not isinstance(blob, dict):
+        return {}
+    entries: List[Dict[str, Any]] = []
+    if isinstance(blob.get("items"), list):
+        entries = [x for x in (blob.get("items") or []) if isinstance(x, dict)]
+    elif isinstance(blob.get("sections"), list):
+        entries = [x for x in (blob.get("sections") or []) if isinstance(x, dict)]
+    for it in entries:
+        if str(it.get("knowledge_point") or "").strip() != kp:
+            continue
+        ds = it.get("diagrams")
+        if isinstance(ds, list):
+            first = next((d for d in ds if isinstance(d, dict)), None)
+            return dict(first or {})
+        return {}
+    return {}
+
+
 class StudyMaterialGenerationToolsMixin:
-    async def _tool_generate_study_material(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
-        """基于聚合数据，为每个知识点生成讲解与例题解答。"""
+    async def _tool_generate_outline(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Generate an adaptive outline per knowledge point.
 
-        aggregated = ctx.working_memory.get("aggregate_knowledge") or ctx.working_memory.get("aggregated")
-        if not isinstance(aggregated, dict):
-            aggregated = {}
+        Writes:
+        - ctx.working_memory["outlines"][knowledge_point] = outline (dict)
+        """
 
-        topic = str(args.get("topic") or aggregated.get("topic") or ctx.current_task).strip()
-        subject = str(args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
-        sections_in = aggregated.get("items") if isinstance(aggregated.get("items"), list) else []
+        topic = str(args.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        strict_llm = self._strict_llm(ctx, args)
 
-        # Study-materials options (passed from API -> TaskManager -> AgentCore).
-        # Planner already uses these flags; here we also use them to shape writing style/length.
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-        strict_llm = self._strict_llm(ctx, args)
-        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-            raise RuntimeError("llm_not_configured")
         preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
         if preset not in {"quick", "standard", "deep", "research"}:
             preset = "standard"
@@ -36,55 +168,184 @@ class StudyMaterialGenerationToolsMixin:
         if len(requirements) > 600:
             requirements = requirements[:599].rstrip() + "…"
 
-        # Optional: generate only for specified knowledge points (useful when running per-point subagents).
-        requested_points: List[str] = []
-        provided = args.get("knowledge_points")
-        if isinstance(provided, list):
-            requested_points = [str(x or "").strip() for x in provided if str(x or "").strip()]
-        if requested_points:
-            requested_set = {p for p in requested_points}
-            sections_in = [
-                it
-                for it in (sections_in or [])
-                if isinstance(it, dict) and str(it.get("knowledge_point") or "").strip() in requested_set
-            ]
+        points = _extract_points(args, ctx)
+
+        source_briefs = ctx.working_memory.get("source_briefs")
+        source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
+
+        knowledge_types = ctx.working_memory.get("knowledge_types")
+        knowledge_types = dict(knowledge_types) if isinstance(knowledge_types, dict) else {}
+
+        model = str(
+            os.getenv("STUDY_MATERIALS_OUTLINE_MODEL")
+            or getattr(getattr(self, "config", None), "summarizer_model", "")
+            or getattr(getattr(self, "config", None), "planner_model", "")
+        ).strip()
+        if not model:
+            model = "gpt-4o-mini"
+
+        def _sec_bounds() -> Tuple[int, int]:
+            if preset == "quick":
+                return (5, 7)
+            if preset == "deep":
+                return (8, 11)
+            if preset == "research":
+                return (9, 13)
+            return (6, 9)
+
+        sec_min, sec_max = _sec_bounds()
+
+        async def _outline_one(kp: str) -> Dict[str, Any]:
+            kt_obj = knowledge_types.get(kp) if isinstance(knowledge_types.get(kp), dict) else {}
+            knowledge_type = str(kt_obj.get("knowledge_type") or "").strip().lower()
+            if knowledge_type not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
+                knowledge_type = _heuristic_knowledge_type(kp)
+
+            brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
+
+            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+                if strict_llm:
+                    raise RuntimeError("llm_not_configured")
+                outline = {"sections": _default_outline_sections(knowledge_type, preset)}
+                ctx.working_memory.setdefault("outlines", {})[kp] = outline
+                return {"knowledge_point": kp, "outline": outline, "source": "heuristic", "knowledge_type": knowledge_type}
+
+            prompt = {
+                "topic": topic,
+                "subject": subject,
+                "knowledge_point": kp,
+                "preset": preset,
+                "knowledge_type": knowledge_type,
+                "ability_level": str(ctx.user_profile.ability_level or "unknown"),
+                "ability_score": float(ctx.user_profile.ability_score or 0.5),
+                "requirements": requirements,
+                "source_brief": brief,
+                "constraints": [
+                    "请为该知识点设计一份『讲解结构提纲』，用于后续分段写作。",
+                    f"sections 数量建议：{sec_min}~{sec_max} 个（不必凑满，但要覆盖核心内容）。",
+                    "输出严格 JSON：{\"sections\":[{\"title\":\"...\",\"hints\":[\"...\"],\"verify\":[\"...\"]}, ...]}。",
+                    "title 用中文短语，避免机械复用固定模板标题；要体现本知识点特点。",
+                    "hints 每节 1~4 条，短提示即可。",
+                    "verify 为该节写完后的『验证标准』，每节 2~5 条，越可操作越好。",
+                    "必须覆盖：定义/表述、直观理解、关键结论或性质/条件、常见误区、应用/解题框架或总结。",
+                    "不要输出例题/练习题；不要输出 URL；不要输出 Markdown。",
+                ],
+            }
+
+            raw = await self._call_llm_text(
+                messages=[
+                    {"role": "system", "content": "你是严谨的教学结构设计助手，只输出 JSON。"},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                model=model,
+                temperature=0.2,
+                max_tokens=1400,
+                response_format={"type": "json_object"},
+                raise_on_fail=strict_llm,
+            )
+            obj = self._extract_json_obj(raw)
+            sections_raw = obj.get("sections") if isinstance(obj, dict) else None
+            sections: List[Dict[str, Any]] = []
+            if isinstance(sections_raw, list):
+                for sec in sections_raw[: max(4, sec_max)]:
+                    if not isinstance(sec, dict):
+                        continue
+                    title = str(sec.get("title") or "").strip().strip("# ").strip()
+                    if not title:
+                        continue
+                    hints = sec.get("hints")
+                    verify = sec.get("verify")
+                    hints_list = [str(x).strip() for x in hints if str(x).strip()] if isinstance(hints, list) else []
+                    verify_list = [str(x).strip() for x in verify if str(x).strip()] if isinstance(verify, list) else []
+                    sections.append({"title": title[:48], "hints": hints_list[:6], "verify": verify_list[:8]})
+
+            if not sections:
+                sections = _default_outline_sections(knowledge_type, preset)
+
+            outline = {"sections": sections}
+            ctx.working_memory.setdefault("outlines", {})[kp] = outline
+            return {"knowledge_point": kp, "outline": outline, "source": "llm", "knowledge_type": knowledge_type}
+
+        items = [await _outline_one(kp) for kp in points]
+        return {"topic": topic, "subject": subject, "preset": preset, "items": items}
+
+    async def _tool_generate_study_material(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Write study material per knowledge point (section-level parallel writing)."""
+
+        aggregated = ctx.working_memory.get("aggregate_knowledge") or ctx.working_memory.get("aggregated") or {}
+        if not isinstance(aggregated, dict):
+            aggregated = {}
+
+        topic = str(args.get("topic") or aggregated.get("topic") or ctx.current_task).strip()
+        subject = str(args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        items_in = aggregated.get("items") if isinstance(aggregated.get("items"), list) else []
+        items_in = [x for x in items_in if isinstance(x, dict)]
+
+        study_opts = ctx.working_memory.get("study_options")
+        study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+        strict_llm = self._strict_llm(ctx, args)
+        preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
+        requirements = str(args.get("requirements") or study_opts.get("requirements") or "").strip()
+        if len(requirements) > 600:
+            requirements = requirements[:599].rstrip() + "…"
+
+        requested = args.get("knowledge_points")
+        if isinstance(requested, list) and requested:
+            wanted = {str(x or "").strip() for x in requested if str(x or "").strip()}
+            items_in = [x for x in items_in if str(x.get("knowledge_point") or "").strip() in wanted]
 
         max_points = max(1, min(int(args.get("max_points") or 8), 15))
-        max_examples = max(0, min(int(args.get("max_examples") or 1), 2))
         max_web_results = max(3, min(int(args.get("max_web_results") or 8), 25))
         max_web_pages = max(0, min(int(args.get("max_web_pages") or 2), 8))
         max_page_chars = max(500, min(int(args.get("max_page_chars") or 3200), 8000))
-        with_diagrams = bool(args.get("with_diagrams", True))
         with_questions = bool(args.get("with_questions", False))
-        max_diagrams = int(
-            args.get("max_diagrams")
-            or (4 if preset == "deep" else 6 if preset == "research" else 3 if preset == "standard" else 1)
-        )
-        # Upper bound only; the model is still instructed to output 0~1 unless multiple diagrams truly help.
-        max_diagrams = max(0, min(max_diagrams, 20))
+
+        section_conc_raw = args.get("section_concurrency") or os.getenv("STUDY_MATERIALS_SECTION_CONCURRENCY") or "3"
+        try:
+            section_concurrency = int(section_conc_raw)
+        except Exception:
+            section_concurrency = 3
+        section_concurrency = max(1, min(section_concurrency, 6))
+
+        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            raise RuntimeError("llm_not_configured")
+
+        writer_model = str(
+            os.getenv("STUDY_MATERIALS_WRITER_MODEL")
+            or getattr(getattr(self, "config", None), "planner_model", "")
+            or getattr(getattr(self, "config", None), "summarizer_model", "")
+        ).strip()
+        if not writer_model:
+            writer_model = "gpt-4o-mini"
+
+        # Per-section token cap (shorter prompts -> faster).
+        if preset == "quick":
+            section_max_tokens = 1800
+            cont_limit = 1
+        elif preset == "deep":
+            section_max_tokens = 2600
+            cont_limit = 2
+        elif preset == "research":
+            section_max_tokens = 3200
+            cont_limit = 2
+        else:
+            section_max_tokens = 2200
+            cont_limit = 1
+
+        source_briefs = ctx.working_memory.get("source_briefs")
+        source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
+        outlines = ctx.working_memory.get("outlines")
+        outlines = dict(outlines) if isinstance(outlines, dict) else {}
+        knowledge_types = ctx.working_memory.get("knowledge_types")
+        knowledge_types = dict(knowledge_types) if isinstance(knowledge_types, dict) else {}
 
         sections: List[Dict[str, Any]] = []
-        for item in (sections_in or [])[:max_points]:
-            if not isinstance(item, dict):
-                continue
+        for item in items_in[:max_points]:
             kp = str(item.get("knowledge_point") or "").strip()
             if not kp:
                 continue
-
-            writer_model = str(
-                os.getenv("STUDY_MATERIALS_WRITER_MODEL")
-                or self.config.planner_model
-                or self.config.summarizer_model
-            ).strip()
-            writer_reasoning = None
-            writer_max_tokens_raw = str(os.getenv("STUDY_MATERIALS_WRITER_MAX_TOKENS") or "").strip()
-            try:
-                writer_max_tokens = int(writer_max_tokens_raw) if writer_max_tokens_raw else 0
-            except Exception:
-                writer_max_tokens = 0
-            # "Infinite" (requested): use a very large max_tokens so generation isn't artificially truncated.
-            if writer_max_tokens <= 0:
-                writer_max_tokens = 200000
 
             wiki = item.get("wikipedia") if isinstance(item.get("wikipedia"), dict) else {}
             mw = item.get("mediawiki") if isinstance(item.get("mediawiki"), dict) else {}
@@ -103,770 +364,142 @@ class StudyMaterialGenerationToolsMixin:
             web_pages = pages_blob.get("pages") if isinstance(pages_blob.get("pages"), list) else []
             web_pages = [p for p in web_pages if isinstance(p, dict)]
             web_pages = [p for p in web_pages if p.get("success") and str(p.get("text") or "").strip()]
+            for p in web_pages:
+                p["text"] = _clip_text(str(p.get("text") or ""), max_page_chars)
             web_pages = web_pages[:max_web_pages]
 
             examples = q.get("examples") if isinstance(q.get("examples"), list) else []
             exercises = q.get("exercises") if isinstance(q.get("exercises"), list) else []
-            examples = [x for x in examples if isinstance(x, dict)][: max_examples or 0]
-            exercises = [x for x in exercises if isinstance(x, dict)][:10]
             if not with_questions:
                 examples = []
                 exercises = []
 
-            # Explanation (LLM if configured; fallback to Wikipedia summary)
-            explanation_md = ""
-            explanation_source = "unknown"
-            explanation_finish_reason = ""
-            explanation_usage: Dict[str, Any] = {}
-            explanation_continuations = 0
+            kt_obj = knowledge_types.get(kp) if isinstance(knowledge_types.get(kp), dict) else {}
+            knowledge_type = str(kt_obj.get("knowledge_type") or "").strip().lower()
+            if knowledge_type not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
+                knowledge_type = _heuristic_knowledge_type(kp)
 
-            if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
+            brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
+            if not brief:
+                wiki_summary = _clip_text(str(wiki.get("summary") or wiki.get("content") or ""), 1200)
+                web_sum = _clip_text(web_summary, 1400)
+                brief = {
+                    "definition": [x for x in [wiki_summary.split("\n")[0] if wiki_summary else ""] if x],
+                    "core_ideas": [x for x in [web_sum] if x],
+                    "key_properties": [],
+                    "conditions_and_boundaries": [],
+                    "common_misconceptions": [],
+                    "applications": [],
+                    "derivation_or_proof_sketch": [],
+                    "notation_and_terms": [],
+                }
 
-                def _clip_text(text: str, limit_chars: int) -> str:
-                    t = (text or "").strip()
-                    if len(t) <= limit_chars:
-                        return t
-                    return t[: limit_chars - 1].rstrip() + "…"
+            outline = outlines.get(kp) if isinstance(outlines.get(kp), dict) else {}
+            outline_sections = outline.get("sections") if isinstance(outline.get("sections"), list) else []
+            outline_sections = [x for x in outline_sections if isinstance(x, dict)]
+            if not outline_sections:
+                outline_sections = _default_outline_sections(knowledge_type, preset)
 
-                fallback_template_lines = [
-                    "#### 为什么需要它（动机与问题背景）",
-                    "  - 这个概念/方法要解决什么问题？没有它会怎样？",
-                    "  - 用一句话概括它的核心价值",
-                    "#### 定义与核心表述",
-                    "  - 给出精确定义（含符号约定）",
-                    "  - 用「一句话版本」帮助记忆",
-                    "#### 直观理解（类比与图像）",
-                    "  - 用日常生活或已学知识做类比，让读者先建立直觉",
-                    '  - 描述"脑中的画面"：如果要画一张图，应该画什么？',
-                    "#### 关键结论与性质",
-                    "  - 列出最重要的 3~6 条结论（写清适用条件）",
-                    "  - 每条结论用**加粗**突出核心表述",
-                    "  - 给出「何时用 / 怎么用」的简要提示",
-                    "#### 常见误区与易错点",
-                    "  - 误区描述 → 为什么会错 → 正确理解 / 反例",
-                    "  - 重点标注「看起来对但实际错」的陷阱",
-                    "#### 解题/应用思路小结",
-                    "  - 遇到相关问题时的思考框架（2~4 步）",
-                    "  - 常用技巧或判断依据",
-                ]
-                if preset in {"deep", "research"}:
-                    fallback_template_lines.extend(
-                        [
-                            "#### 推导/证明思路（选读）",
-                            "  - 给出 3~8 行的证明框架或推导骨架",
-                            "  - 标注关键步骤的「为什么这样做」",
-                            "#### 联系与拓展（选读）",
-                            "  - 前置知识：理解本概念需要先掌握什么？",
-                            "  - 相邻概念：与哪些概念容易混淆或有紧密联系？",
-                            "  - 典型应用场景举例",
-                        ]
-                    )
-                if preset == "research":
-                    fallback_template_lines.extend(
-                        [
-                            "#### 关键例子与反例（选读）",
-                            "  - 用来检验理解的典型例子（不写成练习题）",
-                            "  - 边界情况或反例：帮助界定概念的适用范围",
-                            "#### 自检清单（选读）",
-                            "  - 学完后应能回答的 5 个问题（可用作自我检测）",
-                        ]
-                    )
+            # Section-level parallel writing.
+            sem = asyncio.Semaphore(section_concurrency)
 
-                template_lines: List[str] = []
-                try:
-                    sec_min = 6
-                    sec_max = 9
-                    if preset == "quick":
-                        sec_min, sec_max = 5, 7
-                    elif preset == "deep":
-                        sec_min, sec_max = 8, 11
-                    elif preset == "research":
-                        sec_min, sec_max = 9, 13
+            async def _write_section(sec: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any], int]:
+                title = str(sec.get("title") or "").strip().strip("# ").strip() or "本节"
+                hints = sec.get("hints")
+                verify = sec.get("verify")
+                hints_list = [str(x).strip() for x in hints if str(x).strip()] if isinstance(hints, list) else []
+                verify_list = [str(x).strip() for x in verify if str(x).strip()] if isinstance(verify, list) else []
 
-                    outline_prompt = {
-                        "topic": topic,
-                        "subject": subject,
-                        "knowledge_point": kp,
-                        "preset": preset,
-                        "ability_level": str(ctx.user_profile.ability_level or "unknown"),
-                        "ability_score": float(ctx.user_profile.ability_score or 0.5),
-                        "requirements": requirements,
-                        "constraints": [
-                            "请为该知识点设计一份『讲解结构提纲』，用于后续撰写。",
-                            f"sections 数量建议：{sec_min}~{sec_max} 个（不必凑满，但要覆盖核心内容）。",
-                            "只输出严格 JSON：{\"sections\":[{\"title\":\"...\",\"hints\":[\"...\",...]}, ...]}。",
-                            "title 用中文短语，避免机械复用固定模板标题；要体现本知识点特点。",
-                            "hints 每节 1~4 条，简短提示即可（用于指导写作）。",
-                            "必须覆盖：定义/表述、直观理解、关键结论或性质/条件、常见误区、解题/应用框架或总结。",
-                            "不要输出例题/练习题；不要输出 URL；不要输出 Markdown。",
-                        ],
-                    }
-                    outline_raw = (
-                        await self._call_llm_text(
-                            messages=[
-                                {"role": "system", "content": "你是严谨的教学结构设计助手，只输出JSON。"},
-                                {"role": "user", "content": json.dumps(outline_prompt, ensure_ascii=False)},
-                            ],
-                            model=writer_model,
-                            temperature=0.2,
-                            max_tokens=1200,
-                            response_format={"type": "json_object"},
-                        )
-                    ).strip()
-                    outline_obj = self._extract_json_obj(outline_raw)
-                    outline_sections = outline_obj.get("sections") if isinstance(outline_obj, dict) else None
-                    if isinstance(outline_sections, list):
-                        for sec in outline_sections[: max(4, sec_max)]:
-                            if not isinstance(sec, dict):
-                                continue
-                            title = str(sec.get("title") or "").strip().strip("# ")
-                            if not title:
-                                continue
-                            if len(title) > 48:
-                                title = title[:48].rstrip() + "…"
-                            template_lines.append(f"#### {title}")
-                            hints = sec.get("hints")
-                            if isinstance(hints, list):
-                                for h in hints[:4]:
-                                    s = str(h or "").strip().replace("\n", " ").strip()
-                                    if not s:
-                                        continue
-                                    if len(s) > 60:
-                                        s = s[:60].rstrip() + "…"
-                                    template_lines.append(f"  - {s}")
-                except Exception:
-                    template_lines = []
-
-                if not template_lines:
-                    template_lines = list(fallback_template_lines)
-
-                length_note = ""
-                if preset == "quick":
-                    length_note = "篇幅：尽量精炼；每小节 3~6 条要点为主，避免长段落。"
-                elif preset in {"deep", "research"}:
-                    length_note = (
-                        "篇幅：允许更详细；关键结论尽量 ≥ 5 条，误区 ≥ 3 条（若适用）。"
-                        if preset == "deep"
-                        else "篇幅：研究型；关键结论尽量 ≥ 6 条，误区 ≥ 3 条，补充推导骨架与自检清单。"
-                    )
-
-                extra_req = f"\n额外写作要求（来自用户）：{requirements}\n" if requirements else ""
-
-                instructions = (
-                    "【任务】为知识点生成一份可直接自学的讲解（Markdown），嵌入到「### 核心讲解」下方。\n"
-                    "\n"
-                    f"【生成预设】{preset}\n"
-                    f"{length_note}\n"
-                    f"{extra_req}"
-                    "\n"
-                    "【写作理念 — 费曼学习法】\n"
-                    "1. 先讲「为什么」：概念要解决什么问题？没有它会怎样？\n"
-                    "2. 类比先行：用日常生活或已学知识建立直觉，再给严格定义\n"
-                    "3. 渐进深入：从最简单情形讲起，逐步添加复杂度\n"
-                    "4. 重点突出：关键结论**加粗**，避免淹没在长段落中\n"
-                    "5. 误区预警：主动指出初学者易错点，说明「为何会错」和「如何避免」\n"
-                    "\n"
-                    "【目标读者】自学者。根据 ability_score 调整深度：\n"
-                    "  - 0.0~0.3：侧重直观、类比、生活例子，少用抽象符号\n"
-                    "  - 0.4~0.6：直觉与严谨并重，给出完整定义但配合解释\n"
-                    "  - 0.7~1.0：可更严谨抽象，补充推导细节和边界条件\n"
-                    "\n"
-                    "【结构提纲】（本知识点自适应；允许微调顺序，但需覆盖核心内容）\n"
-                    + "\n".join(template_lines)
-                    + "\n\n"
-                    "【硬性格式要求】\n"
-                    "- 小节标题从 `####` 开始，禁止输出 `#`/`##`/`###`\n"
-                    '- 不输出"参考资料/外部链接"段落，不输出任何 URL\n'
-                    "- 不输出 `[[1]]` 等证据标记，不写「根据网页/维基」等过程描述\n"
-                    "- 数学公式：行内 $...$，独立行 $$...$$\n"
-                    "\n"
-                    "【内容质量要求】\n"
-                    "- 原创综合：严禁照抄任何数据源（包括 MCP 工具返回的搜索摘要、网页正文、维基百科、StackExchange 等）的原文；\n"
-                    "  所有来源仅作为「理解素材」，必须先完全消化，再用你自己的语言重新组织和表达\n"
-                    "- 禁止搬运：不得将搜索结果、网页抓取内容或 API 返回的文本直接粘贴或仅做微小改动后输出；\n"
-                    "  如果发现某段话与来源高度相似，必须彻底改写（换结构、换表述、换例子）\n"
-                    "- 多源整合：综合多条来源的共同结论，不按来源逐条复述，不保留来源的行文结构\n"
-                    "- 极短引用：如需引用原句，用引号标注且 ≤20 字，并立即用自己的话解释\n"
-                    "- 信息不足时：明确标注「推断」或「建议」\n"
-                    "- 不输出例题或练习题\n"
-                )
+                # Fallback when LLM isn't available.
+                if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+                    lines = [f"#### {title}"]
+                    for h in hints_list[:4]:
+                        lines.append(f"- {h}")
+                    # Use a few brief signals so the output isn't empty.
+                    if not hints_list:
+                        for k in ["definition", "core_ideas", "key_properties", "conditions_and_boundaries", "common_misconceptions", "applications"]:
+                            v = brief.get(k)
+                            if isinstance(v, list) and v:
+                                lines.append(f"- {str(v[0]).strip()}")
+                    return ("\n".join(lines).strip(), "fallback", {}, 0)
 
                 payload = {
                     "topic": topic,
                     "subject": subject,
+                    "knowledge_point": kp,
+                    "knowledge_type": knowledge_type,
+                    "preset": preset,
                     "ability_level": str(ctx.user_profile.ability_level or "unknown"),
                     "ability_score": float(ctx.user_profile.ability_score or 0.5),
-                    "knowledge_point": kp,
-                    "wikipedia": {
-                        "title": wiki.get("title"),
-                        "url": wiki.get("url"),
-                        "summary": wiki.get("summary"),
-                    },
-                    "mediawiki": {
-                        "title": mw.get("title"),
-                        "url": mw.get("url"),
-                        "summary": mw.get("summary"),
-                        "base_url": mw.get("base_url"),
-                    },
-                    "web_provider": web_provider,
-                    "web_scope": web_scope,
-                    "web_summary": web_summary,
-                    "web_results": [
-                        {
-                            "title": r.get("title"),
-                            "url": r.get("url"),
-                            "snippet": _clip_text(
-                                str(r.get("snippet") or r.get("text") or ""),
-                                900 if preset == "research" else 600,
-                            ),
-                        }
-                        for r in web_results
+                    "requirements": requirements,
+                    "source_brief": brief,
+                    "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
+                    "instructions": [
+                        "请只撰写这一个小节的内容。",
+                        f"输出必须以 `#### {title}` 开头。",
+                        "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
+                        "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
+                        "若信息不足，请明确标注「推断」或「建议」。",
                     ],
-                    "web_pages": [
-                        {
-                            "title": p.get("title"),
-                            "url": p.get("url"),
-                            "extract": _clip_text(str(p.get("text") or ""), max_page_chars),
-                        }
-                        for p in web_pages
-                    ],
-                    "github_repos": [
-                        {
-                            "full_name": r.get("full_name"),
-                            "url": r.get("url"),
-                            "description": r.get("description"),
-                            "stars": r.get("stars"),
-                            "language": r.get("language"),
-                            "readme_excerpt": _clip_text(str(r.get("readme_excerpt") or ""), max_page_chars),
-                        }
-                        for r in (gh.get("results") if isinstance(gh.get("results"), list) else [])[:10]
-                        if isinstance(r, dict)
-                    ],
-                    "stackexchange": [
-                        {
-                            "title": r.get("title"),
-                            "url": r.get("url"),
-                            "score": r.get("score"),
-                            "tags": r.get("tags"),
-                            "question_text": _clip_text(str(r.get("question_text") or ""), max_page_chars),
-                            "top_answer_text": _clip_text(str(r.get("top_answer_text") or ""), max_page_chars),
-                        }
-                        for r in (se.get("results") if isinstance(se.get("results"), list) else [])[:8]
-                        if isinstance(r, dict)
-                    ],
-                    "instructions": instructions,
                 }
-                cont_limit_raw = str(os.getenv("STUDY_MATERIALS_MAX_CONTINUATIONS") or "20").strip()
-                try:
-                    cont_limit = int(cont_limit_raw)
-                except Exception:
-                    cont_limit = 20
-                cont_limit = max(0, min(cont_limit, 100))
 
-                md_res = await self._call_llm_markdown_with_continuation(
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "你是一位经验丰富的教育专家，擅长将复杂概念拆解为可自学的清晰讲解。\n"
-                                "你遵循「费曼学习法」：如果不能用简单语言解释清楚，说明还没真正理解。\n"
-                                "你的目标是让读者「恍然大悟」，而非堆砌信息。\n"
-                                "输出必须是 Markdown。\n"
-                                "【最高优先级规则】下方 JSON 中的 wikipedia/web_summary/web_results/web_pages/stackexchange 等字段\n"
-                                "仅供你理解知识点，绝对禁止将其原文或近似原文搬入输出。你必须完全用自己的话重写。"
-                            ),
-                        },
-                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                    ],
-                    model=writer_model,
-                    temperature=0.25,
-                    max_tokens=writer_max_tokens,
-                    reasoning=writer_reasoning,
-                    continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "preset": preset},
-                    max_continuations=cont_limit,
-                    raise_on_fail=strict_llm,
-                )
-                explanation_md = str(md_res.get("content") or "").strip()
-                explanation_finish_reason = str(md_res.get("finish_reason") or "").strip()
-                explanation_usage = md_res.get("usage") if isinstance(md_res.get("usage"), dict) else {}
-                try:
-                    explanation_continuations = int(md_res.get("continuations") or 0)
-                except Exception:
-                    explanation_continuations = 0
-
-                if not explanation_md:
-                    # Retry with a smaller payload to reduce context length / provider issues.
-                    mini_payload = {
-                        "topic": topic,
-                        "subject": subject,
-                        "ability_level": str(ctx.user_profile.ability_level or "unknown"),
-                        "ability_score": float(ctx.user_profile.ability_score or 0.5),
-                        "knowledge_point": kp,
-                        "wikipedia_summary": _clip_text(str(wiki.get("summary") or ""), 800),
-                        "mediawiki_summary": _clip_text(str(mw.get("summary") or ""), 800),
-                        "web_summary": _clip_text(web_summary, 1400) if web_summary else "",
-                        "web_results": [
-                            {
-                                "title": r.get("title"),
-                                "url": r.get("url"),
-                                "snippet": _clip_text(str(r.get("snippet") or r.get("text") or ""), 260),
-                            }
-                            for r in web_results[:5]
-                        ],
-                        "instructions": instructions,
-                        "note": "上一次生成返回为空，请基于以上摘要重试生成讲解（仍需输出 Markdown）。",
-                    }
-                    mini_res = await self._call_llm_markdown_with_continuation(
+                async with sem:
+                    res = await self._call_llm_markdown_with_continuation(
                         messages=[
                             {
                                 "role": "system",
-                                "content": "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，严禁直接搬运或拼贴 MCP/搜索/维基等数据源返回的原文；必须完全用自己的话重新组织。输出必须是 Markdown。",
+                                "content": "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，严禁直接搬运或拼贴来源文本。输出必须是 Markdown。",
                             },
-                            {"role": "user", "content": json.dumps(mini_payload, ensure_ascii=False)},
+                            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                         ],
                         model=writer_model,
                         temperature=0.25,
-                        max_tokens=writer_max_tokens,
-                        reasoning=writer_reasoning,
-                        continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "preset": preset},
+                        max_tokens=section_max_tokens,
+                        continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "section_title": title},
                         max_continuations=cont_limit,
                         raise_on_fail=strict_llm,
                     )
-                    explanation_md = str(mini_res.get("content") or "").strip()
-                    explanation_finish_reason = str(mini_res.get("finish_reason") or "").strip()
-                    explanation_usage = mini_res.get("usage") if isinstance(mini_res.get("usage"), dict) else {}
-                    try:
-                        explanation_continuations = int(mini_res.get("continuations") or 0)
-                    except Exception:
-                        explanation_continuations = 0
+                md = str(res.get("content") or "").strip()
+                md = _sanitize_explanation_markdown(md, knowledge_point=kp)
+                finish_reason = str(res.get("finish_reason") or "").strip()
+                usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
+                try:
+                    conts = int(res.get("continuations") or 0)
+                except Exception:
+                    conts = 0
+                return (md, finish_reason, usage, conts)
 
-                if explanation_md:
-                    explanation_source = "llm"
+            tasks = [_write_section(sec) for sec in outline_sections]
+            section_results = await asyncio.gather(*tasks)
 
-                if not explanation_md:
-                    # If the main writer LLM isn't configured, optionally fall back to Metaso /ask as a "writer".
-                    # This keeps the pipeline AI-powered even when only METASO_API_KEY is available.
-                    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                        fallback_raw = (os.getenv("STUDY_MATERIALS_METASO_WRITER_FALLBACK") or "1").strip().lower()
-                        use_metaso_writer = fallback_raw in {"1", "true", "yes", "y", "on"}
-                        disable_metaso_raw = (os.getenv("STUDY_MATERIALS_DISABLE_METASO") or "0").strip().lower()
-                        disable_metaso = disable_metaso_raw in {"1", "true", "yes", "y", "on"}
-                        if use_metaso_writer and not disable_metaso:
-                            try:
-                                from backend.mcp.metaso_search import metaso_ask as _metaso_ask
+            md_parts: List[str] = []
+            finish_reasons: List[str] = []
+            usage_sum: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            cont_sum = 0
+            any_llm = False
+            for md, fr, usage, conts in section_results:
+                if md:
+                    md_parts.append(md)
+                if fr:
+                    finish_reasons.append(fr)
+                if isinstance(usage, dict):
+                    for k in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+                        try:
+                            usage_sum[k] += int(usage.get(k) or 0)
+                        except Exception:
+                            pass
+                cont_sum += int(conts or 0)
+                if fr:
+                    any_llm = True
 
-                                metaso_template_lines = [
-                                    "#### 1) 为什么需要它（动机与问题背景）",
-                                    "#### 2) 定义与核心表述",
-                                    "#### 3) 直观理解（类比与图像）",
-                                    "#### 4) 关键结论与性质",
-                                    "#### 5) 常见误区与易错点",
-                                    "#### 6) 解题/应用思路小结",
-                                ]
-                                if preset in {"deep", "research"}:
-                                    metaso_template_lines.extend(
-                                        [
-                                            "#### 7) 推导/证明思路",
-                                            "#### 8) 联系与拓展（前置知识/相邻概念/典型应用）",
-                                        ]
-                                    )
-                                if preset == "research":
-                                    metaso_template_lines.extend(
-                                        [
-                                            "#### 9) 关键例子与反例",
-                                            "#### 10) 自检清单（学完应能回答的 5 个问题）",
-                                        ]
-                                    )
-
-                                metaso_prompt_lines = [
-                                    f"请为知识点「{kp}」编写可直接自学的讲解（中文 Markdown）。",
-                                    "",
-                                    "【写作理念】费曼学习法：先讲为什么需要，再给定义；用类比建立直觉；重点加粗；主动指出误区。",
-                                    f"【生成预设】{preset}",
-                                    f"【额外要求】{requirements}" if requirements else "",
-                                    "",
-                                    "【硬性格式要求】",
-                                    "- 小节标题从 #### 开始，禁止 #/##/###",
-                                    "- 不输出参考资料/外部链接，不输出任何 URL",
-                                    "- 不输出 [[1]] 等证据标记，不写过程性叙述",
-                                    "- 严禁照抄 MCP/搜索/维基等数据源返回的原文，必须完全用自己的话重新组织和表达",
-                                    "- 数学公式：行内 $...$，独立行 $$...$$",
-                                    "- 不输出例题或练习题",
-                                    "",
-                                    "【模板结构】",
-                                    *metaso_template_lines,
-                                ]
-                                metaso_prompt = "\n".join(
-                                    [x for x in metaso_prompt_lines if str(x or "").strip()]
-                                ).strip()
-
-                                fmt = str(os.getenv("METASO_ASK_FORMAT") or "simple").strip() or "simple"
-                                model_hint = str(os.getenv("METASO_ASK_MODEL") or "").strip()
-                                metaso_res = await _metaso_ask(
-                                    query=metaso_prompt,
-                                    scope="webpage",
-                                    size=6,
-                                    format=fmt,
-                                    model=model_hint,
-                                )
-                                if (
-                                    isinstance(metaso_res, dict)
-                                    and metaso_res.get("success")
-                                    and str(metaso_res.get("answer") or "").strip()
-                                ):
-                                    explanation_md = str(metaso_res.get("answer") or "").strip()
-                                    explanation_source = "metaso-ask-writer"
-                            except Exception:
-                                # Best-effort fallback only; never block the pipeline.
-                                pass
-
-                    # If the main LLM isn't available or returned empty, prefer Metaso /ask summary notes
-                    # (already AI-generated) over a raw encyclopedia excerpt.
-                    if not explanation_md:
-                        if strict_llm:
-                            raise RuntimeError(f"llm_generation_failed: empty_explanation knowledge_point={kp}")
-                        if web_summary:
-                            explanation_md = web_summary.strip()
-                            explanation_source = web_provider or "web_summary"
-                        else:
-                            wiki_summary = str(wiki.get("summary") or "").strip()
-                            if wiki_summary:
-                                explanation_md = f"**百科摘要**：{wiki_summary}\n"
-                                explanation_source = "wikipedia"
-                            else:
-                                mw_summary = str(mw.get("summary") or "").strip()
-                                if mw_summary:
-                                    explanation_md = f"**MediaWiki 摘要**：{mw_summary}\n"
-                                    explanation_source = "mediawiki"
-                                else:
-                                    explanation_md = "（未获取到可靠百科摘要；以下内容以网络检索笔记为主，建议稍后重试生成。）\n"
-                                    explanation_source = "fallback"
-
+            explanation_md = "\n\n".join([x.strip() for x in md_parts if x.strip()]).strip()
             explanation_md = _sanitize_explanation_markdown(explanation_md, knowledge_point=kp)
 
-            diagram: Dict[str, Any] = {}
-            existing_diagrams: List[Dict[str, Any]] = []
-            try:
-                diagrams_blob = ctx.working_memory.get("diagrams")
-                entries: List[Dict[str, Any]] = []
-                if isinstance(diagrams_blob, dict):
-                    if isinstance(diagrams_blob.get("items"), list):
-                        entries = [x for x in (diagrams_blob.get("items") or []) if isinstance(x, dict)]
-                    elif isinstance(diagrams_blob.get("sections"), list):
-                        entries = [x for x in (diagrams_blob.get("sections") or []) if isinstance(x, dict)]
-                for it in entries:
-                    kp0 = str(it.get("knowledge_point") or "").strip()
-                    if kp0 != kp:
-                        continue
-                    ds = it.get("diagrams")
-                    if isinstance(ds, list):
-                        existing_diagrams = [d for d in ds if isinstance(d, dict)]
-                    break
-            except Exception:
-                existing_diagrams = []
+            explanation_source = "llm_sectioned" if any_llm else "fallback"
+            explanation_finish_reason = "length" if any((x or "").strip().lower() == "length" for x in finish_reasons) else "stop"
+            explanation_usage: Dict[str, Any] = {k: v for k, v in usage_sum.items() if v}
 
-            def _store_extra_diagram(diagram_obj: Dict[str, Any]) -> None:
-                try:
-                    blob = ctx.working_memory.get("diagrams")
-                    if not isinstance(blob, dict):
-                        blob = {}
-                    items = blob.get("items")
-                    if not isinstance(items, list):
-                        items = []
-                    kp_item: Optional[Dict[str, Any]] = None
-                    for it in items:
-                        if not isinstance(it, dict):
-                            continue
-                        if str(it.get("knowledge_point") or "").strip() == kp:
-                            kp_item = it
-                            break
-                    if kp_item is None:
-                        kp_item = {"knowledge_point": kp, "diagrams": []}
-                        items.append(kp_item)
-                    dlist = kp_item.get("diagrams")
-                    if not isinstance(dlist, list):
-                        dlist = []
-                    filename = str(diagram_obj.get("filename") or "").strip()
-                    if filename and any(
-                        isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist
-                    ):
-                        return
-                    dlist.append(diagram_obj)
-                    kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-25:]
-                    blob["items"] = [x for x in items if isinstance(x, dict)]
-                    ctx.working_memory["diagrams"] = blob
-                except Exception:
-                    return
-
-            need_diagrams = max(0, int(max_diagrams) - len(existing_diagrams))
-            if with_diagrams and (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and need_diagrams > 0:
-                try:
-                    context_hints = {
-                        "topic": topic,
-                        "subject": subject,
-                        "knowledge_point": kp,
-                        "web_summary": _clip_text(web_summary, 1000) if web_summary else "",
-                        "wikipedia_summary": _clip_text(str(wiki.get("summary") or ""), 600) if wiki.get("summary") else "",
-                        "mediawiki_summary": _clip_text(str(mw.get("summary") or ""), 600) if mw.get("summary") else "",
-                    }
-                    prompt_lines = [
-                        f"你是教学绘图助手。请为知识点「{kp}」生成最多 {need_diagrams} 张配图方案（JSON），用于帮助理解概念。",
-                        "",
-                        "只输出 JSON 对象，不要输出 Markdown、不要输出代码块。",
-                        "",
-                        "请输出严格 JSON：",
-                        '{"diagrams":[{"kind":"tikz_to_svg|seedream_generate","alt":"...","caption":"...","tikz":"...","preamble":"...","prompt":"...","size":"1024x1024","n":1}, ...]}',
-                        '若不需要画图请输出 {"diagrams":[]}。',
-                        "",
-                        "kind 说明：",
-                        "- tikz_to_svg：输出 LaTeX TikZ（优先）→ 编译成 SVG 矢量图。字段：tikz（必须，包含 \\begin{tikzpicture}...\\end{tikzpicture}），preamble（可选，如 \\usetikzlibrary{...}）。",
-                        "- seedream_generate：用自然语言提示词生成图片（适合更具象/真实世界插画）。字段：prompt（必须），size（可选，默认 1024x1024），n（可选，默认 1）。",
-                        "",
-                        "示例（可参考，不必拘泥）：",
-                        '1) tikz_to_svg：{"kind":"tikz_to_svg","alt":"三角形内角和","caption":"三角形的内角","tikz":"\\begin{tikzpicture}\\draw (0,0)--(4,0)--(1,2)--cycle;\\node at (0.3,0.2){$A$};\\node at (3.7,0.2){$B$};\\node at (1,2.2){$C$};\\end{tikzpicture}","preamble":"\\usetikzlibrary{arrows.meta,calc}"}',
-                        '2) seedream_generate：{"kind":"seedream_generate","alt":"抛物线与焦点","caption":"抛物线的几何直观","prompt":"一张用于高中数学教学的简洁插图：白色背景，展示抛物线、焦点与准线，并用少量清晰标注，风格扁平简洁"}',
-                        "",
-                        "要求：",
-                        f"1) 图必须和「{kp}」强相关，尽量简洁，能独立帮助理解。",
-                        "2) 一般优先使用 tikz_to_svg；只有不适合用线稿/几何示意表达时才用 seedream_generate。",
-                        "3) TikZ 尽量使用基础绘图命令与常见 tikzlibrary（如 arrows.meta/calc/positioning），避免复杂依赖（如 pgfplots）与外部图片。",
-                        "4) Seedream 的 prompt 用 1~2 句中文，明确主体、关系与风格（教学插图/简洁/白底/少量标注）。",
-                        "5) caption 用一句中文即可。",
-                        f"6) 数量不必凑满：0~{need_diagrams} 张均可。",
-                        "",
-                        "可参考信息（可能为空）：",
-                        json.dumps(context_hints, ensure_ascii=False),
-                    ]
-                    prompt = "\n".join(prompt_lines)
-
-                    raw = (
-                        await self._call_llm_text(
-                            messages=[
-                                {"role": "system", "content": "你是严谨的绘图规范生成器，只输出JSON。"},
-                                {"role": "user", "content": prompt},
-                            ],
-                            model=writer_model,
-                            temperature=0.2,
-                            max_tokens=1800,
-                            response_format={"type": "json_object"},
-                        )
-                    ).strip()
-
-                    obj = self._extract_json_obj(raw)
-                    diagrams_field = obj.get("diagrams") if isinstance(obj, dict) else None
-                    items: List[Dict[str, Any]] = []
-                    if isinstance(diagrams_field, list):
-                        items = [x for x in (diagrams_field or []) if isinstance(x, dict)]
-                    elif isinstance(obj, dict) and obj:
-                        items = [obj]
-
-                    for it in items[:need_diagrams]:
-                        if not isinstance(it, dict):
-                            continue
-                        kind_raw = str(it.get("kind") or it.get("type") or "").strip().lower()
-                        alt = str(it.get("alt") or "").strip() or f"{kp} 示意图"
-                        caption = str(it.get("caption") or "").strip()
-
-                        spec: Dict[str, Any] = it.get("spec") if isinstance(it.get("spec"), dict) else {}
-
-                        def _pick_str(*candidates: Any) -> str:
-                            for v in candidates:
-                                if isinstance(v, str) and v.strip():
-                                    return v.strip()
-                            return ""
-
-                        kind = kind_raw
-                        if kind in {"tikz", "tikz_to_svg", "tikzsvg", "latex", "tikzpicture", "tikz_picture"}:
-                            kind = "tikz_to_svg"
-                        elif kind in {"seedream", "seedream_generate", "image", "text2img", "t2i"}:
-                            kind = "seedream_generate"
-                        else:
-                            if _pick_str(it.get("prompt"), spec.get("prompt")):
-                                kind = "seedream_generate"
-                            elif _pick_str(it.get("tikz"), it.get("code"), it.get("latex"), spec.get("tikz")):
-                                kind = "tikz_to_svg"
-                            else:
-                                kind = "tikz_to_svg"
-
-                        d_obj: Optional[Dict[str, Any]] = None
-                        if kind == "seedream_generate":
-                            prompt_text = _pick_str(it.get("prompt"), spec.get("prompt"), it.get("text"))
-                            size = _pick_str(it.get("size"), spec.get("size"))
-                            n = it.get("n") if "n" in it else spec.get("n")
-                            res = await self._tool_seedream_generate(
-                                {
-                                    "prompt": prompt_text,
-                                    "alt": alt,
-                                    "caption": caption,
-                                    "size": size,
-                                    "n": n,
-                                    "knowledge_point": kp,
-                                },
-                                ctx,
-                            )
-                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
-                                d_obj = dict(res.get("diagram") or {})
-                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagrams"), list):
-                                for d in [x for x in (res.get("diagrams") or []) if isinstance(x, dict)][:8]:
-                                    _store_extra_diagram(d)
-                        else:
-                            tikz_code = _pick_str(it.get("tikz"), it.get("code"), it.get("latex"), spec.get("tikz"))
-                            preamble = _pick_str(it.get("preamble"), spec.get("preamble"))
-                            res = await self._tool_tikz_to_svg(
-                                {
-                                    "tikz": tikz_code,
-                                    "preamble": preamble,
-                                    "alt": alt,
-                                    "caption": caption,
-                                    "knowledge_point": kp,
-                                },
-                                ctx,
-                            )
-                            if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
-                                d_obj = dict(res.get("diagram") or {})
-
-                        if not (isinstance(d_obj, dict) and str(d_obj.get("url") or "").strip()):
-                            continue
-                        if caption and not str(d_obj.get("caption") or "").strip():
-                            d_obj["caption"] = caption
-                        _store_extra_diagram(d_obj)
-                        if not diagram:
-                            diagram = {
-                                "url": d_obj.get("url"),
-                                "markdown": d_obj.get("markdown"),
-                                "filename": d_obj.get("filename"),
-                                "media_id": d_obj.get("media_id"),
-                                "caption": d_obj.get("caption"),
-                            }
-                except Exception:
-                    diagram = {}
-
-            # Example solutions
-            solved_examples: List[Dict[str, Any]] = []
-            for ex in examples:
-                stem = str(ex.get("stem") or "").strip()
-                if not stem:
-                    continue
-                sol_md = ""
-                if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
-                    prompt = (
-                        "请为下面例题写出详细分步解答（Markdown）。\n\n"
-                        "要求：\n- 每一步说明在做什么\n- 结论清晰\n\n"
-                        f"题目：\n{stem}\n"
-                    )
-                    sol_md = (
-                        await self._call_llm_text(
-                            messages=[
-                                {"role": "system", "content": "你是严谨的解题老师，输出必须是Markdown。"},
-                                {"role": "user", "content": prompt},
-                            ],
-                            model=writer_model,
-                            temperature=0.3,
-                            max_tokens=4000,
-                            reasoning=writer_reasoning,
-                        )
-                    ).strip()
-                if not sol_md:
-                    sol_md = "（模型未配置或调用失败，无法生成解答。）"
-                solved_examples.append(
-                    {
-                        "question_id": ex.get("question_id"),
-                        "stem": stem,
-                        "solution_markdown": sol_md,
-                        "difficulty": ex.get("difficulty"),
-                        "source": ex.get("source"),
-                    }
-                )
-
-            # LLM fallback when the question bank returns nothing (avoid empty sections in the final archive).
-            # Note: question generation is optional and disabled by default (concept-first).
-            default_min_exercises = 2 if with_questions else 0
-            try:
-                min_exercises = int(args.get("min_exercises") or default_min_exercises)
-            except Exception:
-                min_exercises = default_min_exercises
-            min_exercises = max(0, min(min_exercises, 5))
-
-            have_exercise_stems = {
-                str(e.get("stem") or "").strip()
-                for e in exercises
-                if isinstance(e, dict) and str(e.get("stem") or "").strip()
-            }
-            need_example = bool(with_questions and max_examples > 0 and not solved_examples)
-            need_exercises = bool(with_questions and len(have_exercise_stems) < min_exercises)
-
-            if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and (need_example or need_exercises):
-                example_count = 1 if need_example else 0
-                exercise_count = (min_exercises - len(have_exercise_stems)) if need_exercises else 0
-                exercise_count = max(0, min(exercise_count, 5))
-
-                parts = [
-                    f"请为知识点「{kp}」生成练习内容，并严格按 JSON 输出（不要 Markdown 代码块，不要额外解释文字）。",
-                    "",
-                    "需要生成：",
-                    f"- 例题数量：{example_count}（例题需包含详细解答）",
-                    f"- 练习题数量：{exercise_count}（只给题干，不要答案）",
-                    "",
-                    "JSON 格式必须是：",
-                    "{",
-                    '  "example": {"stem": "...", "solution_markdown": "..."},',
-                    '  "exercises": [{"stem": "..."}, {"stem": "..."}]',
-                    "}",
-                    "",
-                    "要求：",
-                    "1) 题目必须与知识点强相关，避免过于宽泛。",
-                    "2) 数学公式使用 LaTeX：行内用 $...$，独立行用 $$...$$。",
-                    "3) solution_markdown 必须是 Markdown，包含分步推导与最后结论。",
-                    "4) stem/solution_markdown 均不要包含外部链接。",
-                    "5) 如果某项数量为 0，请返回对应为空对象/空数组（例如 example 可以为 {}，exercises 可以为 []）。",
-                ]
-                prompt = "\n".join(parts)
-
-                raw = (
-                    await self._call_llm_text(
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": "你是严谨的数学出题与解题老师。你只输出严格 JSON，不输出任何额外文字。",
-                            },
-                            {"role": "user", "content": prompt},
-                        ],
-                        model=writer_model,
-                        temperature=0.3,
-                        max_tokens=5000,
-                        response_format={"type": "json_object"},
-                    )
-                ).strip()
-
-                obj = self._extract_json_obj(raw)
-                if need_example and isinstance(obj.get("example"), dict):
-                    gen_ex = obj.get("example") or {}
-                    stem = str(gen_ex.get("stem") or "").strip()
-                    sol = str(gen_ex.get("solution_markdown") or "").strip()
-                    if stem:
-                        solved_examples.append(
-                            {
-                                "question_id": None,
-                                "stem": stem,
-                                "solution_markdown": sol or "（未生成到解答内容）",
-                                "difficulty": None,
-                                "source": "llm-generated",
-                            }
-                        )
-
-                if need_exercises and isinstance(obj.get("exercises"), list):
-                    for item in obj.get("exercises") or []:
-                        stem = ""
-                        if isinstance(item, dict):
-                            stem = str(item.get("stem") or "").strip()
-                        else:
-                            stem = str(item or "").strip()
-                        if not stem or stem in have_exercise_stems:
-                            continue
-                        exercises.append({"stem": stem, "source": "llm-generated"})
-                        have_exercise_stems.add(stem)
-                        if len(have_exercise_stems) >= min_exercises:
-                            break
+            diagram = _first_existing_diagram(ctx, kp)
 
             sections.append(
                 {
@@ -875,7 +508,7 @@ class StudyMaterialGenerationToolsMixin:
                     "explanation_source": explanation_source,
                     "explanation_finish_reason": explanation_finish_reason,
                     "explanation_usage": explanation_usage,
-                    "explanation_continuations": explanation_continuations,
+                    "explanation_continuations": cont_sum,
                     "wikipedia": wiki,
                     "mediawiki": mw,
                     "web_provider": web_provider,
@@ -886,13 +519,11 @@ class StudyMaterialGenerationToolsMixin:
                     "web_pages": web_pages,
                     "github": gh,
                     "stackexchange": se,
-                    "examples": solved_examples,
+                    "examples": examples,
                     "exercises": exercises,
                 }
             )
 
-        # Note: per-knowledge-point runs are merged by ContextManager.on_step_result (by knowledge_point),
-        # so we only return the sections generated in *this* call.
         return {
             "topic": topic,
             "subject": subject,
@@ -901,3 +532,4 @@ class StudyMaterialGenerationToolsMixin:
             "sections": sections,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
         }
+

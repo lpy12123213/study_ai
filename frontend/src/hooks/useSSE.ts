@@ -1,10 +1,10 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { createSSEConnection } from '@/api/client'
+import { fetchSSERequest } from '@/api/client'
 
 interface UseSSEOptions<T> {
   url: string
   onMessage: (data: T) => void
-  onError?: (error: Event) => void
+  onError?: (error: Error) => void
   onComplete?: () => void
   enabled?: boolean
 }
@@ -16,16 +16,21 @@ export function useSSE<T>({
   onComplete,
   enabled = true,
 }: UseSSEOptions<T>) {
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const [isConnected, setIsConnected] = useState(false)
 
   const connect = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-    }
+    setIsConnected(true)
 
-    eventSourceRef.current = createSSEConnection(
+    if (abortRef.current) {
+      abortRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    fetchSSERequest(
       url,
+      { method: 'GET', signal: controller.signal },
       (data) => {
         onMessage(data as T)
       },
@@ -38,16 +43,14 @@ export function useSSE<T>({
         onComplete?.()
       }
     )
-
-    setIsConnected(true)
   }, [url, onMessage, onError, onComplete])
 
   const disconnect = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-      eventSourceRef.current = null
-      setIsConnected(false)
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
     }
+    setIsConnected(false)
   }, [])
 
   useEffect(() => {

@@ -28,25 +28,25 @@ function PageLoader() {
 
 function App() {
   return (
-    <Suspense fallback={<PageLoader />}>
+    <Suspense fallback={<PageLoader />}> 
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<ManusLayout />}>
+        <Route path="/" element={<ManusLayout />}> 
           <Route index element={<Navigate to="/chat" replace />} />
-          <Route element={<RequireAuth />}>
+          <Route element={<RequireAuth />}> 
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:conversationId" element={<ChatPage />} />
+            <Route path="blueprint" element={<BlueprintPage />} />
+            <Route path="lesson-plans" element={<LessonPlansPage />} />
+            <Route path="lesson-plans/:lessonPlanId" element={<LessonPlanDetailPage />} />
+            <Route path="study-materials" element={<StudyMaterialsPage />} />
+            <Route path="deepthink" element={<DeepThinkPage />} />
+            <Route path="question-evaluate" element={<QuestionEvaluatePage />} />
+            <Route path="papers" element={<PapersPage />} />
+            <Route path="papers/:paperId" element={<PaperDetailPage />} />
+            <Route path="canvas" element={<CanvasPage />} />
+            <Route path="settings" element={<SettingsPage />} />
           </Route>
-          <Route path="blueprint" element={<BlueprintPage />} />
-          <Route path="lesson-plans" element={<LessonPlansPage />} />
-          <Route path="lesson-plans/:lessonPlanId" element={<LessonPlanDetailPage />} />
-          <Route path="study-materials" element={<StudyMaterialsPage />} />
-          <Route path="deepthink" element={<DeepThinkPage />} />
-          <Route path="question-evaluate" element={<QuestionEvaluatePage />} />
-          <Route path="papers" element={<PapersPage />} />
-          <Route path="papers/:paperId" element={<PaperDetailPage />} />
-          <Route path="canvas" element={<CanvasPage />} />
-          <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
     </Suspense>

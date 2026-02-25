@@ -91,23 +91,11 @@ export function createSSEConnection(
   onComplete?: () => void
 ): EventSource {
   const fullUrl = joinBaseUrl(API_BASE_URL, url)
-  const token = useAuthStore.getState().token
-  
+
   // Note: EventSource doesn't support custom headers
   // For auth, we'll need to pass token as query param or use fetch-based SSE
-  let eventUrl = fullUrl
-  if (token) {
-    try {
-      const u = new URL(fullUrl, window.location.origin)
-      u.searchParams.set('token', token)
-      eventUrl = u.toString()
-    } catch {
-      const sep = fullUrl.includes('?') ? '&' : '?'
-      eventUrl = `${fullUrl}${sep}token=${encodeURIComponent(token)}`
-    }
-  }
 
-  const eventSource = new EventSource(eventUrl)
+  const eventSource = new EventSource(fullUrl)
 
   eventSource.onmessage = (event) => {
     try {
