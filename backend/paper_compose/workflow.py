@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -42,6 +43,13 @@ def _as_list(v: Any) -> List[Any]:
     if isinstance(v, list):
         return v
     return []
+
+
+def _truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    raw = str(v or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _clip(text: str, max_chars: int) -> str:
@@ -90,6 +98,23 @@ def _normalize_question_type(name: str, available: Sequence[Dict[str, Any]]) -> 
             if cand and (cand in n or n in cand):
                 return n
     return ""
+
+
+def _extract_json_obj(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("```"):
+        raw = raw.strip("`").strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        raw = raw[start : end + 1]
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
 
 
 async def _load_used_question_ids(*, limit: int = 20000) -> set[str]:
@@ -247,6 +272,7 @@ async def compose_paper_events(
     global_seen_fps: set[str] = set()
 
     selected_questions: List[Dict[str, Any]] = []
+    slot_results: List[Dict[str, Any]] = []
     max_pages_cap = 8
     quality_floor = 0
 
@@ -400,6 +426,15 @@ async def compose_paper_events(
             slot_selected.extend(_select_more(requested - len(slot_selected)))
 
         selected_questions.extend(slot_selected)
+        slot_results.append(
+            {
+                "slot": slot,
+                "selected": slot_selected,
+                "candidates": candidates,
+                "quality_threshold": quality_threshold,
+                "dedup_by_stem": dedup_stem,
+            }
+        )
 
         yield {
             "type": "step",
@@ -424,6 +459,234 @@ async def compose_paper_events(
     if not selected_questions:
         yield {"type": "error", "error": "no_questions_selected", "taskId": task_id}
         return
+
+    # Optional: review selected questions with LLM and replace obvious mismatches.
+    enable_llm_review = _truthy(
+        options.get("llmReview")
+        or options.get("llm_review")
+        or options.get("enableLLMReview")
+        or options.get("enable_llm_review")
+    ) or _truthy(os.getenv("PAPER_COMPOSE_LLM_REVIEW"))
+
+    if enable_llm_review and slot_results:
+        review_step_id = "review_selected_questions"
+        yield {
+            "type": "step",
+            "step": {
+                "id": review_step_id,
+                "title": "LLM 审查题目匹配度（可选）",
+                "status": "running",
+                "startTime": _now_iso(),
+                "toolName": "review_questions",
+                "input": {"slots": len(slot_results), "selected": len(selected_questions)},
+            },
+        }
+
+        review_model = str(os.getenv("PAPER_COMPOSE_REVIEW_MODEL") or "").strip()
+        try:
+            review_timeout_s = float(os.getenv("PAPER_COMPOSE_REVIEW_TIMEOUT_S") or "25")
+        except Exception:
+            review_timeout_s = 25.0
+        review_timeout_s = max(8.0, min(review_timeout_s, 120.0))
+
+        try:
+            max_stem_chars = int(os.getenv("PAPER_COMPOSE_REVIEW_MAX_STEM_CHARS") or 420)
+        except Exception:
+            max_stem_chars = 420
+        max_stem_chars = max(120, min(max_stem_chars, 1200))
+
+        total_replaced = 0
+        slot_reports: List[Dict[str, Any]] = []
+
+        selected_ids: set[str] = set()
+        selected_fps: set[str] = set()
+        for q in selected_questions:
+            qid = str(q.get("question_id") or "").strip()
+            if qid:
+                selected_ids.add(qid)
+            if dedup_by_stem:
+                fp = _stem_fingerprint(str(q.get("stem") or ""))
+                if fp:
+                    selected_fps.add(fp)
+
+        try:
+            import asyncio
+
+            from backend.core.llm_client import chat_completion_text
+            from backend.core.settings import MAIN_MODEL
+
+            if not review_model:
+                review_model = str(MAIN_MODEL or "").strip() or "openai/gpt-5-mini"
+
+            for sr in slot_results:
+                slot_obj = sr.get("slot")
+                slot_selected = sr.get("selected") if isinstance(sr.get("selected"), list) else []
+                slot_candidates = sr.get("candidates") if isinstance(sr.get("candidates"), list) else []
+                if not isinstance(slot_obj, _Slot) or not slot_selected:
+                    continue
+
+                slot_prompt = {
+                    "subject": subject,
+                    "topic": topic,
+                    "slot": {
+                        "question_type": slot_obj.question_type or slot_obj.question_type_raw,
+                        "difficulty": slot_obj.difficulty,
+                        "count": slot_obj.count,
+                        "keyword": slot_obj.keyword,
+                    },
+                    "questions": [
+                        {
+                            "question_id": str(q.get("question_id") or "").strip(),
+                            "type": str(q.get("type") or "").strip(),
+                            "difficulty": str(q.get("difficulty") or "").strip(),
+                            "knowledge_points": _as_list(q.get("knowledge_points"))[:3],
+                            "stem": _clip(str(q.get("stem") or ""), max_stem_chars),
+                        }
+                        for q in slot_selected
+                        if str(q.get("question_id") or "").strip()
+                    ],
+                    "instructions": [
+                        "请审查每道题是否明显不匹配本 slot 的题型/难度/主题（topic）要求。",
+                        "原则：保守，不要过度拒绝；只有明显不相关/题型错误/难度明显不符时才判 fail。",
+                        "输出严格 JSON：{decisions:[{question_id, pass, reason}]}。",
+                    ],
+                }
+
+                text = await asyncio.wait_for(
+                    chat_completion_text(
+                        messages=[
+                            {"role": "system", "content": "你是严格但保守的题目匹配审查员。只输出 JSON。"},
+                            {"role": "user", "content": json.dumps(slot_prompt, ensure_ascii=False)},
+                        ],
+                        model=review_model,
+                        temperature=0.1,
+                        max_tokens=900,
+                        retries=2,
+                        req_id_prefix="paper_review",
+                    ),
+                    timeout=review_timeout_s,
+                )
+
+                obj = _extract_json_obj(text)
+                decisions_raw = obj.get("decisions") if isinstance(obj, dict) else None
+                decisions = (
+                    [x for x in (decisions_raw or []) if isinstance(x, dict)]
+                    if isinstance(decisions_raw, list)
+                    else []
+                )
+
+                decision_by_id: Dict[str, Dict[str, Any]] = {}
+                for d in decisions[:50]:
+                    qid = str(d.get("question_id") or "").strip()
+                    if qid:
+                        decision_by_id[qid] = d
+
+                replaced: List[Dict[str, Any]] = []
+                rejected = 0
+
+                for idx, q in enumerate(list(slot_selected)):
+                    qid = str(q.get("question_id") or "").strip()
+                    if not qid:
+                        continue
+                    d = decision_by_id.get(qid) or {}
+                    passed = d.get("pass")
+                    if passed is True or passed is None:
+                        continue
+                    rejected += 1
+
+                    new_q: Dict[str, Any] = {}
+                    for cand in slot_candidates:
+                        if not isinstance(cand, dict):
+                            continue
+                        cand_id = str(cand.get("question_id") or "").strip()
+                        if not cand_id or cand_id in selected_ids or cand_id in used_ids:
+                            continue
+                        if slot_obj.question_type and str(cand.get("type") or "").strip() != slot_obj.question_type:
+                            continue
+                        if dedup_by_stem:
+                            fp = _stem_fingerprint(str(cand.get("stem") or ""))
+                            if fp and fp in selected_fps:
+                                continue
+                        cand_score = int(cand.get("quality_score") or 0)
+                        if cand_score < int(min_quality_score or 0):
+                            continue
+                        new_q = cand
+                        break
+
+                    if not new_q:
+                        continue
+
+                    old_fp = _stem_fingerprint(str(q.get("stem") or "")) if dedup_by_stem else ""
+                    slot_selected[idx] = new_q
+
+                    selected_ids.discard(qid)
+                    selected_ids.add(str(new_q.get("question_id") or "").strip())
+                    if dedup_by_stem:
+                        if old_fp:
+                            selected_fps.discard(old_fp)
+                        new_fp = _stem_fingerprint(str(new_q.get("stem") or ""))
+                        if new_fp:
+                            selected_fps.add(new_fp)
+
+                    total_replaced += 1
+                    replaced.append(
+                        {
+                            "old": qid,
+                            "new": str(new_q.get("question_id") or "").strip(),
+                            "reason": str(d.get("reason") or "").strip(),
+                        }
+                    )
+
+                slot_reports.append(
+                    {
+                        "slotIndex": slot_obj.index,
+                        "questionType": slot_obj.question_type_raw or slot_obj.question_type,
+                        "difficulty": slot_obj.difficulty,
+                        "rejected": rejected,
+                        "replaced": len(replaced),
+                        "replacements": replaced[:12],
+                    }
+                )
+
+            # Rebuild final selection after replacements.
+            selected_questions = [
+                q
+                for sr in slot_results
+                for q in (sr.get("selected") or [])
+                if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+            ]
+
+            yield {
+                "type": "step",
+                "step": {
+                    "id": review_step_id,
+                    "title": "LLM 审查题目匹配度（可选）",
+                    "status": "completed",
+                    "startTime": _now_iso(),
+                    "endTime": _now_iso(),
+                    "toolName": "review_questions",
+                    "output": {
+                        "enabled": True,
+                        "model": review_model,
+                        "totalReplaced": total_replaced,
+                        "slots": slot_reports,
+                    },
+                },
+            }
+        except Exception as exc:
+            # Best-effort: never block paper composing on optional review.
+            yield {
+                "type": "step",
+                "step": {
+                    "id": review_step_id,
+                    "title": "LLM 审查题目匹配度（可选）",
+                    "status": "completed",
+                    "startTime": _now_iso(),
+                    "endTime": _now_iso(),
+                    "toolName": "review_questions",
+                    "output": {"enabled": True, "skipped": True, "error": str(exc)},
+                },
+            }
 
     yield {
         "type": "step",
@@ -507,4 +770,3 @@ async def compose_paper_events(
 
     yield {"type": "progress", "progress": 100.0}
     yield {"type": "result", "result": out_paper}
-
