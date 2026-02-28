@@ -1069,6 +1069,7 @@ class Planner:
             "并行建议：可用 parallel_group 标记「互不依赖的连续步骤」并行执行；例如：aggregate_knowledge 后并行 synthesize_sources ∥ detect_knowledge_type；写作后并行 critique_draft ∥ generate_diagrams。",
             "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
             "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
+            "计划允许可变长度 steps：你可以根据 reflection_issues/来源覆盖情况决定追加检索、跳过不必要步骤，或只对不足的知识点做修订（系统可能会在解析阶段补齐必要的收尾步骤）。",
         ]
         if bool(flags.get("enable_diagrams")):
             notes.extend(
@@ -1089,7 +1090,7 @@ class Planner:
             notes.append("建议：对每个知识点至少做 2 轮 web_search_knowledge（第一轮概念/直观，第二轮条件/反例/推导）。")
         elif preset == "research":
             notes.append("当前 preset=research：研究型输出（多轮检索 + 更严格的条件/反例/推导覆盖），可能更慢。")
-            notes.append("要求：对每个知识点至少做 3 轮 web_search_knowledge（概念/直观 → 条件/反例/推导 → 应用/典型问题）。")
+            notes.append("建议：对每个知识点做 2~3 轮 web_search_knowledge（概念/直观 → 条件/反例/推导 → 应用/典型问题），不足再追加。")
 
         requirements = str(flags.get("requirements") or "").strip()
         if requirements:

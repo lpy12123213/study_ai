@@ -166,6 +166,7 @@ class SourceSynthesisToolsMixin:
                     "notes": ["（LLM 未配置：source_brief 为启发式兜底，建议配置模型以提升质量。）"],
                 }
                 ctx.working_memory.setdefault("source_briefs", {})[kp] = brief
+                ctx.working_memory.setdefault("source_facts", {})[kp] = []
                 return {
                     "knowledge_point": kp,
                     "source": "heuristic",
@@ -257,6 +258,7 @@ class SourceSynthesisToolsMixin:
                 cleaned_facts.append({"fact": fact, "confidence": max(0.0, min(conf, 1.0)), "source_ids": src_ids[:6]})
 
             ctx.working_memory.setdefault("source_briefs", {})[kp] = brief
+            ctx.working_memory.setdefault("source_facts", {})[kp] = cleaned_facts
             return {
                 "knowledge_point": kp,
                 "source": "llm",
@@ -267,4 +269,3 @@ class SourceSynthesisToolsMixin:
 
         items = [await _synthesize_one(kp) for kp in points]
         return {"topic": topic, "subject": subject, "items": items}
-

@@ -173,6 +173,9 @@ class StudyMaterialGenerationToolsMixin:
         source_briefs = ctx.working_memory.get("source_briefs")
         source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
 
+        source_facts = ctx.working_memory.get("source_facts")
+        source_facts = dict(source_facts) if isinstance(source_facts, dict) else {}
+
         knowledge_types = ctx.working_memory.get("knowledge_types")
         knowledge_types = dict(knowledge_types) if isinstance(knowledge_types, dict) else {}
 
@@ -202,6 +205,20 @@ class StudyMaterialGenerationToolsMixin:
                 knowledge_type = _heuristic_knowledge_type(kp)
 
             brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
+            facts_raw = source_facts.get(kp)
+            facts_list = facts_raw if isinstance(facts_raw, list) else []
+            facts: List[Dict[str, Any]] = []
+            for f in facts_list[:16]:
+                if not isinstance(f, dict):
+                    continue
+                fact = str(f.get("fact") or "").strip()
+                if not fact:
+                    continue
+                try:
+                    conf = float(f.get("confidence") or 0.0)
+                except Exception:
+                    conf = 0.0
+                facts.append({"fact": _clip_text(fact, 180), "confidence": max(0.0, min(conf, 1.0))})
 
             if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                 if strict_llm:
@@ -220,6 +237,7 @@ class StudyMaterialGenerationToolsMixin:
                 "ability_score": float(ctx.user_profile.ability_score or 0.5),
                 "requirements": requirements,
                 "source_brief": brief,
+                "source_facts": facts,
                 "constraints": [
                     "请为该知识点设计一份『讲解结构提纲』，用于后续分段写作。",
                     f"sections 数量建议：{sec_min}~{sec_max} 个（不必凑满，但要覆盖核心内容）。",
@@ -228,6 +246,7 @@ class StudyMaterialGenerationToolsMixin:
                     "hints 每节 1~4 条，短提示即可。",
                     "verify 为该节写完后的『验证标准』，每节 2~5 条，越可操作越好。",
                     "必须覆盖：定义/表述、直观理解、关键结论或性质/条件、常见误区、应用/解题框架或总结。",
+                    "如提供了 source_facts：请在 verify 中加入 1~2 条『与关键事实一致/不矛盾』的校验点；低置信度事实需提示为推断。",
                     "不要输出例题/练习题；不要输出 URL；不要输出 Markdown。",
                 ],
             }
@@ -336,6 +355,8 @@ class StudyMaterialGenerationToolsMixin:
 
         source_briefs = ctx.working_memory.get("source_briefs")
         source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
+        source_facts = ctx.working_memory.get("source_facts")
+        source_facts = dict(source_facts) if isinstance(source_facts, dict) else {}
         outlines = ctx.working_memory.get("outlines")
         outlines = dict(outlines) if isinstance(outlines, dict) else {}
         knowledge_types = ctx.working_memory.get("knowledge_types")
@@ -394,6 +415,21 @@ class StudyMaterialGenerationToolsMixin:
                     "notation_and_terms": [],
                 }
 
+            facts_raw = source_facts.get(kp)
+            facts_list = facts_raw if isinstance(facts_raw, list) else []
+            facts: List[Dict[str, Any]] = []
+            for f in facts_list[:16]:
+                if not isinstance(f, dict):
+                    continue
+                fact = str(f.get("fact") or "").strip()
+                if not fact:
+                    continue
+                try:
+                    conf = float(f.get("confidence") or 0.0)
+                except Exception:
+                    conf = 0.0
+                facts.append({"fact": _clip_text(fact, 180), "confidence": max(0.0, min(conf, 1.0))})
+
             outline = outlines.get(kp) if isinstance(outlines.get(kp), dict) else {}
             outline_sections = outline.get("sections") if isinstance(outline.get("sections"), list) else []
             outline_sections = [x for x in outline_sections if isinstance(x, dict)]
@@ -429,19 +465,21 @@ class StudyMaterialGenerationToolsMixin:
                     "knowledge_point": kp,
                     "knowledge_type": knowledge_type,
                     "preset": preset,
-                    "ability_level": str(ctx.user_profile.ability_level or "unknown"),
-                    "ability_score": float(ctx.user_profile.ability_score or 0.5),
-                    "requirements": requirements,
-                    "source_brief": brief,
-                    "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
-                    "instructions": [
-                        "请只撰写这一个小节的内容。",
-                        f"输出必须以 `#### {title}` 开头。",
-                        "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
-                        "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
-                        "若信息不足，请明确标注「推断」或「建议」。",
-                    ],
-                }
+                     "ability_level": str(ctx.user_profile.ability_level or "unknown"),
+                     "ability_score": float(ctx.user_profile.ability_score or 0.5),
+                     "requirements": requirements,
+                     "source_brief": brief,
+                     "source_facts": facts,
+                     "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
+                     "instructions": [
+                         "请只撰写这一个小节的内容。",
+                         f"输出必须以 `#### {title}` 开头。",
+                         "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
+                         "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
+                         "若 source_facts 中存在低置信度事实（confidence<0.6），对应表述必须使用「推断/可能/建议」等措辞避免强断言。",
+                         "若信息不足，请明确标注「推断」或「建议」。",
+                     ],
+                 }
 
                 async with sem:
                     res = await self._call_llm_markdown_with_continuation(
@@ -532,4 +570,3 @@ class StudyMaterialGenerationToolsMixin:
             "sections": sections,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
         }
-

@@ -945,7 +945,14 @@ class LatexToolsMixin:
                 "xelatex not found. Install a LaTeX engine (MiKTeX or TeX Live) and make sure `xelatex` is on PATH. "
                 "Windows example: `winget install MiKTeX.MiKTeX` (or `choco install miktex`)."
             )
-            raise RuntimeError(f"latex_engine_not_found: {hint} ({exc})")
+            await self._emit_status(f"PDF 编译已跳过：{hint}")
+            return {
+                "skipped": True,
+                "reason": "latex_engine_not_found",
+                "hint": hint,
+                "engine": "xelatex",
+                "error": str(exc),
+            }
 
         if proc is None or proc.returncode != 0:
             stderr = (getattr(proc, "stderr", "") or "").strip()

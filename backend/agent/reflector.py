@@ -39,7 +39,45 @@ class Reflector:
         if not normalized_model:
             return ReflectionResult(passed=True, summary="审查通过（未配置审查模型，跳过）")
 
-        prompt = f"""请审查下面的自学资料 Markdown 是否满足：\n- 结构：讲解→例题（含步骤）→练习（不含答案）\n- 表述清晰，无明显逻辑跳跃\n- 数学/概念表述尽量严谨\n\n输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n\n主题：{topic}\n\nMarkdown:\n{markdown}\n"""
+        facts_by_kp = {}
+        facts_raw = context.working_memory.get("source_facts")
+        if isinstance(facts_raw, dict):
+            for kp, facts in list(facts_raw.items())[:10]:
+                if not isinstance(facts, list):
+                    continue
+                hi = []
+                lo = []
+                for f in facts[:24]:
+                    if not isinstance(f, dict):
+                        continue
+                    fact = str(f.get("fact") or "").strip()
+                    if not fact:
+                        continue
+                    try:
+                        conf = float(f.get("confidence") or 0.0)
+                    except Exception:
+                        conf = 0.0
+                    item = {"fact": (fact[:180].rstrip() + "…") if len(fact) > 180 else fact, "confidence": conf}
+                    if conf >= 0.7 and len(hi) < 5:
+                        hi.append(item)
+                    elif 0.4 <= conf < 0.7 and len(lo) < 3:
+                        lo.append(item)
+                if hi or lo:
+                    facts_by_kp[str(kp).strip() or "（未知知识点）"] = {"high_confidence": hi, "low_confidence": lo}
+
+        prompt = (
+            "请审查下面的自学资料 Markdown 是否满足：\n"
+            "- 结构是否清晰（按知识点分段；讲解逻辑顺畅）\n"
+            "- 是否覆盖关键维度：动机/直观、定义/表述、性质/结论、条件/适用范围、反例/边界、常见误区、应用/题型\n"
+            "- 是否有明显事实/逻辑错误，或过度强断言\n"
+            "- 若提供了 facts_by_kp：检查内容是否与高置信度事实矛盾；低置信度事实相关表述需用“推断/可能/建议”等措辞\n"
+            "\n"
+            "输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n"
+            "\n"
+            f"主题：{topic}\n\n"
+            f"facts_by_kp（可为空）：{json.dumps(facts_by_kp, ensure_ascii=False)}\n\n"
+            f"Markdown:\n{markdown}\n"
+        )
         try:
             content = await chat_completion_text(
                 messages=[
