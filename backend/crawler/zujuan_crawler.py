@@ -1238,9 +1238,13 @@ class ZujuanCrawler:
             return exact[d]
 
         # 宽松匹配（兼容输入中包含“难度：”“中等难度”等）
-        if "难" in d:
-            # “较难/困难”都当作困难档过滤（更严格可用“较难”）
+        # 注意：要区分“较难”(4) 与 “困难”(5)，不能仅凭包含“难”就一刀切。
+        if "较难" in d or "偏难" in d:
+            return 4
+        if "困难" in d or "很难" in d:
             return 5
+        if "难" in d:
+            return 4
         if "中" in d or "适" in d or "一" in d:
             return 3
         if "易" in d:
