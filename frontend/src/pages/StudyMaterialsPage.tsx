@@ -1399,6 +1399,7 @@ export default function StudyMaterialsPage() {
           const fatal = payload?.material?.error as any
           const fatalTool = toText(fatal?.tool)
           const fatalMsg = toText(fatal?.error)
+          const perKpReport = (payload as any)?.per_kp_report
 
           const mdHref = mdUrl ? resolveApiResourceUrl(mdUrl) : ''
           const texHref = texUrl ? resolveApiResourceUrl(texUrl) : ''
@@ -1424,6 +1425,37 @@ export default function StudyMaterialsPage() {
             )
           }
 
+          const perKpLines: string[] = []
+          if (Array.isArray(perKpReport) && perKpReport.length > 0) {
+            perKpLines.push('---', '## 质量与成本报告', '')
+            const missingLabels: Record<string, string> = {
+              web_results_low: 'web 搜索结果偏少',
+              web_pages_missing: '未抓取网页',
+              llm_truncated: 'LLM 输出疑似截断',
+              diagram_missing: '未生成示意图',
+            }
+            const toInt = (value: unknown): number => {
+              const num = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+              if (!Number.isFinite(num)) return 0
+              return Math.max(0, Math.floor(num))
+            }
+            for (const it of perKpReport) {
+              const kp = toText((it as any)?.knowledge_point) || '（未命名）'
+              const webResults = toInt((it as any)?.web_results)
+              const webPages = toInt((it as any)?.web_pages)
+              const ghResults = toInt((it as any)?.github_results)
+              const seResults = toInt((it as any)?.stackexchange_results)
+              const tokensTotal = toInt((it as any)?.tokens_total)
+              const continuations = toInt((it as any)?.continuations)
+              const missingRaw = (it as any)?.missing
+              const missing = Array.isArray(missingRaw) ? missingRaw.map(toText).filter(Boolean) : []
+              const missingText = missing.length > 0 ? missing.map((m) => missingLabels[m] || m).join('、') : '无'
+              perKpLines.push(
+                `- ${kp}：web_results=${webResults}, web_pages=${webPages}, github=${ghResults}, stackexchange=${seResults}, tokens=${tokensTotal}, continuations=${continuations}; missing=${missingText}`
+              )
+            }
+          }
+
           const isExportFailure = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf'].includes(fatalTool)
           const materialError =
             fatalTool || fatalMsg
@@ -1440,6 +1472,9 @@ export default function StudyMaterialsPage() {
           }
           if (interrupt) {
             content = [content, '', interrupt].join('\n')
+          }
+          if (perKpLines.length > 0) {
+            content = [content, '', ...perKpLines].join('\n')
           }
 
           useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
