@@ -371,6 +371,21 @@ async def compose_paper_events(
                     continue
                 if qid in used_ids:
                     continue
+                # Hard filter: avoid selecting questions that are likely unusable (login wall / broken formulas / missing options).
+                flags = q.get("quality_flags") or []
+                if isinstance(flags, list) and flags:
+                    norm_flags = [str(x or "").strip() for x in flags if str(x or "").strip()]
+                    hard_prefixes = ("formula_unconverted:", "unknown_tokens:", "choice_options_incomplete:")
+                    hard_exact = {
+                        "missing_stem",
+                        "login_required_content",
+                        "choice_missing_options",
+                    }
+                    if any(
+                        (f in hard_exact) or f.startswith(hard_prefixes)
+                        for f in norm_flags
+                    ):
+                        continue
                 q_quality = _q_quality(q)
                 if q_quality < int(quality_threshold or 0):
                     continue
@@ -435,6 +450,45 @@ async def compose_paper_events(
                 "dedup_by_stem": dedup_stem,
             }
         )
+
+        if len(relax_trace) > 1:
+            lines = [
+                f"选题策略说明：{slot.question_type_raw or '题型'} × {slot.difficulty}",
+                f"- 需求数量：{requested}",
+                f"- 实际选中：{len(slot_selected)}",
+                "",
+                "触发放宽条件（按顺序）：",
+            ]
+            for r in relax_trace[1:]:
+                if not isinstance(r, dict):
+                    continue
+                action = str(r.get("action") or "").strip()
+                if action == "increase_max_pages":
+                    mp = int(r.get("max_pages") or 0)
+                    ok = bool(r.get("success"))
+                    lines.append(f"- 增加翻页上限到 {mp}（success={ok}）")
+                elif action == "lower_min_quality_score":
+                    qs = int(r.get("min_quality_score") or 0)
+                    lines.append(f"- 降低最小质量分到 {qs}")
+                elif action == "disable_dedup_by_stem":
+                    lines.append("- 关闭按题干去重（dedup_by_stem=false）")
+                else:
+                    lines.append(f"- {action or 'unknown_action'}")
+            if len(slot_selected) < requested:
+                lines.extend(["", "仍未选够题数：将以当前结果继续组卷（可在后续手动补齐/调整）。"])
+
+            yield {
+                "type": "step",
+                "step": {
+                    "id": f"{step_id}-thinking",
+                    "title": "选题放宽策略（原因说明）",
+                    "status": "completed",
+                    "startTime": _now_iso(),
+                    "endTime": _now_iso(),
+                    "toolName": "thinking",
+                    "output": "\n".join([x for x in lines if x is not None]),
+                },
+            }
 
         yield {
             "type": "step",
@@ -687,6 +741,95 @@ async def compose_paper_events(
                     "output": {"enabled": True, "skipped": True, "error": str(exc)},
                 },
             }
+
+    # Paper-level balance report (difficulty distribution / knowledge point repetition).
+    try:
+        diff_counts: Dict[str, int] = {"简单": 0, "中等": 0, "困难": 0, "未知": 0}
+        kp_counts: Dict[str, int] = {}
+        fp_counts: Dict[str, int] = {}
+        slot_shortfalls: List[Dict[str, Any]] = []
+
+        for sr in slot_results:
+            slot_obj = sr.get("slot")
+            selected = sr.get("selected") or []
+            if isinstance(slot_obj, _Slot):
+                requested = int(slot_obj.count or 0)
+                got = len([q for q in selected if isinstance(q, dict)])
+                if requested > 0 and got < requested:
+                    slot_shortfalls.append(
+                        {
+                            "slotIndex": int(slot_obj.index),
+                            "questionType": slot_obj.question_type_raw or slot_obj.question_type,
+                            "difficulty": slot_obj.difficulty,
+                            "requested": requested,
+                            "selected": got,
+                        }
+                    )
+
+        for q in selected_questions:
+            if not isinstance(q, dict):
+                continue
+            label = str(q.get("difficulty") or "").strip()
+            dv = q.get("difficulty_value")
+            bucket = "未知"
+            try:
+                dvf = float(dv) if dv is not None and str(dv).strip() else None
+            except Exception:
+                dvf = None
+            if dvf is not None:
+                if dvf <= 0.39:
+                    bucket = "困难"
+                elif dvf <= 0.69:
+                    bucket = "中等"
+                else:
+                    bucket = "简单"
+            else:
+                if "难" in label:
+                    bucket = "困难"
+                elif "中" in label or "适" in label:
+                    bucket = "中等"
+                elif "易" in label or "简" in label:
+                    bucket = "简单"
+            diff_counts[bucket] = int(diff_counts.get(bucket) or 0) + 1
+
+            fp = _stem_fingerprint(str(q.get("stem") or ""))
+            if fp:
+                fp_counts[fp] = int(fp_counts.get(fp) or 0) + 1
+
+            kps = q.get("knowledge_points")
+            if isinstance(kps, list):
+                for kp in kps[:12]:
+                    name = str(kp or "").strip()
+                    if name:
+                        kp_counts[name] = int(kp_counts.get(name) or 0) + 1
+            else:
+                name = str(kps or "").strip()
+                if name:
+                    kp_counts[name] = int(kp_counts.get(name) or 0) + 1
+
+        top_kps = sorted(kp_counts.items(), key=lambda kv: (-int(kv[1]), kv[0]))[:10]
+        dup_stems = sum(1 for _fp, c in fp_counts.items() if int(c) > 1)
+
+        yield {
+            "type": "step",
+            "step": {
+                "id": "paper_balance",
+                "title": "整卷平衡性检查（可观测）",
+                "status": "completed",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "compose_paper",
+                "output": {
+                    "totalSelected": len(selected_questions),
+                    "difficultyBuckets": diff_counts,
+                    "duplicateStemCount": dup_stems,
+                    "topKnowledgePoints": [{"name": k, "count": v} for k, v in top_kps],
+                    "slotShortfalls": slot_shortfalls[:12],
+                },
+            },
+        }
+    except Exception:
+        pass
 
     yield {
         "type": "step",
