@@ -90,10 +90,23 @@ class SelfCritiqueToolsMixin:
             model = "gpt-4o-mini"
 
         try:
-            threshold = float(args.get("threshold") or os.getenv("STUDY_MATERIALS_REFINE_THRESHOLD") or "7.0")
+            threshold = float(
+                args.get("threshold")
+                or os.getenv("STUDY_MATERIALS_CRITIQUE_THRESHOLD")
+                or os.getenv("STUDY_MATERIALS_REFINE_THRESHOLD")
+                or "7.0"
+            )
         except Exception:
             threshold = 7.0
         threshold = max(0.0, min(threshold, 10.0))
+        try:
+            study_opts = ctx.working_memory.get("study_options")
+            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+            preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
+            if preset == "research":
+                threshold = max(threshold, 8.0)
+        except Exception:
+            pass
 
         async def _critique_one(kp: str) -> Dict[str, Any]:
             sec = _find_section(material, kp) or {}
@@ -191,4 +204,3 @@ class SelfCritiqueToolsMixin:
 
         items = [await _critique_one(kp) for kp in points]
         return {"topic": topic, "subject": subject, "items": items}
-

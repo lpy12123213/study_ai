@@ -51,10 +51,25 @@ class RefineDraftToolsMixin:
         strict_llm = self._strict_llm(ctx, args)  # type: ignore[attr-defined]
 
         try:
-            threshold = float(args.get("threshold") or os.getenv("STUDY_MATERIALS_REFINE_THRESHOLD") or "7.0")
+            threshold = float(
+                args.get("threshold")
+                or os.getenv("STUDY_MATERIALS_CRITIQUE_SKIP_THRESHOLD")
+                or os.getenv("STUDY_MATERIALS_REFINE_THRESHOLD")
+                or os.getenv("STUDY_MATERIALS_CRITIQUE_THRESHOLD")
+                or "7.0"
+            )
         except Exception:
             threshold = 7.0
         threshold = max(0.0, min(threshold, 10.0))
+        try:
+            study_opts = ctx.working_memory.get("study_options")
+            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+            preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
+            # In research mode, be stricter: don't skip refine unless score is very high.
+            if preset == "research":
+                threshold = max(threshold, 8.5)
+        except Exception:
+            pass
 
         points = _extract_points(args, ctx)
         critiques = ctx.working_memory.get("critiques")
@@ -164,4 +179,3 @@ class RefineDraftToolsMixin:
 
         items = [await _refine_one(kp) for kp in points]
         return {"topic": topic, "subject": subject, "items": items}
-
