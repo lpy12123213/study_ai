@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
 from backend.analysis_service import analyze_paper
 from backend.database.models import delete_paper, get_paper, list_papers, save_paper
+from backend.paper_compose.compose_tasks import compose_tasks
+from backend.paper_compose.task_manager import PaperComposeTask
+from backend.paper_compose.workflow import compose_paper_events
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
@@ -83,3 +90,84 @@ async def get_download_link(paper_id: int) -> dict:
             "4. 使用组卷网的正规下载功能下载试卷",
         ],
     }
+
+
+def _sse_headers() -> dict:
+    return {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
+
+async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
+    """
+    Run the compose workflow and append events into the task manager.
+    """
+    try:
+        async for evt in compose_paper_events(task.request, user_id=user_id):
+            if task.status != "running":
+                break
+            await compose_tasks.append_event(task, evt)
+
+            kind = str(evt.get("type") or "")
+            if kind == "result":
+                await compose_tasks.complete_task(task)
+                return
+            if kind == "error":
+                await compose_tasks.fail_task(task, str(evt.get("error") or "compose_failed"))
+                return
+    except asyncio.CancelledError:
+        await compose_tasks.fail_task(task, "Task cancelled")
+        raise
+    except Exception as exc:  # pragma: no cover
+        await compose_tasks.fail_task(task, str(exc))
+    finally:
+        if task.status == "running":
+            await compose_tasks.fail_task(task, "Task ended unexpectedly")
+
+
+@router.post("/papers/compose")
+async def compose_paper(payload: dict, user: dict = Depends(require_auth)) -> StreamingResponse:
+    """
+    Blueprint-based paper composing (teacher-side) with SSE streaming.
+
+    Frontend expects events shaped like:
+    - {type:'step', step: TaskStep}
+    - {type:'progress', progress:number}
+    - {type:'result', result: Paper}
+    - {type:'error', error:string}
+    """
+    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+
+    task_id = str(payload.get("taskId") or payload.get("task_id") or "").strip()
+    if not task_id:
+        task_id = f"compose-{uuid.uuid4().hex[:12]}"
+        payload["taskId"] = task_id
+
+    async def runner_factory(task: PaperComposeTask):
+        await _run_compose_task(task, user_id=user_id)
+
+    try:
+        await compose_tasks.create_task(
+            task_id=task_id,
+            user_id=user_id,
+            request=payload,
+            runner_factory=runner_factory,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    heartbeat_s = float(os.getenv("PAPER_COMPOSE_SSE_HEARTBEAT_S") or "4.0")
+
+    async def event_generator():
+        async for event in compose_tasks.stream(task_id, after_seq=0, heartbeat_s=heartbeat_s):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=_sse_headers(),
+    )

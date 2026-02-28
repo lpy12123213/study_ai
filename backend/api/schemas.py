@@ -63,6 +63,12 @@ class ChatRequest(BaseModel):
     sub_model: Optional[str] = Field(default=None, max_length=200)
 
 
+class DeepThinkRequest(BaseModel):
+    question: str
+    subject: Optional[str] = "高中数学"
+    image_url: Optional[str] = None
+
+
 class ConversationCreate(BaseModel):
     title: Optional[str] = "新对话"
 
@@ -80,10 +86,3 @@ class SearchHistoryCreate(BaseModel):
     search_type: str
     search_query: str
     result_count: int
-
-
-class DeepThinkRequest(BaseModel):
-    """Request body for DeepThink (Tree-of-Thought) endpoint."""
-    question: str
-    subject: Optional[str] = "高中数学"
-    image_url: Optional[str] = None

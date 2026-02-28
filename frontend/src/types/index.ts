@@ -71,6 +71,7 @@ export interface Question {
   difficulty?: string
   knowledgePoint?: string
   sourceUrl?: string
+  stem?: string
 }
 
 export interface PaperAnalysis {

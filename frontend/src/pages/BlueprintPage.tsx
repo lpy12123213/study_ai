@@ -105,6 +105,7 @@ function SlotEditor({ slot, onUpdate, onRemove }: SlotEditorProps) {
 
 export default function BlueprintPage() {
   const [subject, setSubject] = useState('')
+  const [topic, setTopic] = useState('')
   const [slots, setSlots] = useState<BlueprintSlot[]>([])
   const [blueprintName, setBlueprintName] = useState('')
   const [showQuestionTypes, setShowQuestionTypes] = useState(false)
@@ -113,7 +114,7 @@ export default function BlueprintPage() {
 
   const { data: subjects } = useSubjects()
   const { data: filters } = useSubjectFilters(subject || undefined)
-  const { compose, pause, resume, isComposing, result, taskId } = useComposePaper()
+  const { compose, pause, resume, isComposing, result, taskId, progress } = useComposePaper()
   const { mutate: saveBlueprint, isPending: isSaving } = useSaveBlueprint()
 
   const taskSteps = useTaskStore((state) => state.getTaskSteps(taskId ?? ''))
@@ -153,6 +154,8 @@ export default function BlueprintPage() {
     if (!subject || slots.length === 0) return
     compose({
       subject,
+      topic: topic.trim(),
+      paperName: blueprintName.trim() || undefined,
       slots,
       filters: {
         gradeId: gradeId && gradeId !== 'all' ? Number(gradeId) : undefined,
@@ -163,14 +166,12 @@ export default function BlueprintPage() {
 
   const handleSaveBlueprint = () => {
     if (!blueprintName || !subject || slots.length === 0) return
-    saveBlueprint({ name: blueprintName, subject, slots })
+    saveBlueprint({ name: blueprintName, subject, topic: topic.trim(), slots })
     setBlueprintName('')
   }
 
   const isPaused = checkpoint?.status === 'paused'
-  const progress = taskSteps.length > 0
-    ? (taskSteps.filter((s) => s.status === 'completed').length / taskSteps.length) * 100
-    : 0
+  const progressPct = Number.isFinite(progress) ? progress : 0
 
   return (
     <div className="h-full grid grid-cols-12 overflow-hidden">
@@ -211,6 +212,15 @@ export default function BlueprintPage() {
                       ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-1.5 block">考查主题</label>
+                <Input
+                  placeholder="如：导数 / 函数 / 圆锥曲线 / 阅读理解"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                />
               </div>
 
               {filters && (
@@ -388,14 +398,14 @@ export default function BlueprintPage() {
             任务执行
           </h3>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>进度</span>
-              <span>{Math.round(progress)}%</span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>进度</span>
+                <span>{Math.round(progressPct)}%</span>
+              </div>
+              <Progress value={progressPct} className="h-2" />
             </div>
-            <Progress value={progress} className="h-2" />
           </div>
-        </div>
 
         <ScrollArea className="flex-1">
           <div className="p-6">

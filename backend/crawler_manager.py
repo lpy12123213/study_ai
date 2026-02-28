@@ -1,45 +1,89 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import Dict, Tuple
 
 from backend.config import DEFAULT_SUBJECT
 from backend.subjects import resolve_subject
 from backend.crawler.zujuan_crawler import ZujuanCrawler
 
-_crawler: Optional[ZujuanCrawler] = None
+# Keep per-subject crawler instances to avoid cross-request races when switching subjects.
+_crawlers: Dict[Tuple[str, str], ZujuanCrawler] = {}
+_inflight: Dict[Tuple[str, str], asyncio.Future] = {}
 _lock = asyncio.Lock()
 
 
 async def get_crawler(*, subject: str = "", edu_level: str = "", strict: bool = True) -> ZujuanCrawler:
     """
-    Get (or create) a shared crawler instance for the backend app.
+    Get (or create) a crawler instance for the backend app.
 
     Notes:
-    - The crawler is expensive to initialize (Playwright); keep one instance and switch subject when needed.
+    - The crawler is expensive to initialize (Playwright); cache instances per subject.
     - Subject resolution is strict by default to avoid cross-subject leakage.
-    - Uses asyncio.Lock to prevent concurrent subject-switching race conditions.
+    - Uses asyncio.Lock + in-flight futures to prevent duplicate initialization.
     """
-    global _crawler
-
     subject_input = (subject or DEFAULT_SUBJECT).strip()
-    resolved_subject = resolve_subject(subject_input, edu_level=(edu_level or "").strip(), strict=strict)
+    edu_level_clean = (edu_level or "").strip()
+    resolved_subject = resolve_subject(subject_input, edu_level=edu_level_clean, strict=strict)
+    key = (resolved_subject, edu_level_clean)
 
     async with _lock:
-        if _crawler is None:
-            _crawler = ZujuanCrawler(subject=resolved_subject)
-            await _crawler.initialize()
-        elif _crawler.subject != resolved_subject:
-            _crawler.set_subject(resolved_subject)
+        existing = _crawlers.get(key)
+        if existing is not None:
+            return existing
 
-    return _crawler
+        fut = _inflight.get(key)
+        if fut is None:
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            _inflight[key] = fut
+            creator = True
+        else:
+            creator = False
+
+    if not creator:
+        return await fut
+
+    crawler = ZujuanCrawler(subject=resolved_subject)
+    try:
+        await crawler.initialize()
+    except BaseException as exc:
+        async with _lock:
+            inflight = _inflight.pop(key, None)
+            if inflight is not None and not inflight.done():
+                inflight.set_exception(exc)
+        raise
+
+    async with _lock:
+        _crawlers[key] = crawler
+        inflight = _inflight.pop(key, None)
+        if inflight is not None and not inflight.done():
+            inflight.set_result(crawler)
+
+    return crawler
 
 
 async def close_crawler() -> None:
-    """Close the shared crawler instance (best-effort)."""
-    global _crawler
+    """Close cached crawler instances (best-effort)."""
+    global _crawlers
+    global _inflight
+
     async with _lock:
-        if _crawler is None:
-            return
-        await _crawler.close()
-        _crawler = None
+        crawlers = list(_crawlers.values())
+        _crawlers = {}
+
+        inflight = list(_inflight.values())
+        _inflight = {}
+
+    for fut in inflight:
+        try:
+            if not fut.done():
+                fut.set_exception(RuntimeError("crawler_closed"))
+        except Exception:
+            pass
+
+    for crawler in crawlers:
+        try:
+            await crawler.close()
+        except Exception:
+            pass

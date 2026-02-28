@@ -1,14 +1,24 @@
-import { apiClient, fetchSSE } from './client'
+import { apiClient, fetchSSE, fetchSSERequest } from './client'
 import type { Blueprint, BlueprintSlot, Paper, TaskStep } from '@/types'
 
 export interface ComposeRequest {
+  taskId?: string
   subject: string
+  topic?: string
+  paperName?: string
   slots: BlueprintSlot[]
   filters?: {
     gradeId?: number
     textbookVersion?: string
     provinceId?: number
     paperTypeId?: number
+  }
+  options?: {
+    maxPages?: number
+    perSlotExpand?: number
+    minQualityScore?: number
+    dedupByStem?: boolean
+    avoidUsed?: boolean
   }
 }
 
@@ -23,6 +33,7 @@ export interface ComposeStreamEvent {
 export interface SaveBlueprintRequest {
   name: string
   subject: string
+  topic?: string
   slots: BlueprintSlot[]
 }
 
@@ -59,6 +70,23 @@ export function composePaperStream(
     (data) => {
       onEvent(data as ComposeStreamEvent)
     },
+    onError,
+    onComplete
+  )
+}
+
+export function streamComposeTask(
+  taskId: string,
+  afterSeq: number,
+  onEvent: (event: ComposeStreamEvent) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void
+): void {
+  const encodedId = encodeURIComponent(taskId)
+  fetchSSERequest(
+    `/tasks/${encodedId}/stream?after_seq=${Math.max(0, afterSeq || 0)}`,
+    { method: 'GET' },
+    (data) => onEvent(data as ComposeStreamEvent),
     onError,
     onComplete
   )

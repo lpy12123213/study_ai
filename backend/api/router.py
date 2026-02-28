@@ -16,6 +16,8 @@ from backend.api.deepthink import router as deepthink_router
 from backend.api.lesson_plan import router as lesson_plan_router
 from backend.api.study_materials import router as study_materials_router
 from backend.api.question_evaluate import router as question_evaluate_router
+from backend.api.blueprints import router as blueprints_router
+from backend.api.tasks import router as tasks_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(system_router)
@@ -32,3 +34,5 @@ api_router.include_router(deepthink_router)
 api_router.include_router(lesson_plan_router)
 api_router.include_router(study_materials_router)
 api_router.include_router(question_evaluate_router)
+api_router.include_router(blueprints_router)
+api_router.include_router(tasks_router)

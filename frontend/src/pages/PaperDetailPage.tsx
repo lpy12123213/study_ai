@@ -180,7 +180,7 @@ export default function PaperDetailPage() {
                             </div>
                           </div>
 
-                          {!!question.sourceUrl ? (
+                          {question.sourceUrl ? (
                             <Button variant="ghost" size="sm" asChild className="h-8">
                               <a
                                 href={question.sourceUrl}
@@ -195,6 +195,17 @@ export default function PaperDetailPage() {
                             <span className="text-[10px] text-muted-foreground/50 select-none">无链接</span>
                           )}
                         </div>
+
+                        {!!question.stem && (
+                          <details className="mt-3">
+                            <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
+                              查看题干
+                            </summary>
+                            <div className="mt-2 max-h-60 overflow-auto rounded-md bg-muted/30 border border-border/60 p-3 text-sm whitespace-pre-wrap leading-6">
+                              {question.stem}
+                            </div>
+                          </details>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -221,7 +232,7 @@ export default function PaperDetailPage() {
                     </ol>
                   )}
 
-                  {!!download.questionLinks?.length ? (
+                  {download.questionLinks?.length ? (
                     <div className="grid gap-2">
                       {download.questionLinks.map((url, i) => (
                         <a

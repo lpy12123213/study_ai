@@ -1,13 +1,17 @@
 """
-数据库模型 - 只存储题目编号和试卷信息
+数据库模型 - 试卷/对话/画布等持久化。
+
+注意：项目默认合规策略是“题库内容不对外展示/导出”，但为了提升组卷与审卷体验，
+本项目允许在本地数据库中保存题干纯文本（不含答案/解析）。
 """
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, delete, desc, func, select
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, Float, delete, desc, func, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, selectinload
 from datetime import datetime
 import json
-from typing import AsyncGenerator, List, Optional
+import uuid
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from pathlib import Path
 
 Base = declarative_base()
@@ -39,8 +43,33 @@ class PaperQuestion(Base):
     knowledge_point = Column(String(200))  # 知识点
     source_url = Column(String(500))  # 题目来源URL
 
+    # Optional local storage for the question stem (no answers/analysis).
+    stem = Column(Text, default="")  # 题干纯文本（含 LaTeX 公式占位）
+    stem_fingerprint = Column(String(32), default="")  # md5，用于去重/复用
+    difficulty_value = Column(Float)  # 难度系数（越小越难）
+    quality_score = Column(Integer, default=0)  # 0-100
+    quality_flags = Column(Text, default="")  # JSON string list
+    knowledge_points_json = Column(Text, default="")  # JSON string list
+    source = Column(String(200), default="")  # 来源（如：xx年期末）
+    date = Column(String(50), default="")  # 日期（如：2024/05）
+
     # 关联试卷
     paper = relationship("Paper", back_populates="questions")
+
+
+class Blueprint(Base):
+    """组卷蓝图（教师侧配置）"""
+
+    __tablename__ = "blueprints"
+
+    id = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    name = Column(String(200), nullable=False, default="")
+    subject = Column(String(100), nullable=False, default="")
+    topic = Column(String(200), nullable=False, default="")
+    slots_json = Column(Text, nullable=False, default="[]")  # JSON: BlueprintSlot[]
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class SearchHistory(Base):
@@ -154,6 +183,7 @@ async def init_db():
     """初始化数据库"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_sync_migrate_db_schema)
     print("数据库初始化完成")
 
 
@@ -191,12 +221,40 @@ async def save_paper(paper_name: str, questions: List[dict]) -> int:
                 q_diff = ""
                 q_knowledge = ""
                 q_source_url = ""
+                stem = ""
+                stem_fp = ""
+                difficulty_value = None
+                quality_score = 0
+                quality_flags = ""
+                knowledge_points_json = ""
+                source = ""
+                date = ""
             else:
                 qid = q_data.get("question_id")
                 q_type = q_data.get("type") or q_data.get("question_type")
                 q_diff = q_data.get("difficulty")
                 q_knowledge = q_data.get("knowledge_point") or ""
                 q_source_url = q_data.get("source_url") or ""
+                stem = q_data.get("stem") or ""
+                stem_fp = q_data.get("stem_fingerprint") or q_data.get("stem_fp") or ""
+                difficulty_value = q_data.get("difficulty_value")
+                quality_score = q_data.get("quality_score") or 0
+                quality_flags = q_data.get("quality_flags") or ""
+                knowledge_points_json = q_data.get("knowledge_points_json") or q_data.get("knowledge_points") or ""
+                source = q_data.get("source") or ""
+                date = q_data.get("date") or ""
+
+                # Normalize JSON-like fields (store as string).
+                if isinstance(quality_flags, list):
+                    try:
+                        quality_flags = json.dumps(quality_flags, ensure_ascii=False)
+                    except Exception:
+                        quality_flags = ""
+                if isinstance(knowledge_points_json, list):
+                    try:
+                        knowledge_points_json = json.dumps(knowledge_points_json, ensure_ascii=False)
+                    except Exception:
+                        knowledge_points_json = ""
 
             paper_question = PaperQuestion(
                 paper_id=paper.id,
@@ -206,6 +264,14 @@ async def save_paper(paper_name: str, questions: List[dict]) -> int:
                 difficulty=q_diff,
                 knowledge_point=q_knowledge,
                 source_url=q_source_url,
+                stem=stem,
+                stem_fingerprint=stem_fp,
+                difficulty_value=difficulty_value,
+                quality_score=quality_score,
+                quality_flags=quality_flags,
+                knowledge_points_json=knowledge_points_json,
+                source=source,
+                date=date,
             )
             session.add(paper_question)
 
@@ -252,7 +318,8 @@ async def get_paper(paper_id: int) -> dict:
                     "type": q.question_type,
                     "difficulty": q.difficulty,
                     "knowledge_point": q.knowledge_point,
-                    "source_url": q.source_url
+                    "source_url": q.source_url,
+                    "stem": q.stem or "",
                 }
                 for q in questions
             ]
@@ -503,7 +570,9 @@ async def fork_conversation(
 
     async with async_session_maker() as session:
         parent_result = await session.execute(
-            select(Conversation).where(Conversation.id == parent_conv_id)
+            select(Conversation).where(
+                Conversation.id == parent_conv_id,
+            )
         )
         parent = parent_result.scalar_one_or_none()
         if not parent:
@@ -768,7 +837,170 @@ async def get_canvas_board_version(board_id: int, version_id: int) -> Optional[d
         }
 
 
-# 初始化脚本
+# SQLite schema migration (best-effort for existing DBs)
+def _sync_migrate_db_schema(conn) -> None:
+    """Best-effort SQLite schema migrations for existing installations."""
+    # paper_questions: allow local stem storage (no answers/analysis).
+    try:
+        pq_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(paper_questions)").fetchall()]
+    except Exception:
+        pq_cols = []
+
+    def _add_col(table: str, name: str, ddl: str) -> None:
+        if name in pq_cols:
+            return
+        try:
+            conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        except Exception:
+            return
+
+    if pq_cols:
+        _add_col("paper_questions", "stem", "TEXT")
+        _add_col("paper_questions", "stem_fingerprint", "VARCHAR(32)")
+        _add_col("paper_questions", "difficulty_value", "FLOAT")
+        _add_col("paper_questions", "quality_score", "INTEGER")
+        _add_col("paper_questions", "quality_flags", "TEXT")
+        _add_col("paper_questions", "knowledge_points_json", "TEXT")
+        _add_col("paper_questions", "source", "VARCHAR(200)")
+        _add_col("paper_questions", "date", "VARCHAR(50)")
+
+
+async def list_blueprints(*, user_id: str, limit: int = 100) -> List[dict]:
+    uid = (user_id or "").strip()
+    if not uid:
+        uid = "anonymous"
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(Blueprint)
+            .where(Blueprint.user_id == uid)
+            .order_by(Blueprint.updated_at.desc())
+            .limit(int(limit or 100))
+        )
+        items = result.scalars().all()
+
+        out: List[dict] = []
+        for bp in items:
+            try:
+                slots = json.loads(bp.slots_json or "[]")
+                if not isinstance(slots, list):
+                    slots = []
+            except Exception:
+                slots = []
+            out.append(
+                {
+                    "id": bp.id,
+                    "name": bp.name,
+                    "subject": bp.subject,
+                    "topic": bp.topic,
+                    "slots": slots,
+                    "createdAt": bp.created_at.isoformat() if bp.created_at else "",
+                    "updatedAt": bp.updated_at.isoformat() if bp.updated_at else "",
+                }
+            )
+        return out
+
+
+async def get_blueprint(*, user_id: str, blueprint_id: str) -> Optional[dict]:
+    uid = (user_id or "").strip() or "anonymous"
+    bid = (blueprint_id or "").strip()
+    if not bid:
+        return None
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(Blueprint).where(Blueprint.id == bid, Blueprint.user_id == uid)
+        )
+        bp = result.scalar_one_or_none()
+        if not bp:
+            return None
+
+        try:
+            slots = json.loads(bp.slots_json or "[]")
+            if not isinstance(slots, list):
+                slots = []
+        except Exception:
+            slots = []
+
+        return {
+            "id": bp.id,
+            "name": bp.name,
+            "subject": bp.subject,
+            "topic": bp.topic,
+            "slots": slots,
+            "createdAt": bp.created_at.isoformat() if bp.created_at else "",
+            "updatedAt": bp.updated_at.isoformat() if bp.updated_at else "",
+        }
+
+
+async def save_blueprint(
+    *,
+    user_id: str,
+    blueprint_id: str,
+    name: str,
+    subject: str,
+    topic: str,
+    slots: List[dict],
+) -> dict:
+    uid = (user_id or "").strip() or "anonymous"
+    bid = (blueprint_id or "").strip()
+    if not bid:
+        bid = uuid.uuid4().hex
+    name = (name or "").strip()
+    subject = (subject or "").strip()
+    topic = (topic or "").strip()
+
+    try:
+        slots_json = json.dumps(slots or [], ensure_ascii=False)
+    except Exception:
+        slots_json = "[]"
+
+    async with async_session_maker() as session:
+        existing = None
+        if bid:
+            res = await session.execute(select(Blueprint).where(Blueprint.id == bid, Blueprint.user_id == uid))
+            existing = res.scalar_one_or_none()
+
+        if existing:
+            existing.name = name or existing.name
+            existing.subject = subject or existing.subject
+            existing.topic = topic
+            existing.slots_json = slots_json
+            session.add(existing)
+            await session.commit()
+            await session.refresh(existing)
+            return await get_blueprint(user_id=uid, blueprint_id=existing.id)  # type: ignore[return-value]
+
+        bp = Blueprint(
+            id=bid,
+            user_id=uid,
+            name=name,
+            subject=subject,
+            topic=topic,
+            slots_json=slots_json,
+        )
+        session.add(bp)
+        await session.commit()
+        await session.refresh(bp)
+        return await get_blueprint(user_id=uid, blueprint_id=bp.id)  # type: ignore[return-value]
+
+
+async def delete_blueprint(*, user_id: str, blueprint_id: str) -> bool:
+    uid = (user_id or "").strip() or "anonymous"
+    bid = (blueprint_id or "").strip()
+    if not bid:
+        return False
+
+    async with async_session_maker() as session:
+        result = await session.execute(select(Blueprint).where(Blueprint.id == bid, Blueprint.user_id == uid))
+        bp = result.scalar_one_or_none()
+        if not bp:
+            return False
+        await session.delete(bp)
+        await session.commit()
+        return True
+
+
 if __name__ == "__main__":
     import asyncio
 

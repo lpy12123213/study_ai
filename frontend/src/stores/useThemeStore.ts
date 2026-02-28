@@ -55,7 +55,6 @@ function ensureSystemThemeListener(
     mql.addEventListener('change', onChange)
   } else {
     // Safari < 14
-    // eslint-disable-next-line deprecation/deprecation
     mql.addListener(onChange)
   }
 }

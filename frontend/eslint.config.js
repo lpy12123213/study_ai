@@ -24,6 +24,8 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      // This codebase still uses `any` in a few API/stream parsing helpers; keep lint usable.
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
 )

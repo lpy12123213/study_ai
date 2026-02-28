@@ -53,6 +53,8 @@ function toQuestionMeta(input: any): Question | undefined {
 
   const order =
     typeof (input as any).order === 'number' ? (input as any).order : undefined
+  const stem =
+    typeof (input as any).stem === 'string' ? (input as any).stem : undefined
 
   return {
     questionId,
@@ -70,6 +72,7 @@ function toQuestionMeta(input: any): Question | undefined {
       typeof (input as any).source_url === 'string'
         ? (input as any).source_url
         : undefined,
+    stem,
   }
 }
 

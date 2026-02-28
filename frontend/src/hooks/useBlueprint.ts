@@ -48,10 +48,12 @@ export function useComposePaper() {
   const [result, setResult] = useState<Paper | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
+  const [lastSeq, setLastSeq] = useState(0)
 
   const {
     startTask,
     addStep,
+    updateStep,
     completeTask,
     failTask,
     pauseTask,
@@ -69,8 +71,14 @@ export function useComposePaper() {
       setProgress(0)
       setResult(null)
       setError(null)
+      setLastSeq(0)
 
       startTask(newTaskId)
+
+      const requestWithTaskId: blueprintApi.ComposeRequest = {
+        ...request,
+        taskId: newTaskId,
+      }
 
       // Save initial checkpoint for resumability
       saveCheckpoint(newTaskId, {
@@ -82,24 +90,38 @@ export function useComposePaper() {
         checkpoint: {
           completedSteps: [],
           pendingSteps: [],
-          context: request,
+          context: requestWithTaskId,
         },
         canResume: true,
       })
 
+      const seenStepIds = new Set<string>()
+      let endedWithResult = false
+
       blueprintApi.composePaperStream(
-        request,
+        requestWithTaskId,
         (event) => {
+          const seq = Number((event as any)?.seq)
+          if (Number.isFinite(seq) && seq > 0) setLastSeq(seq)
+
           if (event.type === 'step' && event.step) {
-            addStep(newTaskId, event.step)
+            const stepId = event.step.id
+            if (stepId && seenStepIds.has(stepId)) {
+              updateStep(newTaskId, stepId, event.step)
+            } else {
+              if (stepId) seenStepIds.add(stepId)
+              addStep(newTaskId, event.step)
+            }
           } else if (event.type === 'progress' && event.progress !== undefined) {
             setProgress(event.progress)
           } else if (event.type === 'result' && event.result) {
+            endedWithResult = true
             setResult(event.result)
             queryClient.invalidateQueries({ queryKey: ['papers'] })
           } else if (event.type === 'error') {
             setError(event.error || 'Unknown error')
             failTask(newTaskId, event.error || 'Unknown error')
+            setIsComposing(false)
           }
         },
         (err) => {
@@ -108,12 +130,22 @@ export function useComposePaper() {
           setIsComposing(false)
         },
         () => {
-          completeTask(newTaskId)
           setIsComposing(false)
+          setProgress((p) => (p >= 99 ? 100 : p))
+
+          if (endedWithResult) {
+            completeTask(newTaskId)
+            return
+          }
+
+          const cp = getCheckpoint(newTaskId)
+          if (cp?.status === 'paused') return
+          // Stream ended without a result: treat as failure so the user can retry/resume.
+          failTask(newTaskId, 'Task ended unexpectedly')
         }
       )
     },
-    [startTask, addStep, completeTask, failTask, saveCheckpoint, queryClient]
+    [startTask, addStep, updateStep, completeTask, failTask, saveCheckpoint, getCheckpoint, queryClient]
   )
 
   const pause = useCallback(() => {
@@ -129,12 +161,56 @@ export function useComposePaper() {
       const checkpoint = getCheckpoint(taskId)
       if (checkpoint) {
         setIsComposing(true)
+        setError(null)
         await blueprintApi.resumeComposeTask(taskId)
-        // Re-subscribe to the stream
-        // This would need backend support for resumable tasks
+
+        const seenStepIds = new Set<string>()
+        for (const s of useTaskStore.getState().getTaskSteps(taskId)) {
+          if (s?.id) seenStepIds.add(s.id)
+        }
+        let endedWithResult = false
+
+        blueprintApi.streamComposeTask(
+          taskId,
+          lastSeq,
+          (event) => {
+            const seq = Number((event as any)?.seq)
+            if (Number.isFinite(seq) && seq > 0) setLastSeq(seq)
+
+            if (event.type === 'step' && event.step) {
+              const stepId = event.step.id
+              if (stepId && seenStepIds.has(stepId)) {
+                updateStep(taskId, stepId, event.step)
+              } else {
+                if (stepId) seenStepIds.add(stepId)
+                addStep(taskId, event.step)
+              }
+            } else if (event.type === 'progress' && event.progress !== undefined) {
+              setProgress(event.progress)
+            } else if (event.type === 'result' && event.result) {
+              endedWithResult = true
+              setResult(event.result)
+              queryClient.invalidateQueries({ queryKey: ['papers'] })
+            } else if (event.type === 'error') {
+              setError(event.error || 'Unknown error')
+              failTask(taskId, event.error || 'Unknown error')
+              setIsComposing(false)
+            }
+          },
+          (err) => {
+            setError(err.message)
+            failTask(taskId, err.message)
+            setIsComposing(false)
+          },
+          () => {
+            setIsComposing(false)
+            setProgress((p) => (p >= 99 ? 100 : p))
+            if (endedWithResult) completeTask(taskId)
+          }
+        )
       }
     }
-  }, [taskId, getCheckpoint])
+  }, [taskId, getCheckpoint, lastSeq, addStep, updateStep, completeTask, failTask, queryClient])
 
   return {
     compose,
