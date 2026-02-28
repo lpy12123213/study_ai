@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import json
 from typing import Any, Dict, List
 
@@ -46,6 +47,25 @@ class ContentReviewToolsMixin:
 
             enforce_sources = any_web or any_wiki or any_stackexchange
 
+            # When we already have generated markdown, additionally enforce "dimension coverage"
+            # for deep/research presets so iteration is driven by concrete gaps (conditions/edge cases/applications).
+            md_sections_by_kp: Dict[str, str] = {}
+            if preset in {"deep", "research"} and markdown.strip():
+                current_kp = ""
+                buf: List[str] = []
+                for line in markdown.splitlines():
+                    m = re.match(r"^##\s+\d+、\s*(.+?)\s*$", line.strip())
+                    if m:
+                        if current_kp:
+                            md_sections_by_kp[current_kp] = "\n".join(buf).strip()
+                        current_kp = str(m.group(1) or "").strip()
+                        buf = []
+                        continue
+                    if current_kp:
+                        buf.append(line)
+                if current_kp and current_kp not in md_sections_by_kp:
+                    md_sections_by_kp[current_kp] = "\n".join(buf).strip()
+
             for it in items:
                 kp = str(it.get("knowledge_point") or "").strip() or "（未知知识点）"
 
@@ -68,6 +88,28 @@ class ContentReviewToolsMixin:
                     heuristic_issues.append(
                         f"知识点《{kp}》资料来源不足：建议增加 web_search_knowledge 轮次，并补充 query_hint（定义/性质/反例/证明/应用）。"
                     )
+
+                # Dimension coverage gate: definition/conditions/edge cases/pitfalls/applications.
+                if enforce_sources and preset in {"deep", "research"} and md_sections_by_kp:
+                    sec = md_sections_by_kp.get(kp, "")
+                    if sec:
+                        missing_dims: List[str] = []
+                        if not re.search(r"(定义|概念|是什么)", sec):
+                            missing_dims.append("定义/概念")
+                        if not re.search(r"(条件|适用|前提|范围|成立)", sec):
+                            missing_dims.append("条件/适用范围")
+                        if not re.search(r"(反例|边界|极端|陷阱)", sec):
+                            missing_dims.append("反例/边界")
+                        if not re.search(r"(误区|易错|注意|常见错误)", sec):
+                            missing_dims.append("误区/易错点")
+                        if not re.search(r"(应用|题型|例题|典型|场景)", sec):
+                            missing_dims.append("应用/题型")
+
+                        allowed_missing = 2 if preset == "deep" else 1
+                        if len(missing_dims) > allowed_missing:
+                            heuristic_issues.append(
+                                f"知识点《{kp}》覆盖维度不足：缺少 {', '.join(missing_dims[:3])}。建议补充检索并重写该知识点讲解。"
+                            )
 
                 if ctx.working_memory.get("search_questions_by_knowledge") is not None:
                     examples_n = _count_list((it.get("questions") or {}), "examples")
@@ -152,4 +194,3 @@ class ContentReviewToolsMixin:
             ctx.working_memory["markdown"] = revised
             return revised
         return markdown
-

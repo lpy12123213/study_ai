@@ -101,3 +101,7 @@ mcp_logs/
 
 .claude/
 .cursor/
+
+# vibe coding
+nextstep.csv
+nextstep.md

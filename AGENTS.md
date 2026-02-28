@@ -2,54 +2,57 @@
 
 ## Project Structure & Module Organization
 
-- Repo root is the application root.
-- `backend/`: FastAPI services (`backend/app.py`) and an OpenAI-compatible adapter (`backend/openai_adapter.py`).
-  - `backend/api/`: API routers + Pydantic schemas (grouped by domain).
-  - `backend/core/`: shared settings (`backend/core/settings.py`) and subject mappings (`backend/core/subjects.py`).
+- Repo root is the app root.
+- `backend/`: FastAPI services (`backend/app.py`) plus agents/crawlers/MCP integrations.
+  - `backend/api/`: routers + Pydantic schemas (group by domain).
+  - `backend/agent/`, `backend/study_materials/`, `backend/paper_compose/`: AI workflow logic.
   - `backend/database/`: SQLAlchemy models + SQLite helpers.
-  - `backend/crawler/`: Playwright crawler implementation.
-  - `backend/mcp/`: MCP tools + stdio server entrypoint.
-- `frontend/`: Vite + React UI (source in `frontend/src/`).
-- `docs/`: deployment/integration docs; `scripts/`: local helpers.
+  - `backend/crawler/`: Playwright scraping utilities.
+  - `backend/mcp/`: MCP tools + stdio server entrypoint (`python -m backend.mcp.stdio_server`).
+- `frontend/`: Vite + React UI (`frontend/src/`), with `@/` alias for imports.
+- `docs/`: architecture/deployment/API docs; `scripts/`: local helpers.
+- Local state/output is kept out of git: `.local/`, `data/`, `artifacts/`, `venv/` (see `.gitignore`).
 
 ## Build, Test, and Development Commands
 
-Backend (dev):
+Recommended launcher (sets up deps + runs services):
 
-- `pip install -r requirements.txt` (install Python deps)
-- `python -m playwright install chromium` (install browser for crawler)
-- `python -m uvicorn backend.app:app --reload --port 8000` (run API on `:8000`)
+- Windows: `start.bat dev|all|backend|frontend|mcp|setup|doctor`
+- Linux/macOS: `./start.sh dev|all|backend|frontend|mcp|setup|doctor`
 
-Frontend:
+Manual equivalents:
 
-- `cd frontend`
-- `npm install` (install JS deps)
-- `npm run dev` (UI on `http://localhost:3000`, proxies `/api` → `http://localhost:8000`)
-- `npm run lint` / `npm run build`
-
-MCP server:
-
-- `python -m backend.mcp.stdio_server`
+- Backend API: `python -m uvicorn backend.app:app --reload --port 8000`
+- Frontend dev: `cd frontend && npm install && npm run dev`
+- Lint/build: `cd frontend && npm run lint` / `npm run build`
+- MCP server: `python -m backend.mcp.stdio_server`
+- Crawler deps: `python -m playwright install chromium`
 
 ## Coding Style & Naming Conventions
 
-- `.editorconfig` is the source of truth: UTF-8, LF, 2-space indent by default; Python uses 4 spaces.
-- Python targets 3.8+ (Ruff target `py38` in `pyproject.toml`); prefer type hints and `snake_case`.
-- Frontend uses strict TypeScript; React components are `PascalCase` under `frontend/src/`.
+- `.editorconfig` is the source of truth (UTF-8, LF, 2 spaces; Python uses 4 spaces).
+- Python: prefer type hints and `snake_case`; Ruff is configured in `pyproject.toml` (line length 120).
+- Frontend: strict TypeScript (`frontend/tsconfig.json`); components `PascalCase`, hooks `useX`.
 
 ## Testing Guidelines
 
-- Backend tests live in `backend/tests/` and use `unittest`.
-- Run tests: `python -m unittest discover -s backend/tests`.
-- Smoke checks: `python -m compileall . -q` and `python -c "import backend.app, backend.mcp.stdio_server"`.
+- Backend tests live in `backend/tests/` and use `unittest` (`test_*.py`).
+- Run tests: `python -m unittest discover -s backend/tests -p "test_*.py"`
+- Smoke check: `start.bat doctor` / `./start.sh doctor` (compile/import + frontend build).
 
 ## Commit & Pull Request Guidelines
 
-- Use Conventional Commits: `feat: ...`, `fix: ...`, `refactor: ...`, `docs: ...`, `chore: ...`.
-- PRs should include: what/why, how to test locally, and screenshots for UI changes.
-- Never commit secrets or generated artifacts (see `.gitignore`): `.env`, `frontend/dist/`, `frontend/node_modules/`, `*.db`, Playwright user data, `.local/`.
+- Follow Conventional Commits as used in history: `feat(agent): ...`, `fix(mcp): ...`, `refactor: ...`, `docs: ...`, `chore: ...`.
+- PRs: describe what/why, include local test steps, add screenshots for UI changes, and update `docs/` when behavior/config changes.
 
 ## Security & Configuration Tips
 
-- Use `.env.example` as a template; keep real keys in `.env` (never commit it).
-- Prefer shared config/constants in `backend/core/` over duplicating settings in feature code.
+- Copy `.env.example` → `.env`; never commit real keys or scraped content.
+
+- Keep new tools/crawlers rate-limited and respect target site terms.
+
+## Note
+
+- After completing the code, debugging, testing, functional verification, and code REVIEW are required.
+- Push to git once after completing a feature.
+

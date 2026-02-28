@@ -11,6 +11,7 @@ from backend.agent.config import AgentConfig
 from backend.agent.context import ContextManager
 from backend.agent.executor import Executor
 from backend.agent.memory import MemoryStore
+from backend.agent.policy import StudyMaterialsPolicy
 from backend.agent.planner import Planner
 from backend.agent.reflector import Reflector
 from backend.agent.types import (
@@ -123,6 +124,8 @@ class AgentCore:
         self.reflector = reflector or Reflector(config=self.config)
 
         self.state: AgentState = AgentState.IDLE
+        # Latest context snapshot (used by resumable StudyMaterials tasks).
+        self.last_context: Optional[CompressedContext] = None
 
     def _get_split_knowledge_points(self, ctx: CompressedContext) -> List[str]:
         split_res = ctx.working_memory.get("split_knowledge_points") or {}
@@ -514,6 +517,9 @@ class AgentCore:
         user_id: str = "anonymous",
         preferences: Optional[Dict[str, Any]] = None,
         options: Optional[Dict[str, Any]] = None,
+        resume_working_memory: Optional[Dict[str, Any]] = None,
+        iteration_offset: int = 0,
+        max_iterations: Optional[int] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Main entry. Streams AgentEvents compatible with the frontend SSE handler."""
 
@@ -605,10 +611,44 @@ class AgentCore:
             if "strict_llm" not in study_opts:
                 raw = str(os.getenv("STUDY_MATERIALS_STRICT_LLM") or "1").strip().lower()
                 study_opts["strict_llm"] = raw in {"1", "true", "yes", "y", "on"}
+
+            # Resume/continue: merge the previous working memory snapshot so the next iteration can
+            # build on existing retrieval + drafts instead of starting from scratch.
+            if isinstance(resume_working_memory, dict) and resume_working_memory:
+                for k, v in resume_working_memory.items():
+                    key = str(k or "").strip()
+                    if not key:
+                        continue
+                    if key in {"study_options", "_abort_execution", "_fatal_error", "_export_subagent_kp"}:
+                        continue
+                    ctx.working_memory[key] = v
+                # Do not carry over abort markers.
+                ctx.working_memory.pop("_abort_execution", None)
+                ctx.working_memory.pop("_fatal_error", None)
+                ctx.working_memory.pop("_export_subagent_kp", None)
+
             ctx.working_memory["study_options"] = study_opts
+            self.last_context = ctx
             self.context_manager.append_message(ctx, role="user", content=user_input)
 
-            for iteration in range(self.config.max_iterations):
+            policy = StudyMaterialsPolicy()
+            try:
+                iter_offset = int(iteration_offset or 0)
+            except Exception:
+                iter_offset = 0
+            iter_offset = max(0, iter_offset)
+
+            if max_iterations is not None:
+                try:
+                    budget = int(max_iterations)
+                except Exception:
+                    budget = 0
+                budget = max(1, budget)
+            else:
+                budget = int(policy.iteration_budget(ctx, default_cap=int(self.config.max_iterations or 1)) or 1)
+                budget = max(1, budget)
+
+            for iteration in range(iter_offset, iter_offset + budget):
                 results = ActionResults()
                 self.state = AgentState.PLANNING
                 yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
@@ -886,210 +926,175 @@ class AgentCore:
                         {"content": "SubAgent 结束：导出流程提前终止（LaTeX/PDF）。"},
                     )
 
-                # Autonomy boost: if the heuristic reviewer says "sources insufficient", do a bounded
-                # extra research pass for the failing knowledge points *within the same iteration*.
-                # This avoids forcing users into a 2nd planning loop just to fetch a bit more context.
-                try:
-                    auto_research_raw = (os.getenv("STUDY_MATERIALS_AUTO_RESEARCH") or "1").strip().lower()
-                    auto_research = auto_research_raw in {"1", "true", "yes", "y", "on"}
-                except Exception:
-                    auto_research = True
+                # Autonomy boost: if the heuristic reviewer says "sources insufficient" (or "dimension coverage insufficient"),
+                # do a bounded extra research pass for the failing knowledge points *within the same iteration*.
+                missing = policy.missing_kps_for_auto_research(ctx)
+                if missing and plan:
+                    policy.mark_auto_research(ctx, missing)
 
-                if auto_research and iteration == 0 and plan:
-                    review = ctx.working_memory.get("review_content")
-                    if isinstance(review, dict) and review.get("passed") is False:
-                        source = str(review.get("source") or "").strip().lower()
-                        issues = review.get("issues")
-                        if source == "heuristic" and isinstance(issues, list) and issues:
-                            # Parse "知识点「...」资料来源不足" issues.
-                            missing: List[str] = []
-                            for it in issues:
-                                s = str(it or "").strip()
-                                if not s:
-                                    continue
-                                m = re.search(r"知识点[「“\"](.+?)[」”\"]资料来源不足", s)
-                                if not m:
-                                    continue
-                                kp = (m.group(1) or "").strip()
-                                if kp:
-                                    missing.append(kp)
+                    opts = ctx.working_memory.get("study_options")
+                    opts = dict(opts) if isinstance(opts, dict) else {}
+                    preset = str(opts.get("preset") or "standard").strip().lower()
+                    if preset not in {"quick", "standard", "deep", "research"}:
+                        preset = "standard"
+                    requirements = str(opts.get("requirements") or "").strip()
 
-                            # Deduplicate while preserving order.
-                            seen = set()
-                            missing = [x for x in missing if not (x in seen or seen.add(x))]
+                    enable_extra_tools: bool
+                    if isinstance(opts.get("enable_extra_tools"), bool):
+                        enable_extra_tools = bool(opts.get("enable_extra_tools"))
+                    else:
+                        raw = str(os.getenv("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS") or "").strip().lower()
+                        enable_extra_tools = raw in {"1", "true", "yes", "y", "on"}
 
-                            try:
-                                max_kps = int(os.getenv("STUDY_MATERIALS_AUTO_RESEARCH_MAX_POINTS") or "3")
-                            except Exception:
-                                max_kps = 3
-                            max_kps = max(1, min(max_kps, 8))
-                            missing = missing[:max_kps]
+                    subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
 
-                            if missing:
-                                opts = ctx.working_memory.get("study_options")
-                                opts = dict(opts) if isinstance(opts, dict) else {}
-                                preset = str(opts.get("preset") or "standard").strip().lower()
-                                if preset not in {"quick", "standard", "deep", "research"}:
-                                    preset = "standard"
-                                requirements = str(opts.get("requirements") or "").strip()
+                    yield agent_event(
+                        "status",
+                        {
+                            "content": "自动补检索：发现部分知识点资料不足，追加一轮研究型检索（不进入下一轮规划）…\n"
+                            + "\n".join(f"- {kp}" for kp in missing),
+                        },
+                    )
 
-                                def _env_truthy(name: str, default: bool = False) -> bool:
-                                    raw = (os.getenv(name) or "").strip().lower()
-                                    if not raw:
-                                        return default
-                                    return raw in {"1", "true", "yes", "y", "on"}
+                    with_questions = opts.get("with_questions") if isinstance(opts.get("with_questions"), bool) else False
+                    with_diagrams = opts.get("with_diagrams") if isinstance(opts.get("with_diagrams"), bool) else True
 
-                                enable_extra_tools = bool(opts.get("enable_extra_tools")) if isinstance(opts.get("enable_extra_tools"), bool) else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS", False)
-                                # Deep and research presets do not auto-enable extra tools by default
-                                # if preset in {"deep", "research"}:
-                                #     enable_extra_tools = True
+                    # 1) Extra web research (Metaso /ask + decompose).
+                    web_step = PlanStep(
+                        id=f"auto-web-{uuid.uuid4().hex[:8]}",
+                        title="自动补检索：联网搜索知识点（研究型）",
+                        tool="web_search_knowledge",
+                        arguments={
+                            "topic": user_input,
+                            "subject": subject,
+                            "knowledge_points": missing,
+                            "limit": 12 if preset == "research" else 10,
+                            "text_max_length": 6000,
+                            "query_hint": "定义 直观理解 关键结论 适用条件 充分必要条件 等价表述 证明 推导 反例 边界情况 易错点",
+                            "scope": "webpage",
+                            "include_summary": True,
+                            "concurrency": 3,
+                            "decompose": True,
+                            "sub_questions": 4 if preset in {"deep", "research"} else 3,
+                            "preset": preset,
+                        },
+                        thought="为资料不足的知识点追加一轮研究型网搜，补齐条件/反例/推导框架等关键要素。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=web_step):
+                        yield evt
 
-                                subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
+                    # 2) Optional extra tools for higher-signal sources.
+                    if enable_extra_tools:
+                        wiki_step = PlanStep(
+                            id=f"auto-wiki-{uuid.uuid4().hex[:8]}",
+                            title="自动补检索：百科检索（Wikipedia）",
+                            tool="wikipedia_search",
+                            arguments={
+                                "topic": user_input,
+                                "subject": subject,
+                                "knowledge_points": missing,
+                                "lang": "zh",
+                                "sentences": 4,
+                                "max_content_length": 2500,
+                                "concurrency": 3,
+                            },
+                            thought="补充百科级定义/背景，提升术语一致性与可信度。",
+                        )
+                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=wiki_step):
+                            yield evt
 
-                                yield agent_event(
-                                    "status",
-                                    {
-                                        "content": "自动补检索：发现部分知识点资料不足，追加一轮研究型检索（不进入下一轮规划）…\n"
-                                        + "\n".join(f"- {kp}" for kp in missing),
-                                    },
-                                )
+                        se_site = (
+                            "math.stackexchange"
+                            if ("数学" in subject or "math" in subject.lower())
+                            else "stackoverflow"
+                        )
+                        se_step = PlanStep(
+                            id=f"auto-se-{uuid.uuid4().hex[:8]}",
+                            title="自动补检索：问答检索（StackExchange）",
+                            tool="stackexchange_search",
+                            arguments={
+                                "topic": user_input,
+                                "subject": subject,
+                                "knowledge_points": missing,
+                                "limit": 6,
+                                "site": se_site,
+                                "include_answers": True,
+                                "query_hint": "intuition proof pitfall",
+                            },
+                            thought="补充高质量问答解释与易错点，增强“为什么”和“怎么用”。",
+                        )
+                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=se_step):
+                            yield evt
 
-                                # 1) Extra web research (Metaso /ask + decompose).
-                                web_step = PlanStep(
-                                    id=f"auto-web-{uuid.uuid4().hex[:8]}",
-                                    title="自动补检索：联网搜索知识点（研究型）",
-                                    tool="web_search_knowledge",
-                                    arguments={
-                                        "topic": user_input,
-                                        "subject": subject,
-                                        "knowledge_points": missing,
-                                        "limit": 12 if preset == "research" else 10,
-                                        "text_max_length": 6000,
-                                        "query_hint": "定义 直观理解 关键结论 适用条件 充分必要条件 等价表述 证明 推导 反例 边界情况 易错点",
-                                        "scope": "webpage",
-                                        "include_summary": True,
-                                        "concurrency": 3,
-                                        "decompose": True,
-                                        "sub_questions": 4 if preset in {"deep", "research"} else 3,
-                                        "preset": preset,
-                                    },
-                                    thought="为资料不足的知识点追加一轮研究型网搜，补齐条件/反例/推导框架等关键要素。",
-                                )
-                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=web_step):
-                                    yield evt
+                        browse_step = PlanStep(
+                            id=f"auto-browse-{uuid.uuid4().hex[:8]}",
+                            title="自动补检索：提取网页正文（节选）",
+                            tool="browse_web_pages",
+                            arguments={
+                                "topic": user_input,
+                                "subject": subject,
+                                "knowledge_points": missing,
+                                "top_k": 3 if preset == "research" else 2,
+                                "max_chars": 14000 if preset == "research" else 12000,
+                            },
+                            thought="从新增检索结果中抽取可读正文片段，供写作阶段重组表达。",
+                        )
+                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=browse_step):
+                            yield evt
 
-                                # 2) Optional extra tools for higher-signal sources.
-                                if enable_extra_tools:
-                                    wiki_step = PlanStep(
-                                        id=f"auto-wiki-{uuid.uuid4().hex[:8]}",
-                                        title="自动补检索：百科检索（Wikipedia）",
-                                        tool="wikipedia_search",
-                                        arguments={
-                                            "topic": user_input,
-                                            "subject": subject,
-                                            "knowledge_points": missing,
-                                            "lang": "zh",
-                                            "sentences": 4,
-                                            "max_content_length": 2500,
-                                            "concurrency": 3,
-                                        },
-                                        thought="补充百科级定义/背景，提升术语一致性与可信度。",
-                                    )
-                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=wiki_step):
-                                        yield evt
+                    # 3) Re-aggregate + re-generate only for missing points.
+                    agg_step = PlanStep(
+                        id=f"auto-agg-{uuid.uuid4().hex[:8]}",
+                        title="自动补检索：聚合多源资料（按知识点）",
+                        tool="aggregate_knowledge",
+                        arguments={"topic": user_input, "subject": subject, "knowledge_points": missing},
+                        thought="将新增的检索结果聚合回统一素材池。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=agg_step):
+                        yield evt
 
-                                    se_site = (
-                                        "math.stackexchange"
-                                        if ("数学" in subject or "math" in subject.lower())
-                                        else "stackoverflow"
-                                    )
-                                    se_step = PlanStep(
-                                        id=f"auto-se-{uuid.uuid4().hex[:8]}",
-                                        title="自动补检索：问答检索（StackExchange）",
-                                        tool="stackexchange_search",
-                                        arguments={
-                                            "topic": user_input,
-                                            "subject": subject,
-                                            "knowledge_points": missing,
-                                            "limit": 6,
-                                            "site": se_site,
-                                            "include_answers": True,
-                                            "query_hint": "intuition proof pitfall",
-                                        },
-                                        thought="补充高质量问答解释与易错点，增强“为什么”和“怎么用”。",
-                                    )
-                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=se_step):
-                                        yield evt
+                    gen_step = PlanStep(
+                        id=f"auto-gen-{uuid.uuid4().hex[:8]}",
+                        title="自动补检索：生成概念讲解（按知识点）",
+                        tool="generate_study_material",
+                        arguments={
+                            "topic": user_input,
+                            "subject": subject,
+                            "knowledge_points": missing,
+                            "preset": preset,
+                            "requirements": requirements,
+                            "max_points": len(missing),
+                            "max_web_results": 12 if preset == "research" else 10,
+                            "max_web_pages": 3 if preset == "research" else 2,
+                            "max_page_chars": 3000 if preset == "research" else 2600,
+                            "with_questions": with_questions,
+                            "with_diagrams": with_diagrams,
+                        },
+                        thought="基于补充后的资料，重写资料不足的知识点讲解。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=gen_step):
+                        yield evt
 
-                                    browse_step = PlanStep(
-                                        id=f"auto-browse-{uuid.uuid4().hex[:8]}",
-                                        title="自动补检索：提取网页正文（节选）",
-                                        tool="browse_web_pages",
-                                        arguments={
-                                            "topic": user_input,
-                                            "subject": subject,
-                                            "knowledge_points": missing,
-                                            "top_k": 3 if preset == "research" else 2,
-                                            "max_chars": 14000 if preset == "research" else 12000,
-                                        },
-                                        thought="从新增检索结果中抽取可读正文片段，供写作阶段重组表达。",
-                                    )
-                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=browse_step):
-                                        yield evt
+                    assemble_step = PlanStep(
+                        id=f"auto-assemble-{uuid.uuid4().hex[:8]}",
+                        title="自动补检索：重新组装自学档案 Markdown",
+                        tool="assemble_study_archive",
+                        arguments={"topic": user_input, "subject": subject},
+                        thought="将补充后的讲解更新到最终 Markdown。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=assemble_step):
+                        yield evt
 
-                                # 3) Re-aggregate + re-generate only for missing points.
-                                agg_step = PlanStep(
-                                    id=f"auto-agg-{uuid.uuid4().hex[:8]}",
-                                    title="自动补检索：聚合多源资料（按知识点）",
-                                    tool="aggregate_knowledge",
-                                    arguments={"topic": user_input, "subject": subject, "knowledge_points": missing},
-                                    thought="将新增的检索结果聚合回统一素材池。",
-                                )
-                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=agg_step):
-                                    yield evt
-
-                                gen_step = PlanStep(
-                                    id=f"auto-gen-{uuid.uuid4().hex[:8]}",
-                                    title="自动补检索：生成概念讲解（按知识点）",
-                                    tool="generate_study_material",
-                                    arguments={
-                                        "topic": user_input,
-                                        "subject": subject,
-                                        "knowledge_points": missing,
-                                        "preset": preset,
-                                        "requirements": requirements,
-                                        "max_points": len(missing),
-                                        "max_web_results": 12 if preset == "research" else 10,
-                                        "max_web_pages": 3 if preset == "research" else 2,
-                                        "max_page_chars": 3000 if preset == "research" else 2600,
-                                        "with_questions": bool(opts.get("with_questions")) if isinstance(opts.get("with_questions"), bool) else False,
-                                        "with_diagrams": bool(opts.get("with_diagrams")) if isinstance(opts.get("with_diagrams"), bool) else True,
-                                    },
-                                    thought="基于补充后的资料，重写资料不足的知识点讲解。",
-                                )
-                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=gen_step):
-                                    yield evt
-
-                                assemble_step = PlanStep(
-                                    id=f"auto-assemble-{uuid.uuid4().hex[:8]}",
-                                    title="自动补检索：重新组装自学档案 Markdown",
-                                    tool="assemble_study_archive",
-                                    arguments={"topic": user_input, "subject": subject},
-                                    thought="将补充后的讲解更新到最终 Markdown。",
-                                )
-                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=assemble_step):
-                                    yield evt
-
-                                # 4) Re-review so reflect phase can pass without a new planning loop.
-                                review_step = PlanStep(
-                                    id=f"auto-review2-{uuid.uuid4().hex[:8]}",
-                                    title="自动复审（补检索后）",
-                                    tool="review_content",
-                                    arguments={"topic": user_input},
-                                    thought="补检索后复审，确认来源覆盖已达标。",
-                                )
-                                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-                                    yield evt
+                    # 4) Re-review so reflect phase can pass without a new planning loop.
+                    review_step = PlanStep(
+                        id=f"auto-review2-{uuid.uuid4().hex[:8]}",
+                        title="自动复审（补检索后）",
+                        tool="review_content",
+                        arguments={"topic": user_input},
+                        thought="补检索后复审，确认来源覆盖已达标。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
+                        yield evt
 
                 # One-shot quality: if the reviewer (LLM) finds issues, do a single auto-revise pass
                 # inside the same iteration so users are less likely to hit a second planning loop.
