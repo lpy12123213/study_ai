@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,23 @@ from backend.database.models import add_message, get_conversation, get_messages,
 router = APIRouter(dependencies=[Depends(require_auth)])
 
 logger = logging.getLogger(__name__)
+
+def _truncate_display_width(text: str, max_width: int) -> str:
+    s = str(text or "").strip()
+    if not s or max_width <= 0:
+        return ""
+    width = 0
+    out = []
+    for ch in s:
+        ch_w = 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
+        if width + ch_w > max_width:
+            break
+        out.append(ch)
+        width += ch_w
+    clipped = "".join(out).strip()
+    if clipped and len(clipped) < len(s):
+        return clipped + "..."
+    return clipped or s[: max(0, max_width)]
 
 
 @router.post("/chat")
@@ -88,7 +106,7 @@ async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
                     logger.exception("Failed to persist assistant final message")
 
                 if len(history) == 0:
-                    title = user_message[:30] + ("..." if len(user_message) > 30 else "")
+                    title = _truncate_display_width(user_message, 30)
                     try:
                         await update_conversation_title(conv_id, title)
                     except Exception:
