@@ -11,6 +11,7 @@ import secrets
 import threading
 import uuid
 from datetime import datetime, timedelta
+from datetime import timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -166,7 +167,7 @@ _users: Dict[str, Dict[str, Any]] = _bootstrap_users()
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     """Create a JWT access token."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(hours=JWT_EXPIRE_HOURS))
+    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(hours=JWT_EXPIRE_HOURS))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 

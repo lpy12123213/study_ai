@@ -4,6 +4,9 @@ import type { ConversationItem, ConversationType, Message } from '@/types'
 
 const EMPTY_MESSAGES: Message[] = []
 
+const MAX_CONVERSATIONS = 50
+const MAX_MESSAGES_PER_CONVERSATION = 200
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -43,6 +46,12 @@ interface ConversationState {
   getFilteredConversations: () => ConversationItem[]
 }
 
+function trimMessages(messages: Message[]): Message[] {
+  if (!Array.isArray(messages)) return EMPTY_MESSAGES
+  if (messages.length <= MAX_MESSAGES_PER_CONVERSATION) return messages
+  return messages.slice(-MAX_MESSAGES_PER_CONVERSATION)
+}
+
 export const useConversationStore = create<ConversationState>()(
   persist(
     (set, get) => ({
@@ -54,9 +63,23 @@ export const useConversationStore = create<ConversationState>()(
       setConversations: (conversations) => set({ conversations }),
 
       addConversation: (conversation) =>
-        set((state) => ({
-          conversations: [conversation, ...state.conversations],
-        })),
+        set((state) => {
+          const conversations = [conversation, ...state.conversations].slice(0, MAX_CONVERSATIONS)
+          const allowedIds = new Set(conversations.map((c) => c.id))
+
+          const messagesByConversation = Object.fromEntries(
+            Object.entries(state.messagesByConversation).filter(([id]) => allowedIds.has(id))
+          ) as Record<string, Message[]>
+
+          const currentConversationIdByType = Object.fromEntries(
+            Object.entries(state.currentConversationIdByType).map(([t, cur]) => [
+              t,
+              typeof cur === 'string' && allowedIds.has(cur) ? cur : null,
+            ])
+          ) as ConversationState['currentConversationIdByType']
+
+          return { conversations, messagesByConversation, currentConversationIdByType }
+        }),
 
       updateConversation: (id, data) =>
         set((state) => ({
@@ -98,17 +121,18 @@ export const useConversationStore = create<ConversationState>()(
         set((state) => ({
           messagesByConversation: {
             ...state.messagesByConversation,
-            [conversationId]: messages,
+            [conversationId]: trimMessages(messages),
           },
         })),
 
       addMessage: (conversationId, message) =>
         set((state) => {
           const prev = state.messagesByConversation[conversationId] ?? EMPTY_MESSAGES
+          const nextMessages = trimMessages([...prev, message])
           return {
             messagesByConversation: {
               ...state.messagesByConversation,
-              [conversationId]: [...prev, message],
+              [conversationId]: nextMessages,
             },
           }
         }),
@@ -120,7 +144,7 @@ export const useConversationStore = create<ConversationState>()(
           return {
             messagesByConversation: {
               ...state.messagesByConversation,
-              [conversationId]: next,
+              [conversationId]: trimMessages(next),
             },
           }
         }),
@@ -203,10 +227,14 @@ export const useConversationStore = create<ConversationState>()(
         } as ConversationState
       },
       partialize: (state) => {
-        const conversations = (state.conversations || []).filter((c) => c.type !== 'chat')
+        const conversations = (state.conversations || [])
+          .filter((c) => c.type !== 'chat')
+          .slice(0, MAX_CONVERSATIONS)
         const allowedIds = new Set(conversations.map((c) => c.id))
         const messagesByConversation = Object.fromEntries(
-          Object.entries(state.messagesByConversation || {}).filter(([id]) => allowedIds.has(id))
+          Object.entries(state.messagesByConversation || {})
+            .filter(([id]) => allowedIds.has(id))
+            .map(([id, messages]) => [id, trimMessages(messages)])
         ) as Record<string, Message[]>
 
         return {

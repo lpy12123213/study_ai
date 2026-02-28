@@ -13,6 +13,7 @@ import {
   Monitor,
   Moon,
   Sun,
+  Menu,
 } from 'lucide-react'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -30,6 +31,7 @@ import {
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Button } from '@/components/ui/button'
 
 const navItems = [
   { path: '/chat', label: '对话', icon: MessagesSquare },
@@ -63,7 +65,7 @@ export function Header() {
       </Link>
 
       {/* Navigation */}
-      <nav className="flex items-center gap-6">
+      <nav className="hidden lg:flex items-center gap-6">
         {navItems.map((item) => {
           const isActive = location.pathname.startsWith(item.path)
           
@@ -91,6 +93,40 @@ export function Header() {
 
       {/* Right actions */}
       <div className="flex items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 lg:hidden"
+              aria-label="Open navigation"
+            >
+              <Menu className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            {navItems.map((item) => {
+              const isActive = location.pathname.startsWith(item.path)
+              const Icon = item.icon
+              return (
+                <DropdownMenuItem key={item.path} asChild>
+                  <Link
+                    to={item.path}
+                    className={cn(
+                      'cursor-pointer w-full flex items-center',
+                      isActive ? 'text-foreground' : 'text-muted-foreground'
+                    )}
+                  >
+                    <Icon className="mr-2 h-4 w-4" />
+                    <span>{item.label}</span>
+                  </Link>
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <div className="cursor-pointer">

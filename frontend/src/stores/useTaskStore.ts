@@ -166,12 +166,17 @@ export const useTaskStore = create<TaskState>()(
     {
       name: 'task-storage',
       partialize: (state) => ({
+        activeTasks: Array.from(state.activeTasks.entries()),
         checkpoints: Array.from(state.checkpoints.entries()),
       }),
       merge: (persisted, current) => {
-        const persistedState = persisted as { checkpoints?: [string, ResumableTask][] }
+        const persistedState = persisted as {
+          activeTasks?: [string, TaskStep[]][]
+          checkpoints?: [string, ResumableTask][]
+        }
         return {
           ...current,
+          activeTasks: new Map(persistedState?.activeTasks || []),
           checkpoints: new Map(persistedState?.checkpoints || []),
         }
       },

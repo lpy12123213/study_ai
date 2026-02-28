@@ -170,6 +170,21 @@ function SubAgentPanel({
   activeTab: string | null
   onTabChange: (kp: string) => void
 }) {
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const scrollPositionsRef = useRef<Record<string, number>>({})
+
+  const selectedKP = activeTab || activities[0]?.knowledgePoint || null
+  const selectedActivity = activities.find((a) => a.knowledgePoint === selectedKP)
+
+  useEffect(() => {
+    if (!selectedKP) return
+    requestAnimationFrame(() => {
+      const el = scrollContainerRef.current
+      if (!el) return
+      el.scrollTop = scrollPositionsRef.current[selectedKP] ?? 0
+    })
+  }, [selectedKP])
+
   if (!activities.length) {
     return (
       <div className="flex-1 flex items-center justify-center p-8 text-muted-foreground text-sm">
@@ -177,9 +192,6 @@ function SubAgentPanel({
       </div>
     )
   }
-
-  const selectedKP = activeTab || activities[0]?.knowledgePoint || null
-  const selectedActivity = activities.find((a) => a.knowledgePoint === selectedKP)
 
   const statusIcon = (status: SubAgentActivity['status']) => {
     if (status === 'pending') return <div className="h-2 w-2 rounded-full bg-muted-foreground/30" />
@@ -197,7 +209,13 @@ function SubAgentPanel({
           return (
             <motion.button
               key={activity.knowledgePoint}
-              onClick={() => onTabChange(activity.knowledgePoint)}
+              onClick={() => {
+                const el = scrollContainerRef.current
+                if (el && selectedKP) {
+                  scrollPositionsRef.current[selectedKP] = el.scrollTop
+                }
+                onTabChange(activity.knowledgePoint)
+              }}
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.18 }}
@@ -216,7 +234,10 @@ function SubAgentPanel({
       </div>
 
       {/* Content area */}
-      <div className="flex-1 overflow-auto p-4 min-h-0 overscroll-contain">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-auto p-4 min-h-0 overscroll-contain"
+      >
         <AnimatePresence mode="popLayout">
           {selectedActivity ? (
             <motion.div
@@ -280,32 +301,45 @@ function SubAgentPanel({
 }
 
 function DraggableDivider({ onDrag }: { onDrag: (deltaX: number) => void }) {
-  const dragging = useRef(false)
+  const [dragging, setDragging] = useState(false)
   const lastX = useRef(0)
+  const onDragRef = useRef(onDrag)
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragging.current = true
-    lastX.current = e.clientX
+  useEffect(() => {
+    onDragRef.current = onDrag
+  }, [onDrag])
+
+  useEffect(() => {
+    if (!dragging) return
+
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
 
     const onMouseMove = (ev: MouseEvent) => {
-      if (!dragging.current) return
       const dx = ev.clientX - lastX.current
       lastX.current = ev.clientX
-      onDrag(dx)
+      onDragRef.current(dx)
     }
     const onMouseUp = () => {
-      dragging.current = false
+      setDragging(false)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+
+    return () => {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [onDrag])
+  }, [dragging])
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    lastX.current = e.clientX
+    setDragging(true)
+  }, [])
 
   return (
     <div
@@ -459,6 +493,7 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
 
 export default function StudyMaterialsPage() {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
@@ -601,16 +636,31 @@ export default function StudyMaterialsPage() {
   const activeStream = activeConversation?.activeStream
   const hasResumableStream = Boolean(activeConversation?.resumable && activeStream?.taskId)
   const lastTask = activeConversation?.lastTask
+  const lastTaskErrorTool = toText(lastTask?.materialError?.tool)
+  const isLastExportFailure = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf'].includes(lastTaskErrorTool)
   const isGenerating = isGeneratingLocal
 
   const messages = useConversationStore((state) =>
     state.getMessages(activeConversationId ?? '')
   )
 
+  const handleMessageScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
+    stickToBottomRef.current = distanceToBottom < 120
+  }, [])
+
   useEffect(() => {
-    if (!scrollRef.current) return
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages.length])
+    if (!stickToBottomRef.current) return
+    const el = scrollRef.current
+    if (!el) return
+    requestAnimationFrame(() => {
+      const target = scrollRef.current
+      if (!target) return
+      target.scrollTop = target.scrollHeight
+    })
+  }, [messages])
 
   const hasSubAgentPane = isGenerating || subAgentActivities.length > 0
 
@@ -1375,6 +1425,10 @@ export default function StudyMaterialsPage() {
           }
 
           const isExportFailure = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf'].includes(fatalTool)
+          const materialError =
+            fatalTool || fatalMsg
+              ? { tool: fatalTool || undefined, error: fatalMsg || undefined }
+              : undefined
           const interrupt =
             fatalTool || fatalMsg
               ? `**${isExportFailure ? 'LaTeX/PDF 导出失败' : '生成中断'}**：${[fatalTool, fatalMsg].filter(Boolean).join(' - ')}`
@@ -1399,6 +1453,16 @@ export default function StudyMaterialsPage() {
             progress: 100,
             activeStream: undefined,
             resumable: false,
+            ...(serverTaskId
+              ? {
+                  lastTask: {
+                    taskType: 'study_materials',
+                    taskId: serverTaskId,
+                    lastSeq,
+                    materialError,
+                  },
+                }
+              : {}),
           })
 
           if (localTaskId) {
@@ -1576,6 +1640,7 @@ export default function StudyMaterialsPage() {
     e?.preventDefault()
     const prompt = input.trim()
     if (!prompt || isGenerating) return
+    stickToBottomRef.current = true
 
     const normalized = prompt.replace(/\s+/g, '').trim().toLowerCase()
     const isContinueIntent =
@@ -1712,6 +1777,7 @@ export default function StudyMaterialsPage() {
       const baseTaskId = String(lastTask?.taskId || '').trim()
       if (!baseTaskId) return
       if (isGenerating) return
+      stickToBottomRef.current = true
 
       const now = new Date().toISOString()
       const userText =
@@ -1791,7 +1857,11 @@ export default function StudyMaterialsPage() {
             className="flex flex-col overflow-hidden"
             style={{ width: showSplitPane ? `${leftRatio * 100}%` : '100%' }}
           >
-            <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32 overscroll-contain min-h-0">
+            <div
+              ref={scrollRef}
+              className="flex-1 overflow-auto p-4 pb-32 overscroll-contain min-h-0"
+              onScroll={handleMessageScroll}
+            >
               <div className="py-6">
                 {hasResumableStream && !isGenerating && activeConversationId && activeStream && (
                   <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
@@ -1841,6 +1911,16 @@ export default function StudyMaterialsPage() {
                           任务已完成。你可以继续迭代优化（会触发新一轮生成并更新下载链接）。
                         </div>
                         <div className="flex items-center gap-2">
+                          {isLastExportFailure && (
+                            <>
+                              <Button size="sm" variant="secondary" onClick={() => startContinueIteration('fix_export')}>
+                                修复导出
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => startContinueIteration('skip_export')}>
+                                跳过导出
+                              </Button>
+                            </>
+                          )}
                           <Button size="sm" onClick={() => startContinueIteration('improve')}>
                             继续迭代优化
                           </Button>

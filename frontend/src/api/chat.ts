@@ -162,7 +162,10 @@ export function sendMessageStream(
   request: SendMessageRequest,
   onEvent: (event: ChatStreamEvent) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: {
+    signal?: AbortSignal
+  }
 ): void {
   const conversationId = Number.parseInt(request.conversationId, 10)
   if (!Number.isFinite(conversationId) || conversationId <= 0) {
@@ -197,6 +200,7 @@ export function sendMessageStream(
       onEvent({ type: t as ChatStreamEvent['type'], raw })
     },
     onError,
-    onComplete
+    onComplete,
+    { signal: options?.signal }
   )
 }

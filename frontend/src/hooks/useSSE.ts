@@ -19,6 +19,22 @@ export function useSSE<T>({
   const abortRef = useRef<AbortController | null>(null)
   const [isConnected, setIsConnected] = useState(false)
 
+  const onMessageRef = useRef(onMessage)
+  const onErrorRef = useRef(onError)
+  const onCompleteRef = useRef(onComplete)
+
+  useEffect(() => {
+    onMessageRef.current = onMessage
+  }, [onMessage])
+
+  useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete
+  }, [onComplete])
+
   const connect = useCallback(() => {
     setIsConnected(true)
 
@@ -32,18 +48,18 @@ export function useSSE<T>({
       url,
       { method: 'GET', signal: controller.signal },
       (data) => {
-        onMessage(data as T)
+        onMessageRef.current(data as T)
       },
       (error) => {
         setIsConnected(false)
-        onError?.(error)
+        onErrorRef.current?.(error)
       },
       () => {
         setIsConnected(false)
-        onComplete?.()
+        onCompleteRef.current?.()
       }
     )
-  }, [url, onMessage, onError, onComplete])
+  }, [url])
 
   const disconnect = useCallback(() => {
     if (abortRef.current) {

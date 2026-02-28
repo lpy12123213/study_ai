@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.agent.types import CompressedContext
@@ -252,7 +254,79 @@ class WebSearchKnowledgeToolsMixin:
             ]
             return tpl[:sub_n]
 
-        async def _search_one(point: str) -> Dict[str, Any]:
+        # Best-effort cache for repeated searches inside a single (or continued) run.
+        # Stored in working_memory so continuation tasks can reuse results without re-querying.
+        try:
+            cache_ttl_s = int(os.getenv("STUDY_MATERIALS_WEB_SEARCH_CACHE_TTL_S") or "3600")
+        except Exception:
+            cache_ttl_s = 3600
+        cache_ttl_s = max(0, min(cache_ttl_s, 60 * 60 * 24))
+
+        try:
+            cache_max_entries = int(os.getenv("STUDY_MATERIALS_WEB_SEARCH_CACHE_MAX_ENTRIES") or "200")
+        except Exception:
+            cache_max_entries = 200
+        cache_max_entries = max(0, min(cache_max_entries, 2000))
+
+        cache = ctx.working_memory.get("_web_search_cache")
+        if not isinstance(cache, dict):
+            cache = {}
+            ctx.working_memory["_web_search_cache"] = cache
+
+        def _cache_key(payload: Dict[str, Any]) -> str:
+            raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            return "ws1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+        def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+            if not key:
+                return None
+            entry = cache.get(key)
+            if not isinstance(entry, dict):
+                return None
+            try:
+                ts = float(entry.get("ts_s") or 0.0)
+            except Exception:
+                ts = 0.0
+            if cache_ttl_s and ts and (time.time() - ts) > float(cache_ttl_s):
+                try:
+                    cache.pop(key, None)
+                except Exception:
+                    pass
+                return None
+            value = entry.get("value")
+            return dict(value) if isinstance(value, dict) else None
+
+        def _cache_put(key: str, value: Dict[str, Any]) -> None:
+            if not key:
+                return
+            if not isinstance(value, dict):
+                return
+            provider = str(value.get("provider") or "").strip().lower()
+            results = value.get("results")
+            # Cache only "successful enough" results; avoid caching empty failures for long.
+            if provider in {"", "none"}:
+                return
+            if not (isinstance(results, list) and results):
+                return
+
+            cache[key] = {"ts_s": time.time(), "value": value}
+            if cache_max_entries <= 0:
+                return
+            if len(cache) <= cache_max_entries:
+                return
+            try:
+                items = sorted(
+                    cache.items(),
+                    key=lambda kv: float(kv[1].get("ts_s") or 0.0) if isinstance(kv[1], dict) else 0.0,
+                )
+                drop_n = max(0, len(items) - cache_max_entries)
+                for k, _v in items[:drop_n]:
+                    cache.pop(k, None)
+            except Exception:
+                for k in list(cache.keys())[: max(1, len(cache) - cache_max_entries)]:
+                    cache.pop(k, None)
+
+        async def _search_one_uncached(point: str) -> Dict[str, Any]:
             base_query = f"{subject} {point}".strip() if subject and subject not in point else point
             query = base_query
             if query_hint:
@@ -800,6 +874,47 @@ class WebSearchKnowledgeToolsMixin:
                     "results": [],
                     "error": str(exc) or "web search failed",
                 }
+
+        async def _search_one(point: str) -> Dict[str, Any]:
+            base_query = f"{subject} {point}".strip() if subject and subject not in point else point
+            query = base_query
+            if query_hint:
+                query = f"{query} {query_hint}".strip()
+
+            raw_search_mode = args.get("search_mode")
+            if raw_search_mode is None:
+                raw_search_mode = os.getenv("STUDY_MATERIALS_SEARCH_MODE")
+            raw_search_mode = str(raw_search_mode or "").strip()
+            search_mode_key = raw_search_mode.lower()
+            if search_mode_key in {"deep", "research", "deepresearch"}:
+                search_mode_key = "deepresearch"
+            if not search_mode_key:
+                search_mode_key = "deepresearch" if preset in {"deep", "research"} else "exa"
+
+            key = _cache_key(
+                {
+                    "mode": search_mode_key,
+                    "query": query,
+                    "scope": scope,
+                    "include_summary": include_summary,
+                    "limit": limit,
+                    "text_max_length": text_max_length,
+                }
+            )
+            cached = _cache_get(key)
+            if cached:
+                cached["knowledge_point"] = point
+                cached["base_query"] = base_query
+                cached["query"] = query
+                cached["cache_hit"] = True
+                return cached
+
+            res = await _search_one_uncached(point)
+            try:
+                _cache_put(key, res)
+            except Exception:
+                pass
+            return res
 
         concurrency = int(args.get("concurrency") or 3)
         concurrency = max(1, min(concurrency, 5))

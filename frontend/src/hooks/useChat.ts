@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import * as chatApi from '@/api/chat'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -83,12 +83,49 @@ export function useChatStream() {
   const queryClient = useQueryClient()
   const { startTask, addStep, updateStep, completeTask, failTask } = useTaskStore()
 
+  const streamAbortRef = useRef<AbortController | null>(null)
+  const streamKeyRef = useRef<string | null>(null)
+  const taskIdRef = useRef<string | null>(null)
+
+  const cancelStream = useCallback(
+    (reason = 'cancelled') => {
+      // Ensure any in-flight callbacks become no-ops.
+      streamKeyRef.current = null
+
+      if (streamAbortRef.current) {
+        streamAbortRef.current.abort()
+        streamAbortRef.current = null
+      }
+
+      if (taskIdRef.current) {
+        failTask(taskIdRef.current, reason)
+        taskIdRef.current = null
+      }
+
+      setIsStreaming(false)
+    },
+    [failTask]
+  )
+
+  useEffect(() => {
+    return () => {
+      cancelStream('unmounted')
+    }
+  }, [cancelStream])
+
   const sendMessage = useCallback(
     (conversationId: string, content: string) => {
       if (!content.trim()) return
       if (isStreaming) return
 
+      cancelStream('replaced')
+      const controller = new AbortController()
+      streamAbortRef.current = controller
+      const streamKey = generateId()
+      streamKeyRef.current = streamKey
+
       const taskId = `chat-${conversationId}-${Date.now()}`
+      taskIdRef.current = taskId
       
       const userMessage: Message = {
         id: generateId(),
@@ -114,6 +151,8 @@ export function useChatStream() {
       chatApi.sendMessageStream(
         { conversationId, content },
         (event) => {
+          if (streamKeyRef.current !== streamKey) return
+
           if (event.type === 'text_delta') {
             const delta = event.delta || ''
             if (!delta) return
@@ -213,20 +252,30 @@ export function useChatStream() {
           }
         },
         (err) => {
+          if (streamKeyRef.current !== streamKey) return
           setError(err.message)
           failTask(taskId, err.message)
           setIsStreaming(false)
+          streamAbortRef.current = null
+          streamKeyRef.current = null
+          taskIdRef.current = null
         },
         () => {
+          if (streamKeyRef.current !== streamKey) return
           completeTask(taskId)
           setIsStreaming(false)
+          streamAbortRef.current = null
+          streamKeyRef.current = null
+          taskIdRef.current = null
           // Refresh sidebar ordering/title (e.g. backend sets title on first message)
           queryClient.invalidateQueries({ queryKey: ['chatConversations'] })
-        }
+        },
+        { signal: controller.signal }
       )
     },
     [
       isStreaming,
+      cancelStream,
       startTask,
       addStep,
       updateStep,
@@ -242,5 +291,6 @@ export function useChatStream() {
     isStreaming,
     error,
     sendMessage,
+    cancelStream,
   }
 }

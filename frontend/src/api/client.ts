@@ -126,11 +126,15 @@ export async function fetchSSE(
   body: unknown,
   onMessage: (data: unknown) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: {
+    headers?: Record<string, string>
+    signal?: AbortSignal
+  }
 ): Promise<void> {
   return fetchSSERequest(
     url,
-    { method: 'POST', body },
+    { method: 'POST', body, headers: options?.headers, signal: options?.signal },
     onMessage,
     onError,
     onComplete

@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, Paperclip, ChevronDown, ChevronUp } from 'lucide-react'
+import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, Paperclip, ChevronDown, ChevronUp, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
@@ -124,9 +124,18 @@ export default function ChatPage() {
   const lastConversationIdRef = useRef<string | undefined>(conversationId)
   const [isCreatingConversation, setIsCreatingConversation] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const stickToBottomRef = useRef(true)
 
   const { data: historyMessages, isLoading: isHistoryLoading } = useMessages(conversationId)
-  const { messages, setMessages, isStreaming, error, sendMessage } = useChatStream()
+  const { messages, setMessages, isStreaming, error, sendMessage, cancelStream } = useChatStream()
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
+    stickToBottomRef.current = distanceToBottom < 120
+  }, [])
 
   useEffect(() => {
     if (!conversationId) return
@@ -155,9 +164,14 @@ export default function ChatPage() {
   }, [conversationId, setMessages, setCreateError])
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
+    if (!stickToBottomRef.current) return
+    const el = scrollRef.current
+    if (!el) return
+    requestAnimationFrame(() => {
+      const target = scrollRef.current
+      if (!target) return
+      target.scrollTop = target.scrollHeight
+    })
   }, [messages])
 
   const handleSubmit = (e?: React.FormEvent) => {
@@ -167,6 +181,7 @@ export default function ChatPage() {
 
     setInput('')
     setCreateError(null)
+    stickToBottomRef.current = true
 
     if (conversationId) {
       sendMessage(conversationId, text)
@@ -223,7 +238,7 @@ export default function ChatPage() {
           </>
         )
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
           <div className="max-w-3xl mx-auto py-6">
             <AnimatePresence mode="popLayout">
               {messages.map((message) => (
@@ -286,21 +301,35 @@ export default function ChatPage() {
                 }}
               />
               
-              <Button
-                type="submit"
-                size="icon"
-                className={cn(
-                  "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
-                  input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-                )}
-                disabled={!input.trim() || isStreaming || isCreatingConversation}
-              >
-                {isStreaming || isCreatingConversation ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </Button>
+              {isStreaming ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-9 w-9 rounded-xl shrink-0 mb-0.5"
+                  onClick={() => cancelStream('user_cancelled')}
+                  aria-label="Stop generating"
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={cn(
+                    "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
+                    input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                  )}
+                  disabled={!input.trim() || isCreatingConversation}
+                  aria-label="Send message"
+                >
+                  {isCreatingConversation ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
             </div>
           </form>
           

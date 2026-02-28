@@ -648,13 +648,22 @@ class AgentCore:
                 budget = int(policy.iteration_budget(ctx, default_cap=int(self.config.max_iterations or 1)) or 1)
                 budget = max(1, budget)
 
+            try:
+                opts_for_mode = ctx.working_memory.get("study_options")
+                opts_for_mode = dict(opts_for_mode) if isinstance(opts_for_mode, dict) else {}
+            except Exception:
+                opts_for_mode = {}
+            continue_mode = str(opts_for_mode.get("continue_mode") or "").strip().lower()
+            export_only = continue_mode == "fix_export"
+            skip_export = continue_mode == "skip_export"
+
             for iteration in range(iter_offset, iter_offset + budget):
                 results = ActionResults()
                 self.state = AgentState.PLANNING
                 yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
 
                 # Planner-stage: split knowledge points and do a quick review pass before planning the tool chain.
-                if iteration == 0:
+                if iteration == 0 and (not export_only):
                     split_res = ctx.working_memory.get("split_knowledge_points")
                     existing_kps: List[str] = []
                     if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
@@ -733,7 +742,49 @@ class AgentCore:
                             async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
                                 yield evt
 
-                plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
+                if export_only:
+                    subject = str(profile.preferences.get("subject") or "").strip()
+                    compile_err = str(ctx.working_memory.get("_latex_last_compile_error") or "").strip()
+                    yield agent_event(
+                        "status",
+                        {"content": "Continue mode: fix_export (rerun export-only steps)."},
+                    )
+                    plan = ExecutionPlan(
+                        topic=user_input,
+                        rationale="continue_mode=fix_export: rerun export-only steps",
+                        steps=[
+                            PlanStep(
+                                id=f"export_study_markdown-continue-{uuid.uuid4().hex[:8]}",
+                                title="Export Markdown (download link)",
+                                tool="export_study_markdown",
+                                arguments={},
+                                thought="Publish the current Markdown as a downloadable file.",
+                            ),
+                            PlanStep(
+                                id=f"convert_markdown_to_latex-continue-{uuid.uuid4().hex[:8]}",
+                                title="Convert Markdown to LaTeX (ElegantBook)",
+                                tool="convert_markdown_to_latex",
+                                arguments={"topic": user_input, "subject": subject},
+                                thought="Convert the current Markdown to LaTeX and publish the .tex download link.",
+                            ),
+                            PlanStep(
+                                id=f"refine_latex-continue-{uuid.uuid4().hex[:8]}",
+                                title="Refine LaTeX (optional)",
+                                tool="refine_latex",
+                                arguments={"topic": user_input, "subject": subject, "compile_error": compile_err},
+                                thought="Optionally refine LaTeX to improve compilation success rate.",
+                            ),
+                            PlanStep(
+                                id=f"compile_latex_to_pdf-continue-{uuid.uuid4().hex[:8]}",
+                                title="Compile LaTeX to PDF",
+                                tool="compile_latex_to_pdf",
+                                arguments={"topic": user_input},
+                                thought="Compile LaTeX into a PDF and publish the download link.",
+                            ),
+                        ],
+                    )
+                else:
+                    plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
                 if plan.rationale:
                     yield agent_event("status", {"content": plan.rationale})
 
@@ -744,6 +795,12 @@ class AgentCore:
                 # - BFS (old): tool-by-tool across all knowledge points
                 # - DFS (new): for each knowledge point, execute the full research chain before moving on
                 steps = list(plan.steps or [])
+                export_tools = {
+                    "export_study_markdown",
+                    "convert_markdown_to_latex",
+                    "refine_latex",
+                    "compile_latex_to_pdf",
+                }
                 export_kp = "导出：LaTeX/PDF"
                 export_open = False
                 export_closed = False
@@ -752,15 +809,13 @@ class AgentCore:
                     if bool(ctx.working_memory.get("_abort_execution")):
                         break
                     step = steps[i]
+                    if skip_export and step.tool in export_tools:
+                        i += 1
+                        continue
                     if (
                         (not export_open)
                         and step.tool
-                        in {
-                            "export_study_markdown",
-                            "convert_markdown_to_latex",
-                            "refine_latex",
-                            "compile_latex_to_pdf",
-                        }
+                        in export_tools
                     ):
                         export_open = True
                         try:

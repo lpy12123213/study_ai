@@ -45,6 +45,10 @@ export interface ConversationItem {
     taskType: 'study_materials';
     taskId: string;
     lastSeq: number;
+    materialError?: {
+      tool?: string;
+      error?: string;
+    };
   };
   activeStream?: {
     taskType: 'study_materials';

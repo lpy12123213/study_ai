@@ -470,7 +470,29 @@ class LatexToolsMixin:
                         total=part_total,
                     )
             body = _auto_fix_latex(body).strip()
-            return {"body": body, "continuations": conts}
+            looks_truncated = False
+            try:
+                looks_truncated = bool(
+                    body
+                    and (
+                        _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens)
+                        or _looks_incomplete_latex(body)
+                    )
+                )
+            except Exception:
+                looks_truncated = False
+
+            warning = ""
+            if looks_truncated:
+                warning = f"part {part_index}/{part_total}: output may be truncated; returning partial LaTeX."
+                await self._emit_status(f"Warning: {warning}")
+
+            return {
+                "body": body,
+                "continuations": conts,
+                "looks_truncated": looks_truncated,
+                "warning": warning,
+            }
 
         conts_total = 0
         kp_header_re = re.compile(r"(?m)^##\s+(?:\d+|[一二三四五六七八九十]+)、\s*.+$")
@@ -496,6 +518,9 @@ class LatexToolsMixin:
         await self._emit_progress(percent=10, stage="准备转换", current=0, total=total_parts)
 
         bodies: List[str] = []
+        parts_meta: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        partial = False
         part_concurrency = _clamp_int(
             os.getenv("STUDY_MATERIALS_LATEX_PART_CONCURRENCY") or 2,
             default=2,
@@ -525,9 +550,18 @@ class LatexToolsMixin:
                 if b:
                     bodies.append(b)
                 try:
-                    conts_total += int(chunk_res.get("continuations") or 0)
+                    conts = int(chunk_res.get("continuations") or 0)
                 except Exception:
-                    pass
+                    conts = 0
+                conts = max(0, conts)
+                conts_total += conts
+                looks_truncated = bool(chunk_res.get("looks_truncated"))
+                if looks_truncated:
+                    partial = True
+                warn = str(chunk_res.get("warning") or "").strip()
+                if warn:
+                    warnings.append(warn)
+                parts_meta.append({"part": idx, "continuations": conts, "looks_truncated": looks_truncated})
                 await self._emit_progress(
                     percent=p_end,
                     stage=f"转换正文（{idx}/{total_parts}）",
@@ -580,9 +614,24 @@ class LatexToolsMixin:
                 if b:
                     bodies.append(b)
                 try:
-                    conts_total += int(chunk_res.get("continuations") or 0)
+                    conts = int(chunk_res.get("continuations") or 0)
                 except Exception:
-                    pass
+                    conts = 0
+                conts = max(0, conts)
+                conts_total += conts
+                looks_truncated = bool(chunk_res.get("looks_truncated"))
+                if looks_truncated:
+                    partial = True
+                warn = str(chunk_res.get("warning") or "").strip()
+                if warn:
+                    warnings.append(warn)
+                try:
+                    part_idx = int(chunk_res.get("__part_index") or 0)
+                except Exception:
+                    part_idx = 0
+                if part_idx <= 0:
+                    part_idx = len(parts_meta) + 1
+                parts_meta.append({"part": part_idx, "continuations": conts, "looks_truncated": looks_truncated})
 
         body = "\n\n".join([b for b in bodies if b.strip()]).strip()
 
@@ -619,6 +668,10 @@ class LatexToolsMixin:
             "bytes": len(tex_bytes),
             "model": model,
             "continuations": conts_total,
+            "partial": bool(partial),
+            "warnings": warnings[:10],
+            "parts": parts_meta,
+            "total_parts": total_parts,
         }
 
     async def _tool_refine_latex(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
@@ -888,7 +941,11 @@ class LatexToolsMixin:
                 if proc.returncode != 0:
                     break
         except FileNotFoundError as exc:
-            raise RuntimeError(f"latex_engine_not_found: {exc}")
+            hint = (
+                "xelatex not found. Install a LaTeX engine (MiKTeX or TeX Live) and make sure `xelatex` is on PATH. "
+                "Windows example: `winget install MiKTeX.MiKTeX` (or `choco install miktex`)."
+            )
+            raise RuntimeError(f"latex_engine_not_found: {hint} ({exc})")
 
         if proc is None or proc.returncode != 0:
             stderr = (getattr(proc, "stderr", "") or "").strip()

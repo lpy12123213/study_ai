@@ -109,7 +109,7 @@ class StudyMaterialsPolicy:
             preset = "standard"
 
         mode = str(opts.get("continue_mode") or "").strip().lower()
-        if mode in {"improve", "deepen_research", "fix_export"}:
+        if mode in {"improve", "deepen_research", "fix_export", "skip_export"}:
             # Continuation endpoints should stay snappy and user-driven: 1 loop per click.
             return 1
 
