@@ -41,15 +41,44 @@ def _heuristic_knowledge_type(kp: str) -> str:
     s = (kp or "").strip()
     if not s:
         return "concept"
-    if any(x in s for x in ["定理", "命题", "引理", "推论"]):
-        return "theorem"
-    if any(x in s for x in ["算法", "排序", "搜索", "动态规划", "贪心", "回溯"]):
-        return "algorithm"
-    if any(x in s for x in ["实验", "测量", "装置", "观测"]):
+    s_lower = s.lower()
+
+    if any(x in s for x in ["实验", "探究", "测量", "装置", "仪器", "观测", "现象", "操作"]):
         return "experiment"
-    if any(x in s for x in ["历史", "发展", "人物", "年代", "起源"]):
+    if any(x in s for x in ["历史", "发展", "人物", "年代", "起源", "背景", "里程碑"]):
         return "history"
-    if any(x in s for x in ["定义", "是什么", "含义"]):
+
+    if any(x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]):
+        return "theorem"
+
+    if any(
+        x in s
+        for x in [
+            "算法",
+            "排序",
+            "搜索",
+            "动态规划",
+            "贪心",
+            "回溯",
+            "递归",
+            "分治",
+            "二分",
+            "双指针",
+            "滑动窗口",
+            "解法",
+            "方法",
+            "技巧",
+            "步骤",
+            "流程",
+            "推导",
+            "证明思路",
+            "分析",
+            "分解",
+        ]
+    ) or any(x in s_lower for x in ["dp", "bfs", "dfs", "dijkstra"]):
+        return "algorithm"
+
+    if any(x in s for x in ["定义", "是什么", "含义", "概念", "记号", "符号", "术语"]):
         return "definition"
     return "concept"
 
