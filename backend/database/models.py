@@ -6,15 +6,15 @@
 """
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, Float, delete, desc, func, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship, selectinload
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship, selectinload
 from datetime import datetime
 import json
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from pathlib import Path
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 
 class Paper(Base):
