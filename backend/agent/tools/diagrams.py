@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -11,6 +12,14 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from backend.agent.types import CompressedContext
+
+
+def _tikz_missing_hint() -> str:
+    return (
+        "TikZ rendering requires both `xelatex` and `dvisvgm` on PATH. "
+        "Install a TeX distribution (MiKTeX/TeX Live) that provides them, or use the Matplotlib fallback "
+        "(draw_diagram/plot tools)."
+    )
 
 
 class DiagramToolsMixin:
@@ -180,6 +189,20 @@ class DiagramToolsMixin:
         if not tikz:
             return {"success": False, "error": "tikz 不能为空", "knowledge_point": kp}
 
+        missing_tools: List[str] = []
+        if shutil.which("xelatex") is None:
+            missing_tools.append("xelatex")
+        if shutil.which("dvisvgm") is None:
+            missing_tools.append("dvisvgm")
+        if missing_tools:
+            return {
+                "success": False,
+                "error": "tikz_tools_missing",
+                "missing": missing_tools,
+                "hint": _tikz_missing_hint(),
+                "knowledge_point": kp,
+            }
+
         if "\\begin{tikzpicture" not in tikz:
             tikz = "\\begin{tikzpicture}\n" + tikz + "\n\\end{tikzpicture}"
 
@@ -231,7 +254,12 @@ class DiagramToolsMixin:
                 timeout=timeout_s,
             )
         except FileNotFoundError as exc:
-            return {"success": False, "error": f"latex_engine_not_found: {exc}", "knowledge_point": kp}
+            return {
+                "success": False,
+                "error": f"latex_engine_not_found: {exc}",
+                "hint": _tikz_missing_hint(),
+                "knowledge_point": kp,
+            }
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "latex_compile_timeout", "knowledge_point": kp}
 
@@ -267,7 +295,12 @@ class DiagramToolsMixin:
                 timeout=timeout_s,
             )
         except FileNotFoundError as exc:
-            return {"success": False, "error": f"dvisvgm_not_found: {exc}", "knowledge_point": kp}
+            return {
+                "success": False,
+                "error": f"dvisvgm_not_found: {exc}",
+                "hint": _tikz_missing_hint(),
+                "knowledge_point": kp,
+            }
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "dvisvgm_timeout", "knowledge_point": kp}
 
@@ -564,4 +597,3 @@ class DiagramToolsMixin:
                 "markdown": str(first.get("markdown") or ""),
                 "bytes": first_bytes,
             }
-

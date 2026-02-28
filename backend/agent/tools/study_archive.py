@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -93,6 +95,63 @@ class StudyArchiveToolsMixin:
         if meta_lines:
             lines.append("")
             lines.extend(meta_lines)
+            lines.append("")
+
+        study_opts = ctx.working_memory.get("study_options")
+        study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+
+        def _any_diagrams_present() -> bool:
+            diagrams_blob = ctx.working_memory.get("diagrams")
+            if isinstance(diagrams_blob, dict):
+                entries: List[Dict[str, Any]] = []
+                if isinstance(diagrams_blob.get("items"), list):
+                    entries = [x for x in (diagrams_blob.get("items") or []) if isinstance(x, dict)]
+                elif isinstance(diagrams_blob.get("sections"), list):
+                    entries = [x for x in (diagrams_blob.get("sections") or []) if isinstance(x, dict)]
+                for it in entries:
+                    ds = it.get("diagrams")
+                    if not isinstance(ds, list):
+                        continue
+                    for d in ds:
+                        if not isinstance(d, dict):
+                            continue
+                        if str(d.get("markdown") or "").strip() or str(d.get("url") or "").strip():
+                            return True
+
+            for sec in sections:
+                if not isinstance(sec, dict):
+                    continue
+                d = sec.get("diagram") if isinstance(sec.get("diagram"), dict) else {}
+                if str(d.get("markdown") or "").strip() or str(d.get("url") or "").strip():
+                    return True
+            return False
+
+        with_diagrams: bool = True
+        if isinstance(args.get("with_diagrams"), bool):
+            with_diagrams = bool(args.get("with_diagrams"))
+        elif isinstance(study_opts.get("with_diagrams"), bool):
+            with_diagrams = bool(study_opts.get("with_diagrams"))
+
+        if with_diagrams and not _any_diagrams_present():
+            missing: List[str] = []
+            if shutil.which("xelatex") is None:
+                missing.append("xelatex")
+            if shutil.which("dvisvgm") is None:
+                missing.append("dvisvgm")
+
+            api_key = str(os.getenv("ARK_API_KEY") or os.getenv("ARK_API") or "").strip()
+            model = str(
+                os.getenv("SEEDREAM_MODEL") or os.getenv("ARK_IMAGE_MODEL") or os.getenv("ARK_IMAGES_MODEL") or ""
+            ).strip()
+
+            hints: List[str] = []
+            if missing:
+                hints.append(f"missing_tools={','.join(missing)}")
+            if not (api_key and model):
+                hints.append("seedream_not_configured")
+            hint_text = "; ".join(hints) if hints else "diagram_step_skipped_or_failed"
+
+            lines.append(f"> Note: 本次未生成示意图（{hint_text}）。正文不受影响。")
             lines.append("")
 
         lines.append("## 使用方式（建议）")
@@ -238,4 +297,3 @@ class StudyArchiveToolsMixin:
             "knowledge_points": kp_list[:20] if kp_list else ([topic] if topic else []),
             "markdown_chars": len(markdown),
         }
-

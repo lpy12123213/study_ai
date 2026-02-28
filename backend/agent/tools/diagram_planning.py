@@ -2,10 +2,28 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+import shutil
+from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+
+
+def _has_tool(name: str) -> bool:
+    return bool(shutil.which(str(name or "").strip()))
+
+
+def _tikz_available() -> bool:
+    # TikZ -> SVG requires both tools.
+    return _has_tool("xelatex") and _has_tool("dvisvgm")
+
+
+def _seedream_available() -> bool:
+    api_key = str(os.getenv("ARK_API_KEY") or os.getenv("ARK_API") or "").strip()
+    model = str(
+        os.getenv("SEEDREAM_MODEL") or os.getenv("ARK_IMAGE_MODEL") or os.getenv("ARK_IMAGES_MODEL") or ""
+    ).strip()
+    return bool(api_key and model)
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -48,14 +66,18 @@ class DiagramPlanningToolsMixin:
     async def _tool_generate_diagrams(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """Generate teaching diagrams for knowledge points (plan -> render -> persist).
 
-        Uses source briefs when available; falls back to lightweight prompts.
+        Notes:
+        - This tool is best-effort: diagram failures must not abort the whole study generation.
+        - Uses source briefs when available; falls back to lightweight prompts.
         """
 
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
-        strict_llm = self._strict_llm(ctx, args)  # type: ignore[attr-defined]
 
         points = _extract_points(args, ctx)
+
+        # Keep strict_llm for compatibility / telemetry, but do NOT let it raise here.
+        strict_llm = self._strict_llm(ctx, args)  # type: ignore[attr-defined]
 
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
@@ -78,6 +100,14 @@ class DiagramPlanningToolsMixin:
         source_briefs = ctx.working_memory.get("source_briefs")
         source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
 
+        tikz_ok = _tikz_available()
+        seedream_ok = _seedream_available()
+        allowed_kinds: List[str] = ["draw_diagram"]
+        if tikz_ok:
+            allowed_kinds.append("tikz_to_svg")
+        if seedream_ok:
+            allowed_kinds.append("seedream_generate")
+
         async def _gen_one(kp: str) -> Dict[str, Any]:
             existing = _existing_diagrams(ctx, kp)
             need = max(0, max_diagrams - len(existing))
@@ -85,8 +115,6 @@ class DiagramPlanningToolsMixin:
                 return {"knowledge_point": kp, "skipped": True, "reason": "already_have_diagrams", "existing": len(existing)}
 
             if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                if strict_llm:
-                    raise RuntimeError("llm_not_configured")
                 return {"knowledge_point": kp, "skipped": True, "reason": "llm_not_configured", "existing": len(existing)}
 
             brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
@@ -97,87 +125,148 @@ class DiagramPlanningToolsMixin:
                 "knowledge_point": kp,
                 "preset": preset,
                 "source_brief": brief,
+                "capabilities": {
+                    "allowed_kinds": allowed_kinds,
+                    "tikz_available": tikz_ok,
+                    "seedream_available": seedream_ok,
+                },
                 "requirements": [
-                    f"请为知识点「{kp}」生成最多 {need} 张教学配图方案（JSON），用于帮助理解。",
-                    "输出严格 JSON：{\"diagrams\":[...]}，若不需要画图输出 {\"diagrams\":[]}。",
-                    "每个 diagram 需包含 kind(tikz_to_svg|seedream_generate), alt, caption。",
-                    "tikz_to_svg：提供 tikz(必须，含 \\begin{tikzpicture}...\\end{tikzpicture})，可选 preamble(\\usetikzlibrary{...})。",
-                    "seedream_generate：提供 prompt(必须)，可选 size(默认1024x1024) 与 n(默认1)。",
-                    "优先 tikz_to_svg（线稿/示意图）；只有不适合线稿时再用 seedream_generate。",
-                    "TikZ 避免复杂依赖（不要 pgfplots），尽量基础几何/流程/坐标示意。",
-                    "严禁输出 URL 或引用来源原文。",
+                    f"Generate up to {need} teaching diagrams for the knowledge point: {kp}.",
+                    "Output STRICT JSON only: {\"diagrams\":[...]} (or {\"diagrams\":[]}).",
+                    f"Allowed kinds: {', '.join(allowed_kinds)}.",
+                    "Prefer `draw_diagram` (pure Python/Matplotlib). Use `tikz_to_svg` only when available and truly necessary.",
+                    "Use `seedream_generate` only when available and only as a last resort.",
+                    "Each diagram must include: kind, alt, caption.",
+                    "draw_diagram: provide `spec` compatible with backend.core.plot_tools.render_schematic.",
+                    "  - spec supports: title, objects[{id,shape,pos,label,size,color,fill}], wires[[[x,y],[x,y]]], forces[{object,direction,length,label}], annotations[{text,x,y,arrow_to}]",
+                    "  - Keep it simple; do not overfit; no URLs.",
+                    "tikz_to_svg: provide `tikz` (must include \\begin{tikzpicture}...\\end{tikzpicture}) and optional `preamble`.",
+                    "seedream_generate: provide `prompt` and optional `size` (default 1024x1024) and `n` (default 1).",
+                    "Do NOT output URLs or cite sources.",
                 ],
             }
 
-            raw = await self._call_llm_text(  # type: ignore[attr-defined]
-                messages=[
-                    {"role": "system", "content": "你是教学绘图助手，只输出 JSON。"},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                model=model,
-                temperature=0.2,
-                max_tokens=1200,
-                response_format={"type": "json_object"},
-                raise_on_fail=strict_llm,
-            )
+            try:
+                raw = await self._call_llm_text(  # type: ignore[attr-defined]
+                    messages=[
+                        {"role": "system", "content": "You are a teaching diagram helper. Output JSON only."},
+                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                    ],
+                    model=model,
+                    temperature=0.2,
+                    max_tokens=1400,
+                    response_format={"type": "json_object"},
+                    # Non-fatal: never raise and let the main study flow continue.
+                    raise_on_fail=False,
+                )
+            except Exception as exc:
+                msg = str(exc or "").strip().replace("\n", " ")
+                msg = msg[:260]
+                return {
+                    "knowledge_point": kp,
+                    "created": 0,
+                    "diagrams": [],
+                    "existing": len(existing),
+                    "max_diagrams": max_diagrams,
+                    "error": f"diagram_planner_failed: {msg}",
+                    "strict_llm": bool(strict_llm),
+                }
+
             obj = self._extract_json_obj(raw)  # type: ignore[attr-defined]
             diagrams_field = obj.get("diagrams") if isinstance(obj, dict) else None
             specs = [x for x in (diagrams_field or []) if isinstance(x, dict)] if isinstance(diagrams_field, list) else []
             specs = specs[:need]
 
             created: List[Dict[str, Any]] = []
+            errors: List[str] = []
+
             for spec in specs:
                 kind = str(spec.get("kind") or "").strip().lower()
                 if kind in {"tikz", "latex", "tikzpicture", "tikz_picture"}:
                     kind = "tikz_to_svg"
                 if kind in {"seedream", "image", "text2img", "t2i"}:
                     kind = "seedream_generate"
-                if kind not in {"tikz_to_svg", "seedream_generate"}:
-                    # Heuristic: pick based on presence of tikz/prompt.
-                    if str(spec.get("tikz") or "").strip():
+                if kind in {"draw", "schematic", "matplotlib", "mpl"}:
+                    kind = "draw_diagram"
+
+                if kind not in {"draw_diagram", "tikz_to_svg", "seedream_generate"}:
+                    # Heuristic: infer based on available fields.
+                    if isinstance(spec.get("spec"), dict) or isinstance(spec.get("objects"), list):
+                        kind = "draw_diagram"
+                    elif str(spec.get("tikz") or "").strip():
                         kind = "tikz_to_svg"
-                    else:
+                    elif str(spec.get("prompt") or "").strip():
                         kind = "seedream_generate"
+                    else:
+                        kind = "draw_diagram"
+
+                if kind not in allowed_kinds:
+                    # Always prefer pure python fallback if other renderers are unavailable.
+                    kind = "draw_diagram"
 
                 alt = str(spec.get("alt") or kp).strip() or kp
                 caption = str(spec.get("caption") or "").strip()
 
-                if kind == "seedream_generate":
-                    prompt_text = str(spec.get("prompt") or "").strip()
-                    if not prompt_text:
+                try:
+                    if kind == "seedream_generate":
+                        if not seedream_ok:
+                            continue
+                        prompt_text = str(spec.get("prompt") or "").strip()
+                        if not prompt_text:
+                            continue
+                        res = await self._tool_seedream_generate(  # type: ignore[attr-defined]
+                            {
+                                "knowledge_point": kp,
+                                "alt": alt,
+                                "caption": caption,
+                                "prompt": prompt_text,
+                                "size": str(spec.get("size") or "1024x1024"),
+                                "n": int(spec.get("n") or 1),
+                            },
+                            ctx,
+                        )
+                        if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
+                            created.append(dict(res.get("diagram") or {}))
+                        if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagrams"), list):
+                            created.extend([x for x in (res.get("diagrams") or []) if isinstance(x, dict)][:8])
                         continue
-                    res = await self._tool_seedream_generate(  # type: ignore[attr-defined]
-                        {
-                            "knowledge_point": kp,
-                            "alt": alt,
-                            "caption": caption,
-                            "prompt": prompt_text,
-                            "size": str(spec.get("size") or "1024x1024"),
-                            "n": int(spec.get("n") or 1),
-                        },
+
+                    if kind == "tikz_to_svg":
+                        if not tikz_ok:
+                            continue
+                        tikz_code = str(spec.get("tikz") or "").strip()
+                        if not tikz_code:
+                            continue
+                        res = await self._tool_tikz_to_svg(  # type: ignore[attr-defined]
+                            {
+                                "knowledge_point": kp,
+                                "alt": alt,
+                                "caption": caption,
+                                "tikz": tikz_code,
+                                "preamble": str(spec.get("preamble") or ""),
+                            },
+                            ctx,
+                        )
+                        if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
+                            created.append(dict(res.get("diagram") or {}))
+                        continue
+
+                    # draw_diagram (pure python / Matplotlib schematic)
+                    spec_obj = spec.get("spec")
+                    if not isinstance(spec_obj, dict):
+                        spec_obj = {k: v for k, v in spec.items() if k not in {"kind", "alt", "caption"}}
+                    if not spec_obj:
+                        continue
+                    res = await self._tool_draw_diagram(  # type: ignore[attr-defined]
+                        {"knowledge_point": kp, "alt": alt, "caption": caption, "spec": spec_obj},
                         ctx,
                     )
                     if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
                         created.append(dict(res.get("diagram") or {}))
-                    if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagrams"), list):
-                        created.extend([x for x in (res.get("diagrams") or []) if isinstance(x, dict)][:8])
-                    continue
-
-                tikz_code = str(spec.get("tikz") or "").strip()
-                if not tikz_code:
-                    continue
-                res = await self._tool_tikz_to_svg(  # type: ignore[attr-defined]
-                    {
-                        "knowledge_point": kp,
-                        "alt": alt,
-                        "caption": caption,
-                        "tikz": tikz_code,
-                        "preamble": str(spec.get("preamble") or ""),
-                    },
-                    ctx,
-                )
-                if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
-                    created.append(dict(res.get("diagram") or {}))
+                except Exception as exc:  # pragma: no cover (best-effort)
+                    msg = str(exc or "").strip().replace("\n", " ")
+                    if msg:
+                        errors.append(msg[:180])
 
             return {
                 "knowledge_point": kp,
@@ -185,8 +274,21 @@ class DiagramPlanningToolsMixin:
                 "diagrams": created[:8],
                 "existing": len(existing),
                 "max_diagrams": max_diagrams,
+                "errors": errors[:6],
+                "strict_llm": bool(strict_llm),
             }
 
         items = [await _gen_one(kp) for kp in points]
-        return {"topic": topic, "subject": subject, "items": items}
-
+        try:
+            ctx.working_memory["diagram_generation_report"] = {
+                "topic": topic,
+                "subject": subject,
+                "preset": preset,
+                "allowed_kinds": allowed_kinds,
+                "tikz_available": tikz_ok,
+                "seedream_available": seedream_ok,
+                "items": [{"knowledge_point": it.get("knowledge_point"), "created": it.get("created"), "error": it.get("error")} for it in items if isinstance(it, dict)],
+            }
+        except Exception:
+            pass
+        return {"topic": topic, "subject": subject, "items": items, "allowed_kinds": allowed_kinds}

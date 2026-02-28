@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from typing import Any, Dict, List
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -68,6 +69,69 @@ class BrowseWebPagesToolsMixin:
         se_map = _map_by_point(ctx.working_memory.get("stackexchange_search"))
         wiki_map = _map_by_point(ctx.working_memory.get("wikipedia_search"))
         mw_map = _map_by_point(ctx.working_memory.get("mediawiki_search"))
+
+        now = time.time()
+        ttl_raw = args.get("cache_ttl_s") or os.getenv("STUDY_MATERIALS_BROWSE_CACHE_TTL_S") or "86400"
+        try:
+            cache_ttl_s = float(ttl_raw)
+        except Exception:
+            cache_ttl_s = 86400.0
+        cache_ttl_s = max(30.0, min(cache_ttl_s, 60.0 * 60.0 * 24.0 * 7.0))
+
+        max_entries_raw = args.get("cache_max_entries") or os.getenv("STUDY_MATERIALS_BROWSE_CACHE_MAX_ENTRIES") or "256"
+        try:
+            cache_max_entries = int(max_entries_raw)
+        except Exception:
+            cache_max_entries = 256
+        cache_max_entries = max(50, min(cache_max_entries, 2000))
+
+        inline_min_chars_raw = (
+            args.get("inline_min_chars") or os.getenv("STUDY_MATERIALS_BROWSE_INLINE_MIN_CHARS") or "900"
+        )
+        try:
+            inline_min_chars = int(inline_min_chars_raw)
+        except Exception:
+            inline_min_chars = 900
+        inline_min_chars = max(200, min(inline_min_chars, 3000))
+
+        cache_blob = ctx.working_memory.get("browse_web_pages_cache")
+        cache_blob = dict(cache_blob) if isinstance(cache_blob, dict) else {}
+        cache_entries = cache_blob.get("entries")
+        cache_entries = dict(cache_entries) if isinstance(cache_entries, dict) else {}
+        cache_updates: Dict[str, Dict[str, Any]] = {}
+        cache_stats = {"hits": 0, "writes": 0, "inline": 0}
+
+        def _cache_key(url: str) -> str:
+            raw = (url or "").strip()
+            if not raw:
+                return ""
+            try:
+                parsed = urlparse(raw)
+                # Avoid fragment keys exploding the cache.
+                parsed = parsed._replace(fragment="")
+                return parsed.geturl().strip().lower()
+            except Exception:
+                return raw.lower()
+
+        def _get_cached_page(url: str) -> Dict[str, Any]:
+            key = _cache_key(url)
+            if not key:
+                return {}
+            ent = cache_entries.get(key)
+            if not isinstance(ent, dict):
+                return {}
+            try:
+                ts = float(ent.get("ts") or 0.0)
+            except Exception:
+                ts = 0.0
+            if ts and cache_ttl_s > 0 and (now - ts) > cache_ttl_s:
+                return {}
+            page = ent.get("page")
+            if not isinstance(page, dict) or not page.get("success"):
+                return {}
+            out = dict(page)
+            out["cache_hit"] = True
+            return out
 
         def _extract_urls(results: Any) -> List[str]:
             if not isinstance(results, list):
@@ -284,11 +348,29 @@ class BrowseWebPagesToolsMixin:
 
         async def _guarded_fetch(url: str, *, client: httpx.AsyncClient) -> Dict[str, Any]:
             normalized = _normalize_url_for_fetch(url) or url
+            cached = _get_cached_page(normalized)
+            if cached:
+                try:
+                    cache_stats["hits"] += 1
+                except Exception:
+                    pass
+                return cached
             async with sem:
                 if _is_zhihu_url(normalized):
                     async with zhihu_sem:
-                        return await _fetch_one(normalized, client=client)
-                return await _fetch_one(normalized, client=client)
+                        out = await _fetch_one(normalized, client=client)
+                else:
+                    out = await _fetch_one(normalized, client=client)
+
+            if isinstance(out, dict) and out.get("success"):
+                key = _cache_key(str(out.get("url") or normalized))
+                if key:
+                    cache_updates[key] = {"ts": now, "page": dict(out)}
+                    try:
+                        cache_stats["writes"] += 1
+                    except Exception:
+                        pass
+            return out
 
         headers = {
             "User-Agent": (
@@ -313,6 +395,48 @@ class BrowseWebPagesToolsMixin:
                         urls.append(u)
 
                 web = web_map.get(point) or {}
+
+                # Reuse `web_search_knowledge` results that already include body text (e.g. Exa include_text)
+                # to avoid redundant network fetches.
+                inline_pages_by_key: Dict[str, Dict[str, Any]] = {}
+                web_results = web.get("results")
+                if isinstance(web_results, list):
+                    for r in web_results:
+                        if not isinstance(r, dict):
+                            continue
+                        u = str(r.get("url") or r.get("link") or "").strip()
+                        if not u.startswith(("http://", "https://")):
+                            continue
+                        normalized_u = _normalize_url_for_fetch(u) or u
+                        key = _cache_key(normalized_u)
+                        if not key or key in inline_pages_by_key:
+                            continue
+                        text = str(r.get("text") or "").strip()
+                        if len(text) < inline_min_chars:
+                            continue
+                        cleaned = _remove_ui_noise(text)
+                        if len(cleaned) > max_chars:
+                            cleaned = cleaned[: max_chars - 1].rstrip() + "鈥?"
+                        title = str(r.get("title") or "").strip()
+                        page = {
+                            "url": normalized_u,
+                            "success": True,
+                            "provider": "web_search",
+                            "content_type": "text/plain",
+                            "title": title,
+                            "chars": len(cleaned),
+                            "text": cleaned,
+                            "inline_text": True,
+                        }
+                        page = {k: v for k, v in page.items() if v not in ("", None)}
+                        inline_pages_by_key[key] = page
+                        cache_updates[key] = {"ts": now, "page": dict(page)}
+                        try:
+                            cache_stats["inline"] += 1
+                            cache_stats["writes"] += 1
+                        except Exception:
+                            pass
+
                 _add_urls(_extract_urls(web.get("results")))
 
                 se = se_map.get(point) or {}
@@ -346,7 +470,30 @@ class BrowseWebPagesToolsMixin:
                     )
                     continue
 
-                pages = await asyncio.gather(*[_guarded_fetch(u, client=client) for u in urls])
+                to_fetch: List[str] = []
+                for u in urls:
+                    normalized_u = _normalize_url_for_fetch(u) or u
+                    key = _cache_key(normalized_u)
+                    if key and key in inline_pages_by_key:
+                        continue
+                    to_fetch.append(u)
+
+                fetched_pages: List[Dict[str, Any]] = []
+                if to_fetch:
+                    fetched_pages = await asyncio.gather(*[_guarded_fetch(u, client=client) for u in to_fetch])
+
+                fetched_iter = iter(fetched_pages)
+                pages: List[Dict[str, Any]] = []
+                for u in urls:
+                    normalized_u = _normalize_url_for_fetch(u) or u
+                    key = _cache_key(normalized_u)
+                    if key and key in inline_pages_by_key:
+                        pages.append(dict(inline_pages_by_key[key]))
+                        continue
+                    try:
+                        pages.append(next(fetched_iter))
+                    except StopIteration:
+                        pages.append({"url": normalized_u, "success": False, "error": "fetch_missing"})
                 ok = [p for p in pages if isinstance(p, dict) and p.get("success")]
                 items.append(
                     {
@@ -359,5 +506,55 @@ class BrowseWebPagesToolsMixin:
                     }
                 )
 
-        return {"topic": topic, "subject": subject, "top_k": top_k, "max_chars": max_chars, "items": items}
+        cache_size = 0
+        try:
+            merged = dict(cache_entries)
+            merged.update(cache_updates)
 
+            if cache_ttl_s > 0:
+                for k in list(merged.keys()):
+                    ent = merged.get(k)
+                    if not isinstance(ent, dict):
+                        merged.pop(k, None)
+                        continue
+                    try:
+                        ts = float(ent.get("ts") or 0.0)
+                    except Exception:
+                        ts = 0.0
+                    if ts and (now - ts) > cache_ttl_s:
+                        merged.pop(k, None)
+
+            if len(merged) > cache_max_entries:
+                by_ts = sorted(
+                    merged.items(),
+                    key=lambda kv: float(kv[1].get("ts") or 0.0) if isinstance(kv[1], dict) else 0.0,
+                )
+                drop = max(0, len(by_ts) - cache_max_entries)
+                for k, _ in by_ts[:drop]:
+                    merged.pop(k, None)
+
+            cache_blob["entries"] = merged
+            cache_blob["ttl_s"] = cache_ttl_s
+            cache_blob["max_entries"] = cache_max_entries
+            cache_blob["updated_at"] = now
+            ctx.working_memory["browse_web_pages_cache"] = cache_blob
+            cache_size = len(merged)
+        except Exception:
+            cache_size = 0
+
+        cache_info = {
+            "entries": cache_size,
+            "hits": int(cache_stats.get("hits") or 0),
+            "writes": int(cache_stats.get("writes") or 0),
+            "inline": int(cache_stats.get("inline") or 0),
+            "ttl_s": cache_ttl_s,
+        }
+
+        return {
+            "topic": topic,
+            "subject": subject,
+            "top_k": top_k,
+            "max_chars": max_chars,
+            "items": items,
+            "cache": cache_info,
+        }

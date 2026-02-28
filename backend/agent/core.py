@@ -399,6 +399,11 @@ class AgentCore:
                 evt = event_queue.get_nowait()
                 if isinstance(evt, dict) and evt.get("event"):
                     yield evt
+                elif strict_llm and is_llm_error and tool_name in non_fatal_llm_tools:
+                    yield agent_event(
+                        "status",
+                        {"content": f"Non-fatal step failed (LLM error): {tool_name}. Skipped and continuing."},
+                    )
         except Exception:
             pass
 
@@ -486,8 +491,9 @@ class AgentCore:
                             return
 
                 fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
+                non_fatal_llm_tools = {"generate_diagrams"}
                 is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
-                if tool_name in fatal_tools or (strict_llm and is_llm_error):
+                if tool_name in fatal_tools or (strict_llm and is_llm_error and tool_name not in non_fatal_llm_tools):
                     ctx.working_memory["_abort_execution"] = True
                     ctx.working_memory["_fatal_error"] = {
                         "tool": tool_name,
@@ -1368,6 +1374,92 @@ class AgentCore:
             tex_filename = str(ctx.working_memory.get("tex_filename") or "").strip()
             fatal_error = ctx.working_memory.get("_fatal_error")
             fatal_error = dict(fatal_error) if isinstance(fatal_error, dict) else None
+            per_kp_report: List[Dict[str, Any]] = []
+            try:
+                study_opts = ctx.working_memory.get("study_options")
+                study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+                with_diagrams_opt = study_opts.get("with_diagrams")
+                with_diagrams = bool(with_diagrams_opt) if isinstance(with_diagrams_opt, bool) else True
+
+                material_blob = ctx.working_memory.get("generate_study_material")
+                if not isinstance(material_blob, dict):
+                    material_blob = (
+                        ctx.working_memory.get("study_material")
+                        if isinstance(ctx.working_memory.get("study_material"), dict)
+                        else {}
+                    )
+                sections_blob = material_blob.get("sections") if isinstance(material_blob, dict) else None
+                sections_list = (
+                    [s for s in (sections_blob or []) if isinstance(s, dict)] if isinstance(sections_blob, list) else []
+                )
+
+                preferred: List[str] = []
+                split_res = ctx.working_memory.get("split_knowledge_points")
+                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                    preferred = [
+                        str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()
+                    ][:20]
+                if not preferred:
+                    preferred = [
+                        str(s.get("knowledge_point") or "").strip()
+                        for s in sections_list
+                        if str(s.get("knowledge_point") or "").strip()
+                    ][:20]
+
+                sec_by_kp: Dict[str, Dict[str, Any]] = {}
+                for sec in sections_list:
+                    kp = str(sec.get("knowledge_point") or "").strip()
+                    if kp and kp not in sec_by_kp:
+                        sec_by_kp[kp] = sec
+
+                def _count_list(v: Any) -> int:
+                    return len(v) if isinstance(v, list) else 0
+
+                for kp in preferred:
+                    sec = sec_by_kp.get(kp) or {}
+                    web_results = sec.get("web_results")
+                    web_pages = sec.get("web_pages")
+                    gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
+                    se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
+
+                    usage = sec.get("explanation_usage") if isinstance(sec.get("explanation_usage"), dict) else {}
+                    try:
+                        total_tokens = int(usage.get("total_tokens") or 0)
+                    except Exception:
+                        total_tokens = 0
+                    try:
+                        conts = int(sec.get("explanation_continuations") or 0)
+                    except Exception:
+                        conts = 0
+                    finish_reason = str(sec.get("explanation_finish_reason") or "").strip().lower()
+
+                    diagram = sec.get("diagram") if isinstance(sec.get("diagram"), dict) else {}
+                    has_diagram = bool(str(diagram.get("url") or diagram.get("markdown") or "").strip())
+
+                    missing: List[str] = []
+                    if _count_list(web_results) < 2:
+                        missing.append("web_results_low")
+                    if _count_list(web_pages) == 0:
+                        missing.append("web_pages_missing")
+                    if finish_reason == "length" or conts > 0:
+                        missing.append("llm_truncated")
+                    if with_diagrams and not has_diagram:
+                        missing.append("diagram_missing")
+
+                    per_kp_report.append(
+                        {
+                            "knowledge_point": kp,
+                            "web_results": _count_list(web_results),
+                            "web_pages": _count_list(web_pages),
+                            "github_results": _count_list(gh.get("results")),
+                            "stackexchange_results": _count_list(se.get("results")),
+                            "tokens_total": total_tokens,
+                            "continuations": conts,
+                            "missing": missing,
+                        }
+                    )
+            except Exception:
+                per_kp_report = []
             yield agent_event(
                 "done",
                 {
@@ -1384,7 +1476,8 @@ class AgentCore:
                         "passed": bool(reflection.passed) if reflection else True,
                         "issues": reflection.issues if reflection else [],
                         "error": fatal_error,
-                    }
+                    },
+                    "per_kp_report": per_kp_report,
                 },
             )
 
