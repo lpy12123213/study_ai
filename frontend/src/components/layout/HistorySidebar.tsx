@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
@@ -171,10 +171,15 @@ export function HistorySidebar() {
     [storedConversations]
   )
 
-  const effectiveChatConversations =
-    isAuthenticated && token ? chatConversations : ([] as ConversationItem[])
+  const effectiveChatConversations = useMemo<ConversationItem[]>(
+    () => (isAuthenticated && token ? chatConversations : []),
+    [isAuthenticated, token, chatConversations]
+  )
 
-  const conversations: ConversationItem[] = [...effectiveChatConversations, ...localConversations]
+  const conversations: ConversationItem[] = useMemo(
+    () => [...effectiveChatConversations, ...localConversations],
+    [effectiveChatConversations, localConversations]
+  )
 
   // Scope conversations to the current page so different features don't mix
   const pageTypeFilter: ConversationType | null = (() => {
@@ -193,6 +198,31 @@ export function HistorySidebar() {
 
   // Group by date
   const groupedConversations = groupByDate(filteredConversations)
+
+  const handleResumeConversation = useCallback(
+    (id: string) => {
+      const item = conversations.find((c) => c.id === id)
+      if (!item) return
+
+      if (item.type !== 'chat') {
+        setCurrentConversation(item.id, item.type)
+      }
+      if (item.type === 'chat') {
+        navigate(`/chat/${item.id}`)
+        return
+      }
+      if (item.type === 'blueprint') {
+        navigate('/blueprint')
+        return
+      }
+      if (item.type === 'lesson_plan') {
+        navigate('/lesson-plans')
+        return
+      }
+      navigate('/study-materials')
+    },
+    [conversations, navigate, setCurrentConversation]
+  )
 
   const handleNewConversation = () => {
     if (pageTypeFilter && pageTypeFilter !== 'chat') {
@@ -298,7 +328,7 @@ export function HistorySidebar() {
                     item={item}
                     isActive={effectiveActiveId === item.id}
                     onDelete={handleDeleteConversation}
-                    onResume={() => {}}
+                    onResume={handleResumeConversation}
                     isCollapsed={isCollapsed}
                   />
                 ))}
