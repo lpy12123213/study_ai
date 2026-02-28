@@ -144,8 +144,10 @@ def _bootstrap_users() -> Dict[str, Dict[str, Any]]:
         existing["role"] = str(existing.get("role") or admin.get("role") or "admin")
 
         admin_hash_env = (os.getenv("ADMIN_PASSWORD_HASH") or "").strip()
-        admin_pw_env = (os.getenv("ADMIN_PASSWORD") or "").strip()
-        if admin_hash_env or admin_pw_env:
+        # Only force-reset password when an explicit hash is provided.
+        # ADMIN_PASSWORD is treated as "initial bootstrap" only; otherwise it would override
+        # user-changed passwords on every restart (bcrypt hashes are salted and differ each time).
+        if admin_hash_env:
             existing["password_hash"] = admin.get("password_hash")
         users[admin_username] = existing
     else:
