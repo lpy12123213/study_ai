@@ -25,6 +25,13 @@ class StudyMaterialsTask:
     status: str = "running"  # running|completed|failed
     error: Optional[str] = None
 
+    # Continuation support (for "completed -> continue iteration" flows).
+    parent_task_id: Optional[str] = None
+    resume_working_memory: Dict[str, Any] = field(default_factory=dict)
+    iteration_offset: int = 0
+    max_iterations: Optional[int] = None
+    iterations_done: int = 0
+
     # seq starts at 1; `events[i-1]["seq"] == i`.
     events: List[Dict[str, Any]] = field(default_factory=list)
     last_seq: int = 0
@@ -66,14 +73,36 @@ class StudyMaterialsTaskManager:
         user_id: str,
         subject: str = "",
         options: Optional[Dict[str, Any]] = None,
+        parent_task_id: Optional[str] = None,
+        resume_working_memory: Optional[Dict[str, Any]] = None,
+        iteration_offset: int = 0,
+        max_iterations: Optional[int] = None,
     ) -> StudyMaterialsTask:
         query = (query or "").strip()
         user_id = (user_id or "").strip() or "anonymous"
         subject = (subject or "").strip()
         options = options if isinstance(options, dict) else {}
 
+        parent_task_id = (parent_task_id or "").strip() or None
+        resume_working_memory = resume_working_memory if isinstance(resume_working_memory, dict) else {}
+        try:
+            iteration_offset = int(iteration_offset or 0)
+        except Exception:
+            iteration_offset = 0
+        iteration_offset = max(0, iteration_offset)
+
         task_id = uuid.uuid4().hex
-        task = StudyMaterialsTask(task_id=task_id, query=query, user_id=user_id, subject=subject, options=dict(options))
+        task = StudyMaterialsTask(
+            task_id=task_id,
+            query=query,
+            user_id=user_id,
+            subject=subject,
+            options=dict(options),
+            parent_task_id=parent_task_id,
+            resume_working_memory=dict(resume_working_memory),
+            iteration_offset=iteration_offset,
+            max_iterations=max_iterations,
+        )
 
         async with self._lock:
             self._gc_locked()
@@ -91,6 +120,7 @@ class StudyMaterialsTaskManager:
                     "query": query,
                     "subject": subject,
                     "options": options,
+                    "parent_task_id": parent_task_id,
                 },
             },
         )
@@ -174,6 +204,53 @@ class StudyMaterialsTaskManager:
                         },
                     }
 
+    async def continue_task(
+        self,
+        *,
+        task_id: str,
+        user_id: str,
+        mode: str,
+    ) -> StudyMaterialsTask:
+        """Create a new task that continues a completed/failed task with a bounded iteration budget."""
+
+        tid = (task_id or "").strip()
+        uid = (user_id or "").strip() or "anonymous"
+        mode_norm = (mode or "").strip().lower() or "improve"
+        if mode_norm not in {"improve", "deepen_research", "fix_export", "skip_export"}:
+            mode_norm = "improve"
+
+        parent = await self.get_task(tid)
+        if not parent or parent.user_id != uid:
+            raise ValueError("task_not_found")
+
+        if parent.status == "running":
+            raise ValueError("task_running")
+
+        if not parent.resume_working_memory:
+            raise ValueError("task_not_resumable")
+
+        options = dict(parent.options or {})
+        options["continue_mode"] = mode_norm
+
+        # `deepen_research` implies a stronger preset (unless already deep/research).
+        preset = str(options.get("preset") or "").strip().lower()
+        if mode_norm == "deepen_research" and preset not in {"deep", "research"}:
+            options["preset"] = "research"
+
+        # Continuations should be snappy: one Plan-Act-Reflect loop per click by default.
+        max_iters = 1
+
+        return await self.create_task(
+            query=parent.query,
+            user_id=uid,
+            subject=parent.subject,
+            options=options,
+            parent_task_id=parent.task_id,
+            resume_working_memory=parent.resume_working_memory,
+            iteration_offset=int(parent.iterations_done or 0),
+            max_iterations=max_iters,
+        )
+
     async def _append_event(self, task: StudyMaterialsTask, event: Dict[str, Any]) -> None:
         payload = dict(event or {})
         payload.pop("seq", None)
@@ -208,12 +285,31 @@ class StudyMaterialsTaskManager:
 
     async def _run_task(self, task: StudyMaterialsTask) -> None:
         agent = AgentCore()
+
+        def _capture_resume_snapshot() -> None:
+            try:
+                ctx = getattr(agent, "last_context", None)
+                wm = getattr(ctx, "working_memory", None) if ctx is not None else None
+                if isinstance(wm, dict) and wm:
+                    # Shallow copy; values are expected to be JSON-ish.
+                    task.resume_working_memory = dict(wm)
+            except Exception:
+                pass
+
         try:
             preferences = {}
             if (task.subject or "").strip():
                 preferences["subject"] = str(task.subject or "").strip()
 
-            async for evt in agent.run(task.query, user_id=task.user_id, preferences=preferences, options=task.options):
+            async for evt in agent.run(
+                task.query,
+                user_id=task.user_id,
+                preferences=preferences,
+                options=task.options,
+                resume_working_memory=task.resume_working_memory if task.resume_working_memory else None,
+                iteration_offset=int(task.iteration_offset or 0),
+                max_iterations=task.max_iterations,
+            ):
                 # If the task already failed (e.g. due to server shutdown), stop.
                 if task.status != "running":
                     break
@@ -221,12 +317,22 @@ class StudyMaterialsTaskManager:
 
                 kind = str(evt.get("event") or "")
                 if kind == "done":
+                    data = evt.get("data")
+                    if isinstance(data, dict):
+                        material = data.get("material")
+                        if isinstance(material, dict):
+                            try:
+                                task.iterations_done = int(material.get("iteration") or task.iterations_done or 0)
+                            except Exception:
+                                pass
+                    _capture_resume_snapshot()
                     await self._complete_task(task)
                 elif kind == "error":
                     msg = ""
                     data = evt.get("data")
                     if isinstance(data, dict):
-                        msg = str(data.get("message") or "")
+                        msg = str(data.get("message") or "").strip()
+                    _capture_resume_snapshot()
                     task.status = "failed"
                     task.error = msg or "Generation failed"
                     async with task.cond:
@@ -237,6 +343,8 @@ class StudyMaterialsTaskManager:
         except Exception as exc:  # pragma: no cover
             await self._fail_task(task, str(exc))
         finally:
+            # Capture a best-effort continuation snapshot for "continue iteration" calls.
+            _capture_resume_snapshot()
             if task.status == "running":
                 # If we exited without a terminal event, mark as failed so clients stop waiting forever.
                 await self._fail_task(task, "Task ended unexpectedly")

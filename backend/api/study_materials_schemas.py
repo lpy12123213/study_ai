@@ -30,3 +30,9 @@ class StudyMaterialsConvertMarkdownToLatexResponse(BaseModel):
     model: str = Field("", description="使用的模型")
     continuations: int = Field(0, description="续写次数")
 
+
+class StudyMaterialsContinueRequest(BaseModel):
+    mode: str = Field(
+        "improve",
+        description="继续模式：improve|deepen_research|fix_export|skip_export",
+    )

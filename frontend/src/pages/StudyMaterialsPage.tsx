@@ -25,6 +25,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { fetchSSERequest, resolveApiResourceUrl } from '@/api/client'
+import { getStudyMaterialsTask } from '@/api/studyMaterials'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -97,6 +98,12 @@ function formatStudyMaterialsError(raw: string): string {
   if (!msg) return '生成失败'
 
   const lower = msg.toLowerCase()
+  if (lower.includes('task not found') || lower.includes('task_not_found')) {
+    return '任务已丢失（可能是后端重启或任务过期）。请重新生成。'
+  }
+  if (lower.includes('event backlog truncated')) {
+    return '任务输出过长导致回放被截断。建议重新生成以获得完整输出。'
+  }
   if (lower.includes('llm_not_configured')) {
     return '未配置大模型（API Key）。请先配置后端环境变量并重启后端再试。'
   }
@@ -352,7 +359,7 @@ function MessageBubble({
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
           components={{
-            a: ({ node, href, children, ...props }) => {
+            a: ({ href, children, ...props }) => {
               const url = typeof href === 'string' ? href : ''
               const isGenerated = url.startsWith('/api/media/generated/')
               const isDownload = isGenerated && /\.(md|pdf|tex)$/i.test(url)
@@ -592,7 +599,8 @@ export default function StudyMaterialsPage() {
   }, [conversations, activeConversationId])
 
   const activeStream = activeConversation?.activeStream
-  const hasResumableStream = Boolean(activeStream?.taskId)
+  const hasResumableStream = Boolean(activeConversation?.resumable && activeStream?.taskId)
+  const lastTask = activeConversation?.lastTask
   const isGenerating = isGeneratingLocal
 
   const messages = useConversationStore((state) =>
@@ -1017,6 +1025,11 @@ export default function StudyMaterialsPage() {
           assistantMessageId,
           lastSeq,
         },
+        lastTask: {
+          taskType: 'study_materials',
+          taskId: serverTaskId,
+          lastSeq,
+        },
         resumable: true,
       })
     }
@@ -1052,6 +1065,11 @@ export default function StudyMaterialsPage() {
                 taskType: 'study_materials',
                 taskId,
                 assistantMessageId,
+                lastSeq: Number.isFinite(seq) ? (seq as number) : 0,
+              },
+              lastTask: {
+                taskType: 'study_materials',
+                taskId,
                 lastSeq: Number.isFinite(seq) ? (seq as number) : 0,
               },
               resumable: true,
@@ -1453,26 +1471,78 @@ export default function StudyMaterialsPage() {
     )
   }, [abortActiveStream])
 
+  const resumeStudyMaterialsStreamWithProbe = useCallback(
+    async (opts: {
+      conversationId: string
+      assistantMessageId: string
+      taskId: string
+      afterSeq: number
+    }) => {
+      const conversationId = opts.conversationId
+      const assistantMessageId = opts.assistantMessageId
+      const taskId = String(opts.taskId || '').trim()
+      const afterSeq = Number.isFinite(opts.afterSeq) ? opts.afterSeq : 0
+
+      if (!taskId) return
+      if (isGeneratingLocal) return
+
+      try {
+        const status = await getStudyMaterialsTask(taskId)
+        if (status.status !== 'running') {
+          useConversationStore.getState().updateConversation(conversationId, {
+            activeStream: undefined,
+            resumable: false,
+          })
+          return
+        }
+      } catch {
+        useConversationStore.getState().updateConversation(conversationId, {
+          activeStream: undefined,
+          resumable: false,
+        })
+        setError('任务已丢失（可能是后端重启或任务过期）。请重新生成。')
+        return
+      }
+
+      runStudyMaterialsStream({
+        conversationId,
+        assistantMessageId,
+        request: {
+          url: `/study-materials/tasks/${encodeURIComponent(taskId)}/stream?after_seq=${afterSeq}`,
+          method: 'GET',
+        },
+        initialTaskId: taskId,
+        initialSeq: afterSeq,
+        streamKey: `${conversationId}:${taskId}`,
+      })
+    },
+    [isGeneratingLocal, runStudyMaterialsStream]
+  )
+
+  const activeStreamTaskId = activeConversation?.activeStream?.taskId
+  const activeStreamAssistantMessageId = activeConversation?.activeStream?.assistantMessageId
+  const activeStreamLastSeq = activeConversation?.activeStream?.lastSeq
+
   // Resume after refresh: if a conversation has an active stream, reconnect from last seq.
   useEffect(() => {
     if (!activeConversationId) return
-    const stream = activeConversation?.activeStream
-    if (!stream?.taskId || !stream.assistantMessageId) return
+    if (!activeStreamTaskId || !activeStreamAssistantMessageId) return
 
-    const key = `${activeConversationId}:${stream.taskId}`
+    const key = `${activeConversationId}:${activeStreamTaskId}`
     if (streamKeyRef.current === key) return
-    runStudyMaterialsStream({
+    void resumeStudyMaterialsStreamWithProbe({
       conversationId: activeConversationId,
-      assistantMessageId: stream.assistantMessageId,
-      request: {
-        url: `/study-materials/tasks/${encodeURIComponent(stream.taskId)}/stream?after_seq=${Number(stream.lastSeq || 0)}`,
-        method: 'GET',
-      },
-      initialTaskId: stream.taskId,
-      initialSeq: Number(stream.lastSeq || 0),
-      streamKey: key,
+      assistantMessageId: activeStreamAssistantMessageId,
+      taskId: activeStreamTaskId,
+      afterSeq: Number(activeStreamLastSeq || 0),
     })
-  }, [activeConversationId, activeConversation?.activeStream?.taskId, runStudyMaterialsStream])
+  }, [
+    activeConversationId,
+    activeStreamTaskId,
+    activeStreamAssistantMessageId,
+    activeStreamLastSeq,
+    resumeStudyMaterialsStreamWithProbe,
+  ])
 
   useEffect(() => {
     return () => {
@@ -1527,16 +1597,11 @@ export default function StudyMaterialsPage() {
       })
       setInput('')
       setError(null)
-      runStudyMaterialsStream({
+      void resumeStudyMaterialsStreamWithProbe({
         conversationId: activeConversationId,
         assistantMessageId: activeStream.assistantMessageId,
-        request: {
-          url: `/study-materials/tasks/${encodeURIComponent(activeStream.taskId)}/stream?after_seq=${Number(activeStream.lastSeq || 0)}`,
-          method: 'GET',
-        },
-        initialTaskId: activeStream.taskId,
-        initialSeq: Number(activeStream.lastSeq || 0),
-        streamKey: `${activeConversationId}:${activeStream.taskId}`,
+        taskId: activeStream.taskId,
+        afterSeq: Number(activeStream.lastSeq || 0),
       })
       return
     }
@@ -1641,6 +1706,70 @@ export default function StudyMaterialsPage() {
     })
   }
 
+  const startContinueIteration = useCallback(
+    (mode: 'improve' | 'deepen_research' | 'fix_export' | 'skip_export') => {
+      if (!activeConversationId) return
+      const baseTaskId = String(lastTask?.taskId || '').trim()
+      if (!baseTaskId) return
+      if (isGenerating) return
+
+      const now = new Date().toISOString()
+      const userText =
+        mode === 'deepen_research'
+          ? '继续迭代：加深检索与补充边界/反例'
+          : mode === 'fix_export'
+            ? '继续：修复导出（LaTeX/PDF）'
+            : mode === 'skip_export'
+              ? '继续：跳过导出，完成其余内容'
+              : '继续迭代优化'
+
+      addMessage(activeConversationId, {
+        id: generateId(),
+        role: 'user',
+        content: userText,
+        createdAt: now,
+      })
+
+      setError(null)
+      setSubAgentActivities([])
+      setActiveSubAgentTab(null)
+
+      const assistantMessageId = generateId()
+      addMessage(activeConversationId, {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        createdAt: now,
+        steps: [],
+      })
+
+      updateConversation(activeConversationId, {
+        updatedAt: now,
+        status: 'active',
+        progress: 0,
+        activeStream: undefined,
+        resumable: false,
+      })
+
+      const localTaskId = `study-materials-${activeConversationId}-${Date.now()}-continue`
+      useTaskStore.getState().startTask(localTaskId)
+
+      runStudyMaterialsStream({
+        conversationId: activeConversationId,
+        assistantMessageId,
+        request: {
+          url: `/study-materials/tasks/${encodeURIComponent(baseTaskId)}/continue`,
+          method: 'POST',
+          body: { mode },
+        },
+        localTaskId,
+        initialSeq: 0,
+        streamKey: `${activeConversationId}:${assistantMessageId}`,
+      })
+    },
+    [activeConversationId, lastTask?.taskId, isGenerating, addMessage, updateConversation, runStudyMaterialsStream]
+  )
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -1674,16 +1803,11 @@ export default function StudyMaterialsPage() {
                         <Button
                           size="sm"
                           onClick={() => {
-                            runStudyMaterialsStream({
+                            void resumeStudyMaterialsStreamWithProbe({
                               conversationId: activeConversationId,
                               assistantMessageId: activeStream.assistantMessageId,
-                              request: {
-                                url: `/study-materials/tasks/${encodeURIComponent(activeStream.taskId)}/stream?after_seq=${Number(activeStream.lastSeq || 0)}`,
-                                method: 'GET',
-                              },
-                              initialTaskId: activeStream.taskId,
-                              initialSeq: Number(activeStream.lastSeq || 0),
-                              streamKey: `${activeConversationId}:${activeStream.taskId}`,
+                              taskId: activeStream.taskId,
+                              afterSeq: Number(activeStream.lastSeq || 0),
                             })
                           }}
                         >
@@ -1706,6 +1830,27 @@ export default function StudyMaterialsPage() {
                     </div>
                   </div>
                 )}
+
+                {!isGenerating &&
+                  activeConversationId &&
+                  activeConversation?.status === 'completed' &&
+                  lastTask?.taskId && (
+                    <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-muted-foreground">
+                          任务已完成。你可以继续迭代优化（会触发新一轮生成并更新下载链接）。
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" onClick={() => startContinueIteration('improve')}>
+                            继续迭代优化
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => startContinueIteration('deepen_research')}>
+                            加深检索
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                 <AnimatePresence mode="popLayout">
                   {messages.map((m) => (

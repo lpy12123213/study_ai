@@ -41,6 +41,11 @@ export interface ConversationItem {
   status: ConversationStatus;
   resumable: boolean;
   progress?: number;
+  lastTask?: {
+    taskType: 'study_materials';
+    taskId: string;
+    lastSeq: number;
+  };
   activeStream?: {
     taskType: 'study_materials';
     taskId: string;

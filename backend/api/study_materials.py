@@ -23,6 +23,7 @@ from backend.api.auth import get_current_user, require_auth
 from backend.api.study_materials_schemas import (
     StudyMaterialsConvertMarkdownToLatexRequest,
     StudyMaterialsConvertMarkdownToLatexResponse,
+    StudyMaterialsContinueRequest,
     StudyMaterialsGenerateRequest,
 )
 from backend.study_materials.task_manager import StudyMaterialsTaskManager
@@ -286,3 +287,28 @@ async def get_study_materials_task(task_id: str):
         "last_seq": task.last_seq,
     }
 
+
+@router.post("/tasks/{task_id}/continue")
+async def continue_study_materials_task(
+    task_id: str,
+    request: StudyMaterialsContinueRequest,
+    user: Optional[dict] = Depends(get_current_user),
+):
+    """Continue a completed/failed task with one bounded improvement iteration (streams SSE events)."""
+
+    user_id = (user.get("user_id") if user else None) or "anonymous"
+    mode = str(request.mode or "").strip() or "improve"
+
+    try:
+        new_task = await _tasks.continue_task(task_id=task_id, user_id=user_id, mode=mode)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "task_not_found":
+            raise HTTPException(status_code=404, detail="Task not found")
+        if msg == "task_running":
+            raise HTTPException(status_code=409, detail="Task still running")
+        if msg == "task_not_resumable":
+            raise HTTPException(status_code=400, detail="Task not resumable")
+        raise HTTPException(status_code=400, detail=msg)
+
+    return await _stream_task(new_task.task_id, after_seq=0)
