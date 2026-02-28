@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from dotenv import dotenv_values
 
 from backend.config import DIFFICULTY_QUERY_MODE
 from backend.subjects import (
@@ -89,39 +90,35 @@ async def _get_cookies_with_playwright() -> str:
 
 
 def _load_env_login() -> Dict[str, Any]:
-    """从 .env 文件加载登录信息"""
-    # This file lives under `backend/crawler/`, so repository root is 2 levels up.
-    env_file = str(Path(__file__).resolve().parents[2] / ".env")
+    """从环境变量 / .env 文件加载登录信息（使用 python-dotenv 解析，避免手写解析器的不兼容）。"""
+    user_id = (os.getenv("ZUJUAN_USER_ID") or "").strip() or None
+    csrf_token = (os.getenv("ZUJUAN_CSRF_TOKEN") or "").strip() or None
+    cookies = (os.getenv("ZUJUAN_COOKIES") or "").strip()
 
-    if not os.path.exists(env_file):
-        return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False}
-
-    try:
-        env_data: Dict[str, str] = {}
-        with open(env_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                if (
-                    (value.startswith('"') and value.endswith('"'))
-                    or (value.startswith("'") and value.endswith("'"))
-                ):
-                    value = value[1:-1]
-                env_data[key] = value
-
-        user_id = (env_data.get("ZUJUAN_USER_ID") or "").strip() or None
-        csrf_token = (env_data.get("ZUJUAN_CSRF_TOKEN") or "").strip() or None
-        cookies = env_data.get("ZUJUAN_COOKIES", "") or ""
-
+    # If env vars already provide anything, use them directly (highest priority).
+    if user_id or csrf_token or cookies:
         return {
             "cookies": cookies,
             "user_id": user_id,
             "csrf_token": csrf_token,
-            "is_logged_in": bool(user_id),
+            "is_logged_in": bool(user_id or cookies),
+        }
+
+    # This file lives under `backend/crawler/`, so repository root is 2 levels up.
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False}
+
+    try:
+        env_data = dotenv_values(str(env_path))
+        user_id = str(env_data.get("ZUJUAN_USER_ID") or "").strip() or None
+        csrf_token = str(env_data.get("ZUJUAN_CSRF_TOKEN") or "").strip() or None
+        cookies = str(env_data.get("ZUJUAN_COOKIES") or "").strip()
+        return {
+            "cookies": cookies,
+            "user_id": user_id,
+            "csrf_token": csrf_token,
+            "is_logged_in": bool(user_id or cookies),
         }
     except Exception as e:
         print(f"读取.env失败: {e}")
