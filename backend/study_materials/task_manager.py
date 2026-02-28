@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.core import AgentCore
@@ -11,6 +14,9 @@ from backend.agent.core import AgentCore
 
 def _now_s() -> float:
     return time.time()
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_TASK_SNAPSHOTS_DIR = (_REPO_ROOT / ".local" / "study_materials" / "tasks").resolve()
 
 
 @dataclass
@@ -42,6 +48,7 @@ class StudyMaterialsTask:
 
     # Runner task (created by manager).
     runner: Optional[asyncio.Task] = None
+    persisted_at_s: float = 0.0
 
 
 class StudyMaterialsTaskManager:
@@ -65,6 +72,150 @@ class StudyMaterialsTaskManager:
         self._max_tasks = max(1, int(max_tasks))
         self._task_ttl_s = max(60, int(task_ttl_s))
         self._max_events_per_task = max(100, int(max_events_per_task))
+        self._restore_tasks_from_disk()
+
+    def _snapshot_path(self, task_id: str) -> Path:
+        tid = (task_id or "").strip()
+        return _TASK_SNAPSHOTS_DIR / f"{tid}.json"
+
+    def _delete_snapshot(self, task_id: str) -> None:
+        try:
+            path = self._snapshot_path(task_id)
+            if path.exists():
+                path.unlink(missing_ok=True)  # py3.8+ on Windows supports missing_ok
+        except Exception:
+            return
+
+    def _persist_snapshot(self, task: StudyMaterialsTask, *, force: bool = False) -> None:
+        if not isinstance(task, StudyMaterialsTask):
+            return
+        now = _now_s()
+        if not force and (now - float(task.persisted_at_s or 0.0)) < 0.8 and task.status == "running":
+            return
+
+        try:
+            _TASK_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+            path = self._snapshot_path(task.task_id)
+            tmp = path.with_suffix(".json.tmp")
+
+            data = {
+                "task_id": task.task_id,
+                "query": task.query,
+                "user_id": task.user_id,
+                "subject": task.subject,
+                "options": dict(task.options or {}),
+                "created_at_s": float(task.created_at_s or 0.0),
+                "updated_at_s": float(task.updated_at_s or 0.0),
+                "status": task.status,
+                "error": task.error,
+                "parent_task_id": task.parent_task_id,
+                "resume_working_memory": dict(task.resume_working_memory or {}),
+                "iteration_offset": int(task.iteration_offset or 0),
+                "max_iterations": task.max_iterations,
+                "iterations_done": int(task.iterations_done or 0),
+                "events": list(task.events or [])[-self._max_events_per_task :],
+                "last_seq": int(task.last_seq or 0),
+                "seq_offset": int(task.seq_offset or 0),
+            }
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            tmp.replace(path)
+            task.persisted_at_s = now
+        except Exception:
+            return
+
+    def _task_from_snapshot(self, obj: Dict[str, Any]) -> Optional[StudyMaterialsTask]:
+        try:
+            tid = str(obj.get("task_id") or "").strip()
+            query = str(obj.get("query") or "").strip()
+            user_id = str(obj.get("user_id") or "").strip() or "anonymous"
+            if not tid or not query:
+                return None
+
+            events = obj.get("events") if isinstance(obj.get("events"), list) else []
+            events = [e for e in events if isinstance(e, dict)]
+            last_seq = int(obj.get("last_seq") or 0) if str(obj.get("last_seq") or "").strip() else 0
+            if last_seq <= 0 and events:
+                try:
+                    last_seq = int(events[-1].get("seq") or 0)
+                except Exception:
+                    last_seq = 0
+
+            task = StudyMaterialsTask(
+                task_id=tid,
+                query=query,
+                user_id=user_id,
+                subject=str(obj.get("subject") or "").strip(),
+                options=dict(obj.get("options") or {}) if isinstance(obj.get("options"), dict) else {},
+                created_at_s=float(obj.get("created_at_s") or 0.0) or _now_s(),
+                updated_at_s=float(obj.get("updated_at_s") or 0.0) or _now_s(),
+                status=str(obj.get("status") or "completed").strip() or "completed",
+                error=str(obj.get("error") or "").strip() or None,
+                parent_task_id=str(obj.get("parent_task_id") or "").strip() or None,
+                resume_working_memory=dict(obj.get("resume_working_memory") or {})
+                if isinstance(obj.get("resume_working_memory"), dict)
+                else {},
+                iteration_offset=int(obj.get("iteration_offset") or 0),
+                max_iterations=obj.get("max_iterations"),
+                iterations_done=int(obj.get("iterations_done") or 0),
+                events=events,
+                last_seq=max(0, last_seq),
+                seq_offset=int(obj.get("seq_offset") or 0),
+            )
+
+            # A "running" task cannot continue after restart; mark as failed with a clear reason.
+            if task.status == "running":
+                task.status = "failed"
+                task.error = task.error or "server_restarted"
+                task.updated_at_s = _now_s()
+                task.last_seq += 1
+                task.events.append(
+                    {
+                        "task_id": task.task_id,
+                        "seq": task.last_seq,
+                        "event": "warning",
+                        "data": {
+                            "task_id": task.task_id,
+                            "message": "Server restarted; this task can no longer stream. You can start a new task or continue if resumable.",
+                        },
+                    }
+                )
+            return task
+        except Exception:
+            return None
+
+    def _restore_tasks_from_disk(self) -> None:
+        try:
+            if not _TASK_SNAPSHOTS_DIR.exists():
+                return
+
+            now = _now_s()
+            snaps: List[Dict[str, Any]] = []
+            for path in list(_TASK_SNAPSHOTS_DIR.glob("*.json"))[:2000]:
+                try:
+                    raw = path.read_text(encoding="utf-8")
+                    obj = json.loads(raw) if raw.strip() else {}
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                updated = float(obj.get("updated_at_s") or obj.get("created_at_s") or 0.0)
+                if updated and (now - updated) > float(self._task_ttl_s):
+                    continue
+                snaps.append(obj)
+
+            snaps.sort(key=lambda o: float(o.get("updated_at_s") or o.get("created_at_s") or 0.0), reverse=True)
+            snaps = snaps[: self._max_tasks]
+
+            for obj in snaps:
+                task = self._task_from_snapshot(obj)
+                if not task:
+                    continue
+                self._tasks[task.task_id] = task
+                # Best-effort: persist again if we normalized state (e.g. running -> failed).
+                if task.status != str(obj.get("status") or ""):
+                    self._persist_snapshot(task, force=True)
+        except Exception:
+            return
 
     async def create_task(
         self,
@@ -270,6 +421,11 @@ class StudyMaterialsTaskManager:
                     task.seq_offset += drop_n
 
             task.cond.notify_all()
+        try:
+            force = str(payload.get("event") or "") in {"task_started", "done", "error"}
+            self._persist_snapshot(task, force=force or task.status != "running")
+        except Exception:
+            pass
 
     async def _fail_task(self, task: StudyMaterialsTask, message: str) -> None:
         task.status = "failed"
@@ -280,6 +436,8 @@ class StudyMaterialsTaskManager:
 
     async def _complete_task(self, task: StudyMaterialsTask) -> None:
         task.status = "completed"
+        task.updated_at_s = _now_s()
+        self._persist_snapshot(task, force=True)
         async with task.cond:
             task.cond.notify_all()
 
@@ -335,6 +493,7 @@ class StudyMaterialsTaskManager:
                     _capture_resume_snapshot()
                     task.status = "failed"
                     task.error = msg or "Generation failed"
+                    self._persist_snapshot(task, force=True)
                     async with task.cond:
                         task.cond.notify_all()
         except asyncio.CancelledError:
@@ -359,6 +518,7 @@ class StudyMaterialsTaskManager:
 
         for tid in expired:
             task = self._tasks.pop(tid, None)
+            self._delete_snapshot(tid)
             if task and task.runner and not task.runner.done():
                 task.runner.cancel()
 
@@ -368,5 +528,6 @@ class StudyMaterialsTaskManager:
         oldest = min(self._tasks.values(), key=lambda t: float(t.updated_at_s or t.created_at_s or 0.0))
         tid = oldest.task_id
         task = self._tasks.pop(tid, None)
+        self._delete_snapshot(tid)
         if task and task.runner and not task.runner.done():
             task.runner.cancel()
