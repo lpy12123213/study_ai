@@ -409,6 +409,23 @@ class AgentCore:
 
         step_result = await tool_task
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        try:
+            timings = ctx.working_memory.get("_tool_timings")
+            if not isinstance(timings, list):
+                timings = []
+                ctx.working_memory["_tool_timings"] = timings
+            timings.append(
+                {
+                    "step_id": concrete_step.id,
+                    "name": str(concrete_step.tool or "").strip(),
+                    "title": str(concrete_step.title or "").strip(),
+                    "success": bool(step_result.success),
+                    "elapsed_ms": elapsed_ms,
+                }
+            )
+        except Exception:
+            # Best-effort only; never block execution.
+            pass
         yield agent_event(
             "tool_result",
             {
@@ -1375,6 +1392,7 @@ class AgentCore:
             fatal_error = ctx.working_memory.get("_fatal_error")
             fatal_error = dict(fatal_error) if isinstance(fatal_error, dict) else None
             per_kp_report: List[Dict[str, Any]] = []
+            timing_report: Dict[str, Any] = {}
             try:
                 study_opts = ctx.working_memory.get("study_options")
                 study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
@@ -1460,6 +1478,87 @@ class AgentCore:
                     )
             except Exception:
                 per_kp_report = []
+            try:
+                timings_blob = ctx.working_memory.get("_tool_timings")
+                timings_list = (
+                    [dict(x) for x in (timings_blob or []) if isinstance(x, dict)]
+                    if isinstance(timings_blob, list)
+                    else []
+                )
+
+                def _safe_int(v: Any) -> int:
+                    try:
+                        return int(v)
+                    except Exception:
+                        return 0
+
+                ms_values: List[int] = []
+                for x in timings_list:
+                    ms = _safe_int(x.get("elapsed_ms"))
+                    if ms > 0:
+                        ms_values.append(ms)
+                ms_values.sort()
+
+                def _pct(sorted_values: List[int], p: float) -> int:
+                    if not sorted_values:
+                        return 0
+                    idx = int((len(sorted_values) - 1) * p)
+                    idx = max(0, min(idx, len(sorted_values) - 1))
+                    return sorted_values[idx]
+
+                by_tool: Dict[str, List[int]] = {}
+                for it in timings_list:
+                    name = str(it.get("name") or "").strip() or "unknown"
+                    ms = _safe_int(it.get("elapsed_ms"))
+                    if ms <= 0:
+                        continue
+                    by_tool.setdefault(name, []).append(ms)
+
+                by_tool_rows: List[Dict[str, Any]] = []
+                for name, ms_list in by_tool.items():
+                    ms_list = sorted([m for m in ms_list if isinstance(m, int) and m > 0])
+                    if not ms_list:
+                        continue
+                    by_tool_rows.append(
+                        {
+                            "name": name,
+                            "count": len(ms_list),
+                            "total_ms": sum(ms_list),
+                            "p50_ms": _pct(ms_list, 0.50),
+                            "p95_ms": _pct(ms_list, 0.95),
+                        }
+                    )
+                by_tool_rows.sort(key=lambda x: int(x.get("total_ms") or 0), reverse=True)
+
+                kp_count = 0
+                try:
+                    kp_count = len({str(x.get("knowledge_point") or "").strip() for x in per_kp_report if isinstance(x, dict) and str(x.get("knowledge_point") or "").strip()})
+                except Exception:
+                    kp_count = 0
+                if kp_count <= 0:
+                    split_res = ctx.working_memory.get("split_knowledge_points")
+                    if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                        kp_count = len([str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()])
+
+                tokens_total = 0
+                for it in per_kp_report:
+                    if not isinstance(it, dict):
+                        continue
+                    tokens_total += _safe_int(it.get("tokens_total"))
+
+                total_ms = sum(ms_values)
+                timing_report = {
+                    "tool_calls": len(ms_values),
+                    "total_elapsed_ms": total_ms,
+                    "p50_ms": _pct(ms_values, 0.50),
+                    "p95_ms": _pct(ms_values, 0.95),
+                    "kp_count": int(kp_count or 0),
+                    "avg_ms_per_kp": int(total_ms / max(1, int(kp_count or 0))),
+                    "tokens_total": tokens_total,
+                    "by_tool": by_tool_rows[:20],
+                }
+            except Exception:
+                timing_report = {}
             yield agent_event(
                 "done",
                 {
@@ -1478,6 +1577,7 @@ class AgentCore:
                         "error": fatal_error,
                     },
                     "per_kp_report": per_kp_report,
+                    "timing_report": timing_report,
                 },
             )
 
