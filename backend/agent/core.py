@@ -1099,25 +1099,17 @@ class AgentCore:
                 # One-shot quality: if the reviewer (LLM) finds issues, do a single auto-revise pass
                 # inside the same iteration so users are less likely to hit a second planning loop.
                 # We explicitly *skip* heuristic "sources不足" failures (those need more retrieval, not editing).
-                try:
-                    auto_revise_raw = (os.getenv("STUDY_MATERIALS_AUTO_REVISE") or "1").strip().lower()
-                    auto_revise = auto_revise_raw in {"1", "true", "yes", "y", "on"}
-                except Exception:
-                    auto_revise = True
+                auto_revise = bool(policy.config.auto_revise)
 
-                if auto_revise and iteration == 0 and plan:
+                if auto_revise and plan:
                     planned_tools = {str(getattr(s, "tool", "") or "") for s in (plan.steps or []) if s}
                     # If the plan already includes revise_markdown, let the planner handle it.
                     if "revise_markdown" not in planned_tools:
-                        review = ctx.working_memory.get("review_content")
-                        if isinstance(review, dict) and review.get("passed") is False:
-                            source = str(review.get("source") or "").strip().lower()
-                            issues = review.get("issues")
-                            # Only apply when review is LLM-based (content/style issues).
-                            if source and source != "heuristic" and isinstance(issues, list) and issues:
-                                # Ensure we have something to edit.
-                                markdown = str(ctx.working_memory.get("markdown") or "").strip()
-                                if markdown:
+                        issues = policy.issues_for_auto_revise(ctx, planned_tools=planned_tools)
+                        if issues:
+                            policy.mark_auto_revise(ctx)
+                            markdown = str(ctx.working_memory.get("markdown") or "").strip()
+                            if markdown:
                                     yield agent_event(
                                         "status",
                                         {
