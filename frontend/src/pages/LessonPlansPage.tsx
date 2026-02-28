@@ -20,6 +20,7 @@ import {
   Layers,
   CheckCircle2,
   Circle,
+  XCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -163,7 +164,7 @@ function toConversationTitle(text: string): string {
 
 interface SubAgentActivity {
   knowledgePoint: string
-  status: 'pending' | 'running' | 'completed'
+  status: 'pending' | 'running' | 'completed' | 'failed'
   steps: TaskStep[]
 }
 
@@ -381,6 +382,7 @@ function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }) {
             activity.status === 'running' && 'border-primary/50 bg-primary/5 shadow-sm',
             activity.status === 'completed' && 'border-border bg-card',
             activity.status === 'pending' && 'border-border/50 bg-muted/30 opacity-60',
+            activity.status === 'failed' && 'border-destructive/40 bg-destructive/5',
           )}
         >
           <div className="flex items-center gap-2 mb-2">
@@ -393,6 +395,9 @@ function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }) {
             {activity.status === 'pending' && (
               <Circle className="h-4 w-4 text-muted-foreground/40 shrink-0" />
             )}
+            {activity.status === 'failed' && (
+              <XCircle className="h-4 w-4 text-destructive shrink-0" />
+            )}
             <span className="text-sm font-medium truncate">{activity.knowledgePoint}</span>
           </div>
 
@@ -403,6 +408,7 @@ function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }) {
                   {step.status === 'completed' && <CheckCircle2 className="h-3 w-3 text-green-500/70 shrink-0" />}
                   {step.status === 'running' && <Loader2 className="h-3 w-3 text-primary animate-spin shrink-0" />}
                   {step.status === 'pending' && <Circle className="h-3 w-3 opacity-40 shrink-0" />}
+                  {step.status === 'failed' && <XCircle className="h-3 w-3 text-destructive/80 shrink-0" />}
                   <span className="truncate">{step.title}</span>
                 </div>
               ))}
@@ -835,6 +841,7 @@ function LessonPlansPage() {
                 a.knowledgePoint === currentSubAgentKP
                   ? {
                       ...a,
+                      status: !success ? ('failed' as const) : a.status,
                       steps: a.steps.map((s) =>
                         s.id === stepId
                           ? {
@@ -879,7 +886,10 @@ function LessonPlansPage() {
               a.knowledgePoint === kp
                 ? {
                     ...a,
-                    status: 'completed' as const,
+                    status:
+                      a.status === 'failed' || a.steps.some((s) => s.status === 'failed')
+                        ? ('failed' as const)
+                        : ('completed' as const),
                     steps: a.steps.map((s) =>
                       s.status === 'running'
                         ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }

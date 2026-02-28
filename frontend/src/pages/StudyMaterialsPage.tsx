@@ -476,7 +476,7 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
         ].map((item) => (
           <button
             key={item.title}
-            onClick={() => onExampleClick(item.desc)}
+            onClick={() => onExampleClick(item.title)}
             className="group relative flex flex-col items-start p-4 h-auto text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
           >
             <div className="mb-3 rounded-lg bg-muted p-2 group-hover:bg-background transition-colors">
@@ -810,7 +810,7 @@ export default function StudyMaterialsPage() {
 
   const handleConvertToLatex = async () => {
     const md = (latexMarkdown || '').trim()
-    if (!md || latexIsConverting || latexIsLoadingSource || !latexLessonPlanId.trim()) return
+    if (!md || latexIsConverting || latexIsLoadingSource) return
 
     if (latexConvertAbortRef.current) {
       latexConvertAbortRef.current.abort()
@@ -2364,9 +2364,9 @@ export default function StudyMaterialsPage() {
               </div>
               <Textarea
                 value={latexMarkdown}
+                onChange={(e) => setLatexMarkdown(e.target.value)}
                 className="min-h-[180px] font-mono text-xs"
-                placeholder="请先选择一个已成功生成的 Markdown"
-                readOnly
+                placeholder="可从上方选择加载，也可直接粘贴/编辑 Markdown"
                 disabled={latexIsConverting || latexIsLoadingSource}
               />
             </div>
@@ -2440,7 +2440,7 @@ export default function StudyMaterialsPage() {
             <Button
               type="button"
               onClick={handleConvertToLatex}
-              disabled={latexIsConverting || latexIsLoadingSource || !latexLessonPlanId || !latexMarkdown.trim()}
+              disabled={latexIsConverting || latexIsLoadingSource || !latexMarkdown.trim()}
             >
               {latexIsConverting && <Loader2 className="h-4 w-4 animate-spin" />}
               开始转换
