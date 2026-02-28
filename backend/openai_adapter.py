@@ -335,6 +335,9 @@ async def compose_blueprint(request: ComposeBlueprintRequest) -> Dict[str, Any]:
         min_quality_score=request.min_quality_score,
         dedup_by_stem=bool(request.dedup_by_stem),
         strict_subject=bool(request.strict_subject),
+        slot_concurrency=request.slot_concurrency,
+        slot_delay_s=request.slot_delay_s,
+        slot_retries=request.slot_retries,
     )
     result["applied_subject"] = subject
     if request.edu_level:

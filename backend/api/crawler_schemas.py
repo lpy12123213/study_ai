@@ -31,4 +31,7 @@ class ComposeBlueprintRequest(BaseModel):
     min_quality_score: int = 0
     dedup_by_stem: bool = True
     strict_subject: bool = True
+    slot_concurrency: int = 0
+    slot_delay_s: float = 0.0
+    slot_retries: int = 1
 

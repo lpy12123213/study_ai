@@ -2561,6 +2561,9 @@ class ZujuanCrawler:
         min_quality_score: int = 0,
         dedup_by_stem: bool = True,
         strict_subject: bool = True,
+        slot_concurrency: int = 0,
+        slot_delay_s: float = 0.0,
+        slot_retries: int = 1,
     ) -> Dict[str, Any]:
         """
         根据蓝图（多个“检索槽位”）批量检索并组装题目列表。
@@ -2638,7 +2641,49 @@ class ZujuanCrawler:
                 "questions_preview": [],
             }
 
-        def _sort_candidates(cands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        def _split_kps(value: Any) -> List[str]:
+            if isinstance(value, list):
+                out: List[str] = []
+                for x in value:
+                    s = str(x or "").strip()
+                    if s:
+                        out.append(s)
+                return out
+            s = str(value or "").strip()
+            if not s:
+                return []
+            parts = re.split(r"[,，;；|、/\\n\\r\\t]+", s)
+            return [p.strip() for p in parts if p.strip()]
+
+        def _required_kps(slot_item: Dict[str, Any]) -> List[str]:
+            raw = str(slot_item.get("knowledge_point") or slot_item.get("knowledge_contains") or "").strip()
+            return _split_kps(raw)[:6]
+
+        def _kp_match_ratio(required: List[str], candidate: List[str]) -> float:
+            if not required:
+                return 0.0
+            if not candidate:
+                return 0.0
+            hit = 0
+            for r in required:
+                if any((r in c) or (c in r) for c in candidate):
+                    hit += 1
+            return float(hit) / float(max(1, len(required)))
+
+        def _sort_candidates(cands: List[Dict[str, Any]], *, required_kps: List[str]) -> List[Dict[str, Any]]:
+            if required_kps:
+                for q in cands:
+                    cand_kps = _split_kps(q.get("knowledge_points"))
+                    q["kp_match_score"] = _kp_match_ratio(required_kps, cand_kps)
+                cands.sort(
+                    key=lambda q: (
+                        float(q.get("kp_match_score") or 0.0),
+                        _safe_int(q.get("quality_score"), 0),
+                    ),
+                    reverse=True,
+                )
+                return cands
+
             cands.sort(key=lambda q: _safe_int(q.get("quality_score"), 0), reverse=True)
             return cands
 
@@ -2685,14 +2730,45 @@ class ZujuanCrawler:
                 knowledge_point=slot_item["knowledge_point"], **common_kwargs
             )
 
-        slot_concurrency = 3
-        sem = asyncio.Semaphore(slot_concurrency)
+        slot_retries_env = _safe_int(os.getenv("ZUJUAN_BLUEPRINT_SLOT_RETRIES"), 0)
+        slot_retries_value = _safe_int(slot_retries, 0) or slot_retries_env or 1
+        slot_retries_value = max(1, min(slot_retries_value, 5))
+
+        async def _run_slot_search_with_retry(slot_item: Dict[str, Any], *, slot_max_pages: int) -> Dict[str, Any]:
+            last: Dict[str, Any] = {}
+
+            for attempt in range(1, slot_retries_value + 1):
+                res = await _run_slot_search(slot_item, slot_max_pages=slot_max_pages)
+                if isinstance(res, dict) and res.get("success"):
+                    return res
+                last = res if isinstance(res, dict) else {"success": False, "error": "search_failed"}
+                if attempt < slot_retries_value:
+                    await asyncio.sleep(0.35 * attempt)
+            return last
+
+        slot_concurrency_env = _safe_int(os.getenv("ZUJUAN_BLUEPRINT_SLOT_CONCURRENCY"), 0)
+        slot_concurrency_value = _safe_int(slot_concurrency, 0) or slot_concurrency_env or 3
+        slot_concurrency_value = max(1, min(slot_concurrency_value, 8))
+
+        delay_env_raw = os.getenv("ZUJUAN_BLUEPRINT_SLOT_DELAY_S") or ""
+        try:
+            delay_env = float(delay_env_raw) if delay_env_raw.strip() else 0.0
+        except Exception:
+            delay_env = 0.0
+        slot_delay_value = float(slot_delay_s or 0.0)
+        if slot_delay_value <= 0:
+            slot_delay_value = delay_env
+        slot_delay_value = max(0.0, min(slot_delay_value, 3.0))
+
+        sem = asyncio.Semaphore(slot_concurrency_value)
 
         async def _prefetch_one(slot_item: Dict[str, Any]) -> Dict[str, Any]:
             async with sem:
-                result = await _run_slot_search(slot_item, slot_max_pages=slot_item["max_pages"])
+                result = await _run_slot_search_with_retry(slot_item, slot_max_pages=slot_item["max_pages"])
+                if slot_delay_value > 0:
+                    await asyncio.sleep(slot_delay_value)
                 candidates = list(result.get("questions") or [])
-                _sort_candidates(candidates)
+                _sort_candidates(candidates, required_kps=_required_kps(slot_item))
                 return {
                     "success": bool(result.get("success")),
                     "error": result.get("error") or "",
@@ -2790,7 +2866,9 @@ class ZujuanCrawler:
 
             # If prefetch failed (or returned empty), fetch once in-band.
             if not candidates:
-                initial = await _run_slot_search(slot_item, slot_max_pages=slot_max_pages)
+                initial = await _run_slot_search_with_retry(slot_item, slot_max_pages=slot_max_pages)
+                if slot_delay_value > 0:
+                    await asyncio.sleep(slot_delay_value)
                 if not initial.get("success"):
                     _trace(
                         "initial_fetch",
@@ -2813,7 +2891,7 @@ class ZujuanCrawler:
                     continue
 
                 candidates = list(initial.get("questions") or [])
-                _sort_candidates(candidates)
+                _sort_candidates(candidates, required_kps=_required_kps(slot_item))
                 seen_candidate_ids = {
                     (q.get("question_id") or "").strip()
                     for q in candidates
@@ -2840,7 +2918,9 @@ class ZujuanCrawler:
                     break
                 slot_max_pages = next_pages
 
-                expanded = await _run_slot_search(slot_item, slot_max_pages=slot_max_pages)
+                expanded = await _run_slot_search_with_retry(slot_item, slot_max_pages=slot_max_pages)
+                if slot_delay_value > 0:
+                    await asyncio.sleep(slot_delay_value)
                 if not expanded.get("success"):
                     _trace(
                         "increase_max_pages",
@@ -2859,7 +2939,7 @@ class ZujuanCrawler:
                     seen_candidate_ids.add(qid)
                     candidates.append(q)
                     added += 1
-                _sort_candidates(candidates)
+                _sort_candidates(candidates, required_kps=_required_kps(slot_item))
 
                 newly = _select_more(
                     candidates,
@@ -2916,6 +2996,12 @@ class ZujuanCrawler:
             "count": len(question_ids),
             "question_ids": question_ids,
             "sections": sections,
+            "trace": {
+                "slot_concurrency": slot_concurrency_value,
+                "slot_delay_s": slot_delay_value,
+                "slot_retries": slot_retries_value,
+                "knowledge_point_rerank": True,
+            },
             # 返回精简预览，避免输出过大
             "questions_preview": [
                 {
@@ -3365,7 +3451,20 @@ class ZujuanCrawler:
             )
             html = result.stdout.decode('utf-8', errors='ignore')
 
-            if len(html) < 10000:  # 被反爬拦截
+            def _looks_like_login_page(text: str) -> bool:
+                s = (text or "")
+                if not s:
+                    return False
+                lower = s.lower()
+                if "passport" in lower and "login" in lower:
+                    return True
+                if "login" in lower and ("password" in lower or "username" in lower):
+                    return True
+                if ("登录" in s or "登陆" in s) and ("密码" in s or "账号" in s or "用户名" in s):
+                    return True
+                return False
+
+            if len(html) < 10000 or _looks_like_login_page(html):  # 被反爬拦截/登录页
                 # 检查是否已登录
                 env_session = _load_env_login()
                 if not env_session.get("is_logged_in"):
@@ -3473,7 +3572,26 @@ class ZujuanCrawler:
             return {"success": True, "questions": [], "count": 0}
 
         # 限制最多10个
-        question_ids = question_ids[:10]
+        max_total_raw = (
+            os.getenv("ZUJUAN_BATCH_GET_DETAILS_MAX")
+            or os.getenv("ZUJUAN_BATCH_GET_DETAILS_LIMIT")
+            or os.getenv("ZUJUAN_MAX_QUESTION_DETAILS")
+            or "0"
+        )
+        max_total = _safe_int(max_total_raw, 0)
+        max_total = max(0, min(max_total, 500))
+        if max_total:
+            question_ids = question_ids[:max_total]
+
+        max_concurrent = _safe_int(max_concurrent, 5)
+        max_concurrent = max(1, min(max_concurrent, 20))
+
+        delay_raw = os.getenv("ZUJUAN_BATCH_GET_DETAILS_DELAY_S") or "0.2"
+        try:
+            delay_s = float(delay_raw)
+        except Exception:
+            delay_s = 0.2
+        delay_s = max(0.0, min(delay_s, 3.0))
 
         results = []
         # 分批执行，避免并发过高
@@ -3491,8 +3609,8 @@ class ZujuanCrawler:
                 else:
                     results.append(result)
             # 添加小延迟避免请求过快（减少延迟以提升速度）
-            if i + max_concurrent < len(question_ids):
-                await asyncio.sleep(0.2)
+            if delay_s > 0 and i + max_concurrent < len(question_ids):
+                await asyncio.sleep(delay_s)
 
         return {
             "success": True,
