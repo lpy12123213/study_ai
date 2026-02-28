@@ -34,20 +34,40 @@ function joinBaseUrl(base: string, path: string): string {
 }
 
 export function resolveApiResourceUrl(resourceUrl: string): string {
-  const value = String(resourceUrl || '').trim()
+  let value = String(resourceUrl || '').trim()
   if (!value) return value
   if (isAbsoluteHttpUrl(value)) return value
 
-  const baseValue = String(API_BASE_URL || '').trim()
-  if (!isAbsoluteHttpUrl(baseValue)) return value
-
-  try {
-    const origin = new URL(baseValue).origin
-    const path = value.startsWith('/') ? value : `/${value}`
-    return new URL(path, origin).toString()
-  } catch {
-    return value
+  // Normalize common backend-returned paths to root-relative.
+  if (!value.startsWith('/') && value.startsWith('api/')) {
+    value = `/${value}`
   }
+
+  const baseValue = String(API_BASE_URL || '').trim()
+
+  // If base is absolute, prefer it for cross-origin deployments.
+  if (isAbsoluteHttpUrl(baseValue)) {
+    try {
+      return joinBaseUrl(baseValue, value)
+    } catch {
+      // fall through
+    }
+  }
+
+  // Default (same-origin) dev/prod: make it absolute using the current origin so downloads/open-in-new-tab work.
+  try {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      const path = value.startsWith('/') ? value : joinBaseUrl(baseValue, value)
+      const normalizedPath = path.startsWith('/') ? path : `/${path}`
+      return new URL(normalizedPath, window.location.origin).toString()
+    }
+  } catch {
+    // ignore
+  }
+
+  // Fallback: keep it relative.
+  if (value.startsWith('/')) return value
+  return joinBaseUrl(baseValue, value)
 }
 
 export const apiClient: AxiosInstance = axios.create({
