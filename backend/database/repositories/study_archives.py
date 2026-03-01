@@ -116,3 +116,48 @@ async def get_latest_study_archive(
             "created_at": row.created_at.isoformat() if row.created_at else "",
         }
 
+
+async def get_study_archive_by_fingerprint(
+    *,
+    user_id: str,
+    subject: str,
+    topic: str,
+    requirements: str = "",
+) -> Optional[dict]:
+    """Fetch an archive by deterministic fingerprint (user+subject+topic+requirements).
+
+    This is used as a local knowledge cache to avoid repeated web search for identical requests.
+    """
+
+    uid = str(user_id or "").strip() or "anonymous"
+    subj = str(subject or "").strip()
+    top = str(topic or "").strip()
+    req = str(requirements or "").strip()
+
+    fp = build_study_archive_fingerprint(subject=subj, topic=top, requirements=req, user_id=uid)
+
+    async with async_session_maker() as session:
+        result = await session.execute(select(StudyArchive).where(StudyArchive.fingerprint == fp).limit(1))
+        row = result.scalar_one_or_none()
+        if not row:
+            return None
+
+        try:
+            sections = json.loads(row.sections_json or "[]")
+            if not isinstance(sections, list):
+                sections = []
+        except Exception:
+            sections = []
+
+        return {
+            "id": row.id,
+            "user_id": row.user_id,
+            "subject": row.subject,
+            "topic": row.topic,
+            "fingerprint": row.fingerprint,
+            "preset": row.preset,
+            "requirements": row.requirements,
+            "markdown": row.markdown or "",
+            "sections": sections,
+            "created_at": row.created_at.isoformat() if row.created_at else "",
+        }

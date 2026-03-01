@@ -106,6 +106,8 @@ async def generate_study_materials(
             n = 0
         if n > 0:
             options["max_points"] = max(1, min(n, 15))
+    if request.prefer_local_archive is not None:
+        options["preferLocalArchive"] = bool(request.prefer_local_archive)
 
     task = await _tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
     return await _stream_task(task.task_id, after_seq=0)

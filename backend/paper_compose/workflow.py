@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, List, Sequence, Tuple
-
-from sqlalchemy import desc, select
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from backend.crawler_manager import get_crawler
-from backend.database.models import PaperQuestion, async_session_maker, get_paper, save_paper
+from backend.database.models import (
+    add_questions_to_paper,
+    get_paper,
+    get_question_cache,
+    list_used_question_ids,
+    mark_used_questions,
+    save_paper,
+    upsert_question_cache,
+)
+from backend.paper_compose.slot_selection import select_slot_with_relax
 from backend.subjects import resolve_subject
 
 
@@ -146,14 +154,9 @@ def _extract_json_obj(text: str) -> Dict[str, Any]:
         return {}
 
 
-async def _load_used_question_ids(*, limit: int = 20000) -> set[str]:
-    limit = max(100, int(limit or 20000))
-    async with async_session_maker() as session:
-        result = await session.execute(
-            select(PaperQuestion.question_id).order_by(desc(PaperQuestion.id)).limit(limit)
-        )
-        ids = result.scalars().all()
-        return {str(x).strip() for x in ids if str(x or "").strip()}
+async def _load_used_question_ids(*, subject: str, limit: int = 20000) -> set[str]:
+    ids = await list_used_question_ids(limit=limit, subject=str(subject or "").strip() or None)
+    return {str(x).strip() for x in (ids or []) if str(x or "").strip()}
 
 
 @dataclass
@@ -177,6 +180,9 @@ async def compose_paper_events(
     subject_input = str(request.get("subject") or "").strip()
     topic = str(request.get("topic") or "").strip()
     paper_name = str(request.get("paperName") or request.get("paper_name") or "").strip()
+    mode = str(request.get("mode") or request.get("composeMode") or request.get("compose_mode") or "").strip().lower()
+    existing_paper_id = int(request.get("paperId") or request.get("paper_id") or 0)
+    shortfalls_in = request.get("shortfalls") or request.get("slotShortfalls") or request.get("slot_shortfalls")
 
     if not subject_input:
         yield {"type": "error", "error": "missing_subject", "taskId": task_id}
@@ -191,6 +197,43 @@ async def compose_paper_events(
     if not paper_name:
         paper_name = f"{subject}-{topic}-组卷"
 
+    existing_paper: Optional[dict] = None
+    fill_shortfalls: Dict[int, int] = {}
+    if mode == "fill_shortfalls":
+        if existing_paper_id <= 0:
+            yield {"type": "error", "error": "missing_paper_id", "taskId": task_id}
+            return
+
+        existing_paper = await get_paper(existing_paper_id)
+        if not existing_paper:
+            yield {"type": "error", "error": "paper_not_found", "taskId": task_id, "data": {"paperId": existing_paper_id}}
+            return
+
+        paper_name = str(existing_paper.get("paper_name") or paper_name).strip() or paper_name
+
+        items = shortfalls_in if isinstance(shortfalls_in, list) else []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            try:
+                slot_index = int(it.get("slotIndex") or it.get("slot_index") or -1)
+            except Exception:
+                slot_index = -1
+            if slot_index < 0:
+                continue
+            try:
+                requested = int(it.get("requested") or 0)
+                selected = int(it.get("selected") or 0)
+            except Exception:
+                continue
+            missing = max(0, requested - selected)
+            if missing > 0:
+                fill_shortfalls[slot_index] = missing
+
+        if not fill_shortfalls:
+            yield {"type": "error", "error": "no_shortfalls", "taskId": task_id, "data": {"paperId": existing_paper_id}}
+            return
+
     filters = request.get("filters") if isinstance(request.get("filters"), dict) else {}
     grade_id = int(filters.get("gradeId") or 0) if filters else 0
     textbook_version = str(filters.get("textbookVersion") or "").strip() if filters else ""
@@ -203,6 +246,21 @@ async def compose_paper_events(
     min_quality_score = int(options.get("minQualityScore") or 60)
     dedup_by_stem = bool(options.get("dedupByStem") if "dedupByStem" in options else True)
     avoid_used = bool(options.get("avoidUsed") if "avoidUsed" in options else True)
+    strict_slot_count = _truthy(options.get("strictSlotCount") if "strictSlotCount" in options else options.get("strict_slot_count"))
+
+    slot_concurrency = int(
+        options.get("slotConcurrency")
+        or options.get("slot_concurrency")
+        or os.getenv("PAPER_COMPOSE_SLOT_CONCURRENCY")
+        or "3"
+    )
+    slot_concurrency = max(1, min(slot_concurrency, 10))
+
+    candidate_parse_content = _truthy(
+        options.get("candidateParseContent")
+        if "candidateParseContent" in options
+        else options.get("candidate_parse_content")
+    )
 
     max_pages = max(1, min(max_pages, 8))
     per_slot_expand = max(1, min(per_slot_expand, 6))
@@ -245,31 +303,41 @@ async def compose_paper_events(
     }
 
     used_ids: set[str] = set()
+    existing_ids: set[str] = set()
+    if existing_paper and isinstance(existing_paper.get("questions"), list):
+        for q in existing_paper.get("questions") or []:
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("question_id") or "").strip()
+            if qid:
+                existing_ids.add(qid)
+        used_ids.update(existing_ids)
+
     if avoid_used:
         yield {
             "type": "step",
             "step": {
                 "id": "load_used",
-                "title": "加载历史去重集",
+                "title": "加载去重集（历史 + 已选题）",
                 "status": "running",
                 "startTime": _now_iso(),
                 "toolName": "compose_paper",
             },
         }
         try:
-            used_ids = await _load_used_question_ids()
+            used_ids.update(await _load_used_question_ids(subject=subject))
         except Exception:
-            used_ids = set()
+            pass
         yield {
             "type": "step",
             "step": {
                 "id": "load_used",
-                "title": "加载历史去重集",
+                "title": "加载去重集（历史 + 已选题）",
                 "status": "completed",
                 "startTime": _now_iso(),
                 "endTime": _now_iso(),
                 "toolName": "compose_paper",
-                "output": {"usedCount": len(used_ids)},
+                "output": {"usedCount": len(used_ids), "paperExistingCount": len(existing_ids)},
             },
         }
 
@@ -278,7 +346,8 @@ async def compose_paper_events(
         if not isinstance(raw, dict):
             continue
         qtype_raw = str(raw.get("questionType") or raw.get("question_type") or "").strip()
-        count = int(raw.get("count") or 0)
+        raw_count = int(raw.get("count") or 0)
+        count = int(fill_shortfalls.get(idx) or 0) if mode == "fill_shortfalls" else raw_count
         if count <= 0:
             continue
         difficulty = _difficulty_from_slot(str(raw.get("difficulty") or ""))
@@ -307,6 +376,49 @@ async def compose_paper_events(
     max_pages_cap = 8
     quality_floor = 0
 
+    fetch_sem = asyncio.Semaphore(slot_concurrency)
+
+    async def _fetch_slot_candidates(
+        slot: _Slot,
+        *,
+        search_limit: int,
+        max_pages_value: int,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        async with fetch_sem:
+            res = await crawler.search_by_keyword(
+                keyword=slot.keyword,
+                subject=subject,
+                edu_level="",
+                limit=search_limit,
+                difficulty=slot.difficulty,
+                question_type=slot.question_type,
+                learn_grade_id=grade_id,
+                textbook_version=textbook_version,
+                max_pages=max_pages_value,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                dedup_by_stem=False,
+                min_quality_score=0,
+                with_quality=True,
+                require_difficulty=True,
+                strict_subject=True,
+                parse_content=bool(candidate_parse_content),
+            )
+            if not isinstance(res, dict) or not res.get("success"):
+                return [], str((res or {}).get("error") or "search_failed")
+            qs = res.get("questions") or []
+            if not isinstance(qs, list):
+                qs = []
+            return [q for q in qs if isinstance(q, dict)], ""
+
+    prefetch_tasks: Dict[int, asyncio.Task] = {}
+    for slot in slot_plans:
+        requested = int(slot.count or 0)
+        search_limit = min(50, max(requested * per_slot_expand, requested))
+        prefetch_tasks[int(slot.index)] = asyncio.create_task(
+            _fetch_slot_candidates(slot, search_limit=search_limit, max_pages_value=max_pages)
+        )
+
     for i, slot in enumerate(slot_plans):
         step_id = f"slot-{slot.index}"
         yield {
@@ -331,33 +443,15 @@ async def compose_paper_events(
         candidates: List[Dict[str, Any]] = []
         seen_candidate_ids: set[str] = set()
 
-        async def _fetch(max_pages_value: int) -> Tuple[List[Dict[str, Any]], str]:
-            res = await crawler.search_by_keyword(
-                keyword=slot.keyword,
-                subject=subject,
-                edu_level="",
-                limit=search_limit,
-                difficulty=slot.difficulty,
-                question_type=slot.question_type,
-                learn_grade_id=grade_id,
-                textbook_version=textbook_version,
-                max_pages=max_pages_value,
-                province_id=province_id,
-                paper_type_id=paper_type_id,
-                dedup_by_stem=False,
-                min_quality_score=0,
-                with_quality=True,
-                require_difficulty=True,
-                strict_subject=True,
+        prefetch = prefetch_tasks.get(int(slot.index))
+        if prefetch is not None:
+            fetched, fetch_err = await prefetch
+        else:
+            fetched, fetch_err = await _fetch_slot_candidates(
+                slot,
+                search_limit=search_limit,
+                max_pages_value=slot_max_pages,
             )
-            if not isinstance(res, dict) or not res.get("success"):
-                return [], str((res or {}).get("error") or "search_failed")
-            qs = res.get("questions") or []
-            if not isinstance(qs, list):
-                qs = []
-            return [q for q in qs if isinstance(q, dict)], ""
-
-        fetched, fetch_err = await _fetch(slot_max_pages)
         if fetch_err:
             yield {
                 "type": "step",
@@ -380,6 +474,69 @@ async def compose_paper_events(
             seen_candidate_ids.add(qid)
             candidates.append(q)
 
+        # Best-effort: reuse cached metadata to avoid repeated parsing/fetching across runs.
+        cache_map: Dict[str, dict] = {}
+        try:
+            cache_map = await get_question_cache(question_ids=list(seen_candidate_ids))
+        except Exception:
+            cache_map = {}
+
+        def _maybe_json_list(value: Any) -> List[str]:
+            if isinstance(value, list):
+                return [str(x).strip() for x in value if str(x or "").strip()]
+            if isinstance(value, str):
+                raw = value.strip()
+                if raw.startswith("[") and raw.endswith("]"):
+                    try:
+                        obj = json.loads(raw)
+                        if isinstance(obj, list):
+                            return [str(x).strip() for x in obj if str(x or "").strip()]
+                    except Exception:
+                        return []
+            return []
+
+        if cache_map:
+            for q in candidates:
+                qid = str(q.get("question_id") or "").strip()
+                cached = cache_map.get(qid)
+                if not isinstance(cached, dict):
+                    continue
+
+                # Prefer the longer stem snapshot (candidate stage uses preview stems by default).
+                cur_stem = str(q.get("stem") or "").strip()
+                cached_stem = str(cached.get("stem") or "").strip()
+                if cached_stem and len(cached_stem) > len(cur_stem) + 80:
+                    q["stem"] = cached_stem
+
+                if cached.get("stem_fingerprint") and not q.get("stem_fingerprint"):
+                    q["stem_fingerprint"] = cached.get("stem_fingerprint")
+
+                # Merge answer/analysis when already cached (teacher-side local storage).
+                if cached.get("answer") and not q.get("answer"):
+                    q["answer"] = cached.get("answer")
+                if cached.get("analysis") and not q.get("analysis"):
+                    q["analysis"] = cached.get("analysis")
+
+                if cached.get("difficulty_value") and not q.get("difficulty_value"):
+                    q["difficulty_value"] = cached.get("difficulty_value")
+
+                # knowledge_points: prefer list from cache when candidate didn't provide it.
+                if not q.get("knowledge_points") and cached.get("knowledge_points_json"):
+                    q["knowledge_points"] = _maybe_json_list(cached.get("knowledge_points_json"))
+
+                # quality score/flags are useful for filtering unusable items.
+                try:
+                    if int(cached.get("quality_score") or 0) > int(q.get("quality_score") or 0):
+                        q["quality_score"] = int(cached.get("quality_score") or 0)
+                except Exception:
+                    pass
+
+                if cached.get("quality_flags") and not q.get("quality_flags"):
+                    try:
+                        q["quality_flags"] = json.loads(cached.get("quality_flags") or "[]")
+                    except Exception:
+                        q["quality_flags"] = cached.get("quality_flags")
+
         def _q_quality(q: Dict[str, Any]) -> int:
             try:
                 return int(q.get("quality_score") or 0)
@@ -400,88 +557,47 @@ async def compose_paper_events(
         else:
             candidates.sort(key=_q_quality, reverse=True)
 
-        def _select_more(remaining: int) -> List[Dict[str, Any]]:
-            newly: List[Dict[str, Any]] = []
-            if remaining <= 0:
-                return newly
-            for q in candidates:
-                if len(newly) >= remaining:
-                    break
-                qid = str(q.get("question_id") or "").strip()
-                if not qid:
-                    continue
-                if qid in global_seen_ids:
-                    continue
-                if qid in used_ids:
-                    continue
-                # Hard filter: avoid selecting questions that are likely unusable (login wall / broken formulas / missing options).
-                flags = q.get("quality_flags") or []
-                if isinstance(flags, list) and flags:
-                    norm_flags = [str(x or "").strip() for x in flags if str(x or "").strip()]
-                    hard_prefixes = ("formula_unconverted:", "unknown_tokens:", "choice_options_incomplete:")
-                    hard_exact = {
-                        "missing_stem",
-                        "login_required_content",
-                        "choice_missing_options",
-                    }
-                    if any(
-                        (f in hard_exact) or f.startswith(hard_prefixes)
-                        for f in norm_flags
-                    ):
-                        continue
-                q_quality = _q_quality(q)
-                if q_quality < int(quality_threshold or 0):
-                    continue
-                fp = ""
-                if dedup_stem:
-                    fp = _stem_fingerprint(str(q.get("stem") or ""))
-                    if fp and fp in global_seen_fps:
-                        continue
-                global_seen_ids.add(qid)
-                if fp:
-                    global_seen_fps.add(fp)
-                newly.append(q)
-            return newly
+        def _allow_candidate(q: Dict[str, Any]) -> bool:
+            # Avoid selecting questions that are likely unusable (login wall / broken formulas / missing options).
+            flags = q.get("quality_flags") or []
+            if isinstance(flags, list) and flags:
+                norm_flags = [str(x or "").strip() for x in flags if str(x or "").strip()]
+                hard_prefixes = ("formula_unconverted:", "unknown_tokens:", "choice_options_incomplete:")
+                hard_exact = {
+                    "missing_stem",
+                    "login_required_content",
+                    "choice_missing_options",
+                }
+                if any((f in hard_exact) or f.startswith(hard_prefixes) for f in norm_flags):
+                    return False
+            return True
 
-        slot_selected: List[Dict[str, Any]] = []
-        slot_selected.extend(_select_more(requested))
-        relax_trace.append(
-            {
-                "action": "initial_select",
-                "selected": len(slot_selected),
-                "max_pages": slot_max_pages,
-                "min_quality_score": quality_threshold,
-                "dedup_by_stem": dedup_stem,
-            }
+        async def _fetch_more(pages: int):
+            return await _fetch_slot_candidates(slot, search_limit=search_limit, max_pages_value=int(pages or 1))
+
+        sel = await select_slot_with_relax(
+            requested=requested,
+            candidates=candidates,
+            fetch_more=_fetch_more,
+            sort_candidates=(lambda items: items.sort(key=_q_quality, reverse=True)),
+            global_seen_ids=global_seen_ids,
+            global_seen_fps=global_seen_fps,
+            used_ids=used_ids,
+            max_pages=slot_max_pages,
+            max_pages_cap=max_pages_cap,
+            min_quality_score=quality_threshold,
+            quality_floor=quality_floor,
+            dedup_by_stem=dedup_stem,
+            stem_fingerprint=_stem_fingerprint,
+            allow_candidate=_allow_candidate,
         )
 
-        while len(slot_selected) < requested and slot_max_pages < max_pages_cap:
-            slot_max_pages = min(max_pages_cap, slot_max_pages + 2)
-            fetched2, fetch_err2 = await _fetch(slot_max_pages)
-            relax_trace.append({"action": "increase_max_pages", "max_pages": slot_max_pages, "success": not bool(fetch_err2)})
-            if fetch_err2:
-                break
-            added = 0
-            for q in fetched2:
-                qid = str(q.get("question_id") or "").strip()
-                if not qid or qid in seen_candidate_ids:
-                    continue
-                seen_candidate_ids.add(qid)
-                candidates.append(q)
-                added += 1
-            if added:
-                candidates.sort(key=_q_quality, reverse=True)
-            slot_selected.extend(_select_more(requested - len(slot_selected)))
-
-        while len(slot_selected) < requested and quality_threshold > quality_floor:
-            quality_threshold = max(quality_floor, quality_threshold - 10)
-            relax_trace.append({"action": "lower_min_quality_score", "min_quality_score": quality_threshold})
-            slot_selected.extend(_select_more(requested - len(slot_selected)))
-
-        if len(slot_selected) < requested and dedup_stem:
-            dedup_stem = False
-            relax_trace.append({"action": "disable_dedup_by_stem"})
-            slot_selected.extend(_select_more(requested - len(slot_selected)))
+        slot_selected = sel.get("selected") if isinstance(sel.get("selected"), list) else []
+        candidates = sel.get("candidates") if isinstance(sel.get("candidates"), list) else candidates
+        relax_trace = sel.get("relax_trace") if isinstance(sel.get("relax_trace"), list) else relax_trace
+        slot_max_pages = int(sel.get("max_pages") or slot_max_pages)
+        quality_threshold = int(sel.get("min_quality_score") or quality_threshold)
+        dedup_stem = bool(sel.get("dedup_by_stem") if "dedup_by_stem" in sel else dedup_stem)
 
         selected_questions.extend(slot_selected)
         slot_results.append(
@@ -508,8 +624,10 @@ async def compose_paper_events(
                 action = str(r.get("action") or "").strip()
                 if action == "increase_max_pages":
                     mp = int(r.get("max_pages") or 0)
-                    ok = bool(r.get("success"))
-                    lines.append(f"- 增加翻页上限到 {mp}（success={ok}）")
+                    ok = bool(r.get("success")) if "success" in r else bool(r.get("fetch_success"))
+                    err = str(r.get("fetch_error") or "").strip()
+                    suffix = f"，error={err}" if err else ""
+                    lines.append(f"- 增加翻页上限到 {mp}（success={ok}{suffix}）")
                 elif action == "lower_min_quality_score":
                     qs = int(r.get("min_quality_score") or 0)
                     lines.append(f"- 降低最小质量分到 {qs}")
@@ -785,12 +903,13 @@ async def compose_paper_events(
                 },
             }
 
+    slot_shortfalls: List[Dict[str, Any]] = []
+
     # Paper-level balance report (difficulty distribution / knowledge point repetition).
     try:
         diff_counts: Dict[str, int] = {"简单": 0, "中等": 0, "困难": 0, "未知": 0}
         kp_counts: Dict[str, int] = {}
         fp_counts: Dict[str, int] = {}
-        slot_shortfalls: List[Dict[str, Any]] = []
 
         for sr in slot_results:
             slot_obj = sr.get("slot")
@@ -874,15 +993,138 @@ async def compose_paper_events(
     except Exception:
         pass
 
+    if strict_slot_count and slot_shortfalls:
+        yield {
+            "type": "error",
+            "error": "slot_shortfall",
+            "taskId": task_id,
+            "data": {
+                "message": "严格模式：存在槽位缺题，未保存试卷。请调整筛选条件或点击“重试补齐”。",
+                "slotShortfalls": slot_shortfalls,
+            },
+        }
+        return
+
+    # Best-effort: fetch richer question details (including answer/analysis when available) for selected questions.
+    fetch_details = _truthy(
+        options.get("fetchDetails")
+        if "fetchDetails" in options
+        else options.get("fetch_details")
+        if "fetch_details" in options
+        else os.getenv("PAPER_COMPOSE_FETCH_DETAILS")
+        or "1"
+    )
+
+    if fetch_details and selected_questions:
+        detail_step_id = "fetch_question_details"
+        yield {
+            "type": "step",
+            "step": {
+                "id": detail_step_id,
+                "title": "补齐题目详情（答案/解析/题干快照）",
+                "status": "running",
+                "startTime": _now_iso(),
+                "toolName": "batch_get_question_details",
+                "input": {"count": len(selected_questions)},
+            },
+        }
+
+        selected_ids = [str(q.get("question_id") or "").strip() for q in selected_questions if isinstance(q, dict)]
+        selected_ids = [x for x in selected_ids if x]
+
+        details_max_concurrent = int(
+            options.get("detailsConcurrency")
+            or options.get("details_concurrency")
+            or os.getenv("PAPER_COMPOSE_DETAILS_CONCURRENCY")
+            or "5"
+        )
+        details_max_concurrent = max(1, min(details_max_concurrent, 20))
+
+        ok_n = 0
+        err_n = 0
+        err_samples: List[Dict[str, Any]] = []
+
+        by_id: Dict[str, Dict[str, Any]] = {
+            str(q.get("question_id") or "").strip(): q
+            for q in selected_questions
+            if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+        }
+
+        cache_updates: List[dict] = []
+        try:
+            details_res = await crawler.batch_get_question_details(selected_ids, max_concurrent=details_max_concurrent)
+            items = details_res.get("questions") if isinstance(details_res, dict) else []
+            if not isinstance(items, list):
+                items = []
+
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                qid = str(it.get("question_id") or "").strip()
+                if not qid:
+                    continue
+                if it.get("success") is True:
+                    ok_n += 1
+                    target = by_id.get(qid)
+                    if isinstance(target, dict):
+                        for k in ("type", "difficulty", "knowledge_points", "source", "date", "stem", "source_url"):
+                            v = it.get(k)
+                            if v is not None and str(v).strip():
+                                target[k] = v
+                        for k in ("answer", "analysis"):
+                            v = it.get(k)
+                            if v is not None and str(v).strip():
+                                target[k] = v
+                    cache_updates.append({**it, "subject": subject})
+                else:
+                    err_n += 1
+                    if len(err_samples) < 6:
+                        err_samples.append(
+                            {
+                                "question_id": qid,
+                                "error": str(it.get("error") or "").strip(),
+                                "login_required": bool(it.get("login_required")),
+                                "cookie_expired": bool(it.get("cookie_expired")),
+                            }
+                        )
+        except Exception as exc:
+            err_n = len(selected_ids)
+            err_samples = [{"error": str(exc)}]
+
+        try:
+            if cache_updates:
+                await upsert_question_cache(cache_updates)
+        except Exception:
+            pass
+
+        yield {
+            "type": "step",
+            "step": {
+                "id": detail_step_id,
+                "title": "补齐题目详情（答案/解析/题干快照）",
+                "status": "completed",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "batch_get_question_details",
+                "output": {"requested": len(selected_ids), "success": ok_n, "failed": err_n, "errors": err_samples},
+            },
+        }
+
+    save_title = "保存试卷" if mode != "fill_shortfalls" else "补齐试卷（追加题目）"
+    save_tool = "create_paper" if mode != "fill_shortfalls" else "update_paper"
+    save_input = {"paperName": paper_name, "count": len(selected_questions)}
+    if mode == "fill_shortfalls":
+        save_input["paperId"] = existing_paper_id
+
     yield {
         "type": "step",
         "step": {
             "id": "save_paper",
-            "title": "保存试卷",
+            "title": save_title,
             "status": "running",
             "startTime": _now_iso(),
-            "toolName": "create_paper",
-            "input": {"paperName": paper_name, "count": len(selected_questions)},
+            "toolName": save_tool,
+            "input": save_input,
         },
     }
 
@@ -900,6 +1142,7 @@ async def compose_paper_events(
 
         q_dicts.append(
             {
+                "subject": subject,
                 "question_id": qid,
                 "type": str(q.get("type") or "").strip(),
                 "difficulty": str(q.get("difficulty") or "").strip(),
@@ -913,10 +1156,23 @@ async def compose_paper_events(
                 "stem_fingerprint": _stem_fingerprint(str(q.get("stem") or "")),
                 "quality_score": int(q.get("quality_score") or 0),
                 "quality_flags": q.get("quality_flags") or [],
+                "answer": str(q.get("answer") or "").strip(),
+                "analysis": str(q.get("analysis") or "").strip(),
             }
         )
 
-    paper_id = await save_paper(paper_name=paper_name, questions=q_dicts)
+    if mode == "fill_shortfalls":
+        await add_questions_to_paper(paper_id=existing_paper_id, questions=q_dicts)
+        paper_id = int(existing_paper_id)
+    else:
+        paper_id = await save_paper(paper_name=paper_name, questions=q_dicts)
+    try:
+        await mark_used_questions(
+            question_ids=[q.get("question_id") for q in q_dicts if isinstance(q, dict)],
+            subject=subject,
+        )
+    except Exception:
+        pass
     paper = await get_paper(paper_id)
     if not paper:
         yield {"type": "error", "error": "paper_save_failed", "taskId": task_id}
@@ -926,12 +1182,12 @@ async def compose_paper_events(
         "type": "step",
         "step": {
             "id": "save_paper",
-            "title": "保存试卷",
+            "title": save_title,
             "status": "completed",
             "startTime": _now_iso(),
             "endTime": _now_iso(),
-            "toolName": "create_paper",
-            "output": {"paperId": paper_id},
+            "toolName": save_tool,
+            "output": {"paperId": paper_id, "appended": len(q_dicts) if mode == "fill_shortfalls" else None},
         },
     }
 

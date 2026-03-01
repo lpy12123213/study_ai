@@ -12,11 +12,15 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
+
 # 未知签名记录文件路径
 UNKNOWN_SIGNATURES_FILE = os.path.join(os.path.dirname(__file__), "unknown_signatures.json")
 
 # 线程锁，确保并发安全
 _file_lock = threading.Lock()
+
+logger = get_logger(__name__)
 
 # 内存缓存，减少文件读写
 _cache: Optional[Dict] = None
@@ -51,7 +55,7 @@ def _save_records(records: Dict) -> None:
             json.dump(records, f, ensure_ascii=False, indent=2)
         _cache_dirty = False
     except Exception as e:
-        print(f"保存未知签名记录失败: {e}")
+        logger.warning("failed to save unknown signatures record", extra={"error": str(e)})
 
 
 def record_unknown_signatures(

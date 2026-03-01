@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.settings import MAIN_MODEL
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -84,7 +85,8 @@ class RefineDraftToolsMixin:
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()
         if not model:
-            model = "gpt-4o-mini"
+            # Refining is a quality-critical step; default to the main model.
+            model = str(MAIN_MODEL or "").strip() or "gpt-4o-mini"
 
         async def _refine_one(kp: str) -> Dict[str, Any]:
             critique = critiques.get(kp) if isinstance(critiques.get(kp), dict) else {}

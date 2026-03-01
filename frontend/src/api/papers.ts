@@ -25,6 +25,27 @@ export interface PaperDownloadLink {
   instructions?: string[]
 }
 
+export interface PaperExportRequest {
+  format: 'markdown' | 'latex' | 'pdf'
+  includeStem?: boolean
+  includeAnswer?: boolean
+  includeAnalysis?: boolean
+}
+
+export interface PaperExportResponse {
+  success: boolean
+  format?: string
+  url?: string
+  filename?: string
+  // PDF export may return both PDF and TeX URLs
+  pdfUrl?: string
+  pdfFilename?: string
+  texUrl?: string
+  texFilename?: string
+  error?: string
+  log?: string
+}
+
 function toPaperAnalysis(input: any): PaperAnalysis | undefined {
   if (!input || typeof input !== 'object') return undefined
   const difficultyScore = Number((input as any).difficulty_score)
@@ -146,5 +167,31 @@ export async function getPaperDownloadLink(id: string): Promise<PaperDownloadLin
       ? data.question_links
       : undefined,
     instructions: Array.isArray(data?.instructions) ? data.instructions : undefined,
+  }
+}
+
+export async function exportPaper(
+  id: string,
+  req: PaperExportRequest
+): Promise<PaperExportResponse> {
+  const response = await apiClient.post<unknown>(`/papers/${id}/export`, {
+    format: req.format,
+    includeStem: Boolean(req.includeStem),
+    includeAnswer: Boolean(req.includeAnswer),
+    includeAnalysis: Boolean(req.includeAnalysis),
+  })
+  const data = response.data as any
+
+  return {
+    success: Boolean(data?.success),
+    format: typeof data?.format === 'string' ? data.format : undefined,
+    url: typeof data?.url === 'string' ? data.url : undefined,
+    filename: typeof data?.filename === 'string' ? data.filename : undefined,
+    pdfUrl: typeof data?.pdf_url === 'string' ? data.pdf_url : undefined,
+    pdfFilename: typeof data?.pdf_filename === 'string' ? data.pdf_filename : undefined,
+    texUrl: typeof data?.tex_url === 'string' ? data.tex_url : undefined,
+    texFilename: typeof data?.tex_filename === 'string' ? data.tex_filename : undefined,
+    error: typeof data?.error === 'string' ? data.error : undefined,
+    log: typeof data?.log === 'string' ? data.log : undefined,
   }
 }

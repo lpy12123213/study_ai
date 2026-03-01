@@ -14,6 +14,10 @@ class StudyMaterialsGenerateRequest(BaseModel):
     with_diagrams: Optional[bool] = Field(None, description="可选：是否生成示意图（默认开启）")
     enable_extra_tools: Optional[bool] = Field(None, description="可选：是否启用额外检索工具（默认按环境变量）")
     max_points: Optional[int] = Field(None, description="可选：知识点数量上限（1-15）")
+    prefer_local_archive: Optional[bool] = Field(
+        None,
+        description="可选：是否优先从本地知识库/归档复用（默认 quick/standard 自动开；可用环境变量 STUDY_ARCHIVE_PREFER_LOCAL 覆盖）",
+    )
 
 
 class StudyMaterialsConvertMarkdownToLatexRequest(BaseModel):

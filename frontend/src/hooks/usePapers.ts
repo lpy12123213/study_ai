@@ -44,3 +44,10 @@ export function usePaperDownloadLink() {
     mutationFn: papersApi.getPaperDownloadLink,
   })
 }
+
+export function usePaperExport() {
+  return useMutation({
+    mutationFn: ({ id, req }: { id: string; req: papersApi.PaperExportRequest }) =>
+      papersApi.exportPaper(id, req),
+  })
+}

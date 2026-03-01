@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -13,7 +13,8 @@ import {
   Settings2,
   Layers,
   ArrowRight,
-  CheckCircle2
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,14 @@ import { useSubjects, useSubjectFilters } from '@/hooks/useSubjects'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { BlueprintSlot } from '@/types'
+
+type SlotShortfall = {
+  slotIndex: number
+  questionType: string
+  difficulty: string
+  requested: number
+  selected: number
+}
 
 const defaultQuestionTypes = [
   { id: 'single_choice', name: '单选题', defaultScore: 3 },
@@ -122,6 +131,22 @@ export default function BlueprintPage() {
     taskId ? state.getCheckpoint(taskId) : undefined
   )
 
+  const slotShortfalls = useMemo<SlotShortfall[]>(() => {
+    const step = (taskSteps || []).find((s) => s?.id === 'paper_balance')
+    const out = (step as any)?.output
+    const list: unknown[] = Array.isArray(out?.slotShortfalls) ? out.slotShortfalls : []
+    return (list as any[])
+      .filter((x: any) => x && typeof x === 'object')
+      .map((x: any): SlotShortfall => ({
+        slotIndex: Number(x.slotIndex),
+        questionType: typeof x.questionType === 'string' ? x.questionType : '',
+        difficulty: typeof x.difficulty === 'string' ? x.difficulty : '',
+        requested: Number(x.requested || 0),
+        selected: Number(x.selected || 0),
+      }))
+      .filter((x: SlotShortfall) => Number.isFinite(x.slotIndex) && x.requested > x.selected)
+  }, [taskSteps])
+
   const totalScore = slots.reduce(
     (sum, slot) => sum + slot.count * (slot.score || 0),
     0
@@ -161,6 +186,19 @@ export default function BlueprintPage() {
         gradeId: gradeId && gradeId !== 'all' ? Number(gradeId) : undefined,
         textbookVersion: textbookVersionId && textbookVersionId !== 'all' ? textbookVersionId : undefined,
       },
+    })
+  }
+
+  const handleFillShortfalls = () => {
+    if (!result || slotShortfalls.length === 0) return
+    const ctx = (checkpoint as any)?.checkpoint?.context
+    const base = ctx && typeof ctx === 'object' ? ctx : { subject, topic: topic.trim(), slots }
+
+    compose({
+      ...(base as any),
+      mode: 'fill_shortfalls',
+      paperId: result.id,
+      shortfalls: slotShortfalls,
     })
   }
 
@@ -418,6 +456,34 @@ export default function BlueprintPage() {
                 <p className="text-muted-foreground mb-6">
                   已生成试卷，包含 {result.questions.length} 道题目
                 </p>
+
+                {slotShortfalls.length > 0 && (
+                  <div className="mx-auto max-w-md mb-6 rounded-xl border border-amber-200/60 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-900/10 p-4 text-left">
+                    <div className="flex items-center gap-2 font-medium text-amber-900 dark:text-amber-200 mb-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      槽位缺题提示
+                    </div>
+                    <div className="text-xs text-amber-900/80 dark:text-amber-200/80 space-y-1">
+                      {slotShortfalls.slice(0, 6).map((s) => (
+                        <div key={s.slotIndex}>
+                          槽位 #{s.slotIndex + 1}：{s.questionType || '题型'} × {s.difficulty || '难度'}，缺 {s.requested - s.selected} 题
+                        </div>
+                      ))}
+                      {slotShortfalls.length > 6 && <div>… 共 {slotShortfalls.length} 个槽位缺题</div>}
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="bg-background"
+                        onClick={handleFillShortfalls}
+                        disabled={isComposing}
+                      >
+                        一键重试补齐
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 <Button asChild className="gap-2">
                   <Link to={`/papers/${result.id}`}>
                     查看试卷 <ArrowRight className="h-4 w-4" />

@@ -7,14 +7,16 @@ import {
   Link2,
   Loader2,
   Printer,
-  BarChart3
+  BarChart3,
+  Download
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { usePaper, usePaperDownloadLink } from '@/hooks/usePapers'
+import { resolveApiResourceUrl } from '@/api/client'
+import { usePaper, usePaperDownloadLink, usePaperExport } from '@/hooks/usePapers'
 import { formatDate } from '@/lib/utils'
 
 export default function PaperDetailPage() {
@@ -25,9 +27,35 @@ export default function PaperDetailPage() {
     data: download,
     isPending: isLoadingLinks,
   } = usePaperDownloadLink()
+  const { mutateAsync: exportPaper, isPending: isExporting } = usePaperExport()
 
   const handlePrint = () => {
     window.print()
+  }
+
+  const handleExport = async (format: 'markdown' | 'pdf') => {
+    if (!paperId) return
+    try {
+      const res = await exportPaper({
+        id: paperId,
+        req: {
+          format,
+          includeStem: true,
+          includeAnswer: false,
+          includeAnalysis: false,
+        },
+      })
+
+      const url = res.url || res.pdfUrl || res.texUrl
+      if (res.success && url) {
+        window.open(resolveApiResourceUrl(url), '_blank', 'noopener,noreferrer')
+      } else if (res.texUrl) {
+        // If PDF compilation failed, still offer the TeX file as a fallback.
+        window.open(resolveApiResourceUrl(res.texUrl), '_blank', 'noopener,noreferrer')
+      }
+    } catch {
+      // Ignore: UI already shows export state; user can retry.
+    }
   }
 
   const questionsByType = useMemo(() => {
@@ -82,6 +110,32 @@ export default function PaperDetailPage() {
           <Button variant="outline" size="sm" onClick={handlePrint}>
             <Printer className="h-4 w-4 mr-2" />
             打印
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleExport('markdown')}
+            disabled={!paperId || isExporting}
+          >
+            {isExporting ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
+            导出 Markdown
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleExport('pdf')}
+            disabled={!paperId || isExporting}
+          >
+            {isExporting ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
+            导出 PDF
           </Button>
           <Button
             variant="default"

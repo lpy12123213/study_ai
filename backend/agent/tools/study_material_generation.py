@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.settings import MAIN_MODEL
 
 
 def _clip_text(text: str, limit: int) -> str:
@@ -366,7 +367,8 @@ class StudyMaterialGenerationToolsMixin:
             or getattr(getattr(self, "config", None), "summarizer_model", "")
         ).strip()
         if not writer_model:
-            writer_model = "gpt-4o-mini"
+            # Writing is the highest-impact stage; default to the main model.
+            writer_model = str(MAIN_MODEL or "").strip() or "gpt-4o-mini"
 
         # Per-section token cap (shorter prompts -> faster).
         if preset == "quick":

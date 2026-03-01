@@ -12,6 +12,9 @@ from backend.agent.types import CompressedContext
 from backend.agent.tools.deep_research import deep_research_exa
 from backend.agent.tools.text_utils import _clip_text, _postprocess_web_search_result
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class WebSearchKnowledgeToolsMixin:
@@ -605,9 +608,9 @@ class WebSearchKnowledgeToolsMixin:
                                 }
 
                             if not disable_metaso:
-                                print(
-                                    f"[web_search] Exa search failed for {point}, falling back to Metaso: {errors[:2]}",
-                                    flush=True,
+                                logger.warning(
+                                    "Exa search failed; falling back to Metaso",
+                                    extra={"knowledge_point": point, "errors": errors[:2]},
                                 )
                 except Exception as exc:
                     if force_search_mode:
@@ -623,7 +626,10 @@ class WebSearchKnowledgeToolsMixin:
                             "error": str(exc) or "exa_search_exception",
                         }
                     if not disable_metaso:
-                        print(f"[web_search] Exa search exception for {point}, falling back to Metaso: {exc}", flush=True)
+                        logger.warning(
+                            "Exa search exception; falling back to Metaso",
+                            extra={"knowledge_point": point, "error": str(exc)},
+                        )
 
             metaso: Dict[str, Any] = {}
             if not disable_metaso:

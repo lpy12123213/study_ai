@@ -12,6 +12,9 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 from backend.core import llm_console
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def calculate_difficulty_score(questions: List[Dict[str, Any]]) -> float:
@@ -153,12 +156,15 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
                 return content or _fallback_comment(paper_name, q_count, diff_str, type_info)
             else:
                 err = f"http_status_{response.status_code}"
-                print(f"OpenRouter API error: {response.status_code} - {response.text}")
+                logger.warning(
+                    "OpenRouter API error",
+                    extra={"status_code": int(response.status_code), "body_preview": str(response.text or "")[:800]},
+                )
                 return _fallback_comment(paper_name, q_count, diff_str, type_info)
 
     except Exception as e:
         err = str(e)
-        print(f"AI comment generation failed: {e}")
+        logger.exception("AI comment generation failed", extra={"error": str(e)})
         return _fallback_comment(paper_name, q_count, diff_str, type_info)
     finally:
         elapsed_s = 0.0

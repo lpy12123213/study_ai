@@ -67,6 +67,43 @@ function flattenToEntries(data: unknown): [string, string][] {
   return []
 }
 
+type RelaxTraceEntry = Record<string, unknown>
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function renderRelaxTraceEntry(entry: RelaxTraceEntry): string {
+  const action = typeof entry.action === 'string' ? entry.action : ''
+
+  if (action === 'initial_select') {
+    const selected = Number(entry.selected || entry.selected_total || 0)
+    const maxPages = Number(entry.max_pages || entry.maxPages || 0)
+    const minQuality = Number(entry.min_quality_score || entry.minQualityScore || 0)
+    const dedup = entry.dedup_by_stem === false ? 'false' : 'true'
+    return `初始选择：selected=${selected}，max_pages=${maxPages}，min_quality_score=${minQuality}，dedup_by_stem=${dedup}`
+  }
+
+  if (action === 'increase_max_pages') {
+    const maxPages = Number(entry.max_pages || entry.maxPages || 0)
+    const ok = entry.success === undefined ? (entry.fetch_success === false ? false : true) : !!entry.success
+    const err = typeof entry.fetch_error === 'string' ? entry.fetch_error : ''
+    return `增加翻页上限到 ${maxPages}（success=${ok}${err ? `，error=${err}` : ''}）`
+  }
+
+  if (action === 'lower_min_quality_score') {
+    const minQuality = Number(entry.min_quality_score || entry.minQualityScore || 0)
+    return `降低最小质量分到 ${minQuality}`
+  }
+
+  if (action === 'disable_dedup_by_stem') {
+    return '关闭按题干去重（dedup_by_stem=false）'
+  }
+
+  const summary = extractText(entry, 1)
+  return action ? `${action}: ${summary}` : summary
+}
+
 /** Nice labels for common keys */
 const KEY_LABELS: Record<string, string> = {
   topic: '主题',
@@ -114,6 +151,7 @@ const KEY_LABELS: Record<string, string> = {
   revision_instructions: '修订指令',
   recommended_sections: '推荐小节',
   dimensions: '维度评分',
+  relaxTrace: '放宽过程',
 }
 
 /** Short human-readable purpose per tool */
@@ -175,6 +213,10 @@ export function StepDetail({ step }: StepDetailProps) {
 
   const inputEntries = hasInput ? flattenToEntries(step.input) : []
   const outputEntries = hasOutput ? flattenToEntries(step.output) : []
+  const relaxTrace =
+    isObject(step.output) && Array.isArray((step.output as any).relaxTrace)
+      ? (((step.output as any).relaxTrace as unknown[]) || []).filter((x) => isObject(x)) as RelaxTraceEntry[]
+      : []
 
   return (
     <div className="mt-2 pt-2 border-t border-border/50 space-y-3 text-xs">
@@ -204,6 +246,26 @@ export function StepDetail({ step }: StepDetailProps) {
       )}
 
       {/* Output */}
+      {relaxTrace.length > 0 && (
+        <div>
+          <div className="text-muted-foreground/60 mb-1 font-medium uppercase tracking-wider text-[10px]">
+            放宽过程
+          </div>
+          <div className="space-y-1 text-foreground/80 bg-muted/30 rounded-md p-2">
+            {relaxTrace.slice(0, 24).map((it, idx) => (
+              <div key={idx} className="break-all whitespace-pre-wrap">
+                {renderRelaxTraceEntry(it)}
+              </div>
+            ))}
+            {relaxTrace.length > 24 && (
+              <div className="text-muted-foreground/70 pt-1">
+                仅展示前 24 条（共 {relaxTrace.length} 条）
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {outputEntries.length > 0 && (
         <div>
           <div className="text-muted-foreground/60 mb-1 font-medium uppercase tracking-wider text-[10px]">返回</div>

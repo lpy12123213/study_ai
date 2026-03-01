@@ -15,6 +15,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 import httpx
 
 from backend.core import llm_console
+from backend.core.logging_utils import get_logger
+from backend.core.record_replay import RecordReplayStore, record_enabled, replay_enabled
 from backend.core.settings import (
     API_TIMEOUT,
     LESSON_PLAN_API_KEY,
@@ -28,6 +30,8 @@ from backend.core.settings import (
 # IMPORTANT: these values must never be persisted (tasks snapshots/events), only kept in-memory.
 _llm_api_key_override_var: ContextVar[str] = ContextVar("llm_api_key_override", default="")
 _moonshot_api_key_override_var: ContextVar[str] = ContextVar("moonshot_api_key_override", default="")
+
+logger = get_logger(__name__)
 
 
 def set_llm_api_key_override(api_key: Optional[str]) -> Token:
@@ -488,6 +492,39 @@ async def chat_completion(
         moonshot_base_url=moonshot_base_url_in,
     )
 
+    effective_temperature = float(temperature)
+    if resolved_provider == "moonshot" and resolved_model.lower().startswith("kimi-"):
+        # Moonshot kimi models reject temperatures other than 1.0 (HTTP 400).
+        effective_temperature = 1.0
+
+    rr_store = RecordReplayStore("llm")
+    rr_request = {
+        "provider": resolved_provider,
+        "base_url": resolved_base_url,
+        "model": resolved_model,
+        "messages": messages,
+        "temperature": effective_temperature,
+        "max_tokens": int(max_tokens),
+        "response_format": response_format or None,
+        "reasoning": reasoning or None,
+        "stream": bool(stream),
+    }
+
+    if replay_enabled():
+        fixture, key = rr_store.load(request=rr_request)
+        resp = fixture.get("response") if isinstance(fixture, dict) else None
+        if isinstance(resp, dict):
+            usage = resp.get("usage") if isinstance(resp.get("usage"), dict) else {}
+            return ChatCompletionResult(
+                content=str(resp.get("content") or ""),
+                finish_reason=str(resp.get("finish_reason") or ""),
+                usage=dict(usage),
+            )
+        if not record_enabled():
+            if raise_on_fail:
+                raise RuntimeError(f"replay_fixture_missing key={key}")
+            return ChatCompletionResult()
+
     if not resolved_api_key:
         if raise_on_fail:
             raise RuntimeError("llm_not_configured")
@@ -501,11 +538,6 @@ async def chat_completion(
     last_error = ""
 
     headers = {"Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
-
-    effective_temperature = float(temperature)
-    if resolved_provider == "moonshot" and resolved_model.lower().startswith("kimi-"):
-        # Moonshot kimi models reject temperatures other than 1.0 (HTTP 400).
-        effective_temperature = 1.0
 
     requested_max_tokens = int(max_tokens)
     payload_max_tokens = 0
@@ -695,7 +727,13 @@ async def chat_completion(
                             usage=usage,
                             content_chars=len(content_text),
                         )
-                        return ChatCompletionResult(content=content_text, finish_reason=finish_reason, usage=usage)
+                        result = ChatCompletionResult(content=content_text, finish_reason=finish_reason, usage=usage)
+                        if record_enabled():
+                            rr_store.save(
+                                request=rr_request,
+                                response={"content": result.content, "finish_reason": result.finish_reason, "usage": result.usage},
+                            )
+                        return result
 
                 resp = await client.post(url, headers=headers, json=payload)
 
@@ -735,7 +773,13 @@ async def chat_completion(
                     usage=usage,
                     content_chars=len(content),
                 )
-                return ChatCompletionResult(content=content, finish_reason=finish_reason, usage=usage)
+                result = ChatCompletionResult(content=content, finish_reason=finish_reason, usage=usage)
+                if record_enabled():
+                    rr_store.save(
+                        request=rr_request,
+                        response={"content": result.content, "finish_reason": result.finish_reason, "usage": result.usage},
+                    )
+                return result
             except Exception:
                 last_error = "invalid_response"
                 llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
@@ -834,7 +878,7 @@ async def chat_completion(
 
     if last_error:
         try:
-            print(f"[llm] request failed after retries: {last_error}", flush=True)
+            logger.warning("llm request failed after retries", extra={"error": last_error, "model": resolved_model})
         except Exception:
             pass
     if raise_on_fail:

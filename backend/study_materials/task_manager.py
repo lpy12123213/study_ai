@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.core import AgentCore
+from backend.agent.types import agent_event
+from backend.database.models import get_study_archive_by_fingerprint, upsert_study_archive
 
 
 def _now_s() -> float:
@@ -17,6 +20,26 @@ def _now_s() -> float:
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_SNAPSHOTS_DIR = (_REPO_ROOT / ".local" / "study_materials" / "tasks").resolve()
+
+
+def _truthy(value: Any) -> bool:
+    raw = str(value or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _export_markdown_to_media(*, markdown: str) -> Dict[str, Any]:
+    data = (markdown + ("\n" if not markdown.endswith("\n") else "")).encode("utf-8", errors="ignore")
+    sha = hashlib.sha256(data).hexdigest()
+    filename = f"{sha}.md"
+    url = f"/api/media/generated/{filename}"
+
+    out_dir = (_REPO_ROOT / ".local" / "media" / "generated").resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / filename
+    if not out_path.exists():
+        out_path.write_bytes(data)
+
+    return {"md_url": url, "md_filename": filename, "sha256": sha, "bytes": len(data)}
 
 
 @dataclass
@@ -471,6 +494,110 @@ class StudyMaterialsTaskManager:
             task.cond.notify_all()
 
     async def _run_task(self, task: StudyMaterialsTask) -> None:
+        async def _maybe_reuse_local_archive() -> bool:
+            # Only reuse for fresh "generate" tasks (not continuation).
+            if task.parent_task_id or task.resume_working_memory:
+                return False
+
+            topic = (task.query or "").strip()
+            subject = (task.subject or "").strip()
+            if not topic or not subject:
+                return False
+
+            opts = dict(task.options or {})
+            preset = str(opts.get("preset") or "standard").strip().lower() or "standard"
+            requirements = str(opts.get("requirements") or "").strip()
+
+            prefer_opt = (
+                opts.get("preferLocalArchive")
+                if "preferLocalArchive" in opts
+                else opts.get("prefer_local_archive") if "prefer_local_archive" in opts else None
+            )
+            if prefer_opt is None:
+                env_raw = os.getenv("STUDY_ARCHIVE_PREFER_LOCAL")
+                if env_raw is None or not str(env_raw).strip():
+                    prefer = preset in {"quick", "standard"}
+                else:
+                    prefer = _truthy(env_raw)
+            else:
+                prefer = bool(prefer_opt)
+
+            if not prefer:
+                return False
+
+            try:
+                archive = await get_study_archive_by_fingerprint(
+                    user_id=task.user_id,
+                    subject=subject,
+                    topic=topic,
+                    requirements=requirements,
+                )
+            except Exception:
+                archive = None
+
+            if not isinstance(archive, dict):
+                return False
+
+            markdown = str(archive.get("markdown") or "").strip()
+            sections = archive.get("sections") if isinstance(archive.get("sections"), list) else []
+            if not markdown:
+                return False
+
+            exported = _export_markdown_to_media(markdown=markdown)
+
+            task.resume_working_memory = {
+                "study_options": {"preset": preset, "requirements": requirements},
+                "assemble_study_archive": markdown,
+                "markdown": markdown,
+                "generate_study_material": {
+                    "topic": topic,
+                    "subject": subject,
+                    "preset": preset,
+                    "requirements": requirements,
+                    "sections": sections,
+                },
+                "md_url": exported.get("md_url"),
+                "md_filename": exported.get("md_filename"),
+            }
+            task.iterations_done = 1
+
+            await self._append_event(
+                task,
+                agent_event(
+                    "status",
+                    {
+                        "content": "本地知识库命中：发现相同主题的历史归档，已直接复用（如需重新联网检索，可在请求中设置 preferLocalArchive=false）。"
+                    },
+                ),
+            )
+            await self._append_event(
+                task,
+                agent_event(
+                    "done",
+                    {
+                        "material": {
+                            "topic": topic,
+                            "archive_path": "",
+                            "md_url": exported.get("md_url") or "",
+                            "md_filename": exported.get("md_filename") or "",
+                            "tex_url": "",
+                            "tex_filename": "",
+                            "pdf_url": "",
+                            "pdf_filename": "",
+                            "iteration": 1,
+                            "passed": True,
+                            "issues": [],
+                            "error": None,
+                        },
+                        "per_kp_report": [],
+                        "timing_report": {"reused_local_archive": True},
+                    },
+                ),
+            )
+
+            await self._complete_task(task)
+            return True
+
         agent = AgentCore()
 
         def _capture_resume_snapshot() -> None:
@@ -484,6 +611,9 @@ class StudyMaterialsTaskManager:
                 pass
 
         try:
+            if await _maybe_reuse_local_archive():
+                return
+
             preferences = {}
             if (task.subject or "").strip():
                 preferences["subject"] = str(task.subject or "").strip()
@@ -513,6 +643,29 @@ class StudyMaterialsTaskManager:
                             except Exception:
                                 pass
                     _capture_resume_snapshot()
+                    try:
+                        wm = dict(task.resume_working_memory or {})
+                        markdown = str(wm.get("assemble_study_archive") or wm.get("markdown") or "").strip()
+                        material = wm.get("generate_study_material") if isinstance(wm.get("generate_study_material"), dict) else {}
+                        sections = material.get("sections") if isinstance(material.get("sections"), list) else []
+                        preset = str((task.options or {}).get("preset") or "").strip() or str(material.get("preset") or "")
+                        requirements = str((task.options or {}).get("requirements") or "").strip() or str(
+                            material.get("requirements") or ""
+                        )
+                        topic = str(material.get("topic") or task.query or "").strip()
+                        subject = str(material.get("subject") or task.subject or "").strip()
+                        if markdown and topic and subject:
+                            await upsert_study_archive(
+                                user_id=task.user_id,
+                                subject=subject,
+                                topic=topic,
+                                preset=preset,
+                                requirements=requirements,
+                                markdown=markdown,
+                                sections=[x for x in sections if isinstance(x, dict)],
+                            )
+                    except Exception:
+                        pass
                     await self._complete_task(task)
                 elif kind == "error":
                     msg = ""

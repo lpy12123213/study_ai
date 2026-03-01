@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -15,6 +15,7 @@ from backend.analysis_service import analyze_paper
 from backend.database.models import delete_paper, get_paper, list_papers, save_paper
 from backend.paper_compose.compose_tasks import compose_tasks
 from backend.paper_compose.task_manager import PaperComposeTask
+from backend.paper_compose.export import export_paper as export_paper_doc
 from backend.paper_compose.workflow import compose_paper_events
 
 router = APIRouter(dependencies=[Depends(require_auth)])
@@ -90,6 +91,39 @@ async def get_download_link(paper_id: int) -> dict:
             "4. 使用组卷网的正规下载功能下载试卷",
         ],
     }
+
+
+@router.post("/papers/{paper_id}/export")
+async def export_paper(paper_id: int, payload: Optional[dict] = None) -> dict:
+    """导出试卷为 Markdown/LaTeX/PDF（写入 `.local/media/generated/` 并返回下载链接）。"""
+
+    paper = await get_paper(paper_id)
+    if not paper:
+        raise HTTPException(status_code=404, detail="试卷不存在")
+
+    body = payload if isinstance(payload, dict) else {}
+    fmt = str(body.get("format") or body.get("fmt") or "markdown").strip().lower()
+
+    include_stem = bool(body.get("includeStem")) if "includeStem" in body else bool(body.get("include_stem"))
+    include_answer = bool(body.get("includeAnswer")) if "includeAnswer" in body else bool(body.get("include_answer"))
+    include_analysis = bool(body.get("includeAnalysis")) if "includeAnalysis" in body else bool(body.get("include_analysis"))
+
+    try:
+        out = export_paper_doc(
+            paper,
+            fmt=fmt,
+            include_stem=include_stem,
+            include_answer=include_answer,
+            include_analysis=include_analysis,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if isinstance(out, dict) and out.get("success") is False:
+        return {"success": False, **out}
+    return {"success": True, **(out if isinstance(out, dict) else {})}
 
 
 def _sse_headers() -> dict:

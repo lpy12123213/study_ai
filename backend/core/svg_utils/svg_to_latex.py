@@ -27,6 +27,8 @@ from typing import Optional, List, Dict, Tuple, Set
 from dataclasses import dataclass, field
 from collections import defaultdict, OrderedDict
 
+from backend.core.logging_utils import get_logger
+
 try:
     import httpx
 except ImportError:
@@ -34,6 +36,8 @@ except ImportError:
 
 _SVG_LATEX_CACHE_MAX = 2048
 _SVG_LATEX_CACHE: "OrderedDict[tuple[str, bool], tuple[str, tuple[str, ...]]]" = OrderedDict()
+
+logger = get_logger(__name__)
 
 
 def _svg_latex_cache_get(svg_url: str, use_advanced: bool) -> Optional[Tuple[str, List[str]]]:
@@ -289,7 +293,7 @@ def save_signatures():
         with open(SIGNATURES_FILE, "w", encoding="utf-8") as f:
             json.dump(GLYPH_SIGNATURES, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"保存签名失败: {e}")
+        logger.warning("failed to save glyph signatures", extra={"error": str(e)})
 
 
 def add_signature(signature: str, latex_char: str):
@@ -1388,7 +1392,7 @@ async def svg_url_to_latex(
         return None, unknown
 
     except Exception as e:
-        print(f"解析SVG失败: {e}")
+        logger.warning("failed to parse svg to latex", extra={"error": str(e), "svg_url": svg_url})
         return None, []
     finally:
         if owns_client:

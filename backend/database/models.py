@@ -55,7 +55,7 @@ from backend.database.repositories.conversations import (
     list_conversations,
     update_conversation_title,
 )
-from backend.database.repositories.papers import delete_paper, get_paper, list_papers, save_paper
+from backend.database.repositories.papers import add_questions_to_paper, delete_paper, get_paper, list_papers, save_paper
 from backend.database.repositories.question_cache import (
     get_question_cache,
     list_used_question_ids,
@@ -66,6 +66,6 @@ from backend.database.repositories.search_history import add_search_history
 from backend.database.repositories.study_archives import (
     build_study_archive_fingerprint,
     get_latest_study_archive,
+    get_study_archive_by_fingerprint,
     upsert_study_archive,
 )
-

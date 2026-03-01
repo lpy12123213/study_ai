@@ -12,10 +12,15 @@ def _truthy(raw: str) -> bool:
 
 
 def enabled() -> bool:
-    # Default ON for local debugging; set `LLM_CONSOLE_LOG=0` to disable.
+    # Default behavior:
+    # - When `LOG_FORMAT=json` (server/structured logs), keep this OFF by default to avoid mixed log formats.
+    # - Otherwise (local debugging), keep it ON by default.
+    #
+    # Override with `LLM_CONSOLE_LOG=1|0`.
     raw = os.getenv("LLM_CONSOLE_LOG")
     if raw is None:
-        raw = "1"
+        fmt = str(os.getenv("LOG_FORMAT") or "json").strip().lower()
+        raw = "0" if fmt == "json" else "1"
     return _truthy(raw)
 
 
@@ -130,4 +135,3 @@ def log_end(
         parts.append(f"error={error}")
     suffix = (" " + " ".join(parts)) if parts else ""
     _safe_print(f"[llm:{req_id}] end{suffix}")
-

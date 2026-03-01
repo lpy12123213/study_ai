@@ -6,6 +6,15 @@ export interface ComposeRequest {
   subject: string
   topic?: string
   paperName?: string
+  mode?: 'compose' | 'fill_shortfalls' | string
+  paperId?: number
+  shortfalls?: Array<{
+    slotIndex: number
+    questionType?: string
+    difficulty?: string
+    requested: number
+    selected: number
+  }>
   slots: BlueprintSlot[]
   filters?: {
     gradeId?: number
@@ -19,6 +28,11 @@ export interface ComposeRequest {
     minQualityScore?: number
     dedupByStem?: boolean
     avoidUsed?: boolean
+    strictSlotCount?: boolean
+    slotConcurrency?: number
+    candidateParseContent?: boolean
+    fetchDetails?: boolean
+    detailsConcurrency?: number
   }
 }
 
