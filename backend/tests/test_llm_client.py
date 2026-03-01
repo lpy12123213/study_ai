@@ -78,6 +78,42 @@ class RespErrorTests(unittest.TestCase):
         self.assertEqual(llm_client._resp_error(resp), "bad gateway")
 
 
+class ApiKeyOverrideTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._orig_lesson_plan_api_key = llm_client.LESSON_PLAN_API_KEY
+        self._orig_moonshot_api_key = llm_client.MOONSHOT_API_KEY
+        llm_client.LESSON_PLAN_API_KEY = ""
+        llm_client.MOONSHOT_API_KEY = ""
+
+    def tearDown(self) -> None:
+        llm_client.LESSON_PLAN_API_KEY = self._orig_lesson_plan_api_key
+        llm_client.MOONSHOT_API_KEY = self._orig_moonshot_api_key
+
+    def test_is_llm_configured_false_without_env_or_override(self) -> None:
+        self.assertFalse(llm_client.is_llm_configured())
+
+    def test_is_llm_configured_true_with_llm_override(self) -> None:
+        token = llm_client.set_llm_api_key_override("or-key")
+        try:
+            self.assertTrue(llm_client.is_llm_configured())
+            self.assertEqual(llm_client.get_llm_api_key_override(), "or-key")
+        finally:
+            llm_client.reset_llm_api_key_override(token)
+
+        self.assertFalse(llm_client.is_llm_configured())
+        self.assertEqual(llm_client.get_llm_api_key_override(), "")
+
+    def test_is_llm_configured_true_with_moonshot_override(self) -> None:
+        token = llm_client.set_moonshot_api_key_override("ms-key")
+        try:
+            self.assertTrue(llm_client.is_llm_configured())
+            self.assertEqual(llm_client.get_moonshot_api_key_override(), "ms-key")
+        finally:
+            llm_client.reset_moonshot_api_key_override(token)
+
+        self.assertFalse(llm_client.is_llm_configured())
+        self.assertEqual(llm_client.get_moonshot_api_key_override(), "")
+
+
 if __name__ == "__main__":
     unittest.main()
-

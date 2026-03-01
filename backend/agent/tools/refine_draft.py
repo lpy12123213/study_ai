@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -110,7 +110,7 @@ class RefineDraftToolsMixin:
             if not draft:
                 return {"knowledge_point": kp, "skipped": True, "reason": "no_draft", "score": score, "threshold": threshold}
 
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            if not is_llm_configured():
                 if strict_llm:
                     raise RuntimeError("llm_not_configured")
                 return {

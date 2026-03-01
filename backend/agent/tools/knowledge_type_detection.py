@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -100,7 +100,7 @@ class KnowledgeTypeDetectionToolsMixin:
         async def _detect_one(kp: str) -> Dict[str, Any]:
             brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
 
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            if not is_llm_configured():
                 if strict_llm:
                     raise RuntimeError("llm_not_configured")
                 kt = _heuristic_type(kp)

@@ -11,13 +11,17 @@ from __future__ import annotations
 
 import os
 import sys
+import asyncio
+import hashlib
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 if __package__ is None or __package__ == "":
@@ -26,6 +30,12 @@ if __package__ is None or __package__ == "":
 
 from backend.api.router import api_router
 from backend.crawler_manager import close_crawler
+from backend.core.llm_client import (
+    reset_llm_api_key_override,
+    reset_moonshot_api_key_override,
+    set_llm_api_key_override,
+    set_moonshot_api_key_override,
+)
 from backend.database.models import init_db
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +70,76 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
+    rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")
+    rate_limit_max = max(0, min(rate_limit_max, 50_000))
+    rate_limit_window_s = max(1.0, min(rate_limit_window_s, 3600.0))
+
+    _rate_lock = asyncio.Lock()
+    _rate_hits: dict[str, deque[float]] = defaultdict(deque)
+
+    @app.middleware("http")
+    async def rate_limit_middleware(request: Request, call_next):
+        if rate_limit_max <= 0:
+            return await call_next(request)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        path = request.url.path or ""
+        if not path.startswith("/api/"):
+            return await call_next(request)
+
+        key = ""
+        auth = str(request.headers.get("Authorization") or "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+            if token:
+                digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+                key = f"token:{digest}"
+
+        if not key:
+            host = (request.client.host if request.client else "") or "unknown"
+            key = f"ip:{host}"
+
+        now = time.monotonic()
+        async with _rate_lock:
+            bucket = _rate_hits[key]
+            while bucket and (now - bucket[0]) > rate_limit_window_s:
+                bucket.popleft()
+            if len(bucket) >= rate_limit_max:
+                return JSONResponse(status_code=429, content={"detail": "rate_limited"})
+            bucket.append(now)
+
+            # Best-effort pruning to avoid unbounded memory in long-running processes.
+            if len(_rate_hits) > 10_000:
+                for k in list(_rate_hits.keys())[:2000]:
+                    b = _rate_hits.get(k)
+                    if not b:
+                        _rate_hits.pop(k, None)
+
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def llm_api_key_override_middleware(request: Request, call_next):
+        """
+        Allow the frontend to supply an LLM API key per request (saved in browser localStorage).
+
+        Security notes:
+        - The key is only held in-memory for the duration of the request (ContextVar).
+        - Never persist/log the key (tasks snapshots, events, db, etc.).
+        """
+
+        llm_key_header = request.headers.get("X-LLM-API-Key", "")
+        moonshot_key_header = request.headers.get("X-Moonshot-API-Key", "")
+
+        llm_token = set_llm_api_key_override(llm_key_header)
+        moonshot_token = set_moonshot_api_key_override(moonshot_key_header)
+        try:
+            return await call_next(request)
+        finally:
+            reset_llm_api_key_override(llm_token)
+            reset_moonshot_api_key_override(moonshot_token)
 
     app.include_router(api_router)
 

@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.crawler_manager import get_crawler
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 class QuestionBankToolsMixin:
@@ -106,7 +106,7 @@ class QuestionBankToolsMixin:
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
         difficulty = str(args.get("difficulty") or "中等").strip()
 
-        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        if not is_llm_configured():
             return {
                 "topic": topic,
                 "subject": subject,
@@ -200,4 +200,3 @@ class QuestionBankToolsMixin:
         filtered = [q for q in questions if str(q.get("question_id") or "").strip() not in used_ids]
         picked = self._pick_questions(filtered, limit=limit)
         return {"topic": topic, "subject": subject or crawler.subject, "difficulty": difficulty, "exercises": picked}
-

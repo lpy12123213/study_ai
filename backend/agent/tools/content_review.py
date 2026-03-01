@@ -5,7 +5,7 @@ import json
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 class ContentReviewToolsMixin:
@@ -177,7 +177,7 @@ class ContentReviewToolsMixin:
                 "dimensions": dimensions,
             }
 
-        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        if not is_llm_configured():
             if strict_llm:
                 raise RuntimeError("llm_not_configured")
             return {"passed": True, "issues": [], "suggestions": [], "source": "fallback", "dimensions": dimensions}
@@ -250,7 +250,7 @@ class ContentReviewToolsMixin:
         if not markdown:
             markdown = str(ctx.working_memory.get("assemble_markdown") or "")
 
-        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) or not markdown:
+        if not is_llm_configured() or not markdown:
             return markdown
 
         prompt = {

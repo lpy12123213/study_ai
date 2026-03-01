@@ -29,10 +29,20 @@ const tabs = [
   { id: 'about', label: '关于', icon: Info },
 ]
 
+const roleLabels: Record<string, string> = {
+  admin: '管理员',
+  user: '普通用户',
+}
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('account')
   const { user, logout } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
+  const roleLabel = (() => {
+    const role = String(user?.role || '').trim().toLowerCase()
+    if (!role) return '普通用户'
+    return roleLabels[role] || String(user?.role || '普通用户')
+  })()
 
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('settings_api_key') || '')
   const [isSaving, setIsSaving] = useState(false)
@@ -100,7 +110,7 @@ export default function SettingsPage() {
                     <div>
                       <h3 className="font-semibold text-lg">{user.username}</h3>
                       {user.email && <p className="text-sm text-muted-foreground">{user.email}</p>}
-                      <Badge variant="outline" className="mt-2">普通用户</Badge>
+                      <Badge variant="outline" className="mt-2">{roleLabel}</Badge>
                     </div>
                   </div>
 
@@ -145,7 +155,7 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                   <p className="text-[13px] text-muted-foreground">
-                    密钥将安全存储在本地浏览器中，不会上传到服务器。
+                    密钥将保存在本地浏览器中，并在请求时通过请求头发送到你的后端用于调用模型；后端不会持久化或记录该密钥。
                   </p>
                 </div>
               </div>

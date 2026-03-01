@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, Paperclip, ChevronDown, ChevronUp, Square } from 'lucide-react'
+import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, ChevronDown, ChevronUp, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
@@ -275,15 +275,6 @@ export default function ChatPage() {
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="relative group">
             <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
-               <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 rounded-xl text-muted-foreground hover:text-foreground shrink-0 mb-0.5"
-               >
-                 <Paperclip className="h-5 w-5" />
-               </Button>
-               
               <Textarea
                 ref={textareaRef}
                 value={input}

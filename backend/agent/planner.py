@@ -8,13 +8,11 @@ from typing import Any, Dict, List, Optional
 
 from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, ExecutionPlan, PlanStep, UserProfile
-from backend.core.llm_client import chat_completion_text
+from backend.core.llm_client import chat_completion_text, is_llm_configured
 from backend.core.settings import (
     DEFAULT_SUBJECT,
-    LESSON_PLAN_API_KEY,
     LESSON_PLAN_MAX_TOKENS,
     LESSON_PLAN_TEMPERATURE,
-    MOONSHOT_API_KEY,
 )
 
 
@@ -1050,7 +1048,7 @@ class Planner:
         issues = last_reflection.get("issues") if isinstance(last_reflection, dict) else None
 
         # If planner LLM isn't configured, use a deterministic fallback plan.
-        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        if not is_llm_configured():
             return self._fallback_plan(
                 topic=topic,
                 subject=subject,

@@ -6,7 +6,6 @@ OpenAI Function Calling 适配器。
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,25 +18,19 @@ if __package__ is None or __package__ == "":
     # Allow running as a script: `python backend/openai_adapter.py`
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from backend.crawler_manager import close_crawler as close_subject_crawlers
+from backend.crawler_manager import get_crawler as get_subject_crawler
 from backend.crawler.zujuan_crawler import ZujuanCrawler
 from backend.database.models import get_paper, init_db, list_papers, save_paper
 from backend.config import DEFAULT_SUBJECT
 from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 
 
-crawler: Optional[ZujuanCrawler] = None
-_crawler_lock = asyncio.Lock()
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
     yield
-    global crawler
-    async with _crawler_lock:
-        if crawler:
-            await crawler.close()
-            crawler = None
+    await close_subject_crawlers()
 
 
 app = FastAPI(
@@ -48,20 +41,11 @@ app = FastAPI(
 )
 
 
-async def get_crawler(subject: str = "") -> ZujuanCrawler:
+async def get_crawler(subject: str = "", edu_level: str = "") -> ZujuanCrawler:
     """获取或创建爬虫实例（支持学科切换）"""
-    global crawler
-
-    subject = (subject or DEFAULT_SUBJECT).strip()
-    subject = resolve_subject(subject, strict=True)
-
-    async with _crawler_lock:
-        if crawler is None:
-            crawler = ZujuanCrawler(subject=subject)
-            await crawler.initialize()
-        elif crawler.subject != subject:
-            crawler.set_subject(subject)
-        return crawler
+    subject_value = (subject or DEFAULT_SUBJECT).strip()
+    edu_level_value = (edu_level or "").strip()
+    return await get_subject_crawler(subject=subject_value, edu_level=edu_level_value, strict=True)
 
 
 class SearchByKeywordRequest(BaseModel):
@@ -174,7 +158,7 @@ async def search_by_keyword(request: SearchByKeywordRequest) -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    crawler_instance = await get_crawler(subject)
+    crawler_instance = await get_crawler(subject, edu_level=request.edu_level)
     result = await crawler_instance.search_by_keyword(
         keyword=request.keyword,
         subject=subject,
@@ -220,7 +204,7 @@ async def search_by_knowledge(request: SearchByKnowledgeRequest) -> Dict[str, An
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    crawler_instance = await get_crawler(subject)
+    crawler_instance = await get_crawler(subject, edu_level=request.edu_level)
     result = await crawler_instance.search_by_knowledge(
         knowledge_point=request.knowledge_point,
         subject=subject,
@@ -296,7 +280,7 @@ async def available_filters(request: AvailableFiltersRequest) -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    crawler_instance = await get_crawler(subject)
+    crawler_instance = await get_crawler(subject, edu_level=request.edu_level)
     result = await crawler_instance.get_available_filters()
     result["applied_subject"] = subject
     if request.edu_level:
@@ -313,7 +297,7 @@ async def compose_blueprint(request: ComposeBlueprintRequest) -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    crawler_instance = await get_crawler(subject)
+    crawler_instance = await get_crawler(subject, edu_level=request.edu_level)
     result = await crawler_instance.compose_paper_blueprint(
         blueprint=request.blueprint,
         subject=subject,

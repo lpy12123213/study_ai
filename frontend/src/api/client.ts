@@ -33,6 +33,15 @@ function joinBaseUrl(base: string, path: string): string {
   return `${baseValue}${pathValue}`
 }
 
+function getSettingsApiKey(): string {
+  try {
+    if (typeof window === 'undefined') return ''
+    return String(window.localStorage.getItem('settings_api_key') || '').trim()
+  } catch {
+    return ''
+  }
+}
+
 export function resolveApiResourceUrl(resourceUrl: string): string {
   let value = String(resourceUrl || '').trim()
   if (!value) return value
@@ -84,6 +93,11 @@ apiClient.interceptors.request.use(
     const token = useAuthStore.getState().token
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+
+    const settingsApiKey = getSettingsApiKey()
+    if (settingsApiKey) {
+      ;(config.headers as any)['X-LLM-API-Key'] = settingsApiKey
     }
     return config
   },
@@ -175,6 +189,7 @@ export async function fetchSSERequest(
 ): Promise<void> {
   const fullUrl = joinBaseUrl(API_BASE_URL, url)
   const token = useAuthStore.getState().token
+  const settingsApiKey = getSettingsApiKey()
 
   const method = options.method || 'POST'
   const hasBody = options.body !== undefined && options.body !== null && method !== 'GET'
@@ -185,6 +200,7 @@ export async function fetchSSERequest(
       headers: {
         ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(settingsApiKey ? { 'X-LLM-API-Key': settingsApiKey } : {}),
         ...(options.headers || {}),
       },
       ...(hasBody ? { body: JSON.stringify(options.body) } : {}),

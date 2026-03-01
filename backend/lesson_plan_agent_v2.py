@@ -85,7 +85,12 @@ from backend.core.settings import (
     MOONSHOT_BASE_URL,
 )
 from backend.core import llm_console
-from backend.core.llm_client import cap_max_tokens_for_messages
+from backend.core.llm_client import (
+    cap_max_tokens_for_messages,
+    get_llm_api_key_override,
+    get_moonshot_api_key_override,
+    is_llm_configured,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERATED_DIR = (REPO_ROOT / ".local" / "media" / "generated").resolve()
@@ -169,11 +174,11 @@ async def _call_llm_text(
 ) -> str:
     provider = str(LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
     base_url = str(LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
-    api_key = str(LESSON_PLAN_API_KEY or "").strip()
+    api_key = str(get_llm_api_key_override() or LESSON_PLAN_API_KEY or "").strip()
 
     normalized_model = str(model or "").strip()
     model_lower = normalized_model.lower()
-    moonshot_key = str(MOONSHOT_API_KEY or "").strip()
+    moonshot_key = str(get_moonshot_api_key_override() or MOONSHOT_API_KEY or "").strip()
     moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
 
     if provider == "moonshot" or (
@@ -996,7 +1001,7 @@ async def generate_lesson_plan_stream(
 ) -> AsyncIterator[Dict[str, Any]]:
     """Generate a lesson plan and export Markdown/PDF (streaming tool events)."""
 
-    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+    if not is_llm_configured():
         yield _agent_event('error', {'message': 'llm_not_configured'})
         return
 

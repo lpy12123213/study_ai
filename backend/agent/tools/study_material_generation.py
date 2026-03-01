@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 def _clip_text(text: str, limit: int) -> str:
@@ -249,7 +249,7 @@ class StudyMaterialGenerationToolsMixin:
                     conf = 0.0
                 facts.append({"fact": _clip_text(fact, 180), "confidence": max(0.0, min(conf, 1.0))})
 
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            if not is_llm_configured():
                 if strict_llm:
                     raise RuntimeError("llm_not_configured")
                 outline = {"sections": _default_outline_sections(knowledge_type, preset)}
@@ -357,7 +357,7 @@ class StudyMaterialGenerationToolsMixin:
             section_concurrency = 3
         section_concurrency = max(1, min(section_concurrency, 6))
 
-        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        if strict_llm and not is_llm_configured():
             raise RuntimeError("llm_not_configured")
 
         writer_model = str(
@@ -476,7 +476,7 @@ class StudyMaterialGenerationToolsMixin:
                 verify_list = [str(x).strip() for x in verify if str(x).strip()] if isinstance(verify, list) else []
 
                 # Fallback when LLM isn't available.
-                if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+                if not is_llm_configured():
                     lines = [f"#### {title}"]
                     for h in hints_list[:4]:
                         lines.append(f"- {h}")

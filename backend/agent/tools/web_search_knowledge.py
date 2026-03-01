@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.agent.types import CompressedContext
 from backend.agent.tools.deep_research import deep_research_exa
 from backend.agent.tools.text_utils import _clip_text, _postprocess_web_search_result
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 class WebSearchKnowledgeToolsMixin:
@@ -36,7 +36,7 @@ class WebSearchKnowledgeToolsMixin:
         text_max_length = int(args.get("text_max_length") or 2600)
         text_max_length = max(200, min(text_max_length, 8000))
         strict_llm = self._strict_llm(ctx, args)
-        if strict_llm and not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        if strict_llm and not is_llm_configured():
             raise RuntimeError("llm_not_configured")
 
         # Study preset helps SubAgent choose better sub-questions and prompt style.
@@ -159,7 +159,7 @@ class WebSearchKnowledgeToolsMixin:
             )
 
             # If LLM isn't configured, fall back to a deterministic template split (non-strict only).
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            if not is_llm_configured():
                 if strict_llm:
                     raise RuntimeError("llm_not_configured")
                 tpl = [
@@ -411,7 +411,7 @@ class WebSearchKnowledgeToolsMixin:
                                 or self.config.planner_model
                                 or self.config.summarizer_model
                             ).strip()
-                            llm_model = thinking_model if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) else ""
+                            llm_model = thinking_model if is_llm_configured() else ""
 
                             deep = await deep_research_exa(
                                 call_llm_text=self._call_llm_text,
@@ -805,40 +805,13 @@ class WebSearchKnowledgeToolsMixin:
                         "results": cleaned_results,
                     }
 
-            # 2) Legacy fallback：Exa -> BigModel MCP broker（best-effort）
+            # 2) BigModel MCP fallback (best-effort).
             try:
-                from backend.mcp.exa_web_search import exa_search
                 from backend.mcp.bigmodel_web_search import web_search_with_bigmodel_mcp
-
-                exa = await exa_search(
-                    query=query,
-                    num_results=limit,
-                    use_autoprompt=True,
-                    type="neural",
-                    include_text=True,
-                    text_max_length=text_max_length,
-                )
-                exa_results = exa.get("results") if isinstance(exa, dict) else []
-                if isinstance(exa_results, list) and exa_results:
-                    cleaned_results: List[Dict[str, Any]] = []
-                    for r in exa_results:
-                        if not isinstance(r, dict):
-                            continue
-                        cleaned_results.append(_postprocess_web_search_result(r))
-                    return {
-                        "knowledge_point": point,
-                        "base_query": base_query,
-                        "query": query,
-                        "queries": [query],
-                        "provider": "exa",
-                        "results": cleaned_results,
-                        "autoprompt_string": exa.get("autoprompt_string") if isinstance(exa, dict) else None,
-                        "error": str(metaso.get("error") or "").strip() if isinstance(metaso, dict) else "",
-                    }
 
                 zhipu = await web_search_with_bigmodel_mcp(query=query, limit=limit)
                 if isinstance(zhipu, dict) and zhipu.get("success") and zhipu.get("results"):
-                    cleaned_results = []
+                    cleaned_results: List[Dict[str, Any]] = []
                     for r in (zhipu.get("results") or []):
                         if not isinstance(r, dict):
                             continue
@@ -849,7 +822,9 @@ class WebSearchKnowledgeToolsMixin:
                         "query": query,
                         "queries": [query],
                         "provider": str(zhipu.get("provider") or "zhipu-bigmodel-mcp-web-search"),
-                        "results": cleaned_results,
+                        "scope": scope,
+                        "include_summary": include_summary,
+                        "results": cleaned_results[: max(1, limit)],
                         "error": str(metaso.get("error") or "").strip() if isinstance(metaso, dict) else "",
                     }
 
@@ -859,6 +834,8 @@ class WebSearchKnowledgeToolsMixin:
                     "query": query,
                     "queries": [query],
                     "provider": "none",
+                    "scope": scope,
+                    "include_summary": include_summary,
                     "results": [],
                     "error": str(metaso.get("error") or "web search failed").strip()
                     if isinstance(metaso, dict)
@@ -871,6 +848,8 @@ class WebSearchKnowledgeToolsMixin:
                     "query": query,
                     "queries": [query],
                     "provider": "none",
+                    "scope": scope,
+                    "include_summary": include_summary,
                     "results": [],
                     "error": str(exc) or "web search failed",
                 }

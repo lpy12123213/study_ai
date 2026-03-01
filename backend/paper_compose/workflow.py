@@ -39,6 +39,35 @@ def _stem_fingerprint(stem: str) -> str:
     return hashlib.md5(s.encode("utf-8", errors="ignore")).hexdigest()
 
 
+def _split_kps(value: Any) -> List[str]:
+    if isinstance(value, list):
+        out: List[str] = []
+        for x in value:
+            s = str(x or "").strip()
+            if s:
+                out.append(s)
+        return out
+    s = str(value or "").strip()
+    if not s:
+        return []
+    parts = re.split(r"[,，;；、。\\n\\r\\t/|]+", s)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _kp_match_ratio(required: Sequence[str], candidate: Sequence[str]) -> float:
+    required_items = [str(x or "").strip() for x in (required or []) if str(x or "").strip()]
+    if not required_items:
+        return 0.0
+    candidate_items = [str(x or "").strip() for x in (candidate or []) if str(x or "").strip()]
+    if not candidate_items:
+        return 0.0
+    hit = 0
+    for r in required_items:
+        if any((r in c) or (c in r) for c in candidate_items):
+            hit += 1
+    return float(hit) / float(max(1, len(required_items)))
+
+
 def _as_list(v: Any) -> List[Any]:
     if isinstance(v, list):
         return v
@@ -156,6 +185,8 @@ async def compose_paper_events(
     subject = resolve_subject(subject_input, strict=True)
     if not topic:
         topic = "相关知识点"
+
+    required_kps = _split_kps(topic)[:6]
 
     if not paper_name:
         paper_name = f"{subject}-{topic}-组卷"
@@ -355,7 +386,19 @@ async def compose_paper_events(
             except Exception:
                 return 0
 
-        candidates.sort(key=_q_quality, reverse=True)
+        if required_kps:
+            for q in candidates:
+                cand_kps = _split_kps(q.get("knowledge_points"))
+                q["kp_match_score"] = _kp_match_ratio(required_kps, cand_kps)
+            candidates.sort(
+                key=lambda q: (
+                    float(q.get("kp_match_score") or 0.0),
+                    _q_quality(q),
+                ),
+                reverse=True,
+            )
+        else:
+            candidates.sort(key=_q_quality, reverse=True)
 
         def _select_more(remaining: int) -> List[Dict[str, Any]]:
             newly: List[Dict[str, Any]] = []

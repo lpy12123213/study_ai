@@ -8,6 +8,7 @@ import random
 import re
 import time
 import uuid
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -22,6 +23,44 @@ from backend.core.settings import (
     MOONSHOT_API_KEY,
     MOONSHOT_BASE_URL,
 )
+
+# Per-request LLM key overrides (e.g. provided by the frontend settings page).
+# IMPORTANT: these values must never be persisted (tasks snapshots/events), only kept in-memory.
+_llm_api_key_override_var: ContextVar[str] = ContextVar("llm_api_key_override", default="")
+_moonshot_api_key_override_var: ContextVar[str] = ContextVar("moonshot_api_key_override", default="")
+
+
+def set_llm_api_key_override(api_key: Optional[str]) -> Token:
+    return _llm_api_key_override_var.set(str(api_key or "").strip())
+
+
+def reset_llm_api_key_override(token: Token) -> None:
+    _llm_api_key_override_var.reset(token)
+
+
+def get_llm_api_key_override() -> str:
+    return str(_llm_api_key_override_var.get() or "").strip()
+
+
+def set_moonshot_api_key_override(api_key: Optional[str]) -> Token:
+    return _moonshot_api_key_override_var.set(str(api_key or "").strip())
+
+
+def reset_moonshot_api_key_override(token: Token) -> None:
+    _moonshot_api_key_override_var.reset(token)
+
+
+def get_moonshot_api_key_override() -> str:
+    return str(_moonshot_api_key_override_var.get() or "").strip()
+
+
+def is_llm_configured() -> bool:
+    return bool(
+        get_llm_api_key_override()
+        or get_moonshot_api_key_override()
+        or str(LESSON_PLAN_API_KEY or "").strip()
+        or str(MOONSHOT_API_KEY or "").strip()
+    )
 
 
 @dataclass
@@ -429,8 +468,15 @@ async def chat_completion(
 
     provider_in = str(provider or LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
     base_url_in = str(base_url or LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
-    api_key_in = str(api_key or LESSON_PLAN_API_KEY or "").strip()
-    moonshot_key_in = str(moonshot_key or MOONSHOT_API_KEY or "").strip()
+
+    api_key_in = str(api_key or "").strip() or str(_llm_api_key_override_var.get() or "").strip()
+    if not api_key_in:
+        api_key_in = str(LESSON_PLAN_API_KEY or "").strip()
+
+    moonshot_key_in = str(moonshot_key or "").strip() or str(_moonshot_api_key_override_var.get() or "").strip()
+    if not moonshot_key_in:
+        moonshot_key_in = str(MOONSHOT_API_KEY or "").strip()
+
     moonshot_base_url_in = str(moonshot_base_url or MOONSHOT_BASE_URL or "").strip().rstrip("/")
 
     resolved_provider, resolved_base_url, resolved_api_key, resolved_model = _resolve_provider(
@@ -828,4 +874,3 @@ async def chat_completion_text(
         req_id_prefix=req_id_prefix,
     )
     return str(res.content or "")
-

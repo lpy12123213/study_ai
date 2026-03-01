@@ -7,7 +7,7 @@ import re
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.core.settings import LESSON_PLAN_API_KEY, MOONSHOT_API_KEY
+from backend.core.llm_client import is_llm_configured
 
 
 class KnowledgePointsToolsMixin:
@@ -148,7 +148,7 @@ class KnowledgePointsToolsMixin:
             return _clean_points(cands)
 
         # LLM-powered split when configured.
-        if LESSON_PLAN_API_KEY or MOONSHOT_API_KEY:
+        if is_llm_configured():
             # Use a faster model for small JSON tasks by default; allow override via env.
             model = str(os.getenv("STUDY_MATERIALS_KP_SPLIT_MODEL") or "").strip()
             if not model:
@@ -288,7 +288,7 @@ class KnowledgePointsToolsMixin:
         source = "heuristic"
         note = ""
 
-        if (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY) and points:
+        if is_llm_configured() and points:
             # Allow override, but default to a faster model for this small JSON-only task.
             model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or "").strip()
             if not model:
