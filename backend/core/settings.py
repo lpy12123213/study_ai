@@ -217,7 +217,8 @@ class Settings:
             moonshot_api_key=moonshot_api_key,
             moonshot_base_url=moonshot_base_url,
             main_model=main_model,
-            sub_model=_get_str("SUB_MODEL", "openai/gpt-5-mini"),
+            # Use a cheaper/faster default for intermediate structured steps (summaries/outlines).
+            sub_model=_get_str("SUB_MODEL", "openai/gpt-4o-mini"),
             deepthink_generator_model=deepthink_generator_model,
             deepthink_generator_temperature=deepthink_generator_temperature,
             deepthink_generator_max_tokens=deepthink_generator_max_tokens,

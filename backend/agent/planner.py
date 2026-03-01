@@ -855,17 +855,31 @@ class Planner:
             # Ensure aggregate exists before generation (writer expects aggregated items).
             agg_idx = _find_last_before("aggregate_knowledge", gen_idx)
             if agg_idx == -1:
-                steps.insert(
-                    gen_idx,
-                    PlanStep(
-                        id=sid("aggregate_knowledge"),
-                        title="聚合多源资料（按知识点）",
-                        tool="aggregate_knowledge",
-                        arguments={"topic": topic, "subject": subject},
-                        thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
-                        foreach_knowledge_point=True,
-                    ),
+                spec = self._default_step_spec(
+                    "aggregate_knowledge",
+                    topic=topic,
+                    subject=subject,
+                    difficulty=difficulty,
+                    preset=preset,
+                    requirements=requirements,
+                    max_web_pages=max_web_pages,
+                    enable_diagrams=enable_diagrams,
+                    enable_questions=enable_questions,
+                    issues=issues,
                 )
+                if spec:
+                    steps.insert(
+                        gen_idx,
+                        PlanStep(
+                            id=sid("aggregate_knowledge"),
+                            title=str(spec.get("title") or "aggregate_knowledge"),
+                            tool="aggregate_knowledge",
+                            arguments=dict(spec.get("arguments") or {}),
+                            foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                            parallel_group=str(spec.get("parallel_group") or ""),
+                            thought=str(spec.get("thought") or ""),
+                        ),
+                    )
                 gen_idx += 1
                 agg_idx = gen_idx - 1
 
@@ -874,46 +888,86 @@ class Planner:
             insert_pos = agg_idx + 1
             pre_steps: List[PlanStep] = []
             if "synthesize_sources" not in between_tools:
-                pre_steps.append(
-                    PlanStep(
-                        id=sid("synthesize_sources"),
-                        title="综合源简报（按知识点）",
-                        tool="synthesize_sources",
-                        arguments={"topic": topic, "subject": subject},
-                        parallel_group="kp_prewrite",
-                        thought="对聚合素材去噪并提炼关键事实，生成结构化源简报，降低写作噪声与上下文长度。",
-                        foreach_knowledge_point=True,
-                    )
+                spec = self._default_step_spec(
+                    "synthesize_sources",
+                    topic=topic,
+                    subject=subject,
+                    difficulty=difficulty,
+                    preset=preset,
+                    requirements=requirements,
+                    max_web_pages=max_web_pages,
+                    enable_diagrams=enable_diagrams,
+                    enable_questions=enable_questions,
+                    issues=issues,
                 )
+                if spec:
+                    pre_steps.append(
+                        PlanStep(
+                            id=sid("synthesize_sources"),
+                            title=str(spec.get("title") or "synthesize_sources"),
+                            tool="synthesize_sources",
+                            arguments=dict(spec.get("arguments") or {}),
+                            foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                            parallel_group=str(spec.get("parallel_group") or ""),
+                            thought=str(spec.get("thought") or ""),
+                        )
+                    )
             if "detect_knowledge_type" not in between_tools:
-                pre_steps.append(
-                    PlanStep(
-                        id=sid("detect_knowledge_type"),
-                        title="检测知识类型（按知识点）",
-                        tool="detect_knowledge_type",
-                        arguments={"topic": topic, "subject": subject},
-                        parallel_group="kp_prewrite",
-                        thought="判断知识点类型（定义/定理/算法等），为自适应大纲与写作提供结构先验。",
-                        foreach_knowledge_point=True,
-                    )
+                spec = self._default_step_spec(
+                    "detect_knowledge_type",
+                    topic=topic,
+                    subject=subject,
+                    difficulty=difficulty,
+                    preset=preset,
+                    requirements=requirements,
+                    max_web_pages=max_web_pages,
+                    enable_diagrams=enable_diagrams,
+                    enable_questions=enable_questions,
+                    issues=issues,
                 )
+                if spec:
+                    pre_steps.append(
+                        PlanStep(
+                            id=sid("detect_knowledge_type"),
+                            title=str(spec.get("title") or "detect_knowledge_type"),
+                            tool="detect_knowledge_type",
+                            arguments=dict(spec.get("arguments") or {}),
+                            foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                            parallel_group=str(spec.get("parallel_group") or ""),
+                            thought=str(spec.get("thought") or ""),
+                        )
+                    )
             if pre_steps:
                 steps[insert_pos:insert_pos] = pre_steps
                 gen_idx += len(pre_steps)
 
             between_tools = {s.tool for s in steps[agg_idx + 1 : gen_idx]}
             if "generate_outline" not in between_tools:
-                steps.insert(
-                    gen_idx,
-                    PlanStep(
-                        id=sid("generate_outline"),
-                        title="生成自适应大纲（按知识点）",
-                        tool="generate_outline",
-                        arguments={"topic": topic, "subject": subject, "preset": preset, "requirements": requirements},
-                        thought="基于知识类型与源简报生成写作大纲（含验证标准），为分段并行写作做准备。",
-                        foreach_knowledge_point=True,
-                    ),
+                spec = self._default_step_spec(
+                    "generate_outline",
+                    topic=topic,
+                    subject=subject,
+                    difficulty=difficulty,
+                    preset=preset,
+                    requirements=requirements,
+                    max_web_pages=max_web_pages,
+                    enable_diagrams=enable_diagrams,
+                    enable_questions=enable_questions,
+                    issues=issues,
                 )
+                if spec:
+                    steps.insert(
+                        gen_idx,
+                        PlanStep(
+                            id=sid("generate_outline"),
+                            title=str(spec.get("title") or "generate_outline"),
+                            tool="generate_outline",
+                            arguments=dict(spec.get("arguments") or {}),
+                            foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                            parallel_group=str(spec.get("parallel_group") or ""),
+                            thought=str(spec.get("thought") or ""),
+                        ),
+                    )
                 gen_idx += 1
 
             # Ensure diagrams are generated in a dedicated stage (generate_diagrams).
@@ -937,30 +991,57 @@ class Planner:
 
             if enable_diagrams:
                 if critique_idx == -1 and diagrams_idx == -1:
-                    steps.insert(
-                        gen_idx + 1,
-                        PlanStep(
-                            id=sid("critique_draft"),
-                            title="自我批判（按知识点）",
-                            tool="critique_draft",
-                            arguments={"topic": topic, "subject": subject},
-                            parallel_group="kp_postwrite",
-                            thought="对草稿多维度审查并给出可执行修订指令。",
-                            foreach_knowledge_point=True,
-                        ),
+                    spec = self._default_step_spec(
+                        "critique_draft",
+                        topic=topic,
+                        subject=subject,
+                        difficulty=difficulty,
+                        preset=preset,
+                        requirements=requirements,
+                        max_web_pages=max_web_pages,
+                        enable_diagrams=enable_diagrams,
+                        enable_questions=enable_questions,
+                        issues=issues,
                     )
-                    steps.insert(
-                        gen_idx + 2,
-                        PlanStep(
-                            id=sid("generate_diagrams"),
-                            title="生成教学配图（按知识点）",
-                            tool="generate_diagrams",
-                            arguments={"topic": topic, "subject": subject, "preset": preset},
-                            parallel_group="kp_postwrite",
-                            thought="为知识点生成必要的示意图（与自我批判并行）。",
-                            foreach_knowledge_point=True,
-                        ),
+                    if spec:
+                        steps.insert(
+                            gen_idx + 1,
+                            PlanStep(
+                                id=sid("critique_draft"),
+                                title=str(spec.get("title") or "critique_draft"),
+                                tool="critique_draft",
+                                arguments=dict(spec.get("arguments") or {}),
+                                foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                                parallel_group=str(spec.get("parallel_group") or ""),
+                                thought=str(spec.get("thought") or ""),
+                            ),
+                        )
+
+                    spec = self._default_step_spec(
+                        "generate_diagrams",
+                        topic=topic,
+                        subject=subject,
+                        difficulty=difficulty,
+                        preset=preset,
+                        requirements=requirements,
+                        max_web_pages=max_web_pages,
+                        enable_diagrams=enable_diagrams,
+                        enable_questions=enable_questions,
+                        issues=issues,
                     )
+                    if spec:
+                        steps.insert(
+                            gen_idx + 2,
+                            PlanStep(
+                                id=sid("generate_diagrams"),
+                                title=str(spec.get("title") or "generate_diagrams"),
+                                tool="generate_diagrams",
+                                arguments=dict(spec.get("arguments") or {}),
+                                foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                                parallel_group=str(spec.get("parallel_group") or ""),
+                                thought=str(spec.get("thought") or ""),
+                            ),
+                        )
                     critique_idx = gen_idx + 1
                     diagrams_idx = gen_idx + 2
                     post_end += 2
@@ -969,18 +1050,31 @@ class Planner:
                         steps[critique_idx].parallel_group = "kp_postwrite"
                     except Exception:
                         pass
-                    steps.insert(
-                        critique_idx + 1,
-                        PlanStep(
-                            id=sid("generate_diagrams"),
-                            title="生成教学配图（按知识点）",
-                            tool="generate_diagrams",
-                            arguments={"topic": topic, "subject": subject, "preset": preset},
-                            parallel_group="kp_postwrite",
-                            thought="为知识点生成必要的示意图（与自我批判并行）。",
-                            foreach_knowledge_point=True,
-                        ),
+                    spec = self._default_step_spec(
+                        "generate_diagrams",
+                        topic=topic,
+                        subject=subject,
+                        difficulty=difficulty,
+                        preset=preset,
+                        requirements=requirements,
+                        max_web_pages=max_web_pages,
+                        enable_diagrams=enable_diagrams,
+                        enable_questions=enable_questions,
+                        issues=issues,
                     )
+                    if spec:
+                        steps.insert(
+                            critique_idx + 1,
+                            PlanStep(
+                                id=sid("generate_diagrams"),
+                                title=str(spec.get("title") or "generate_diagrams"),
+                                tool="generate_diagrams",
+                                arguments=dict(spec.get("arguments") or {}),
+                                foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                                parallel_group=str(spec.get("parallel_group") or ""),
+                                thought=str(spec.get("thought") or ""),
+                            ),
+                        )
                     diagrams_idx = critique_idx + 1
                     post_end += 1
                 elif critique_idx == -1 and diagrams_idx != -1:
@@ -988,18 +1082,31 @@ class Planner:
                         steps[diagrams_idx].parallel_group = "kp_postwrite"
                     except Exception:
                         pass
-                    steps.insert(
-                        diagrams_idx,
-                        PlanStep(
-                            id=sid("critique_draft"),
-                            title="自我批判（按知识点）",
-                            tool="critique_draft",
-                            arguments={"topic": topic, "subject": subject},
-                            parallel_group="kp_postwrite",
-                            thought="对草稿多维度审查并给出可执行修订指令。",
-                            foreach_knowledge_point=True,
-                        ),
+                    spec = self._default_step_spec(
+                        "critique_draft",
+                        topic=topic,
+                        subject=subject,
+                        difficulty=difficulty,
+                        preset=preset,
+                        requirements=requirements,
+                        max_web_pages=max_web_pages,
+                        enable_diagrams=enable_diagrams,
+                        enable_questions=enable_questions,
+                        issues=issues,
                     )
+                    if spec:
+                        steps.insert(
+                            diagrams_idx,
+                            PlanStep(
+                                id=sid("critique_draft"),
+                                title=str(spec.get("title") or "critique_draft"),
+                                tool="critique_draft",
+                                arguments=dict(spec.get("arguments") or {}),
+                                foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                                parallel_group=str(spec.get("parallel_group") or ""),
+                                thought=str(spec.get("thought") or ""),
+                            ),
+                        )
                     critique_idx = diagrams_idx
                     diagrams_idx += 1
                     post_end += 1
@@ -1016,33 +1123,61 @@ class Planner:
                         pass
             else:
                 if critique_idx == -1:
-                    steps.insert(
-                        gen_idx + 1,
-                        PlanStep(
-                            id=sid("critique_draft"),
-                            title="自我批判（按知识点）",
-                            tool="critique_draft",
-                            arguments={"topic": topic, "subject": subject},
-                            thought="对草稿多维度审查并给出可执行修订指令。",
-                            foreach_knowledge_point=True,
-                        ),
+                    spec = self._default_step_spec(
+                        "critique_draft",
+                        topic=topic,
+                        subject=subject,
+                        difficulty=difficulty,
+                        preset=preset,
+                        requirements=requirements,
+                        max_web_pages=max_web_pages,
+                        enable_diagrams=enable_diagrams,
+                        enable_questions=enable_questions,
+                        issues=issues,
                     )
+                    if spec:
+                        steps.insert(
+                            gen_idx + 1,
+                            PlanStep(
+                                id=sid("critique_draft"),
+                                title=str(spec.get("title") or "critique_draft"),
+                                tool="critique_draft",
+                                arguments=dict(spec.get("arguments") or {}),
+                                foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                                parallel_group=str(spec.get("parallel_group") or ""),
+                                thought=str(spec.get("thought") or ""),
+                            ),
+                        )
                     critique_idx = gen_idx + 1
                     post_end += 1
 
             if refine_idx == -1:
                 insert_after = max([x for x in [critique_idx, diagrams_idx] if x != -1] or [gen_idx])
-                steps.insert(
-                    insert_after + 1,
-                    PlanStep(
-                        id=sid("refine_draft"),
-                        title="精炼修订（按知识点）",
-                        tool="refine_draft",
-                        arguments={"topic": topic, "subject": subject},
-                        thought="根据批判意见对草稿做定向修订（高分则跳过）。",
-                        foreach_knowledge_point=True,
-                    ),
+                spec = self._default_step_spec(
+                    "refine_draft",
+                    topic=topic,
+                    subject=subject,
+                    difficulty=difficulty,
+                    preset=preset,
+                    requirements=requirements,
+                    max_web_pages=max_web_pages,
+                    enable_diagrams=enable_diagrams,
+                    enable_questions=enable_questions,
+                    issues=issues,
                 )
+                if spec:
+                    steps.insert(
+                        insert_after + 1,
+                        PlanStep(
+                            id=sid("refine_draft"),
+                            title=str(spec.get("title") or "refine_draft"),
+                            tool="refine_draft",
+                            arguments=dict(spec.get("arguments") or {}),
+                            foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                            parallel_group=str(spec.get("parallel_group") or ""),
+                            thought=str(spec.get("thought") or ""),
+                        ),
+                    )
 
         rationale = str(obj.get("rationale") or "").strip()
         if not rationale:
@@ -1050,15 +1185,30 @@ class Planner:
 
         # If reflection issues exist, allow the model to add revise step; otherwise we keep it optional.
         if iteration > 0 and issues and "revise_markdown" not in existing_tools:
-            steps.append(
-                PlanStep(
-                    id=sid("revise_markdown"),
-                    title="根据审查问题修订 Markdown",
-                    tool="revise_markdown",
-                    arguments={"issues": issues},
-                    thought="按审查问题修订内容。",
-                )
+            spec = self._default_step_spec(
+                "revise_markdown",
+                topic=topic,
+                subject=subject,
+                difficulty=difficulty,
+                preset=preset,
+                requirements=requirements,
+                max_web_pages=max_web_pages,
+                enable_diagrams=enable_diagrams,
+                enable_questions=enable_questions,
+                issues=issues,
             )
+            if spec:
+                steps.append(
+                    PlanStep(
+                        id=sid("revise_markdown"),
+                        title=str(spec.get("title") or "revise_markdown"),
+                        tool="revise_markdown",
+                        arguments=dict(spec.get("arguments") or {}),
+                        foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                        parallel_group=str(spec.get("parallel_group") or ""),
+                        thought=str(spec.get("thought") or ""),
+                    )
+                )
 
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
 

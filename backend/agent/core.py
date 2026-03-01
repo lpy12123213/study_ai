@@ -103,6 +103,10 @@ def _clip_for_sse(value: Any, *, depth: int = 0) -> Any:
         return "<unserializable>"
 
 
+class _StopStepExecution(Exception):
+    """Internal control-flow exception to stop step execution early."""
+
+
 class AgentCore:
     """Plan-Act-Reflect agent core with streaming events."""
 
@@ -290,25 +294,9 @@ class AgentCore:
         finally:
             await queue.put(None)
 
-    async def _execute_concrete_step(
-        self,
-        *,
-        ctx: CompressedContext,
-        results: ActionResults,
-        concrete_step: PlanStep,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
+    def _enrich_step_arguments(self, *, ctx: CompressedContext, concrete_step: PlanStep) -> None:
+        """Best-effort inject `knowledge_points` into multi-point tools for better UX."""
 
-        self.state = AgentState.WAITING_TOOL
-        if bool(ctx.working_memory.get("_abort_execution")):
-            return
-
-        thought = (getattr(concrete_step, "thought", "") or "").strip()
-        if thought:
-            yield agent_event("status", {"content": thought})
-
-        # Enrich multi-point tools with the split result for better UX (and to make
-        # downstream tools explicitly reflect the current knowledge points).
         try:
             step_args = dict(concrete_step.arguments or {})
             export_kp = str(ctx.working_memory.get("_export_subagent_kp") or "").strip()
@@ -324,6 +312,7 @@ class AgentCore:
                 and "knowledge_points" not in step_args
             ):
                 step_args["knowledge_points"] = [export_kp]
+
             if concrete_step.tool in {
                 "web_search_knowledge",
                 "browse_web_pages",
@@ -343,15 +332,164 @@ class AgentCore:
             } and "knowledge_points" not in step_args:
                 split_res = ctx.working_memory.get("split_knowledge_points")
                 if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                    kps = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()][
-                        :15
-                    ]
+                    kps = [
+                        str(x or "").strip()
+                        for x in (split_res.get("knowledge_points") or [])
+                        if str(x or "").strip()
+                    ][:15]
                     if kps:
                         step_args["knowledge_points"] = kps
+
             concrete_step.arguments = step_args
         except Exception:
             # Best-effort only; never block execution.
-            pass
+            return
+
+    def _append_tool_timing(
+        self,
+        *,
+        ctx: CompressedContext,
+        concrete_step: PlanStep,
+        step_result: StepResult,
+        elapsed_ms: int,
+    ) -> None:
+        try:
+            timings = ctx.working_memory.get("_tool_timings")
+            if not isinstance(timings, list):
+                timings = []
+                ctx.working_memory["_tool_timings"] = timings
+            timings.append(
+                {
+                    "step_id": concrete_step.id,
+                    "name": str(concrete_step.tool or "").strip(),
+                    "title": str(concrete_step.title or "").strip(),
+                    "success": bool(step_result.success),
+                    "elapsed_ms": int(elapsed_ms or 0),
+                }
+            )
+        except Exception:
+            # Best-effort only; never block execution.
+            return
+
+    async def _maybe_handle_step_failure(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        concrete_step: PlanStep,
+        step_result: StepResult,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        if step_result.success:
+            return
+
+        study_opts = ctx.working_memory.get("study_options")
+        study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+        strict_llm = bool(study_opts.get("strict_llm"))
+
+        tool_name = str(step_result.tool or concrete_step.tool or "").strip()
+        err = str(step_result.error or "").strip()
+
+        # LaTeX/PDF compilation can often be fixed by one more "refine LaTeX" round.
+        # Do a few visible retry rounds (refine -> compile) before treating it as fatal.
+        if tool_name == "compile_latex_to_pdf":
+            if not err.startswith("latex_engine_not_found"):
+                tex_current = str(ctx.working_memory.get("latex_tex") or "").strip()
+                max_rounds_raw = (
+                    os.getenv("STUDY_MATERIALS_LATEX_COMPILE_ROUNDS")
+                    or os.getenv("STUDY_MATERIALS_LATEX_MAX_ROUNDS")
+                    or "3"
+                )
+                try:
+                    max_rounds = int(max_rounds_raw)
+                except Exception:
+                    max_rounds = 3
+                max_rounds = max(1, min(max_rounds, 6))
+
+                try:
+                    cur_round = int(ctx.working_memory.get("_latex_compile_round") or 1)
+                except Exception:
+                    cur_round = 1
+                cur_round = max(1, cur_round)
+
+                if tex_current and cur_round < max_rounds:
+                    next_round = cur_round + 1
+                    ctx.working_memory["_latex_compile_round"] = next_round
+                    ctx.working_memory["_latex_last_compile_error"] = err
+
+                    yield agent_event(
+                        "status",
+                        {"content": f"PDF 编译失败，准备第 {next_round} 轮修订与重编译…"},
+                    )
+
+                    subject_hint = str(ctx.user_profile.preferences.get("subject") or "").strip()
+                    refine_step = PlanStep(
+                        id=f"refine_latex-retry-{uuid.uuid4().hex[:8]}",
+                        title=f"LaTeX 修订（第{next_round}轮）",
+                        tool="refine_latex",
+                        arguments={
+                            "topic": ctx.current_task,
+                            "subject": subject_hint,
+                            "compile_error": err,
+                        },
+                        thought="根据编译报错信息修订 LaTeX，提升通过率。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=refine_step):
+                        yield evt
+
+                    compile_step = PlanStep(
+                        id=f"compile_latex_to_pdf-retry-{uuid.uuid4().hex[:8]}",
+                        title=f"编译 PDF（第{next_round}轮）",
+                        tool="compile_latex_to_pdf",
+                        arguments={"topic": ctx.current_task},
+                        thought="重新编译修订后的 LaTeX，生成 PDF 下载文件。",
+                    )
+                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=compile_step):
+                        yield evt
+
+                    raise _StopStepExecution
+
+        fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
+        non_fatal_llm_tools = {"generate_diagrams"}
+        is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
+        if tool_name in fatal_tools or (strict_llm and is_llm_error and tool_name not in non_fatal_llm_tools):
+            ctx.working_memory["_abort_execution"] = True
+            ctx.working_memory["_fatal_error"] = {
+                "tool": tool_name,
+                "step_id": concrete_step.id,
+                "error": err or "unknown_error",
+            }
+            yield agent_event(
+                "status",
+                {"content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}"},
+            )
+
+    def _maybe_capture_markdown_artifact(self, *, step_result: StepResult, results: ActionResults) -> None:
+        if (
+            step_result.success
+            and step_result.tool in {"assemble_markdown", "revise_markdown"}
+            and isinstance(step_result.output, str)
+            and step_result.output.strip()
+        ):
+            results.artifacts["markdown"] = step_result.output.strip()
+
+    async def _execute_concrete_step(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        concrete_step: PlanStep,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
+
+        self.state = AgentState.WAITING_TOOL
+        if bool(ctx.working_memory.get("_abort_execution")):
+            return
+
+        thought = (getattr(concrete_step, "thought", "") or "").strip()
+        if thought:
+            yield agent_event("status", {"content": thought})
+
+        self._enrich_step_arguments(ctx=ctx, concrete_step=concrete_step)
 
         yield agent_event(
             "tool_call",
@@ -399,33 +537,12 @@ class AgentCore:
                 evt = event_queue.get_nowait()
                 if isinstance(evt, dict) and evt.get("event"):
                     yield evt
-                elif strict_llm and is_llm_error and tool_name in non_fatal_llm_tools:
-                    yield agent_event(
-                        "status",
-                        {"content": f"Non-fatal step failed (LLM error): {tool_name}. Skipped and continuing."},
-                    )
         except Exception:
             pass
 
         step_result = await tool_task
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        try:
-            timings = ctx.working_memory.get("_tool_timings")
-            if not isinstance(timings, list):
-                timings = []
-                ctx.working_memory["_tool_timings"] = timings
-            timings.append(
-                {
-                    "step_id": concrete_step.id,
-                    "name": str(concrete_step.tool or "").strip(),
-                    "title": str(concrete_step.title or "").strip(),
-                    "success": bool(step_result.success),
-                    "elapsed_ms": elapsed_ms,
-                }
-            )
-        except Exception:
-            # Best-effort only; never block execution.
-            pass
+        self._append_tool_timing(ctx=ctx, concrete_step=concrete_step, step_result=step_result, elapsed_ms=elapsed_ms)
         yield agent_event(
             "tool_result",
             {
@@ -441,97 +558,19 @@ class AgentCore:
         results.step_results.append(step_result)
         self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
         try:
-            if not step_result.success:
-                study_opts = ctx.working_memory.get("study_options")
-                study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-                strict_llm = bool(study_opts.get("strict_llm"))
-
-                tool_name = str(step_result.tool or concrete_step.tool or "").strip()
-                err = str(step_result.error or "").strip()
-
-                # LaTeX/PDF compilation can often be fixed by one more "refine LaTeX" round.
-                # Do a few visible retry rounds (refine -> compile) before treating it as fatal.
-                if tool_name == "compile_latex_to_pdf":
-                    if not err.startswith("latex_engine_not_found"):
-                        tex_current = str(ctx.working_memory.get("latex_tex") or "").strip()
-                        max_rounds_raw = (
-                            os.getenv("STUDY_MATERIALS_LATEX_COMPILE_ROUNDS")
-                            or os.getenv("STUDY_MATERIALS_LATEX_MAX_ROUNDS")
-                            or "3"
-                        )
-                        try:
-                            max_rounds = int(max_rounds_raw)
-                        except Exception:
-                            max_rounds = 3
-                        max_rounds = max(1, min(max_rounds, 6))
-
-                        try:
-                            cur_round = int(ctx.working_memory.get("_latex_compile_round") or 1)
-                        except Exception:
-                            cur_round = 1
-                        cur_round = max(1, cur_round)
-
-                        if tex_current and cur_round < max_rounds:
-                            next_round = cur_round + 1
-                            ctx.working_memory["_latex_compile_round"] = next_round
-                            ctx.working_memory["_latex_last_compile_error"] = err
-
-                            yield agent_event(
-                                "status",
-                                {"content": f"PDF 编译失败，准备第 {next_round} 轮修订与重编译…"},
-                            )
-
-                            subject_hint = str(ctx.user_profile.preferences.get("subject") or "").strip()
-                            refine_step = PlanStep(
-                                id=f"refine_latex-retry-{uuid.uuid4().hex[:8]}",
-                                title=f"LaTeX 修订（第{next_round}轮）",
-                                tool="refine_latex",
-                                arguments={
-                                    "topic": ctx.current_task,
-                                    "subject": subject_hint,
-                                    "compile_error": err,
-                                },
-                                thought="根据编译报错信息修订 LaTeX，提升通过率。",
-                            )
-                            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=refine_step):
-                                yield evt
-
-                            compile_step = PlanStep(
-                                id=f"compile_latex_to_pdf-retry-{uuid.uuid4().hex[:8]}",
-                                title=f"编译 PDF（第{next_round}轮）",
-                                tool="compile_latex_to_pdf",
-                                arguments={"topic": ctx.current_task},
-                                thought="重新编译修订后的 LaTeX，生成 PDF 下载文件。",
-                            )
-                            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=compile_step):
-                                yield evt
-                            return
-
-                fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
-                non_fatal_llm_tools = {"generate_diagrams"}
-                is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
-                if tool_name in fatal_tools or (strict_llm and is_llm_error and tool_name not in non_fatal_llm_tools):
-                    ctx.working_memory["_abort_execution"] = True
-                    ctx.working_memory["_fatal_error"] = {
-                        "tool": tool_name,
-                        "step_id": concrete_step.id,
-                        "error": err or "unknown_error",
-                    }
-                    yield agent_event(
-                        "status",
-                        {
-                            "content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}",
-                        },
-                    )
+            async for evt in self._maybe_handle_step_failure(
+                ctx=ctx,
+                results=results,
+                concrete_step=concrete_step,
+                step_result=step_result,
+            ):
+                yield evt
+        except _StopStepExecution:
+            return
         except Exception:
             pass
-        if (
-            step_result.success
-            and step_result.tool in {"assemble_markdown", "revise_markdown"}
-            and isinstance(step_result.output, str)
-            and step_result.output.strip()
-        ):
-            results.artifacts["markdown"] = step_result.output.strip()
+
+        self._maybe_capture_markdown_artifact(step_result=step_result, results=results)
 
     async def _initialize_run(
         self,
