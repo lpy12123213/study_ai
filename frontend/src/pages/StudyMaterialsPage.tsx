@@ -36,11 +36,11 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 
-type StudyMaterialsAgentEvent = {
-  event: string
+type StudyMaterialsTaskEvent = {
+  type: string
   data?: any
   seq?: unknown
-  task_id?: unknown
+  taskId?: unknown
 }
 
 function toText(value: unknown): string {
@@ -1170,15 +1170,15 @@ export default function StudyMaterialsPage() {
         // Ignore events from a previous stream.
         if (streamAbortRef.current !== controller) return
 
-        const evt = data as StudyMaterialsAgentEvent
-        const kind = typeof evt?.event === 'string' ? evt.event : ''
+        const evt = data as StudyMaterialsTaskEvent
+        const kind = typeof evt?.type === 'string' ? evt.type : ''
         const payload = evt?.data
         const seqRaw = evt?.seq
         const seq = typeof seqRaw === 'number' ? seqRaw : typeof seqRaw === 'string' ? Number(seqRaw) : NaN
         if (Number.isFinite(seq)) recordSeq(seq as number)
 
         if (kind === 'task_started') {
-          const taskId = toText(payload?.task_id) || toText(evt?.task_id)
+          const taskId = toText(payload?.taskId) || toText(evt?.taskId)
           if (taskId) {
             serverTaskId = taskId
             streamKeyRef.current = `${conversationId}:${taskId}`

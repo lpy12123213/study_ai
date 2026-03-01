@@ -23,11 +23,17 @@ export interface ComposeRequest {
 }
 
 export interface ComposeStreamEvent {
-  type: 'step' | 'progress' | 'result' | 'done' | 'error'
-  step?: TaskStep
-  progress?: number
-  result?: Paper
-  error?: string
+  taskId?: string
+  seq?: number
+  type: 'step' | 'progress' | 'result' | 'done' | 'error' | string
+  data?: {
+    step?: TaskStep
+    progress?: number
+    result?: Paper
+    error?: string
+    message?: string
+    [key: string]: any
+  }
 }
 
 export interface SaveBlueprintRequest {

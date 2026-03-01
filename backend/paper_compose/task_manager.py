@@ -246,21 +246,34 @@ class PaperComposeTaskManager:
         }
 
     async def _append_event(self, task: PaperComposeTask, event: Dict[str, Any]) -> None:
-        payload = dict(event or {})
-        payload.pop("seq", None)
-        payload["taskId"] = task.task_id
+        raw = dict(event or {})
+        raw.pop("seq", None)
+
+        event_type = str(raw.get("type") or raw.get("event") or "").strip() or "unknown"
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+
+        # Back-compat: legacy compose events put fields at the top-level (step/progress/result/error).
+        for key in ("step", "progress", "result", "error"):
+            if key in raw:
+                data[key] = raw.get(key)
+
+        payload = {
+            "taskId": task.task_id,
+            "type": event_type,
+            "data": data,
+        }
 
         # Track latest step snapshot.
-        step = payload.get("step")
+        step = data.get("step") if isinstance(data, dict) else None
         if isinstance(step, dict):
             step_id = str(step.get("id") or "").strip()
             if step_id:
                 task.steps_by_id[step_id] = step
 
         # Track progress (0..100).
-        if payload.get("type") == "progress":
+        if event_type == "progress":
             try:
-                task.progress = float(payload.get("progress") or 0.0)
+                task.progress = float((data or {}).get("progress") or 0.0)
             except Exception:
                 pass
 
@@ -284,7 +297,7 @@ class PaperComposeTaskManager:
     async def fail_task(self, task: PaperComposeTask, message: str) -> None:
         task.status = "failed"
         task.error = message
-        await self._append_event(task, {"type": "error", "error": message})
+        await self._append_event(task, {"type": "error", "data": {"error": message}})
         async with task.cond:
             task.cond.notify_all()
 

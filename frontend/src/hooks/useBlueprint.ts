@@ -98,32 +98,39 @@ export function useComposePaper() {
       const seenStepIds = new Set<string>()
       let endedWithResult = false
 
-      blueprintApi.composePaperStream(
-        requestWithTaskId,
-        (event) => {
-          const seq = Number((event as any)?.seq)
-          if (Number.isFinite(seq) && seq > 0) setLastSeq(seq)
+        blueprintApi.composePaperStream(
+          requestWithTaskId,
+          (event) => {
+            const seq = Number((event as any)?.seq)
+            if (Number.isFinite(seq) && seq > 0) setLastSeq(seq)
 
-          if (event.type === 'step' && event.step) {
-            const stepId = event.step.id
-            if (stepId && seenStepIds.has(stepId)) {
-              updateStep(newTaskId, stepId, event.step)
-            } else {
-              if (stepId) seenStepIds.add(stepId)
-              addStep(newTaskId, event.step)
+            const data = (event as any)?.data
+            const step = data?.step
+            const progress = data?.progress
+            const result = data?.result
+            const errText = data?.error || data?.message
+
+            if (event.type === 'step' && step) {
+              const stepId = step.id
+              if (stepId && seenStepIds.has(stepId)) {
+                updateStep(newTaskId, stepId, step)
+              } else {
+                if (stepId) seenStepIds.add(stepId)
+                addStep(newTaskId, step)
+              }
+            } else if (event.type === 'progress' && progress !== undefined) {
+              setProgress(progress)
+            } else if (event.type === 'result' && result) {
+              endedWithResult = true
+              setResult(result)
+              queryClient.invalidateQueries({ queryKey: ['papers'] })
+            } else if (event.type === 'error') {
+              const msg = errText || 'Unknown error'
+              setError(msg)
+              failTask(newTaskId, msg)
+              setIsComposing(false)
             }
-          } else if (event.type === 'progress' && event.progress !== undefined) {
-            setProgress(event.progress)
-          } else if (event.type === 'result' && event.result) {
-            endedWithResult = true
-            setResult(event.result)
-            queryClient.invalidateQueries({ queryKey: ['papers'] })
-          } else if (event.type === 'error') {
-            setError(event.error || 'Unknown error')
-            failTask(newTaskId, event.error || 'Unknown error')
-            setIsComposing(false)
-          }
-        },
+          },
         (err) => {
           setError(err.message)
           failTask(newTaskId, err.message)
@@ -177,23 +184,30 @@ export function useComposePaper() {
             const seq = Number((event as any)?.seq)
             if (Number.isFinite(seq) && seq > 0) setLastSeq(seq)
 
-            if (event.type === 'step' && event.step) {
-              const stepId = event.step.id
+            const data = (event as any)?.data
+            const step = data?.step
+            const progress = data?.progress
+            const result = data?.result
+            const errText = data?.error || data?.message
+
+            if (event.type === 'step' && step) {
+              const stepId = step.id
               if (stepId && seenStepIds.has(stepId)) {
-                updateStep(taskId, stepId, event.step)
+                updateStep(taskId, stepId, step)
               } else {
                 if (stepId) seenStepIds.add(stepId)
-                addStep(taskId, event.step)
+                addStep(taskId, step)
               }
-            } else if (event.type === 'progress' && event.progress !== undefined) {
-              setProgress(event.progress)
-            } else if (event.type === 'result' && event.result) {
+            } else if (event.type === 'progress' && progress !== undefined) {
+              setProgress(progress)
+            } else if (event.type === 'result' && result) {
               endedWithResult = true
-              setResult(event.result)
+              setResult(result)
               queryClient.invalidateQueries({ queryKey: ['papers'] })
             } else if (event.type === 'error') {
-              setError(event.error || 'Unknown error')
-              failTask(taskId, event.error || 'Unknown error')
+              const msg = errText || 'Unknown error'
+              setError(msg)
+              failTask(taskId, msg)
               setIsComposing(false)
             }
           },

@@ -131,8 +131,9 @@ class StudyMaterialsTaskManager:
             if not tid or not query:
                 return None
 
-            events = obj.get("events") if isinstance(obj.get("events"), list) else []
-            events = [e for e in events if isinstance(e, dict)]
+            events_raw = obj.get("events") if isinstance(obj.get("events"), list) else []
+            events_raw = [e for e in events_raw if isinstance(e, dict)]
+            events = [self._normalize_event_payload(task_id=tid, event=e) for e in events_raw]
             last_seq = int(obj.get("last_seq") or 0) if str(obj.get("last_seq") or "").strip() else 0
             if last_seq <= 0 and events:
                 try:
@@ -170,11 +171,11 @@ class StudyMaterialsTaskManager:
                 task.last_seq += 1
                 task.events.append(
                     {
-                        "task_id": task.task_id,
+                        "taskId": task.task_id,
                         "seq": task.last_seq,
-                        "event": "warning",
+                        "type": "warning",
                         "data": {
-                            "task_id": task.task_id,
+                            "taskId": task.task_id,
                             "message": "Server restarted; this task can no longer stream. You can start a new task or continue if resumable.",
                         },
                     }
@@ -264,14 +265,14 @@ class StudyMaterialsTaskManager:
         await self._append_event(
             task,
             {
-                "event": "task_started",
+                "type": "task_started",
                 "data": {
-                    "task_id": task_id,
+                    "taskId": task_id,
                     "status": "running",
                     "query": query,
                     "subject": subject,
                     "options": options,
-                    "parent_task_id": parent_task_id,
+                    "parentTaskId": parent_task_id,
                 },
             },
         )
@@ -296,12 +297,12 @@ class StudyMaterialsTaskManager:
     ) -> AsyncIterator[Dict[str, Any]]:
         tid = (task_id or "").strip()
         if not tid:
-            yield {"event": "error", "data": {"message": "Missing task_id"}}
+            yield {"taskId": "", "seq": 0, "type": "error", "data": {"error": "Missing taskId"}}
             return
 
         task = await self.get_task(tid)
         if not task:
-            yield {"event": "error", "data": {"message": f"Task not found: {tid}"}}
+            yield {"taskId": tid, "seq": 0, "type": "error", "data": {"error": f"Task not found: {tid}"}}
             return
 
         last_sent_seq = max(0, int(after_seq or 0))
@@ -313,9 +314,10 @@ class StudyMaterialsTaskManager:
                     # The client is too far behind (events were dropped); emit a soft error so
                     # the UI can restart the generation if needed.
                     yield {
-                        "event": "warning",
+                        "taskId": tid,
+                        "seq": int(task.last_seq or 0),
+                        "type": "warning",
                         "data": {
-                            "task_id": tid,
                             "message": "Event backlog truncated; please restart if output looks incomplete.",
                             "first_seq": first_seq,
                             "last_seq": task.last_seq,
@@ -346,9 +348,10 @@ class StudyMaterialsTaskManager:
                     )
                 except asyncio.TimeoutError:
                     yield {
-                        "event": "ping",
+                        "taskId": tid,
+                        "seq": int(task.last_seq or 0),
+                        "type": "ping",
                         "data": {
-                            "task_id": tid,
                             "status": task.status,
                             "last_seq": task.last_seq,
                             "updated_at_s": task.updated_at_s,
@@ -402,10 +405,36 @@ class StudyMaterialsTaskManager:
             max_iterations=max_iters,
         )
 
+    def _normalize_event_payload(self, *, task_id: str, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize SSE events to a shared envelope: {taskId, seq, type, data}."""
+
+        raw = dict(event or {})
+        raw.pop("seq", None)
+        raw.pop("task_id", None)
+        raw.pop("taskId", None)
+
+        event_type = str(raw.get("type") or raw.get("event") or "").strip() or "unknown"
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+
+        if event_type == "task_started":
+            tid = str(data.get("taskId") or data.get("task_id") or task_id).strip() or task_id
+            data = dict(data)
+            data["taskId"] = tid
+            data.pop("task_id", None)
+            if "parent_task_id" in data and "parentTaskId" not in data:
+                data["parentTaskId"] = data.get("parent_task_id")
+            data.pop("parent_task_id", None)
+
+        if event_type == "error":
+            msg = str((data or {}).get("error") or (data or {}).get("message") or "").strip()
+            if msg and isinstance(data, dict) and "error" not in data:
+                data = dict(data)
+                data["error"] = msg
+
+        return {"taskId": task_id, "type": event_type, "data": data}
+
     async def _append_event(self, task: StudyMaterialsTask, event: Dict[str, Any]) -> None:
-        payload = dict(event or {})
-        payload.pop("seq", None)
-        payload["task_id"] = task.task_id
+        payload = self._normalize_event_payload(task_id=task.task_id, event=event)
 
         async with task.cond:
             task.last_seq += 1
@@ -422,7 +451,7 @@ class StudyMaterialsTaskManager:
 
             task.cond.notify_all()
         try:
-            force = str(payload.get("event") or "") in {"task_started", "done", "error"}
+            force = str(payload.get("type") or "") in {"task_started", "done", "result", "error"}
             self._persist_snapshot(task, force=force or task.status != "running")
         except Exception:
             pass
@@ -430,7 +459,7 @@ class StudyMaterialsTaskManager:
     async def _fail_task(self, task: StudyMaterialsTask, message: str) -> None:
         task.status = "failed"
         task.error = message
-        await self._append_event(task, {"event": "error", "data": {"message": message}})
+        await self._append_event(task, {"type": "error", "data": {"error": message}})
         async with task.cond:
             task.cond.notify_all()
 

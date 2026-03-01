@@ -533,6 +533,1119 @@ class AgentCore:
         ):
             results.artifacts["markdown"] = step_result.output.strip()
 
+    async def _initialize_run(
+        self,
+        *,
+        user_input: str,
+        user_id: str,
+        preferences: Optional[Dict[str, Any]],
+        options: Optional[Dict[str, Any]],
+        resume_working_memory: Optional[Dict[str, Any]],
+        iteration_offset: int,
+        max_iterations: Optional[int],
+        out: Dict[str, Any],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        yield agent_event("status", {"content": "初始化上下文…"})
+        self.state = AgentState.WAITING_TOOL
+
+        profile_step_id = f"get_user_profile-{uuid.uuid4().hex[:8]}"
+        yield agent_event(
+            "tool_call",
+            {
+                "step_id": profile_step_id,
+                "name": "get_user_profile",
+                "title": "读取用户画像",
+                "arguments": {"user_id": user_id},
+            },
+        )
+        try:
+            profile = await self.memory_store.get_user_profile(user_id=user_id)
+            yield agent_event(
+                "tool_result",
+                {
+                    "step_id": profile_step_id,
+                    "name": "get_user_profile",
+                    "title": "读取用户画像",
+                    "success": True,
+                    "output": {
+                        "user_id": profile.user_id,
+                        "ability_level": profile.ability_level,
+                        "ability_score": profile.ability_score,
+                        "preferences": dict(profile.preferences or {}),
+                    },
+                },
+            )
+        except Exception as exc:
+            yield agent_event(
+                "tool_result",
+                {
+                    "step_id": profile_step_id,
+                    "name": "get_user_profile",
+                    "title": "读取用户画像",
+                    "success": False,
+                    "error": str(exc),
+                },
+            )
+            raise
+
+        pref_patch: Dict[str, Any] = {}
+        if isinstance(preferences, dict):
+            for k, v in preferences.items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                if v in (None, "", [], {}):
+                    continue
+                pref_patch[key] = v
+        if pref_patch:
+            try:
+                profile = await self.memory_store.update_user_profile(user_id=user_id, patch=pref_patch)
+            except Exception:
+                # Best-effort; never block execution.
+                try:
+                    prefs = dict(profile.preferences or {})
+                    prefs.update(pref_patch)
+                    profile.preferences = prefs
+                except Exception:
+                    pass
+
+        ctx = self.context_manager.create_context(
+            user_profile=profile,
+            system_instructions=SYSTEM_INSTRUCTIONS,
+            current_task=user_input,
+        )
+
+        study_opts = dict(options) if isinstance(options, dict) else {}
+        if "strict_llm" not in study_opts:
+            raw = str(os.getenv("STUDY_MATERIALS_STRICT_LLM") or "1").strip().lower()
+            study_opts["strict_llm"] = raw in {"1", "true", "yes", "y", "on"}
+
+        if isinstance(resume_working_memory, dict) and resume_working_memory:
+            for k, v in resume_working_memory.items():
+                key = str(k or "").strip()
+                if not key:
+                    continue
+                if key in {"study_options", "_abort_execution", "_fatal_error", "_export_subagent_kp"}:
+                    continue
+                ctx.working_memory[key] = v
+            ctx.working_memory.pop("_abort_execution", None)
+            ctx.working_memory.pop("_fatal_error", None)
+            ctx.working_memory.pop("_export_subagent_kp", None)
+
+        ctx.working_memory["study_options"] = study_opts
+        self.last_context = ctx
+        self.context_manager.append_message(ctx, role="user", content=user_input)
+
+        policy = StudyMaterialsPolicy()
+        try:
+            iter_offset = int(iteration_offset or 0)
+        except Exception:
+            iter_offset = 0
+        iter_offset = max(0, iter_offset)
+
+        if max_iterations is not None:
+            try:
+                budget = int(max_iterations)
+            except Exception:
+                budget = 0
+            budget = max(1, budget)
+        else:
+            budget = int(policy.iteration_budget(ctx, default_cap=int(self.config.max_iterations or 1)) or 1)
+            budget = max(1, budget)
+
+        try:
+            opts_for_mode = ctx.working_memory.get("study_options")
+            opts_for_mode = dict(opts_for_mode) if isinstance(opts_for_mode, dict) else {}
+        except Exception:
+            opts_for_mode = {}
+        continue_mode = str(opts_for_mode.get("continue_mode") or "").strip().lower()
+
+        out["profile"] = profile
+        out["ctx"] = ctx
+        out["policy"] = policy
+        out["iter_offset"] = iter_offset
+        out["budget"] = budget
+        out["export_only"] = continue_mode == "fix_export"
+        out["skip_export"] = continue_mode == "skip_export"
+
+    async def _ensure_planner_knowledge_points(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        user_input: str,
+        profile: UserProfile,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        split_res = ctx.working_memory.get("split_knowledge_points")
+        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+            existing = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()]
+            if existing[:1]:
+                return
+
+        try:
+            opts = ctx.working_memory.get("study_options")
+            opts = dict(opts) if isinstance(opts, dict) else {}
+        except Exception:
+            opts = {}
+
+        preset = str(opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or "").strip().lower()
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
+
+        split_min, split_max = 2, 8
+        if preset == "quick":
+            split_min, split_max = 2, 4
+        elif preset == "deep":
+            split_min, split_max = 4, 12
+        elif preset == "research":
+            split_min, split_max = 3, 8
+
+        try:
+            max_points_override = int(opts.get("max_points") or 0)
+        except Exception:
+            max_points_override = 0
+        if max_points_override > 0:
+            split_max = max(1, min(max_points_override, 15))
+            split_min = min(split_min, split_max)
+
+        subject = str(profile.preferences.get("subject") or "").strip()
+        split_step = PlanStep(
+            id=f"split_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
+            title="拆分知识点",
+            tool="split_knowledge_points",
+            arguments={
+                "topic": user_input,
+                "subject": subject,
+                "min_points": split_min,
+                "max_points": split_max,
+            },
+            thought="先拆分知识点，后续才能逐点深挖并展示 SubAgent 进度。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=split_step):
+            yield evt
+
+        split_res = ctx.working_memory.get("split_knowledge_points")
+        kps: List[str] = []
+        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+            kps = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()][:15]
+        if not kps:
+            return
+
+        review_step = PlanStep(
+            id=f"review_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
+            title="审核知识点列表",
+            tool="review_knowledge_points",
+            arguments={
+                "topic": user_input,
+                "subject": subject,
+                "knowledge_points": kps,
+                "min_points": split_min,
+                "max_points": split_max,
+            },
+            thought="对拆分结果做去重、补全与粒度调整，避免过泛/重复，减少后续检索浪费。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
+            yield evt
+
+    def _build_export_only_plan(self, *, user_input: str, subject: str, compile_err: str) -> ExecutionPlan:
+        return ExecutionPlan(
+            topic=user_input,
+            rationale="continue_mode=fix_export: rerun export-only steps",
+            steps=[
+                PlanStep(
+                    id=f"export_study_markdown-continue-{uuid.uuid4().hex[:8]}",
+                    title="Export Markdown (download link)",
+                    tool="export_study_markdown",
+                    arguments={},
+                    thought="Publish the current Markdown as a downloadable file.",
+                ),
+                PlanStep(
+                    id=f"convert_markdown_to_latex-continue-{uuid.uuid4().hex[:8]}",
+                    title="Convert Markdown to LaTeX (ElegantBook)",
+                    tool="convert_markdown_to_latex",
+                    arguments={"topic": user_input, "subject": subject},
+                    thought="Convert the current Markdown to LaTeX and publish the .tex download link.",
+                ),
+                PlanStep(
+                    id=f"refine_latex-continue-{uuid.uuid4().hex[:8]}",
+                    title="Refine LaTeX (optional)",
+                    tool="refine_latex",
+                    arguments={"topic": user_input, "subject": subject, "compile_error": compile_err},
+                    thought="Optionally refine LaTeX to improve compilation success rate.",
+                ),
+                PlanStep(
+                    id=f"compile_latex_to_pdf-continue-{uuid.uuid4().hex[:8]}",
+                    title="Compile LaTeX to PDF",
+                    tool="compile_latex_to_pdf",
+                    arguments={"topic": user_input},
+                    thought="Compile LaTeX into a PDF and publish the download link.",
+                ),
+            ],
+        )
+
+    async def _start_export_subagent(self, *, ctx: "CompressedContext", kp: str) -> AsyncIterator[Dict[str, Any]]:
+        try:
+            ctx.working_memory["_export_subagent_kp"] = kp
+        except Exception:
+            pass
+        yield agent_event("subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
+        yield agent_event("status", {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
+
+    async def _end_export_subagent(self, *, ctx: "CompressedContext", kp: str, content: str) -> AsyncIterator[Dict[str, Any]]:
+        try:
+            ctx.working_memory.pop("_export_subagent_kp", None)
+        except Exception:
+            pass
+        yield agent_event("subagent_end", {"knowledge_point": kp, "content": content})
+        yield agent_event("status", {"content": content})
+
+    async def _execute_foreach_block(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        block: List[PlanStep],
+        fallback_kp: str,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        kps = self._get_split_knowledge_points(ctx)
+        if not kps and fallback_kp:
+            kps = [fallback_kp]
+
+        limits = [int(getattr(s, "foreach_limit", 0) or 0) for s in block]
+        positive_limits = [x for x in limits if x > 0]
+        limit = min(positive_limits) if positive_limits else 0
+        if limit > 0:
+            kps = kps[: max(1, limit)]
+
+        if not kps:
+            async for evt in self._execute_step_block(ctx=ctx, results=results, steps=block):
+                yield evt
+            return
+
+        subagent_concurrency = max(1, int(getattr(self.config, "subagent_concurrency", 3) or 3))
+        subagent_concurrency = min(subagent_concurrency, len(kps))
+
+        try:
+            opts = ctx.working_memory.get("study_options")
+            opts = dict(opts) if isinstance(opts, dict) else {}
+            preset = str(opts.get("preset") or "").strip().lower()
+            if preset == "research":
+                subagent_concurrency = min(subagent_concurrency, 2)
+        except Exception:
+            pass
+
+        if subagent_concurrency <= 1 or len(kps) <= 1:
+            for kp in kps:
+                yield agent_event(
+                    "subagent_start",
+                    {"knowledge_point": kp, "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"},
+                )
+                yield agent_event(
+                    "status",
+                    {"content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"},
+                )
+                concrete_block = [self._expand_foreach_step(s, kp=kp) for s in block]
+                async for evt in self._execute_step_block(ctx=ctx, results=results, steps=concrete_block):
+                    yield evt
+                yield agent_event(
+                    "subagent_end",
+                    {"knowledge_point": kp, "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}"},
+                )
+                yield agent_event(
+                    "status",
+                    {"content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}"},
+                )
+            return
+
+        yield agent_event(
+            "status",
+            {"content": f"SubAgent 并行模式：共 {len(kps)} 个知识点，最大并发 {subagent_concurrency}。"},
+        )
+
+        queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
+        sem = asyncio.Semaphore(subagent_concurrency)
+        tasks = [
+            asyncio.create_task(self._run_subagent(ctx=ctx, results=results, block=block, kp=kp, sem=sem, queue=queue))
+            for kp in kps
+        ]
+        finished = 0
+        while finished < len(tasks):
+            item = await queue.get()
+            if item is None:
+                finished += 1
+                continue
+            yield item
+
+        for t in tasks:
+            try:
+                await t
+            except Exception:
+                pass
+
+    async def _execute_plan_steps(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        plan: ExecutionPlan,
+        user_input: str,
+        skip_export: bool,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        steps = list(plan.steps or [])
+        export_tools = {
+            "export_study_markdown",
+            "convert_markdown_to_latex",
+            "refine_latex",
+            "compile_latex_to_pdf",
+        }
+        export_kp = "导出：LaTeX/PDF"
+        export_open = False
+        export_closed = False
+
+        i = 0
+        while i < len(steps):
+            if bool(ctx.working_memory.get("_abort_execution")):
+                break
+
+            step = steps[i]
+            if skip_export and step.tool in export_tools:
+                i += 1
+                continue
+
+            if (not export_open) and step.tool in export_tools:
+                export_open = True
+                async for evt in self._start_export_subagent(ctx=ctx, kp=export_kp):
+                    yield evt
+
+            if getattr(step, "foreach_knowledge_point", False):
+                block: List[PlanStep] = []
+                while i < len(steps) and getattr(steps[i], "foreach_knowledge_point", False):
+                    block.append(steps[i])
+                    i += 1
+                async for evt in self._execute_foreach_block(ctx=ctx, results=results, block=block, fallback_kp=user_input):
+                    yield evt
+                continue
+
+            i += 1
+            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step):
+                yield evt
+
+            if export_open and (not export_closed) and step.tool == "compile_latex_to_pdf":
+                export_closed = True
+                async for evt in self._end_export_subagent(
+                    ctx=ctx,
+                    kp=export_kp,
+                    content="SubAgent 完成：导出与编译结束（LaTeX/PDF）。",
+                ):
+                    yield evt
+
+        if export_open and (not export_closed):
+            export_closed = True
+            async for evt in self._end_export_subagent(
+                ctx=ctx,
+                kp=export_kp,
+                content="SubAgent 结束：导出流程提前终止（LaTeX/PDF）。",
+            ):
+                yield evt
+
+    def _auto_research_context(self, *, ctx: "CompressedContext", user_input: str) -> Dict[str, Any]:
+        try:
+            opts = ctx.working_memory.get("study_options")
+            opts = dict(opts) if isinstance(opts, dict) else {}
+        except Exception:
+            opts = {}
+
+        preset = str(opts.get("preset") or "standard").strip().lower()
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
+        requirements = str(opts.get("requirements") or "").strip()
+
+        enable_extra_tools: bool
+        if isinstance(opts.get("enable_extra_tools"), bool):
+            enable_extra_tools = bool(opts.get("enable_extra_tools"))
+        else:
+            raw = str(os.getenv("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS") or "").strip().lower()
+            enable_extra_tools = raw in {"1", "true", "yes", "y", "on"}
+
+        subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
+        with_questions = bool(opts.get("with_questions")) if isinstance(opts.get("with_questions"), bool) else False
+        with_diagrams = bool(opts.get("with_diagrams")) if isinstance(opts.get("with_diagrams"), bool) else True
+
+        return {
+            "preset": preset,
+            "requirements": requirements,
+            "enable_extra_tools": enable_extra_tools,
+            "subject": subject,
+            "with_questions": with_questions,
+            "with_diagrams": with_diagrams,
+            "topic": user_input,
+        }
+
+    async def _auto_research_retrieve(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        missing: List[str],
+        cfg: Dict[str, Any],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        preset = str(cfg.get("preset") or "standard")
+        subject = str(cfg.get("subject") or "")
+        topic = str(cfg.get("topic") or "")
+
+        web_step = PlanStep(
+            id=f"auto-web-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：联网搜索知识点（研究型）",
+            tool="web_search_knowledge",
+            arguments={
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": missing,
+                "limit": 12 if preset == "research" else 10,
+                "text_max_length": 6000,
+                "query_hint": "定义 直观理解 关键结论 适用条件 充分必要条件 等价表述 证明 推导 反例 边界情况 易错点",
+                "scope": "webpage",
+                "include_summary": True,
+                "concurrency": 3,
+                "decompose": True,
+                "sub_questions": 4 if preset in {"deep", "research"} else 3,
+                "preset": preset,
+            },
+            thought="为资料不足的知识点追加一轮研究型网搜，补齐条件/反例/推导框架等关键要素。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=web_step):
+            yield evt
+
+        if not bool(cfg.get("enable_extra_tools")):
+            return
+
+        wiki_step = PlanStep(
+            id=f"auto-wiki-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：百科检索（Wikipedia）",
+            tool="wikipedia_search",
+            arguments={
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": missing,
+                "lang": "zh",
+                "sentences": 4,
+                "max_content_length": 2500,
+                "concurrency": 3,
+            },
+            thought="补充百科级定义/背景，提升术语一致性与可信度。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=wiki_step):
+            yield evt
+
+        se_site = "math.stackexchange" if ("数学" in subject or "math" in subject.lower()) else "stackoverflow"
+        se_step = PlanStep(
+            id=f"auto-se-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：问答检索（StackExchange）",
+            tool="stackexchange_search",
+            arguments={
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": missing,
+                "limit": 6,
+                "site": se_site,
+                "include_answers": True,
+                "query_hint": "intuition proof pitfall",
+            },
+            thought="补充高质量问答解释与易错点，增强“为什么”和“怎么用”。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=se_step):
+            yield evt
+
+        browse_step = PlanStep(
+            id=f"auto-browse-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：提取网页正文（节选）",
+            tool="browse_web_pages",
+            arguments={
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": missing,
+                "top_k": 3 if preset == "research" else 2,
+                "max_chars": 14000 if preset == "research" else 12000,
+            },
+            thought="从新增检索结果中抽取可读正文片段，供写作阶段重组表达。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=browse_step):
+            yield evt
+
+    async def _auto_research_regenerate(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        missing: List[str],
+        cfg: Dict[str, Any],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        preset = str(cfg.get("preset") or "standard")
+        subject = str(cfg.get("subject") or "")
+        topic = str(cfg.get("topic") or "")
+        requirements = str(cfg.get("requirements") or "")
+        with_questions = bool(cfg.get("with_questions"))
+        with_diagrams = bool(cfg.get("with_diagrams"))
+
+        agg_step = PlanStep(
+            id=f"auto-agg-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：聚合多源资料（按知识点）",
+            tool="aggregate_knowledge",
+            arguments={"topic": topic, "subject": subject, "knowledge_points": missing},
+            thought="将新增的检索结果聚合回统一素材池。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=agg_step):
+            yield evt
+
+        gen_step = PlanStep(
+            id=f"auto-gen-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：生成概念讲解（按知识点）",
+            tool="generate_study_material",
+            arguments={
+                "topic": topic,
+                "subject": subject,
+                "knowledge_points": missing,
+                "preset": preset,
+                "requirements": requirements,
+                "max_points": len(missing),
+                "max_web_results": 12 if preset == "research" else 10,
+                "max_web_pages": 3 if preset == "research" else 2,
+                "max_page_chars": 3000 if preset == "research" else 2600,
+                "with_questions": with_questions,
+                "with_diagrams": with_diagrams,
+            },
+            thought="基于补充后的资料，重写资料不足的知识点讲解。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=gen_step):
+            yield evt
+
+        assemble_step = PlanStep(
+            id=f"auto-assemble-{uuid.uuid4().hex[:8]}",
+            title="自动补检索：重新组装自学档案 Markdown",
+            tool="assemble_study_archive",
+            arguments={"topic": topic, "subject": subject},
+            thought="将补充后的讲解更新到最终 Markdown。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=assemble_step):
+            yield evt
+
+        review_step = PlanStep(
+            id=f"auto-review2-{uuid.uuid4().hex[:8]}",
+            title="自动复审（补检索后）",
+            tool="review_content",
+            arguments={"topic": topic},
+            thought="补检索后复审，确认来源覆盖已达标。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
+            yield evt
+
+    async def _maybe_auto_research(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        plan: Optional[ExecutionPlan],
+        policy: StudyMaterialsPolicy,
+        user_input: str,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        missing = policy.missing_kps_for_auto_research(ctx)
+        if not missing or not plan:
+            return
+
+        policy.mark_auto_research(ctx, missing)
+        cfg = self._auto_research_context(ctx=ctx, user_input=user_input)
+
+        yield agent_event(
+            "status",
+            {
+                "content": "自动补检索：发现部分知识点资料不足，追加一轮研究型检索（不进入下一轮规划）…\n"
+                + "\n".join(f"- {kp}" for kp in missing),
+            },
+        )
+
+        async for evt in self._auto_research_retrieve(ctx=ctx, results=results, missing=missing, cfg=cfg):
+            yield evt
+        async for evt in self._auto_research_regenerate(ctx=ctx, results=results, missing=missing, cfg=cfg):
+            yield evt
+
+    async def _maybe_auto_revise(
+        self,
+        *,
+        ctx: "CompressedContext",
+        results: ActionResults,
+        plan: Optional[ExecutionPlan],
+        policy: StudyMaterialsPolicy,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        if not bool(policy.config.auto_revise) or not plan:
+            return
+
+        planned_tools = {str(getattr(s, "tool", "") or "") for s in (plan.steps or []) if s}
+        if "revise_markdown" in planned_tools:
+            return
+
+        issues = policy.issues_for_auto_revise(ctx, planned_tools=planned_tools)
+        if not issues:
+            return
+
+        policy.mark_auto_revise(ctx)
+        markdown = str(ctx.working_memory.get("markdown") or "").strip()
+        if not markdown:
+            return
+
+        yield agent_event("status", {"content": "自动修订：根据审查意见进行一次快速修订（提升一次通过率）…"})
+
+        revise_step = PlanStep(
+            id=f"auto-revise-{uuid.uuid4().hex[:8]}",
+            title="自动修订 Markdown",
+            tool="revise_markdown",
+            arguments={"issues": issues},
+            thought="根据审查 issues 快速修订 Markdown（一次性修补明显问题）。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=revise_step):
+            yield evt
+
+        review_step = PlanStep(
+            id=f"auto-review-{uuid.uuid4().hex[:8]}",
+            title="自动复审（修订后）",
+            tool="review_content",
+            arguments={"topic": ctx.current_task},
+            thought="修订后再次审查，确认问题已解决。",
+        )
+        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
+            yield evt
+
+    async def _compress_context(self, *, ctx: "CompressedContext") -> AsyncIterator[Dict[str, Any]]:
+        self.state = AgentState.COMPRESSING
+        compress_step_id = f"compress_context-{uuid.uuid4().hex[:8]}"
+        yield agent_event(
+            "tool_call",
+            {"step_id": compress_step_id, "name": "compress_context", "title": "压缩上下文", "arguments": {}},
+        )
+
+        t0 = time.monotonic()
+        try:
+            before_tokens = self.context_manager.estimate_tokens(ctx)
+            compress_timeout_s = float(
+                os.getenv("STUDY_MATERIALS_COMPRESS_TIMEOUT_S")
+                or os.getenv("AGENT_COMPRESS_TIMEOUT_S")
+                or "12"
+            )
+            compress_timeout_s = max(2.0, min(compress_timeout_s, 120.0))
+            await asyncio.wait_for(self.context_manager.compress_if_needed(ctx), timeout=compress_timeout_s)
+            after_tokens = self.context_manager.estimate_tokens(ctx)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            yield agent_event(
+                "tool_result",
+                {
+                    "step_id": compress_step_id,
+                    "name": "compress_context",
+                    "title": "压缩上下文",
+                    "success": True,
+                    "elapsed_ms": elapsed_ms,
+                    "output": {"before_tokens": before_tokens, "after_tokens": after_tokens},
+                },
+            )
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            yield agent_event(
+                "tool_result",
+                {
+                    "step_id": compress_step_id,
+                    "name": "compress_context",
+                    "title": "压缩上下文",
+                    "success": False,
+                    "elapsed_ms": elapsed_ms,
+                    "error": str(exc),
+                },
+            )
+
+    async def _record_session(
+        self,
+        *,
+        user_id: str,
+        user_input: str,
+        reflection: Optional[ReflectionResult],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        update_step_id = f"update_user_profile-{uuid.uuid4().hex[:8]}"
+        yield agent_event(
+            "tool_call",
+            {
+                "step_id": update_step_id,
+                "name": "update_user_profile",
+                "title": "更新用户画像",
+                "arguments": {
+                    "user_id": user_id,
+                    "topic": user_input,
+                    "passed": bool(reflection.passed) if reflection else True,
+                },
+            },
+        )
+
+        t0 = time.monotonic()
+        try:
+            profile_timeout_s = float(
+                os.getenv("STUDY_MATERIALS_PROFILE_TIMEOUT_S")
+                or os.getenv("AGENT_PROFILE_TIMEOUT_S")
+                or "5"
+            )
+            profile_timeout_s = max(1.0, min(profile_timeout_s, 60.0))
+            await asyncio.wait_for(
+                self.memory_store.record_session(
+                    user_id=user_id,
+                    topic=user_input,
+                    passed=bool(reflection.passed) if reflection else True,
+                    issues=(reflection.issues if reflection else []),
+                ),
+                timeout=profile_timeout_s,
+            )
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            yield agent_event(
+                "tool_result",
+                {
+                    "step_id": update_step_id,
+                    "name": "update_user_profile",
+                    "title": "更新用户画像",
+                    "success": True,
+                    "elapsed_ms": elapsed_ms,
+                    "output": {
+                        "user_id": user_id,
+                        "topic": user_input,
+                        "passed": bool(reflection.passed) if reflection else True,
+                        "issues_count": len((reflection.issues if reflection else []) or []),
+                    },
+                },
+            )
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            yield agent_event(
+                "tool_result",
+                {
+                    "step_id": update_step_id,
+                    "name": "update_user_profile",
+                    "title": "更新用户画像",
+                    "success": False,
+                    "elapsed_ms": elapsed_ms,
+                    "error": str(exc),
+                },
+            )
+
+    def _resolve_markdown_and_archive_path(
+        self,
+        *,
+        ctx: "CompressedContext",
+        user_input: str,
+        results: ActionResults,
+    ) -> Dict[str, str]:
+        markdown = results.artifacts.get("markdown") or ctx.working_memory.get("markdown") or ""
+        if not isinstance(markdown, str):
+            markdown = ""
+
+        archive_path = str(ctx.working_memory.get("archive_path") or "").strip()
+        if not archive_path:
+            saved = ctx.working_memory.get("save_markdown_file")
+            if isinstance(saved, dict):
+                archive_path = str(saved.get("path") or "").strip()
+
+        if not markdown:
+            markdown = f"# 自学材料：{user_input}\n\n（生成结果为空，建议重试或提供更具体的描述）\n"
+
+        return {"markdown": markdown, "archive_path": archive_path}
+
+    def _build_per_kp_report(self, *, ctx: "CompressedContext") -> List[Dict[str, Any]]:
+        try:
+            study_opts = ctx.working_memory.get("study_options")
+            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+            with_diagrams_opt = study_opts.get("with_diagrams")
+            with_diagrams = bool(with_diagrams_opt) if isinstance(with_diagrams_opt, bool) else True
+
+            material_blob = ctx.working_memory.get("generate_study_material")
+            if not isinstance(material_blob, dict):
+                material_blob = (
+                    ctx.working_memory.get("study_material")
+                    if isinstance(ctx.working_memory.get("study_material"), dict)
+                    else {}
+                )
+            sections_blob = material_blob.get("sections") if isinstance(material_blob, dict) else None
+            sections_list = (
+                [s for s in (sections_blob or []) if isinstance(s, dict)]
+                if isinstance(sections_blob, list)
+                else []
+            )
+
+            preferred: List[str] = []
+            split_res = ctx.working_memory.get("split_knowledge_points")
+            if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                preferred = [
+                    str(x or "").strip()
+                    for x in (split_res.get("knowledge_points") or [])
+                    if str(x or "").strip()
+                ][:20]
+            if not preferred:
+                preferred = [
+                    str(s.get("knowledge_point") or "").strip()
+                    for s in sections_list
+                    if str(s.get("knowledge_point") or "").strip()
+                ][:20]
+
+            sec_by_kp: Dict[str, Dict[str, Any]] = {}
+            for sec in sections_list:
+                kp = str(sec.get("knowledge_point") or "").strip()
+                if kp and kp not in sec_by_kp:
+                    sec_by_kp[kp] = sec
+
+            def _count_list(v: Any) -> int:
+                return len(v) if isinstance(v, list) else 0
+
+            per_kp_report: List[Dict[str, Any]] = []
+            for kp in preferred:
+                sec = sec_by_kp.get(kp) or {}
+                web_results = sec.get("web_results")
+                web_pages = sec.get("web_pages")
+                gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
+                se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
+
+                usage = sec.get("explanation_usage") if isinstance(sec.get("explanation_usage"), dict) else {}
+                try:
+                    total_tokens = int(usage.get("total_tokens") or 0)
+                except Exception:
+                    total_tokens = 0
+                try:
+                    conts = int(sec.get("explanation_continuations") or 0)
+                except Exception:
+                    conts = 0
+                finish_reason = str(sec.get("explanation_finish_reason") or "").strip().lower()
+
+                diagram = sec.get("diagram") if isinstance(sec.get("diagram"), dict) else {}
+                has_diagram = bool(str(diagram.get("url") or diagram.get("markdown") or "").strip())
+
+                missing: List[str] = []
+                if _count_list(web_results) < 2:
+                    missing.append("web_results_low")
+                if _count_list(web_pages) == 0:
+                    missing.append("web_pages_missing")
+                if finish_reason == "length" or conts > 0:
+                    missing.append("llm_truncated")
+                if with_diagrams and not has_diagram:
+                    missing.append("diagram_missing")
+
+                per_kp_report.append(
+                    {
+                        "knowledge_point": kp,
+                        "web_results": _count_list(web_results),
+                        "web_pages": _count_list(web_pages),
+                        "github_results": _count_list(gh.get("results")),
+                        "stackexchange_results": _count_list(se.get("results")),
+                        "tokens_total": total_tokens,
+                        "continuations": conts,
+                        "missing": missing,
+                    }
+                )
+            return per_kp_report
+        except Exception:
+            return []
+
+    def _build_timing_report(
+        self,
+        *,
+        ctx: "CompressedContext",
+        per_kp_report: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        try:
+            timings_blob = ctx.working_memory.get("_tool_timings")
+            timings_list = (
+                [dict(x) for x in (timings_blob or []) if isinstance(x, dict)]
+                if isinstance(timings_blob, list)
+                else []
+            )
+
+            def _safe_int(v: Any) -> int:
+                try:
+                    return int(v)
+                except Exception:
+                    return 0
+
+            ms_values: List[int] = []
+            for x in timings_list:
+                ms = _safe_int(x.get("elapsed_ms"))
+                if ms > 0:
+                    ms_values.append(ms)
+            ms_values.sort()
+
+            def _pct(sorted_values: List[int], p: float) -> int:
+                if not sorted_values:
+                    return 0
+                idx = int((len(sorted_values) - 1) * p)
+                idx = max(0, min(idx, len(sorted_values) - 1))
+                return sorted_values[idx]
+
+            by_tool: Dict[str, List[int]] = {}
+            for it in timings_list:
+                name = str(it.get("name") or "").strip() or "unknown"
+                ms = _safe_int(it.get("elapsed_ms"))
+                if ms <= 0:
+                    continue
+                by_tool.setdefault(name, []).append(ms)
+
+            by_tool_rows: List[Dict[str, Any]] = []
+            for name, ms_list in by_tool.items():
+                ms_list = sorted([m for m in ms_list if isinstance(m, int) and m > 0])
+                if not ms_list:
+                    continue
+                by_tool_rows.append(
+                    {
+                        "name": name,
+                        "count": len(ms_list),
+                        "total_ms": sum(ms_list),
+                        "p50_ms": _pct(ms_list, 0.50),
+                        "p95_ms": _pct(ms_list, 0.95),
+                    }
+                )
+            by_tool_rows.sort(key=lambda x: int(x.get("total_ms") or 0), reverse=True)
+
+            kp_count = 0
+            try:
+                kp_count = len(
+                    {
+                        str(x.get("knowledge_point") or "").strip()
+                        for x in per_kp_report
+                        if isinstance(x, dict) and str(x.get("knowledge_point") or "").strip()
+                    }
+                )
+            except Exception:
+                kp_count = 0
+            if kp_count <= 0:
+                split_res = ctx.working_memory.get("split_knowledge_points")
+                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+                    kp_count = len(
+                        [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()]
+                    )
+
+            tokens_total = 0
+            for it in per_kp_report:
+                if not isinstance(it, dict):
+                    continue
+                tokens_total += _safe_int(it.get("tokens_total"))
+
+            total_ms = sum(ms_values)
+            return {
+                "tool_calls": len(ms_values),
+                "total_elapsed_ms": total_ms,
+                "p50_ms": _pct(ms_values, 0.50),
+                "p95_ms": _pct(ms_values, 0.95),
+                "kp_count": int(kp_count or 0),
+                "avg_ms_per_kp": int(total_ms / max(1, int(kp_count or 0))),
+                "tokens_total": tokens_total,
+                "by_tool": by_tool_rows[:20],
+            }
+        except Exception:
+            return {}
+
+    async def _run_iterations(
+        self,
+        *,
+        ctx: "CompressedContext",
+        profile: UserProfile,
+        policy: StudyMaterialsPolicy,
+        user_input: str,
+        iter_offset: int,
+        budget: int,
+        export_only: bool,
+        skip_export: bool,
+        out: Dict[str, Any],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        iteration = iter_offset
+        plan: Optional[ExecutionPlan] = None
+        results = ActionResults()
+        reflection: Optional[ReflectionResult] = None
+
+        for iteration in range(iter_offset, iter_offset + max(1, int(budget or 1))):
+            results = ActionResults()
+            self.state = AgentState.PLANNING
+            yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
+
+            if iteration == 0 and (not export_only):
+                async for evt in self._ensure_planner_knowledge_points(
+                    ctx=ctx,
+                    results=results,
+                    user_input=user_input,
+                    profile=profile,
+                ):
+                    yield evt
+
+            if export_only:
+                subject = str(profile.preferences.get("subject") or "").strip()
+                compile_err = str(ctx.working_memory.get("_latex_last_compile_error") or "").strip()
+                yield agent_event("status", {"content": "Continue mode: fix_export (rerun export-only steps)."})
+                plan = self._build_export_only_plan(user_input=user_input, subject=subject, compile_err=compile_err)
+            else:
+                plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
+            if plan.rationale:
+                yield agent_event("status", {"content": plan.rationale})
+
+            self.state = AgentState.ACTING
+            yield agent_event("status", {"content": "Act 阶段：执行工具链…"})
+
+            async for evt in self._execute_plan_steps(
+                ctx=ctx,
+                results=results,
+                plan=plan,
+                user_input=user_input,
+                skip_export=skip_export,
+            ):
+                yield evt
+
+            async for evt in self._maybe_auto_research(
+                ctx=ctx,
+                results=results,
+                plan=plan,
+                policy=policy,
+                user_input=user_input,
+            ):
+                yield evt
+
+            async for evt in self._maybe_auto_revise(ctx=ctx, results=results, plan=plan, policy=policy):
+                yield evt
+
+            if bool(ctx.working_memory.get("_abort_execution")):
+                fatal = ctx.working_memory.get("_fatal_error")
+                fatal_msg = ""
+                if isinstance(fatal, dict):
+                    fatal_msg = str(fatal.get("error") or "").strip()
+                    tool_name = str(fatal.get("tool") or "").strip()
+                    if tool_name:
+                        fatal_msg = f"{tool_name}: {fatal_msg}" if fatal_msg else tool_name
+                reflection = ReflectionResult(
+                    passed=True,
+                    issues=[fatal_msg] if fatal_msg else ["关键步骤失败，已停止后续执行。"],
+                    summary="执行中断：已停止后续步骤并返回当前可用结果。",
+                )
+                break
+
+            self.state = AgentState.REFLECTING
+            yield agent_event("status", {"content": "Reflect 阶段：自检与审查…"})
+            reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
+
+            if reflection.summary:
+                yield agent_event("status", {"content": reflection.summary})
+
+            if reflection.passed:
+                break
+
+            self.state = AgentState.ITERATING
+            yield agent_event(
+                "status",
+                {
+                    "content": "发现问题，准备迭代修正…\n"
+                    + ("\n".join(f"- {x}" for x in (reflection.issues or [])[:6]) if reflection.issues else ""),
+                },
+            )
+            self.context_manager.on_reflection(ctx, reflection)
+
+        out["iteration"] = iteration
+        out["plan"] = plan
+        out["results"] = results
+        out["reflection"] = reflection
+
     async def run(
         self,
         user_input: str,
@@ -557,830 +1670,61 @@ class AgentCore:
         reflection: Optional[ReflectionResult] = None
 
         try:
-            yield agent_event("status", {"content": "初始化上下文…"})
-            self.state = AgentState.WAITING_TOOL
-            profile_step_id = f"get_user_profile-{uuid.uuid4().hex[:8]}"
-            yield agent_event(
-                "tool_call",
-                {
-                    "step_id": profile_step_id,
-                    "name": "get_user_profile",
-                    "title": "读取用户画像",
-                    "arguments": {"user_id": user_id},
-                },
-            )
-            try:
-                profile = await self.memory_store.get_user_profile(user_id=user_id)
-                yield agent_event(
-                    "tool_result",
-                    {
-                        "step_id": profile_step_id,
-                        "name": "get_user_profile",
-                        "title": "读取用户画像",
-                        "success": True,
-                        "output": {
-                            "user_id": profile.user_id,
-                            "ability_level": profile.ability_level,
-                            "ability_score": profile.ability_score,
-                            "preferences": dict(profile.preferences or {}),
-                        },
-                    },
-                )
-            except Exception as exc:
-                yield agent_event(
-                    "tool_result",
-                    {
-                        "step_id": profile_step_id,
-                        "name": "get_user_profile",
-                        "title": "读取用户画像",
-                        "success": False,
-                        "error": str(exc),
-                    },
-                )
-                raise
+            init: Dict[str, Any] = {}
+            async for evt in self._initialize_run(
+                user_input=user_input,
+                user_id=user_id,
+                preferences=preferences,
+                options=options,
+                resume_working_memory=resume_working_memory,
+                iteration_offset=iteration_offset,
+                max_iterations=max_iterations,
+                out=init,
+            ):
+                yield evt
 
-            # Per-request overrides (e.g., subject selected in the UI). We both:
-            # - apply it to this run's in-memory profile for planning/writing
-            # - persist it as a user preference so later sessions keep the choice
-            pref_patch: Dict[str, Any] = {}
-            if isinstance(preferences, dict):
-                for k, v in preferences.items():
-                    key = str(k or "").strip()
-                    if not key:
-                        continue
-                    # Ignore empty placeholders.
-                    if v in (None, "", [], {}):
-                        continue
-                    pref_patch[key] = v
-            if pref_patch:
-                try:
-                    profile = await self.memory_store.update_user_profile(user_id=user_id, patch=pref_patch)
-                except Exception:
-                    # Best-effort; never block execution.
-                    try:
-                        prefs = dict(profile.preferences or {})
-                        prefs.update(pref_patch)
-                        profile.preferences = prefs
-                    except Exception:
-                        pass
+            profile: UserProfile = init["profile"]
+            ctx: "CompressedContext" = init["ctx"]
+            policy: StudyMaterialsPolicy = init["policy"]
+            iter_offset = int(init.get("iter_offset") or 0)
+            budget = int(init.get("budget") or 1)
+            export_only = bool(init.get("export_only"))
+            skip_export = bool(init.get("skip_export"))
 
-            ctx = self.context_manager.create_context(
-                user_profile=profile,
-                system_instructions=SYSTEM_INSTRUCTIONS,
-                current_task=user_input,
-            )
-            # Study-materials behavior flags (API can override per request).
-            study_opts = dict(options) if isinstance(options, dict) else {}
-            if "strict_llm" not in study_opts:
-                raw = str(os.getenv("STUDY_MATERIALS_STRICT_LLM") or "1").strip().lower()
-                study_opts["strict_llm"] = raw in {"1", "true", "yes", "y", "on"}
+            iter_state: Dict[str, Any] = {}
+            async for evt in self._run_iterations(
+                ctx=ctx,
+                profile=profile,
+                policy=policy,
+                user_input=user_input,
+                iter_offset=iter_offset,
+                budget=budget,
+                export_only=export_only,
+                skip_export=skip_export,
+                out=iter_state,
+            ):
+                yield evt
 
-            # Resume/continue: merge the previous working memory snapshot so the next iteration can
-            # build on existing retrieval + drafts instead of starting from scratch.
-            if isinstance(resume_working_memory, dict) and resume_working_memory:
-                for k, v in resume_working_memory.items():
-                    key = str(k or "").strip()
-                    if not key:
-                        continue
-                    if key in {"study_options", "_abort_execution", "_fatal_error", "_export_subagent_kp"}:
-                        continue
-                    ctx.working_memory[key] = v
-                # Do not carry over abort markers.
-                ctx.working_memory.pop("_abort_execution", None)
-                ctx.working_memory.pop("_fatal_error", None)
-                ctx.working_memory.pop("_export_subagent_kp", None)
-
-            ctx.working_memory["study_options"] = study_opts
-            self.last_context = ctx
-            self.context_manager.append_message(ctx, role="user", content=user_input)
-
-            policy = StudyMaterialsPolicy()
-            try:
-                iter_offset = int(iteration_offset or 0)
-            except Exception:
-                iter_offset = 0
-            iter_offset = max(0, iter_offset)
-
-            if max_iterations is not None:
-                try:
-                    budget = int(max_iterations)
-                except Exception:
-                    budget = 0
-                budget = max(1, budget)
-            else:
-                budget = int(policy.iteration_budget(ctx, default_cap=int(self.config.max_iterations or 1)) or 1)
-                budget = max(1, budget)
-
-            try:
-                opts_for_mode = ctx.working_memory.get("study_options")
-                opts_for_mode = dict(opts_for_mode) if isinstance(opts_for_mode, dict) else {}
-            except Exception:
-                opts_for_mode = {}
-            continue_mode = str(opts_for_mode.get("continue_mode") or "").strip().lower()
-            export_only = continue_mode == "fix_export"
-            skip_export = continue_mode == "skip_export"
-
-            for iteration in range(iter_offset, iter_offset + budget):
-                results = ActionResults()
-                self.state = AgentState.PLANNING
-                yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
-
-                # Planner-stage: split knowledge points and do a quick review pass before planning the tool chain.
-                if iteration == 0 and (not export_only):
-                    split_res = ctx.working_memory.get("split_knowledge_points")
-                    existing_kps: List[str] = []
-                    if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                        existing_kps = [
-                            str(x or "").strip()
-                            for x in (split_res.get("knowledge_points") or [])
-                            if str(x or "").strip()
-                        ][:15]
-
-                    if not existing_kps:
-                        try:
-                            opts = ctx.working_memory.get("study_options")
-                            opts = dict(opts) if isinstance(opts, dict) else {}
-                        except Exception:
-                            opts = {}
-
-                        preset = str(opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or "").strip().lower()
-                        if preset not in {"quick", "standard", "deep", "research"}:
-                            preset = "standard"
-
-                        split_min, split_max = 2, 8
-                        if preset == "quick":
-                            split_min, split_max = 2, 4
-                        elif preset == "deep":
-                            split_min, split_max = 4, 12
-                        elif preset == "research":
-                            split_min, split_max = 3, 8
-
-                        try:
-                            max_points_override = int(opts.get("max_points") or 0)
-                        except Exception:
-                            max_points_override = 0
-                        if max_points_override > 0:
-                            split_max = max(1, min(max_points_override, 15))
-                            split_min = min(split_min, split_max)
-
-                        subject = str(profile.preferences.get("subject") or "").strip()
-                        split_step = PlanStep(
-                            id=f"split_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
-                            title="拆分知识点",
-                            tool="split_knowledge_points",
-                            arguments={
-                                "topic": user_input,
-                                "subject": subject,
-                                "min_points": split_min,
-                                "max_points": split_max,
-                            },
-                            thought="先拆分知识点，后续才能逐点深挖并展示 SubAgent 进度。",
-                        )
-                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=split_step):
-                            yield evt
-
-                        split_res = ctx.working_memory.get("split_knowledge_points")
-                        kps: List[str] = []
-                        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                            kps = [
-                                str(x or "").strip()
-                                for x in (split_res.get("knowledge_points") or [])
-                                if str(x or "").strip()
-                            ][:15]
-
-                        if kps:
-                            review_step = PlanStep(
-                                id=f"review_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
-                                title="审核知识点列表",
-                                tool="review_knowledge_points",
-                                arguments={
-                                    "topic": user_input,
-                                    "subject": subject,
-                                    "knowledge_points": kps,
-                                    "min_points": split_min,
-                                    "max_points": split_max,
-                                },
-                                thought="对拆分结果做去重、补全与粒度调整，避免过泛/重复，减少后续检索浪费。",
-                            )
-                            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-                                yield evt
-
-                if export_only:
-                    subject = str(profile.preferences.get("subject") or "").strip()
-                    compile_err = str(ctx.working_memory.get("_latex_last_compile_error") or "").strip()
-                    yield agent_event(
-                        "status",
-                        {"content": "Continue mode: fix_export (rerun export-only steps)."},
-                    )
-                    plan = ExecutionPlan(
-                        topic=user_input,
-                        rationale="continue_mode=fix_export: rerun export-only steps",
-                        steps=[
-                            PlanStep(
-                                id=f"export_study_markdown-continue-{uuid.uuid4().hex[:8]}",
-                                title="Export Markdown (download link)",
-                                tool="export_study_markdown",
-                                arguments={},
-                                thought="Publish the current Markdown as a downloadable file.",
-                            ),
-                            PlanStep(
-                                id=f"convert_markdown_to_latex-continue-{uuid.uuid4().hex[:8]}",
-                                title="Convert Markdown to LaTeX (ElegantBook)",
-                                tool="convert_markdown_to_latex",
-                                arguments={"topic": user_input, "subject": subject},
-                                thought="Convert the current Markdown to LaTeX and publish the .tex download link.",
-                            ),
-                            PlanStep(
-                                id=f"refine_latex-continue-{uuid.uuid4().hex[:8]}",
-                                title="Refine LaTeX (optional)",
-                                tool="refine_latex",
-                                arguments={"topic": user_input, "subject": subject, "compile_error": compile_err},
-                                thought="Optionally refine LaTeX to improve compilation success rate.",
-                            ),
-                            PlanStep(
-                                id=f"compile_latex_to_pdf-continue-{uuid.uuid4().hex[:8]}",
-                                title="Compile LaTeX to PDF",
-                                tool="compile_latex_to_pdf",
-                                arguments={"topic": user_input},
-                                thought="Compile LaTeX into a PDF and publish the download link.",
-                            ),
-                        ],
-                    )
-                else:
-                    plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
-                if plan.rationale:
-                    yield agent_event("status", {"content": plan.rationale})
-
-                self.state = AgentState.ACTING
-                yield agent_event("status", {"content": "Act 阶段：执行工具链…"})
-
-                # DFS-style execution for `foreach_knowledge_point` blocks:
-                # - BFS (old): tool-by-tool across all knowledge points
-                # - DFS (new): for each knowledge point, execute the full research chain before moving on
-                steps = list(plan.steps or [])
-                export_tools = {
-                    "export_study_markdown",
-                    "convert_markdown_to_latex",
-                    "refine_latex",
-                    "compile_latex_to_pdf",
-                }
-                export_kp = "导出：LaTeX/PDF"
-                export_open = False
-                export_closed = False
-                i = 0
-                while i < len(steps):
-                    if bool(ctx.working_memory.get("_abort_execution")):
-                        break
-                    step = steps[i]
-                    if skip_export and step.tool in export_tools:
-                        i += 1
-                        continue
-                    if (
-                        (not export_open)
-                        and step.tool
-                        in export_tools
-                    ):
-                        export_open = True
-                        try:
-                            ctx.working_memory["_export_subagent_kp"] = export_kp
-                        except Exception:
-                            pass
-                        yield agent_event(
-                            "subagent_start",
-                            {
-                                "knowledge_point": export_kp,
-                                "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。",
-                            },
-                        )
-                        yield agent_event(
-                            "status",
-                            {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"},
-                        )
-                    if getattr(step, "foreach_knowledge_point", False):
-                        block: List[PlanStep] = []
-                        while i < len(steps) and getattr(steps[i], "foreach_knowledge_point", False):
-                            block.append(steps[i])
-                            i += 1
-
-                        kps = self._get_split_knowledge_points(ctx)
-                        if not kps and user_input:
-                            kps = [user_input]
-
-                        # Respect the smallest positive foreach_limit in this block (if provided).
-                        limits = [int(getattr(s, "foreach_limit", 0) or 0) for s in block]
-                        positive_limits = [x for x in limits if x > 0]
-                        limit = min(positive_limits) if positive_limits else 0
-                        if limit > 0:
-                            kps = kps[: max(1, limit)]
-
-                        if not kps:
-                            # Nothing to expand: execute block steps once.
-                            async for evt in self._execute_step_block(ctx=ctx, results=results, steps=block):
-                                yield evt
-                            continue
-
-                        subagent_concurrency = max(1, int(getattr(self.config, "subagent_concurrency", 3) or 3))
-                        subagent_concurrency = min(subagent_concurrency, len(kps))
-                        # Research preset tends to trigger more tool calls per knowledge point; cap concurrency
-                        # to reduce rate-limit risk and improve result stability (at the cost of speed).
-                        try:
-                            opts = ctx.working_memory.get("study_options")
-                            opts = dict(opts) if isinstance(opts, dict) else {}
-                            preset = str(opts.get("preset") or "").strip().lower()
-                            if preset == "research":
-                                subagent_concurrency = min(subagent_concurrency, 2)
-                        except Exception:
-                            pass
-
-                        if subagent_concurrency <= 1 or len(kps) <= 1:
-                            for kp in kps:
-                                # Sub-agent markers (separate events + status, so UI can display progress without polluting CoT).
-                                yield agent_event(
-                                    "subagent_start",
-                                    {
-                                        "knowledge_point": kp,
-                                        "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
-                                    },
-                                )
-                                yield agent_event(
-                                    "status",
-                                    {
-                                        "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
-                                    },
-                                )
-                                concrete_block = [self._expand_foreach_step(s, kp=kp) for s in block]
-                                async for evt in self._execute_step_block(ctx=ctx, results=results, steps=concrete_block):
-                                    yield evt
-                                yield agent_event(
-                                    "subagent_end",
-                                    {
-                                        "knowledge_point": kp,
-                                        "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
-                                    },
-                                )
-                                yield agent_event(
-                                    "status",
-                                    {
-                                        "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
-                                    },
-                                )
-                            continue
-
-                        yield agent_event(
-                            "status",
-                            {
-                                "content": f"SubAgent 并行模式：共 {len(kps)} 个知识点，最大并发 {subagent_concurrency}。",
-                            },
-                        )
-
-                        queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
-                        sem = asyncio.Semaphore(subagent_concurrency)
-                        tasks = [
-                            asyncio.create_task(
-                                self._run_subagent(
-                                    ctx=ctx,
-                                    results=results,
-                                    block=block,
-                                    kp=kp,
-                                    sem=sem,
-                                    queue=queue,
-                                )
-                            )
-                            for kp in kps
-                        ]
-                        finished = 0
-                        while finished < len(tasks):
-                            item = await queue.get()
-                            if item is None:
-                                finished += 1
-                                continue
-                            yield item
-
-                        for t in tasks:
-                            try:
-                                await t
-                            except Exception:
-                                # Already surfaced via the queue as an error event.
-                                pass
-                        continue
-
-                    i += 1
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step):
-                        yield evt
-
-                    if export_open and (not export_closed) and step.tool == "compile_latex_to_pdf":
-                        export_closed = True
-                        try:
-                            ctx.working_memory.pop("_export_subagent_kp", None)
-                        except Exception:
-                            pass
-                        yield agent_event(
-                            "subagent_end",
-                            {
-                                "knowledge_point": export_kp,
-                                "content": "SubAgent 完成：导出与编译结束（LaTeX/PDF）。",
-                            },
-                        )
-                        yield agent_event(
-                            "status",
-                            {"content": "SubAgent 完成：导出与编译结束（LaTeX/PDF）。"},
-                        )
-
-                if export_open and (not export_closed):
-                    export_closed = True
-                    try:
-                        ctx.working_memory.pop("_export_subagent_kp", None)
-                    except Exception:
-                        pass
-                    yield agent_event(
-                        "subagent_end",
-                        {
-                            "knowledge_point": export_kp,
-                            "content": "SubAgent 结束：导出流程提前终止（LaTeX/PDF）。",
-                        },
-                    )
-                    yield agent_event(
-                        "status",
-                        {"content": "SubAgent 结束：导出流程提前终止（LaTeX/PDF）。"},
-                    )
-
-                # Autonomy boost: if the heuristic reviewer says "sources insufficient" (or "dimension coverage insufficient"),
-                # do a bounded extra research pass for the failing knowledge points *within the same iteration*.
-                missing = policy.missing_kps_for_auto_research(ctx)
-                if missing and plan:
-                    policy.mark_auto_research(ctx, missing)
-
-                    opts = ctx.working_memory.get("study_options")
-                    opts = dict(opts) if isinstance(opts, dict) else {}
-                    preset = str(opts.get("preset") or "standard").strip().lower()
-                    if preset not in {"quick", "standard", "deep", "research"}:
-                        preset = "standard"
-                    requirements = str(opts.get("requirements") or "").strip()
-
-                    enable_extra_tools: bool
-                    if isinstance(opts.get("enable_extra_tools"), bool):
-                        enable_extra_tools = bool(opts.get("enable_extra_tools"))
-                    else:
-                        raw = str(os.getenv("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS") or "").strip().lower()
-                        enable_extra_tools = raw in {"1", "true", "yes", "y", "on"}
-
-                    subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
-
-                    yield agent_event(
-                        "status",
-                        {
-                            "content": "自动补检索：发现部分知识点资料不足，追加一轮研究型检索（不进入下一轮规划）…\n"
-                            + "\n".join(f"- {kp}" for kp in missing),
-                        },
-                    )
-
-                    with_questions = opts.get("with_questions") if isinstance(opts.get("with_questions"), bool) else False
-                    with_diagrams = opts.get("with_diagrams") if isinstance(opts.get("with_diagrams"), bool) else True
-
-                    # 1) Extra web research (Metaso /ask + decompose).
-                    web_step = PlanStep(
-                        id=f"auto-web-{uuid.uuid4().hex[:8]}",
-                        title="自动补检索：联网搜索知识点（研究型）",
-                        tool="web_search_knowledge",
-                        arguments={
-                            "topic": user_input,
-                            "subject": subject,
-                            "knowledge_points": missing,
-                            "limit": 12 if preset == "research" else 10,
-                            "text_max_length": 6000,
-                            "query_hint": "定义 直观理解 关键结论 适用条件 充分必要条件 等价表述 证明 推导 反例 边界情况 易错点",
-                            "scope": "webpage",
-                            "include_summary": True,
-                            "concurrency": 3,
-                            "decompose": True,
-                            "sub_questions": 4 if preset in {"deep", "research"} else 3,
-                            "preset": preset,
-                        },
-                        thought="为资料不足的知识点追加一轮研究型网搜，补齐条件/反例/推导框架等关键要素。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=web_step):
-                        yield evt
-
-                    # 2) Optional extra tools for higher-signal sources.
-                    if enable_extra_tools:
-                        wiki_step = PlanStep(
-                            id=f"auto-wiki-{uuid.uuid4().hex[:8]}",
-                            title="自动补检索：百科检索（Wikipedia）",
-                            tool="wikipedia_search",
-                            arguments={
-                                "topic": user_input,
-                                "subject": subject,
-                                "knowledge_points": missing,
-                                "lang": "zh",
-                                "sentences": 4,
-                                "max_content_length": 2500,
-                                "concurrency": 3,
-                            },
-                            thought="补充百科级定义/背景，提升术语一致性与可信度。",
-                        )
-                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=wiki_step):
-                            yield evt
-
-                        se_site = (
-                            "math.stackexchange"
-                            if ("数学" in subject or "math" in subject.lower())
-                            else "stackoverflow"
-                        )
-                        se_step = PlanStep(
-                            id=f"auto-se-{uuid.uuid4().hex[:8]}",
-                            title="自动补检索：问答检索（StackExchange）",
-                            tool="stackexchange_search",
-                            arguments={
-                                "topic": user_input,
-                                "subject": subject,
-                                "knowledge_points": missing,
-                                "limit": 6,
-                                "site": se_site,
-                                "include_answers": True,
-                                "query_hint": "intuition proof pitfall",
-                            },
-                            thought="补充高质量问答解释与易错点，增强“为什么”和“怎么用”。",
-                        )
-                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=se_step):
-                            yield evt
-
-                        browse_step = PlanStep(
-                            id=f"auto-browse-{uuid.uuid4().hex[:8]}",
-                            title="自动补检索：提取网页正文（节选）",
-                            tool="browse_web_pages",
-                            arguments={
-                                "topic": user_input,
-                                "subject": subject,
-                                "knowledge_points": missing,
-                                "top_k": 3 if preset == "research" else 2,
-                                "max_chars": 14000 if preset == "research" else 12000,
-                            },
-                            thought="从新增检索结果中抽取可读正文片段，供写作阶段重组表达。",
-                        )
-                        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=browse_step):
-                            yield evt
-
-                    # 3) Re-aggregate + re-generate only for missing points.
-                    agg_step = PlanStep(
-                        id=f"auto-agg-{uuid.uuid4().hex[:8]}",
-                        title="自动补检索：聚合多源资料（按知识点）",
-                        tool="aggregate_knowledge",
-                        arguments={"topic": user_input, "subject": subject, "knowledge_points": missing},
-                        thought="将新增的检索结果聚合回统一素材池。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=agg_step):
-                        yield evt
-
-                    gen_step = PlanStep(
-                        id=f"auto-gen-{uuid.uuid4().hex[:8]}",
-                        title="自动补检索：生成概念讲解（按知识点）",
-                        tool="generate_study_material",
-                        arguments={
-                            "topic": user_input,
-                            "subject": subject,
-                            "knowledge_points": missing,
-                            "preset": preset,
-                            "requirements": requirements,
-                            "max_points": len(missing),
-                            "max_web_results": 12 if preset == "research" else 10,
-                            "max_web_pages": 3 if preset == "research" else 2,
-                            "max_page_chars": 3000 if preset == "research" else 2600,
-                            "with_questions": with_questions,
-                            "with_diagrams": with_diagrams,
-                        },
-                        thought="基于补充后的资料，重写资料不足的知识点讲解。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=gen_step):
-                        yield evt
-
-                    assemble_step = PlanStep(
-                        id=f"auto-assemble-{uuid.uuid4().hex[:8]}",
-                        title="自动补检索：重新组装自学档案 Markdown",
-                        tool="assemble_study_archive",
-                        arguments={"topic": user_input, "subject": subject},
-                        thought="将补充后的讲解更新到最终 Markdown。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=assemble_step):
-                        yield evt
-
-                    # 4) Re-review so reflect phase can pass without a new planning loop.
-                    review_step = PlanStep(
-                        id=f"auto-review2-{uuid.uuid4().hex[:8]}",
-                        title="自动复审（补检索后）",
-                        tool="review_content",
-                        arguments={"topic": user_input},
-                        thought="补检索后复审，确认来源覆盖已达标。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-                        yield evt
-
-                # One-shot quality: if the reviewer (LLM) finds issues, do a single auto-revise pass
-                # inside the same iteration so users are less likely to hit a second planning loop.
-                # We explicitly *skip* heuristic "sources不足" failures (those need more retrieval, not editing).
-                auto_revise = bool(policy.config.auto_revise)
-
-                if auto_revise and plan:
-                    planned_tools = {str(getattr(s, "tool", "") or "") for s in (plan.steps or []) if s}
-                    # If the plan already includes revise_markdown, let the planner handle it.
-                    if "revise_markdown" not in planned_tools:
-                        issues = policy.issues_for_auto_revise(ctx, planned_tools=planned_tools)
-                        if issues:
-                            policy.mark_auto_revise(ctx)
-                            markdown = str(ctx.working_memory.get("markdown") or "").strip()
-                            if markdown:
-                                    yield agent_event(
-                                        "status",
-                                        {
-                                            "content": "自动修订：根据审查意见进行一次快速修订（提升一次通过率）…",
-                                        },
-                                    )
-
-                                    # 1) Revise markdown
-                                    revise_step = PlanStep(
-                                        id=f"auto-revise-{uuid.uuid4().hex[:8]}",
-                                        title="自动修订 Markdown",
-                                        tool="revise_markdown",
-                                        arguments={"issues": issues},
-                                        thought="根据审查 issues 快速修订 Markdown（一次性修补明显问题）。",
-                                    )
-                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=revise_step):
-                                        yield evt
-
-                                    # 2) Re-run review so Reflector can pass without a new planning iteration.
-                                    review_step = PlanStep(
-                                        id=f"auto-review-{uuid.uuid4().hex[:8]}",
-                                        title="自动复审（修订后）",
-                                        tool="review_content",
-                                        arguments={"topic": user_input},
-                                        thought="修订后再次审查，确认问题已解决。",
-                                    )
-                                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-                                        yield evt
-                # End auto-revise
-
-                if bool(ctx.working_memory.get("_abort_execution")):
-                    fatal = ctx.working_memory.get("_fatal_error")
-                    fatal_msg = ""
-                    if isinstance(fatal, dict):
-                        fatal_msg = str(fatal.get("error") or "").strip()
-                        tool_name = str(fatal.get("tool") or "").strip()
-                        if tool_name:
-                            fatal_msg = f"{tool_name}: {fatal_msg}" if fatal_msg else tool_name
-                    reflection = ReflectionResult(
-                        passed=True,
-                        issues=[fatal_msg] if fatal_msg else ["关键步骤失败，已停止后续执行。"],
-                        summary="执行中断：已停止后续步骤并返回当前可用结果。",
-                    )
-                    break
-
-                self.state = AgentState.REFLECTING
-                yield agent_event("status", {"content": "Reflect 阶段：自检与审查…"})
-                reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
-
-                if reflection.summary:
-                    yield agent_event("status", {"content": reflection.summary})
-
-                if reflection.passed:
-                    break
-
-                self.state = AgentState.ITERATING
-                yield agent_event(
-                    "status",
-                    {
-                        "content": "发现问题，准备迭代修正…\n"
-                        + ("\n".join(f"- {x}" for x in (reflection.issues or [])[:6]) if reflection.issues else ""),
-                    },
-                )
-                self.context_manager.on_reflection(ctx, reflection)
-
-            markdown = results.artifacts.get("markdown") or ctx.working_memory.get("markdown") or ""
-            if not isinstance(markdown, str):
-                markdown = ""
-
-            archive_path = str(ctx.working_memory.get("archive_path") or "").strip()
-            if not archive_path:
-                saved = ctx.working_memory.get("save_markdown_file")
-                if isinstance(saved, dict):
-                    archive_path = str(saved.get("path") or "").strip()
-
-            if not markdown:
-                # Last-resort fallback to something readable.
-                markdown = f"# 自学材料：{user_input}\n\n（生成结果为空，建议重试或提供更具体的描述）\n"
-
-            self.state = AgentState.COMPRESSING
-            compress_step_id = f"compress_context-{uuid.uuid4().hex[:8]}"
-            yield agent_event(
-                "tool_call",
-                {
-                    "step_id": compress_step_id,
-                    "name": "compress_context",
-                    "title": "压缩上下文",
-                    "arguments": {},
-                },
+            iteration = int(iter_state.get("iteration") or iter_offset)
+            plan = iter_state.get("plan") if isinstance(iter_state.get("plan"), ExecutionPlan) else plan
+            results = iter_state.get("results") if isinstance(iter_state.get("results"), ActionResults) else results
+            reflection = (
+                iter_state.get("reflection") if isinstance(iter_state.get("reflection"), ReflectionResult) else reflection
             )
 
-            t0 = time.monotonic()
-            try:
-                before_tokens = self.context_manager.estimate_tokens(ctx)
-                compress_timeout_s = float(
-                    os.getenv("STUDY_MATERIALS_COMPRESS_TIMEOUT_S")
-                    or os.getenv("AGENT_COMPRESS_TIMEOUT_S")
-                    or "12"
-                )
-                compress_timeout_s = max(2.0, min(compress_timeout_s, 120.0))
-                await asyncio.wait_for(
-                    self.context_manager.compress_if_needed(ctx),
-                    timeout=compress_timeout_s,
-                )
-                after_tokens = self.context_manager.estimate_tokens(ctx)
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                yield agent_event(
-                    "tool_result",
-                    {
-                        "step_id": compress_step_id,
-                        "name": "compress_context",
-                        "title": "压缩上下文",
-                        "success": True,
-                        "elapsed_ms": elapsed_ms,
-                        "output": {"before_tokens": before_tokens, "after_tokens": after_tokens},
-                    },
-                )
-            except Exception as exc:
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                yield agent_event(
-                    "tool_result",
-                    {
-                        "step_id": compress_step_id,
-                        "name": "compress_context",
-                        "title": "压缩上下文",
-                        "success": False,
-                        "elapsed_ms": elapsed_ms,
-                        "error": str(exc),
-                    },
-                )
+            resolved = self._resolve_markdown_and_archive_path(ctx=ctx, user_input=user_input, results=results)
+            markdown = resolved["markdown"]
+            archive_path = resolved["archive_path"]
 
-            update_step_id = f"update_user_profile-{uuid.uuid4().hex[:8]}"
-            yield agent_event(
-                "tool_call",
-                {
-                    "step_id": update_step_id,
-                    "name": "update_user_profile",
-                    "title": "更新用户画像",
-                    "arguments": {
-                        "user_id": user_id,
-                        "topic": user_input,
-                        "passed": bool(reflection.passed) if reflection else True,
-                    },
-                },
-            )
+            async for evt in self._compress_context(ctx=ctx):
+                yield evt
 
-            t0 = time.monotonic()
-            try:
-                profile_timeout_s = float(
-                    os.getenv("STUDY_MATERIALS_PROFILE_TIMEOUT_S")
-                    or os.getenv("AGENT_PROFILE_TIMEOUT_S")
-                    or "5"
-                )
-                profile_timeout_s = max(1.0, min(profile_timeout_s, 60.0))
-                await asyncio.wait_for(
-                    self.memory_store.record_session(
-                        user_id=user_id,
-                        topic=user_input,
-                        passed=bool(reflection.passed) if reflection else True,
-                        issues=(reflection.issues if reflection else []),
-                    ),
-                    timeout=profile_timeout_s,
-                )
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                yield agent_event(
-                    "tool_result",
-                    {
-                        "step_id": update_step_id,
-                        "name": "update_user_profile",
-                        "title": "更新用户画像",
-                        "success": True,
-                        "elapsed_ms": elapsed_ms,
-                        "output": {
-                            "user_id": user_id,
-                            "topic": user_input,
-                            "passed": bool(reflection.passed) if reflection else True,
-                            "issues_count": len((reflection.issues if reflection else []) or []),
-                        },
-                    },
-                )
-            except Exception as exc:
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                yield agent_event(
-                    "tool_result",
-                    {
-                        "step_id": update_step_id,
-                        "name": "update_user_profile",
-                        "title": "更新用户画像",
-                        "success": False,
-                        "elapsed_ms": elapsed_ms,
-                        "error": str(exc),
-                    },
-                )
+            async for evt in self._record_session(
+                user_id=user_id,
+                user_input=user_input,
+                reflection=reflection,
+            ):
+                yield evt
 
             self.state = AgentState.COMPLETED
             md_url = str(ctx.working_memory.get("md_url") or "").strip()
@@ -1391,174 +1735,8 @@ class AgentCore:
             tex_filename = str(ctx.working_memory.get("tex_filename") or "").strip()
             fatal_error = ctx.working_memory.get("_fatal_error")
             fatal_error = dict(fatal_error) if isinstance(fatal_error, dict) else None
-            per_kp_report: List[Dict[str, Any]] = []
-            timing_report: Dict[str, Any] = {}
-            try:
-                study_opts = ctx.working_memory.get("study_options")
-                study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-                with_diagrams_opt = study_opts.get("with_diagrams")
-                with_diagrams = bool(with_diagrams_opt) if isinstance(with_diagrams_opt, bool) else True
-
-                material_blob = ctx.working_memory.get("generate_study_material")
-                if not isinstance(material_blob, dict):
-                    material_blob = (
-                        ctx.working_memory.get("study_material")
-                        if isinstance(ctx.working_memory.get("study_material"), dict)
-                        else {}
-                    )
-                sections_blob = material_blob.get("sections") if isinstance(material_blob, dict) else None
-                sections_list = (
-                    [s for s in (sections_blob or []) if isinstance(s, dict)] if isinstance(sections_blob, list) else []
-                )
-
-                preferred: List[str] = []
-                split_res = ctx.working_memory.get("split_knowledge_points")
-                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                    preferred = [
-                        str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()
-                    ][:20]
-                if not preferred:
-                    preferred = [
-                        str(s.get("knowledge_point") or "").strip()
-                        for s in sections_list
-                        if str(s.get("knowledge_point") or "").strip()
-                    ][:20]
-
-                sec_by_kp: Dict[str, Dict[str, Any]] = {}
-                for sec in sections_list:
-                    kp = str(sec.get("knowledge_point") or "").strip()
-                    if kp and kp not in sec_by_kp:
-                        sec_by_kp[kp] = sec
-
-                def _count_list(v: Any) -> int:
-                    return len(v) if isinstance(v, list) else 0
-
-                for kp in preferred:
-                    sec = sec_by_kp.get(kp) or {}
-                    web_results = sec.get("web_results")
-                    web_pages = sec.get("web_pages")
-                    gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
-                    se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
-
-                    usage = sec.get("explanation_usage") if isinstance(sec.get("explanation_usage"), dict) else {}
-                    try:
-                        total_tokens = int(usage.get("total_tokens") or 0)
-                    except Exception:
-                        total_tokens = 0
-                    try:
-                        conts = int(sec.get("explanation_continuations") or 0)
-                    except Exception:
-                        conts = 0
-                    finish_reason = str(sec.get("explanation_finish_reason") or "").strip().lower()
-
-                    diagram = sec.get("diagram") if isinstance(sec.get("diagram"), dict) else {}
-                    has_diagram = bool(str(diagram.get("url") or diagram.get("markdown") or "").strip())
-
-                    missing: List[str] = []
-                    if _count_list(web_results) < 2:
-                        missing.append("web_results_low")
-                    if _count_list(web_pages) == 0:
-                        missing.append("web_pages_missing")
-                    if finish_reason == "length" or conts > 0:
-                        missing.append("llm_truncated")
-                    if with_diagrams and not has_diagram:
-                        missing.append("diagram_missing")
-
-                    per_kp_report.append(
-                        {
-                            "knowledge_point": kp,
-                            "web_results": _count_list(web_results),
-                            "web_pages": _count_list(web_pages),
-                            "github_results": _count_list(gh.get("results")),
-                            "stackexchange_results": _count_list(se.get("results")),
-                            "tokens_total": total_tokens,
-                            "continuations": conts,
-                            "missing": missing,
-                        }
-                    )
-            except Exception:
-                per_kp_report = []
-            try:
-                timings_blob = ctx.working_memory.get("_tool_timings")
-                timings_list = (
-                    [dict(x) for x in (timings_blob or []) if isinstance(x, dict)]
-                    if isinstance(timings_blob, list)
-                    else []
-                )
-
-                def _safe_int(v: Any) -> int:
-                    try:
-                        return int(v)
-                    except Exception:
-                        return 0
-
-                ms_values: List[int] = []
-                for x in timings_list:
-                    ms = _safe_int(x.get("elapsed_ms"))
-                    if ms > 0:
-                        ms_values.append(ms)
-                ms_values.sort()
-
-                def _pct(sorted_values: List[int], p: float) -> int:
-                    if not sorted_values:
-                        return 0
-                    idx = int((len(sorted_values) - 1) * p)
-                    idx = max(0, min(idx, len(sorted_values) - 1))
-                    return sorted_values[idx]
-
-                by_tool: Dict[str, List[int]] = {}
-                for it in timings_list:
-                    name = str(it.get("name") or "").strip() or "unknown"
-                    ms = _safe_int(it.get("elapsed_ms"))
-                    if ms <= 0:
-                        continue
-                    by_tool.setdefault(name, []).append(ms)
-
-                by_tool_rows: List[Dict[str, Any]] = []
-                for name, ms_list in by_tool.items():
-                    ms_list = sorted([m for m in ms_list if isinstance(m, int) and m > 0])
-                    if not ms_list:
-                        continue
-                    by_tool_rows.append(
-                        {
-                            "name": name,
-                            "count": len(ms_list),
-                            "total_ms": sum(ms_list),
-                            "p50_ms": _pct(ms_list, 0.50),
-                            "p95_ms": _pct(ms_list, 0.95),
-                        }
-                    )
-                by_tool_rows.sort(key=lambda x: int(x.get("total_ms") or 0), reverse=True)
-
-                kp_count = 0
-                try:
-                    kp_count = len({str(x.get("knowledge_point") or "").strip() for x in per_kp_report if isinstance(x, dict) and str(x.get("knowledge_point") or "").strip()})
-                except Exception:
-                    kp_count = 0
-                if kp_count <= 0:
-                    split_res = ctx.working_memory.get("split_knowledge_points")
-                    if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                        kp_count = len([str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()])
-
-                tokens_total = 0
-                for it in per_kp_report:
-                    if not isinstance(it, dict):
-                        continue
-                    tokens_total += _safe_int(it.get("tokens_total"))
-
-                total_ms = sum(ms_values)
-                timing_report = {
-                    "tool_calls": len(ms_values),
-                    "total_elapsed_ms": total_ms,
-                    "p50_ms": _pct(ms_values, 0.50),
-                    "p95_ms": _pct(ms_values, 0.95),
-                    "kp_count": int(kp_count or 0),
-                    "avg_ms_per_kp": int(total_ms / max(1, int(kp_count or 0))),
-                    "tokens_total": tokens_total,
-                    "by_tool": by_tool_rows[:20],
-                }
-            except Exception:
-                timing_report = {}
+            per_kp_report = self._build_per_kp_report(ctx=ctx)
+            timing_report = self._build_timing_report(ctx=ctx, per_kp_report=per_kp_report)
             yield agent_event(
                 "done",
                 {

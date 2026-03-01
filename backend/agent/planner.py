@@ -268,6 +268,12 @@ class Planner:
             # Prefer 2-3 focused passes to increase diversity and keep each ask answerable.
             sub_q_pass1 = max(4, min(sub_questions, 6))
 
+        # Performance: for quick/standard presets, run independent retrieval steps in parallel within each
+        # knowledge point to reduce end-to-end latency. Deep/research presets already do multi-pass retrieval
+        # and are more likely to hit rate limits, so keep them more conservative by default.
+        retrieve_pg = "kp_retrieve" if preset in {"quick", "standard"} else ""
+        extra_sources_pg = retrieve_pg if retrieve_pg else "kp_sources"
+
         steps: List[PlanStep] = [
             PlanStep(
                 id=sid("web_search_knowledge"),
@@ -289,6 +295,7 @@ class Planner:
                     "preset": preset,
                 },
                 foreach_knowledge_point=True,
+                parallel_group=retrieve_pg,
                 thought="为每个知识点检索可用讲解资料，并获取一段 summary 作为“报告型梳理”（概念为主）。",
             ),
         ]
@@ -353,6 +360,7 @@ class Planner:
                         tool="wikipedia_search",
                         arguments={"topic": topic, "subject": subject, "lang": "zh", "sentences": 4, "max_content_length": 2500},
                         foreach_knowledge_point=True,
+                        parallel_group=extra_sources_pg,
                         thought="补充百科级定义与背景，便于建立直观框架。",
                     ),
                     PlanStep(
@@ -369,6 +377,7 @@ class Planner:
                             "max_content_length": 2500,
                         },
                         foreach_knowledge_point=True,
+                        parallel_group=extra_sources_pg,
                         thought="补充 Wikibooks/ProofWiki 等来源的结构化内容（如可用）。",
                     ),
                     PlanStep(
@@ -384,6 +393,7 @@ class Planner:
                             "query_hint": "intuition proof pitfall",
                         },
                         foreach_knowledge_point=True,
+                        parallel_group=extra_sources_pg,
                         thought="补充高质量问答解释与易错点，提升可理解性。",
                     ),
                     PlanStep(
@@ -392,6 +402,7 @@ class Planner:
                         tool="github_search",
                         arguments={"topic": topic, "subject": subject, "limit": 5, "include_readme": False},
                         foreach_knowledge_point=True,
+                        parallel_group=extra_sources_pg,
                         thought="查找教程/笔记仓库，获取更接近“教学表达”的材料线索。",
                     ),
                     PlanStep(
@@ -420,6 +431,7 @@ class Planner:
                         "max_pages": 3,
                     },
                     foreach_knowledge_point=True,
+                    parallel_group=extra_sources_pg,
                     thought="（可选）为每个知识点搜集例题与练习题；默认关闭以优先保证概念质量。",
                 )
             )
