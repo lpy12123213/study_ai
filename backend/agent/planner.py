@@ -424,175 +424,258 @@ class Planner:
                 )
             )
 
-        steps.extend(
-            [
-                PlanStep(
-                    id=sid("aggregate_knowledge"),
-                    title="聚合多源资料（按知识点）",
-                    tool="aggregate_knowledge",
-                    arguments={"topic": topic, "subject": subject},
-                    foreach_knowledge_point=True,
-                    thought="把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
-                ),
-                PlanStep(
-                    id=sid("synthesize_sources"),
-                    title="综合源简报（按知识点）",
-                    tool="synthesize_sources",
-                    arguments={
-                        "topic": topic,
-                        "subject": subject,
-                        "max_web_results": 10 if preset == "quick" else 12 if preset == "standard" else 14,
-                        "max_web_pages": max_web_pages,
-                        "max_page_chars": 2600 if preset != "research" else 3200,
-                    },
-                    foreach_knowledge_point=True,
-                    parallel_group="kp_prewrite",
-                    thought="对聚合素材去噪并提炼关键事实，生成结构化「源简报」，降低后续写作噪声与上下文长度。",
-                ),
-                PlanStep(
-                    id=sid("detect_knowledge_type"),
-                    title="检测知识类型（按知识点）",
-                    tool="detect_knowledge_type",
-                    arguments={"topic": topic, "subject": subject},
-                    foreach_knowledge_point=True,
-                    parallel_group="kp_prewrite",
-                    thought="判断知识点类型（定义/定理/算法等），为后续自适应大纲与写作提供结构先验。",
-                ),
-                PlanStep(
-                    id=sid("generate_outline"),
-                    title="生成自适应大纲（按知识点）",
-                    tool="generate_outline",
-                    arguments={"topic": topic, "subject": subject, "preset": preset, "requirements": requirements},
-                    foreach_knowledge_point=True,
-                    thought="基于知识类型与源简报生成写作大纲（含验证标准），为分段并行写作做准备。",
-                ),
-                PlanStep(
-                    id=sid("generate_study_material"),
-                    title="生成概念讲解（按知识点）",
-                    tool="generate_study_material",
-                    arguments={
-                        "topic": topic,
-                        "subject": subject,
-                        "preset": preset,
-                        "requirements": requirements,
-                        "max_examples": 1 if use_questions else 0,
-                        "max_points": 1,
-                        "max_web_results": 15 if preset == "research" else 12 if preset == "deep" else 10,
-                        # Keep context compact to avoid LLM call failures (context overflow) and improve speed.
-                        "max_web_pages": max_web_pages,
-                        "max_page_chars": 3200 if preset == "research" else 2600,
-                        "with_questions": bool(use_questions),
-                        # Diagrams are generated in a separate parallel stage (generate_diagrams).
-                        "with_diagrams": False,
-                    },
-                    foreach_knowledge_point=True,
-                    thought="按大纲对当前知识点进行分段并行写作，生成可直接自学的核心讲解草稿。",
-                ),
-                PlanStep(
-                    id=sid("critique_draft"),
-                    title="自我批判（按知识点）",
-                    tool="critique_draft",
-                    arguments={"topic": topic, "subject": subject},
-                    foreach_knowledge_point=True,
-                    parallel_group="kp_postwrite",
-                    thought="对草稿做多维度审查（准确性/清晰度/完整性/原创性/深度匹配），给出可执行修订指令。",
-                ),
-                *(
-                    [
-                        PlanStep(
-                            id=sid("generate_diagrams"),
-                            title="生成教学配图（按知识点）",
-                            tool="generate_diagrams",
-                            arguments={"topic": topic, "subject": subject, "preset": preset},
-                            foreach_knowledge_point=True,
-                            parallel_group="kp_postwrite",
-                            thought="为该知识点生成必要的示意图（与自我批判并行），帮助直观理解。",
-                        )
-                    ]
-                    if enable_diagrams
-                    else []
-                ),
-                PlanStep(
-                    id=sid("refine_draft"),
-                    title="精炼修订（按知识点）",
-                    tool="refine_draft",
-                    arguments={"topic": topic, "subject": subject},
-                    foreach_knowledge_point=True,
-                    thought="根据批判意见对草稿做定向修订（高分则自动跳过）。",
-                ),
-                PlanStep(
-                    id=sid("assemble_study_archive"),
-                    title="组装自学档案 Markdown",
-                    tool="assemble_study_archive",
-                    arguments={"topic": topic, "subject": subject},
-                    thought="将生成内容整理成结构化 Markdown：讲解（含示意图）→ 资料来源。",
-                ),
-            ]
-        )
-
-        if iteration > 0 and issues:
+        def _add_default(tool_name: str) -> None:
+            spec = self._default_step_spec(
+                tool_name,
+                topic=topic,
+                subject=subject,
+                difficulty=difficulty,
+                preset=preset,
+                requirements=requirements,
+                max_web_pages=max_web_pages,
+                enable_diagrams=enable_diagrams,
+                enable_questions=use_questions,
+                issues=issues,
+            )
+            if not spec:
+                return
             steps.append(
                 PlanStep(
-                    id=sid("revise_markdown"),
-                    title="根据审查问题修订 Markdown",
-                    tool="revise_markdown",
-                    arguments={"issues": issues},
-                    thought="根据自检发现的问题修订内容，提升完整性与可读性。",
+                    id=sid(tool_name),
+                    title=str(spec.get("title") or tool_name),
+                    tool=tool_name,
+                    arguments=dict(spec.get("arguments") or {}),
+                    foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                    parallel_group=str(spec.get("parallel_group") or ""),
+                    thought=str(spec.get("thought") or ""),
                 )
             )
 
-        steps.extend(
-            [
-                PlanStep(
-                    id=sid("save_markdown_file"),
-                    title="保存 Markdown 到文件",
-                    tool="save_markdown_file",
-                    arguments={"topic": topic, "dir": "study_archives"},
-                    thought="把最终结果保存为本地 Markdown 文件，便于复习与分享。",
-                ),
-                PlanStep(
-                    id=sid("export_study_markdown"),
-                    title="导出 Markdown 下载文件",
-                    tool="export_study_markdown",
-                    arguments={"topic": topic},
-                    thought="将最终 Markdown 发布为可下载链接，前端仅展示下载入口而不直接渲染全文。",
-                ),
-                PlanStep(
-                    id=sid("convert_markdown_to_latex"),
-                    title="Markdown → LaTeX（ElegantBook）",
-                    tool="convert_markdown_to_latex",
-                    arguments={"topic": topic, "subject": subject},
-                    thought="使用 LLM 将 Markdown 转为 ElegantBook LaTeX，为编译 PDF 做准备。",
-                ),
-                PlanStep(
-                    id=sid("refine_latex"),
-                    title="LaTeX 二次修订",
-                    tool="refine_latex",
-                    arguments={"topic": topic, "subject": subject},
-                    thought="对 LaTeX 进行二次修订，尽量减少编译失败与排版问题。",
-                ),
-                PlanStep(
-                    id=sid("compile_latex_to_pdf"),
-                    title="编译 PDF",
-                    tool="compile_latex_to_pdf",
-                    arguments={"topic": topic},
-                    thought="编译 LaTeX 生成 PDF，并发布为可下载链接。",
-                ),
-                PlanStep(
-                    id=sid("review_content"),
-                    title="内容审查",
-                    tool="review_content",
-                    arguments={"topic": topic, "subject": subject},
-                    thought="对结构、准确性与可读性做最后自检，避免明显错误与空泛表述。",
-                ),
-            ]
-        )
+        for tool_name in (
+            "aggregate_knowledge",
+            "synthesize_sources",
+            "detect_knowledge_type",
+            "generate_outline",
+            "generate_study_material",
+            "critique_draft",
+            "generate_diagrams",
+            "refine_draft",
+            "assemble_study_archive",
+        ):
+            _add_default(tool_name)
+
+        if iteration > 0 and issues:
+            _add_default("revise_markdown")
+
+        for tool_name in (
+            "save_markdown_file",
+            "export_study_markdown",
+            "convert_markdown_to_latex",
+            "refine_latex",
+            "compile_latex_to_pdf",
+            "review_content",
+        ):
+            _add_default(tool_name)
 
         if use_questions:
             rationale = f"计划：拆分/审核（已完成）→逐点网搜→逐点题库→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         else:
             rationale = f"计划：拆分/审核（已完成）→逐点网搜→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
+
+    def _default_step_spec(
+        self,
+        tool: str,
+        *,
+        topic: str,
+        subject: str,
+        difficulty: str,
+        preset: str,
+        requirements: str,
+        max_web_pages: int,
+        enable_diagrams: bool,
+        enable_questions: bool,
+        issues: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Single source of truth for common step defaults.
+
+        This keeps `_fallback_plan` and `_parse_llm_plan` consistent and prevents
+        the two code paths from drifting.
+        """
+
+        t = str(tool or "").strip()
+        if not t:
+            return None
+
+        if t == "aggregate_knowledge":
+            return {
+                "title": "聚合多源资料（按知识点）",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": True,
+                "parallel_group": "",
+                "thought": "把网搜/题库结果按知识点聚合，形成可用于写作的统一素材。",
+            }
+
+        if t == "synthesize_sources":
+            max_web_results = 10 if preset == "quick" else 12 if preset == "standard" else 14
+            return {
+                "title": "综合源简报（按知识点）",
+                "arguments": {
+                    "topic": topic,
+                    "subject": subject,
+                    "max_web_results": max_web_results,
+                    "max_web_pages": max_web_pages,
+                    "max_page_chars": 2600 if preset != "research" else 3200,
+                },
+                "foreach_knowledge_point": True,
+                "parallel_group": "kp_prewrite",
+                "thought": "对聚合素材去噪并提炼关键事实，生成结构化源简报，降低后续写作噪声与上下文长度。",
+            }
+
+        if t == "detect_knowledge_type":
+            return {
+                "title": "检测知识类型（按知识点）",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": True,
+                "parallel_group": "kp_prewrite",
+                "thought": "判断知识点类型（定义/定理/算法等），为后续自适应大纲与写作提供结构先验。",
+            }
+
+        if t == "generate_outline":
+            return {
+                "title": "生成自适应大纲（按知识点）",
+                "arguments": {"topic": topic, "subject": subject, "preset": preset, "requirements": requirements},
+                "foreach_knowledge_point": True,
+                "parallel_group": "",
+                "thought": "基于知识类型与源简报生成写作大纲（含验证标准），为分段并行写作做准备。",
+            }
+
+        if t == "generate_study_material":
+            max_web_results = 15 if preset == "research" else 12 if preset == "deep" else 10
+            return {
+                "title": "生成概念讲解（按知识点）",
+                "arguments": {
+                    "topic": topic,
+                    "subject": subject,
+                    "preset": preset,
+                    "requirements": requirements,
+                    "max_examples": 1 if enable_questions else 0,
+                    "max_points": 1,
+                    "max_web_results": max_web_results,
+                    "max_web_pages": max_web_pages,
+                    "max_page_chars": 3200 if preset == "research" else 2600,
+                    "with_questions": bool(enable_questions),
+                    # Diagrams are generated in a separate stage (generate_diagrams).
+                    "with_diagrams": False,
+                },
+                "foreach_knowledge_point": True,
+                "parallel_group": "",
+                "thought": "按大纲对当前知识点进行分段并行写作，生成可直接自学的核心讲解草稿（配图在后续阶段生成）。",
+            }
+
+        if t == "critique_draft":
+            return {
+                "title": "自我批判（按知识点）",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": True,
+                "parallel_group": "kp_postwrite",
+                "thought": "对草稿多维度审查（结构/准确性/完整性/原创性/深度匹配），给出可执行修订指令。",
+            }
+
+        if t == "generate_diagrams":
+            if not enable_diagrams:
+                return None
+            return {
+                "title": "生成教学配图（按知识点）",
+                "arguments": {"topic": topic, "subject": subject, "preset": preset},
+                "foreach_knowledge_point": True,
+                "parallel_group": "kp_postwrite",
+                "thought": "为该知识点生成必要的示意图（与自我批判并行），帮助直观理解。",
+            }
+
+        if t == "refine_draft":
+            return {
+                "title": "精炼修订（按知识点）",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": True,
+                "parallel_group": "",
+                "thought": "根据批判意见对草稿做定向修订（高分则自动跳过）。",
+            }
+
+        if t == "assemble_study_archive":
+            return {
+                "title": "组装自学档案 Markdown",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "将生成内容整理成结构化 Markdown：讲解（含示意图）→ 资料来源。",
+            }
+
+        if t == "revise_markdown":
+            issues = issues or []
+            return {
+                "title": "根据审查问题修订 Markdown",
+                "arguments": {"issues": issues},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "根据自检发现的问题修订内容，提升完整性与可读性。",
+            }
+
+        if t == "save_markdown_file":
+            return {
+                "title": "保存 Markdown 到文件",
+                "arguments": {"topic": topic, "dir": "study_archives"},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "把最终结果保存为本地 Markdown 文件，便于复习与分享。",
+            }
+
+        if t == "export_study_markdown":
+            return {
+                "title": "导出 Markdown 下载文件",
+                "arguments": {"topic": topic},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "将最终 Markdown 发布为可下载链接，前端仅展示下载入口而不直接渲染全文。",
+            }
+
+        if t == "convert_markdown_to_latex":
+            return {
+                "title": "Markdown → LaTeX（ElegantBook）",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "使用 LLM 将 Markdown 转为 ElegantBook LaTeX，为编译 PDF 做准备。",
+            }
+
+        if t == "refine_latex":
+            return {
+                "title": "LaTeX 二次修订",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "对 LaTeX 进行二次修订，尽量减少编译失败与排版问题。",
+            }
+
+        if t == "compile_latex_to_pdf":
+            return {
+                "title": "编译 PDF",
+                "arguments": {"topic": topic},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "编译 LaTeX 生成 PDF，并发布为可下载链接。",
+            }
+
+        if t == "review_content":
+            return {
+                "title": "内容审查",
+                "arguments": {"topic": topic, "subject": subject},
+                "foreach_knowledge_point": False,
+                "parallel_group": "",
+                "thought": "对结构、准确性与可读性做最后自检，避免明显错误与空泛表述。",
+            }
+
+        return None
 
     def _parse_llm_plan(
         self,
@@ -678,7 +761,21 @@ class Planner:
         if not steps:
             return None
 
-        # Ensure essential finishing steps exist.
+        flags = flags if isinstance(flags, dict) else {}
+        preset = str(flags.get("preset") or "standard").strip().lower() or "standard"
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
+        requirements = str(flags.get("requirements") or "").strip()
+        enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
+        enable_questions = bool(flags.get("enable_questions")) if "enable_questions" in flags else False
+        max_web_pages = 2
+        if preset == "quick":
+            max_web_pages = 1
+        elif preset == "deep":
+            max_web_pages = 3
+        elif preset == "research":
+            max_web_pages = 4
+
         required_tail = [
             "generate_study_material",
             "assemble_study_archive",
@@ -693,104 +790,31 @@ class Planner:
         for tool in required_tail:
             if tool in existing_tools:
                 continue
-            if tool == "generate_study_material":
-                preset = str(flags.get("preset") or "standard").strip().lower() or "standard"
-                requirements = str(flags.get("requirements") or "").strip()
-                enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
-                enable_questions = bool(flags.get("enable_questions")) if "enable_questions" in flags else False
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="生成概念讲解（按知识点）",
-                        tool=tool,
-                        arguments={
-                            "topic": topic,
-                            "subject": subject,
-                            "preset": preset,
-                            "requirements": requirements,
-                            "max_examples": 0,
-                            "max_points": 1,
-                            "max_web_results": 10,
-                            "max_web_pages": 2,
-                            "max_page_chars": 2600,
-                            "with_questions": bool(enable_questions),
-                            # Diagrams are generated in a separate tool stage (generate_diagrams).
-                            "with_diagrams": False,
-                        },
-                        foreach_knowledge_point=True,
-                        thought="为当前知识点生成概念讲解草稿（配图在后续阶段生成）。",
-                    )
+            spec = self._default_step_spec(
+                tool,
+                topic=topic,
+                subject=subject,
+                difficulty=difficulty,
+                preset=preset,
+                requirements=requirements,
+                max_web_pages=max_web_pages,
+                enable_diagrams=enable_diagrams,
+                enable_questions=enable_questions,
+                issues=issues,
+            )
+            if not spec:
+                continue
+            steps.append(
+                PlanStep(
+                    id=sid(tool),
+                    title=str(spec.get("title") or tool),
+                    tool=tool,
+                    arguments=dict(spec.get("arguments") or {}),
+                    foreach_knowledge_point=bool(spec.get("foreach_knowledge_point") or False),
+                    parallel_group=str(spec.get("parallel_group") or ""),
+                    thought=str(spec.get("thought") or ""),
                 )
-            elif tool == "assemble_study_archive":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="组装自学档案 Markdown",
-                        tool=tool,
-                        arguments={"topic": topic, "subject": subject},
-                        thought="整理为 Markdown，自学结构更清晰。",
-                    )
-                )
-            elif tool == "save_markdown_file":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="保存 Markdown 到文件",
-                        tool=tool,
-                        arguments={"topic": topic, "dir": "study_archives"},
-                        thought="保存到本地文件，方便后续复习。",
-                    )
-                )
-            elif tool == "export_study_markdown":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="导出 Markdown 下载文件",
-                        tool=tool,
-                        arguments={"topic": topic},
-                        thought="发布 Markdown 为下载链接（不在页面渲染全文）。",
-                    )
-                )
-            elif tool == "convert_markdown_to_latex":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="Markdown → LaTeX（ElegantBook）",
-                        tool=tool,
-                        arguments={"topic": topic, "subject": subject},
-                        thought="将 Markdown 转为 ElegantBook LaTeX，以便编译 PDF。",
-                    )
-                )
-            elif tool == "refine_latex":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="LaTeX 二次修订",
-                        tool=tool,
-                        arguments={"topic": topic, "subject": subject},
-                        thought="对 LaTeX 做二次修订，减少排版/编译问题。",
-                    )
-                )
-            elif tool == "compile_latex_to_pdf":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="编译 PDF",
-                        tool=tool,
-                        arguments={"topic": topic},
-                        thought="编译 LaTeX 得到 PDF 并发布下载链接。",
-                    )
-                )
-            elif tool == "review_content":
-                steps.append(
-                    PlanStep(
-                        id=sid(tool),
-                        title="内容审查",
-                        tool=tool,
-                        arguments={"topic": topic, "subject": subject},
-                        thought="最后审查结构与可靠性，避免明显错误。",
-                    )
-                )
+            )
 
         # Ensure the new multi-stage study-materials pipeline is visible and executed even when
         # the planner LLM omits some steps.

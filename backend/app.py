@@ -14,6 +14,7 @@ import sys
 import asyncio
 import hashlib
 import time
+import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,6 +31,7 @@ if __package__ is None or __package__ == "":
 
 from backend.api.router import api_router
 from backend.crawler_manager import close_crawler
+from backend.core.logging_utils import configure_logging, set_request_id
 from backend.core.llm_client import (
     reset_llm_api_key_override,
     reset_moonshot_api_key_override,
@@ -42,6 +44,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
 
 # NOTE: This app includes the new `/api/study-materials/*` routes via `backend/api/router.py`.
+
+_log_format = (os.getenv("LOG_FORMAT") or "").strip().lower()
+configure_logging(force=(not _log_format or _log_format == "json"))
 
 
 @asynccontextmanager
@@ -78,6 +83,18 @@ def create_app() -> FastAPI:
 
     _rate_lock = asyncio.Lock()
     _rate_hits: dict[str, deque[float]] = defaultdict(deque)
+
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        incoming = str(request.headers.get("X-Request-ID") or "").strip()
+        rid = incoming or f"req_{uuid.uuid4().hex[:12]}"
+        set_request_id(rid)
+        response = await call_next(request)
+        try:
+            response.headers["X-Request-ID"] = rid
+        except Exception:
+            pass
+        return response
 
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
