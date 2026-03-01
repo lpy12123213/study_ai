@@ -82,11 +82,11 @@ def create_app() -> FastAPI:
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
 
-         index_path = DIST_PATH / "index.html"
-         if index_path.exists():
-             # Prevent stale SPA shells after redeploys/builds. Asset files are fingerprinted
-             # (hashed) so they can still be cached safely.
-             return FileResponse(index_path, headers={"Cache-Control": "no-cache, max-age=0, must-revalidate"})
+        index_path = DIST_PATH / "index.html"
+        if index_path.exists():
+            # Prevent stale SPA shells after redeploys/builds. Asset files are fingerprinted
+            # (hashed) so they can still be cached safely.
+            return FileResponse(index_path, headers={"Cache-Control": "no-cache, max-age=0, must-revalidate"})
         raise HTTPException(
             status_code=503,
             detail="Frontend not built. Please run 'npm run build' in frontend directory.",
