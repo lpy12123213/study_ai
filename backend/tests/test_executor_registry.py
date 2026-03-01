@@ -1,0 +1,23 @@
+import unittest
+
+
+class TestExecutorRegistry(unittest.TestCase):
+    def test_tool_registry_contains_common_tools(self):
+        from backend.agent.executor import Executor
+
+        ex = Executor()
+        handlers = getattr(ex, "_tool_handlers", None)
+        self.assertIsInstance(handlers, dict)
+
+        for tool in (
+            "split_knowledge_points",
+            "web_search_knowledge",
+            "aggregate_knowledge",
+            "synthesize_sources",
+            "generate_outline",
+            "generate_study_material",
+            "assemble_study_archive",
+            "review_content",
+        ):
+            self.assertIn(tool, handlers)
+

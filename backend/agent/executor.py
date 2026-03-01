@@ -20,11 +20,51 @@ _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]
 )
 
 
-class Executor(
+class _ToolBox(
     *TOOL_MIXINS,
 ):
+    """Composition wrapper around tool mixins.
+
+    Tool mixins were historically inherited directly by `Executor`, which grew a
+    long and fragile multiple-inheritance chain. `_ToolBox` keeps the mixins
+    isolated and delegates unknown attributes back to the owning `Executor`.
+    """
+
+    def __init__(self, *, executor: "Executor") -> None:
+        self._executor = executor
+        # Many tools expect `self.config` to exist.
+        self.config = executor.config
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover (simple delegation)
+        return getattr(self._executor, name)
+
+
+class Executor:
     def __init__(self, *, config: Optional[AgentConfig] = None) -> None:
         self.config = config or AgentConfig.from_env()
+        self._toolbox = _ToolBox(executor=self)
+        self._tool_handlers = self._build_tool_handlers()
+
+    def _build_tool_handlers(self) -> Dict[str, Callable[[Dict[str, Any], CompressedContext], Awaitable[Any]]]:
+        """Build a stable `{tool_name -> handler}` dispatch table.
+
+        This detects duplicate registrations early (avoids silent MRO overrides).
+        """
+
+        handlers: Dict[str, Callable[[Dict[str, Any], CompressedContext], Awaitable[Any]]] = {}
+        for mixin in TOOL_MIXINS:
+            for attr_name, value in (getattr(mixin, "__dict__", {}) or {}).items():
+                if not attr_name.startswith("_tool_"):
+                    continue
+                if not callable(value):
+                    continue
+                tool_name = attr_name[len("_tool_") :].strip()
+                if not tool_name:
+                    continue
+                if tool_name in handlers:
+                    raise RuntimeError(f"duplicate_tool_registration: {tool_name}")
+                handlers[tool_name] = getattr(self._toolbox, attr_name)
+        return handlers
 
     @staticmethod
     def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -91,7 +131,7 @@ class Executor(
         emit_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> StepResult:
         tool = (step.tool or "").strip()
-        handler = getattr(self, f"_tool_{tool}", None)
+        handler = self._tool_handlers.get(tool)
         if handler is None:
             return StepResult(step_id=step.id, tool=tool, success=False, error=f"Unknown tool: {tool}")
 
