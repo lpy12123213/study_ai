@@ -126,7 +126,13 @@ export default function ChatPage() {
   const [createError, setCreateError] = useState<string | null>(null)
   const stickToBottomRef = useRef(true)
 
-  const { data: historyMessages, isLoading: isHistoryLoading } = useMessages(conversationId)
+  const {
+    messages: historyMessages,
+    isLoading: isHistoryLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useMessages(conversationId)
   const { messages, setMessages, isStreaming, error, sendMessage, cancelStream } = useChatStream()
 
   const handleScroll = useCallback(() => {
@@ -140,12 +146,19 @@ export default function ChatPage() {
   useEffect(() => {
     if (!conversationId) return
     if (!historyMessages) return
-    // Avoid wiping streaming/tool steps on background refetch.
-    if (hydratedConversationIdRef.current === conversationId) return
     if (isStreaming) return
 
-    hydratedConversationIdRef.current = conversationId
-    setMessages(historyMessages)
+    setMessages((prev) => {
+      if (hydratedConversationIdRef.current !== conversationId) {
+        hydratedConversationIdRef.current = conversationId
+        return historyMessages
+      }
+
+      const seen = new Set(prev.map((m) => m.id))
+      const older = historyMessages.filter((m) => !seen.has(m.id))
+      if (older.length === 0) return prev
+      return [...older, ...prev]
+    })
   }, [conversationId, historyMessages, isStreaming, setMessages])
 
   useEffect(() => {
@@ -240,6 +253,23 @@ export default function ChatPage() {
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
           <div className="max-w-3xl mx-auto py-6">
+            {(hasNextPage || isFetchingNextPage) && (
+              <div className="flex justify-center mb-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                >
+                  {isFetchingNextPage ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : null}
+                  加载更早消息
+                </Button>
+              </div>
+            )}
+
             <AnimatePresence mode="popLayout">
               {messages.map((message) => (
                 <MessageBubble key={message.id} message={message} />

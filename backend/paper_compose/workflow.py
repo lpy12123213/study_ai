@@ -204,7 +204,7 @@ async def compose_paper_events(
             yield {"type": "error", "error": "missing_paper_id", "taskId": task_id}
             return
 
-        existing_paper = await get_paper(existing_paper_id)
+        existing_paper = await get_paper(user_id=user_id, paper_id=existing_paper_id)
         if not existing_paper:
             yield {"type": "error", "error": "paper_not_found", "taskId": task_id, "data": {"paperId": existing_paper_id}}
             return
@@ -725,8 +725,6 @@ async def compose_paper_events(
                     selected_fps.add(fp)
 
         try:
-            import asyncio
-
             from backend.core.llm_client import chat_completion_text
             from backend.core.settings import MAIN_MODEL
 
@@ -1162,10 +1160,10 @@ async def compose_paper_events(
         )
 
     if mode == "fill_shortfalls":
-        await add_questions_to_paper(paper_id=existing_paper_id, questions=q_dicts)
+        await add_questions_to_paper(user_id=user_id, paper_id=existing_paper_id, questions=q_dicts)
         paper_id = int(existing_paper_id)
     else:
-        paper_id = await save_paper(paper_name=paper_name, questions=q_dicts)
+        paper_id = await save_paper(user_id=user_id, paper_name=paper_name, questions=q_dicts)
     try:
         await mark_used_questions(
             question_ids=[q.get("question_id") for q in q_dicts if isinstance(q, dict)],
@@ -1173,7 +1171,7 @@ async def compose_paper_events(
         )
     except Exception:
         pass
-    paper = await get_paper(paper_id)
+    paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         yield {"type": "error", "error": "paper_save_failed", "taskId": task_id}
         return

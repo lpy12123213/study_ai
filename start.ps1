@@ -54,6 +54,86 @@ function Ensure-Venv {
   return $venvPython
 }
 
+function Get-ContentFingerprint {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string[]]$Paths
+  )
+
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $builder = New-Object System.Text.StringBuilder
+    foreach ($path in $Paths) {
+      if (-not (Test-Path $path)) { continue }
+      $resolved = (Resolve-Path $path).Path
+      [void]$builder.AppendLine("## $resolved")
+      [void]$builder.AppendLine([System.IO.File]::ReadAllText($resolved))
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($builder.ToString())
+    $hash = $sha.ComputeHash($bytes)
+    return ([System.BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $sha.Dispose()
+  }
+}
+
+function Read-Stamp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  if (-not (Test-Path $Path)) {
+    return ''
+  }
+  return (Get-Content $Path -Raw).Trim()
+}
+
+function Write-Stamp {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+    [Parameter(Mandatory = $true)]
+    [string]$Value
+  )
+
+  $dir = Split-Path -Parent $Path
+  if ($dir -and -not (Test-Path $dir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  Set-Content -Path $Path -Value $Value -Encoding utf8
+}
+
+function Invoke-CheckedNative {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Label,
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory = ""
+  )
+
+  $previous = $null
+  if ($WorkingDirectory) {
+    $previous = Get-Location
+    Push-Location $WorkingDirectory
+  }
+
+  try {
+    & $FilePath @ArgumentList
+    $exitCode = $LASTEXITCODE
+  } finally {
+    if ($previous) {
+      Pop-Location
+    }
+  }
+
+  if ($exitCode -ne 0) {
+    throw ("{0} failed with exit code {1}" -f $Label, $exitCode)
+  }
+}
+
 function Ensure-BackendDeps {
   param(
     [Parameter(Mandatory = $true)]
@@ -64,18 +144,26 @@ function Ensure-BackendDeps {
 
   Write-Host "[setup] Checking backend deps..." -ForegroundColor Cyan
 
-  # NOTE: some tools (pip / playwright installer) print warnings to stderr even
-  # on success. With `$ErrorActionPreference = 'Stop'` that can terminate the
-  # script. Temporarily suppress native stderr error records, and rely on
-  # `$LASTEXITCODE` for the real success/failure signal.
-  $oldEap = $ErrorActionPreference
-  $ErrorActionPreference = 'SilentlyContinue'
-  & $PythonExe -m pip show fastapi *> $null
-  $pipShowExit = $LASTEXITCODE
-  $ErrorActionPreference = $oldEap
+  $requirementsFiles = @(
+    (Join-Path $Root 'requirements.txt')
+  )
+  $requirementsDev = Join-Path $Root 'requirements-dev.txt'
+  if (Test-Path $requirementsDev) {
+    $requirementsFiles += $requirementsDev
+  }
 
-  if ($pipShowExit -ne 0) {
-    & $PythonExe -m pip install -r (Join-Path $Root 'requirements.txt')
+  $requirementsStamp = Join-Path $Root 'venv\.backend-requirements.sha256'
+  $expectedFingerprint = Get-ContentFingerprint -Paths $requirementsFiles
+  $installedFingerprint = Read-Stamp -Path $requirementsStamp
+
+  if ($expectedFingerprint -ne $installedFingerprint) {
+    Write-Host "[setup] Installing backend Python packages..." -ForegroundColor Cyan
+    Invoke-CheckedNative -Label 'pip install bootstrap tools' -FilePath $PythonExe -ArgumentList @('-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel')
+    Invoke-CheckedNative -Label 'pip install requirements.txt' -FilePath $PythonExe -ArgumentList @('-m', 'pip', 'install', '-r', (Join-Path $Root 'requirements.txt'))
+    if (Test-Path $requirementsDev) {
+      Invoke-CheckedNative -Label 'pip install requirements-dev.txt' -FilePath $PythonExe -ArgumentList @('-m', 'pip', 'install', '-r', $requirementsDev)
+    }
+    Write-Stamp -Path $requirementsStamp -Value $expectedFingerprint
   }
 
   $oldEap = $ErrorActionPreference
@@ -85,7 +173,7 @@ function Ensure-BackendDeps {
   $ErrorActionPreference = $oldEap
 
   if ($playwrightVersionExit -ne 0) {
-    & $PythonExe -m pip install playwright
+    Invoke-CheckedNative -Label 'pip install playwright' -FilePath $PythonExe -ArgumentList @('-m', 'pip', 'install', 'playwright')
   }
 
   $oldEap = $ErrorActionPreference
@@ -110,12 +198,25 @@ function Ensure-FrontendDeps {
     throw "npm not found in PATH. Please install Node.js (LTS) and retry."
   }
 
-  $nodeModules = Join-Path $Root 'frontend\node_modules'
-  if (-not (Test-Path $nodeModules)) {
+  $frontendDir = Join-Path $Root 'frontend'
+  $nodeModules = Join-Path $frontendDir 'node_modules'
+  $frontendFiles = @(
+    (Join-Path $frontendDir 'package.json')
+  )
+  $packageLock = Join-Path $frontendDir 'package-lock.json'
+  if (Test-Path $packageLock) {
+    $frontendFiles += $packageLock
+  }
+  $depsStamp = Join-Path $frontendDir 'node_modules\.deps.sha256'
+  $expectedFingerprint = Get-ContentFingerprint -Paths $frontendFiles
+  $installedFingerprint = Read-Stamp -Path $depsStamp
+
+  if ((-not (Test-Path $nodeModules)) -or $expectedFingerprint -ne $installedFingerprint) {
     Write-Host "[setup] Installing frontend deps..." -ForegroundColor Cyan
-    Push-Location (Join-Path $Root 'frontend')
+    Push-Location $frontendDir
     try {
-      & npm install
+      Invoke-CheckedNative -Label 'npm install' -FilePath 'npm' -ArgumentList @('install')
+      Write-Stamp -Path $depsStamp -Value $expectedFingerprint
     } finally {
       Pop-Location
     }
@@ -204,29 +305,44 @@ function Run-Doctor {
   )
 
   Write-Host "[doctor] python -m compileall . -q" -ForegroundColor Cyan
-  Push-Location $Root
-  try {
-    & $PythonExe -m compileall . -q
-    & $PythonExe -c "import backend.app, backend.mcp.stdio_server"
-  } finally {
-    Pop-Location
-  }
+  Invoke-CheckedNative -Label 'python -m compileall' -FilePath $PythonExe -ArgumentList @('-m', 'compileall', '.', '-q') -WorkingDirectory $Root
+  Write-Host "[doctor] python -c `"import backend.app, backend.mcp.stdio_server, mcp_server.server`"" -ForegroundColor Cyan
+  Invoke-CheckedNative -Label 'python import check' -FilePath $PythonExe -ArgumentList @('-c', 'import backend.app, backend.mcp.stdio_server, mcp_server.server') -WorkingDirectory $Root
+  Write-Host "[doctor] python -m pip check" -ForegroundColor Cyan
+  Invoke-CheckedNative -Label 'python -m pip check' -FilePath $PythonExe -ArgumentList @('-m', 'pip', 'check') -WorkingDirectory $Root
+  Write-Host "[doctor] python -m unittest discover -s backend/tests -p `"test_*.py`"" -ForegroundColor Cyan
+  Invoke-CheckedNative -Label 'python -m unittest discover' -FilePath $PythonExe -ArgumentList @('-m', 'unittest', 'discover', '-s', 'backend/tests', '-p', 'test_*.py') -WorkingDirectory $Root
+  $ruffTargets = @(
+    'backend/api/chat.py',
+    'backend/api/media.py',
+    'backend/api/papers.py',
+    'backend/api/subjects.py',
+    'backend/api/canvas.py',
+    'backend/api/study_materials.py',
+    'backend/chat/llm_mixin.py',
+    'backend/chat/service.py',
+    'backend/core/plot_tools.py',
+    'backend/database/repositories/papers.py',
+    'backend/study_materials/task_manager.py',
+    'backend/paper_compose/workflow.py',
+    'backend/tests'
+  )
+  Write-Host "[doctor] python -m ruff check <maintained backend paths>" -ForegroundColor Cyan
+  $ruffArgs = @('-m', 'ruff', 'check') + $ruffTargets
+  Invoke-CheckedNative -Label 'python -m ruff check maintained backend paths' -FilePath $PythonExe -ArgumentList $ruffArgs -WorkingDirectory $Root
 
   $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
   if ($npmCmd) {
     Ensure-FrontendDeps -Root $Root
+    Write-Host "[doctor] npm run lint" -ForegroundColor Cyan
+    Invoke-CheckedNative -Label 'npm run lint' -FilePath 'npm' -ArgumentList @('run', 'lint') -WorkingDirectory (Join-Path $Root 'frontend')
     Write-Host "[doctor] npm run build" -ForegroundColor Cyan
-    Push-Location (Join-Path $Root 'frontend')
-    try {
-      & npm run build
-    } finally {
-      Pop-Location
-    }
+    Invoke-CheckedNative -Label 'npm run build' -FilePath 'npm' -ArgumentList @('run', 'build') -WorkingDirectory (Join-Path $Root 'frontend')
   } else {
     Write-Host "[doctor] npm not found; skipping frontend build." -ForegroundColor Yellow
   }
 
-  Write-Host "Smoke checks passed." -ForegroundColor Green
+  Write-Host "Doctor checks passed." -ForegroundColor Green
 }
 
 $Root = $PSScriptRoot

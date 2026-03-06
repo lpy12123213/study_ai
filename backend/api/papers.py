@@ -6,19 +6,41 @@ import os
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from backend.analysis_service import analyze_paper
 from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
-from backend.analysis_service import analyze_paper
 from backend.database.models import delete_paper, get_paper, list_papers, save_paper
 from backend.paper_compose.compose_tasks import compose_tasks
-from backend.paper_compose.task_manager import PaperComposeTask
 from backend.paper_compose.export import export_paper as export_paper_doc
+from backend.paper_compose.task_manager import PaperComposeTask
 from backend.paper_compose.workflow import compose_paper_events
 
 router = APIRouter(dependencies=[Depends(require_auth)])
+_PAPER_ANALYSIS_CACHE: dict[tuple[int, str], dict] = {}
+
+
+def clear_paper_analysis_cache() -> None:
+    _PAPER_ANALYSIS_CACHE.clear()
+
+
+async def _get_cached_paper_analysis(*, paper_id: int, paper: dict) -> dict:
+    version = str(paper.get("updated_at") or paper.get("created_at") or "").strip()
+    key = (int(paper_id), version)
+    cached = _PAPER_ANALYSIS_CACHE.get(key)
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    loop = asyncio.get_running_loop()
+    analysis = await loop.run_in_executor(None, analyze_paper, paper)
+    if len(_PAPER_ANALYSIS_CACHE) >= 256:
+        oldest_key = next(iter(_PAPER_ANALYSIS_CACHE.keys()), None)
+        if oldest_key is not None:
+            _PAPER_ANALYSIS_CACHE.pop(oldest_key, None)
+    _PAPER_ANALYSIS_CACHE[key] = dict(analysis or {})
+    return dict(analysis or {})
 
 
 @router.post("/papers", response_model=dict)
@@ -34,18 +56,21 @@ async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -
 
 
 @router.get("/papers/{paper_id}", response_model=PaperResponse)
-async def get_paper_info(paper_id: int, user: dict = Depends(require_auth)) -> dict:
+async def get_paper_info(
+    paper_id: int,
+    include_analysis: bool = Query(False),
+    user: dict = Depends(require_auth),
+) -> dict:
     """获取试卷信息"""
     user_id = str((user or {}).get("user_id") or "").strip() or "1"
     paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
 
-    # analyze_paper() does network I/O (OpenRouter) synchronously; offload it
-    # to a thread to avoid blocking the event loop.
-    loop = asyncio.get_running_loop()
-    analysis = await loop.run_in_executor(None, analyze_paper, paper)
-    paper["analysis"] = analysis
+    if include_analysis:
+        paper["analysis"] = await _get_cached_paper_analysis(paper_id=paper_id, paper=paper)
+    else:
+        paper.pop("analysis", None)
     return paper
 
 

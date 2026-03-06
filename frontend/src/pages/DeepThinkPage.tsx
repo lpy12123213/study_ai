@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Brain, ChevronDown, ChevronUp, Loader2, Paperclip, RefreshCw, Send } from 'lucide-react'
+import { Brain, ChevronDown, ChevronUp, Loader2, Paperclip, RefreshCw, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -108,9 +108,32 @@ export default function DeepThinkPage() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const stickToBottomRef = useRef(true)
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false)
 
-  const { status, nodes, bestPath, answer, metrics, error, config, solve, reset } = useDeepThink()
+  const { status, nodes, bestPath, answer, metrics, error, config, solve, cancel, reset } = useDeepThink()
   const isStreaming = status === 'searching' || status === 'answering'
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    stickToBottomRef.current = true
+    setShowJumpToBottom(false)
+    requestAnimationFrame(() => {
+      const target = scrollRef.current
+      if (!target) return
+      target.scrollTop = target.scrollHeight
+    })
+  }, [])
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
+    const nearBottom = distanceToBottom < 120
+    stickToBottomRef.current = nearBottom
+    setShowJumpToBottom((prev) => (prev !== !nearBottom ? !nearBottom : prev))
+  }, [])
 
   useEffect(() => {
     if (subjects && subjects.length > 0 && !subject) {
@@ -125,9 +148,14 @@ export default function DeepThinkPage() {
   }, [answer])
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
+    if (!stickToBottomRef.current) return
+    const el = scrollRef.current
+    if (!el) return
+    requestAnimationFrame(() => {
+      const target = scrollRef.current
+      if (!target) return
+      target.scrollTop = target.scrollHeight
+    })
   }, [messages])
 
   const selectedNode = useMemo(() => {
@@ -169,6 +197,9 @@ export default function DeepThinkPage() {
     e?.preventDefault()
     const question = input.trim()
     if (!question || isStreaming) return
+
+    stickToBottomRef.current = true
+    setShowJumpToBottom(false)
 
     const now = new Date().toISOString()
     const userMessage: DeepThinkChatMessage = {
@@ -223,7 +254,7 @@ export default function DeepThinkPage() {
       {messages.length === 0 ? (
         <WelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
+        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
           <div className="max-w-3xl mx-auto py-6">
             <AnimatePresence mode="popLayout">
               {messages.map((message) => {
@@ -483,17 +514,30 @@ export default function DeepThinkPage() {
                 }}
               />
 
-              <Button
-                type="submit"
-                size="icon"
-                className={cn(
-                  'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
-                  input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
-                )}
-                disabled={!input.trim() || isStreaming}
-              >
-                {isStreaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </Button>
+              {isStreaming ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-9 w-9 rounded-xl shrink-0 mb-0.5"
+                  onClick={() => cancel('user_cancelled')}
+                  title="停止"
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={cn(
+                    'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
+                    input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+                  )}
+                  disabled={!input.trim()}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </form>
 
@@ -502,6 +546,15 @@ export default function DeepThinkPage() {
           </div>
         </div>
       </div>
+
+      {messages.length > 0 && showJumpToBottom && (
+        <div className="absolute bottom-28 right-4">
+          <Button type="button" variant="secondary" size="sm" className="shadow-md" onClick={scrollToBottom}>
+            回到底部
+            <ChevronDown className="h-4 w-4 ml-1" />
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

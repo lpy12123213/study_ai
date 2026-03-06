@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import require_auth
@@ -7,6 +10,20 @@ from backend.crawler_manager import get_crawler
 from backend.subjects import get_all_subjects, resolve_subject
 
 router = APIRouter()
+_SUBJECT_FILTERS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def clear_subject_filters_cache() -> None:
+    _SUBJECT_FILTERS_CACHE.clear()
+
+
+def _subject_filters_cache_ttl_s() -> float:
+    raw = str(os.getenv("SUBJECT_FILTERS_CACHE_TTL_S") or "").strip()
+    try:
+        ttl = float(raw) if raw else 10 * 60.0
+    except Exception:
+        ttl = 10 * 60.0
+    return max(0.0, min(ttl, 24.0 * 60.0 * 60.0))
 
 
 @router.get("/subjects")
@@ -32,6 +49,11 @@ async def get_subject_filters(subject_code: str, user: dict = Depends(require_au
         subject = resolve_subject(subject_input, strict=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    ttl_s = _subject_filters_cache_ttl_s()
+    cached = _SUBJECT_FILTERS_CACHE.get(subject)
+    if ttl_s > 0 and cached and (time.time() - cached[0]) <= ttl_s:
+        return dict(cached[1])
 
     crawler = await get_crawler(subject=subject, edu_level="", strict=True)
     result = await crawler.get_available_filters()
@@ -75,11 +97,17 @@ async def get_subject_filters(subject_code: str, user: dict = Depends(require_au
             out.append({"id": it.get("id"), "name": it.get("name")})
         return out
 
-    return {
+    payload = {
         "grades": _keep_id_name_list(grades),
         "textbookVersions": _keep_id_name_list(textbook_versions),
         "provinces": _keep_id_name_list(provinces),
         "paperTypes": paper_types,
         "questionTypes": _keep_id_name_list(question_types),
     }
+    if ttl_s > 0:
+        _SUBJECT_FILTERS_CACHE[subject] = (time.time(), dict(payload))
+        if len(_SUBJECT_FILTERS_CACHE) > 128:
+            oldest_key = min(_SUBJECT_FILTERS_CACHE, key=lambda key: _SUBJECT_FILTERS_CACHE[key][0])
+            _SUBJECT_FILTERS_CACHE.pop(oldest_key, None)
+    return payload
 

@@ -10,13 +10,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import html as html_module
 import json
 import os
 import re
-import subprocess
 import time
 import urllib.parse
 from collections import OrderedDict
@@ -31,7 +29,6 @@ from backend.core.record_replay import RecordReplayStore, record_enabled, replay
 from backend.crawler.zujuan.cookies import (
     DEFAULT_USER_AGENT,
     build_cookie_string,
-    fetch_csrf_token_from_page,
     get_cookies_with_playwright,
     get_login_session_with_playwright,
     load_antibot_cookie_cache,
@@ -43,7 +40,6 @@ from backend.crawler.zujuan.cookies import (
 from backend.crawler.zujuan.parsing import FORMULA_HASH_PATTERN, FORMULA_IMG_TAG_PATTERN, IMG_TAG_PATTERN
 from backend.crawler.zujuan.utils import (
     PROVINCE_UNLIMITED_ALIASES,
-    _extract_js_var_json,
     _normalize_province_name,
     _parse_base_json,
     _parse_province_list_json,
@@ -52,12 +48,9 @@ from backend.crawler.zujuan.utils import (
 )
 from backend.subjects import (
     DEFAULT_DIFFICULTY,
-    DIFFICULTY_LEVELS,
-    SUBJECTS,
     normalize_difficulty,
     resolve_subject,
 )
-
 
 logger = get_logger(__name__)
 _record_replay_store = RecordReplayStore("crawler")
@@ -1991,359 +1984,54 @@ class ZujuanCrawler:
         }
 
     def _build_curl_cmd(self, url: str, timeout: int = 30, use_login_cookie: bool = True) -> list:
-        """构建带header的curl命令"""
-        cmd = [
-            'curl', '-s',
-            '-H', f'User-Agent: {self.user_agent}',
-            '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            '-H', 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8',
-            '-H', 'Referer: https://zujuan.xkw.com/',
-        ]
+        from backend.crawler.zujuan.formulas import build_curl_cmd as impl
 
-        # 优先使用登录 cookie（反爬能力更强）
-        cookie_to_use = self.cookies
-        if use_login_cookie:
-            env_session = load_env_login()
-            if env_session.get("is_logged_in") and env_session.get("cookies"):
-                cookie_to_use = env_session["cookies"]
-
-        if cookie_to_use:
-            cmd.extend(['-H', f'Cookie: {cookie_to_use}'])
-        cmd.append(url)
-        return cmd
+        return impl(self, url, timeout=timeout, use_login_cookie=use_login_cookie)
 
     def _resolve_url(self, url: str) -> str:
-        u = (url or "").strip()
-        if not u:
-            return ""
-        if u.startswith("//"):
-            return f"https:{u}"
-        if u.startswith("/"):
-            # Static assets in list fragments are frequently referenced as absolute paths.
-            # Docs: docs/zujuan_crawler/docs/07-static-assets.md#732-img-src-抽取规则
-            if u.startswith("/quesimg/Upload/"):
-                return f"https://staticzujuan.xkw.com{u}"
-            return f"{self.base_url.rstrip('/')}{u}"
-        return u
+        from backend.crawler.zujuan.formulas import resolve_url as impl
+
+        return impl(self, url)
 
     def _formula_cache_get(self, formula_hash: str) -> Optional[str]:
-        key = (formula_hash or "").strip().lower()
-        if not key:
-            return None
-        cached = self._formula_cache.get(key)
-        if cached is None:
-            return None
-        try:
-            self._formula_cache.move_to_end(key)
-        except Exception:
-            pass
-        return cached
+        from backend.crawler.zujuan.formulas import formula_cache_get as impl
+
+        return impl(self, formula_hash)
 
     def _formula_cache_set(self, formula_hash: str, latex: str) -> None:
-        key = (formula_hash or "").strip().lower()
-        if not key:
-            return
-        self._formula_cache[key] = latex or ""
-        try:
-            self._formula_cache.move_to_end(key)
-            while len(self._formula_cache) > int(self._formula_cache_max_entries or 4096):
-                self._formula_cache.popitem(last=False)
-        except Exception:
-            return
+        from backend.crawler.zujuan.formulas import formula_cache_set as impl
+
+        impl(self, formula_hash, latex)
 
     async def _fetch_formula_mathml(self, formula_hash: str) -> str:
-        """
-        Fetch `{hash}.mml` and decode into MathML XML.
+        from backend.crawler.zujuan.formulas import fetch_formula_mathml as impl
 
-        Observed on zujuan static domain:
-        - `{hash}.mml` body is base64 text
-        - base64-decoded content starts with `<math ...>`
-        """
-        h = (formula_hash or "").strip().lower()
-        if not h or not re.fullmatch(r"[0-9a-f]{32}", h):
-            return ""
-        if not self.client:
-            return ""
-
-        url = f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{h}.mml"
-        async with self._formula_http_sem:
-            resp = await self.client.get(
-                url,
-                headers={
-                    "User-Agent": self.user_agent,
-                    "Referer": f"{self.base_url.rstrip('/')}/",
-                },
-            )
-        if resp.status_code != 200:
-            return ""
-        raw = (resp.content or b"").strip()
-        if not raw:
-            return ""
-
-        # Some variants may already be plain XML.
-        try:
-            as_text = raw.decode("utf-8", errors="ignore").strip()
-        except Exception:
-            as_text = ""
-        if as_text.lstrip().startswith("<math"):
-            return as_text
-
-        try:
-            decoded = base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
-        except Exception:
-            return ""
-
-        return decoded if "<math" in decoded else ""
+        return await impl(self, formula_hash)
 
     async def _mathml_to_latex_via_pandoc(self, mathml_xml: str) -> str:
-        xml = (mathml_xml or "").strip()
-        if not xml:
-            return ""
+        from backend.crawler.zujuan.formulas import mathml_to_latex_via_pandoc as impl
 
-        def _run() -> str:
-            try:
-                p = subprocess.run(
-                    ["pandoc", "-f", "html", "-t", "latex"],
-                    input=xml,
-                    text=True,
-                    encoding="utf-8",
-                    capture_output=True,
-                    timeout=20,
-                    check=True,
-                )
-                return (p.stdout or "").strip()
-            except Exception:
-                return ""
-
-        async with self._formula_pandoc_sem:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _run)
+        return await impl(self, mathml_xml)
 
     async def _get_formula_latex(self, formula_hash: str) -> str:
-        h = (formula_hash or "").strip().lower()
-        if not h or not re.fullmatch(r"[0-9a-f]{32}", h):
-            return ""
+        from backend.crawler.zujuan.formulas import get_formula_latex as impl
 
-        cached = self._formula_cache_get(h)
-        if cached is not None:
-            return cached
-
-        inflight = self._formula_inflight.get(h)
-        if inflight is not None:
-            try:
-                return await inflight
-            except Exception:
-                return ""
-
-        loop = asyncio.get_event_loop()
-        fut: "asyncio.Future[str]" = loop.create_future()
-        self._formula_inflight[h] = fut
-        try:
-            mathml = await self._fetch_formula_mathml(h)
-            latex = ""
-            if mathml:
-                latex = (await self._mathml_to_latex_via_pandoc(mathml)).strip()
-            if not latex:
-                # Fallback: SVG signature conversion (pure python; no pandoc dependency).
-                # This is best-effort and may produce unknown signature placeholders like "[?abcd1234]".
-                try:
-                    from backend.core.svg_utils.svg_to_latex import svg_url_to_latex
-
-                    svg_url = f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{h}.svg"
-                    async with self._formula_http_sem:
-                        svg_latex, unknown = await svg_url_to_latex(svg_url, client=self.client, use_advanced=True)
-                    svg_latex = (svg_latex or "").strip()
-                    if svg_latex:
-                        latex = f"\\({svg_latex}\\)"
-
-                    if unknown:
-                        try:
-                            from backend.core.svg_utils.unknown_signatures import record_unknown_signatures
-
-                            record_unknown_signatures(unknown_sigs=unknown, source_url=svg_url, context=None)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            self._formula_cache_set(h, latex)
-            if not fut.done():
-                fut.set_result(latex)
-            return latex
-        except Exception:
-            if not fut.done():
-                fut.set_result("")
-            return ""
-        finally:
-            self._formula_inflight.pop(h, None)
-
-    async def _replace_formulas_with_latex_mml(self, html: str) -> Tuple[str, List[str]]:
-        raw = html or ""
-        hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
-        # Preserve order + de-dupe
-        hashes = list(dict.fromkeys(hashes))
-        if not hashes:
-            return raw, []
-
-        latex_list = await asyncio.gather(*[self._get_formula_latex(h) for h in hashes], return_exceptions=True)
-        hash_to_latex: Dict[str, str] = {}
-        for h, v in zip(hashes, latex_list):
-            if isinstance(v, Exception):
-                continue
-            if isinstance(v, str) and v.strip():
-                hash_to_latex[h] = v.strip()
-
-        def _repl(m: re.Match) -> str:
-            h = (m.group("hash") or "").lower()
-            latex = hash_to_latex.get(h, "")
-            if latex:
-                return latex
-            return f"[公式:{h}]"
-
-        replaced = FORMULA_IMG_TAG_PATTERN.sub(_repl, raw)
-        return replaced, hashes
-
-    async def _fetch_formula_svg(self, png_url: str) -> str:
-        """获取公式的SVG源码"""
-        svg_url = (png_url or "").strip()
-        if not svg_url:
-            return ""
-        if not svg_url.lower().endswith(".svg"):
-            svg_url = re.sub(r"\.(png|gif|jpe?g)(\?.*)?$", ".svg", svg_url, flags=re.IGNORECASE)
-        try:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    ['curl', '-s', svg_url],
-                    capture_output=True,
-                    timeout=10
-                )
-            )
-            svg = result.stdout.decode('utf-8', errors='ignore')
-            if svg.startswith('<svg'):
-                return svg
-        except:
-            pass
-        return ""
+        return await impl(self, formula_hash)
 
     async def _replace_formulas_with_latex(self, html: str) -> str:
-        """
-        将HTML中的公式图片替换为LaTeX表达式。
+        from backend.crawler.zujuan.formulas import replace_formulas_with_latex as impl
 
-        默认优先走 `{hash}.mml`（MathML base64 sidecar）-> pandoc -> LaTeX 的链路；
-        当该链路不可用时，才回退到旧的 SVG 字形签名方案。
-        """
-        try:
-            replaced, _hashes = await self._replace_formulas_with_latex_mml(html)
-            return replaced
-        except Exception:
-            pass
-
-        try:
-            # 导入SVG转LaTeX工具
-            from backend.core.svg_utils.svg_to_latex import replace_formulas_with_latex, svg_content_to_latex
-
-            # 使用工具替换公式
-            # 静态资源域名通常允许较高并发，适当提高并发以显著减少等待时间
-            result, unknown_sigs = await replace_formulas_with_latex(html, concurrency=12, use_advanced=True)
-
-            # 如果有未识别的签名，记录到文件用于后续完善签名库
-            if unknown_sigs:
-                try:
-                    from backend.core.svg_utils.unknown_signatures import record_unknown_signatures
-                    # unknown_sigs 格式为 {svg_url: [sig1, sig2, ...]}
-                    for svg_url, sigs in unknown_sigs.items():
-                        if sigs:
-                            record_unknown_signatures(
-                                unknown_sigs=sigs,
-                                source_url=svg_url,
-                                context=None
-                            )
-                except ImportError:
-                    pass  # 模块不存在时静默忽略
-
-            return result
-        except ImportError:
-            # 如果导入失败，回退到SVG源码模式
-            return await self._replace_formulas_with_svg(html)
-        except Exception as e:
-            # 其他错误也回退
-            logger.warning("mathml to latex failed; fallback to svg", extra={"error": str(e)})
-            return await self._replace_formulas_with_svg(html)
+        return await impl(self, html)
 
     async def _replace_formulas_with_svg(self, html: str) -> str:
-        """将HTML中的公式图片替换为SVG源码（回退方案）"""
-        raw = html or ""
-        hashes = [h.lower() for (h, _ext) in FORMULA_HASH_PATTERN.findall(raw)]
-        # Preserve order + de-dupe
-        hashes = list(dict.fromkeys(hashes))
-        if not hashes:
-            return raw
+        from backend.crawler.zujuan.formulas import replace_formulas_with_svg as impl
 
-        # Batch fetch svgs (cap to avoid slowing down fallback path too much)
-        hashes = hashes[:20]
-        svg_list = await asyncio.gather(
-            *[
-                self._fetch_formula_svg(f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{h}.svg")
-                for h in hashes
-            ],
-            return_exceptions=True,
-        )
-        hash_to_svg: Dict[str, str] = {}
-        for h, v in zip(hashes, svg_list):
-            if isinstance(v, Exception):
-                continue
-            if isinstance(v, str) and v.lstrip().startswith("<svg"):
-                hash_to_svg[h] = v
-
-        def _repl(m: re.Match) -> str:
-            h = (m.group("hash") or "").lower()
-            svg = hash_to_svg.get(h, "")
-            if svg:
-                return f"[公式:{svg}]"
-            return f"[公式:{h}]"
-
-        return FORMULA_IMG_TAG_PATTERN.sub(_repl, raw)
+        return await impl(self, html)
 
     async def _replace_formulas_with_inline_svg(self, html: str) -> str:
-        """
-        将HTML中的公式图片替换为内联 SVG（用于前端渲染）。
+        from backend.crawler.zujuan.formulas import replace_formulas_with_inline_svg as impl
 
-        说明：
-        - 公式图片常见路径：`/quesimg/Upload/formula/{hash}.png`，可替换为同名 `.svg` 内容。
-        - 该模式不做 svg->latex 转换，避免转换误差。
-        """
-        formula_pattern = r'<img[^>]*src="([^"]+)"[^>]*>'
-        matches = re.findall(formula_pattern, html)
-        formula_srcs = []
-        for src in matches:
-            if "/Upload/formula/" not in src:
-                continue
-            formula_srcs.append(src)
-
-        # Preserve order + de-dupe
-        formula_srcs = list(dict.fromkeys(formula_srcs))
-        if not formula_srcs:
-            return html
-
-        svg_map = {}
-        for src in formula_srcs[:20]:
-            resolved = src
-            if resolved.startswith("//"):
-                resolved = f"https:{resolved}"
-            elif resolved.startswith("/"):
-                resolved = f"{self.base_url.rstrip('/')}{resolved}"
-            svg = await self._fetch_formula_svg(resolved)
-            if svg:
-                svg_map[src] = svg
-
-        result = html
-        for src, svg in svg_map.items():
-            img_pattern = f'<img[^>]*src="{re.escape(src)}"[^>]*>'
-            replacement = f'<span class="epa-formula" data-formula-src="{src}">{svg}</span>'
-            result = re.sub(img_pattern, replacement, result)
-
-        return result
+        return await impl(self, html)
 
     async def get_question_detail(
         self,
@@ -2452,437 +2140,25 @@ class ZujuanCrawler:
         auto_login: bool = True,
         auto_switch_subject: bool = True,
     ) -> Dict[str, Any]:
-        """
-        导出题目到组卷网题篮
+        from backend.crawler.zujuan.basket import export_to_basket as impl
 
-        Args:
-            question_ids: 题目ID列表
-            question_details: 题目详情列表（可选，如果提供则使用其中的信息）
-            auto_login: 未登录时是否自动弹出登录窗口
-            auto_switch_subject: Cookie题库不一致时是否自动切换bankId
-
-        Returns:
-            导出结果，包含成功/失败状态和消息
-        """
-        # 获取登录会话
-        session = await get_login_session_with_playwright()
-
-        if not session.get("is_logged_in"):
-            if auto_login:
-                # 自动弹出登录窗口
-                logger.info("zujuan not logged in; opening interactive login")
-                login_result = await self.login_interactive()
-
-                if not login_result.get("success"):
-                    return {
-                        "success": False,
-                        "error": "登录失败或用户取消登录",
-                        "login_required": True
-                    }
-
-                # 重新获取会话
-                session = await get_login_session_with_playwright()
-
-                if not session.get("is_logged_in"):
-                    return {
-                        "success": False,
-                        "error": "登录后仍无法获取会话，请重试",
-                        "login_required": True
-                    }
-            else:
-                return {
-                    "success": False,
-                    "error": "未登录组卷网，请先在浏览器中登录 https://zujuan.xkw.com",
-                    "login_required": True,
-                    "help": "提示：首次使用需要在浏览器中登录组卷网，登录状态会被保存"
-                }
-
-        # 构建题篮数据
-        basket_items = []
-        current_time = int(time.time() * 1000)  # 毫秒时间戳
-
-        # 如果有详情，使用详情中的信息
-        details_map = {}
-        if question_details:
-            for d in question_details:
-                if d.get("question_id"):
-                    details_map[str(d["question_id"])] = d
-
-        for idx, qid in enumerate(question_ids):
-            detail = details_map.get(str(qid), {})
-
-            # 题型映射
-            type_name = detail.get("type", "解答题")
-            type_id_map = {
-                "单选题": 2701, "选择题": 2701,
-                "多选题": 2702,
-                "填空题": 2703,
-                "解答题": 2704,
-                "判断题": 2705,
-            }
-            ques_type_id = type_id_map.get(type_name, 2704)
-
-            # 难度映射 (1-5, 5为最难)
-            diff_name = detail.get("difficulty", "中等")
-            diff_map = {"简单": 2, "中等": 3, "困难": 5, "较难": 4, "容易": 1}
-            ques_diff = diff_map.get(diff_name, 3)
-
-            item = {
-                "questionId": int(qid),
-                "addTime": current_time + idx,  # 确保每个题目时间戳不同
-                "childNum": 1,
-                "quesDiff": ques_diff,
-                "quesTypeId": ques_type_id,
-                "quesTypeName": type_name,
-                "status": "CHECK",
-                "from": detail.get("source", "AI组卷"),
-                "ext": {
-                    "isSelectType": ques_type_id in [2701, 2702],
-                    "title": detail.get("source", ""),
-                    "categoryName": detail.get("knowledge_points", ""),
-                    "categoryId": 0
-                }
-            }
-            basket_items.append(item)
-
-        # 构建请求数据
-        basket_json = json.dumps(basket_items, ensure_ascii=False)
-
-        # 导出时使用“当前学科”的 bankId；若登录态 cookie 的 bankId 不一致，通常会导致导出不生效
-        export_bank_id = str(self.bank_id)
-        cookie_str = session.get("cookies", "") or ""
-        cookie_bank_id: Optional[str] = None
-        cookie_bank_id_original: Optional[str] = None
-        cookie_switched = False
-        if cookie_str:
-            cookie_dict = parse_cookie_string(cookie_str)
-            cookie_bank_id = cookie_dict.get("bankId")
-            cookie_bank_id_original = cookie_bank_id
-            if export_bank_id and cookie_bank_id != export_bank_id:
-                if auto_switch_subject:
-                    cookie_dict["bankId"] = export_bank_id
-                    cookie_str = build_cookie_string(cookie_dict)
-                    session["cookies"] = cookie_str
-                    cookie_bank_id = export_bank_id
-                    cookie_switched = True
-                    refreshed_csrf = await fetch_csrf_token_from_page(cookie_str)
-                    if refreshed_csrf:
-                        session["csrf_token"] = refreshed_csrf
-                else:
-                    return {
-                        "success": False,
-                        "error": (
-                            f"当前登录态题库(bankId={cookie_bank_id})与当前学科“{self.subject}”(bankId={export_bank_id})不一致，"
-                            "请切换到目标学科后重新登录保存Cookie再导出"
-                        ),
-                        "user_action_required": True,
-                        "bank_id_cookie": cookie_bank_id,
-                        "bank_id_target": export_bank_id,
-                        "login_instructions": [
-                            f"1. 打开 https://zujuan.xkw.com/ 并在左上角切换到“{self.subject}”",
-                            f"2. 运行 scripts/登录组卷网.bat \"{self.subject}\" 重新登录并保存 Cookie",
-                            "3. 再次执行导出",
-                        ],
-                    }
-
-        payload = {
-            "bankId": export_bank_id,
-            "syncFlag": "9",
-            "basketJson": basket_json
-        }
-
-        # 发送请求
-        try:
-            referer_url = "https://zujuan.xkw.com/"
-            if question_ids:
-                # 使用题目页作为 Referer，避免学科入口路径（如 gzsx）硬编码
-                referer_url = f"{self.base_url}/{export_bank_id}q{question_ids[0]}.html"
-
-            headers = {
-                "User-Agent": self.user_agent,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": session["cookies"],
-                "Accept": "application/json, text/plain, */*",
-                "Origin": "https://zujuan.xkw.com",
-                "Referer": referer_url,
-            }
-
-            # 添加CSRF token
-            if session.get("csrf_token"):
-                headers["RequestVerification"] = session["csrf_token"]
-
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    "https://zujuan.xkw.com/zujuan-api/sync_baskets",
-                    data=payload,
-                    headers=headers
-                )
-
-                # 检测 cookie 过期的情况
-                if resp.status_code in [401, 403]:
-                    return {
-                        "success": False,
-                        "error": "登录已过期，请重新登录",
-                        "cookie_expired": True,
-                        "login_instructions": [
-                            "Cookie 已过期，请重新登录：",
-                            "1. 双击运行 scripts/登录组卷网.bat",
-                            "2. 在弹出的浏览器中登录组卷网",
-                            "3. 登录成功后按回车保存",
-                            "4. 重新尝试导出"
-                        ]
-                    }
-
-                if resp.status_code == 200:
-                    result = resp.json() if resp.text else {}
-
-                    # 检查响应内容是否表示未登录
-                    if isinstance(result, dict):
-                        # 检查常见的未登录响应
-                        error_code = result.get("code") or result.get("errCode") or result.get("status")
-                        error_msg = result.get("msg") or result.get("message") or result.get("error") or ""
-
-                        if error_code in [401, 403, -1, 1001] or "登录" in str(error_msg) or "login" in str(error_msg).lower():
-                            return {
-                                "success": False,
-                                "error": "登录已过期，请重新登录",
-                                "cookie_expired": True,
-                                "api_response": result,
-                                "login_instructions": [
-                                    "Cookie 已过期，请重新登录：",
-                                    "1. 双击运行 scripts/登录组卷网.bat",
-                                    "2. 在弹出的浏览器中登录组卷网",
-                                    "3. 登录成功后按回车保存",
-                                    "4. 重新尝试导出"
-                                ]
-                            }
-
-                    # 兼容：有时 API 会返回 200 但未真正写入题篮（questions 为空）
-                    questions = result.get("questions") if isinstance(result, dict) else None
-                    if not isinstance(questions, list):
-                        questions = []
-
-                    requested_ids = []
-                    for qid in question_ids:
-                        try:
-                            requested_ids.append(int(qid))
-                        except Exception:
-                            pass
-                    requested_set = set(requested_ids)
-                    returned_set = set()
-                    for q in questions:
-                        try:
-                            returned_set.add(int(q.get("questionId")))
-                        except Exception:
-                            pass
-
-                    hit_ids = sorted(requested_set.intersection(returned_set))
-                    if len(question_ids) > 0 and len(hit_ids) == 0:
-                        auto_switch_note = "（已尝试自动切换学科Cookie）" if cookie_switched else ""
-                        return {
-                            "success": False,
-                            "error": (
-                                "导出未生效：sync_baskets 返回空题篮或未包含所选题目"
-                                f"{auto_switch_note}（通常是 bankId 与登录态 token 不一致，请在网页切到“{self.subject}”后重新登录再导出）"
-                            ),
-                            "bank_id_used": export_bank_id,
-                            "bank_id_cookie": cookie_bank_id,
-                            "bank_id_cookie_original": cookie_bank_id_original,
-                            "auto_switched_subject": cookie_switched,
-                            "referer_used": referer_url,
-                            "api_response": result,
-                            "debug": {
-                                "requested_count": len(question_ids),
-                                "returned_count": len(questions),
-                                "returned_sample_ids": sorted(list(returned_set))[:10],
-                            },
-                            "user_action_required": True,
-                            "login_instructions": [
-                                f"1. 打开 https://zujuan.xkw.com/ 并确认左上角为“{self.subject}”",
-                                f"2. 运行 scripts/登录组卷网.bat \"{self.subject}\" 重新登录并保存 Cookie",
-                                "3. 再次执行导出",
-                            ],
-                        }
-
-                    result_payload = {
-                        "success": True,
-                        "message": f"成功添加 {len(question_ids)} 道题目到组卷网题篮",
-                        "question_count": len(question_ids),
-                        "question_ids": question_ids,
-                        "bank_id_used": export_bank_id,
-                        "basket_url": "https://zujuan.xkw.com/basket/",
-                        "api_response": result,
-                        "note": "题目已同步到服务器，请在组卷网题篮中查看",
-                    }
-                    if cookie_switched:
-                        result_payload["auto_switched_subject"] = True
-                        result_payload["bank_id_cookie_original"] = cookie_bank_id_original
-                    if len(hit_ids) != len(requested_set) and len(hit_ids) > 0:
-                        missing_ids = sorted(list(requested_set.difference(hit_ids)))
-                        result_payload["warning"] = "部分题目未出现在返回列表中，可能存在延迟或被过滤"
-                        result_payload["missing_question_ids"] = [str(i) for i in missing_ids[:50]]
-                    return result_payload
-                else:
-                    # 其他 HTTP 错误也可能是登录问题
-                    error_text = resp.text[:500] if resp.text else ""
-                    if "登录" in error_text or "login" in error_text.lower() or resp.status_code in [302, 307]:
-                        return {
-                            "success": False,
-                            "error": "登录已过期，请重新登录",
-                            "cookie_expired": True,
-                            "login_instructions": [
-                                "Cookie 已过期，请重新登录：",
-                                "1. 双击运行 scripts/登录组卷网.bat",
-                                "2. 在弹出的浏览器中登录组卷网",
-                                "3. 登录成功后按回车保存",
-                                "4. 重新尝试导出"
-                            ]
-                        }
-                    return {
-                        "success": False,
-                        "error": f"API请求失败: HTTP {resp.status_code}",
-                        "response": error_text
-                    }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"导出失败: {str(e)}"
-            }
+        return await impl(
+            self,
+            question_ids,
+            question_details=question_details,
+            auto_login=auto_login,
+            auto_switch_subject=auto_switch_subject,
+        )
 
     async def login_interactive(self) -> Dict[str, Any]:
-        """
-        交互式登录：打开浏览器让用户手动登录
-        登录成功后会话会被保存，后续可直接使用
+        from backend.crawler.zujuan.basket import login_interactive as impl
 
-        注意：在MCP等后台环境中可能无法直接弹出窗口，
-        此时会尝试启动独立进程来显示登录窗口
-        """
-        try:
-            from playwright.sync_api import sync_playwright
-            import concurrent.futures
-
-            def _sync_login():
-                with sync_playwright() as p:
-                    user_data_dir = os.path.join(os.path.dirname(__file__), ".playwright_data")
-                    os.makedirs(user_data_dir, exist_ok=True)
-
-                    # 使用非headless模式让用户登录
-                    browser = p.chromium.launch_persistent_context(
-                        user_data_dir,
-                        headless=False,  # 显示浏览器
-                    )
-                    page = browser.pages[0] if browser.pages else browser.new_page()
-
-                    # 打开登录页
-                    page.goto("https://zujuan.xkw.com/", timeout=30000)
-
-                    logger.info("please login in the browser window (zujuan)")
-                    logger.info("after login, close the browser window")
-
-                    # 等待用户关闭浏览器或登录成功
-                    try:
-                        # 等待userId cookie出现（表示登录成功）
-                        page.wait_for_function(
-                            "document.cookie.includes('userId=')",
-                            timeout=300000  # 5分钟超时
-                        )
-                        logger.info("login detected (zujuan)")
-                    except:
-                        pass
-
-                    # 获取登录状态
-                    cookies = browser.cookies()
-                    user_id = None
-                    for c in cookies:
-                        if c['name'] == 'userId':
-                            user_id = c['value']
-                            break
-
-                    browser.close()
-
-                    return {
-                        "success": user_id is not None,
-                        "user_id": user_id,
-                        "message": "登录成功" if user_id else "未检测到登录"
-                    }
-
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                result = await loop.run_in_executor(pool, _sync_login)
-            return result
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"登录失败: {str(e)}"
-            }
+        return await impl(self)
 
     async def login_via_subprocess(self) -> Dict[str, Any]:
-        """
-        通过启动独立子进程来执行登录
-        用于MCP等后台环境无法直接显示GUI的情况
-        """
-        try:
-            import sys
+        from backend.crawler.zujuan.basket import login_via_subprocess as impl
 
-            # Validate subject against whitelist to prevent command injection
-            try:
-                from backend.core.subjects import SUBJECTS as _VALID_SUBJECTS
-                if self.subject not in _VALID_SUBJECTS:
-                    return {
-                        "success": False,
-                        "error": f"非法学科名称: {self.subject}"
-                    }
-            except ImportError:
-                # Fallback: reject any subject containing shell metacharacters
-                import re as _re
-                if not _re.match(r'^[\u4e00-\u9fff\w]+$', self.subject or ''):
-                    return {
-                        "success": False,
-                        "error": f"学科名称包含非法字符: {self.subject}"
-                    }
-
-            # This file lives under `backend/crawler/`, so repository root is 2 levels up.
-            project_root = str(Path(__file__).resolve().parents[2])
-            scripts_dir = os.path.join(project_root, "scripts")
-            bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
-            py_path = os.path.join(scripts_dir, "save_login.py")
-
-            if not (os.path.exists(bat_path) or os.path.exists(py_path)):
-                return {
-                    "success": False,
-                    "error": f"登录脚本不存在: {bat_path} / {py_path}"
-                }
-
-            # Use list form (shell=False) to prevent command injection
-            if sys.platform == "win32":
-                if os.path.exists(bat_path):
-                    subprocess.Popen(
-                        [bat_path, self.subject],
-                        creationflags=subprocess.CREATE_NEW_CONSOLE,
-                    )
-                else:
-                    subprocess.Popen(
-                        [sys.executable, py_path, "--subject", self.subject],
-                        creationflags=subprocess.CREATE_NEW_CONSOLE,
-                    )
-            else:
-                # Linux/Mac
-                subprocess.Popen([sys.executable, py_path, "--subject", self.subject])
-
-            return {
-                "success": True,
-                "message": f"已启动登录窗口，请在弹出的浏览器中登录并切换到“{self.subject}”",
-                "note": "登录完成后请重新尝试导出"
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"启动登录窗口失败: {str(e)}"
-            }
-
+        return await impl(self)
 
 # 手动测试
 async def test_crawler():

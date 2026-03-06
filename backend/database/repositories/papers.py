@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, List, Optional
 
 from sqlalchemy import func, select
@@ -25,6 +26,21 @@ def _normalize_user_id(user_id: str) -> str:
     return str(user_id or "").strip()[:64]
 
 
+def _env_truthy(name: str, *, default: bool = False) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _paper_storage_flags() -> tuple[bool, bool, bool]:
+    store_all = _env_truthy("PAPER_STORE_CONTENT", default=False)
+    store_stem = _env_truthy("PAPER_STORE_STEM", default=store_all)
+    store_answer = _env_truthy("PAPER_STORE_ANSWER", default=store_all)
+    store_analysis = _env_truthy("PAPER_STORE_ANALYSIS", default=store_all)
+    return store_stem, store_answer, store_analysis
+
+
 async def save_paper(*, user_id: str, paper_name: str, questions: List[dict]) -> int:
     """保存试卷并写入题目快照（以及本地题目缓存）。"""
 
@@ -36,6 +52,7 @@ async def save_paper(*, user_id: str, paper_name: str, questions: List[dict]) ->
         await session.refresh(paper)
 
         cache_items: List[QuestionCache] = []
+        store_stem, store_answer, store_analysis = _paper_storage_flags()
 
         for i, q_data in enumerate(questions or []):
             if isinstance(q_data, str):
@@ -49,8 +66,8 @@ async def save_paper(*, user_id: str, paper_name: str, questions: List[dict]) ->
             q_knowledge = str(payload.get("knowledge_point") or "").strip()
             q_source_url = str(payload.get("source_url") or "").strip()
 
-            stem = str(payload.get("stem") or "").strip()
-            stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip()
+            stem = str(payload.get("stem") or "").strip() if store_stem else ""
+            stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if store_stem else ""
             difficulty_value = payload.get("difficulty_value")
             quality_score = int(payload.get("quality_score") or 0)
             quality_flags = payload.get("quality_flags") or ""
@@ -58,8 +75,10 @@ async def save_paper(*, user_id: str, paper_name: str, questions: List[dict]) ->
             source = str(payload.get("source") or "").strip()
             date = str(payload.get("date") or "").strip()
 
-            answer = str(payload.get("answer") or payload.get("solution") or "").strip()
-            analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip()
+            answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
+            analysis = (
+                str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
+            )
 
             pq = PaperQuestion(
                 paper_id=paper.id,
@@ -149,6 +168,7 @@ async def add_questions_to_paper(*, user_id: str, paper_id: int, questions: List
 
         cache_items: List[QuestionCache] = []
         appended = 0
+        store_stem, store_answer, store_analysis = _paper_storage_flags()
 
         for q_data in entries:
             payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
@@ -162,8 +182,8 @@ async def add_questions_to_paper(*, user_id: str, paper_id: int, questions: List
             q_knowledge = str(payload.get("knowledge_point") or "").strip()
             q_source_url = str(payload.get("source_url") or "").strip()
 
-            stem = str(payload.get("stem") or "").strip()
-            stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip()
+            stem = str(payload.get("stem") or "").strip() if store_stem else ""
+            stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if store_stem else ""
             difficulty_value = payload.get("difficulty_value")
             quality_score = int(payload.get("quality_score") or 0)
             quality_flags = payload.get("quality_flags") or ""
@@ -171,8 +191,10 @@ async def add_questions_to_paper(*, user_id: str, paper_id: int, questions: List
             source = str(payload.get("source") or "").strip()
             date = str(payload.get("date") or "").strip()
 
-            answer = str(payload.get("answer") or payload.get("solution") or "").strip()
-            analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip()
+            answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
+            analysis = (
+                str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
+            )
 
             pq = PaperQuestion(
                 paper_id=pid,

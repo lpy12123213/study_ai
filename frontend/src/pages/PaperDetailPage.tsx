@@ -21,13 +21,20 @@ import { formatDate } from '@/lib/utils'
 
 export default function PaperDetailPage() {
   const { paperId } = useParams<{ paperId: string }>()
-  const { data: paper, isLoading, error } = usePaper(paperId)
+  const { data: paperBase, isLoading, error } = usePaper(paperId)
+  const {
+    data: paperWithAnalysis,
+    refetch: loadAnalysis,
+    isFetching: isLoadingAnalysis,
+    error: analysisError,
+  } = usePaper(paperId, { includeAnalysis: true, enabled: false })
   const {
     mutate: loadDownloadLinks,
     data: download,
     isPending: isLoadingLinks,
   } = usePaperDownloadLink()
   const { mutateAsync: exportPaper, isPending: isExporting } = usePaperExport()
+  const paper = paperWithAnalysis || paperBase
 
   const handlePrint = () => {
     window.print()
@@ -170,7 +177,7 @@ export default function PaperDetailPage() {
             </div>
           </div>
 
-          {paper.analysis && (
+          {paper.analysis ? (
             <div className="mb-8 p-4 rounded-xl bg-muted/30 border border-border/50 print:hidden">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2 font-semibold">
@@ -184,6 +191,39 @@ export default function PaperDetailPage() {
               <p className="text-sm text-muted-foreground leading-6">
                 {paper.analysis.aiComment || "暂无详细评语"}
               </p>
+            </div>
+          ) : (
+            <div className="mb-8 p-4 rounded-xl bg-muted/30 border border-border/50 print:hidden">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 font-semibold">
+                    <BarChart3 className="h-4 w-4 text-primary" />
+                    AI 智能分析
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    默认不请求外部分析服务。需要时再手动加载，并复用缓存结果。
+                  </p>
+                  {analysisError && (
+                    <p className="mt-2 text-sm text-destructive">
+                      加载失败，请稍后重试。
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => loadAnalysis()}
+                  disabled={!paperId || isLoadingAnalysis}
+                >
+                  {isLoadingAnalysis ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <BarChart3 className="h-4 w-4 mr-2" />
+                  )}
+                  加载分析
+                </Button>
+              </div>
             </div>
           )}
 

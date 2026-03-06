@@ -2,57 +2,24 @@
 
 ## Project Structure & Module Organization
 
-- Repo root is the app root.
-- `backend/`: FastAPI services (`backend/app.py`) plus agents/crawlers/MCP integrations.
-  - `backend/api/`: routers + Pydantic schemas (group by domain).
-  - `backend/agent/`, `backend/study_materials/`, `backend/paper_compose/`: AI workflow logic.
-  - `backend/database/`: SQLAlchemy models + SQLite helpers.
-  - `backend/crawler/`: Playwright scraping utilities.
-  - `backend/mcp/`: MCP tools + stdio server entrypoint (`python -m backend.mcp.stdio_server`).
-- `frontend/`: Vite + React UI (`frontend/src/`), with `@/` alias for imports.
-- `docs/`: architecture/deployment/API docs; `scripts/`: local helpers.
-- Local state/output is kept out of git: `.local/`, `data/`, `artifacts/`, `venv/` (see `.gitignore`).
+Repo root is the app root. `backend/` contains the FastAPI service (`backend/app.py`), domain routers in `backend/api/`, workflow logic in `backend/agent/`, `backend/study_materials/`, and `backend/paper_compose/`, database code in `backend/database/`, crawlers in `backend/crawler/`, and MCP tooling in `backend/mcp/`. `frontend/` is a Vite + React app with source under `frontend/src/` and `@/` path aliases. Docs live in `docs/`; helper scripts live in `scripts/`. Keep generated or local-only data in ignored paths such as `.local/`, `data/`, `artifacts/`, and `venv/`.
 
 ## Build, Test, and Development Commands
 
-Recommended launcher (sets up deps + runs services):
-
-- Windows: `start.bat dev|all|backend|frontend|mcp|setup|doctor`
-- Linux/macOS: `./start.sh dev|all|backend|frontend|mcp|setup|doctor`
-
-Manual equivalents:
-
-- Backend API: `python -m uvicorn backend.app:app --reload --port 8000`
-- Frontend dev: `cd frontend && npm install && npm run dev`
-- Lint/build: `cd frontend && npm run lint` / `npm run build`
-- MCP server: `python -m backend.mcp.stdio_server`
-- Crawler deps: `python -m playwright install chromium`
+Preferred entrypoints are `start.bat dev|all|backend|frontend|mcp|setup|doctor` on Windows and `./start.sh dev|all|backend|frontend|mcp|setup|doctor` on Linux/macOS. Manual backend start: `python -m uvicorn backend.app:app --reload --port 8000`. Manual frontend start: `cd frontend && npm install && npm run dev`. Frontend quality checks: `cd frontend && npm run lint` and `npm run build`. Start the MCP server with `python -m backend.mcp.stdio_server`.
 
 ## Coding Style & Naming Conventions
 
-- `.editorconfig` is the source of truth (UTF-8, LF, 2 spaces; Python uses 4 spaces).
-- Python: prefer type hints and `snake_case`; Ruff is configured in `pyproject.toml` (line length 120).
-- Frontend: strict TypeScript (`frontend/tsconfig.json`); components `PascalCase`, hooks `useX`.
+Follow `.editorconfig`: UTF-8, LF, 2-space indentation by default, 4 spaces for Python. Python code should prefer type hints, `snake_case`, and Ruff rules from `pyproject.toml` with a 120-character line length. Frontend TypeScript is strict; use `PascalCase` for components, `useX` for hooks, and keep imports on the `@/` alias when resolving from `frontend/src/`.
 
 ## Testing Guidelines
 
-- Backend tests live in `backend/tests/` and use `unittest` (`test_*.py`).
-- Run tests: `python -m unittest discover -s backend/tests -p "test_*.py"`
-- Smoke check: `start.bat doctor` / `./start.sh doctor` (compile/import + frontend build).
+Backend tests use `unittest` and live in `backend/tests/` with filenames matching `test_*.py`. Run them with `python -m unittest discover -s backend/tests -p "test_*.py"`. Use `start.bat doctor` or `./start.sh doctor` as a smoke check for import, compile, and frontend build health.
 
 ## Commit & Pull Request Guidelines
 
-- Follow Conventional Commits as used in history: `feat(agent): ...`, `fix(mcp): ...`, `refactor: ...`, `docs: ...`, `chore: ...`.
-- PRs: describe what/why, include local test steps, add screenshots for UI changes, and update `docs/` when behavior/config changes.
+Follow Conventional Commits, as seen in history: `feat(agent): ...`, `refactor(frontend): ...`, `fix(mcp): ...`, `docs: ...`. PRs should explain what changed and why, list local verification steps, include screenshots for UI changes, and update `docs/` when behavior or configuration changes.
 
 ## Security & Configuration Tips
 
-- Copy `.env.example` → `.env`; never commit real keys or scraped content.
-
-- Keep new tools/crawlers rate-limited and respect target site terms.
-
-## Note
-
-- After completing the code, debugging, testing, functional verification, and code REVIEW are required.
-- Push to git once after completing a feature.
-
+Copy `.env.example` to `.env`; never commit real API keys, scraped content, or local database artifacts. Keep crawlers rate-limited and aligned with target-site terms.

@@ -200,6 +200,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             from backend.database.models import save_paper
 
             paper_id = await save_paper(
+                user_id="1",
                 paper_name=arguments["paper_name"],
                 questions=arguments["question_ids"],
             )
@@ -349,7 +350,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             if paper_id is not None:
                 from backend.database.models import get_paper
 
-                paper = await get_paper(int(paper_id))
+                paper = await get_paper(user_id="1", paper_id=int(paper_id))
                 if not paper:
                     result = {"success": False, "error": f"未找到试卷 paper_id={paper_id}"}
                     return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -35,7 +36,7 @@ def _truncate_display_width(text: str, max_width: int) -> str:
 
 
 @router.post("/chat")
-async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
+async def chat_endpoint(request: ChatRequest, user: dict = Depends(require_auth)) -> StreamingResponse:
     """
     处理聊天请求，返回 SSE 流式响应（前端通过 fetch 读取）。
     支持学科选择。
@@ -46,14 +47,23 @@ async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
     model_override = (request.model or "").strip() or None
     sub_model_override = (request.sub_model or "").strip() or None
 
-    conv = await get_conversation(conv_id)
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+
+    conv = await get_conversation(user_id=user_id, conv_id=conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="对话不存在")
 
-    history = await get_messages(conv_id)
+    try:
+        max_context_messages = int(os.getenv("CHAT_CONTEXT_MAX_MESSAGES") or "40")
+    except Exception:
+        max_context_messages = 40
+    max_context_messages = max(0, min(max_context_messages, 200))
+
+    history_limit = max_context_messages or 40
+    history = await get_messages(user_id=user_id, conv_id=conv_id, limit=history_limit)
 
     try:
-        await add_message(conv_id, "user", user_message)
+        await add_message(user_id=user_id, conv_id=conv_id, role="user", content=user_message)
     except Exception:
         logger.exception("Failed to persist user message")
 
@@ -61,6 +71,7 @@ async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
         async for chunk in chat_service.chat(
             history,
             user_message,
+            user_id=user_id,
             subject=subject,
             model=model_override,
             sub_model=sub_model_override,
@@ -73,9 +84,10 @@ async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
                 if tool_calls:
                     try:
                         await add_message(
-                            conv_id,
-                            "assistant",
-                            chunk.get("content", "") or "",
+                            user_id=user_id,
+                            conv_id=conv_id,
+                            role="assistant",
+                            content=chunk.get("content", "") or "",
                             tool_calls=json.dumps(tool_calls, ensure_ascii=False),
                         )
                     except Exception:
@@ -88,9 +100,10 @@ async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
                     # Persist tool results as tool-role messages (indexed by tool_call_id).
                     try:
                         await add_message(
-                            conv_id,
-                            "tool",
-                            json.dumps(chunk.get("result"), ensure_ascii=False),
+                            user_id=user_id,
+                            conv_id=conv_id,
+                            role="tool",
+                            content=json.dumps(chunk.get("result"), ensure_ascii=False),
                             tool_call_id=chunk.get("tool_call_id", ""),
                         )
                     except Exception:
@@ -101,14 +114,14 @@ async def chat_endpoint(request: ChatRequest) -> StreamingResponse:
             if chunk_type == "assistant_final":
                 final_content = chunk.get("content", "")
                 try:
-                    await add_message(conv_id, "assistant", final_content)
+                    await add_message(user_id=user_id, conv_id=conv_id, role="assistant", content=final_content)
                 except Exception:
                     logger.exception("Failed to persist assistant final message")
 
                 if len(history) == 0:
                     title = _truncate_display_width(user_message, 30)
                     try:
-                        await update_conversation_title(conv_id, title)
+                        await update_conversation_title(user_id=user_id, conv_id=conv_id, title=title)
                     except Exception:
                         logger.exception("Failed to update conversation title")
 

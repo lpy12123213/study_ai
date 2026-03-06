@@ -5,6 +5,10 @@ export interface GetPapersParams {
   limit?: number
 }
 
+export interface GetPaperOptions {
+  includeAnalysis?: boolean
+}
+
 export interface CreatePaperRequest {
   name: string
   questionIds: string[]
@@ -115,8 +119,12 @@ export async function getPapers(
     .filter((p) => Number.isFinite(p.id) && !!p.name)
 }
 
-export async function getPaper(id: string): Promise<Paper> {
-  const response = await apiClient.get<unknown>(`/papers/${id}`)
+export async function getPaper(id: string, options: GetPaperOptions = {}): Promise<Paper> {
+  const response = await apiClient.get<unknown>(`/papers/${id}`, {
+    params: {
+      include_analysis: options.includeAnalysis ? 1 : 0,
+    },
+  })
   const data = response.data as any
 
   const rawQuestions: unknown[] = Array.isArray(data?.questions)

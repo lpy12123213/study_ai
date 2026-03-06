@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import io
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def _as_str(value: Any) -> str:
@@ -174,7 +174,7 @@ def _to_png_bytes(fig: Any, *, dpi: int) -> bytes:
     return buf.getvalue()
 
 
-def render_2d_plot(spec: Dict[str, Any]) -> bytes:
+def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
     import numpy as np
 
     width = _clamp_int(spec.get("width"), default=820, min_value=360, max_value=1600)
@@ -207,6 +207,8 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
     if grid:
         ax.grid(True, alpha=0.25)
 
+    warnings: List[Dict[str, str]] = []
+    rendered_any = False
     curves = [c for c in _iter_list(spec.get("curves")) if isinstance(c, dict)]
     for c in curves:
         expr = _as_str(c.get("expr"))
@@ -219,14 +221,18 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
         try:
             y = _safe_eval_expr(expr, variables={"x": x})
             y = np.asarray(y, dtype=float)
-        except Exception:
+        except Exception as exc:
+            warnings.append({"kind": "curve", "expr": expr, "reason": str(exc)})
             continue
         if y.shape != x.shape:
+            warnings.append({"kind": "curve", "expr": expr, "reason": "shape_mismatch"})
             continue
         mask = np.isfinite(y)
         if not mask.any():
+            warnings.append({"kind": "curve", "expr": expr, "reason": "no_finite_points"})
             continue
         ax.plot(x[mask], y[mask], style, color=(color or None), linewidth=lw, label=(label or None))
+        rendered_any = True
 
     implicit_curves = [c for c in _iter_list(spec.get("implicit_curves")) if isinstance(c, dict)]
     if implicit_curves:
@@ -244,10 +250,12 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
             try:
                 Z = _safe_eval_expr(expr, variables={"x": X, "y": Y})
                 Z = np.asarray(Z, dtype=float)
-            except Exception:
+            except Exception as exc:
+                warnings.append({"kind": "implicit_curve", "expr": expr, "reason": str(exc)})
                 continue
             try:
                 ax.contour(X, Y, Z, levels=[0.0], colors=[color], linewidths=[lw])
+                rendered_any = True
             except Exception:
                 continue
 
@@ -263,6 +271,7 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
         except Exception:
             continue
         ax.axvline(xv, color="#9ca3af", linewidth=1.3, linestyle="--", alpha=0.9)
+        rendered_any = True
 
     hlines = [v for v in _iter_list(spec.get("hlines")) if isinstance(v, (int, float, str, dict))]
     for v in hlines:
@@ -276,6 +285,7 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
         except Exception:
             continue
         ax.axhline(yv, color="#9ca3af", linewidth=1.3, linestyle="--", alpha=0.9)
+        rendered_any = True
 
     tangent_lines = [t for t in _iter_list(spec.get("tangent_lines")) if isinstance(t, dict)]
     for t in tangent_lines:
@@ -309,6 +319,7 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
         lw = _clamp_float(t.get("linewidth"), default=2.2, min_value=0.6, max_value=6.0)
         ax.plot(xs, ys, "-", color=color, linewidth=lw)
         ax.scatter([x0], [y0], s=20, color=color)
+        rendered_any = True
 
     points = [p for p in _iter_list(spec.get("points")) if isinstance(p, dict)]
     for p in points:
@@ -321,6 +332,7 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
         ax.scatter([px], [py], s=32, color=_as_str(p.get("color") or "#111827"))
         if label:
             ax.text(px, py, f" {label}", fontsize=10)
+        rendered_any = True
 
     annotations = [a for a in _iter_list(spec.get("annotations")) if isinstance(a, dict)]
     for a in annotations:
@@ -342,6 +354,7 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
             ax.annotate(text, xy=(tx, ty), xytext=(x0, y0), arrowprops={"arrowstyle": "->", "lw": 1.3})
         else:
             ax.text(x0, y0, text, fontsize=10)
+        rendered_any = True
 
     ax.set_xlim(float(x_min), float(x_max))
     if y_range is not None:
@@ -354,7 +367,17 @@ def render_2d_plot(spec: Dict[str, Any]) -> bytes:
     if any(_as_str(c.get("label") or "") for c in curves):
         ax.legend(loc="best")
 
-    return _to_png_bytes(fig, dpi=dpi)
+    if not rendered_any:
+        return {"success": False, "error": "no_renderable_curves", "warnings": warnings, "png_bytes": b""}
+
+    return {"success": True, "png_bytes": _to_png_bytes(fig, dpi=dpi), "warnings": warnings}
+
+
+def render_2d_plot(spec: Dict[str, Any]) -> bytes:
+    result = render_2d_plot_with_meta(spec)
+    if not result.get("success"):
+        raise ValueError(str(result.get("error") or "plot_render_failed"))
+    return bytes(result.get("png_bytes") or b"")
 
 
 def render_3d_plot(spec: Dict[str, Any]) -> bytes:

@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
@@ -36,6 +36,9 @@ const typeIcons: Record<ConversationType, typeof MessagesSquare> = {
   lesson_plan: BookOpenCheck,
   study_materials: BookOpen,
 }
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'manus.sidebar.collapsed'
+const MOBILE_MEDIA_QUERY = '(max-width: 1023px)'
 
 interface ConversationItemProps {
   item: ConversationItem
@@ -149,8 +152,44 @@ export function HistorySidebar() {
     setCurrentConversation,
   } = useConversationStore()
   
-  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia(MOBILE_MEDIA_QUERY).matches
+  })
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false
+    const stored = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
+    if (stored === 'true') return true
+    if (stored === 'false') return false
+    return window.matchMedia(MOBILE_MEDIA_QUERY).matches
+  })
   const [searchQuery, setSearchQuery] = useState('')
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, isCollapsed ? 'true' : 'false')
+  }, [isCollapsed])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const media = window.matchMedia(MOBILE_MEDIA_QUERY)
+    const update = (event?: MediaQueryListEvent) => {
+      const nextMobile = event ? event.matches : media.matches
+      setIsMobile(nextMobile)
+      if (window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) == null) {
+        setIsCollapsed(nextMobile)
+      }
+    }
+
+    update()
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', update)
+      return () => media.removeEventListener('change', update)
+    }
+
+    media.addListener(update)
+    return () => media.removeListener(update)
+  }, [])
 
   const { data: chatConversations = [] } = useQuery({
     queryKey: ['chatConversations'],
@@ -263,7 +302,7 @@ export function HistorySidebar() {
   return (
     <motion.aside 
       initial={false}
-      animate={{ width: isCollapsed ? 60 : 260 }}
+      animate={{ width: isCollapsed ? (isMobile ? 52 : 60) : 260 }}
       className="border-r border-border bg-sidebar-background flex flex-col relative transition-all duration-300 ease-in-out"
     >
       <div className="p-3 flex items-center justify-between">

@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import * as chatApi from '@/api/chat'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { generateId } from '@/lib/utils'
@@ -45,12 +45,28 @@ export function useConversation(id: string | undefined) {
 }
 
 export function useMessages(conversationId: string | undefined) {
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: ['messages', conversationId],
-    queryFn: () => chatApi.getMessages(conversationId!),
+    queryFn: ({ pageParam }) =>
+      chatApi.getMessages(conversationId!, {
+        limit: 100,
+        beforeId: typeof pageParam === 'number' ? pageParam : 0,
+      }),
     enabled: !!conversationId,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextBeforeId : undefined),
     refetchOnWindowFocus: false,
   })
+
+  const messages = useMemo(() => {
+    const pages = query.data?.pages || []
+    return pages.flatMap((page) => page.messages)
+  }, [query.data])
+
+  return {
+    ...query,
+    messages,
+  }
 }
 
 export function useCreateConversation() {
@@ -148,6 +164,28 @@ export function useChatStream() {
       }
       setMessages((prev) => [...prev, assistantMessage])
 
+      let deltaBuffer = ''
+      let deltaRaf: number | null = null
+
+      const flushDeltas = () => {
+        if (!deltaBuffer) return
+        const chunk = deltaBuffer
+        deltaBuffer = ''
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessage.id ? { ...m, content: m.content + chunk } : m
+          )
+        )
+      }
+
+      const scheduleFlush = () => {
+        if (deltaRaf != null) return
+        deltaRaf = requestAnimationFrame(() => {
+          deltaRaf = null
+          flushDeltas()
+        })
+      }
+
       chatApi.sendMessageStream(
         { conversationId, content },
         (event) => {
@@ -156,11 +194,8 @@ export function useChatStream() {
           if (event.type === 'text_delta') {
             const delta = event.delta || ''
             if (!delta) return
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMessage.id ? { ...m, content: m.content + delta } : m
-              )
-            )
+            deltaBuffer += delta
+            scheduleFlush()
             return
           }
 
@@ -234,6 +269,11 @@ export function useChatStream() {
             const raw = event.raw as any
             const finalText = String(raw?.content || '')
             if (!finalText) return
+            deltaBuffer = ''
+            if (deltaRaf != null) {
+              cancelAnimationFrame(deltaRaf)
+              deltaRaf = null
+            }
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.id !== assistantMessage.id) return m

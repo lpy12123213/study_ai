@@ -55,7 +55,7 @@ class PaperResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation_id: int
-    message: str
+    message: str = Field(..., min_length=1, max_length=12000)
     subject: Optional[str] = "高中数学"
     # Optional model overrides (client-side selector).
     # When omitted/empty, backend defaults from env are used.
@@ -64,9 +64,9 @@ class ChatRequest(BaseModel):
 
 
 class DeepThinkRequest(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=12000)
     subject: Optional[str] = "高中数学"
-    image_url: Optional[str] = None
+    image_url: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ConversationCreate(BaseModel):

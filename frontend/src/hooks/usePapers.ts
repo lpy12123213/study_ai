@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import * as papersApi from '@/api/papers'
-import type { CreatePaperRequest, GetPapersParams } from '@/api/papers'
+import type { CreatePaperRequest, GetPaperOptions, GetPapersParams } from '@/api/papers'
 
 export function usePapers(params: GetPapersParams = {}) {
   return useQuery({
@@ -9,11 +9,11 @@ export function usePapers(params: GetPapersParams = {}) {
   })
 }
 
-export function usePaper(id: string | undefined) {
+export function usePaper(id: string | undefined, options: GetPaperOptions & { enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: ['paper', id],
-    queryFn: () => papersApi.getPaper(id!),
-    enabled: !!id,
+    queryKey: ['paper', id, Boolean(options.includeAnalysis)],
+    queryFn: () => papersApi.getPaper(id!, { includeAnalysis: options.includeAnalysis }),
+    enabled: !!id && (options.enabled ?? true),
   })
 }
 

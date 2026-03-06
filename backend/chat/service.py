@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -63,10 +62,12 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
         user_message: str,
         subject: str = "高中数学",
         *,
+        user_id: str = "1",
         model: Optional[str] = None,
         sub_model: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self.current_subject = subject
+        uid = str(user_id or "").strip() or "1"
 
         main_model = (model or MAIN_MODEL).strip() or MAIN_MODEL
         sub_model_effective = (sub_model or "").strip() or None
@@ -145,7 +146,12 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                             "iteration": iteration,
                         }
 
-                        tool_result = await self.execute_tool(tool_name, tool_args, sub_model=sub_model_effective)
+                        tool_result = await self.execute_tool(
+                            tool_name,
+                            tool_args,
+                            sub_model=sub_model_effective,
+                            user_id=uid,
+                        )
                         yield {
                             "type": "tool_result",
                             "tool_call_id": tool_id,
@@ -185,10 +191,8 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                 final_content = str(message.get("content") or "")
                 yield {"type": "stream_start", "iteration": iteration}
                 if final_content:
-                    chunk_size = 12
-                    for i in range(0, len(final_content), chunk_size):
-                        yield {"type": "text_delta", "content": final_content[i : i + chunk_size]}
-                        await asyncio.sleep(0.01)
+                    # Avoid artificial latency; let the client render immediately.
+                    yield {"type": "text_delta", "content": final_content}
                 yield {"type": "assistant_final", "content": final_content, "total_iterations": iteration}
                 return
 
@@ -201,4 +205,3 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
 
 
 chat_service = ChatService()
-

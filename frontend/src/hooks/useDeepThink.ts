@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DeepThinkEvent, DeepThinkNode } from '@/api/deepthink'
 import { solveDeepThinkStream } from '@/api/deepthink'
 
@@ -38,15 +38,64 @@ export function useDeepThink() {
   const [error, setError] = useState<string | null>(null)
   const [config, setConfig] = useState<Record<string, unknown> | null>(null)
 
+  const abortRef = useRef<AbortController | null>(null)
+
+  const nodesRef = useRef<Record<string, ThinkingNode>>({})
+  const nodesFlushRafRef = useRef<number | null>(null)
+
+  const answerRef = useRef<string>('')
+  const answerFlushRafRef = useRef<number | null>(null)
+
+  const flushNodes = useCallback(() => {
+    nodesFlushRafRef.current = null
+    setNodes({ ...nodesRef.current })
+  }, [])
+
+  const scheduleNodesFlush = useCallback(() => {
+    if (nodesFlushRafRef.current != null) return
+    nodesFlushRafRef.current = requestAnimationFrame(() => {
+      flushNodes()
+    })
+  }, [flushNodes])
+
+  const flushAnswer = useCallback(() => {
+    answerFlushRafRef.current = null
+    setAnswer(answerRef.current)
+  }, [])
+
+  const scheduleAnswerFlush = useCallback(() => {
+    if (answerFlushRafRef.current != null) return
+    answerFlushRafRef.current = requestAnimationFrame(() => {
+      flushAnswer()
+    })
+  }, [flushAnswer])
+
+  const cancel = useCallback((reason = 'cancelled') => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    // Keep existing nodes/answer so users can inspect partial progress.
+    if (status === 'searching' || status === 'answering') {
+      setStatus('idle')
+      if (reason && reason !== 'cancelled') {
+        // no-op: keep UX quiet for normal cancels
+      }
+    }
+  }, [status])
+
   const reset = useCallback(() => {
+    cancel('reset')
     setStatus('idle')
+    nodesRef.current = {}
     setNodes({})
     setBestPath([])
+    answerRef.current = ''
     setAnswer('')
     setMetrics(EMPTY_METRICS)
     setError(null)
     setConfig(null)
-  }, [])
+  }, [cancel])
 
   const applyEvent = useCallback((event: DeepThinkEvent) => {
     switch (event.type) {
@@ -62,89 +111,70 @@ export function useDeepThink() {
           bestScore: 0,
           bestLeafId: '',
         }))
+        nodesRef.current = {}
+        answerRef.current = ''
+        setNodes({})
+        setAnswer('')
+        setBestPath([])
         return
       }
       case 'node_generated': {
         const n = event.node
-        setNodes((prev) => ({
-          ...prev,
-          [n.id]: {
-            ...n,
-            score: prev[n.id]?.score ?? null,
-            evalReasoning: prev[n.id]?.evalReasoning ?? null,
-            issues: prev[n.id]?.issues ?? [],
-            createdAt: prev[n.id]?.createdAt ?? Date.now(),
-          },
-        }))
+        const existing = nodesRef.current[n.id]
+        nodesRef.current[n.id] = {
+          ...(existing || ({} as any)),
+          ...n,
+          score: existing?.score ?? null,
+          evalReasoning: existing?.evalReasoning ?? null,
+          issues: existing?.issues ?? [],
+          createdAt: existing?.createdAt ?? Date.now(),
+        }
+        scheduleNodesFlush()
         return
       }
       case 'node_evaluated': {
-        setNodes((prev) => {
-          const existing = prev[event.nodeId]
-          if (!existing) return prev
-          return {
-            ...prev,
-            [event.nodeId]: {
-              ...existing,
-              score: typeof event.score === 'number' ? event.score : existing.score,
-              evalReasoning:
-                typeof event.evalReasoning === 'string'
-                  ? event.evalReasoning
-                  : existing.evalReasoning,
-              issues: Array.isArray(event.issues)
-                ? event.issues.filter((x) => typeof x === 'string')
-                : existing.issues,
-              status: event.status || existing.status,
-            },
-          }
-        })
+        const existing = nodesRef.current[event.nodeId]
+        if (!existing) return
+        nodesRef.current[event.nodeId] = {
+          ...existing,
+          score: typeof event.score === 'number' ? event.score : existing.score,
+          evalReasoning:
+            typeof event.evalReasoning === 'string' ? event.evalReasoning : existing.evalReasoning,
+          issues: Array.isArray(event.issues)
+            ? event.issues.filter((x) => typeof x === 'string')
+            : existing.issues,
+          status: event.status || existing.status,
+        }
+        scheduleNodesFlush()
         return
       }
       case 'node_pruned': {
-        setNodes((prev) => {
-          const existing = prev[event.nodeId]
-          if (!existing) return prev
-          return {
-            ...prev,
-            [event.nodeId]: {
-              ...existing,
-              score: typeof event.score === 'number' ? event.score : existing.score,
-              status: 'pruned',
-              evalReasoning:
-                typeof event.reason === 'string' && event.reason.trim()
-                  ? event.reason
-                  : existing.evalReasoning,
-            },
-          }
-        })
+        const existing = nodesRef.current[event.nodeId]
+        if (!existing) return
+        nodesRef.current[event.nodeId] = {
+          ...existing,
+          score: typeof event.score === 'number' ? event.score : existing.score,
+          status: 'pruned',
+          evalReasoning:
+            typeof event.reason === 'string' && event.reason.trim()
+              ? event.reason
+              : existing.evalReasoning,
+        }
+        scheduleNodesFlush()
         return
       }
       case 'node_selected': {
-        setNodes((prev) => {
-          const existing = prev[event.nodeId]
-          if (!existing) return prev
-          return {
-            ...prev,
-            [event.nodeId]: {
-              ...existing,
-              status: 'selected',
-            },
-          }
-        })
+        const existing = nodesRef.current[event.nodeId]
+        if (!existing) return
+        nodesRef.current[event.nodeId] = { ...existing, status: 'selected' }
+        scheduleNodesFlush()
         return
       }
       case 'search_complete': {
-        setNodes((prev) => {
-          const existing = prev[event.nodeId]
-          if (!existing) return prev
-          return {
-            ...prev,
-            [event.nodeId]: {
-              ...existing,
-              status: 'final',
-            },
-          }
-        })
+        const existing = nodesRef.current[event.nodeId]
+        if (!existing) return
+        nodesRef.current[event.nodeId] = { ...existing, status: 'final' }
+        scheduleNodesFlush()
         return
       }
       case 'depth_complete': {
@@ -176,7 +206,8 @@ export function useDeepThink() {
         return
       }
       case 'answer_delta': {
-        setAnswer((prev) => prev + (event.content || ''))
+        answerRef.current += event.content || ''
+        scheduleAnswerFlush()
         return
       }
       case 'done': {
@@ -198,13 +229,17 @@ export function useDeepThink() {
       default:
         return
     }
-  }, [])
+  }, [scheduleAnswerFlush, scheduleNodesFlush])
 
   const solve = useCallback(
     (question: string, opts?: { subject?: string; imageUrl?: string }) => {
+      cancel('replaced')
       reset()
       setStatus('searching')
       setError(null)
+
+      const controller = new AbortController()
+      abortRef.current = controller
 
       solveDeepThinkStream(
         { question, subject: opts?.subject, imageUrl: opts?.imageUrl },
@@ -212,16 +247,34 @@ export function useDeepThink() {
           applyEvent(event)
         },
         (err) => {
+          if (controller.signal.aborted) return
           setStatus('error')
           setError(err.message)
+          abortRef.current = null
         },
         () => {
           // Stream completed ([DONE]) - status is usually set by 'done'
+          abortRef.current = null
         },
+        { signal: controller.signal },
       )
     },
-    [applyEvent, reset],
+    [applyEvent, cancel, reset],
   )
+
+  useEffect(() => {
+    return () => {
+      cancel('unmounted')
+      if (nodesFlushRafRef.current != null) {
+        cancelAnimationFrame(nodesFlushRafRef.current)
+        nodesFlushRafRef.current = null
+      }
+      if (answerFlushRafRef.current != null) {
+        cancelAnimationFrame(answerFlushRafRef.current)
+        answerFlushRafRef.current = null
+      }
+    }
+  }, [cancel])
 
   return {
     status,
@@ -232,6 +285,7 @@ export function useDeepThink() {
     error,
     config,
     solve,
+    cancel,
     reset,
   }
 }

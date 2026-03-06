@@ -265,7 +265,7 @@ async def create_paper(request: CreatePaperRequest) -> Dict[str, Any]:
     """创建试卷（仅保存题目编号，合规）"""
     try:
         questions = [{"question_id": qid} for qid in request.question_ids]
-        paper_id = await save_paper(paper_name=request.paper_name, questions=questions)
+        paper_id = await save_paper(user_id="1", paper_name=request.paper_name, questions=questions)
         return {"success": True, "paper_id": paper_id, "message": f"试卷 '{request.paper_name}' 创建成功"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -332,13 +332,13 @@ async def compose_blueprint(request: ComposeBlueprintRequest) -> Dict[str, Any]:
 @app.get("/api/papers")
 async def get_papers(limit: int = 50) -> List[dict]:
     """获取试卷列表"""
-    return await list_papers(limit=limit)
+    return await list_papers(user_id="1", limit=limit)
 
 
 @app.get("/api/papers/{paper_id}")
 async def get_paper_detail(paper_id: int) -> dict:
     """获取试卷详情"""
-    paper = await get_paper(paper_id)
+    paper = await get_paper(user_id="1", paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
     return paper

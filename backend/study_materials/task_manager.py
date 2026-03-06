@@ -95,6 +95,7 @@ class StudyMaterialsTaskManager:
         self._max_tasks = max(1, int(max_tasks))
         self._task_ttl_s = max(60, int(task_ttl_s))
         self._max_events_per_task = max(100, int(max_events_per_task))
+        self._restore_cleanup_count = 0
         self._restore_tasks_from_disk()
 
     def _snapshot_path(self, task_id: str) -> Path:
@@ -213,6 +214,7 @@ class StudyMaterialsTaskManager:
                 return
 
             now = _now_s()
+            cleanup_count = 0
             snaps: List[Dict[str, Any]] = []
             for path in list(_TASK_SNAPSHOTS_DIR.glob("*.json"))[:2000]:
                 try:
@@ -224,6 +226,11 @@ class StudyMaterialsTaskManager:
                     continue
                 updated = float(obj.get("updated_at_s") or obj.get("created_at_s") or 0.0)
                 if updated and (now - updated) > float(self._task_ttl_s):
+                    try:
+                        path.unlink(missing_ok=True)
+                        cleanup_count += 1
+                    except Exception:
+                        pass
                     continue
                 snaps.append(obj)
 
@@ -238,6 +245,7 @@ class StudyMaterialsTaskManager:
                 # Best-effort: persist again if we normalized state (e.g. running -> failed).
                 if task.status != str(obj.get("status") or ""):
                     self._persist_snapshot(task, force=True)
+            self._restore_cleanup_count = cleanup_count
         except Exception:
             return
 

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -75,6 +76,17 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+        errors = exc.errors()
+        for err in errors:
+            if str(err.get("type") or "").strip() != "string_too_long":
+                continue
+            loc = [str(part).strip() for part in list(err.get("loc") or []) if str(part).strip() not in {"body"}]
+            field = "_".join(loc) or "input"
+            return JSONResponse(status_code=400, content={"detail": f"{field}_too_long"})
+        return JSONResponse(status_code=422, content={"detail": errors})
 
     rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
     rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")

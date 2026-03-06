@@ -122,7 +122,13 @@ export default function BlueprintPage() {
   const [textbookVersionId, setTextbookVersionId] = useState<string>('')
 
   const { data: subjects } = useSubjects()
-  const { data: filters } = useSubjectFilters(subject || undefined)
+  const {
+    data: filters,
+    isLoading: isFiltersLoading,
+    isFetching: isFiltersFetching,
+    error: filtersError,
+    refetch: refetchFilters,
+  } = useSubjectFilters(subject || undefined)
   const { compose, pause, resume, isComposing, result, taskId, progress } = useComposePaper()
   const { mutate: saveBlueprint, isPending: isSaving } = useSaveBlueprint()
 
@@ -260,6 +266,31 @@ export default function BlueprintPage() {
                   onChange={(e) => setTopic(e.target.value)}
                 />
               </div>
+
+              {!!subject && isFiltersLoading && (
+                <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在初始化筛选项，首次加载该学科可能需要几秒。
+                </div>
+              )}
+
+              {!!subject && !!filtersError && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                    <AlertTriangle className="h-4 w-4" />
+                    筛选项加载失败，可重试后继续组卷。
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => refetchFilters()}>
+                    重试
+                  </Button>
+                </div>
+              )}
+
+              {!!subject && !isFiltersLoading && !filtersError && isFiltersFetching && (
+                <div className="text-xs text-muted-foreground">
+                  正在刷新筛选项缓存...
+                </div>
+              )}
 
               {filters && (
                 <div className="grid grid-cols-2 gap-4">

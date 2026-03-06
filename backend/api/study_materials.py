@@ -21,13 +21,12 @@ from backend.agent.executor import Executor
 from backend.agent.types import CompressedContext, PlanStep, UserProfile, agent_event
 from backend.api.auth import get_current_user, require_auth
 from backend.api.study_materials_schemas import (
+    StudyMaterialsContinueRequest,
     StudyMaterialsConvertMarkdownToLatexRequest,
     StudyMaterialsConvertMarkdownToLatexResponse,
-    StudyMaterialsContinueRequest,
     StudyMaterialsGenerateRequest,
 )
 from backend.study_materials.task_manager import StudyMaterialsTaskManager
-
 
 router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependencies=[Depends(require_auth)])
 

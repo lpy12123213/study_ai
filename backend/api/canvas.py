@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-
 from backend.api.auth import require_auth
+from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
 from backend.config import DEFAULT_SUBJECT
 from backend.crawler_manager import get_crawler
-from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
-from backend.subjects import resolve_subject
 from backend.database.models import (
     create_canvas_board,
     create_canvas_board_version,
@@ -24,6 +23,7 @@ from backend.database.models import (
     list_canvas_boards,
     update_canvas_board,
 )
+from backend.subjects import resolve_subject
 
 router = APIRouter(prefix="/canvas", dependencies=[Depends(require_auth)])
 
@@ -37,6 +37,26 @@ def _parse_snapshot(raw: str) -> Dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _snapshot_max_bytes() -> int:
+    raw = str(os.getenv("CANVAS_SNAPSHOT_MAX_BYTES") or "").strip()
+    try:
+        value = int(raw) if raw else 2 * 1024 * 1024
+    except Exception:
+        value = 2 * 1024 * 1024
+    return max(1024, min(value, 20 * 1024 * 1024))
+
+
+def _serialize_snapshot(snapshot: Dict[str, Any]) -> str:
+    try:
+        raw = json.dumps(snapshot, ensure_ascii=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid_snapshot: {str(exc)}")
+
+    if len(raw.encode("utf-8")) > _snapshot_max_bytes():
+        raise HTTPException(status_code=413, detail="snapshot_too_large")
+    return raw
 
 
 def _normalize_asset_url(raw: str, base_url: str) -> str:
@@ -137,10 +157,7 @@ async def create_board(payload: CanvasBoardCreate, user: dict = Depends(require_
     user_id = str((user or {}).get("user_id") or "").strip() or "1"
     snapshot_raw = ""
     if payload.snapshot is not None:
-        try:
-            snapshot_raw = json.dumps(payload.snapshot, ensure_ascii=False)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"invalid_snapshot: {str(exc)}")
+        snapshot_raw = _serialize_snapshot(payload.snapshot)
 
     board = await create_canvas_board(
         user_id=user_id,
@@ -169,10 +186,7 @@ async def put_board(board_id: int, payload: CanvasBoardUpdate, user: dict = Depe
     user_id = str((user or {}).get("user_id") or "").strip() or "1"
     snapshot_raw = None
     if payload.snapshot is not None:
-        try:
-            snapshot_raw = json.dumps(payload.snapshot, ensure_ascii=False)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"invalid_snapshot: {str(exc)}")
+        snapshot_raw = _serialize_snapshot(payload.snapshot)
 
     result = await update_canvas_board(
         user_id,

@@ -67,6 +67,9 @@ export function solveDeepThinkStream(
   onEvent: (event: DeepThinkEvent) => void,
   onError?: (error: Error) => void,
   onComplete?: () => void,
+  options?: {
+    signal?: AbortSignal
+  },
 ): void {
   fetchSSE(
     '/deepthink',
@@ -80,6 +83,7 @@ export function solveDeepThinkStream(
     },
     onError,
     onComplete,
+    { signal: options?.signal },
   )
 }
 

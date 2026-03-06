@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "exam-paper-assistant": {
+      "command": "python",
+      "args": [
+        "C:/path/to/study_ai/backend/mcp/stdio_server.py"
+      ],
+      "description": "Study AI MCP stdio server"
+    }
+  }
+}

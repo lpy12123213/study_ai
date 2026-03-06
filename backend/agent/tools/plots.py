@@ -23,12 +23,22 @@ class PlotToolsMixin:
         if not spec:
             return {"success": False, "error": "spec 不能为空", "knowledge_point": kp}
 
-        from backend.core.plot_tools import render_2d_plot
+        from backend.core.plot_tools import render_2d_plot_with_meta
 
         try:
-            png_bytes = render_2d_plot(spec)
+            plot_result = render_2d_plot_with_meta(spec)
         except Exception as exc:
             return {"success": False, "error": str(exc), "knowledge_point": kp}
+
+        if not plot_result.get("success"):
+            return {
+                "success": False,
+                "error": str(plot_result.get("error") or "plot_render_failed"),
+                "warnings": plot_result.get("warnings") or [],
+                "knowledge_point": kp,
+            }
+
+        png_bytes = bytes(plot_result.get("png_bytes") or b"")
 
         import hashlib
 
@@ -95,6 +105,7 @@ class PlotToolsMixin:
             "url": url,
             "markdown": markdown,
             "bytes": len(png_bytes),
+            "warnings": plot_result.get("warnings") or [],
         }
 
     async def _tool_plot_3d(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
@@ -186,4 +197,3 @@ class PlotToolsMixin:
             "markdown": markdown,
             "bytes": len(png_bytes),
         }
-

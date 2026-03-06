@@ -186,7 +186,14 @@ class ChatToolsMixin:
         except Exception:
             return value
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], *, sub_model: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        sub_model: Optional[str] = None,
+        user_id: str = "1",
+    ) -> Dict[str, Any]:
         try:
             arguments = self._coerce_tool_args(tool_name, arguments)
 
@@ -325,11 +332,18 @@ class ChatToolsMixin:
 
             if tool_name == "create_paper":
                 questions = [{"question_id": qid} for qid in (arguments.get("question_ids") or [])]
-                paper_id = await save_paper(paper_name=arguments.get("paper_name", "未命名试卷"), questions=questions)
+                paper_id = await save_paper(
+                    user_id=str(user_id or "").strip() or "1",
+                    paper_name=arguments.get("paper_name", "未命名试卷"),
+                    questions=questions,
+                )
                 return {"success": True, "paper_id": paper_id, "message": f"试卷创建成功，ID: {paper_id}"}
 
             if tool_name == "get_papers":
-                papers = await list_papers(limit=int(arguments.get("limit") or 10))
+                papers = await list_papers(
+                    user_id=str(user_id or "").strip() or "1",
+                    limit=int(arguments.get("limit") or 10),
+                )
                 return {"success": True, "papers": papers, "count": len(papers)}
 
             if tool_name == "get_question_detail":
@@ -391,4 +405,3 @@ class ChatToolsMixin:
             return {"success": False, "error": f"未知工具: {tool_name}"}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
-

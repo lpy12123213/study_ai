@@ -6,6 +6,7 @@ import ipaddress
 import mimetypes
 import os
 import socket
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -36,6 +37,14 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/bmp",
 }
 
+_PROXY_CACHE_STATS = {
+    "hits": 0,
+    "misses": 0,
+    "expired": 0,
+    "evicted_files": 0,
+    "evicted_bytes": 0,
+}
+
 
 def _env_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
@@ -45,6 +54,21 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except Exception:
         return int(default)
+
+
+def reset_proxy_cache_stats() -> None:
+    for key in list(_PROXY_CACHE_STATS.keys()):
+        _PROXY_CACHE_STATS[key] = 0
+
+
+def get_proxy_cache_stats() -> dict[str, int]:
+    return {key: int(value or 0) for key, value in _PROXY_CACHE_STATS.items()}
+
+
+def _bump_proxy_cache_stat(key: str, amount: int = 1) -> None:
+    if key not in _PROXY_CACHE_STATS:
+        return
+    _PROXY_CACHE_STATS[key] = int(_PROXY_CACHE_STATS.get(key, 0) or 0) + int(amount or 0)
 
 
 def _get_allowed_domains() -> list[str]:
@@ -197,6 +221,13 @@ def _is_safe_generated_filename(name: str) -> bool:
     return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "md", "tex", "pdf"}
 
 
+def _file_response(path: Path, *, filename: Optional[str] = None) -> FileResponse:
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if filename:
+        return FileResponse(path, filename=filename, headers=headers)
+    return FileResponse(path, headers=headers)
+
+
 @router.get("/media/generated/{filename}")
 async def get_generated_media(filename: str) -> FileResponse:
     """Serve locally generated media from `.local/media/generated/`."""
@@ -215,8 +246,8 @@ async def get_generated_media(filename: str) -> FileResponse:
     ext = path.suffix.lower().lstrip(".")
     if ext in {"md", "tex", "pdf"}:
         # Force "download" behavior for generated documents (avoid opening raw text/PDF in-app).
-        return FileResponse(path, filename=filename)
-    return FileResponse(path)
+        return _file_response(path, filename=filename)
+    return _file_response(path)
 
 
 def _iter_proxy_cache_files() -> list[Path]:
@@ -226,16 +257,11 @@ def _iter_proxy_cache_files() -> list[Path]:
     for p in MEDIA_DIR.iterdir():
         if p.is_dir():
             continue
-        if p.name.endswith(".tmp"):
-            out.append(p)
-            continue
-        if len(p.name) < 10:
-            continue
         out.append(p)
     return out
 
 
-def _prune_proxy_cache() -> None:
+def _prune_proxy_cache() -> dict[str, int]:
     """
     Best-effort pruning to avoid unbounded disk growth.
 
@@ -250,18 +276,19 @@ def _prune_proxy_cache() -> None:
     max_files = _env_int("MEDIA_PROXY_CACHE_MAX_FILES", 5000)
 
     ttl_s = max(0, min(ttl_s, 365 * 24 * 3600))
-    max_bytes = max(16 * 1024 * 1024, min(max_bytes, 10 * 1024 * 1024 * 1024))
-    max_files = max(100, min(max_files, 200_000))
+    max_bytes = max(1, min(max_bytes, 10 * 1024 * 1024 * 1024))
+    max_files = max(1, min(max_files, 200_000))
+
+    stats = {
+        "temp_deleted": 0,
+        "expired": 0,
+        "evicted_files": 0,
+        "evicted_bytes": 0,
+    }
 
     files = _iter_proxy_cache_files()
     if not files:
-        return
-
-    now = None
-    try:
-        now = int(asyncio.get_event_loop().time())
-    except Exception:
-        now = None
+        return stats
 
     # 1) Delete temp files and expired files.
     survivors: list[tuple[Path, float, int]] = []
@@ -269,38 +296,34 @@ def _prune_proxy_cache() -> None:
         try:
             if p.name.endswith(".tmp"):
                 p.unlink(missing_ok=True)
+                stats["temp_deleted"] += 1
                 continue
             stat = p.stat()
             mtime = float(stat.st_mtime or 0.0)
             size = int(stat.st_size or 0)
             if ttl_s > 0:
-                if now is None:
-                    # Fallback: use wall time.
-                    import time as _time
-
-                    if (_time.time() - mtime) > ttl_s:
-                        p.unlink(missing_ok=True)
-                        continue
-                else:
-                    # `asyncio` monotonic time can't be compared to mtime; use wall time only when available.
-                    import time as _time
-
-                    if (_time.time() - mtime) > ttl_s:
-                        p.unlink(missing_ok=True)
-                        continue
+                if (time.time() - mtime) > ttl_s:
+                    p.unlink(missing_ok=True)
+                    stats["expired"] += 1
+                    continue
             survivors.append((p, mtime, size))
         except Exception:
             continue
 
     if not survivors:
-        return
+        _bump_proxy_cache_stat("expired", stats["expired"])
+        _bump_proxy_cache_stat("evicted_files", stats["evicted_files"])
+        _bump_proxy_cache_stat("evicted_bytes", stats["evicted_bytes"])
+        return stats
 
     # 2) Enforce max_files.
     survivors.sort(key=lambda t: (t[1], str(t[0].name)))
     if len(survivors) > max_files:
-        for p, _, _ in survivors[: max(0, len(survivors) - max_files)]:
+        for p, _, size in survivors[: max(0, len(survivors) - max_files)]:
             try:
                 p.unlink(missing_ok=True)
+                stats["evicted_files"] += 1
+                stats["evicted_bytes"] += int(size or 0)
             except Exception:
                 pass
         survivors = survivors[-max_files:]
@@ -308,15 +331,24 @@ def _prune_proxy_cache() -> None:
     # 3) Enforce max_bytes.
     total = sum(s for _, _, s in survivors)
     if total <= max_bytes:
-        return
+        _bump_proxy_cache_stat("expired", stats["expired"])
+        _bump_proxy_cache_stat("evicted_files", stats["evicted_files"])
+        _bump_proxy_cache_stat("evicted_bytes", stats["evicted_bytes"])
+        return stats
     for p, _, s in survivors:
         try:
             p.unlink(missing_ok=True)
+            stats["evicted_files"] += 1
+            stats["evicted_bytes"] += int(s or 0)
         except Exception:
             pass
         total -= s
         if total <= max_bytes:
             break
+    _bump_proxy_cache_stat("expired", stats["expired"])
+    _bump_proxy_cache_stat("evicted_files", stats["evicted_files"])
+    _bump_proxy_cache_stat("evicted_bytes", stats["evicted_bytes"])
+    return stats
 
 
 @router.get("/media/proxy")
@@ -335,7 +367,14 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
     media_id = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     cached = _find_cached_file(media_id)
     if cached:
-        return FileResponse(cached)
+        try:
+            os.utime(cached, None)
+        except Exception:
+            pass
+        _bump_proxy_cache_stat("hits")
+        return _file_response(cached)
+
+    _bump_proxy_cache_stat("misses")
 
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     _prune_proxy_cache()
@@ -422,7 +461,7 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
                         raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
 
                     _prune_proxy_cache()
-                    return FileResponse(out_path)
+                    return _file_response(out_path)
             except HTTPException:
                 raise
             except Exception as exc:
