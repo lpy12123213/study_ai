@@ -180,6 +180,27 @@ class QuestionCache(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class QuestionLibraryItem(Base):
+    """用户维度的本地题库条目（来源/隐藏/评分等“题库语义”）。"""
+
+    __tablename__ = "question_library"
+
+    user_id = Column(String(64), primary_key=True)
+    question_id = Column(String(50), primary_key=True)
+    subject = Column(String(100), default="", index=True)
+    origin = Column(String(20), default="crawled", index=True)  # crawled|ai
+
+    hidden = Column(Integer, default=0, index=True)  # 0/1
+
+    ai_score = Column(Integer)
+    ai_verdict = Column(String(20), default="")
+    ai_dimensions_json = Column(Text, default="")
+    ai_summary = Column(Text, default="")
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class StudyArchive(Base):
     """自学材料归档（本地知识库，用于复用与加速）。"""
 

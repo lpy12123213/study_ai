@@ -6,6 +6,7 @@ import {
   Files,
   LayoutTemplate,
   BookOpen,
+  Library,
   Award,
   PenTool,
   Settings,
@@ -39,6 +40,7 @@ const navItems = [
   { path: '/blueprint', label: '蓝图组卷', icon: LayoutTemplate },
   { path: '/study-materials', label: '自学资料', icon: BookOpen },
   { path: '/question-evaluate', label: '好题鉴别', icon: Award },
+  { path: '/question-library', label: '本地题库', icon: Library },
   { path: '/papers', label: '试卷管理', icon: Files },
   { path: '/canvas', label: '学习画布', icon: PenTool },
 ]

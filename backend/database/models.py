@@ -29,6 +29,7 @@ from backend.database.schema import (
     Paper,
     PaperQuestion,
     QuestionCache,
+    QuestionLibraryItem,
     SearchHistory,
     StudyArchive,
     UsedQuestion,
@@ -61,6 +62,13 @@ from backend.database.repositories.question_cache import (
     list_used_question_ids,
     mark_used_questions,
     upsert_question_cache,
+)
+from backend.database.repositories.question_library import (
+    get_question_library_item,
+    list_question_library_items,
+    list_unscored_question_ids,
+    set_hidden,
+    upsert_question_library_items,
 )
 from backend.database.repositories.search_history import add_search_history
 from backend.database.repositories.study_archives import (

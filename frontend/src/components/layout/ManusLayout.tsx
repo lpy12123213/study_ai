@@ -8,6 +8,9 @@ export function ManusLayout() {
   
   // Full screen pages (no sidebar)
   const isFullScreenPage = location.pathname.startsWith('/canvas')
+
+  // Studio pages (keep header, hide history sidebar, manage internal scroll)
+  const isStudioPage = location.pathname.startsWith('/question-library')
   
   // Wide pages (no max-width constraint)
   const isWidePage =
@@ -15,10 +18,11 @@ export function ManusLayout() {
     location.pathname.startsWith('/lesson-plans') ||
     location.pathname.startsWith('/study-materials') ||
     location.pathname.startsWith('/question-evaluate') ||
-    location.pathname.startsWith('/deepthink')
+    location.pathname.startsWith('/deepthink') ||
+    isStudioPage
 
   const pageManagesOwnScroll =
-    location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/lesson-plans')
+    location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/lesson-plans') || isStudioPage
 
   if (isFullScreenPage) {
     return (
@@ -36,7 +40,7 @@ export function ManusLayout() {
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left sidebar - History */}
-        <HistorySidebar />
+        {!isStudioPage && <HistorySidebar />}
         
         {/* Center - Main content */}
         <main className="flex-1 flex flex-col overflow-hidden relative bg-background">

@@ -40,6 +40,7 @@ from backend.core.llm_client import (
     set_moonshot_api_key_override,
 )
 from backend.database.models import init_db
+from backend.question_library.worker import run_question_library_scoring_worker
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
@@ -53,8 +54,21 @@ configure_logging(force=(not _log_format or _log_format == "json"))
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
-    yield
-    await close_crawler()
+    stop = asyncio.Event()
+    worker_task = asyncio.create_task(run_question_library_scoring_worker(stop=stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        try:
+            await asyncio.wait_for(worker_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            worker_task.cancel()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        await close_crawler()
 
 
 def create_app() -> FastAPI:
