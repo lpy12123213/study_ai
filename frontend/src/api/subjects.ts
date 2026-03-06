@@ -28,7 +28,7 @@ export async function getSubjects(): Promise<Subject[]> {
       ? ((data as any).subjects as BackendSubject[])
       : []
 
-  return list
+  const normalized = list
     .filter((s): s is BackendSubject & { name: string } => typeof s?.name === 'string' && s.name.trim().length > 0)
     .map((s) => {
       const name = s.name.trim()
@@ -44,6 +44,16 @@ export async function getSubjects(): Promise<Subject[]> {
         eduId,
       }
     })
+
+  // Defensive de-dupe: backend bugs or legacy configs may repeat items.
+  const seen = new Set<string>()
+  return normalized.filter((s) => {
+    const key = String(s.id || '').trim() || s.code
+    if (!key) return false
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 // Get subject filters (grades, textbook versions, etc.)

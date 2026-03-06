@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
@@ -50,6 +50,16 @@ def _normalize_asset_url(raw: str, base_url: str) -> str:
     return raw
 
 
+def _is_safe_http_url(url: str) -> bool:
+    url = (url or "").strip()
+    if not url:
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return bool(parsed.netloc)
+
+
 def _sanitize_question_html(html: str, *, base_url: str) -> str:
     """
     Sanitize and rewrite question stem HTML for safe rendering in the frontend.
@@ -75,7 +85,7 @@ def _sanitize_question_html(html: str, *, base_url: str) -> str:
             img.decompose()
             continue
         full = _normalize_asset_url(src, base_url)
-        if not full:
+        if not full or not _is_safe_http_url(full):
             img.decompose()
             continue
         img.attrs = {"src": f"/api/media/proxy?url={quote(full, safe='')}", "loading": "lazy"}
@@ -85,11 +95,21 @@ def _sanitize_question_html(html: str, *, base_url: str) -> str:
         if not href:
             continue
         full = _normalize_asset_url(href, base_url)
-        if not full:
+        if not full or not _is_safe_http_url(full):
+            # Keep the text, but prevent scriptable/unsafe links.
+            if "href" in a.attrs:
+                del a.attrs["href"]
+            if "target" in a.attrs:
+                del a.attrs["target"]
+            if "rel" in a.attrs:
+                del a.attrs["rel"]
             continue
-        a["href"] = full
-        a["target"] = "_blank"
-        a["rel"] = "noreferrer noopener"
+        a.attrs = {
+            **{k: v for k, v in a.attrs.items() if k not in {"href", "target", "rel"}},
+            "href": full,
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+        }
 
     container = soup.body if soup.body else soup
     return container.decode_contents()
@@ -106,13 +126,15 @@ class CanvasPickQuestionsRequest(BaseModel):
 
 
 @router.get("/boards")
-async def list_boards(limit: int = Query(50, ge=1, le=200), q: str = Query("")) -> dict:
-    boards = await list_canvas_boards(limit=limit, query=q)
+async def list_boards(limit: int = Query(50, ge=1, le=200), q: str = Query(""), user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    boards = await list_canvas_boards(user_id=user_id, limit=limit, query=q)
     return {"success": True, "boards": boards}
 
 
 @router.post("/boards")
-async def create_board(payload: CanvasBoardCreate) -> dict:
+async def create_board(payload: CanvasBoardCreate, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
     snapshot_raw = ""
     if payload.snapshot is not None:
         try:
@@ -121,6 +143,7 @@ async def create_board(payload: CanvasBoardCreate) -> dict:
             raise HTTPException(status_code=400, detail=f"invalid_snapshot: {str(exc)}")
 
     board = await create_canvas_board(
+        user_id=user_id,
         title=(payload.title or "").strip(),
         subject=(payload.subject or "").strip(),
         snapshot=snapshot_raw,
@@ -129,8 +152,9 @@ async def create_board(payload: CanvasBoardCreate) -> dict:
 
 
 @router.get("/boards/{board_id}")
-async def get_board(board_id: int) -> dict:
-    board = await get_canvas_board(board_id)
+async def get_board(board_id: int, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    board = await get_canvas_board(user_id=user_id, board_id=board_id)
     if not board:
         raise HTTPException(status_code=404, detail="board_not_found")
 
@@ -141,7 +165,8 @@ async def get_board(board_id: int) -> dict:
 
 
 @router.put("/boards/{board_id}")
-async def put_board(board_id: int, payload: CanvasBoardUpdate) -> dict:
+async def put_board(board_id: int, payload: CanvasBoardUpdate, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
     snapshot_raw = None
     if payload.snapshot is not None:
         try:
@@ -150,6 +175,7 @@ async def put_board(board_id: int, payload: CanvasBoardUpdate) -> dict:
             raise HTTPException(status_code=400, detail=f"invalid_snapshot: {str(exc)}")
 
     result = await update_canvas_board(
+        user_id,
         board_id,
         title=payload.title,
         subject=payload.subject,
@@ -171,22 +197,25 @@ async def put_board(board_id: int, payload: CanvasBoardUpdate) -> dict:
 
 
 @router.get("/boards/{board_id}/versions")
-async def get_versions(board_id: int, limit: int = Query(30, ge=1, le=200)) -> dict:
-    versions = await list_canvas_board_versions(board_id, limit=limit)
+async def get_versions(board_id: int, limit: int = Query(30, ge=1, le=200), user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    versions = await list_canvas_board_versions(user_id=user_id, board_id=board_id, limit=limit)
     return {"success": True, "versions": versions}
 
 
 @router.post("/boards/{board_id}/versions")
-async def create_version(board_id: int) -> dict:
-    result = await create_canvas_board_version(board_id)
+async def create_version(board_id: int, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    result = await create_canvas_board_version(user_id=user_id, board_id=board_id)
     if not result.get("success"):
         raise HTTPException(status_code=404, detail=result.get("error") or "board_not_found")
     return result
 
 
 @router.get("/boards/{board_id}/versions/{version_id}")
-async def get_version(board_id: int, version_id: int) -> dict:
-    version = await get_canvas_board_version(board_id, version_id)
+async def get_version(board_id: int, version_id: int, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    version = await get_canvas_board_version(user_id=user_id, board_id=board_id, version_id=version_id)
     if not version:
         raise HTTPException(status_code=404, detail="version_not_found")
     snapshot = _parse_snapshot(version.get("snapshot", ""))
@@ -196,7 +225,7 @@ async def get_version(board_id: int, version_id: int) -> dict:
 
 
 @router.post("/boards/{board_id}/pick-questions")
-async def pick_questions(board_id: int, payload: CanvasPickQuestionsRequest) -> dict:
+async def pick_questions(board_id: int, payload: CanvasPickQuestionsRequest, user: dict = Depends(require_auth)) -> dict:
     """
     Use crawler + MCP sub-AI selector to pick questions, then return render-ready HTML.
 
@@ -204,7 +233,8 @@ async def pick_questions(board_id: int, payload: CanvasPickQuestionsRequest) -> 
     - Formula rendering: inline SVG (no svg2latex).
     - Images: rewritten to `/api/media/proxy` for on-demand download + cache.
     """
-    board = await get_canvas_board(board_id)
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    board = await get_canvas_board(user_id=user_id, board_id=board_id)
     if not board:
         raise HTTPException(status_code=404, detail="board_not_found")
 

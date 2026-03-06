@@ -21,11 +21,16 @@ def _to_json_str(value: Any) -> str:
     return ""
 
 
-async def save_paper(*, paper_name: str, questions: List[dict]) -> int:
+def _normalize_user_id(user_id: str) -> str:
+    return str(user_id or "").strip()[:64]
+
+
+async def save_paper(*, user_id: str, paper_name: str, questions: List[dict]) -> int:
     """保存试卷并写入题目快照（以及本地题目缓存）。"""
 
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        paper = Paper(paper_name=str(paper_name or "").strip() or "未命名试卷")
+        paper = Paper(user_id=uid, paper_name=str(paper_name or "").strip() or "未命名试卷")
         session.add(paper)
         await session.commit()
         await session.refresh(paper)
@@ -110,7 +115,7 @@ async def save_paper(*, paper_name: str, questions: List[dict]) -> int:
         return int(paper.id)
 
 
-async def add_questions_to_paper(*, paper_id: int, questions: List[dict]) -> int:
+async def add_questions_to_paper(*, user_id: str, paper_id: int, questions: List[dict]) -> int:
     """向现有试卷追加题目（并写入题目缓存）。
 
     Returns:
@@ -125,8 +130,9 @@ async def add_questions_to_paper(*, paper_id: int, questions: List[dict]) -> int
     if not entries:
         return 0
 
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        result = await session.execute(select(Paper).where(Paper.id == pid))
+        result = await session.execute(select(Paper).where(Paper.id == pid, Paper.user_id == uid))
         paper = result.scalar_one_or_none()
         if not paper:
             raise ValueError("paper_not_found")
@@ -221,9 +227,10 @@ async def add_questions_to_paper(*, paper_id: int, questions: List[dict]) -> int
         return appended
 
 
-async def get_paper(paper_id: int) -> Optional[dict]:
+async def get_paper(*, user_id: str, paper_id: int) -> Optional[dict]:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        result = await session.execute(select(Paper).where(Paper.id == int(paper_id)))
+        result = await session.execute(select(Paper).where(Paper.id == int(paper_id), Paper.user_id == uid))
         paper = result.scalar_one_or_none()
         if not paper:
             return None
@@ -237,6 +244,7 @@ async def get_paper(paper_id: int) -> Optional[dict]:
 
         return {
             "paper_id": paper.id,
+            "user_id": paper.user_id,
             "paper_name": paper.paper_name,
             "created_at": paper.created_at.isoformat() if paper.created_at else "",
             "updated_at": paper.updated_at.isoformat() if paper.updated_at else "",
@@ -257,11 +265,13 @@ async def get_paper(paper_id: int) -> Optional[dict]:
         }
 
 
-async def list_papers(*, limit: int = 50) -> List[dict]:
+async def list_papers(*, user_id: str, limit: int = 50) -> List[dict]:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
         result = await session.execute(
             select(Paper)
             .options(selectinload(Paper.questions))
+            .where(Paper.user_id == uid)
             .order_by(Paper.created_at.desc())
             .limit(int(limit or 50))
         )
@@ -269,6 +279,7 @@ async def list_papers(*, limit: int = 50) -> List[dict]:
         return [
             {
                 "paper_id": p.id,
+                "user_id": p.user_id,
                 "paper_name": p.paper_name,
                 "created_at": p.created_at.isoformat() if p.created_at else "",
                 "question_count": len(p.questions),
@@ -277,9 +288,10 @@ async def list_papers(*, limit: int = 50) -> List[dict]:
         ]
 
 
-async def delete_paper(paper_id: int) -> bool:
+async def delete_paper(*, user_id: str, paper_id: int) -> bool:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        result = await session.execute(select(Paper).where(Paper.id == int(paper_id)))
+        result = await session.execute(select(Paper).where(Paper.id == int(paper_id), Paper.user_id == uid))
         paper = result.scalar_one_or_none()
         if not paper:
             return False

@@ -8,18 +8,24 @@ from backend.database.engine import async_session_maker
 from backend.database.schema import CanvasBoard, CanvasBoardVersion
 
 
-async def create_canvas_board(*, title: str = "", subject: str = "", snapshot: str = "") -> dict:
+def _normalize_user_id(user_id: str) -> str:
+    return str(user_id or "").strip()[:64]
+
+
+async def create_canvas_board(*, user_id: str, title: str = "", subject: str = "", snapshot: str = "") -> dict:
     title = (title or "").strip() or "新画布"
     subject = (subject or "").strip()
     snapshot = snapshot or ""
+    uid = _normalize_user_id(user_id) or "1"
 
     async with async_session_maker() as session:
-        board = CanvasBoard(title=title, subject=subject, snapshot=snapshot, revision=1)
+        board = CanvasBoard(user_id=uid, title=title, subject=subject, snapshot=snapshot, revision=1)
         session.add(board)
         await session.commit()
         await session.refresh(board)
         return {
             "id": board.id,
+            "user_id": board.user_id,
             "title": board.title,
             "subject": board.subject,
             "revision": board.revision,
@@ -28,12 +34,13 @@ async def create_canvas_board(*, title: str = "", subject: str = "", snapshot: s
         }
 
 
-async def list_canvas_boards(*, limit: int = 50, query: str = "") -> List[dict]:
+async def list_canvas_boards(*, user_id: str, limit: int = 50, query: str = "") -> List[dict]:
     limit = max(1, min(int(limit or 50), 200))
     query = (query or "").strip()
+    uid = _normalize_user_id(user_id) or "1"
 
     async with async_session_maker() as session:
-        stmt = select(CanvasBoard).order_by(desc(CanvasBoard.updated_at)).limit(limit)
+        stmt = select(CanvasBoard).where(CanvasBoard.user_id == uid).order_by(desc(CanvasBoard.updated_at)).limit(limit)
         if query:
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             stmt = stmt.where(CanvasBoard.title.like(f"%{escaped}%"))
@@ -42,6 +49,7 @@ async def list_canvas_boards(*, limit: int = 50, query: str = "") -> List[dict]:
         return [
             {
                 "id": b.id,
+                "user_id": b.user_id,
                 "title": b.title,
                 "subject": b.subject,
                 "revision": b.revision,
@@ -52,14 +60,18 @@ async def list_canvas_boards(*, limit: int = 50, query: str = "") -> List[dict]:
         ]
 
 
-async def get_canvas_board(*, board_id: int) -> Optional[dict]:
+async def get_canvas_board(*, user_id: str, board_id: int) -> Optional[dict]:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        result = await session.execute(select(CanvasBoard).where(CanvasBoard.id == int(board_id)))
+        result = await session.execute(
+            select(CanvasBoard).where(CanvasBoard.id == int(board_id), CanvasBoard.user_id == uid)
+        )
         board = result.scalar_one_or_none()
         if not board:
             return None
         return {
             "id": board.id,
+            "user_id": board.user_id,
             "title": board.title,
             "subject": board.subject,
             "revision": board.revision,
@@ -70,6 +82,7 @@ async def get_canvas_board(*, board_id: int) -> Optional[dict]:
 
 
 async def update_canvas_board(
+    user_id: str,
     board_id: int,
     *,
     title: Optional[str] = None,
@@ -77,8 +90,11 @@ async def update_canvas_board(
     snapshot: Optional[str] = None,
     expected_revision: Optional[int] = None,
 ) -> dict:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        result = await session.execute(select(CanvasBoard).where(CanvasBoard.id == int(board_id)))
+        result = await session.execute(
+            select(CanvasBoard).where(CanvasBoard.id == int(board_id), CanvasBoard.user_id == uid)
+        )
         board = result.scalar_one_or_none()
         if not board:
             return {"success": False, "error": "board_not_found"}
@@ -90,6 +106,7 @@ async def update_canvas_board(
                 "error": "revision_conflict",
                 "server_board": {
                     "id": board.id,
+                    "user_id": board.user_id,
                     "title": board.title,
                     "subject": board.subject,
                     "revision": board.revision,
@@ -113,6 +130,7 @@ async def update_canvas_board(
             "success": True,
             "board": {
                 "id": board.id,
+                "user_id": board.user_id,
                 "title": board.title,
                 "subject": board.subject,
                 "revision": board.revision,
@@ -122,9 +140,12 @@ async def update_canvas_board(
         }
 
 
-async def create_canvas_board_version(*, board_id: int) -> dict:
+async def create_canvas_board_version(*, user_id: str, board_id: int) -> dict:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
-        result = await session.execute(select(CanvasBoard).where(CanvasBoard.id == int(board_id)))
+        result = await session.execute(
+            select(CanvasBoard).where(CanvasBoard.id == int(board_id), CanvasBoard.user_id == uid)
+        )
         board = result.scalar_one_or_none()
         if not board:
             return {"success": False, "error": "board_not_found"}
@@ -162,9 +183,15 @@ async def create_canvas_board_version(*, board_id: int) -> dict:
         }
 
 
-async def list_canvas_board_versions(*, board_id: int, limit: int = 30) -> List[dict]:
+async def list_canvas_board_versions(*, user_id: str, board_id: int, limit: int = 30) -> List[dict]:
     limit = max(1, min(int(limit or 30), 200))
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
+        board_result = await session.execute(
+            select(CanvasBoard.id).where(CanvasBoard.id == int(board_id), CanvasBoard.user_id == uid)
+        )
+        if board_result.scalar_one_or_none() is None:
+            return []
         result = await session.execute(
             select(CanvasBoardVersion)
             .where(CanvasBoardVersion.board_id == int(board_id))
@@ -183,8 +210,14 @@ async def list_canvas_board_versions(*, board_id: int, limit: int = 30) -> List[
         ]
 
 
-async def get_canvas_board_version(*, board_id: int, version_id: int) -> Optional[dict]:
+async def get_canvas_board_version(*, user_id: str, board_id: int, version_id: int) -> Optional[dict]:
+    uid = _normalize_user_id(user_id) or "1"
     async with async_session_maker() as session:
+        board_result = await session.execute(
+            select(CanvasBoard.id).where(CanvasBoard.id == int(board_id), CanvasBoard.user_id == uid)
+        )
+        if board_result.scalar_one_or_none() is None:
+            return None
         result = await session.execute(
             select(CanvasBoardVersion).where(
                 CanvasBoardVersion.board_id == int(board_id),
@@ -201,4 +234,3 @@ async def get_canvas_board_version(*, board_id: int, version_id: int) -> Optiona
             "snapshot": v.snapshot or "",
             "created_at": v.created_at.isoformat() if v.created_at else "",
         }
-

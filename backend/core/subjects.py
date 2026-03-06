@@ -43,7 +43,6 @@ COMMON_SUBJECTS = [
     "初中生物",
     "高中语文",
     "高中数学",
-    "高中语文",
     "高中英语",
     "高中物理",
     "高中化学",
@@ -123,7 +122,11 @@ def get_subject_config(subject_name: str) -> Dict[str, Any]:
 def get_all_subjects() -> List[Dict[str, Any]]:
     """获取所有学科列表（用于前端选择器）"""
     result = []
+    seen: set[str] = set()
     for name in COMMON_SUBJECTS:
+        if name in seen:
+            continue
+        seen.add(name)
         if name in SUBJECTS:
             config = SUBJECTS[name]
             result.append(

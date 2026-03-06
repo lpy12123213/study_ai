@@ -39,7 +39,7 @@ export default function LoginPage() {
       setAuth(response.user, response.token)
       const next = (location.state as any)?.from || '/chat'
       navigate(next, { replace: true })
-    } catch (err) {
+    } catch {
       setError('登录失败，请检查用户名和密码')
     } finally {
       setIsLoading(false)

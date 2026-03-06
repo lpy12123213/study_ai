@@ -19,6 +19,13 @@ def _add_col(conn, *, table: str, name: str, ddl: str, existing_cols: Iterable[s
         return
 
 
+def _ensure_index(conn, *, name: str, table: str, columns: str) -> None:
+    try:
+        conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+    except Exception:
+        return
+
+
 def sync_migrate_db_schema(conn) -> None:
     """Best-effort SQLite schema migrations for existing installations.
 
@@ -42,3 +49,17 @@ def sync_migrate_db_schema(conn) -> None:
         ):
             _add_col(conn, table="paper_questions", name=name, ddl=ddl, existing_cols=pq_cols)
 
+    # User scoping (multi-user isolation):
+    # - Older installations had no `user_id` for these tables (effectively global storage).
+    # - Add `user_id` with a conservative default ('1' == bootstrap admin user id).
+    for table, idx in (
+        ("papers", "ix_papers_user_id"),
+        ("conversations", "ix_conversations_user_id"),
+        ("canvas_boards", "ix_canvas_boards_user_id"),
+        ("search_history", "ix_search_history_user_id"),
+    ):
+        cols = _table_cols(conn, table)
+        if not cols:
+            continue
+        _add_col(conn, table=table, name="user_id", ddl="VARCHAR(64) NOT NULL DEFAULT '1'", existing_cols=cols)
+        _ensure_index(conn, name=idx, table=table, columns="user_id")

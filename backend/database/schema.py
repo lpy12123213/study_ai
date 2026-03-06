@@ -14,6 +14,7 @@ class Paper(Base):
     __tablename__ = "papers"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
     paper_name = Column(String(200), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -73,6 +74,7 @@ class SearchHistory(Base):
     __tablename__ = "search_history"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
     search_type = Column(String(50))
     search_query = Column(String(500))
     result_count = Column(Integer)
@@ -85,6 +87,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
     title = Column(String(200), default="新对话")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -114,6 +117,7 @@ class CanvasBoard(Base):
     __tablename__ = "canvas_boards"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
     title = Column(String(200), nullable=False, default="新画布")
     subject = Column(String(100), default="")
     revision = Column(Integer, default=1)
@@ -193,4 +197,3 @@ class StudyArchive(Base):
     sections_json = Column(Text, default="[]")
 
     created_at = Column(DateTime, default=datetime.utcnow)
-

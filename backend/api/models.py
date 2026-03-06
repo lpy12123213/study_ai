@@ -4,11 +4,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from backend.api.auth import require_auth
 from backend.core.settings import settings
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 
 _FIREWORKS_CACHE: Dict[str, Any] = {
     "fetched_at": 0.0,
