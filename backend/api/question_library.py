@@ -25,6 +25,7 @@ from backend.database.models import (
     get_question_library_item,
     list_question_library_items,
     set_hidden,
+    set_starred,
     upsert_question_cache,
     upsert_question_library_items,
 )
@@ -118,6 +119,82 @@ async def unhide_item(question_id: str, user: dict = Depends(require_auth)) -> d
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
     return {"success": True}
+
+
+@router.post("/items/{question_id}/star", response_model=dict)
+async def star_item(question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    ok = await set_starred(user_id=user_id, question_id=question_id, starred=True)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"success": True}
+
+
+@router.post("/items/{question_id}/unstar", response_model=dict)
+async def unstar_item(question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    ok = await set_starred(user_id=user_id, question_id=question_id, starred=False)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"success": True}
+
+
+@router.post("/items/{question_id}/export-to-basket", response_model=dict)
+async def export_item_to_basket(question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    qid = str(question_id or "").strip()
+    if not qid:
+        raise HTTPException(status_code=400, detail="missing_question_id")
+    if not qid.isdigit():
+        raise HTTPException(status_code=400, detail="question_id_not_numeric")
+
+    item = await get_question_library_item(user_id=user_id, question_id=qid)
+    if not item:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    cache = await get_question_cache(question_ids=[qid])
+    q = cache.get(qid) or {}
+    subject = str(item.get("subject") or q.get("subject") or "").strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail="subject_required")
+
+    def _kp_text(rec: dict) -> str:
+        raw = str(rec.get("knowledge_points_json") or "").strip()
+        kp = str(rec.get("knowledge_point") or "").strip()
+        try:
+            obj = json.loads(raw) if raw else []
+        except Exception:
+            obj = []
+        parts = []
+        if kp:
+            parts.append(kp)
+        if isinstance(obj, list):
+            for x in obj[:12]:
+                if isinstance(x, str) and x.strip():
+                    parts.append(x.strip())
+        uniq = []
+        seen = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            uniq.append(p)
+        return "、".join(uniq[:12])
+
+    detail = {
+        "question_id": qid,
+        "type": str(q.get("question_type") or "").strip() or "解答题",
+        "difficulty": str(q.get("difficulty") or "").strip() or "中等",
+        "source": str(q.get("source") or "").strip() or "本地题库",
+        "knowledge_points": _kp_text(q),
+    }
+
+    crawler = await get_crawler(subject=subject, edu_level="", strict=True)
+    try:
+        result = await crawler.export_to_basket([qid], question_details=[detail], auto_login=True, auto_switch_subject=True)
+    except Exception:
+        raise HTTPException(status_code=500, detail="export_failed")
+    return result if isinstance(result, dict) else {"success": False, "error": "export_failed"}
 
 
 @router.get("/tasks/{task_id}", response_model=dict)

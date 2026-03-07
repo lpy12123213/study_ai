@@ -50,6 +50,8 @@ async def upsert_question_library_items(*, user_id: str, items: List[dict]) -> i
                 row.origin = origin
             if "hidden" in it:
                 row.hidden = 1 if bool(it.get("hidden")) else 0
+            if "starred" in it:
+                row.starred = 1 if bool(it.get("starred")) else 0
 
             if "ai_score" in it:
                 try:
@@ -96,11 +98,21 @@ async def list_question_library_items(
                 QuestionLibraryItem.subject,
                 QuestionLibraryItem.origin,
                 QuestionLibraryItem.hidden,
+                QuestionLibraryItem.starred,
                 QuestionLibraryItem.ai_score,
                 QuestionLibraryItem.ai_verdict,
                 QuestionLibraryItem.ai_summary,
                 QuestionLibraryItem.updated_at,
                 QuestionCache.stem,
+                QuestionCache.question_type,
+                QuestionCache.difficulty,
+                QuestionCache.difficulty_value,
+                QuestionCache.knowledge_point,
+                QuestionCache.knowledge_points_json,
+                QuestionCache.source_url,
+                QuestionCache.quality_score,
+                QuestionCache.source,
+                QuestionCache.date,
             )
             .select_from(QuestionLibraryItem)
             .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
@@ -137,11 +149,21 @@ async def list_question_library_items(
                 "subject": r[1] or "",
                 "origin": r[2] or "",
                 "hidden": bool(r[3]),
-                "ai_score": r[4],
-                "ai_verdict": r[5] or "",
-                "ai_summary": r[6] or "",
-                "updated_at": r[7].isoformat() if r[7] else "",
-                "stem": (r[8] or ""),
+                "starred": bool(r[4]),
+                "ai_score": r[5],
+                "ai_verdict": r[6] or "",
+                "ai_summary": r[7] or "",
+                "updated_at": r[8].isoformat() if r[8] else "",
+                "stem": (r[9] or ""),
+                "question_type": r[10] or "",
+                "difficulty": r[11] or "",
+                "difficulty_value": r[12],
+                "knowledge_point": r[13] or "",
+                "knowledge_points_json": r[14] or "",
+                "source_url": r[15] or "",
+                "quality_score": int(r[16] or 0),
+                "source": r[17] or "",
+                "date": r[18] or "",
             }
         )
 
@@ -170,6 +192,28 @@ async def set_hidden(*, user_id: str, question_id: str, hidden: bool) -> bool:
         return True
 
 
+async def set_starred(*, user_id: str, question_id: str, starred: bool) -> bool:
+    uid = _normalize_user_id(user_id)
+    qid = str(question_id or "").strip()
+    if not qid:
+        return False
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(QuestionLibraryItem).where(
+                QuestionLibraryItem.user_id == uid,
+                QuestionLibraryItem.question_id == qid,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return False
+        row.starred = 1 if starred else 0
+        session.add(row)
+        await session.commit()
+        return True
+
+
 async def get_question_library_item(*, user_id: str, question_id: str) -> Optional[dict]:
     uid = _normalize_user_id(user_id)
     qid = str(question_id or "").strip()
@@ -193,6 +237,7 @@ async def get_question_library_item(*, user_id: str, question_id: str) -> Option
         "subject": row.subject or "",
         "origin": row.origin or "",
         "hidden": bool(row.hidden),
+        "starred": bool(getattr(row, "starred", 0)),
         "ai_score": row.ai_score,
         "ai_verdict": row.ai_verdict or "",
         "ai_dimensions_json": row.ai_dimensions_json or "",

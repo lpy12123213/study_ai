@@ -68,6 +68,7 @@ from backend.database.repositories.question_library import (
     list_question_library_items,
     list_unscored_question_ids,
     set_hidden,
+    set_starred,
     upsert_question_library_items,
 )
 from backend.database.repositories.search_history import add_search_history

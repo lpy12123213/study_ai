@@ -63,3 +63,12 @@ def sync_migrate_db_schema(conn) -> None:
             continue
         _add_col(conn, table=table, name="user_id", ddl="VARCHAR(64) NOT NULL DEFAULT '1'", existing_cols=cols)
         _ensure_index(conn, name=idx, table=table, columns="user_id")
+
+    # Question library incremental additions.
+    ql_cols = _table_cols(conn, "question_library")
+    if ql_cols:
+        _add_col(conn, table="question_library", name="starred", ddl="INTEGER NOT NULL DEFAULT 0", existing_cols=ql_cols)
+        _ensure_index(conn, name="ix_question_library_subject", table="question_library", columns="subject")
+        _ensure_index(conn, name="ix_question_library_origin", table="question_library", columns="origin")
+        _ensure_index(conn, name="ix_question_library_hidden", table="question_library", columns="hidden")
+        _ensure_index(conn, name="ix_question_library_starred", table="question_library", columns="starred")

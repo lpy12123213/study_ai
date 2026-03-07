@@ -191,6 +191,7 @@ class QuestionLibraryItem(Base):
     origin = Column(String(20), default="crawled", index=True)  # crawled|ai
 
     hidden = Column(Integer, default=0, index=True)  # 0/1
+    starred = Column(Integer, default=0, index=True)  # 0/1
 
     ai_score = Column(Integer)
     ai_verdict = Column(String(20), default="")
