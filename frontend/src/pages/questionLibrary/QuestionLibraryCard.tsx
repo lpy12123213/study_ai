@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bookmark, CircleHelp, Info, MessageSquareWarning, ShoppingCart } from 'lucide-react'
+import { Bookmark, Check, CircleHelp, Info, MessageSquareWarning, ShoppingCart, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -85,10 +85,15 @@ interface Props {
   onOpenDetail: (questionId: string) => void
   onSearchSimilar: (query: string) => void
   onMutated: () => void
+  bulk?: {
+    enabled: boolean
+    selected: boolean
+    onToggle: () => void
+  }
 }
 
 export function QuestionLibraryCard(props: Props) {
-  const { item, onOpenDetail, onSearchSimilar, onMutated } = props
+  const { item, onOpenDetail, onSearchSimilar, onMutated, bulk } = props
 
   const [isStarring, setIsStarring] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
@@ -176,22 +181,45 @@ export function QuestionLibraryCard(props: Props) {
     }
   }
 
+  const bulkEnabled = Boolean(bulk?.enabled)
+  const bulkSelected = Boolean(bulk?.selected)
+
   return (
-    <div className="rounded-xl border bg-background p-4 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {metaLeft && (
-          <span className="font-medium text-foreground/80">
-            {metaLeft}
-          </span>
-        )}
-        {tags.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {tags.map((t) => (
-              <Badge key={t} variant="secondary" className="text-[11px] font-normal">
-                {t}
-              </Badge>
-            ))}
-          </div>
+    <div
+      className={cn(
+        'rounded-xl border bg-background p-4 shadow-sm hover:shadow-md transition-shadow',
+        bulkEnabled && bulkSelected && 'ring-2 ring-primary/20 border-primary/40'
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {metaLeft && (
+            <span className="font-medium text-foreground/80">
+              {metaLeft}
+            </span>
+          )}
+          {tags.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {tags.map((t) => (
+                <Badge key={t} variant="secondary" className="text-[11px] font-normal">
+                  {t}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {bulkEnabled && bulk && (
+          <Button
+            type="button"
+            variant={bulkSelected ? 'secondary' : 'outline'}
+            size="sm"
+            className="h-8 px-2 text-xs gap-1 shrink-0"
+            onClick={bulk.onToggle}
+          >
+            {bulkSelected ? <Check className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+            {bulkSelected ? '已选' : '选择'}
+          </Button>
         )}
       </div>
 
@@ -277,4 +305,3 @@ export function QuestionLibraryCard(props: Props) {
     </div>
   )
 }
-
