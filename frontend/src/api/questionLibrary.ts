@@ -139,6 +139,15 @@ export async function exportQuestionToBasket(questionId: string): Promise<any> {
   return resp.data as any
 }
 
+export async function bulkDeleteQuestionLibraryItems(questionIds: string[]): Promise<{ success: boolean; deleted: number }> {
+  const ids = Array.from(
+    new Set((questionIds || []).map((x) => String(x || '').trim()).filter(Boolean))
+  )
+  if (ids.length === 0) throw new Error('question_ids_required')
+  const resp = await apiClient.post('/question-library/items/bulk-delete', { question_ids: ids })
+  return resp.data as any
+}
+
 export function crawlQuestions(
   payload: CrawlQuestionsPayload,
   onEvent: (event: SseEnvelope) => void,
