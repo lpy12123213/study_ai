@@ -1618,6 +1618,38 @@ class ZujuanCrawler:
         if not question_stems:
             return
 
+        def _is_fragmented_text(value: str) -> bool:
+            if "\n" not in value:
+                return False
+            lines = [ln.strip() for ln in re.split(r"\r?\n", value or "") if ln.strip()]
+            if len(lines) < 8:
+                return False
+            short2 = sum(1 for ln in lines if len(ln) <= 2)
+            short3 = sum(1 for ln in lines if len(ln) <= 3)
+            ratio2 = short2 / max(1, len(lines))
+            ratio3 = short3 / max(1, len(lines))
+            if len(lines) >= 25:
+                return ratio2 >= 0.7
+            return ratio2 >= 0.55 or (ratio3 >= 0.7 and short2 >= 6)
+
+        def _defragment_text(value: str) -> str:
+            if not _is_fragmented_text(value):
+                return value
+
+            parts = re.split(r"\r?\n", value or "")
+            out = ""
+            pending_paragraph = False
+            for ln in parts:
+                t = (ln or "").strip()
+                if not t:
+                    pending_paragraph = True
+                    continue
+                if pending_paragraph and out:
+                    out += "\n\n"
+                pending_paragraph = False
+                out += t
+            return out
+
         # 1) Collect unique hashes across all fragments.
         all_hashes: List[str] = []
         per_fragment_hashes: Dict[int, List[str]] = {}
@@ -1710,7 +1742,7 @@ class ZujuanCrawler:
             text = re.sub(r"[ \t]+\n", "\n", text)
             text = re.sub(r"\n[ \t]+", "\n", text)
             text = re.sub(r"\n{3,}", "\n\n", text)
-            text = text.strip()
+            text = _defragment_text(text).strip()
             text = re.sub(r"^\d+\s*[.．、]\s*", "", text)
 
             # Keep within reasonable size to avoid tool payload bloat.
