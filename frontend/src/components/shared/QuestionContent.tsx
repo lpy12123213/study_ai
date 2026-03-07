@@ -11,28 +11,51 @@ function isProbablyVerticalText(value: string): boolean {
     .map((l) => l.trim())
     .filter((l) => l)
 
-  if (lines.length < 25) return false
+  // Two common failure modes:
+  // 1) truly "vertical": nearly every line is 1-2 chars (one character per line).
+  // 2) "fragmented": many short lines (e.g. E / F / AB / 交 / 于) that should be inline.
+  if (lines.length < 8) return false
 
-  let shortLines = 0
+  let short2 = 0
+  let short3 = 0
   for (const line of lines) {
-    if (line.length <= 2) shortLines += 1
+    if (line.length <= 2) short2 += 1
+    if (line.length <= 3) short3 += 1
   }
 
-  return shortLines / lines.length >= 0.7
+  const ratio2 = short2 / lines.length
+  const ratio3 = short3 / lines.length
+
+  if (lines.length >= 25) {
+    return ratio2 >= 0.7
+  }
+
+  return ratio2 >= 0.55 || (ratio3 >= 0.7 && short2 >= 6)
 }
 
 function normalizeQuestionText(input: string): string {
   const raw = String(input || '')
   if (!isProbablyVerticalText(raw)) return raw
 
-  // Typical crawler failure mode: each char is separated by a newline.
-  const compact = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l)
-    .join('')
+  // Typical crawler failure mode: content is split by newlines between inline nodes.
+  // Re-join the non-empty fragments while preserving intentional paragraph breaks.
+  const parts = raw.split(/\r?\n/)
+  let out = ''
+  let pendingParagraphBreak = false
 
-  return compact
+  for (const line of parts) {
+    const t = line.trim()
+    if (!t) {
+      pendingParagraphBreak = true
+      continue
+    }
+
+    if (pendingParagraphBreak && out) out += '\n\n'
+    pendingParagraphBreak = false
+    out += t
+  }
+
+  return out
 }
 
 function renderKatex(latex: string, displayMode: boolean): ReactNode {
