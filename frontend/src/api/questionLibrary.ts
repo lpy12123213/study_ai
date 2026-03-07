@@ -72,6 +72,9 @@ export interface CrawlQuestionsPayload {
   limit?: number
   max_pages?: number
   min_quality_score?: number
+  difficulty_value_min?: number
+  difficulty_value_max?: number
+  require_difficulty_value?: boolean
   task_id?: string
 }
 

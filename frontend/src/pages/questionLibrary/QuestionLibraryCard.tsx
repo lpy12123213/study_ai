@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Bookmark, Check, CircleHelp, Info, MessageSquareWarning, ShoppingCart, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { QuestionContent } from '@/components/shared/QuestionContent'
 import { cn } from '@/lib/utils'
 import {
   exportQuestionToBasket,
@@ -224,9 +225,11 @@ export function QuestionLibraryCard(props: Props) {
       </div>
 
       <div className="mt-3">
-        <div className={cn('text-sm whitespace-pre-wrap leading-relaxed', stem ? 'text-foreground/90' : 'text-muted-foreground')}>
-          {stem || '暂无题干'}
-        </div>
+        {stem ? (
+          <QuestionContent content={stem} className="text-sm text-foreground/90" />
+        ) : (
+          <div className="text-sm text-muted-foreground">暂无题干</div>
+        )}
       </div>
 
       {actionError && <div className="mt-3 text-sm text-destructive">{actionError}</div>}

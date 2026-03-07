@@ -3,6 +3,7 @@ import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { QuestionContent } from '@/components/shared/QuestionContent'
 import { cn } from '@/lib/utils'
 import {
   hideQuestion,
@@ -54,6 +55,9 @@ export function QuestionDetailPane(props: Props) {
 
   const libItem = (detail?.library_item || listItem || null) as QuestionLibraryListItem | null
   const cache = detail?.question_cache || null
+  const stemText = String(cache?.stem || libItem?.stem || '').trim()
+  const answerText = String(cache?.answer || '').trim()
+  const analysisText = String(cache?.analysis || '').trim()
 
   const dims = useMemo(() => {
     const raw = detail?.library_item?.ai_dimensions_json
@@ -147,24 +151,30 @@ export function QuestionDetailPane(props: Props) {
 
               <div className="rounded-lg border p-3">
                 <div className="text-xs text-muted-foreground mb-2">题干</div>
-                <div className="text-sm whitespace-pre-wrap leading-relaxed">
-                  {String(cache?.stem || libItem.stem || '').trim() || '暂无题干'}
-                </div>
+                {stemText ? (
+                  <QuestionContent content={stemText} className="text-sm" />
+                ) : (
+                  <div className="text-sm text-muted-foreground">暂无题干</div>
+                )}
               </div>
 
               {libItem.origin === 'ai' && (
                 <div className="rounded-lg border p-3 space-y-3">
                   <div>
                     <div className="text-xs text-muted-foreground mb-2">答案</div>
-                    <div className="text-sm whitespace-pre-wrap leading-relaxed">
-                      {String(cache?.answer || '').trim() || '暂无答案'}
-                    </div>
+                    {answerText ? (
+                      <QuestionContent content={answerText} className="text-sm" />
+                    ) : (
+                      <div className="text-sm text-muted-foreground">暂无答案</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-muted-foreground mb-2">解析</div>
-                    <div className="text-sm whitespace-pre-wrap leading-relaxed">
-                      {String(cache?.analysis || '').trim() || '暂无解析'}
-                    </div>
+                    {analysisText ? (
+                      <QuestionContent content={analysisText} className="text-sm" />
+                    ) : (
+                      <div className="text-sm text-muted-foreground">暂无解析</div>
+                    )}
                   </div>
                 </div>
               )}

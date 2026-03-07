@@ -254,6 +254,9 @@ export function QuestionLibraryBrowser() {
             limit: p.limit,
             max_pages: p.max_pages,
             min_quality_score: p.min_quality_score,
+            difficulty_value_min: p.difficulty_value_min,
+            difficulty_value_max: p.difficulty_value_max,
+            require_difficulty_value: p.require_difficulty_value,
           })
         }}
       />
