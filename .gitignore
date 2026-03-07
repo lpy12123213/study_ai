@@ -26,6 +26,10 @@ wheels/
 # Legacy / backup folders
 frontend_old/
 
+# Git worktrees (project-local)
+.worktrees/
+worktrees/
+
 # Frontend build/output
 frontend/dist/
 frontend/node_modules/
