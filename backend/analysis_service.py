@@ -1,20 +1,29 @@
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 import os
 import time
 import uuid
+
 import httpx
-from dotenv import load_dotenv
-
-# 加载环境变量
-load_dotenv()
-
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 from backend.core import llm_console
 from backend.core.logging_utils import get_logger
+from backend.core.settings import settings
 
 logger = get_logger(__name__)
+
+
+def _chat_headers(*, provider: str, api_key: str) -> Dict[str, str]:
+    headers: Dict[str, str] = {
+        "Authorization": f"Bearer {str(api_key or '').strip()}",
+        "Content-Type": "application/json",
+    }
+    if str(provider or "").strip().lower() == "openrouter":
+        if (settings.review_http_referer or "").strip():
+            headers["HTTP-Referer"] = settings.review_http_referer
+        if (settings.review_x_title or "").strip():
+            headers["X-Title"] = settings.review_x_title
+    return headers
 
 
 def calculate_difficulty_score(questions: List[Dict[str, Any]]) -> float:
@@ -66,7 +75,7 @@ def generate_knowledge_distribution(questions: List[Dict[str, Any]], paper_name:
 
 def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict[str, Any]]) -> str:
     """
-    使用 OpenRouter API 生成 AI 评语
+    使用 OpenAI-compatible Chat Completions API 生成 AI 评语。
     """
     q_count = len(questions)
     diff_str = "简单" if difficulty < 0.4 else "中等" if difficulty < 0.7 else "困难"
@@ -86,8 +95,13 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
     type_info = "、".join([f"{k}{v}道" for k, v in type_stats.items() if v > 0])
     diff_info = "、".join([f"{k}{v}道" for k, v in diff_stats.items() if v > 0])
 
-    # 如果没有API key，使用模板生成
-    if not OPENROUTER_API_KEY:
+    provider = str(settings.chat_provider or "").strip().lower()
+    base_url = str(settings.chat_base_url or "").strip().rstrip("/")
+    api_key = str(settings.chat_api_key or "").strip()
+    model = str(os.getenv("PAPER_ANALYSIS_MODEL") or settings.main_model or "").strip() or "openai/gpt-4o-mini"
+
+    # 如果没有 API key，使用模板生成
+    if not api_key or not base_url:
         return _fallback_comment(paper_name, q_count, diff_str, type_info)
 
     prompt = f"""你是一位专业的教育评估专家。请根据以下试卷信息，生成一段简洁专业的试卷分析评语（100-150字）：
@@ -104,12 +118,12 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
     req_id = f"paper-comment-{uuid.uuid4().hex[:8]}"
     start_ts = llm_console.log_start(
         req_id=req_id,
-        provider="openrouter",
-        model="x-ai/grok-4.1-fast:free",
+        provider=provider or "openai_compat",
+        model=model,
         stream=False,
         temperature=0.7,
         max_tokens=300,
-        base_url="https://openrouter.ai/api/v1",
+        base_url=base_url,
     )
     finish_reason = ""
     usage: Dict[str, Any] = {}
@@ -119,15 +133,10 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                OPENROUTER_BASE_URL,
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "http://localhost:8000",
-                    "X-Title": "Exam Paper Assistant"
-                },
+                f"{base_url}/chat/completions",
+                headers=_chat_headers(provider=provider, api_key=api_key),
                 json={
-                    "model": "x-ai/grok-4.1-fast:free",
+                    "model": model,
                     "messages": [
                         {"role": "user", "content": prompt}
                     ],

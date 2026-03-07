@@ -57,16 +57,22 @@ async def select_best_question(
         return {"success": False, "error": "没有候选题目"}
 
     effective_model = (model or SUB_MODEL).strip() or SUB_MODEL
-    provider = _infer_provider_for_model(effective_model)
-    if provider == "fireworks":
-        base_url = (settings.fireworks_base_url or "").rstrip("/")
-        api_key = (settings.fireworks_api_key or "").strip()
-    elif provider == "moonshot":
-        base_url = (settings.moonshot_base_url or "").rstrip("/")
-        api_key = (settings.moonshot_api_key or "").strip()
+
+    if getattr(settings, "llm_provider_pinned", False):
+        provider = str(settings.chat_provider or "").strip().lower() or "openai_compat"
+        base_url = (settings.chat_base_url or "").rstrip("/")
+        api_key = (settings.chat_api_key or "").strip()
     else:
-        base_url = (settings.openrouter_base_url or "").rstrip("/")
-        api_key = (settings.openrouter_api_key or "").strip()
+        provider = _infer_provider_for_model(effective_model)
+        if provider == "fireworks":
+            base_url = (settings.fireworks_base_url or "").rstrip("/")
+            api_key = (settings.fireworks_api_key or "").strip()
+        elif provider == "moonshot":
+            base_url = (settings.moonshot_base_url or "").rstrip("/")
+            api_key = (settings.moonshot_api_key or "").strip()
+        else:
+            base_url = (settings.openrouter_base_url or "").rstrip("/")
+            api_key = (settings.openrouter_api_key or "").strip()
 
     if not api_key:
         return {"success": False, "error": f"未配置 {provider} API Key（当前模型: {effective_model}）"}

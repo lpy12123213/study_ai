@@ -19,6 +19,7 @@ from backend.core.logging_utils import get_logger
 from backend.core.record_replay import RecordReplayStore, record_enabled, replay_enabled
 from backend.core.settings import (
     API_TIMEOUT,
+    LLM_PROVIDER_PINNED,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_PROVIDER,
@@ -414,6 +415,7 @@ def _resolve_provider(
     model: str,
     moonshot_key: str,
     moonshot_base_url: str,
+    allow_moonshot_auto_switch: bool = True,
 ) -> Tuple[str, str, str, str]:
     normalized_provider = (provider or "").strip().lower() or "openrouter"
     normalized_base_url = (base_url or "").strip().rstrip("/")
@@ -425,7 +427,8 @@ def _resolve_provider(
     m_base_url = (moonshot_base_url or "").strip().rstrip("/")
 
     if normalized_provider == "moonshot" or (
-        normalized_provider == "openrouter"
+        allow_moonshot_auto_switch
+        and normalized_provider == "openrouter"
         and m_key
         and (
             model_lower.startswith("moonshotai/")
@@ -490,6 +493,7 @@ async def chat_completion(
         model=str(model or "").strip(),
         moonshot_key=moonshot_key_in,
         moonshot_base_url=moonshot_base_url_in,
+        allow_moonshot_auto_switch=not bool(LLM_PROVIDER_PINNED),
     )
 
     effective_temperature = float(temperature)

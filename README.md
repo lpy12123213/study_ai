@@ -108,6 +108,18 @@ Start the MCP server:
 python -m backend.mcp.stdio_server
 ```
 
+## LLM configuration
+
+By default the backend reads provider/model settings from `.env`. For local development you can also place a
+local-only JSON config at `config/model.json` (gitignored) to manage multiple OpenAI-compatible providers and
+select an active one.
+
+1. Copy `config/model.example.json` to `config/model.json`
+2. Fill `providers.<name>.base_url` and `providers.<name>.api_key`
+3. Set `active_provider` and adjust `models` / `params` as needed
+
+Optional: set `MODEL_CONFIG_PATH` to load the config from a custom path.
+
 ## Doctor
 
 `start.bat doctor` and `./start.sh doctor` now run:

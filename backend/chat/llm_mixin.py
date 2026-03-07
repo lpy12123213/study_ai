@@ -69,6 +69,16 @@ class ChatLLMMixin:
         return CHAT_PROVIDER
 
     def _resolve_chat_endpoint(self, model: str) -> Dict[str, str]:
+        # Pinned provider mode (config/model.json): always use the configured chat endpoint,
+        # do not infer provider from the model string.
+        if getattr(settings, "llm_provider_pinned", False):
+            provider = str(settings.chat_provider or "").strip().lower() or "openai_compat"
+            return {
+                "provider": provider,
+                "base_url": (settings.chat_base_url or "").rstrip("/"),
+                "api_key": (settings.chat_api_key or "").strip(),
+            }
+
         provider = self._infer_provider_for_model(model)
         if provider == "fireworks":
             return {

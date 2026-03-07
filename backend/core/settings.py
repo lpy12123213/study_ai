@@ -14,6 +14,8 @@ from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
+from backend.core.model_config import load_model_json_config
+
 
 def _get_str(name: str, default: str) -> str:
     value = os.getenv(name)
@@ -51,6 +53,11 @@ def _get_float(name: str, default: float) -> float:
 
 @dataclass(frozen=True)
 class Settings:
+    # Model config (local-only json)
+    model_config_path: str
+    llm_provider_pinned: bool
+    llm_active_provider: str
+
     # Chat provider (OpenAI-compatible)
     chat_provider: str
     chat_api_key: str
@@ -147,6 +154,11 @@ class Settings:
         else:
             load_dotenv(override=False)
 
+        model_json = load_model_json_config(repo_root=repo_root)
+        llm_provider_pinned = bool(model_json and model_json.pinned)
+        llm_active_provider = str(model_json.active_provider if model_json else "").strip().lower()
+        model_config_path = str(model_json.path) if model_json else ""
+
         openrouter_api_key = _get_str("OPENROUTER_API_KEY", "")
         base_url = _get_str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
         moonshot_api_key = _get_str("MOONSHOT_API_KEY", _get_str("MOONSHOT_API", ""))
@@ -156,43 +168,111 @@ class Settings:
         zhipu_base_url = _get_str("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
         metaso_base_url = _get_str("METASO_BASE_URL", "https://metaso.cn/api/v1").rstrip("/")
 
+        if model_json:
+            cfg = model_json.providers or {}
+            if cfg.get("openrouter"):
+                if cfg["openrouter"].api_key:
+                    openrouter_api_key = cfg["openrouter"].api_key
+                if cfg["openrouter"].base_url:
+                    base_url = cfg["openrouter"].base_url
+            if cfg.get("moonshot"):
+                if cfg["moonshot"].api_key:
+                    moonshot_api_key = cfg["moonshot"].api_key
+                if cfg["moonshot"].base_url:
+                    moonshot_base_url = cfg["moonshot"].base_url
+            if cfg.get("fireworks"):
+                if cfg["fireworks"].api_key:
+                    fireworks_api_key = cfg["fireworks"].api_key
+                if cfg["fireworks"].base_url:
+                    fireworks_base_url = cfg["fireworks"].base_url
+
         # Metaso API key: prefer METASO_API_KEY; keep legacy alias METASO_API for compatibility.
         metaso_api_key = _get_str("METASO_API_KEY", _get_str("METASO_API", ""))
         metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
 
-        chat_provider_raw = _get_str("CHAT_PROVIDER", "openrouter").lower()
-        chat_provider = (
-            chat_provider_raw if chat_provider_raw in {"openrouter", "fireworks", "moonshot"} else "openrouter"
-        )
-        if chat_provider == "fireworks":
-            chat_base_url = fireworks_base_url
-            chat_api_key = fireworks_api_key
-        elif chat_provider == "moonshot":
-            chat_base_url = moonshot_base_url
-            chat_api_key = moonshot_api_key
-        else:
-            chat_base_url = base_url
-            chat_api_key = openrouter_api_key
+        chat_base_url = ""
+        chat_api_key = ""
+        if llm_provider_pinned and model_json:
+            # Pinned provider mode: always use the explicitly configured provider.
+            provider_key = llm_active_provider
+            prov = (model_json.providers or {}).get(provider_key)
+            if prov:
+                chat_provider = provider_key
+                chat_base_url = str(prov.base_url or "").strip().rstrip("/")
+                chat_api_key = str(prov.api_key or "").strip()
+            else:
+                # Invalid config; fall back to env behavior.
+                llm_provider_pinned = False
+                chat_provider = ""
+        if not chat_base_url:
+            chat_provider_raw = _get_str("CHAT_PROVIDER", "openrouter").lower()
+            chat_provider = (
+                chat_provider_raw if chat_provider_raw in {"openrouter", "fireworks", "moonshot"} else "openrouter"
+            )
+            if chat_provider == "fireworks":
+                chat_base_url = fireworks_base_url
+                chat_api_key = fireworks_api_key
+            elif chat_provider == "moonshot":
+                chat_base_url = moonshot_base_url
+                chat_api_key = moonshot_api_key
+            else:
+                chat_base_url = base_url
+                chat_api_key = openrouter_api_key
 
-        lesson_plan_provider_raw = _get_str("LESSON_PLAN_PROVIDER", chat_provider).lower()
-        lesson_plan_provider = (
-            lesson_plan_provider_raw
-            if lesson_plan_provider_raw in {"openrouter", "fireworks", "moonshot"}
-            else chat_provider
-        )
-        if lesson_plan_provider == "fireworks":
-            lesson_plan_base_url = fireworks_base_url
-            lesson_plan_api_key = fireworks_api_key
-        elif lesson_plan_provider == "moonshot":
-            lesson_plan_base_url = moonshot_base_url
-            lesson_plan_api_key = moonshot_api_key
+        if llm_provider_pinned:
+            lesson_plan_provider = str(chat_provider or "").strip().lower()
+            lesson_plan_base_url = str(chat_base_url or "").strip().rstrip("/")
+            lesson_plan_api_key = str(chat_api_key or "").strip()
         else:
-            lesson_plan_base_url = base_url
-            lesson_plan_api_key = openrouter_api_key
+            lesson_plan_provider_raw = _get_str("LESSON_PLAN_PROVIDER", chat_provider).lower()
+            lesson_plan_provider = (
+                lesson_plan_provider_raw
+                if lesson_plan_provider_raw in {"openrouter", "fireworks", "moonshot"}
+                else chat_provider
+            )
+            if lesson_plan_provider == "fireworks":
+                lesson_plan_base_url = fireworks_base_url
+                lesson_plan_api_key = fireworks_api_key
+            elif lesson_plan_provider == "moonshot":
+                lesson_plan_base_url = moonshot_base_url
+                lesson_plan_api_key = moonshot_api_key
+            else:
+                lesson_plan_base_url = base_url
+                lesson_plan_api_key = openrouter_api_key
+
+        def _pick_provider_scoped(value: Any, provider_name: str) -> str:
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, dict):
+                key = str(provider_name or "").strip().lower()
+                v = value.get(key)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+                v = value.get("default")
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+                for vv in value.values():
+                    if isinstance(vv, str) and vv.strip():
+                        return vv.strip()
+            return ""
+
+        provider_for_models = str(chat_provider or "").strip().lower()
         lesson_plan_model = _get_str("LESSON_PLAN_MODEL", _get_str("MAIN_MODEL", "openai/gpt-5-mini"))
+        if model_json:
+            picked = _pick_provider_scoped(model_json.models.get("lesson_plan"), provider_for_models)
+            if picked:
+                lesson_plan_model = picked
         lesson_plan_concurrency = _get_int("LESSON_PLAN_V2_SUBAGENT_CONCURRENCY", 3)
 
         main_model = _get_str("MAIN_MODEL", "openai/gpt-5-mini")
+        sub_model = _get_str("SUB_MODEL", "openai/gpt-4o-mini")
+        if model_json:
+            picked_main = _pick_provider_scoped(model_json.models.get("main"), provider_for_models)
+            if picked_main:
+                main_model = picked_main
+            picked_sub = _pick_provider_scoped(model_json.models.get("sub"), provider_for_models)
+            if picked_sub:
+                sub_model = picked_sub
         deepthink_generator_model = _get_str("DEEPTHINK_GENERATOR_MODEL", main_model)
         deepthink_evaluator_model = _get_str("DEEPTHINK_EVALUATOR_MODEL", "")
 
@@ -208,7 +288,25 @@ class Settings:
         tot_prune_threshold = _get_float("TOT_PRUNE_THRESHOLD", 5.0)
         tot_timeout_seconds = _get_int("TOT_TIMEOUT", 60)
 
+        main_model_temperature = _get_float("MAIN_MODEL_TEMPERATURE", 0.7)
+        main_model_max_tokens = _get_int("MAIN_MODEL_MAX_TOKENS", 2000)
+        sub_model_temperature = _get_float("SUB_MODEL_TEMPERATURE", 0.3)
+        sub_model_max_tokens = _get_int("SUB_MODEL_MAX_TOKENS", 1000)
+        if model_json:
+            p = model_json.params or {}
+            if isinstance(p.get("main_temperature"), (int, float)):
+                main_model_temperature = float(p.get("main_temperature"))  # type: ignore[arg-type]
+            if isinstance(p.get("main_max_tokens"), (int, float)):
+                main_model_max_tokens = int(p.get("main_max_tokens"))  # type: ignore[arg-type]
+            if isinstance(p.get("sub_temperature"), (int, float)):
+                sub_model_temperature = float(p.get("sub_temperature"))  # type: ignore[arg-type]
+            if isinstance(p.get("sub_max_tokens"), (int, float)):
+                sub_model_max_tokens = int(p.get("sub_max_tokens"))  # type: ignore[arg-type]
+
         return cls(
+            model_config_path=model_config_path,
+            llm_provider_pinned=llm_provider_pinned,
+            llm_active_provider=llm_active_provider,
             chat_provider=chat_provider,
             chat_api_key=chat_api_key,
             chat_base_url=chat_base_url,
@@ -218,7 +316,7 @@ class Settings:
             moonshot_base_url=moonshot_base_url,
             main_model=main_model,
             # Use a cheaper/faster default for intermediate structured steps (summaries/outlines).
-            sub_model=_get_str("SUB_MODEL", "openai/gpt-4o-mini"),
+            sub_model=sub_model,
             deepthink_generator_model=deepthink_generator_model,
             deepthink_generator_temperature=deepthink_generator_temperature,
             deepthink_generator_max_tokens=deepthink_generator_max_tokens,
@@ -236,10 +334,10 @@ class Settings:
             lesson_plan_base_url=lesson_plan_base_url,
             lesson_plan_model=lesson_plan_model,
             lesson_plan_v2_subagent_concurrency=lesson_plan_concurrency,
-            main_model_temperature=_get_float("MAIN_MODEL_TEMPERATURE", 0.7),
-            main_model_max_tokens=_get_int("MAIN_MODEL_MAX_TOKENS", 2000),
-            sub_model_temperature=_get_float("SUB_MODEL_TEMPERATURE", 0.3),
-            sub_model_max_tokens=_get_int("SUB_MODEL_MAX_TOKENS", 1000),
+            main_model_temperature=main_model_temperature,
+            main_model_max_tokens=main_model_max_tokens,
+            sub_model_temperature=sub_model_temperature,
+            sub_model_max_tokens=sub_model_max_tokens,
             lesson_plan_temperature=_get_float("LESSON_PLAN_TEMPERATURE", _get_float("MAIN_MODEL_TEMPERATURE", 0.7)),
             lesson_plan_max_tokens=_get_int("LESSON_PLAN_MAX_TOKENS", _get_int("MAIN_MODEL_MAX_TOKENS", 2000)),
             max_tool_iterations=_get_int("MAX_TOOL_ITERATIONS", 10),
@@ -269,6 +367,9 @@ class Settings:
 
     def summary(self) -> Dict[str, Any]:
         return {
+            "model_config_path": self.model_config_path,
+            "llm_provider_pinned": bool(self.llm_provider_pinned),
+            "llm_active_provider": self.llm_active_provider,
             "chat_provider": self.chat_provider,
             "main_model": self.main_model,
             "sub_model": self.sub_model,
@@ -295,6 +396,9 @@ settings = Settings.from_env()
 CHAT_PROVIDER = settings.chat_provider
 CHAT_API_KEY = settings.chat_api_key
 CHAT_BASE_URL = settings.chat_base_url
+
+# Whether provider selection is pinned (explicit provider only) or inferred.
+LLM_PROVIDER_PINNED = bool(settings.llm_provider_pinned)
 
 # Back-compat module-level constants (used widely across the codebase).
 OPENROUTER_API_KEY = settings.openrouter_api_key

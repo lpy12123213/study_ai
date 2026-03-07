@@ -30,6 +30,14 @@ def _infer_provider_for_model(model: str) -> str:
 
 
 def _resolve_chat_endpoint(model: str) -> Tuple[str, str, str]:
+    if getattr(settings, "llm_provider_pinned", False):
+        provider = str(settings.chat_provider or "").strip().lower() or "openai_compat"
+        return (
+            provider,
+            (settings.chat_base_url or "").rstrip("/"),
+            (settings.chat_api_key or "").strip(),
+        )
+
     provider = _infer_provider_for_model(model)
     if provider == "fireworks":
         return (
@@ -50,8 +58,10 @@ def _chat_headers(provider: str, api_key: str) -> Dict[str, str]:
         "Content-Type": "application/json",
     }
     if provider == "openrouter":
-        headers["HTTP-Referer"] = "http://localhost:8000"
-        headers["X-Title"] = "Exam Paper Assistant - DeepThink"
+        if (settings.review_http_referer or "").strip():
+            headers["HTTP-Referer"] = settings.review_http_referer
+        if (settings.review_x_title or "").strip():
+            headers["X-Title"] = settings.review_x_title
     return headers
 
 

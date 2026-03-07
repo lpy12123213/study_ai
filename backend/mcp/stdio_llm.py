@@ -13,6 +13,7 @@ import httpx
 from backend.core import llm_console
 from backend.core.settings import (
     API_TIMEOUT,
+    LLM_PROVIDER_PINNED,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_PROVIDER,
@@ -55,7 +56,8 @@ async def call_llm_text(
     moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
 
     if provider == "moonshot" or (
-        provider == "openrouter"
+        not bool(LLM_PROVIDER_PINNED)
+        and provider == "openrouter"
         and moonshot_key
         and (
             model_lower.startswith("moonshotai/")
@@ -174,4 +176,3 @@ def pick_questions(questions: List[Dict[str, Any]], *, limit: int) -> List[Dict[
         scored.append((penalty, q))
     scored.sort(key=lambda x: x[0])
     return [q for _, q in scored[: max(1, limit)]]
-

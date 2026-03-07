@@ -17,6 +17,7 @@ from backend.core.llm_client import (
 )
 from backend.core.settings import (
     API_TIMEOUT,
+    LLM_PROVIDER_PINNED,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_MAX_TOKENS,
@@ -47,7 +48,8 @@ async def call_llm_text(
     moonshot_base_url = str(MOONSHOT_BASE_URL or "").strip().rstrip("/")
 
     if provider == "moonshot" or (
-        provider == "openrouter"
+        not bool(LLM_PROVIDER_PINNED)
+        and provider == "openrouter"
         and moonshot_key
         and (
             model_lower.startswith("moonshotai/")
@@ -185,4 +187,3 @@ async def call_llm_text(
     if raise_on_fail:
         raise RuntimeError(f"llm_request_failed model={normalized_model} err={last_error or 'unknown'}")
     return ""
-
