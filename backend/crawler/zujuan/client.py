@@ -1422,15 +1422,15 @@ class ZujuanCrawler:
                 q["_stem_html"] = block
                 questions.append(q)
 
-        if content_fragments:
-            stem_max_chars = 2500 if parse_content else 650
-            await self._batch_convert_formulas(
-                questions,
-                content_fragments,
-                convert_formulas=bool(parse_content),
-                stem_max_chars=stem_max_chars,
-            )
-        return questions
+            if content_fragments:
+                stem_max_chars = 2500 if parse_content else 650
+                await self._batch_convert_formulas(
+                    questions,
+                    content_fragments,
+                    convert_formulas=bool(parse_content),
+                    stem_max_chars=stem_max_chars,
+                )
+            return questions
 
         soup = BeautifulSoup(decoded, "lxml")
 
