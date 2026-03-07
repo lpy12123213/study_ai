@@ -35,6 +35,9 @@ class QuestionLibraryCrawlRequest(BaseModel):
     limit: int = 30
     max_pages: int = 2
     min_quality_score: int = 0
+    difficulty_value_min: Optional[float] = None
+    difficulty_value_max: Optional[float] = None
+    require_difficulty_value: bool = False
     task_id: str = ""
 
 

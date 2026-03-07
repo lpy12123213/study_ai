@@ -1018,6 +1018,7 @@ class ZujuanCrawler:
         exclude_elective: bool = False,
         difficulty_value_min: Optional[float] = None,
         difficulty_value_max: Optional[float] = None,
+        require_difficulty_value: bool = False,
         dedup_by_stem: bool = False,
         min_quality_score: int = 0,
         with_quality: bool = True,
@@ -1027,10 +1028,10 @@ class ZujuanCrawler:
         使用当前学科配置的 bankId 和 categoryId。
         """
         limit = _safe_int(limit, 20)
-        limit = max(1, min(50, limit))
+        limit = max(1, min(200, limit))
 
         max_pages = _safe_int(max_pages, 3)
-        max_pages = max(1, min(8, max_pages))
+        max_pages = max(1, min(50, max_pages))
 
         year = _safe_int(year, 0)
         paper_type_id = _safe_int(paper_type_id, 0)
@@ -1108,6 +1109,7 @@ class ZujuanCrawler:
                 year=year,
                 difficulty_value_min=difficulty_value_min,
                 difficulty_value_max=difficulty_value_max,
+                require_difficulty_value=bool(require_difficulty_value),
             ):
                 continue
 
@@ -1159,6 +1161,7 @@ class ZujuanCrawler:
                     "with_quality": bool(with_quality),
                     "difficulty_value_min": difficulty_value_min,
                     "difficulty_value_max": difficulty_value_max,
+                    "require_difficulty_value": bool(require_difficulty_value),
                 },
                 "pages": debug_pages,
             },
@@ -1686,12 +1689,26 @@ class ZujuanCrawler:
 
             # 4) HTML -> text
             if BeautifulSoup is not None:
-                text = BeautifulSoup(converted, "lxml").get_text("\n", strip=True)
+                soup = BeautifulSoup(converted, "lxml")
+                # Avoid "vertical text" output: some stems wrap every character in inline tags.
+                # We manually insert newlines for <br> and common block elements, then extract
+                # text with an empty separator so inline spans don't become one-char-per-line.
+                try:
+                    for br in soup.select("br"):
+                        br.replace_with("\n")
+                    for block in soup.select("p,div,li,section,tr,table,ul,ol,hr,h1,h2,h3,h4,h5,h6"):
+                        block.append("\n")
+                except Exception:
+                    pass
+                text = soup.get_text("", strip=False)
             else:
                 text = re.sub(r"<[^>]+>", "", converted)
 
             text = html_module.unescape(text or "")
             text = re.sub(r"[ \t]+", " ", text)
+            text = text.replace("\u00a0", " ")
+            text = re.sub(r"[ \t]+\n", "\n", text)
+            text = re.sub(r"\n[ \t]+", "\n", text)
             text = re.sub(r"\n{3,}", "\n\n", text)
             text = text.strip()
             text = re.sub(r"^\d+\s*[.．、]\s*", "", text)
@@ -1725,6 +1742,7 @@ class ZujuanCrawler:
         year: int = 0,
         difficulty_value_min: Optional[float] = None,
         difficulty_value_max: Optional[float] = None,
+        require_difficulty_value: bool = False,
     ) -> bool:
         source_contains = (source_contains or "").strip()
         stem_contains = (stem_contains or "").strip()
@@ -1774,9 +1792,9 @@ class ZujuanCrawler:
         if difficulty_value_min is not None or difficulty_value_max is not None:
             dv = _safe_float(question.get("difficulty_value"))
             if dv is None:
-                # 不强制要求每道题都带“难度系数”。
-                # 如果题目没有难度系数，则不因该过滤条件被剔除。
-                return True
+                # Some questions don't expose the numeric difficulty coefficient. Keep the previous permissive
+                # behavior unless the caller explicitly requires a coefficient for strict filtering.
+                return not bool(require_difficulty_value)
             if difficulty_value_min is not None and dv < difficulty_value_min:  
                 return False
             if difficulty_value_max is not None and dv > difficulty_value_max:  
@@ -1807,6 +1825,7 @@ class ZujuanCrawler:
         knowledge_contains: str = "",
         difficulty_value_min: Optional[float] = None,
         difficulty_value_max: Optional[float] = None,
+        require_difficulty_value: Optional[bool] = None,
         require_difficulty: bool = False,
         strict_subject: bool = True,
         elective_mode: str = "",
@@ -1853,6 +1872,7 @@ class ZujuanCrawler:
         knowledge_contains: str = "",
         difficulty_value_min: Optional[float] = None,
         difficulty_value_max: Optional[float] = None,
+        require_difficulty_value: Optional[bool] = None,
         require_difficulty: bool = False,
         strict_subject: bool = True,
         elective_mode: str = "",

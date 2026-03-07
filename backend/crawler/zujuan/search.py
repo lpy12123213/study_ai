@@ -73,6 +73,7 @@ async def search_by_keyword(
     knowledge_contains: str = "",
     difficulty_value_min: Optional[float] = None,
     difficulty_value_max: Optional[float] = None,
+    require_difficulty_value: bool = False,
     require_difficulty: bool = False,
     strict_subject: bool = True,
     elective_mode: str = "",
@@ -106,10 +107,11 @@ async def search_by_keyword(
         }
 
     limit = _safe_int(limit, 20)
-    limit = max(1, min(50, limit))
+    # Batch crawl use-case: allow bigger caps than the old quick-preview defaults.
+    limit = max(1, min(200, limit))
 
     max_pages = _safe_int(max_pages, 2)
-    max_pages = max(1, min(8, max_pages))
+    max_pages = max(1, min(50, max_pages))
 
     if difficulty_value_min is not None:
         difficulty_value_min = _safe_float(difficulty_value_min)
@@ -175,6 +177,7 @@ async def search_by_keyword(
             exclude_elective=exclude_elective,
             difficulty_value_min=difficulty_value_min,
             difficulty_value_max=difficulty_value_max,
+            require_difficulty_value=bool(require_difficulty_value),
             dedup_by_stem=dedup_by_stem,
             min_quality_score=min_quality_score,
             with_quality=with_quality,
@@ -208,6 +211,7 @@ async def search_by_keyword(
             exclude_elective=exclude_elective,
             difficulty_value_min=difficulty_value_min,
             difficulty_value_max=difficulty_value_max,
+            require_difficulty_value=bool(require_difficulty_value),
             dedup_by_stem=dedup_by_stem,
             min_quality_score=min_quality_score,
             with_quality=with_quality,
@@ -307,6 +311,7 @@ async def search_by_keyword(
                 year=year,
                 difficulty_value_min=difficulty_value_min,
                 difficulty_value_max=difficulty_value_max,
+                require_difficulty_value=bool(require_difficulty_value),
             ):
                 score, flags = self._quality_score(q)
                 if with_quality:
@@ -369,6 +374,7 @@ async def search_by_keyword(
             exclude_elective=exclude_elective,
             difficulty_value_min=difficulty_value_min,
             difficulty_value_max=difficulty_value_max,
+            require_difficulty_value=bool(require_difficulty_value),
             dedup_by_stem=dedup_by_stem,
             min_quality_score=min_quality_score,
             with_quality=with_quality,
@@ -399,6 +405,7 @@ async def search_by_keyword(
                 "with_quality": bool(with_quality),
                 "difficulty_value_min": difficulty_value_min,
                 "difficulty_value_max": difficulty_value_max,
+                "require_difficulty_value": bool(require_difficulty_value),
                 "parse_content": bool(parse_content),
             },
             "pages": debug_pages,
@@ -429,6 +436,7 @@ async def search_by_knowledge(
     knowledge_contains: str = "",
     difficulty_value_min: Optional[float] = None,
     difficulty_value_max: Optional[float] = None,
+    require_difficulty_value: bool = False,
     require_difficulty: bool = False,
     strict_subject: bool = True,
     elective_mode: str = "",
@@ -464,6 +472,7 @@ async def search_by_knowledge(
         knowledge_contains=knowledge_contains,
         difficulty_value_min=difficulty_value_min,
         difficulty_value_max=difficulty_value_max,
+        require_difficulty_value=require_difficulty_value,
         require_difficulty=require_difficulty,
         strict_subject=strict_subject,
         elective_mode=elective_mode,
@@ -474,5 +483,3 @@ async def search_by_knowledge(
         with_quality=with_quality,
         parse_content=parse_content,
     )
-
-

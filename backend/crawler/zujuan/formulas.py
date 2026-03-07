@@ -13,6 +13,28 @@ from backend.crawler.zujuan.parsing import FORMULA_HASH_PATTERN, FORMULA_IMG_TAG
 logger = get_logger(__name__)
 
 
+def _ensure_inline_math_wrapped(latex: str) -> str:
+    """Ensure LaTeX is wrapped in an inline-math delimiter.
+
+    We normalize crawler output so frontend renderers can reliably detect math.
+    """
+
+    value = (latex or "").strip()
+    if not value:
+        return ""
+
+    if value.startswith("\\(") and value.endswith("\\)"):
+        return value
+    if value.startswith("\\[") and value.endswith("\\]"):
+        return value
+    if value.startswith("$$") and value.endswith("$$") and len(value) >= 4:
+        return value
+    if value.startswith("$") and value.endswith("$") and len(value) >= 2:
+        return value
+
+    return f"\\({value}\\)"
+
+
 def build_curl_cmd(crawler: Any, url: str, timeout: int = 30, use_login_cookie: bool = True) -> list:
     cmd = [
         "curl",
@@ -187,6 +209,7 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
             except Exception:
                 pass
 
+        latex = _ensure_inline_math_wrapped(latex)
         formula_cache_set(crawler, formula_hash, latex)
         if not fut.done():
             fut.set_result(latex)

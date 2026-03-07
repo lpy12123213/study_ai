@@ -254,6 +254,30 @@ async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depe
     except Exception:
         min_quality_score = 0
 
+    difficulty_value_min = request.difficulty_value_min
+    difficulty_value_max = request.difficulty_value_max
+    try:
+        if difficulty_value_min is not None:
+            difficulty_value_min = float(difficulty_value_min)
+    except Exception:
+        difficulty_value_min = None
+    try:
+        if difficulty_value_max is not None:
+            difficulty_value_max = float(difficulty_value_max)
+    except Exception:
+        difficulty_value_max = None
+
+    if difficulty_value_min is not None:
+        difficulty_value_min = max(0.0, min(1.0, difficulty_value_min))
+    if difficulty_value_max is not None:
+        difficulty_value_max = max(0.0, min(1.0, difficulty_value_max))
+    if difficulty_value_min is not None and difficulty_value_max is not None and difficulty_value_min > difficulty_value_max:
+        difficulty_value_min, difficulty_value_max = difficulty_value_max, difficulty_value_min
+
+    require_difficulty_value = bool(request.require_difficulty_value) and (
+        difficulty_value_min is not None or difficulty_value_max is not None
+    )
+
     difficulty = (request.difficulty or "").strip()
     question_type = (request.question_type or "").strip()
 
@@ -281,6 +305,9 @@ async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depe
                             "limit": limit,
                             "max_pages": max_pages,
                             "min_quality_score": min_quality_score,
+                            "difficulty_value_min": difficulty_value_min,
+                            "difficulty_value_max": difficulty_value_max,
+                            "require_difficulty_value": require_difficulty_value,
                         },
                     },
                 },
@@ -296,6 +323,9 @@ async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depe
                 question_type=question_type,
                 max_pages=max_pages,
                 min_quality_score=min_quality_score,
+                difficulty_value_min=difficulty_value_min,
+                difficulty_value_max=difficulty_value_max,
+                require_difficulty_value=require_difficulty_value,
                 parse_content=True,
             )
 
