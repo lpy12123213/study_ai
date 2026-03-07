@@ -13,3 +13,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
         # Auth will block; we only assert that it's not a 404.
         self.assertNotEqual(resp.status_code, 404)
 
+    def test_bulk_delete_endpoint_exists(self) -> None:
+        app = create_app()
+        client = TestClient(app)
+        resp = client.post("/api/question-library/items/bulk-delete", json={"question_ids": ["q1"]})
+        # Auth will block; we only assert that it's not a 404/405.
+        self.assertNotIn(resp.status_code, {404, 405})

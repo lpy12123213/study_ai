@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
 from backend.api.question_library_schemas import (
+    QuestionLibraryBulkDeleteRequest,
     QuestionLibraryCrawlRequest,
     QuestionLibraryGenerateRequest,
     QuestionLibraryScoreRequest,
@@ -20,6 +21,7 @@ from backend.crawler_manager import get_crawler
 from backend.core.llm_client import is_llm_configured
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.database.models import (
+    bulk_delete_question_library_items,
     get_latest_study_archive,
     get_question_cache,
     get_question_library_item,
@@ -137,6 +139,20 @@ async def unstar_item(question_id: str, user: dict = Depends(require_auth)) -> d
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
     return {"success": True}
+
+
+@router.post("/items/bulk-delete", response_model=dict)
+async def bulk_delete_items(request: QuestionLibraryBulkDeleteRequest, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    ids = [str(x or "").strip() for x in (request.question_ids or []) if str(x or "").strip()]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        raise HTTPException(status_code=400, detail="question_ids_required")
+    if len(ids) > 500:
+        raise HTTPException(status_code=400, detail="too_many_ids")
+
+    deleted = await bulk_delete_question_library_items(user_id=user_id, question_ids=ids)
+    return {"success": True, "deleted": deleted}
 
 
 @router.post("/items/{question_id}/export-to-basket", response_model=dict)

@@ -64,6 +64,7 @@ from backend.database.repositories.question_cache import (
     upsert_question_cache,
 )
 from backend.database.repositories.question_library import (
+    bulk_delete_question_library_items,
     get_question_library_item,
     list_question_library_items,
     list_unscored_question_ids,

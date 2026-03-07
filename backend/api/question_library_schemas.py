@@ -62,3 +62,7 @@ class QuestionLibraryScoreRequest(BaseModel):
     limit: int = 50
     only_unscored: bool = True
     task_id: str = ""
+
+
+class QuestionLibraryBulkDeleteRequest(BaseModel):
+    question_ids: List[str] = Field(default_factory=list)
