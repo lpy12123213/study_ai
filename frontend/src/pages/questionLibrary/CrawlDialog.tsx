@@ -50,8 +50,10 @@ export function CrawlDialog(props: Props) {
     const lim = Number(limit)
     const mp = Number(maxPages)
     const mq = Number(minQuality)
-    const dvMinRaw = Number(difficultyValueMin)
-    const dvMaxRaw = Number(difficultyValueMax)
+    const dvMinText = difficultyValueMin.trim()
+    const dvMaxText = difficultyValueMax.trim()
+    const dvMinRaw = dvMinText ? Number(dvMinText) : Number.NaN
+    const dvMaxRaw = dvMaxText ? Number(dvMaxText) : Number.NaN
 
     const dvMinParsed = Number.isFinite(dvMinRaw) ? Math.max(0, Math.min(1, dvMinRaw)) : undefined
     const dvMaxParsed = Number.isFinite(dvMaxRaw) ? Math.max(0, Math.min(1, dvMaxRaw)) : undefined
