@@ -4,10 +4,10 @@ import { cn } from '@/lib/utils'
 
 function isProbablyVerticalText(value: string): boolean {
   const text = String(value || '')
-  if (!text.includes('\n')) return false
+  if (!/[\r\n\u2028\u2029]/.test(text)) return false
 
   const lines = text
-    .split(/\r?\n/)
+    .split(/\r\n|\r|\n|\u2028|\u2029/)
     .map((l) => l.trim())
     .filter((l) => l)
 
@@ -27,7 +27,7 @@ function isProbablyVerticalText(value: string): boolean {
   const ratio3 = short3 / lines.length
 
   if (lines.length >= 25) {
-    return ratio2 >= 0.7
+    return ratio2 >= 0.6 || (ratio3 >= 0.7 && short2 >= 10)
   }
 
   return ratio2 >= 0.55 || (ratio3 >= 0.7 && short2 >= 6)
@@ -39,7 +39,7 @@ function normalizeQuestionText(input: string): string {
 
   // Typical crawler failure mode: content is split by newlines between inline nodes.
   // Re-join the non-empty fragments while preserving intentional paragraph breaks.
-  const parts = raw.split(/\r?\n/)
+  const parts = raw.split(/\r\n|\r|\n|\u2028|\u2029/)
   let out = ''
   let pendingParagraphBreak = false
 

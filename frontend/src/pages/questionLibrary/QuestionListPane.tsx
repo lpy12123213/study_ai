@@ -89,7 +89,7 @@ export function QuestionListPane(props: Props) {
                     </div>
 
                     {it.stem && (
-                      <div className="mt-2 text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap">
+                      <div className="mt-2 text-xs text-muted-foreground line-clamp-3">
                         {it.stem}
                       </div>
                     )}

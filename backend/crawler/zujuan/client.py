@@ -1619,9 +1619,13 @@ class ZujuanCrawler:
             return
 
         def _is_fragmented_text(value: str) -> bool:
-            if "\n" not in value:
+            if not re.search(r"[\r\n\u2028\u2029]", value or ""):
                 return False
-            lines = [ln.strip() for ln in re.split(r"\r?\n", value or "") if ln.strip()]
+            lines = [
+                ln.strip()
+                for ln in re.split(r"\r\n|\r|\n|\u2028|\u2029", value or "")
+                if ln.strip()
+            ]
             if len(lines) < 8:
                 return False
             short2 = sum(1 for ln in lines if len(ln) <= 2)
@@ -1629,14 +1633,14 @@ class ZujuanCrawler:
             ratio2 = short2 / max(1, len(lines))
             ratio3 = short3 / max(1, len(lines))
             if len(lines) >= 25:
-                return ratio2 >= 0.7
+                return ratio2 >= 0.6 or (ratio3 >= 0.7 and short2 >= 10)
             return ratio2 >= 0.55 or (ratio3 >= 0.7 and short2 >= 6)
 
         def _defragment_text(value: str) -> str:
             if not _is_fragmented_text(value):
                 return value
 
-            parts = re.split(r"\r?\n", value or "")
+            parts = re.split(r"\r\n|\r|\n|\u2028|\u2029", value or "")
             out = ""
             pending_paragraph = False
             for ln in parts:
