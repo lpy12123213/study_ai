@@ -9,6 +9,10 @@ import { useTaskStore } from '@/stores/useTaskStore'
 import type { TaskStep } from '@/types'
 import type { QuestionLibraryTaskMeta } from '@/pages/questionLibrary/hooks/useQuestionLibraryTasks'
 
+// Avoid returning a new array literal from Zustand selectors. React 19 will treat that
+// as an unstable snapshot and can get stuck in an update loop.
+const EMPTY_STEPS: TaskStep[] = []
+
 function kindLabel(kind: string): string {
   if (kind === 'crawl') return '爬取入库'
   if (kind === 'generate') return 'AI 出题'
@@ -24,7 +28,8 @@ export function RunPanel(props: Props) {
   const { task } = props
   const [expanded, setExpanded] = useState(false)
 
-  const steps = useTaskStore((s) => (task?.taskId ? s.getTaskSteps(task.taskId) : [])) as TaskStep[]
+  const taskId = String(task?.taskId || '').trim()
+  const steps = useTaskStore((s) => (taskId ? s.getTaskSteps(taskId) : EMPTY_STEPS))
 
   useEffect(() => {
     if (!task) return
