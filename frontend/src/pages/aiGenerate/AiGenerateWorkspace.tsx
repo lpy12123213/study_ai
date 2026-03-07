@@ -7,6 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useSubjects } from '@/hooks/useSubjects'
+import { bulkDeleteQuestionLibraryItems } from '@/api/questionLibrary'
 import { useQuestionLibrary } from '@/pages/questionLibrary/hooks/useQuestionLibrary'
 import { useQuestionLibraryTasks } from '@/pages/questionLibrary/hooks/useQuestionLibraryTasks'
 import { QuestionLibraryCard } from '@/pages/questionLibrary/QuestionLibraryCard'
@@ -42,6 +43,14 @@ export function AiGenerateWorkspace() {
   const [useStudyArchive, setUseStudyArchive] = useState(true)
 
   const [detailOpen, setDetailOpen] = useState(false)
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({})
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+
+  const selectedCount = useMemo(() => {
+    return Object.values(selectedIds).filter(Boolean).length
+  }, [selectedIds])
 
   const canGenerate = useMemo(() => {
     if (!lib.filters.subject.trim()) return false
@@ -68,6 +77,70 @@ export function AiGenerateWorkspace() {
   const openDetail = (qid: string) => {
     lib.setSelectedId(qid)
     setDetailOpen(true)
+  }
+
+  const toggleBulkMode = () => {
+    setBulkError(null)
+    setSelectedIds({})
+    setBulkMode((v) => !v)
+  }
+
+  const toggleSelected = (qid: string) => {
+    const id = String(qid || '').trim()
+    if (!id) return
+    setSelectedIds((prev) => {
+      const next = { ...prev }
+      if (next[id]) delete next[id]
+      else next[id] = true
+      return next
+    })
+  }
+
+  const selectAllOnPage = () => {
+    setBulkError(null)
+    setSelectedIds(() => {
+      const next: Record<string, boolean> = {}
+      for (const it of lib.items) {
+        const id = String(it.question_id || '').trim()
+        if (!id) continue
+        next[id] = true
+      }
+      return next
+    })
+  }
+
+  const clearSelection = () => {
+    setBulkError(null)
+    setSelectedIds({})
+  }
+
+  const deleteSelected = async () => {
+    if (isBulkDeleting) return
+    const ids = Object.entries(selectedIds)
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+    if (ids.length === 0) return
+
+    const ok = confirm(`确定要删除选中的 ${ids.length} 道题吗？此操作不可恢复。`)
+    if (!ok) return
+
+    setIsBulkDeleting(true)
+    setBulkError(null)
+    try {
+      await bulkDeleteQuestionLibraryItems(ids)
+      const deletedSet = new Set(ids)
+      if (deletedSet.has(String(lib.selectedId || '').trim())) {
+        lib.setSelectedId('')
+        setDetailOpen(false)
+      }
+      clearSelection()
+      await lib.refreshList()
+      await lib.refreshDetail()
+    } catch (err: any) {
+      setBulkError(err?.message || '批量删除失败')
+    } finally {
+      setIsBulkDeleting(false)
+    }
   }
 
   return (
@@ -172,10 +245,40 @@ export function AiGenerateWorkspace() {
                 <div className="text-sm font-medium">最近 AI 题目</div>
                 <div className="text-xs text-muted-foreground">共 {lib.total}</div>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={lib.refreshList} disabled={lib.listQuery.isFetching}>
-                刷新
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant={bulkMode ? 'secondary' : 'outline'} size="sm" onClick={toggleBulkMode}>
+                  批量删除
+                </Button>
+                {bulkMode && (
+                  <>
+                    <Button type="button" variant="ghost" size="sm" onClick={selectAllOnPage} disabled={lib.items.length === 0}>
+                      全选本页
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={clearSelection} disabled={selectedCount === 0}>
+                      清空
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={deleteSelected}
+                      disabled={selectedCount === 0 || isBulkDeleting}
+                      className="gap-2"
+                    >
+                      {isBulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      删除 ({selectedCount})
+                    </Button>
+                  </>
+                )}
+                <Button type="button" variant="outline" size="sm" onClick={lib.refreshList} disabled={lib.listQuery.isFetching}>
+                  刷新
+                </Button>
+              </div>
             </div>
+
+            {bulkError && (
+              <div className="text-sm text-destructive">{bulkError}</div>
+            )}
 
             {lib.listQuery.isLoading ? (
               <div className="flex items-center justify-center text-muted-foreground text-sm py-10">
@@ -200,6 +303,15 @@ export function AiGenerateWorkspace() {
                       await lib.refreshList()
                       await lib.refreshDetail()
                     }}
+                    bulk={
+                      bulkMode
+                        ? {
+                            enabled: true,
+                            selected: Boolean(selectedIds[String(it.question_id || '').trim()]),
+                            onToggle: () => toggleSelected(String(it.question_id || '').trim()),
+                          }
+                        : undefined
+                    }
                   />
                 ))}
               </div>
@@ -229,4 +341,3 @@ export function AiGenerateWorkspace() {
     </div>
   )
 }
-
