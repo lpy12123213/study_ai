@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import delete, desc, func, or_, select
 
 from backend.database.engine import async_session_maker
 from backend.database.schema import QuestionCache, QuestionLibraryItem
@@ -168,6 +168,26 @@ async def list_question_library_items(
         )
 
     return {"total": total, "items": items, "limit": lim, "offset": off}
+
+
+async def bulk_delete_question_library_items(*, user_id: str, question_ids: List[str]) -> int:
+    uid = _normalize_user_id(user_id)
+    ids = [str(x or "").strip() for x in (question_ids or []) if str(x or "").strip()]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return 0
+
+    async with async_session_maker() as session:
+        stmt = delete(QuestionLibraryItem).where(
+            QuestionLibraryItem.user_id == uid,
+            QuestionLibraryItem.question_id.in_(ids),
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        try:
+            return int(getattr(result, "rowcount", 0) or 0)
+        except Exception:
+            return 0
 
 
 async def set_hidden(*, user_id: str, question_id: str, hidden: bool) -> bool:

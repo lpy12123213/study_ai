@@ -100,3 +100,32 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(it.get("subject"), "高中数学")
         self.assertEqual(it.get("origin"), "crawled")
         self.assertEqual(it.get("ai_score"), 80)
+
+    async def test_bulk_delete_scoped_by_user(self) -> None:
+        await cache_repo.upsert_question_cache(
+            [
+                {"question_id": "q1", "subject": "高中数学", "stem": "stem 1"},
+                {"question_id": "q2", "subject": "高中数学", "stem": "stem 2"},
+            ]
+        )
+
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[
+                {"question_id": "q1", "subject": "高中数学", "origin": "crawled"},
+                {"question_id": "q2", "subject": "高中数学", "origin": "crawled"},
+            ],
+        )
+        await lib_repo.upsert_question_library_items(
+            user_id="user-b",
+            items=[{"question_id": "q1", "subject": "高中数学", "origin": "crawled"}],
+        )
+
+        deleted = await lib_repo.bulk_delete_question_library_items(user_id="user-a", question_ids=["q1", "q2"])  # type: ignore[attr-defined]
+        self.assertEqual(deleted, 2)
+
+        list_a = await lib_repo.list_question_library_items(user_id="user-a", subject="高中数学", hidden="all", limit=10)
+        list_b = await lib_repo.list_question_library_items(user_id="user-b", subject="高中数学", hidden="all", limit=10)
+
+        self.assertEqual(len(list_a["items"]), 0)
+        self.assertEqual({it["question_id"] for it in list_b["items"]}, {"q1"})
