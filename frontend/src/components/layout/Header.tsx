@@ -8,6 +8,7 @@ import {
   BookOpen,
   Library,
   Award,
+  Sparkles,
   PenTool,
   Settings,
   LogOut,
@@ -41,6 +42,7 @@ const navItems = [
   { path: '/study-materials', label: '自学资料', icon: BookOpen },
   { path: '/question-evaluate', label: '好题鉴别', icon: Award },
   { path: '/question-library', label: '本地题库', icon: Library },
+  { path: '/ai-generate', label: 'AI 出题', icon: Sparkles },
   { path: '/papers', label: '试卷管理', icon: Files },
   { path: '/canvas', label: '学习画布', icon: PenTool },
 ]

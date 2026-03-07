@@ -17,6 +17,7 @@ const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const LoginPage = lazy(() => import('@/pages/LoginPage'))
 const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
 const QuestionLibraryPage = lazy(() => import('@/pages/QuestionLibraryPage'))
+const AiGeneratePage = lazy(() => import('@/pages/AiGeneratePage'))
 const DeepThinkPage = lazy(() => import('@/pages/DeepThinkPage'))
 
 function PageLoader() {
@@ -44,6 +45,7 @@ function App() {
             <Route path="deepthink" element={<DeepThinkPage />} />
             <Route path="question-evaluate" element={<QuestionEvaluatePage />} />
             <Route path="question-library" element={<QuestionLibraryPage />} />
+            <Route path="ai-generate" element={<AiGeneratePage />} />
             <Route path="papers" element={<PapersPage />} />
             <Route path="papers/:paperId" element={<PaperDetailPage />} />
             <Route path="canvas" element={<CanvasPage />} />

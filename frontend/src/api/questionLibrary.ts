@@ -8,12 +8,22 @@ export interface QuestionLibraryListItem {
   subject: string
   origin: QuestionOrigin
   hidden: boolean
+  starred?: boolean
   ai_score?: number | null
   ai_verdict?: string
   ai_dimensions_json?: string
   ai_summary?: string
   updated_at?: string
   stem?: string
+  question_type?: string
+  difficulty?: string
+  difficulty_value?: number | null
+  knowledge_point?: string
+  knowledge_points_json?: string
+  source_url?: string
+  quality_score?: number | null
+  source?: string
+  date?: string
 }
 
 export interface QuestionLibraryListResponse {
@@ -108,6 +118,25 @@ export async function unhideQuestion(questionId: string): Promise<void> {
   const qid = String(questionId || '').trim()
   if (!qid) throw new Error('missing_question_id')
   await apiClient.post(`/question-library/items/${encodeURIComponent(qid)}/unhide`)
+}
+
+export async function starQuestion(questionId: string): Promise<void> {
+  const qid = String(questionId || '').trim()
+  if (!qid) throw new Error('missing_question_id')
+  await apiClient.post(`/question-library/items/${encodeURIComponent(qid)}/star`)
+}
+
+export async function unstarQuestion(questionId: string): Promise<void> {
+  const qid = String(questionId || '').trim()
+  if (!qid) throw new Error('missing_question_id')
+  await apiClient.post(`/question-library/items/${encodeURIComponent(qid)}/unstar`)
+}
+
+export async function exportQuestionToBasket(questionId: string): Promise<any> {
+  const qid = String(questionId || '').trim()
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.post(`/question-library/items/${encodeURIComponent(qid)}/export-to-basket`)
+  return resp.data as any
 }
 
 export function crawlQuestions(

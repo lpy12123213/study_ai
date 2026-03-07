@@ -17,16 +17,21 @@ export interface QuestionLibraryFilters {
   order: 'desc' | 'asc'
 }
 
-export function useQuestionLibrary() {
+export function useQuestionLibrary(options?: {
+  initialFilters?: Partial<QuestionLibraryFilters>
+}) {
   const queryClient = useQueryClient()
 
-  const [filters, setFilters] = useState<QuestionLibraryFilters>({
-    subject: '高中数学',
-    origin: 'all',
-    hidden: '0',
-    q: '',
-    sort: 'updated_at',
-    order: 'desc',
+  const [filters, setFilters] = useState<QuestionLibraryFilters>(() => {
+    const initial = (options?.initialFilters || {}) as Partial<QuestionLibraryFilters>
+    return {
+      subject: typeof initial.subject === 'string' ? initial.subject : '高中数学',
+      origin: initial.origin ?? 'all',
+      hidden: initial.hidden ?? '0',
+      q: typeof initial.q === 'string' ? initial.q : '',
+      sort: initial.sort ?? 'updated_at',
+      order: initial.order ?? 'desc',
+    }
   })
 
   const [selectedId, setSelectedId] = useState<string>('')

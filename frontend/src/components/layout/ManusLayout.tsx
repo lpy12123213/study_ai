@@ -10,7 +10,9 @@ export function ManusLayout() {
   const isFullScreenPage = location.pathname.startsWith('/canvas')
 
   // Studio pages (keep header, hide history sidebar, manage internal scroll)
-  const isStudioPage = location.pathname.startsWith('/question-library')
+  const isStudioPage =
+    location.pathname.startsWith('/question-library') ||
+    location.pathname.startsWith('/ai-generate')
   
   // Wide pages (no max-width constraint)
   const isWidePage =

@@ -1,6 +1,6 @@
-import { QuestionLibraryStudio } from '@/pages/questionLibrary/QuestionLibraryStudio'
+import { QuestionLibraryBrowser } from '@/pages/questionLibrary/QuestionLibraryBrowser'
 
 export default function QuestionLibraryPage() {
-  return <QuestionLibraryStudio />
+  return <QuestionLibraryBrowser />
 }
 
