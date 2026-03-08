@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus,
@@ -24,11 +24,15 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Progress } from '@/components/ui/progress'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
+import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useComposePaper, useSaveBlueprint } from '@/hooks/useBlueprint'
 import { useSubjects, useSubjectFilters } from '@/hooks/useSubjects'
+import { useFormDraft } from '@/hooks/useFormDraft'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { BlueprintSlot } from '@/types'
+import * as tasksApi from '@/api/tasks'
 
 type SlotShortfall = {
   slotIndex: number
@@ -113,6 +117,10 @@ function SlotEditor({ slot, onUpdate, onRemove }: SlotEditorProps) {
 }
 
 export default function BlueprintPage() {
+  const userId = useAuthStore((s) => s.user?.id || '')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const reuseTaskId = String(searchParams.get('reuse_task') || '').trim()
+
   const [subject, setSubject] = useState('')
   const [topic, setTopic] = useState('')
   const [slots, setSlots] = useState<BlueprintSlot[]>([])
@@ -216,6 +224,92 @@ export default function BlueprintPage() {
 
   const isPaused = checkpoint?.status === 'paused'
   const progressPct = Number.isFinite(progress) ? progress : 0
+
+  const draftKey = `draft:blueprint:v1:${userId || 'anon'}`
+  const { clearDraft } = useFormDraft({
+    storageKey: draftKey,
+    enabled: true,
+    value: {
+      subject,
+      topic,
+      slots,
+      blueprintName,
+      gradeId,
+      textbookVersionId,
+    },
+    shouldSave: (v) => {
+      const anySlot = Array.isArray((v as any)?.slots) && (v as any).slots.length > 0
+      return Boolean(String((v as any)?.subject || '').trim() || String((v as any)?.topic || '').trim() || anySlot)
+    },
+    onRestore: (data: any) => {
+      setSubject(String(data?.subject || ''))
+      setTopic(String(data?.topic || ''))
+      setBlueprintName(String(data?.blueprintName || ''))
+      setGradeId(String(data?.gradeId || ''))
+      setTextbookVersionId(String(data?.textbookVersionId || ''))
+      const restoredSlots = Array.isArray(data?.slots) ? data.slots : []
+      setSlots(
+        restoredSlots
+          .filter((s: any) => s && typeof s === 'object')
+          .map((s: any) => ({
+            id: String(s.id || generateId()),
+            questionType: String(s.questionType || ''),
+            count: Number(s.count || 1),
+            score: Number(s.score || 0),
+            difficulty: String(s.difficulty || 'medium'),
+          })),
+      )
+    },
+  })
+
+  useEffect(() => {
+    if (!result) return
+    clearDraft()
+  }, [clearDraft, result])
+
+  useEffect(() => {
+    if (!reuseTaskId) return
+    let active = true
+    const run = async () => {
+      try {
+        const task = await tasksApi.getTask(reuseTaskId)
+        if (!active) return
+        const req = (task as any)?.request
+        if (!req || typeof req !== 'object') return
+        const subject = String((req as any).subject || '')
+        const topic = String((req as any).topic || '')
+        const paperName = String((req as any).paperName || (req as any).paper_name || '')
+        const slots = Array.isArray((req as any).slots) ? (req as any).slots : []
+        const filters = (req as any).filters && typeof (req as any).filters === 'object' ? (req as any).filters : {}
+
+        setSubject(subject)
+        setTopic(topic)
+        setBlueprintName(paperName)
+        setGradeId(filters.gradeId != null ? String(filters.gradeId) : '')
+        setTextbookVersionId(filters.textbookVersion != null ? String(filters.textbookVersion) : '')
+        setSlots(
+          slots
+            .filter((s: any) => s && typeof s === 'object')
+            .map((s: any) => ({
+              id: generateId(),
+              questionType: String(s.questionType || s.question_type || ''),
+              count: Number(s.count || 1),
+              score: Number(s.score || 0),
+              difficulty: String(s.difficulty || 'medium'),
+            })),
+        )
+      } finally {
+        const next = new URLSearchParams(searchParams)
+        next.delete('reuse_task')
+        setSearchParams(next, { replace: true })
+      }
+    }
+    void run()
+    return () => {
+      active = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reuseTaskId])
 
   return (
     <div className="h-full grid grid-cols-12 overflow-hidden">
@@ -467,6 +561,9 @@ export default function BlueprintPage() {
             任务执行
           </h3>
 
+          {taskId ? (
+            <TaskProgressHeader taskId={taskId} compact />
+          ) : (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>进度</span>
@@ -474,6 +571,7 @@ export default function BlueprintPage() {
               </div>
               <Progress value={progressPct} className="h-2" />
             </div>
+          )}
           </div>
 
         <ScrollArea className="flex-1">

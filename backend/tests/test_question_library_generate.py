@@ -8,4 +8,3 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         qid = build_ai_question_id(now_ts=0, suffix="a1b2c3d4")
         self.assertTrue(qid.startswith("ai_"))
         self.assertLessEqual(len(qid), 50)
-

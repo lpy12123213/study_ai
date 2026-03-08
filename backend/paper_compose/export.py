@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import shutil
 import subprocess
@@ -8,28 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_GENERATED_DIR = (_REPO_ROOT / ".local" / "media" / "generated").resolve()
-
-
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _write_generated(*, ext: str, data: bytes) -> Dict[str, Any]:
-    _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-
-    suffix = (ext or "").lstrip(".").strip().lower() or "bin"
-    sha = _sha256_bytes(data)
-    filename = f"{sha}.{suffix}"
-    url = f"/api/media/generated/{filename}"
-    out_path = _GENERATED_DIR / filename
-
-    if not out_path.exists():
-        out_path.write_bytes(data)
-
-    return {"url": url, "filename": filename, "sha256": sha, "bytes": len(data)}
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
 
 
 def render_paper_markdown(
@@ -246,9 +224,10 @@ def compile_latex_to_pdf(*, tex: str) -> Tuple[Optional[bytes], str]:
         return pdf_path.read_bytes(), log_text[-8000:]
 
 
-def export_paper(
+async def export_paper(
     paper: dict,
     *,
+    user_id: str,
     fmt: str,
     include_stem: bool = False,
     include_answer: bool = False,
@@ -264,7 +243,15 @@ def export_paper(
             include_answer=include_answer,
             include_analysis=include_analysis,
         )
-        return {"format": "markdown", **_write_generated(ext="md", data=md.encode("utf-8"))}
+        out = await publish_generated_text(
+            md,
+            user_id=user_id,
+            ext=".md",
+            file_type="md",
+            mime_type="text/markdown; charset=utf-8",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        return {"format": "markdown", **out}
 
     if fmt_norm in {"tex", "latex"}:
         tex = render_paper_latex(
@@ -273,7 +260,15 @@ def export_paper(
             include_answer=include_answer,
             include_analysis=include_analysis,
         )
-        return {"format": "latex", **_write_generated(ext="tex", data=tex.encode("utf-8"))}
+        out = await publish_generated_text(
+            tex,
+            user_id=user_id,
+            ext=".tex",
+            file_type="tex",
+            mime_type="application/x-tex; charset=utf-8",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        return {"format": "latex", **out}
 
     if fmt_norm == "pdf":
         tex = render_paper_latex(
@@ -282,7 +277,14 @@ def export_paper(
             include_answer=include_answer,
             include_analysis=include_analysis,
         )
-        tex_out = _write_generated(ext="tex", data=tex.encode("utf-8"))
+        tex_out = await publish_generated_text(
+            tex,
+            user_id=user_id,
+            ext=".tex",
+            file_type="tex",
+            mime_type="application/x-tex; charset=utf-8",
+            ttl_s=default_generated_media_ttl_s(),
+        )
         pdf_bytes, log_text = compile_latex_to_pdf(tex=tex)
         if not pdf_bytes:
             return {
@@ -293,7 +295,14 @@ def export_paper(
                 "tex_url": tex_out["url"],
                 "tex_filename": tex_out["filename"],
             }
-        pdf_out = _write_generated(ext="pdf", data=pdf_bytes)
+        pdf_out = await publish_generated_bytes(
+            pdf_bytes,
+            user_id=user_id,
+            ext=".pdf",
+            file_type="pdf",
+            mime_type="application/pdf",
+            ttl_s=default_generated_media_ttl_s(),
+        )
         return {
             "format": "pdf",
             "success": True,
@@ -304,4 +313,3 @@ def export_paper(
         }
 
     raise ValueError("unsupported_format")
-

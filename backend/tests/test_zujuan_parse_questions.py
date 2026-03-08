@@ -1,6 +1,5 @@
 import unittest
 
-
 from backend.crawler.zujuan.client import ZujuanCrawler
 
 
@@ -22,4 +21,3 @@ class TestZujuanParseQuestions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(questions[0].get("question_id"), "31391674")
         self.assertTrue(str(questions[0].get("source_url") or "").endswith("/11q31391674.html"))
         self.assertIn("已知", str(questions[0].get("stem") or ""))
-

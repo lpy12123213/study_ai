@@ -8,8 +8,8 @@ import time
 from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
-
 _request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+_client_ip_var: ContextVar[str] = ContextVar("client_ip", default="")
 
 
 def set_request_id(request_id: str) -> str:
@@ -20,6 +20,16 @@ def set_request_id(request_id: str) -> str:
 
 def get_request_id() -> str:
     return str(_request_id_var.get() or "").strip()
+
+
+def set_client_ip(client_ip: str) -> str:
+    ip = str(client_ip or "").strip()
+    _client_ip_var.set(ip)
+    return ip
+
+
+def get_client_ip() -> str:
+    return str(_client_ip_var.get() or "").strip()
 
 
 def _level_from_env() -> int:
@@ -74,6 +84,10 @@ class JsonFormatter(logging.Formatter):
         request_id = get_request_id()
         if request_id:
             payload["request_id"] = request_id
+
+        client_ip = get_client_ip()
+        if client_ip:
+            payload["client_ip"] = client_ip
 
         payload["src"] = {"module": record.module, "func": record.funcName, "line": record.lineno}
 

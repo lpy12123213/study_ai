@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-
 TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -31,10 +30,19 @@ TOOLS: List[Dict[str, Any]] = [
                         "default": "",
                     },
                     "learn_grade_id": {"type": "integer", "description": "年级ID（高级；优先级高于 learn_grade）"},
-                    "textbook_version": {"type": "string", "description": "教材版本（可选；建议先通过 get_available_filters 获取可用项）"},
-                    "province": {"type": "string", "description": "省份（可选；建议先通过 get_available_filters 获取可用项）"},
+                    "textbook_version": {
+                        "type": "string",
+                        "description": "教材版本（可选；建议先通过 get_available_filters 获取可用项）",
+                    },
+                    "province": {
+                        "type": "string",
+                        "description": "省份（可选；建议先通过 get_available_filters 获取可用项）",
+                    },
                     "province_id": {"type": "integer", "description": "省份ID（高级；优先级高于 province）"},
-                    "paper_type_id": {"type": "integer", "description": "试卷类型ID（可选；建议先通过 get_available_filters 获取可用项）"},
+                    "paper_type_id": {
+                        "type": "integer",
+                        "description": "试卷类型ID（可选；建议先通过 get_available_filters 获取可用项）",
+                    },
                     "year": {"type": "integer", "description": "年份（可选；如 2023）"},
                     "term": {"type": "integer", "description": "学期/月份（可选；0 表示不限）"},
                     "order_by": {"type": "integer", "description": "排序方式（可选；默认 2）"},
@@ -47,7 +55,11 @@ TOOLS: List[Dict[str, Any]] = [
                         "description": "选修内容处理：include/exclude",
                         "default": "",
                     },
-                    "elective_keywords": {"type": "array", "items": {"type": "string"}, "description": "选修关键词列表（可选）"},
+                    "elective_keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "选修关键词列表（可选）",
+                    },
                     "exclude_elective": {"type": "boolean", "description": "是否排除选修内容（可选）"},
                     "dedup_by_stem": {"type": "boolean", "description": "是否按题干去重（可选）"},
                     "min_quality_score": {"type": "integer", "description": "最低题干质量分（0-100，可选）"},
@@ -185,8 +197,11 @@ TOOLS: List[Dict[str, Any]] = [
         "function": {
             "name": "get_question_detail",
             "description": "获取单题详情（仅调试用）。",
-            "parameters": {"type": "object", "properties": {"question_id": {"type": "string"}}, "required": ["question_id"]},
+            "parameters": {
+                "type": "object",
+                "properties": {"question_id": {"type": "string"}},
+                "required": ["question_id"],
+            },
         },
     },
 ]
-

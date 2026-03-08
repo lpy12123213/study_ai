@@ -26,11 +26,7 @@ class TestZujuanQualityScore(unittest.TestCase):
         q = {
             "type": "单选题",
             "knowledge_points": ["导数"],
-            "stem": (
-                "已知函数 f(x)=x^2+2x+1，当 x=1 时 f'(x)=？"
-                "下列选项中正确的是："
-                " A. 1  B. 2  C. 3  D. 4"
-            ),
+            "stem": ("已知函数 f(x)=x^2+2x+1，当 x=1 时 f'(x)=？下列选项中正确的是： A. 1  B. 2  C. 3  D. 4"),
         }
         score, flags = self.crawler._quality_score(q)
         self.assertTrue(any(str(f).startswith("choice_options:") for f in flags))

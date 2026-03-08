@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   User,
@@ -17,8 +17,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
+import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore'
+import { useUserSettingsStore } from '@/stores/useUserSettingsStore'
 import { cn } from '@/lib/utils'
 
 const tabs = [
@@ -36,8 +39,43 @@ const roleLabels: Record<string, string> = {
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('account')
-  const { user, logout } = useAuthStore()
+  const { user, logout, isAuthenticated } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
+  const { fontScale, lineHeight, density, contrast, reduceMotion, setPreferences, resetPreferences } = useUiPreferencesStore()
+  const {
+    loaded: userSettingsLoaded,
+    loadFromServer,
+    patchLocal,
+    saveToServer,
+    exportFromServer,
+    importToServer,
+    resetToDefaults,
+    isSaving: isSyncing,
+    error: syncError,
+  } = useUserSettingsStore()
+
+  const syncTimerRef = useRef<number | null>(null)
+
+  const scheduleAccountSave = (patch: Record<string, unknown>) => {
+    if (!isAuthenticated) return
+    patchLocal(patch)
+    if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
+    syncTimerRef.current = window.setTimeout(() => {
+      void saveToServer()
+    }, 800)
+  }
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+    if (userSettingsLoaded) return
+    void loadFromServer()
+  }, [isAuthenticated, loadFromServer, userSettingsLoaded])
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
+    }
+  }, [])
   const roleLabel = (() => {
     const role = String(user?.role || '').trim().toLowerCase()
     if (!role) return '普通用户'
@@ -50,7 +88,16 @@ export default function SettingsPage() {
   const handleSaveApiKey = async () => {
     setIsSaving(true)
     try {
-      localStorage.setItem('settings_api_key', apiKey)
+      const cleaned = apiKey.trim()
+      if (cleaned) {
+        localStorage.setItem('settings_api_key', cleaned)
+        localStorage.setItem('settings_api_key_enabled', '1')
+        localStorage.removeItem('settings_api_key_disabled_reason')
+      } else {
+        localStorage.removeItem('settings_api_key')
+        localStorage.removeItem('settings_api_key_enabled')
+        localStorage.removeItem('settings_api_key_disabled_reason')
+      }
     } finally {
       setIsSaving(false)
     }
@@ -183,7 +230,10 @@ export default function SettingsPage() {
                         "cursor-pointer rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground",
                         theme === option.value && "border-primary"
                       )}
-                      onClick={() => setTheme(option.value as any)}
+                      onClick={() => {
+                        setTheme(option.value as any)
+                        scheduleAccountSave({ theme: { mode: option.value } })
+                      }}
                     >
                       <div className="mb-2 rounded-md bg-background p-2 w-fit border shadow-sm">
                         <option.icon className="h-5 w-5" />
@@ -193,6 +243,106 @@ export default function SettingsPage() {
                   ))}
                 </div>
               </div>
+
+              <div className="space-y-4">
+                <label className="text-sm font-medium">字体大小</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min="0.85"
+                    max="1.25"
+                    step="0.05"
+                    value={fontScale}
+                    onChange={(e) => {
+                      const next = Number(e.target.value)
+                      setPreferences({ fontScale: next })
+                      scheduleAccountSave({ ui: { fontScale: next } })
+                    }}
+                    className="flex-1"
+                  />
+                  <div className="w-14 text-right text-xs text-muted-foreground tabular-nums">
+                    {Math.round(fontScale * 100)}%
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-sm font-medium">行距</label>
+                <select
+                  className="h-[var(--control-h)] rounded-md border border-input bg-background px-[var(--control-px)] text-sm w-full"
+                  value={String(lineHeight)}
+                  onChange={(e) => {
+                    const next = Number(e.target.value)
+                    setPreferences({ lineHeight: next })
+                    scheduleAccountSave({ ui: { lineHeight: next } })
+                  }}
+                >
+                  <option value="1.4">紧凑</option>
+                  <option value="1.6">标准</option>
+                  <option value="1.8">舒适</option>
+                  <option value="2.0">宽松</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">页面密度</label>
+                  <select
+                    className="h-[var(--control-h)] rounded-md border border-input bg-background px-[var(--control-px)] text-sm w-full"
+                    value={density}
+                    onChange={(e) => {
+                      const next = e.target.value
+                      if (next !== 'comfortable' && next !== 'compact') return
+                      setPreferences({ density: next })
+                      scheduleAccountSave({ ui: { density: next } })
+                    }}
+                  >
+                    <option value="comfortable">舒适</option>
+                    <option value="compact">紧凑</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">对比度模式</label>
+                  <select
+                    className="h-[var(--control-h)] rounded-md border border-input bg-background px-[var(--control-px)] text-sm w-full"
+                    value={contrast}
+                    onChange={(e) => {
+                      const next = e.target.value
+                      if (next !== 'normal' && next !== 'high' && next !== 'eye') return
+                      setPreferences({ contrast: next })
+                      scheduleAccountSave({ ui: { contrast: next } })
+                    }}
+                  >
+                    <option value="normal">标准</option>
+                    <option value="high">高对比</option>
+                    <option value="eye">护眼</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
+                <div>
+                  <div className="text-sm font-medium">减少动画</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    关闭大部分过渡/动效，长列表与流式页面更流畅
+                  </div>
+                </div>
+                <Switch
+                  checked={reduceMotion}
+                  onCheckedChange={(checked) => {
+                    setPreferences({ reduceMotion: Boolean(checked) })
+                    scheduleAccountSave({ ui: { reduceMotion: Boolean(checked) } })
+                  }}
+                />
+              </div>
+
+              {isAuthenticated && (
+                <div className="text-xs text-muted-foreground">
+                  {isSyncing ? '正在同步到账号…' : '已同步到账号'}
+                  {syncError ? <span className="text-destructive">（同步失败：{syncError}）</span> : null}
+                </div>
+              )}
             </div>
           )}
 
@@ -223,6 +373,95 @@ export default function SettingsPage() {
                   >
                     清除
                   </Button>
+                </div>
+
+                <div className="p-4 rounded-lg border bg-card space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="font-medium text-sm">账号配置（跨设备同步）</h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        主题与显示偏好将保存在账号中；清空浏览器数据后重新登录可恢复。
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        const settings = await exportFromServer()
+                        const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `user-settings-${new Date().toISOString().slice(0, 10)}.json`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      disabled={!isAuthenticated}
+                    >
+                      导出配置
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" asChild disabled={!isAuthenticated}>
+                      <label className="cursor-pointer">
+                        导入配置
+                        <input
+                          type="file"
+                          accept="application/json"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            try {
+                              const text = await file.text()
+                              const parsed = JSON.parse(text) as unknown
+                              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                                alert('配置文件格式不正确')
+                                return
+                              }
+                              await importToServer(parsed as Record<string, unknown>)
+                              // Apply imported settings immediately
+                              const themeMode = String((parsed as any)?.theme?.mode || '').trim()
+                              if (themeMode === 'light' || themeMode === 'dark' || themeMode === 'system') {
+                                setTheme(themeMode as any)
+                              }
+                              const ui = (parsed as any)?.ui
+                              if (ui && typeof ui === 'object' && !Array.isArray(ui)) {
+                                setPreferences({
+                                  ...(ui.fontScale !== undefined ? { fontScale: Number(ui.fontScale) } : {}),
+                                  ...(ui.lineHeight !== undefined ? { lineHeight: Number(ui.lineHeight) } : {}),
+                                  ...(ui.density ? { density: String(ui.density) as any } : {}),
+                                  ...(ui.contrast ? { contrast: String(ui.contrast) as any } : {}),
+                                  ...(ui.reduceMotion !== undefined ? { reduceMotion: Boolean(ui.reduceMotion) } : {}),
+                                })
+                              }
+                              alert('已导入并同步到账号')
+                            } catch {
+                              alert('读取或解析配置失败')
+                            } finally {
+                              e.target.value = ''
+                            }
+                          }}
+                        />
+                      </label>
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!isAuthenticated}
+                      onClick={async () => {
+                        if (!confirm('恢复默认配置？这会覆盖你账号中已同步的设置。')) return
+                        await resetToDefaults()
+                        setTheme('system')
+                        resetPreferences()
+                        alert('已恢复默认配置')
+                      }}
+                    >
+                      恢复默认
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between p-4 rounded-lg border bg-card">

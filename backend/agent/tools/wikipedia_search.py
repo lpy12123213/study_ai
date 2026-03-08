@@ -69,4 +69,3 @@ class WikipediaToolsMixin:
 
         items = await asyncio.gather(*[_guarded(p) for p in points])
         return {"topic": topic, "subject": subject, "lang": lang, "items": items}
-

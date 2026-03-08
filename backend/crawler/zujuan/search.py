@@ -1,52 +1,17 @@
 """Zujuan search APIs (keyword/knowledge)."""
+
 from __future__ import annotations
 
-
 import asyncio
-import base64
-import hashlib
-import html as html_module
-import json
-import os
-import re
-import subprocess
-import time
-import urllib.parse
-from collections import OrderedDict
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import httpx
-
-from backend.config import DIFFICULTY_QUERY_MODE
-from backend.crawler.zujuan.cookies import (
-    DEFAULT_USER_AGENT,
-    build_cookie_string,
-    fetch_csrf_token_from_page,
-    get_cookies_with_playwright,
-    get_login_session_with_playwright,
-    load_antibot_cookie_cache,
-    load_env_login,
-    missing_antibot_keys,
-    parse_cookie_string,
-    save_antibot_cookie_cache,
-)
-from backend.crawler.zujuan.parsing import FORMULA_HASH_PATTERN, FORMULA_IMG_TAG_PATTERN, IMG_TAG_PATTERN
 from backend.crawler.zujuan.utils import (
-    PROVINCE_UNLIMITED_ALIASES,
-    _extract_js_var_json,
-    _normalize_province_name,
-    _parse_base_json,
-    _parse_province_list_json,
     _safe_float,
     _safe_int,
 )
 from backend.subjects import (
-    DEFAULT_DIFFICULTY,
     DIFFICULTY_LEVELS,
     SUBJECTS,
-    normalize_difficulty,
-    resolve_subject,
 )
 
 
@@ -273,9 +238,7 @@ async def search_by_keyword(
     seen_stem_fps: set[str] = set()
     debug_pages = []
     target_question_type_id = _safe_int(target.get("question_type_id"), 0)
-    question_type_id_for_request = (
-        target_question_type_id if not (question_type or "").strip() else 0
-    )
+    question_type_id_for_request = target_question_type_id if not (question_type or "").strip() else 0
     min_quality_score = _safe_int(min_quality_score, 0)
     for page_idx in range(1, max_pages + 1):
         questions, dbg = await self._fetch_question_list(

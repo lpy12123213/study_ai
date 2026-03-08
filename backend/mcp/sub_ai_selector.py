@@ -5,25 +5,32 @@
 from __future__ import annotations
 
 import json
-import httpx
 import time
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
+import httpx
+
+from backend.core import llm_console
 from backend.core.settings import (
     CHAT_PROVIDER,
-    settings,
     SUB_AI_TIMEOUT,
     SUB_MODEL,
     SUB_MODEL_MAX_TOKENS,
     SUB_MODEL_TEMPERATURE,
+    settings,
 )
-from backend.core import llm_console
+
 
 def _infer_provider_for_model(model: str) -> str:
     m = (model or "").strip()
     ml = m.lower()
-    moonshot_like = ml.startswith("moonshotai/") or ml.startswith("moonshot/") or ml.startswith("kimi-") or ml.startswith("moonshot-")
+    moonshot_like = (
+        ml.startswith("moonshotai/")
+        or ml.startswith("moonshot/")
+        or ml.startswith("kimi-")
+        or ml.startswith("moonshot-")
+    )
     if moonshot_like and (settings.moonshot_api_key or "").strip():
         return "moonshot"
     if m.startswith("accounts/"):
@@ -111,16 +118,16 @@ async def select_best_question(
     # 构建题目描述文本
     questions_text = ""
     for i, q in enumerate(questions, 1):
-        stem = q.get('stem', '')
+        stem = q.get("stem", "")
         if not stem:
             stem = "(无题干内容)"
 
         questions_text += f"""
 【题目{i}】
-- ID: {q.get('question_id', 'N/A')}
-- 题型: {q.get('type', '未知')}
-- 难度系数: {q.get('difficulty', '未知')}
-- 知识点: {q.get('knowledge_points', '未知')}
+- ID: {q.get("question_id", "N/A")}
+- 题型: {q.get("type", "未知")}
+- 难度系数: {q.get("difficulty", "未知")}
+- 知识点: {q.get("knowledge_points", "未知")}
 - 题干内容: {stem}
 """
 
@@ -180,8 +187,8 @@ async def select_best_question(
                     "model": normalized_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": effective_temperature,
-                    "max_tokens": SUB_MODEL_MAX_TOKENS
-                }
+                    "max_tokens": SUB_MODEL_MAX_TOKENS,
+                },
             )
 
             if response.status_code != 200:
@@ -189,7 +196,7 @@ async def select_best_question(
                 return {
                     "success": False,
                     "error": f"API调用失败: {response.status_code}",
-                    "response_text": response.text[:500]
+                    "response_text": response.text[:500],
                 }
 
             data = response.json()
@@ -208,7 +215,8 @@ async def select_best_question(
             # 解析JSON响应
             try:
                 import re
-                json_match = re.search(r'\{[\s\S]*\}', content)
+
+                json_match = re.search(r"\{[\s\S]*\}", content)
                 if json_match:
                     result = json.loads(json_match.group())
 
@@ -218,9 +226,7 @@ async def select_best_question(
 
                     selected_question_id_raw = result.get("selected_question_id")
                     selected_question_id = (
-                        str(selected_question_id_raw).strip()
-                        if selected_question_id_raw is not None
-                        else ""
+                        str(selected_question_id_raw).strip() if selected_question_id_raw is not None else ""
                     )
 
                     selected_idx: int
@@ -250,18 +256,10 @@ async def select_best_question(
                     return result
                 else:
                     err = "parse_error_no_json"
-                    return {
-                        "success": False,
-                        "error": "无法解析AI响应",
-                        "raw_response": content[:500]
-                    }
+                    return {"success": False, "error": "无法解析AI响应", "raw_response": content[:500]}
             except json.JSONDecodeError as e:
                 err = f"json_decode_error: {e}"
-                return {
-                    "success": False,
-                    "error": f"JSON解析失败: {str(e)}",
-                    "raw_response": content[:500]
-                }
+                return {"success": False, "error": f"JSON解析失败: {str(e)}", "raw_response": content[:500]}
 
     except httpx.TimeoutException:
         err = "timeout"

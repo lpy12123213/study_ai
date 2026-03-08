@@ -28,25 +28,31 @@ interface TaskTimelineProps {
 
 export function TaskTimeline({ steps }: TaskTimelineProps) {
   const filtered = steps.filter((s) => !isNoiseStep(s))
+  const disableMotion = filtered.length >= 2000
 
   return (
     <div className="space-y-1">
-      <AnimatePresence mode="popLayout">
-        {filtered.map((step, index) => (
-          <motion.div
-            key={step.id}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ delay: index * 0.05 }}
-          >
-            <TaskStepComponent
-              step={step}
-              isLast={index === filtered.length - 1}
-            />
-          </motion.div>
-        ))}
-      </AnimatePresence>
+      {disableMotion ? (
+        filtered.map((step, index) => (
+          <div key={step.id}>
+            <TaskStepComponent step={step} isLast={index === filtered.length - 1} />
+          </div>
+        ))
+      ) : (
+        <AnimatePresence mode="popLayout">
+          {filtered.map((step, index) => (
+            <motion.div
+              key={step.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ delay: filtered.length > 200 ? 0 : index * 0.05 }}
+            >
+              <TaskStepComponent step={step} isLast={index === filtered.length - 1} />
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      )}
       
       {filtered.length === 0 && (
         <div className="text-center text-muted-foreground text-sm py-8">

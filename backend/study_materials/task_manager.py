@@ -1,22 +1,36 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.core import AgentCore
 from backend.agent.types import agent_event
+from backend.core.logging_utils import get_logger
 from backend.database.models import get_study_archive_by_fingerprint, upsert_study_archive
+from backend.database.repositories.tasks import (
+    append_task_event as db_append_task_event,
+)
+from backend.database.repositories.tasks import (
+    update_task_status as db_update_task_status,
+)
+from backend.database.repositories.tasks import (
+    upsert_task as db_upsert_task,
+)
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
+
+logger = get_logger(__name__)
 
 
 def _now_s() -> float:
     return time.time()
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_SNAPSHOTS_DIR = (_REPO_ROOT / ".local" / "study_materials" / "tasks").resolve()
@@ -27,19 +41,21 @@ def _truthy(value: Any) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
-def _export_markdown_to_media(*, markdown: str) -> Dict[str, Any]:
-    data = (markdown + ("\n" if not markdown.endswith("\n") else "")).encode("utf-8", errors="ignore")
-    sha = hashlib.sha256(data).hexdigest()
-    filename = f"{sha}.md"
-    url = f"/api/media/generated/{filename}"
-
-    out_dir = (_REPO_ROOT / ".local" / "media" / "generated").resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / filename
-    if not out_path.exists():
-        out_path.write_bytes(data)
-
-    return {"md_url": url, "md_filename": filename, "sha256": sha, "bytes": len(data)}
+async def _export_markdown_to_media(*, markdown: str, user_id: str) -> Dict[str, Any]:
+    published = await publish_generated_text(
+        markdown,
+        user_id=user_id,
+        ext=".md",
+        file_type="md",
+        ttl_s=default_generated_media_ttl_s(),
+    )
+    return {
+        "md_url": published.get("url") or "",
+        "md_filename": published.get("filename") or "",
+        "sha256": published.get("sha256") or "",
+        "bytes": int(published.get("bytes") or 0),
+        "expires_at": published.get("expires_at") or "",
+    }
 
 
 @dataclass
@@ -51,7 +67,7 @@ class StudyMaterialsTask:
     options: Dict[str, Any] = field(default_factory=dict)
     created_at_s: float = field(default_factory=_now_s)
     updated_at_s: float = field(default_factory=_now_s)
-    status: str = "running"  # running|completed|failed
+    status: str = "running"  # running|paused|completed|failed|canceled
     error: Optional[str] = None
 
     # Continuation support (for "completed -> continue iteration" flows).
@@ -230,7 +246,11 @@ class StudyMaterialsTaskManager:
                         path.unlink(missing_ok=True)
                         cleanup_count += 1
                     except Exception:
-                        pass
+                        logger.debug(
+                            "study_material_task_snapshot_cleanup_failed",
+                            extra={"path": str(path)},
+                            exc_info=True,
+                        )
                     continue
                 snaps.append(obj)
 
@@ -293,6 +313,28 @@ class StudyMaterialsTaskManager:
                 self._drop_oldest_locked()
             self._tasks[task_id] = task
 
+        try:
+            await db_upsert_task(
+                user_id=task.user_id,
+                task_id=task.task_id,
+                task_type="study_materials",
+                title=str(task.query or "").strip()[:200],
+                status="running",
+                progress=0.0,
+                request={
+                    "query": task.query,
+                    "subject": task.subject,
+                    "options": dict(task.options or {}),
+                    "parentTaskId": task.parent_task_id,
+                },
+                started_at=datetime.utcnow(),
+            )
+        except Exception:
+            logger.exception(
+                "study_material_task_upsert_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id},
+            )
+
         await self._append_event(
             task,
             {
@@ -318,6 +360,147 @@ class StudyMaterialsTaskManager:
         async with self._lock:
             self._gc_locked()
             return self._tasks.get(tid)
+
+    async def pause_task(self, *, task_id: str, user_id: str) -> bool:
+        tid = (task_id or "").strip()
+        uid = (user_id or "").strip()
+        if not tid or not uid:
+            return False
+
+        task = await self.get_task(tid)
+        if not task or task.user_id != uid:
+            return False
+        if task.status != "running":
+            return True
+
+        task.status = "paused"
+        task.updated_at_s = _now_s()
+        await self._append_event(
+            task,
+            agent_event(
+                "step",
+                {
+                    "step": {
+                        "id": "task_paused",
+                        "title": "任务已暂停",
+                        "status": "paused",
+                        "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "toolName": "study_materials",
+                    }
+                },
+            ),
+        )
+
+        try:
+            await db_update_task_status(user_id=uid, task_id=tid, status="paused", error={})
+        except Exception:
+            logger.exception("study_material_task_pause_write_failed", extra={"task_id": tid, "user_id": uid})
+
+        if task.runner and not task.runner.done():
+            task.runner.cancel()
+
+        async with task.cond:
+            task.cond.notify_all()
+
+        return True
+
+    async def resume_task(self, *, task_id: str, user_id: str) -> bool:
+        tid = (task_id or "").strip()
+        uid = (user_id or "").strip()
+        if not tid or not uid:
+            return False
+
+        task = await self.get_task(tid)
+        if not task or task.user_id != uid:
+            return False
+        if task.status == "running":
+            return True
+        if task.status != "paused":
+            return False
+
+        task.status = "running"
+        task.error = None
+        task.updated_at_s = _now_s()
+
+        await self._append_event(
+            task,
+            agent_event(
+                "step",
+                {
+                    "step": {
+                        "id": "task_resumed",
+                        "title": "任务继续执行",
+                        "status": "running",
+                        "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "toolName": "study_materials",
+                    }
+                },
+            ),
+        )
+
+        try:
+            await db_update_task_status(user_id=uid, task_id=tid, status="running", error={})
+        except Exception:
+            logger.exception("study_material_task_resume_write_failed", extra={"task_id": tid, "user_id": uid})
+
+        if task.runner and not task.runner.done():
+            return True
+
+        task.runner = asyncio.create_task(self._run_task(task))
+        return True
+
+    async def cancel_task(self, *, task_id: str, user_id: str) -> bool:
+        tid = (task_id or "").strip()
+        uid = (user_id or "").strip()
+        if not tid or not uid:
+            return False
+
+        task = await self.get_task(tid)
+        if not task or task.user_id != uid:
+            return False
+
+        if task.status in {"completed", "failed", "canceled", "cancelled"}:
+            return True
+
+        task.status = "canceled"
+        task.error = "Task cancelled"
+        task.updated_at_s = _now_s()
+
+        await self._append_event(
+            task,
+            agent_event(
+                "step",
+                {
+                    "step": {
+                        "id": "task_canceled",
+                        "title": "任务已取消",
+                        "status": "failed",
+                        "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "toolName": "study_materials",
+                        "error": "Task cancelled",
+                    }
+                },
+            ),
+        )
+
+        try:
+            await db_update_task_status(
+                user_id=uid,
+                task_id=tid,
+                status="canceled",
+                error={"message": "Task cancelled"},
+                ended_at=datetime.utcnow(),
+            )
+        except Exception:
+            logger.exception("study_material_task_cancel_write_failed", extra={"task_id": tid, "user_id": uid})
+
+        if task.runner and not task.runner.done():
+            task.runner.cancel()
+
+        async with task.cond:
+            task.cond.notify_all()
+
+        return True
 
     async def stream(
         self,
@@ -467,8 +650,10 @@ class StudyMaterialsTaskManager:
     async def _append_event(self, task: StudyMaterialsTask, event: Dict[str, Any]) -> None:
         payload = self._normalize_event_payload(task_id=task.task_id, event=event)
 
+        seq = 0
         async with task.cond:
             task.last_seq += 1
+            seq = int(task.last_seq or 0)
             payload["seq"] = task.last_seq
             task.events.append(payload)
             task.updated_at_s = _now_s()
@@ -481,16 +666,56 @@ class StudyMaterialsTaskManager:
                     task.seq_offset += drop_n
 
             task.cond.notify_all()
+
+        try:
+            # Persist to DB (best-effort). `payload["data"]` is the SSE `data` object.
+            event_type = str(payload.get("type") or "").strip() or "unknown"
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            progress = None
+            if event_type == "progress":
+                try:
+                    progress = float((data or {}).get("progress") or 0.0)
+                except Exception:
+                    progress = None
+            await db_append_task_event(
+                user_id=task.user_id,
+                task_id=task.task_id,
+                event_type=event_type,
+                payload=data if isinstance(data, dict) else {},
+                seq=seq if seq > 0 else None,
+                progress=progress,
+            )
+        except Exception:
+            logger.exception(
+                "study_material_task_event_write_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id, "event_type": event_type},
+            )
         try:
             force = str(payload.get("type") or "") in {"task_started", "done", "result", "error"}
             self._persist_snapshot(task, force=force or task.status != "running")
         except Exception:
-            pass
+            logger.exception(
+                "study_material_task_snapshot_persist_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id},
+            )
 
     async def _fail_task(self, task: StudyMaterialsTask, message: str) -> None:
         task.status = "failed"
         task.error = message
         await self._append_event(task, {"type": "error", "data": {"error": message}})
+        try:
+            await db_update_task_status(
+                user_id=task.user_id,
+                task_id=task.task_id,
+                status="failed",
+                error={"message": message},
+                ended_at=datetime.utcnow(),
+            )
+        except Exception:
+            logger.exception(
+                "study_material_task_fail_write_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id},
+            )
         async with task.cond:
             task.cond.notify_all()
 
@@ -498,6 +723,19 @@ class StudyMaterialsTaskManager:
         task.status = "completed"
         task.updated_at_s = _now_s()
         self._persist_snapshot(task, force=True)
+        try:
+            await db_update_task_status(
+                user_id=task.user_id,
+                task_id=task.task_id,
+                status="completed",
+                progress=100.0,
+                ended_at=datetime.utcnow(),
+            )
+        except Exception:
+            logger.exception(
+                "study_material_task_complete_write_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id},
+            )
         async with task.cond:
             task.cond.notify_all()
 
@@ -519,7 +757,9 @@ class StudyMaterialsTaskManager:
             prefer_opt = (
                 opts.get("preferLocalArchive")
                 if "preferLocalArchive" in opts
-                else opts.get("prefer_local_archive") if "prefer_local_archive" in opts else None
+                else opts.get("prefer_local_archive")
+                if "prefer_local_archive" in opts
+                else None
             )
             if prefer_opt is None:
                 env_raw = os.getenv("STUDY_ARCHIVE_PREFER_LOCAL")
@@ -551,7 +791,7 @@ class StudyMaterialsTaskManager:
             if not markdown:
                 return False
 
-            exported = _export_markdown_to_media(markdown=markdown)
+            exported = await _export_markdown_to_media(markdown=markdown, user_id=task.user_id)
 
             task.resume_working_memory = {
                 "study_options": {"preset": preset, "requirements": requirements},
@@ -616,7 +856,11 @@ class StudyMaterialsTaskManager:
                     # Shallow copy; values are expected to be JSON-ish.
                     task.resume_working_memory = dict(wm)
             except Exception:
-                pass
+                logger.debug(
+                    "study_material_task_resume_snapshot_failed",
+                    extra={"task_id": task.task_id, "user_id": task.user_id},
+                    exc_info=True,
+                )
 
         try:
             if await _maybe_reuse_local_archive():
@@ -649,14 +893,24 @@ class StudyMaterialsTaskManager:
                             try:
                                 task.iterations_done = int(material.get("iteration") or task.iterations_done or 0)
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "study_material_task_iteration_parse_failed",
+                                    extra={"task_id": task.task_id, "user_id": task.user_id},
+                                    exc_info=True,
+                                )
                     _capture_resume_snapshot()
                     try:
                         wm = dict(task.resume_working_memory or {})
                         markdown = str(wm.get("assemble_study_archive") or wm.get("markdown") or "").strip()
-                        material = wm.get("generate_study_material") if isinstance(wm.get("generate_study_material"), dict) else {}
+                        material = (
+                            wm.get("generate_study_material")
+                            if isinstance(wm.get("generate_study_material"), dict)
+                            else {}
+                        )
                         sections = material.get("sections") if isinstance(material.get("sections"), list) else []
-                        preset = str((task.options or {}).get("preset") or "").strip() or str(material.get("preset") or "")
+                        preset = str((task.options or {}).get("preset") or "").strip() or str(
+                            material.get("preset") or ""
+                        )
                         requirements = str((task.options or {}).get("requirements") or "").strip() or str(
                             material.get("requirements") or ""
                         )
@@ -673,7 +927,10 @@ class StudyMaterialsTaskManager:
                                 sections=[x for x in sections if isinstance(x, dict)],
                             )
                     except Exception:
-                        pass
+                        logger.exception(
+                            "study_material_archive_upsert_failed",
+                            extra={"task_id": task.task_id, "user_id": task.user_id},
+                        )
                     await self._complete_task(task)
                 elif kind == "error":
                     msg = ""
@@ -687,6 +944,13 @@ class StudyMaterialsTaskManager:
                     async with task.cond:
                         task.cond.notify_all()
         except asyncio.CancelledError:
+            # TaskCenter operations set `task.status` first, then cancel the runner.
+            # In that case, do not overwrite the requested terminal state.
+            if task.status in {"paused", "canceled", "cancelled"}:
+                async with task.cond:
+                    task.cond.notify_all()
+                raise
+
             await self._fail_task(task, "Task cancelled")
             raise
         except Exception as exc:  # pragma: no cover

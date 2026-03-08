@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,13 +14,18 @@ from fastapi.responses import StreamingResponse
 from backend.analysis_service import analyze_paper
 from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
+from backend.core.logging_utils import get_logger
 from backend.database.models import delete_paper, get_paper, list_papers, save_paper
+from backend.database.repositories.tasks import append_task_event as db_append_task_event
+from backend.database.repositories.tasks import update_task_status as db_update_task_status
+from backend.database.repositories.tasks import upsert_task as db_upsert_task
 from backend.paper_compose.compose_tasks import compose_tasks
 from backend.paper_compose.export import export_paper as export_paper_doc
 from backend.paper_compose.task_manager import PaperComposeTask
 from backend.paper_compose.workflow import compose_paper_events
 
 router = APIRouter(dependencies=[Depends(require_auth)])
+logger = get_logger(__name__)
 _PAPER_ANALYSIS_CACHE: dict[tuple[int, str], dict] = {}
 
 
@@ -46,7 +53,9 @@ async def _get_cached_paper_analysis(*, paper_id: int, paper: dict) -> dict:
 @router.post("/papers", response_model=dict)
 async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -> dict:
     """创建试卷"""
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     try:
         q_dicts = paper.to_question_dicts()
         paper_id = await save_paper(user_id=user_id, paper_name=paper.paper_name, questions=q_dicts)
@@ -62,7 +71,9 @@ async def get_paper_info(
     user: dict = Depends(require_auth),
 ) -> dict:
     """获取试卷信息"""
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
@@ -77,14 +88,18 @@ async def get_paper_info(
 @router.get("/papers", response_model=List[dict])
 async def get_papers_list(limit: int = 50, user: dict = Depends(require_auth)) -> List[dict]:
     """获取试卷列表"""
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     return await list_papers(user_id=user_id, limit=limit)
 
 
 @router.delete("/papers/{paper_id}")
 async def remove_paper(paper_id: int, user: dict = Depends(require_auth)) -> dict:
     """删除试卷"""
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     success = await delete_paper(user_id=user_id, paper_id=paper_id)
     if not success:
         raise HTTPException(status_code=404, detail="试卷不存在")
@@ -94,7 +109,9 @@ async def remove_paper(paper_id: int, user: dict = Depends(require_auth)) -> dic
 @router.get("/papers/{paper_id}/download-link")
 async def get_download_link(paper_id: int, user: dict = Depends(require_auth)) -> dict:
     """生成组卷网下载链接（合规：仅提供题目链接）"""
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
@@ -127,7 +144,9 @@ async def get_download_link(paper_id: int, user: dict = Depends(require_auth)) -
 async def export_paper(paper_id: int, payload: Optional[dict] = None, user: dict = Depends(require_auth)) -> dict:
     """导出试卷为 Markdown/LaTeX/PDF（写入 `.local/media/generated/` 并返回下载链接）。"""
 
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
@@ -137,11 +156,14 @@ async def export_paper(paper_id: int, payload: Optional[dict] = None, user: dict
 
     include_stem = bool(body.get("includeStem")) if "includeStem" in body else bool(body.get("include_stem"))
     include_answer = bool(body.get("includeAnswer")) if "includeAnswer" in body else bool(body.get("include_answer"))
-    include_analysis = bool(body.get("includeAnalysis")) if "includeAnalysis" in body else bool(body.get("include_analysis"))
+    include_analysis = (
+        bool(body.get("includeAnalysis")) if "includeAnalysis" in body else bool(body.get("include_analysis"))
+    )
 
     try:
-        out = export_paper_doc(
+        out = await export_paper_doc(
             paper,
+            user_id=user_id,
             fmt=fmt,
             include_stem=include_stem,
             include_answer=include_answer,
@@ -169,27 +191,144 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
     """
     Run the compose workflow and append events into the task manager.
     """
+
+    title = (
+        str((task.request or {}).get("paperName") or (task.request or {}).get("paper_name") or "组卷任务").strip()
+        or "组卷任务"
+    )
+    try:
+        await db_upsert_task(
+            user_id=user_id,
+            task_id=task.task_id,
+            task_type="paper_compose",
+            title=title,
+            status="running",
+            progress=0.0,
+            request=dict(task.request or {}),
+            started_at=datetime.utcnow(),
+        )
+        await db_append_task_event(
+            user_id=user_id,
+            task_id=task.task_id,
+            event_type="step",
+            payload={
+                "step": {
+                    "id": "task_started",
+                    "title": "开始组卷任务",
+                    "status": "running",
+                    "startTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "toolName": "paper_compose",
+                    "input": {"taskId": task.task_id},
+                }
+            },
+        )
+    except Exception:
+        logger.exception("paper_compose_task_upsert_failed", extra={"task_id": task.task_id, "user_id": user_id})
+
     try:
         async for evt in compose_paper_events(task.request, user_id=user_id):
             if task.status != "running":
                 break
             await compose_tasks.append_event(task, evt)
 
+            try:
+                payload = {k: evt.get(k) for k in ("step", "progress", "result", "error", "message") if k in evt}
+                progress = None
+                if "progress" in payload:
+                    try:
+                        progress = float(payload.get("progress") or 0.0)
+                    except Exception:
+                        progress = None
+                await db_append_task_event(
+                    user_id=user_id,
+                    task_id=task.task_id,
+                    event_type=str(evt.get("type") or "event"),
+                    payload=payload,
+                    progress=progress,
+                )
+            except Exception:
+                logger.exception(
+                    "paper_compose_task_event_write_failed",
+                    extra={"task_id": task.task_id, "user_id": user_id, "event": evt},
+                )
+
             kind = str(evt.get("type") or "")
             if kind == "result":
                 await compose_tasks.complete_task(task)
+                try:
+                    result = evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
+                    await db_update_task_status(
+                        user_id=user_id,
+                        task_id=task.task_id,
+                        status="completed",
+                        progress=100.0,
+                        result=result,
+                        ended_at=datetime.utcnow(),
+                    )
+                except Exception:
+                    logger.exception(
+                        "paper_compose_task_complete_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
+                    )
                 return
             if kind == "error":
                 await compose_tasks.fail_task(task, str(evt.get("error") or "compose_failed"))
+                try:
+                    await db_update_task_status(
+                        user_id=user_id,
+                        task_id=task.task_id,
+                        status="failed",
+                        error={"message": str(evt.get("error") or "compose_failed")},
+                        ended_at=datetime.utcnow(),
+                    )
+                except Exception:
+                    logger.exception(
+                        "paper_compose_task_fail_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
+                    )
                 return
     except asyncio.CancelledError:
         await compose_tasks.fail_task(task, "Task cancelled")
+        try:
+            await db_update_task_status(
+                user_id=user_id,
+                task_id=task.task_id,
+                status="canceled",
+                error={"message": "Task cancelled"},
+                ended_at=datetime.utcnow(),
+            )
+        except Exception:
+            logger.exception(
+                "paper_compose_task_cancel_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
+            )
         raise
     except Exception as exc:  # pragma: no cover
         await compose_tasks.fail_task(task, str(exc))
+        try:
+            await db_update_task_status(
+                user_id=user_id,
+                task_id=task.task_id,
+                status="failed",
+                error={"message": str(exc)},
+                ended_at=datetime.utcnow(),
+            )
+        except Exception:
+            logger.exception(
+                "paper_compose_task_error_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
+            )
     finally:
         if task.status == "running":
             await compose_tasks.fail_task(task, "Task ended unexpectedly")
+            try:
+                await db_update_task_status(
+                    user_id=user_id,
+                    task_id=task.task_id,
+                    status="failed",
+                    error={"message": "Task ended unexpectedly"},
+                    ended_at=datetime.utcnow(),
+                )
+            except Exception:
+                logger.exception(
+                    "paper_compose_task_final_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
+                )
 
 
 @router.post("/papers/compose")
@@ -203,7 +342,9 @@ async def compose_paper(payload: dict, user: dict = Depends(require_auth)) -> St
     - {type:'result', result: Paper}
     - {type:'error', error:string}
     """
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid_payload")
 

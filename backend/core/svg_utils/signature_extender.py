@@ -11,7 +11,7 @@ def load_signatures(path: Path) -> Dict[str, str]:
     """Load signatures from a JSON file."""
     if not path.exists():
         return {}
-    
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -33,18 +33,18 @@ def add_signature(
 ) -> Dict[str, str]:
     """
     Add a new glyph signature.
-    
+
     Args:
         glyph_id: The glyph identifier from the SVG
         latex: The LaTeX equivalent
         path: Optional path to the signatures file
-    
+
     Returns:
         Updated signatures dict
     """
     if path is None:
         path = Path(__file__).parent / "glyph_signatures.json"
-    
+
     signatures = load_signatures(path)
     signatures[glyph_id] = latex
     save_signatures(signatures, path)
@@ -57,17 +57,17 @@ def add_signatures_batch(
 ) -> Dict[str, str]:
     """
     Add multiple glyph signatures.
-    
+
     Args:
         mappings: Dict of glyph_id -> latex
         path: Optional path to the signatures file
-    
+
     Returns:
         Updated signatures dict
     """
     if path is None:
         path = Path(__file__).parent / "glyph_signatures.json"
-    
+
     signatures = load_signatures(path)
     signatures.update(mappings)
     save_signatures(signatures, path)
@@ -77,20 +77,20 @@ def add_signatures_batch(
 def get_missing_glyphs(svg_content: str, signatures: Dict[str, str]) -> List[str]:
     """
     Find glyph IDs in SVG content that don't have signatures.
-    
+
     Args:
         svg_content: SVG string
         signatures: Current signatures dict
-    
+
     Returns:
         List of missing glyph IDs
     """
     import re
-    
+
     # Find all glyph references
     use_pattern = r'<use[^>]*xlink:href="#([^"]+)"'
     glyph_ids = set(re.findall(use_pattern, svg_content))
-    
+
     # Filter to those without signatures
     missing = [gid for gid in glyph_ids if gid not in signatures]
     return sorted(missing)

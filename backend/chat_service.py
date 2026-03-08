@@ -18,4 +18,3 @@ __all__ = [
     "PLAN_TAG_CLOSE",
     "get_system_prompt",
 ]
-

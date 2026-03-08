@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ThinkingTree } from '@/components/deepthink/ThinkingTree'
+import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useDeepThink } from '@/hooks/useDeepThink'
 import { useSubjects } from '@/hooks/useSubjects'
 import { cn, generateId } from '@/lib/utils'
@@ -111,7 +112,7 @@ export default function DeepThinkPage() {
   const stickToBottomRef = useRef(true)
   const [showJumpToBottom, setShowJumpToBottom] = useState(false)
 
-  const { status, nodes, bestPath, answer, metrics, error, config, solve, cancel, reset } = useDeepThink()
+  const { status, taskId, nodes, bestPath, answer, metrics, error, config, solve, cancel, reset } = useDeepThink()
   const isStreaming = status === 'searching' || status === 'answering'
 
   const scrollToBottom = useCallback(() => {
@@ -256,6 +257,11 @@ export default function DeepThinkPage() {
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
           <div className="max-w-3xl mx-auto py-6">
+            {!!taskId && status !== 'idle' && (
+              <div className="sticky top-0 z-10 pb-3 bg-background/80 backdrop-blur-sm">
+                <TaskProgressHeader taskId={taskId} compact />
+              </div>
+            )}
             <AnimatePresence mode="popLayout">
               {messages.map((message) => {
                 if (message.role === 'user') {

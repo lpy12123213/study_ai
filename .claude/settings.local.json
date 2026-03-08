@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(if exist \"C:\\\\Users\\\\李\\\\Desktop\\\\study_ai\\\\.env\" echo EXISTS)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(grep:*)"
     ]
   }
 }

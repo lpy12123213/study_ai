@@ -2,28 +2,32 @@
 
 from __future__ import annotations
 
-import httpx
+import json
 import time
 import uuid
-from typing import Optional, Dict, Any, AsyncIterator
-import json
+from typing import Any, AsyncIterator, Dict, Optional
 
+import httpx
+
+from backend.core import llm_console
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     CHAT_API_KEY,
     CHAT_BASE_URL,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
     FIREWORKS_API_KEY,
     FIREWORKS_BASE_URL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
     ZHIPU_API_KEY,
     ZHIPU_BASE_URL,
 )
-from backend.core import llm_console
+
+logger = get_logger(__name__)
 
 
 class OpenAICompatibleClient:
     """Client for OpenAI-compatible APIs."""
-    
+
     def __init__(
         self,
         api_key: str,
@@ -33,13 +37,13 @@ class OpenAICompatibleClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-    
+
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-    
+
     async def chat_completion(
         self,
         messages: list,
@@ -71,13 +75,13 @@ class OpenAICompatibleClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        
+
         if tools:
             payload["tools"] = tools
-        
+
         if stream:
             payload["stream"] = True
-        
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
@@ -117,7 +121,7 @@ class OpenAICompatibleClient:
                 content_chars=content_chars,
                 error=err,
             )
-    
+
     async def chat_completion_stream(
         self,
         messages: list,
@@ -149,10 +153,10 @@ class OpenAICompatibleClient:
             "max_tokens": max_tokens,
             "stream": True,
         }
-        
+
         if tools:
             payload["tools"] = tools
-        
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream(
@@ -186,7 +190,7 @@ class OpenAICompatibleClient:
                             if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
                                 usage = dict(chunk.get("usage") or {})
                         except Exception:
-                            pass
+                            logger.debug("mcp_llm_stream_parse_failed", extra={"req_id": req_id}, exc_info=True)
 
                         yield chunk
         except Exception as exc:

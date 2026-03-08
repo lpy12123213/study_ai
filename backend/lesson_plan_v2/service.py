@@ -22,6 +22,8 @@ async def generate_lesson_plan_stream(
     subject: str,
     grade: str,
     topic: str,
+    *,
+    user_id: str,
     duration_minutes: int = 45,
     objectives: Optional[List[str]] = None,
     teaching_style: Optional[str] = None,
@@ -90,7 +92,11 @@ async def generate_lesson_plan_stream(
                 "title": "审核知识点列表",
                 "success": True,
                 "elapsed_ms": int((time.monotonic() - t0) * 1000),
-                "output": {"knowledge_points": knowledge_points, "count": len(knowledge_points), "source": "review_llm"},
+                "output": {
+                    "knowledge_points": knowledge_points,
+                    "count": len(knowledge_points),
+                    "source": "review_llm",
+                },
             },
         )
 
@@ -119,7 +125,12 @@ async def generate_lesson_plan_stream(
         for i, kp in enumerate(knowledge_points):
             yield agent_event(
                 "subagent_start",
-                {"knowledge_point": kp, "index": i, "total": len(knowledge_points), "content": f"SubAgent 启动：研究知识点「{kp}」"},
+                {
+                    "knowledge_point": kp,
+                    "index": i,
+                    "total": len(knowledge_points),
+                    "content": f"SubAgent 启动：研究知识点「{kp}」",
+                },
             )
             step_id = f"research_knowledge_point-{uuid.uuid4().hex[:8]}"
             yield agent_event(
@@ -157,7 +168,12 @@ async def generate_lesson_plan_stream(
                 )
                 yield agent_event(
                     "subagent_end",
-                    {"knowledge_point": kp, "index": i, "total": len(knowledge_points), "content": f"SubAgent 完成：「{kp}」资料收集完毕"},
+                    {
+                        "knowledge_point": kp,
+                        "index": i,
+                        "total": len(knowledge_points),
+                        "content": f"SubAgent 完成：「{kp}」资料收集完毕",
+                    },
                 )
         except Exception:
             for t in tasks:
@@ -182,7 +198,13 @@ async def generate_lesson_plan_stream(
                 "step_id": gen_step_id,
                 "name": "generate_lesson_plan",
                 "title": "生成教案",
-                "arguments": {"subject": subject, "grade": grade, "topic": topic, "duration_minutes": duration_minutes, "knowledge_points": knowledge_points},
+                "arguments": {
+                    "subject": subject,
+                    "grade": grade,
+                    "topic": topic,
+                    "duration_minutes": duration_minutes,
+                    "knowledge_points": knowledge_points,
+                },
             },
         )
         t0 = time.monotonic()
@@ -213,10 +235,22 @@ async def generate_lesson_plan_stream(
         assemble_id = f"assemble_study_archive-{uuid.uuid4().hex[:8]}"
         yield agent_event(
             "tool_call",
-            {"step_id": assemble_id, "name": "assemble_study_archive", "title": "组装 Markdown", "arguments": {"topic": topic, "subject": subject}},
+            {
+                "step_id": assemble_id,
+                "name": "assemble_study_archive",
+                "title": "组装 Markdown",
+                "arguments": {"topic": topic, "subject": subject},
+            },
         )
         t0 = time.monotonic()
-        md = lesson_plan_to_markdown(plan, subject=subject, grade=grade, topic=topic, duration_minutes=duration_minutes, knowledge_points=knowledge_points)
+        md = lesson_plan_to_markdown(
+            plan,
+            subject=subject,
+            grade=grade,
+            topic=topic,
+            duration_minutes=duration_minutes,
+            knowledge_points=knowledge_points,
+        )
         yield agent_event(
             "tool_result",
             {
@@ -234,10 +268,17 @@ async def generate_lesson_plan_stream(
         export_md_id = f"export_study_markdown-{uuid.uuid4().hex[:8]}"
         yield agent_event(
             "tool_call",
-            {"step_id": export_md_id, "name": "export_study_markdown", "title": "导出 Markdown", "arguments": {"topic": topic, "subject": subject}},
+            {
+                "step_id": export_md_id,
+                "name": "export_study_markdown",
+                "title": "导出 Markdown",
+                "arguments": {"topic": topic, "subject": subject},
+            },
         )
         t0 = time.monotonic()
-        md_pub = publish_generated_text(md, ext=".md")
+        md_pub = await publish_generated_text(
+            md, user_id=user_id, ext=".md", file_type="md", mime_type="text/markdown; charset=utf-8"
+        )
         yield agent_event(
             "tool_result",
             {
@@ -253,11 +294,18 @@ async def generate_lesson_plan_stream(
         convert_id = f"convert_markdown_to_latex-{uuid.uuid4().hex[:8]}"
         yield agent_event(
             "tool_call",
-            {"step_id": convert_id, "name": "convert_markdown_to_latex", "title": "Markdown → LaTeX", "arguments": {"topic": topic, "subject": subject}},
+            {
+                "step_id": convert_id,
+                "name": "convert_markdown_to_latex",
+                "title": "Markdown → LaTeX",
+                "arguments": {"topic": topic, "subject": subject},
+            },
         )
         t0 = time.monotonic()
         tex = await convert_markdown_to_latex(markdown=md, title=title, subject=subject)
-        tex_pub = publish_generated_text(tex, ext=".tex")
+        tex_pub = await publish_generated_text(
+            tex, user_id=user_id, ext=".tex", file_type="tex", mime_type="application/x-tex; charset=utf-8"
+        )
         yield agent_event(
             "tool_result",
             {
@@ -277,11 +325,24 @@ async def generate_lesson_plan_stream(
             refine_id = f"refine_latex-{uuid.uuid4().hex[:8]}"
             yield agent_event(
                 "tool_call",
-                {"step_id": refine_id, "name": "refine_latex", "title": f"修订 LaTeX（第{attempt + 1}轮）", "arguments": {"topic": topic, "subject": subject}},
+                {
+                    "step_id": refine_id,
+                    "name": "refine_latex",
+                    "title": f"修订 LaTeX（第{attempt + 1}轮）",
+                    "arguments": {"topic": topic, "subject": subject},
+                },
             )
             t0 = time.monotonic()
-            tex_current = await refine_latex(latex=tex_current, topic=topic, subject=subject, compile_error=last_compile_err)
-            tex_pub2 = publish_generated_text(tex_current, ext=".tex")
+            tex_current = await refine_latex(
+                latex=tex_current, topic=topic, subject=subject, compile_error=last_compile_err
+            )
+            tex_pub2 = await publish_generated_text(
+                tex_current,
+                user_id=user_id,
+                ext=".tex",
+                file_type="tex",
+                mime_type="application/x-tex; charset=utf-8",
+            )
             yield agent_event(
                 "tool_result",
                 {
@@ -290,18 +351,27 @@ async def generate_lesson_plan_stream(
                     "title": f"修订 LaTeX（第{attempt + 1}轮）",
                     "success": True,
                     "elapsed_ms": int((time.monotonic() - t0) * 1000),
-                    "output": {"tex_url": tex_pub2["url"], "filename": tex_pub2["filename"], "bytes": tex_pub2["bytes"]},
+                    "output": {
+                        "tex_url": tex_pub2["url"],
+                        "filename": tex_pub2["filename"],
+                        "bytes": tex_pub2["bytes"],
+                    },
                 },
             )
 
             compile_id = f"compile_latex_to_pdf-{uuid.uuid4().hex[:8]}"
             yield agent_event(
                 "tool_call",
-                {"step_id": compile_id, "name": "compile_latex_to_pdf", "title": f"编译 PDF（第{attempt + 1}轮）", "arguments": {"topic": topic}},
+                {
+                    "step_id": compile_id,
+                    "name": "compile_latex_to_pdf",
+                    "title": f"编译 PDF（第{attempt + 1}轮）",
+                    "arguments": {"topic": topic},
+                },
             )
             t0 = time.monotonic()
             try:
-                pdf_pub = compile_latex_to_pdf(latex=tex_current)
+                pdf_pub = await compile_latex_to_pdf(latex=tex_current, user_id=user_id)
                 yield agent_event(
                     "tool_result",
                     {
@@ -310,7 +380,11 @@ async def generate_lesson_plan_stream(
                         "title": f"编译 PDF（第{attempt + 1}轮）",
                         "success": True,
                         "elapsed_ms": int((time.monotonic() - t0) * 1000),
-                        "output": {"pdf_url": pdf_pub["url"], "filename": pdf_pub["filename"], "bytes": pdf_pub["bytes"]},
+                        "output": {
+                            "pdf_url": pdf_pub["url"],
+                            "filename": pdf_pub["filename"],
+                            "bytes": pdf_pub["bytes"],
+                        },
                     },
                 )
                 break
@@ -351,4 +425,3 @@ async def generate_lesson_plan_stream(
         )
     except Exception as exc:
         yield agent_event("error", {"message": str(exc)})
-

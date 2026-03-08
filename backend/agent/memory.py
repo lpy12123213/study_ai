@@ -46,7 +46,9 @@ class MemoryStore:
             self._save_all(data)
             return current
 
-    async def record_session(self, *, user_id: str, topic: str, passed: bool, issues: Optional[List[str]] = None) -> None:
+    async def record_session(
+        self, *, user_id: str, topic: str, passed: bool, issues: Optional[List[str]] = None
+    ) -> None:
         uid = str(user_id or "anonymous")
         topic = str(topic or "").strip()
         issues = issues or []
@@ -96,4 +98,3 @@ class MemoryStore:
             self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             return None
-

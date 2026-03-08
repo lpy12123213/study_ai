@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_DIR = (REPO_ROOT / ".local" / "media" / "generated").resolve()
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,4 +57,3 @@ def clean_points(items: List[Any], *, max_points: int) -> List[str]:
         if len(out) >= max_points:
             break
     return out
-

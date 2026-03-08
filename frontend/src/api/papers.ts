@@ -137,6 +137,7 @@ export async function getPaper(id: string, options: GetPaperOptions = {}): Promi
   return {
     id: Number(data?.paper_id),
     name: typeof data?.paper_name === 'string' ? data.paper_name : String(id),
+    subject: typeof data?.subject === 'string' ? data.subject : undefined,
     createdAt: typeof data?.created_at === 'string' ? data.created_at : '',
     questions,
     analysis: toPaperAnalysis(data?.analysis),

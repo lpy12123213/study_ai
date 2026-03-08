@@ -15,14 +15,23 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { formatDate } from '@/lib/utils'
-import { resolveApiResourceUrl } from '@/api/client'
+import { downloadObjectUrl } from '@/api/client'
 
 export default function LessonPlanDetailPage() {
   const { lessonPlanId } = useParams<{ lessonPlanId: string }>()
   const plan = useLessonPlanStore((state) => state.getPlan(lessonPlanId ?? ''))
 
-  const mdHref = plan?.mdUrl ? resolveApiResourceUrl(plan.mdUrl) : ''
-  const pdfHref = plan?.pdfUrl ? resolveApiResourceUrl(plan.pdfUrl) : ''
+  const openGeneratedFile = async (resourceUrl: string) => {
+    const { objectUrl, revoke } = await downloadObjectUrl(resourceUrl)
+    const win = window.open(objectUrl, '_blank', 'noopener,noreferrer')
+    if (!win) {
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = ''
+      a.click()
+    }
+    window.setTimeout(revoke, 60_000)
+  }
 
   const handlePrint = () => {
     window.print()
@@ -123,20 +132,16 @@ export default function LessonPlanDetailPage() {
             <div className="rounded-xl border border-border/50 bg-muted/30 p-6 flex flex-col gap-3">
               <div className="flex flex-wrap gap-2">
                 {plan.mdUrl ? (
-                  <Button asChild>
-                    <a href={mdHref} target="_blank" rel="noreferrer" download>
-                      下载 Markdown
-                    </a>
+                  <Button type="button" onClick={() => void openGeneratedFile(plan.mdUrl!)}>
+                    下载 Markdown
                   </Button>
                 ) : (
                   <Button disabled>Markdown 未生成</Button>
                 )}
 
                 {plan.pdfUrl ? (
-                  <Button asChild variant="outline">
-                    <a href={pdfHref} target="_blank" rel="noreferrer" download>
-                      下载 PDF
-                    </a>
+                  <Button type="button" variant="outline" onClick={() => void openGeneratedFile(plan.pdfUrl!)}>
+                    下载 PDF
                   </Button>
                 ) : (
                   <Button disabled variant="outline">

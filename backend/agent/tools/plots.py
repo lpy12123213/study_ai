@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
+
+logger = get_logger(__name__)
 
 
 class PlotToolsMixin:
@@ -39,24 +42,19 @@ class PlotToolsMixin:
             }
 
         png_bytes = bytes(plot_result.get("png_bytes") or b"")
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            png_bytes,
+            user_id=user_id,
+            ext=".png",
+            file_type="image",
+            mime_type="image/png",
+            ttl_s=default_generated_media_ttl_s(),
+        )
 
-        import hashlib
-
-        media_id = hashlib.sha256(png_bytes).hexdigest()
-        filename = f"{media_id}.png"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-
-        try:
-            if not out_path.exists():
-                out_path.write_bytes(png_bytes)
-        except Exception as exc:
-            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
-
-        url = f"/api/media/generated/{filename}"
+        media_id = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
         markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
@@ -94,7 +92,7 @@ class PlotToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            pass
+            logger.debug("plot_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -104,7 +102,7 @@ class PlotToolsMixin:
             "filename": filename,
             "url": url,
             "markdown": markdown,
-            "bytes": len(png_bytes),
+            "bytes": int(published.get("bytes") or len(png_bytes)),
             "warnings": plot_result.get("warnings") or [],
         }
 
@@ -130,24 +128,19 @@ class PlotToolsMixin:
             png_bytes = render_3d_plot(spec)
         except Exception as exc:
             return {"success": False, "error": str(exc), "knowledge_point": kp}
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            png_bytes,
+            user_id=user_id,
+            ext=".png",
+            file_type="image",
+            mime_type="image/png",
+            ttl_s=default_generated_media_ttl_s(),
+        )
 
-        import hashlib
-
-        media_id = hashlib.sha256(png_bytes).hexdigest()
-        filename = f"{media_id}.png"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-
-        try:
-            if not out_path.exists():
-                out_path.write_bytes(png_bytes)
-        except Exception as exc:
-            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
-
-        url = f"/api/media/generated/{filename}"
+        media_id = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
         markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
@@ -185,7 +178,7 @@ class PlotToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            pass
+            logger.debug("plot_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -195,5 +188,5 @@ class PlotToolsMixin:
             "filename": filename,
             "url": url,
             "markdown": markdown,
-            "bytes": len(png_bytes),
+            "bytes": int(published.get("bytes") or len(png_bytes)),
         }

@@ -363,4 +363,3 @@ async def wikipedia_search(
             }
 
     return await _to_thread(_run)
-

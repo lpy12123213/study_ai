@@ -13,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import httpx
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import API_TIMEOUT
 
+logger = get_logger(__name__)
 
 _GITHUB_API_BASE = (os.getenv("GITHUB_API_BASE_URL") or "https://api.github.com").rstrip("/")
 _GITHUB_TOKEN = (os.getenv("GITHUB_TOKEN") or "").strip()
@@ -79,7 +81,11 @@ async def github_fetch_readme(
                 continue
 
             if resp.status_code in {401, 403, 404}:
-                return {"success": False, "provider": "github", "error": f"readme_unavailable_status_{resp.status_code}"}
+                return {
+                    "success": False,
+                    "provider": "github",
+                    "error": f"readme_unavailable_status_{resp.status_code}",
+                }
 
             resp.raise_for_status()
             text = (resp.text or "").strip()
@@ -166,7 +172,7 @@ async def github_search_repositories(
                     if isinstance(data_err, dict) and data_err.get("message"):
                         msg = str(data_err.get("message"))
                 except Exception:
-                    pass
+                    logger.debug("github_api_error_payload_parse_failed", exc_info=True)
                 return {"success": False, "query": q, "provider": "github", "error": msg, "note": note}
 
             resp.raise_for_status()

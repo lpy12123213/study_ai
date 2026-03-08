@@ -1,5 +1,7 @@
-import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronLeft, ChevronRight, Layers, Loader2 } from 'lucide-react'
+import { AnimatePresence } from 'framer-motion'
+import { ChevronDown, ChevronLeft, ChevronRight, Layers, Loader2 } from 'lucide-react'
+import { ErrorNotice } from '@/components/shared/ErrorNotice'
+import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { Button } from '@/components/ui/button'
 import { DraggableDivider } from '@/pages/studyMaterials/components/DraggableDivider'
 import { MessageBubble } from '@/pages/studyMaterials/components/MessageBubble'
@@ -13,6 +15,8 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
     showSplitPane,
     messages,
     handleMessageScroll,
+    isNearBottom,
+    scrollToBottom,
     hasResumableStream,
     isGenerating,
     activeConversationId,
@@ -22,6 +26,7 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
     isLastExportFailure,
     startContinueIteration,
     error,
+    clearError,
     hasSubAgentPane,
     subAgentActivities,
     activeSubAgentTab,
@@ -30,17 +35,23 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
   } = controller
 
   const lastTask = activeConversation?.lastTask
+  const disableMotion = messages.length >= 500
 
   return (
     <div className="flex-1 flex overflow-hidden min-h-0 relative">
       {/* ── Left column: Main agent (chat + steps) ── */}
-      <div className="flex flex-col overflow-hidden" style={{ width: showSplitPane ? `${leftRatio * 100}%` : '100%' }}>
+      <div className="flex flex-col overflow-hidden relative" style={{ width: showSplitPane ? `${leftRatio * 100}%` : '100%' }}>
         <div
           ref={scrollRef}
           className="flex-1 overflow-auto p-4 pb-32 overscroll-contain min-h-0"
           onScroll={handleMessageScroll}
         >
           <div className="py-6">
+            {!!lastTask?.taskId && (
+              <div className="sticky top-0 z-10 pb-3 bg-background/80 backdrop-blur-sm">
+                <TaskProgressHeader taskId={lastTask.taskId} compact />
+              </div>
+            )}
             {hasResumableStream && !isGenerating && activeConversationId && activeConversation?.activeStream && (
               <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
@@ -87,29 +98,48 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
               </div>
             )}
 
-            <AnimatePresence mode="popLayout">
-              {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
-              ))}
-            </AnimatePresence>
+            {disableMotion ? (
+              messages.map((m) => <MessageBubble key={m.id} message={m} disableMotion={true} />)
+            ) : (
+              <AnimatePresence mode="popLayout">
+                {messages.map((m) => (
+                  <MessageBubble key={m.id} message={m} disableMotion={false} />
+                ))}
+              </AnimatePresence>
+            )}
 
             {isGenerating && messages[messages.length - 1]?.content === '' && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3 mb-4">
+              <div className="flex gap-3 mb-4">
                 <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
                 </div>
                 <div className="text-sm text-muted-foreground pt-0.5">正在生成...</div>
-              </motion.div>
+              </div>
             )}
 
-            {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
-                {error}
-              </div>
+            {Boolean(error) && (
+              <ErrorNotice
+                error={error}
+                title="生成失败"
+                onRetry={hasResumableStream && !isGenerating ? resumeActiveStream : undefined}
+                onClose={clearError}
+              />
             )}
           </div>
         </div>
+
+        {!isNearBottom && messages.length > 0 && (
+          <Button
+            type="button"
+            size="icon"
+            variant="secondary"
+            className="absolute right-4 bottom-28 z-20 h-10 w-10 rounded-full shadow"
+            onClick={scrollToBottom}
+            aria-label="回到底部"
+          >
+            <ChevronDown className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
       {/* ── Draggable divider ── */}
@@ -159,4 +189,3 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
     </div>
   )
 }
-

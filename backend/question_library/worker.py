@@ -4,10 +4,13 @@ import asyncio
 import os
 
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.database.repositories.question_cache import get_question_cache
 from backend.database.repositories.question_library import list_unscored_question_ids
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
+
+logger = get_logger(__name__)
 
 
 def _env_truthy(name: str, *, default: bool = False) -> bool:
@@ -71,7 +74,7 @@ async def run_question_library_scoring_worker(*, stop: asyncio.Event) -> None:
                 limit=batch,
             )
         except Exception:
-            pass
+            logger.exception("question_library_worker_score_failed")
         try:
             await asyncio.wait_for(stop.wait(), timeout=max(1.0, interval_s))
         except asyncio.TimeoutError:

@@ -18,4 +18,3 @@ class TestZujuanParsingPatterns(unittest.TestCase):
         m = FORMULA_IMG_TAG_PATTERN.search(html)
         self.assertIsNotNone(m)
         self.assertEqual(m.group("hash"), "37ab7408ffcefcb8e5e1ad4a9c58f1b1")
-

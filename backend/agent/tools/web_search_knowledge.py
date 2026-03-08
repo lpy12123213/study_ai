@@ -6,11 +6,11 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from backend.agent.types import CompressedContext
 from backend.agent.tools.deep_research import deep_research_exa
 from backend.agent.tools.text_utils import _clip_text, _postprocess_web_search_result
+from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
 from backend.core.logging_utils import get_logger
 
@@ -45,7 +45,11 @@ class WebSearchKnowledgeToolsMixin:
         # Study preset helps SubAgent choose better sub-questions and prompt style.
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-        preset = str(args.get("preset") or study_opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or "").strip().lower()
+        preset = (
+            str(args.get("preset") or study_opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or "")
+            .strip()
+            .lower()
+        )
         if preset not in {"quick", "standard", "deep", "research"}:
             preset = ""
 
@@ -149,14 +153,14 @@ class WebSearchKnowledgeToolsMixin:
 
             # Allow overriding the "thinking" model separately (some providers expose a thinking variant).
             thinking_model = str(
-                os.getenv("STUDY_MATERIALS_THINKING_MODEL")
-                or self.config.planner_model
-                or self.config.summarizer_model
+                os.getenv("STUDY_MATERIALS_THINKING_MODEL") or self.config.planner_model or self.config.summarizer_model
             ).strip()
 
             sub_n = _clamp_int(
                 args.get("sub_questions"),
-                default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=25),
+                default=_clamp_int(
+                    os.getenv("STUDY_MATERIALS_WEB_SUBQUERIES") or 4, default=4, min_value=2, max_value=25
+                ),
                 min_value=2,
                 max_value=25,
             )
@@ -191,7 +195,9 @@ class WebSearchKnowledgeToolsMixin:
                     "尽量包含：等价表述/充分必要条件、边界情况/反例、不适用条件、与相近概念的区别（若适用）。"
                     if preset in {"deep", "research"}
                     else "（可选）如存在等价表述/边界情况/反例，也可作为子问题的一部分。",
-                    "尽量包含：推导/证明思路的“骨架”（若适用）。" if preset in {"deep", "research"} else "（可选）需要时可补充推导/证明思路。",
+                    "尽量包含：推导/证明思路的“骨架”（若适用）。"
+                    if preset in {"deep", "research"}
+                    else "（可选）需要时可补充推导/证明思路。",
                     "子问题要足够具体，避免泛泛而谈；每个子问题尽量能检索到不同角度的资料。",
                     "只输出严格 JSON，不要输出任何解释性文字。",
                 ],
@@ -205,8 +211,7 @@ class WebSearchKnowledgeToolsMixin:
                         {
                             "role": "system",
                             "content": (
-                                "你是严谨的知识探索助手（面向自学资料）。"
-                                "请先在心里思考如何拆分问题，再只输出 JSON。"
+                                "你是严谨的知识探索助手（面向自学资料）。请先在心里思考如何拆分问题，再只输出 JSON。"
                             ),
                         },
                         {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
@@ -294,7 +299,7 @@ class WebSearchKnowledgeToolsMixin:
                 try:
                     cache.pop(key, None)
                 except Exception:
-                    pass
+                    logger.debug("web_search_cache_evict_failed", extra={"key": key}, exc_info=True)
                 return None
             value = entry.get("value")
             return dict(value) if isinstance(value, dict) else None
@@ -363,7 +368,7 @@ class WebSearchKnowledgeToolsMixin:
             # 0) Exa Search (direct results). deepresearch => multi-round Exa search inspired by open-deep-research.
             if search_mode != "metaso":
                 try:
-                    from backend.mcp.exa_web_search import exa_search, EXA_API_KEY
+                    from backend.mcp.exa_web_search import EXA_API_KEY, exa_search
 
                     if not EXA_API_KEY:
                         if force_search_mode:
@@ -406,7 +411,9 @@ class WebSearchKnowledgeToolsMixin:
                                 elif str(prev.get("knowledge_point") or "").strip() == point:
                                     prev_item = prev
 
-                            prev_queries = prev_item.get("queries") if isinstance(prev_item.get("queries"), list) else []
+                            prev_queries = (
+                                prev_item.get("queries") if isinstance(prev_item.get("queries"), list) else []
+                            )
                             prev_summary = str(prev_item.get("summary") or "").strip()
 
                             thinking_model = str(
@@ -431,7 +438,8 @@ class WebSearchKnowledgeToolsMixin:
                                 keep_sources=keep_sources,
                                 breadth=args.get("deep_breadth") or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_BREADTH"),
                                 depth=args.get("deep_depth") or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_DEPTH"),
-                                max_queries=args.get("max_queries") or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_MAX_QUERIES"),
+                                max_queries=args.get("max_queries")
+                                or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_MAX_QUERIES"),
                                 per_query_results=args.get("per_query_results")
                                 or os.getenv("STUDY_MATERIALS_DEEPRESEARCH_PER_QUERY_RESULTS"),
                                 concurrency=args.get("deep_concurrency")
@@ -502,7 +510,12 @@ class WebSearchKnowledgeToolsMixin:
                         # Ask Exa for each sub-question
                         sub_conc = _clamp_int(
                             args.get("sub_concurrency"),
-                            default=_clamp_int(os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2, default=2, min_value=1, max_value=4),
+                            default=_clamp_int(
+                                os.getenv("STUDY_MATERIALS_WEB_SUBQUERY_CONCURRENCY") or 2,
+                                default=2,
+                                min_value=1,
+                                max_value=4,
+                            ),
                             min_value=1,
                             max_value=4,
                         )
@@ -570,7 +583,7 @@ class WebSearchKnowledgeToolsMixin:
                             seen_urls.add(key)
                             deduped.append(r)
                             if len(deduped) >= keep_sources:
-                                 break
+                                break
 
                         summary_value = "\n\n".join(summary_parts).strip() if include_summary else ""
 
@@ -633,7 +646,9 @@ class WebSearchKnowledgeToolsMixin:
 
             metaso: Dict[str, Any] = {}
             if not disable_metaso:
-                metaso_mode = str(args.get("metaso_mode") or os.getenv("STUDY_MATERIALS_METASO_MODE") or "ask").strip().lower()
+                metaso_mode = (
+                    str(args.get("metaso_mode") or os.getenv("STUDY_MATERIALS_METASO_MODE") or "ask").strip().lower()
+                )
                 if metaso_mode not in {"ask", "search"}:
                     metaso_mode = "ask"
 
@@ -749,7 +764,7 @@ class WebSearchKnowledgeToolsMixin:
                             # Keep each block compact; downstream will still do its own LLM writing.
                             summary_parts.append(f"【{sub_q}】\n{_clip_text(ans, max_chars=900)}")
 
-                        for r in (res.get("results") or []):
+                        for r in res.get("results") or []:
                             if not isinstance(r, dict):
                                 continue
                             cleaned_results.append(_postprocess_web_search_result(r))
@@ -791,7 +806,7 @@ class WebSearchKnowledgeToolsMixin:
 
                 if isinstance(metaso, dict) and metaso.get("success"):
                     cleaned_results: List[Dict[str, Any]] = []
-                    for r in (metaso.get("results") or []):
+                    for r in metaso.get("results") or []:
                         if not isinstance(r, dict):
                             continue
                         cleaned_results.append(_postprocess_web_search_result(r))
@@ -818,7 +833,7 @@ class WebSearchKnowledgeToolsMixin:
                 zhipu = await web_search_with_bigmodel_mcp(query=query, limit=limit)
                 if isinstance(zhipu, dict) and zhipu.get("success") and zhipu.get("results"):
                     cleaned_results: List[Dict[str, Any]] = []
-                    for r in (zhipu.get("results") or []):
+                    for r in zhipu.get("results") or []:
                         if not isinstance(r, dict):
                             continue
                         cleaned_results.append(_postprocess_web_search_result(r))
@@ -898,7 +913,7 @@ class WebSearchKnowledgeToolsMixin:
             try:
                 _cache_put(key, res)
             except Exception:
-                pass
+                logger.debug("web_search_cache_put_failed", extra={"key": key}, exc_info=True)
             return res
 
         concurrency = int(args.get("concurrency") or 3)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _as_str(value: Any) -> str:
@@ -163,13 +163,11 @@ def render_svg_diagram(spec: Dict[str, Any]) -> str:
 
     # Background
     if background:
-        elems.append(
-            f'<rect x="0" y="0" width="{width}" height="{height}" fill="{_safe_text(background)}" />'
-        )
+        elems.append(f'<rect x="0" y="0" width="{width}" height="{height}" fill="{_safe_text(background)}" />')
 
     # Clip region (so extended lines don't overflow)
     elems.append(
-        f'<defs><clipPath id="clip"><rect x="{padding}" y="{padding}" width="{width - 2*padding}" height="{height - 2*padding}" /></clipPath></defs>'
+        f'<defs><clipPath id="clip"><rect x="{padding}" y="{padding}" width="{width - 2 * padding}" height="{height - 2 * padding}" /></clipPath></defs>'
     )
 
     # Main drawing group
@@ -318,7 +316,7 @@ def render_svg_diagram(spec: Dict[str, Any]) -> str:
 
     # Optional arrow marker (defined even if unused to keep rendering stable).
     defs = (
-        '<defs>'
+        "<defs>"
         '<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">'
         f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{_safe_text(stroke)}" />'
         "</marker>"
@@ -332,4 +330,3 @@ def render_svg_diagram(spec: Dict[str, Any]) -> str:
         + "</svg>"
     )
     return svg
-

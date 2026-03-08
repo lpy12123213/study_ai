@@ -220,14 +220,18 @@ async def export_to_basket(
                 try:
                     requested_ids.append(int(qid))
                 except Exception:
-                    pass
+                    logger.debug("zujuan_invalid_question_id", extra={"question_id": str(qid)}, exc_info=True)
             requested_set = set(requested_ids)
             returned_set = set()
             for question in questions:
                 try:
                     returned_set.add(int(question.get("questionId")))
                 except Exception:
-                    pass
+                    logger.debug(
+                        "zujuan_invalid_question_detail_id",
+                        extra={"question_id": str(question.get("questionId") or "")},
+                        exc_info=True,
+                    )
 
             hit_ids = sorted(requested_set.intersection(returned_set))
             if question_ids and not hit_ids:
@@ -301,7 +305,7 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
                     page.wait_for_function("document.cookie.includes('userId=')", timeout=300000)
                     logger.info("login detected (zujuan)")
                 except Exception:
-                    pass
+                    logger.debug("zujuan_login_cookie_wait_failed", exc_info=True)
 
                 cookies = browser.cookies()
                 user_id = None
@@ -351,7 +355,9 @@ async def login_via_subprocess(crawler: Any) -> Dict[str, Any]:
             if os.path.exists(bat_path):
                 subprocess.Popen([bat_path, crawler.subject], creationflags=subprocess.CREATE_NEW_CONSOLE)
             else:
-                subprocess.Popen([sys.executable, py_path, "--subject", crawler.subject], creationflags=subprocess.CREATE_NEW_CONSOLE)
+                subprocess.Popen(
+                    [sys.executable, py_path, "--subject", crawler.subject], creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
         else:
             subprocess.Popen([sys.executable, py_path, "--subject", crawler.subject])
 

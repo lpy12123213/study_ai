@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
+from backend.core.logging_utils import get_logger
 from backend.crawler_manager import get_crawler
 from backend.database.models import (
     add_questions_to_paper,
@@ -21,6 +22,8 @@ from backend.database.models import (
 )
 from backend.paper_compose.slot_selection import select_slot_with_relax
 from backend.subjects import resolve_subject
+
+logger = get_logger(__name__)
 
 
 def _now_iso() -> str:
@@ -154,8 +157,8 @@ def _extract_json_obj(text: str) -> Dict[str, Any]:
         return {}
 
 
-async def _load_used_question_ids(*, subject: str, limit: int = 20000) -> set[str]:
-    ids = await list_used_question_ids(limit=limit, subject=str(subject or "").strip() or None)
+async def _load_used_question_ids(*, user_id: str, subject: str, limit: int = 20000) -> set[str]:
+    ids = await list_used_question_ids(limit=limit, subject=str(subject or "").strip() or None, user_id=user_id)
     return {str(x).strip() for x in (ids or []) if str(x or "").strip()}
 
 
@@ -206,7 +209,12 @@ async def compose_paper_events(
 
         existing_paper = await get_paper(user_id=user_id, paper_id=existing_paper_id)
         if not existing_paper:
-            yield {"type": "error", "error": "paper_not_found", "taskId": task_id, "data": {"paperId": existing_paper_id}}
+            yield {
+                "type": "error",
+                "error": "paper_not_found",
+                "taskId": task_id,
+                "data": {"paperId": existing_paper_id},
+            }
             return
 
         paper_name = str(existing_paper.get("paper_name") or paper_name).strip() or paper_name
@@ -246,7 +254,9 @@ async def compose_paper_events(
     min_quality_score = int(options.get("minQualityScore") or 60)
     dedup_by_stem = bool(options.get("dedupByStem") if "dedupByStem" in options else True)
     avoid_used = bool(options.get("avoidUsed") if "avoidUsed" in options else True)
-    strict_slot_count = _truthy(options.get("strictSlotCount") if "strictSlotCount" in options else options.get("strict_slot_count"))
+    strict_slot_count = _truthy(
+        options.get("strictSlotCount") if "strictSlotCount" in options else options.get("strict_slot_count")
+    )
 
     slot_concurrency = int(
         options.get("slotConcurrency")
@@ -325,9 +335,9 @@ async def compose_paper_events(
             },
         }
         try:
-            used_ids.update(await _load_used_question_ids(subject=subject))
+            used_ids.update(await _load_used_question_ids(user_id=user_id, subject=subject))
         except Exception:
-            pass
+            logger.exception("load_used_question_ids_failed", extra={"task_id": task_id, "subject": subject})
         yield {
             "type": "step",
             "step": {
@@ -529,7 +539,11 @@ async def compose_paper_events(
                     if int(cached.get("quality_score") or 0) > int(q.get("quality_score") or 0):
                         q["quality_score"] = int(cached.get("quality_score") or 0)
                 except Exception:
-                    pass
+                    logger.debug(
+                        "paper_compose_quality_score_merge_failed",
+                        extra={"task_id": task_id, "question_id": q.get("question_id")},
+                        exc_info=True,
+                    )
 
                 if cached.get("quality_flags") and not q.get("quality_flags"):
                     try:
@@ -783,9 +797,7 @@ async def compose_paper_events(
                 obj = _extract_json_obj(text)
                 decisions_raw = obj.get("decisions") if isinstance(obj, dict) else None
                 decisions = (
-                    [x for x in (decisions_raw or []) if isinstance(x, dict)]
-                    if isinstance(decisions_raw, list)
-                    else []
+                    [x for x in (decisions_raw or []) if isinstance(x, dict)] if isinstance(decisions_raw, list) else []
                 )
 
                 decision_by_id: Dict[str, Dict[str, Any]] = {}
@@ -989,7 +1001,7 @@ async def compose_paper_events(
             },
         }
     except Exception:
-        pass
+        logger.debug("paper_compose_balance_step_failed", extra={"task_id": task_id}, exc_info=True)
 
     if strict_slot_count and slot_shortfalls:
         yield {
@@ -1009,8 +1021,7 @@ async def compose_paper_events(
         if "fetchDetails" in options
         else options.get("fetch_details")
         if "fetch_details" in options
-        else os.getenv("PAPER_COMPOSE_FETCH_DETAILS")
-        or "1"
+        else os.getenv("PAPER_COMPOSE_FETCH_DETAILS") or "1"
     )
 
     if fetch_details and selected_questions:
@@ -1093,7 +1104,7 @@ async def compose_paper_events(
             if cache_updates:
                 await upsert_question_cache(cache_updates)
         except Exception:
-            pass
+            logger.exception("paper_compose_question_cache_upsert_failed", extra={"task_id": task_id})
 
         yield {
             "type": "step",
@@ -1168,9 +1179,10 @@ async def compose_paper_events(
         await mark_used_questions(
             question_ids=[q.get("question_id") for q in q_dicts if isinstance(q, dict)],
             subject=subject,
+            user_id=user_id,
         )
     except Exception:
-        pass
+        logger.exception("mark_used_questions_failed", extra={"task_id": task_id, "paper_id": paper_id})
     paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         yield {"type": "error", "error": "paper_save_failed", "taskId": task_id}

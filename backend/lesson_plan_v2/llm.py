@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 import uuid
@@ -17,12 +16,11 @@ from backend.core.llm_client import (
 )
 from backend.core.settings import (
     API_TIMEOUT,
-    LLM_PROVIDER_PINNED,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_MAX_TOKENS,
     LESSON_PLAN_PROVIDER,
-    LESSON_PLAN_TEMPERATURE,
+    LLM_PROVIDER_PINNED,
     MOONSHOT_API_KEY,
     MOONSHOT_BASE_URL,
 )

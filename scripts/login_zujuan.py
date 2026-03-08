@@ -3,6 +3,7 @@
 运行此脚本会打开浏览器，让你手动登录组卷网。
 登录成功后，会话会被保存，之后可以直接使用导出功能。
 """
+
 import os
 import sys
 from pathlib import Path
@@ -15,18 +16,22 @@ sys.path.insert(0, str(PROJECT_ROOT))
 def check_playwright():
     """检查 playwright 是否安装"""
     try:
-        import playwright
-        return True
+        import importlib.util
+
+        if importlib.util.find_spec("playwright") is not None:
+            return True
     except ImportError:
-        print("=" * 50)
-        print("错误: 未安装 playwright")
-        print("=" * 50)
-        print()
-        print("请运行以下命令安装:")
-        print(f"  {sys.executable} -m pip install playwright")
-        print(f"  {sys.executable} -m playwright install chromium")
-        print()
-        return False
+        pass
+
+    print("=" * 50)
+    print("错误: 未安装 playwright")
+    print("=" * 50)
+    print()
+    print("请运行以下命令安装:")
+    print(f"  {sys.executable} -m pip install playwright")
+    print(f"  {sys.executable} -m playwright install chromium")
+    print()
+    return False
 
 
 def main():
@@ -76,7 +81,7 @@ def main():
             try:
                 page.wait_for_function(
                     "document.cookie.includes('userId=')",
-                    timeout=300000  # 5分钟超时
+                    timeout=300000,  # 5分钟超时
                 )
                 print("检测到登录成功！")
             except Exception as e:
@@ -86,8 +91,8 @@ def main():
             cookies = browser.cookies()
             user_id = None
             for c in cookies:
-                if c['name'] == 'userId':
-                    user_id = c['value']
+                if c["name"] == "userId":
+                    user_id = c["value"]
                     break
 
             browser.close()
@@ -109,6 +114,7 @@ def main():
     except Exception as e:
         print(f"\n错误: {e}")
         import traceback
+
         traceback.print_exc()
 
     input("\n按 Enter 键退出...")

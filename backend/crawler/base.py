@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import httpx
 
 
 @dataclass
 class CrawlerConfig:
     """Configuration for a crawler."""
+
     base_url: str
     timeout: float = 30.0
     max_retries: int = 3
@@ -21,6 +23,7 @@ class CrawlerConfig:
 @dataclass
 class SearchResult:
     """A single search result."""
+
     id: str
     title: str
     content: str
@@ -31,6 +34,7 @@ class SearchResult:
 @dataclass
 class QuestionData:
     """Parsed question data."""
+
     id: str
     stem: str
     answer: Optional[str] = None

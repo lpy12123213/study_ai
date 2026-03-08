@@ -5,17 +5,14 @@ Split out of `backend/mcp/stdio_server.py` to keep the stdio entrypoint small an
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Sequence
 
 from mcp.types import TextContent
 
 from backend.agent.memory import MemoryStore
 from backend.core.settings import (
-    DEFAULT_SUBJECT,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_MODEL,
     MOONSHOT_API_KEY,
@@ -23,7 +20,6 @@ from backend.core.settings import (
 )
 from backend.crawler.zujuan_crawler import ZujuanCrawler
 from backend.mcp.bigmodel_web_search import web_search_with_bigmodel_mcp
-from backend.mcp.diagnostics import diagnose_export
 from backend.mcp.reviewer import review_questions_with_openrouter
 from backend.mcp.stdio_llm import call_llm_text, extract_json_obj, pick_questions
 from backend.mcp.sub_ai_selector import select_best_question
@@ -41,6 +37,7 @@ from backend.subjects import (
 
 async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[TextContent]:
     """处理工具调用"""
+
     async def ensure_crawler_initialized() -> None:
         if server.crawler is None:
             server.crawler = ZujuanCrawler(subject=server.current_subject)
@@ -82,7 +79,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 edu_level=edu_level,
                 limit=arguments.get("limit", 10),
                 difficulty=difficulty,
-                question_type=arguments.get("question_type", ""),       
+                question_type=arguments.get("question_type", ""),
                 learn_grade=arguments.get("learn_grade", ""),
                 learn_grade_id=arguments.get("learn_grade_id", 0),
                 textbook_version=arguments.get("textbook_version", ""),
@@ -90,11 +87,11 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 year=arguments.get("year", 0),
                 province=arguments.get("province", ""),
                 province_id=arguments.get("province_id", -1),
-                paper_type_id=arguments.get("paper_type_id", 0),        
+                paper_type_id=arguments.get("paper_type_id", 0),
                 term=arguments.get("term", 0),
                 order_by=arguments.get("order_by", 2),
-                source_contains=arguments.get("source_contains", ""),   
-                stem_contains=arguments.get("stem_contains", ""),       
+                source_contains=arguments.get("source_contains", ""),
+                stem_contains=arguments.get("stem_contains", ""),
                 knowledge_contains=arguments.get("knowledge_contains", ""),
                 exclude_elective=bool(arguments.get("exclude_elective", False)),
                 elective_mode=arguments.get("elective_mode", ""),
@@ -149,7 +146,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 edu_level=edu_level,
                 limit=arguments.get("limit", 10),
                 difficulty=difficulty,
-                question_type=arguments.get("question_type", ""),       
+                question_type=arguments.get("question_type", ""),
                 learn_grade=arguments.get("learn_grade", ""),
                 learn_grade_id=arguments.get("learn_grade_id", 0),
                 textbook_version=arguments.get("textbook_version", ""),
@@ -157,11 +154,11 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 year=arguments.get("year", 0),
                 province=arguments.get("province", ""),
                 province_id=arguments.get("province_id", -1),
-                paper_type_id=arguments.get("paper_type_id", 0),        
+                paper_type_id=arguments.get("paper_type_id", 0),
                 term=arguments.get("term", 0),
                 order_by=arguments.get("order_by", 2),
-                source_contains=arguments.get("source_contains", ""),   
-                stem_contains=arguments.get("stem_contains", ""),       
+                source_contains=arguments.get("source_contains", ""),
+                stem_contains=arguments.get("stem_contains", ""),
                 knowledge_contains=arguments.get("knowledge_contains", ""),
                 exclude_elective=bool(arguments.get("exclude_elective", False)),
                 elective_mode=arguments.get("elective_mode", ""),
@@ -192,9 +189,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
 
         elif name == "get_question_info":
             await ensure_crawler_initialized()
-            result = await server.crawler.get_question_info(
-                question_id=arguments["question_id"]
-            )
+            result = await server.crawler.get_question_info(question_id=arguments["question_id"])
 
         elif name == "create_paper":
             from backend.database.models import save_paper
@@ -231,10 +226,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 result = {"success": False, "error": "无法获取候选题目详情"}
             else:
                 # 调用子AI选择最佳题目
-                result = await select_best_question(
-                    questions=questions,
-                    requirement=requirement
-                )
+                result = await select_best_question(questions=questions, requirement=requirement)
 
                 # 添加说明信息
                 if result.get("success"):
@@ -280,7 +272,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             result = await server.crawler.export_to_basket(
                 question_ids=question_ids,
                 question_details=question_details,
-                auto_login=False  # MCP环境不支持GUI弹窗
+                auto_login=False,  # MCP环境不支持GUI弹窗
             )
 
             # 如果 cookie 过期，显示友好提示
@@ -295,10 +287,10 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 result["login_window"] = login_result
                 result["login_instructions"] = [
                     "首次使用需要登录组卷网：",
-                    f"1. 双击运行 scripts/登录组卷网.bat \"{server.current_subject}\"",
+                    f'1. 双击运行 scripts/登录组卷网.bat "{server.current_subject}"',
                     "2. 在弹出的浏览器中登录",
                     "3. 登录成功后按回车保存",
-                    "4. 重新调用此工具导出题目"
+                    "4. 重新调用此工具导出题目",
                 ]
 
             # 如果成功，添加额外提示
@@ -306,7 +298,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 result["next_steps"] = [
                     "1. 打开组卷网题篮页面: https://zujuan.xkw.com/basket/",
                     "2. 检查题目是否已添加",
-                    "3. 点击'生成试卷'按钮完成组卷"
+                    "3. 点击'生成试卷'按钮完成组卷",
                 ]
 
         elif name == "review_paper":
@@ -409,7 +401,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 "current_subject": server.current_subject,
                 "subjects": subjects,
                 "count": len(subjects),
-                "edu_levels": ["小学", "初中", "高中"]
+                "edu_levels": ["小学", "初中", "高中"],
             }
 
         elif name == "set_subject":
@@ -431,7 +423,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                         "success": False,
                         "error": f"未找到学科: {subject}",
                         "available_subjects": list(SUBJECTS.keys()),
-                        "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文"
+                        "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
                     }
                     return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
 
@@ -446,18 +438,18 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 "message": f"已切换到 {subject}",
                 "current_subject": subject,
                 "bank_id": config["bank_id"],
-                "edu_id": config["edu_id"]
+                "edu_id": config["edu_id"],
             }
 
         elif name == "get_current_subject":
             # 获取当前学科
-            config = get_subject_config(server.current_subject)     
+            config = get_subject_config(server.current_subject)
             result = {
                 "success": True,
                 "current_subject": server.current_subject,
-                "short_name": config.get("short_name", ""),       
+                "short_name": config.get("short_name", ""),
                 "bank_id": config["bank_id"],
-                "edu_id": config["edu_id"]
+                "edu_id": config["edu_id"],
             }
 
         elif name == "get_available_filters":
@@ -733,7 +725,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                 result = {"success": True, "markdown": "（未配置模型，无法生成解答。）", "source": "fallback"}
             else:
-                prompt = f"""请为下面题目写出详细分步解答（Markdown）。\n\n要求：\n- 每一步说明在做什么\n- 如果题干信息不足，请说明需要补充什么\n\n学科：{subject_input or server.current_subject}\n知识点：{topic or '（未指定）'}\n\n题目：\n{stem}\n"""
+                prompt = f"""请为下面题目写出详细分步解答（Markdown）。\n\n要求：\n- 每一步说明在做什么\n- 如果题干信息不足，请说明需要补充什么\n\n学科：{subject_input or server.current_subject}\n知识点：{topic or "（未指定）"}\n\n题目：\n{stem}\n"""
                 text = await call_llm_text(
                     messages=[
                         {"role": "system", "content": "你是严谨的解题老师，输出必须是Markdown。"},
@@ -814,9 +806,9 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 result = {"success": True, "summary": (text or "").strip(), "source": "llm"}
 
         elif name == "web_search":
-            query = (arguments.get("query") or "").strip()        
+            query = (arguments.get("query") or "").strip()
             limit = arguments.get("limit", 5)
-            model = (arguments.get("model") or "").strip()        
+            model = (arguments.get("model") or "").strip()
             result = await web_search_with_bigmodel_mcp(
                 query=query,
                 limit=limit,
@@ -845,9 +837,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
 
         elif name == "diagnose_export":
             # 诊断导出功能
-            result = await server._diagnose_export(
-                test_question_id=arguments.get("test_question_id", "70287")
-            )
+            result = await server._diagnose_export(test_question_id=arguments.get("test_question_id", "70287"))
 
         else:
             result = {"error": f"未知工具: {name}"}
@@ -866,4 +856,3 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 text=json.dumps({"error": str(e), "tool": name}, ensure_ascii=False),
             )
         ]
-

@@ -23,7 +23,6 @@ SUBJECTS: Dict[str, Dict[str, Any]] = {
     "初中物理": {"bank_id": 4, "edu_id": 2, "category_id": "18194", "short_name": "物理"},
     "初中化学": {"bank_id": 5, "edu_id": 2, "category_id": "19366", "short_name": "化学"},
     "初中生物": {"bank_id": 6, "edu_id": 2, "category_id": "19922", "short_name": "生物"},
-
     # 高中
     "高中语文": {"bank_id": 10, "edu_id": 3, "category_id": "23177", "short_name": "语文"},
     "高中数学": {"bank_id": 11, "edu_id": 3, "category_id": "27925", "short_name": "数学"},

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Dict
 from dataclasses import dataclass
-from dotenv import load_dotenv
+from typing import Dict, Optional
 
-load_dotenv(override=False)
+from backend.core.settings import load_project_dotenv
+
+load_project_dotenv(override=False)
 
 
 @dataclass
 class CrawlerCredentials:
     """Credentials for a crawler."""
+
     username: Optional[str] = None
     password: Optional[str] = None
     api_key: Optional[str] = None
@@ -33,7 +35,7 @@ def _parse_cookies(cookie_string: Optional[str]) -> Optional[Dict[str, str]]:
     """Parse a cookie string into a dictionary."""
     if not cookie_string:
         return None
-    
+
     cookies = {}
     for item in cookie_string.split(";"):
         item = item.strip()

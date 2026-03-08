@@ -60,4 +60,3 @@ class TestQuestionLibraryWorkerOnce(unittest.IsolatedAsyncioTestCase):
 
         hidden_list = await lib_repo.list_question_library_items(user_id="u1", subject="高中数学", hidden="1", limit=10)
         self.assertEqual(len(hidden_list["items"]), 1)
-

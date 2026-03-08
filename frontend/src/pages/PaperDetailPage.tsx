@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate, useParams, Link } from 'react-router-dom'
 import {
   ArrowLeft,
   ExternalLink,
@@ -8,19 +8,29 @@ import {
   Loader2,
   Printer,
   BarChart3,
-  Download
+  Download,
+  Share2,
+  MessageSquarePlus,
+  BookmarkPlus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { resolveApiResourceUrl } from '@/api/client'
+import { downloadObjectUrl } from '@/api/client'
 import { usePaper, usePaperDownloadLink, usePaperExport } from '@/hooks/usePapers'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
+import { ShareLinkDialog } from '@/components/shared/ShareLinkDialog'
+import { AnnotationDialog } from '@/components/shared/AnnotationDialog'
+import { useToastStore } from '@/stores/useToastStore'
+import * as tasksApi from '@/api/tasks'
+import * as wrongbookApi from '@/api/wrongbook'
 
 export default function PaperDetailPage() {
   const { paperId } = useParams<{ paperId: string }>()
+  const location = useLocation()
+  const navigate = useNavigate()
   const { data: paperBase, isLoading, error } = usePaper(paperId)
   const {
     data: paperWithAnalysis,
@@ -35,6 +45,21 @@ export default function PaperDetailPage() {
   } = usePaperDownloadLink()
   const { mutateAsync: exportPaper, isPending: isExporting } = usePaperExport()
   const paper = paperWithAnalysis || paperBase
+  const pushToast = useToastStore((s) => s.pushToast)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [annotateOpen, setAnnotateOpen] = useState(false)
+  const [annotateAnchor, setAnnotateAnchor] = useState<string>('')
+  const [annotateSnippet, setAnnotateSnippet] = useState<string>('')
+
+  useEffect(() => {
+    const anchor = String(location.hash || '').replace(/^#/, '').trim()
+    if (!anchor) return
+    if (!paper) return
+    window.setTimeout(() => {
+      const el = document.getElementById(anchor)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+  }, [location.hash, paper])
 
   const handlePrint = () => {
     window.print()
@@ -43,25 +68,69 @@ export default function PaperDetailPage() {
   const handleExport = async (format: 'markdown' | 'pdf') => {
     if (!paperId) return
     try {
+      const { taskId } = await tasksApi.exportPaperTask(paperId, {
+        format,
+        includeStem: true,
+        includeAnswer: false,
+        includeAnalysis: false,
+      })
+      if (taskId) {
+        pushToast({
+          id: `export-${taskId}`,
+          title: '已加入导出队列',
+          taskId,
+          status: 'running',
+        })
+        navigate('/exports')
+        return
+      }
+
+      // Fallback: legacy export (should be rare).
       const res = await exportPaper({
         id: paperId,
-        req: {
-          format,
-          includeStem: true,
-          includeAnswer: false,
-          includeAnalysis: false,
-        },
+        req: { format, includeStem: true, includeAnswer: false, includeAnalysis: false },
       })
-
       const url = res.url || res.pdfUrl || res.texUrl
-      if (res.success && url) {
-        window.open(resolveApiResourceUrl(url), '_blank', 'noopener,noreferrer')
-      } else if (res.texUrl) {
-        // If PDF compilation failed, still offer the TeX file as a fallback.
-        window.open(resolveApiResourceUrl(res.texUrl), '_blank', 'noopener,noreferrer')
+      if (url) {
+        const { objectUrl, revoke } = await downloadObjectUrl(url)
+        const win = window.open(objectUrl, '_blank', 'noopener,noreferrer')
+        if (!win) {
+          const a = document.createElement('a')
+          a.href = objectUrl
+          a.download = ''
+          a.click()
+        }
+        window.setTimeout(revoke, 60_000)
       }
     } catch {
       // Ignore: UI already shows export state; user can retry.
+    }
+  }
+
+  const openAnnotate = (questionId: string, snippet: string) => {
+    setAnnotateAnchor(`question-${questionId}`)
+    setAnnotateSnippet(snippet)
+    setAnnotateOpen(true)
+  }
+
+  const addToWrongbook = async (question: any) => {
+    const qid = String(question?.questionId || question?.question_id || '').trim()
+    if (!qid) return
+    try {
+      await wrongbookApi.upsertWrongQuestion({
+        question_id: qid,
+        subject: String(paper?.subject || '').trim(),
+        knowledge_point: String(question?.knowledgePoint || question?.knowledge_point || '').trim(),
+        mastery: 0,
+        note: '',
+        source_ref: {
+          type: 'paper',
+          paper_id: Number(paper?.id || paperId || 0) || undefined,
+        },
+      })
+      pushToast({ id: `wrongbook-${qid}`, title: '已加入错题本' })
+    } catch (e) {
+      pushToast({ id: `wrongbook-failed-${qid}`, title: '加入错题本失败' })
     }
   }
 
@@ -114,6 +183,10 @@ export default function PaperDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShareOpen(true)} disabled={!paperId}>
+            <Share2 className="h-4 w-4 mr-2" />
+            分享
+          </Button>
           <Button variant="outline" size="sm" onClick={handlePrint}>
             <Printer className="h-4 w-4 mr-2" />
             打印
@@ -250,7 +323,12 @@ export default function PaperDetailPage() {
                   {questions.map((question, index) => (
                     <div
                       key={`${question.questionId}-${index}`}
-                      className="group relative pl-6 py-2"
+                      id={`question-${String(question.questionId)}`}
+                      className={cn(
+                        'group relative pl-6 py-2 rounded-lg',
+                        String(location.hash || '').replace(/^#/, '') === `question-${String(question.questionId)}` &&
+                          'ring-2 ring-primary/20 ring-offset-2 ring-offset-background'
+                      )}
                     >
                       <div className="absolute left-[-5px] top-5 h-2.5 w-2.5 rounded-full border-2 border-background bg-muted-foreground/30 group-hover:bg-primary transition-colors" />
 
@@ -274,20 +352,45 @@ export default function PaperDetailPage() {
                             </div>
                           </div>
 
-                          {question.sourceUrl ? (
-                            <Button variant="ghost" size="sm" asChild className="h-8">
-                              <a
-                                href={question.sourceUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                                原题
-                              </a>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8"
+                              onClick={() => addToWrongbook(question)}
+                              aria-label="加入错题本"
+                            >
+                              <BookmarkPlus className="h-3.5 w-3.5 mr-1.5" />
+                              错题本
                             </Button>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground/50 select-none">无链接</span>
-                          )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8"
+                              onClick={() =>
+                                openAnnotate(
+                                  String(question.questionId),
+                                  `题目 #${String(question.questionId)} ${String(question.knowledgePoint || '')}`.trim()
+                                )
+                              }
+                              aria-label="添加批注"
+                            >
+                              <MessageSquarePlus className="h-3.5 w-3.5 mr-1.5" />
+                              批注
+                            </Button>
+                            {question.sourceUrl ? (
+                              <Button variant="ghost" size="sm" asChild className="h-8">
+                                <a href={question.sourceUrl} target="_blank" rel="noopener noreferrer">
+                                  <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                                  原题
+                                </a>
+                              </Button>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground/50 select-none">无链接</span>
+                            )}
+                          </div>
                         </div>
 
                         {!!question.stem && (
@@ -333,7 +436,7 @@ export default function PaperDetailPage() {
                           key={`${url}-${i}`}
                           href={url}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                           className="text-sm text-primary hover:underline break-all block p-2 rounded hover:bg-background transition-colors"
                         >
                           {i + 1}. {url}
@@ -351,6 +454,23 @@ export default function PaperDetailPage() {
           )}
         </div>
       </ScrollArea>
+
+      <ShareLinkDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        itemType="paper"
+        itemId={String(paperId || paper?.id || '')}
+        title={paper?.name}
+      />
+
+      <AnnotationDialog
+        open={annotateOpen}
+        onOpenChange={setAnnotateOpen}
+        itemType="paper"
+        itemId={String(paperId || paper?.id || '')}
+        anchor={annotateAnchor}
+        snippet={annotateSnippet}
+      />
     </div>
   )
 }

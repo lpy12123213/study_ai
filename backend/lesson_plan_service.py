@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
 import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from backend.api.lesson_plan_schemas import (
-    LessonPlanResponse,
     LessonPlanObjective,
+    LessonPlanResponse,
     LessonPlanSection,
-    LessonPlanGenerateRequest,
 )
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DIR = PROJECT_ROOT / ".local"
@@ -72,17 +70,14 @@ def create_lesson_plan(
     """Create a new lesson plan."""
     plan_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
-    
+
     plan = {
         "id": plan_id,
         "title": title,
         "subject": subject,
         "grade": grade,
         "topic": topic,
-        "objectives": [
-            {"description": obj, "type": "knowledge"}
-            for obj in (objectives or [])
-        ],
+        "objectives": [{"description": obj, "type": "knowledge"} for obj in (objectives or [])],
         "sections": [],
         "duration_minutes": duration_minutes,
         "status": "draft",
@@ -90,7 +85,7 @@ def create_lesson_plan(
         "created_at": now,
         "updated_at": now,
     }
-    
+
     with _lesson_plans_lock:
         _lesson_plans[plan_id] = plan
         _save_lesson_plans_to_disk(_lesson_plans)
@@ -128,7 +123,7 @@ def update_lesson_plan(
         plan = _lesson_plans.get(plan_id)
         if not plan:
             return None
-        
+
         if title is not None:
             plan["title"] = title
         if objectives is not None:
@@ -137,7 +132,7 @@ def update_lesson_plan(
             plan["sections"] = [sec.model_dump() for sec in sections]
         if status is not None:
             plan["status"] = status
-        
+
         plan["updated_at"] = datetime.utcnow().isoformat()
         _save_lesson_plans_to_disk(_lesson_plans)
         return LessonPlanResponse(**plan)
@@ -159,7 +154,7 @@ def export_lesson_plan_markdown(plan_id: str) -> Optional[str]:
         plan = _lesson_plans.get(plan_id)
         if not plan:
             return None
-    
+
     lines = [
         f"# {plan['title']}",
         "",
@@ -171,25 +166,25 @@ def export_lesson_plan_markdown(plan_id: str) -> Optional[str]:
         "## Learning Objectives",
         "",
     ]
-    
+
     for obj in plan.get("objectives", []):
         lines.append(f"- {obj.get('description', '')}")
-    
+
     lines.append("")
     lines.append("## Lesson Sections")
     lines.append("")
-    
+
     for section in plan.get("sections", []):
         lines.append(f"### {section.get('title', 'Untitled')} ({section.get('duration_minutes', 0)} min)")
         lines.append("")
         lines.append(section.get("content", ""))
         lines.append("")
-        
+
         activities = section.get("activities", [])
         if activities:
             lines.append("**Activities:**")
             for act in activities:
                 lines.append(f"- {act}")
             lines.append("")
-    
+
     return "\n".join(lines)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -12,6 +11,10 @@ from typing import Any, Dict, List
 from backend.agent.tools.text_utils import _trim_overlap
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
+
+logger = get_logger(__name__)
 
 
 def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
@@ -130,7 +133,7 @@ def _looks_truncated_latex_chunk(text: str, finish_reason: str, usage: Any, *, m
         if begins > ends:
             return True
     except Exception:
-        pass
+        logger.debug("latex_truncation_env_balance_check_failed", exc_info=True)
     raw_no_esc = re.sub(r"\\\$", "", raw)
     if raw_no_esc.count("$$") % 2 == 1:
         return True
@@ -141,7 +144,7 @@ def _looks_truncated_latex_chunk(text: str, finish_reason: str, usage: Any, *, m
         if _brace_balance(raw_sans_verbatim) != 0:
             return True
     except Exception:
-        pass
+        logger.debug("latex_truncation_brace_balance_check_failed", exc_info=True)
     tail = raw.rstrip()
     if tail and tail[-1] in {"\\", "{", "[", "(", "=", "+", "-", "$"}:
         return True
@@ -180,7 +183,7 @@ def _looks_incomplete_latex(text: str) -> bool:
         if begins > ends:
             return True
     except Exception:
-        pass
+        logger.debug("latex_truncation_env_balance_check_failed", exc_info=True)
     raw_no_esc = re.sub(r"\\\$", "", raw)
     if raw_no_esc.count("$$") % 2 == 1:
         return True
@@ -191,7 +194,7 @@ def _looks_incomplete_latex(text: str) -> bool:
         if _brace_balance(raw_sans_verbatim) != 0:
             return True
     except Exception:
-        pass
+        logger.debug("latex_truncation_brace_balance_check_failed", exc_info=True)
     tail = raw.rstrip()
     if tail and tail[-1] in {"\\", "{", "[", "(", "=", "+", "-", "$"}:
         return True
@@ -244,7 +247,7 @@ def _auto_fix_latex(text: str) -> str:
                 for name in reversed(stack[-24:]):
                     s = s.rstrip() + "\n\\end{" + name + "}"
     except Exception:
-        pass
+        logger.debug("latex_auto_fix_env_stack_failed", exc_info=True)
 
     try:
         raw_no_esc = re.sub(r"\\\$", "", s)
@@ -253,7 +256,7 @@ def _auto_fix_latex(text: str) -> str:
         if raw_no_esc.replace("$$", "").count("$") % 2 == 1:
             s = s.rstrip() + "$"
     except Exception:
-        pass
+        logger.debug("latex_auto_fix_math_delimiters_failed", exc_info=True)
 
     if suffix:
         if not s.endswith("\n"):
@@ -268,7 +271,6 @@ class LatexToolsMixin:
 
         topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
-        strict_llm = self._strict_llm(ctx, args)
         # LaTeX export is 100% LLM-dependent; fail fast even if other tools allow fallbacks.
         if not is_llm_configured():
             raise RuntimeError("llm_not_configured")
@@ -406,9 +408,13 @@ class LatexToolsMixin:
 
             body = _normalize_latex_text(_extract_latex_body(raw))
             conts = 0
-            while conts < max_continuations and body and (
-                _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens)
-                or _looks_incomplete_latex(body)
+            while (
+                conts < max_continuations
+                and body
+                and (
+                    _looks_truncated_latex_chunk(raw, finish_reason, usage, max_tokens=max_tokens)
+                    or _looks_incomplete_latex(body)
+                )
             ):
                 await self._emit_status(
                     f"输出疑似被截断，继续补全（{part_index}/{part_total}，续写 {conts + 1}/{max_continuations}）…"
@@ -640,24 +646,26 @@ class LatexToolsMixin:
         tex = _auto_fix_latex(template.replace("<BODY>", body).strip()) + "\n"
 
         await self._emit_progress(percent=96, stage="写入文件")
-        tex_bytes = tex.encode("utf-8")
-        sha = hashlib.sha256(tex_bytes).hexdigest()
-        filename = f"{sha}.tex"
-        url = f"/api/media/generated/{filename}"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-        if not out_path.exists():
-            out_path.write_bytes(tex_bytes)
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_text(
+            tex,
+            user_id=user_id,
+            ext=".tex",
+            file_type="tex",
+            mime_type="application/x-tex; charset=utf-8",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        sha = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
+        size = int(published.get("bytes") or 0)
 
         try:
             ctx.working_memory["latex_tex"] = tex
             ctx.working_memory["tex_url"] = url
             ctx.working_memory["tex_filename"] = filename
         except Exception:
-            pass
+            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         await self._emit_progress(percent=100, stage="完成")
 
@@ -665,7 +673,7 @@ class LatexToolsMixin:
             "tex_url": url,
             "filename": filename,
             "sha256": sha,
-            "bytes": len(tex_bytes),
+            "bytes": size,
             "model": model,
             "continuations": conts_total,
             "partial": bool(partial),
@@ -679,7 +687,6 @@ class LatexToolsMixin:
 
         topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
-        strict_llm = self._strict_llm(ctx, args)
         # LaTeX refining is LLM-dependent; fail fast to avoid cascading "latex_missing" errors.
         if not is_llm_configured():
             raise RuntimeError("llm_not_configured")
@@ -694,7 +701,7 @@ class LatexToolsMixin:
         try:
             ctx.working_memory["latex_tex"] = tex
         except Exception:
-            pass
+            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         compile_error = str(args.get("compile_error") or "").strip()
         if len(compile_error) > 1800:
@@ -703,26 +710,28 @@ class LatexToolsMixin:
         always_refine_raw = str(os.getenv("STUDY_MATERIALS_LATEX_ALWAYS_REFINE") or "0").strip().lower()
         always_refine = always_refine_raw in {"1", "true", "yes", "y", "on"}
         if (not compile_error) and (not always_refine):
-            tex_bytes = (tex.strip() + "\n").encode("utf-8")
-            sha = hashlib.sha256(tex_bytes).hexdigest()
-            filename = f"{sha}.tex"
-            url = f"/api/media/generated/{filename}"
-
-            repo_root = Path(__file__).resolve().parents[3]
-            out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path = out_dir / filename
-            if not out_path.exists():
-                out_path.write_bytes(tex_bytes)
+            user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+            published = await publish_generated_text(
+                tex.strip() + "\n",
+                user_id=user_id,
+                ext=".tex",
+                file_type="tex",
+                mime_type="application/x-tex; charset=utf-8",
+                ttl_s=default_generated_media_ttl_s(),
+            )
+            sha = str(published.get("sha256") or "")
+            filename = str(published.get("filename") or "")
+            url = str(published.get("url") or "")
+            size = int(published.get("bytes") or 0)
 
             try:
                 ctx.working_memory["latex_tex"] = tex.strip() + "\n"
                 ctx.working_memory["tex_url"] = url
                 ctx.working_memory["tex_filename"] = filename
             except Exception:
-                pass
+                logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
-            return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": len(tex_bytes), "model": ""}
+            return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": size, "model": ""}
 
         model = str(
             os.getenv("STUDY_MATERIALS_LATEX_REFINE_MODEL")
@@ -790,9 +799,13 @@ class LatexToolsMixin:
             min_value=0,
             max_value=8,
         )
-        while conts < max_continuations and refined and (
-            _looks_truncated_latex_chunk(refined, finish_reason, usage, max_tokens=refine_max_tokens)
-            or _looks_incomplete_latex(refined)
+        while (
+            conts < max_continuations
+            and refined
+            and (
+                _looks_truncated_latex_chunk(refined, finish_reason, usage, max_tokens=refine_max_tokens)
+                or _looks_incomplete_latex(refined)
+            )
         ):
             tail = refined[-2000:]
             cont_prompt = {
@@ -835,28 +848,28 @@ class LatexToolsMixin:
 
         refined = _auto_fix_latex(refined).strip()
 
-        tex_bytes = (refined.strip() + "\n").encode("utf-8")
-        import hashlib
-
-        sha = hashlib.sha256(tex_bytes).hexdigest()
-        filename = f"{sha}.tex"
-        url = f"/api/media/generated/{filename}"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-        if not out_path.exists():
-            out_path.write_bytes(tex_bytes)
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_text(
+            refined.strip() + "\n",
+            user_id=user_id,
+            ext=".tex",
+            file_type="tex",
+            mime_type="application/x-tex; charset=utf-8",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        sha = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
+        size = int(published.get("bytes") or 0)
 
         try:
             ctx.working_memory["latex_tex"] = refined.strip() + "\n"
             ctx.working_memory["tex_url"] = url
             ctx.working_memory["tex_filename"] = filename
         except Exception:
-            pass
+            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
-        return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": len(tex_bytes), "model": model}
+        return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": size, "model": model}
 
     async def _tool_compile_latex_to_pdf(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """编译 LaTeX 为 PDF，并发布为可下载文件。"""
@@ -873,7 +886,7 @@ class LatexToolsMixin:
         try:
             ctx.working_memory["latex_tex"] = tex
         except Exception:
-            pass
+            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         repo_root = Path(__file__).resolve().parents[3]
         gen_dir = (repo_root / ".local" / "media" / "generated").resolve()
@@ -965,27 +978,31 @@ class LatexToolsMixin:
             raise RuntimeError("pdf_missing")
 
         pdf_bytes = pdf_path.read_bytes()
-
-        import hashlib
-
-        sha = hashlib.sha256(pdf_bytes).hexdigest()
-        filename = f"{sha}.pdf"
-        url = f"/api/media/generated/{filename}"
-        out_path = gen_dir / filename
-        if not out_path.exists():
-            out_path.write_bytes(pdf_bytes)
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            pdf_bytes,
+            user_id=user_id,
+            ext=".pdf",
+            file_type="pdf",
+            mime_type="application/pdf",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        sha = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
+        size = int(published.get("bytes") or 0)
 
         try:
             ctx.working_memory["pdf_url"] = url
             ctx.working_memory["pdf_filename"] = filename
         except Exception:
-            pass
+            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         return {
             "pdf_url": url,
             "filename": filename,
             "sha256": sha,
-            "bytes": len(pdf_bytes),
+            "bytes": size,
             "topic": topic,
             "copied_images": copied,
             "missing_images": missing[:20],

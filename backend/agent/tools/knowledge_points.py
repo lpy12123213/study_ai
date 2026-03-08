@@ -8,6 +8,9 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class KnowledgePointsToolsMixin:
@@ -16,7 +19,6 @@ class KnowledgePointsToolsMixin:
 
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
-        strict_llm = self._strict_llm(ctx, args)
         min_points = int(args.get("min_points") or 3)
         max_points = int(args.get("max_points") or 8)
         min_points = max(1, min(min_points, 10))
@@ -152,14 +154,13 @@ class KnowledgePointsToolsMixin:
             # Use a faster model for small JSON tasks by default; allow override via env.
             model = str(os.getenv("STUDY_MATERIALS_KP_SPLIT_MODEL") or "").strip()
             if not model:
-                model = str(getattr(self.config, "summarizer_model", "") or "").strip() or str(
-                    getattr(self.config, "planner_model", "") or ""
-                ).strip()
+                model = (
+                    str(getattr(self.config, "summarizer_model", "") or "").strip()
+                    or str(getattr(self.config, "planner_model", "") or "").strip()
+                )
 
             timeout_raw = (
-                os.getenv("STUDY_MATERIALS_KP_SPLIT_TIMEOUT_S")
-                or os.getenv("STUDY_MATERIALS_PREPLAN_TIMEOUT_S")
-                or ""
+                os.getenv("STUDY_MATERIALS_KP_SPLIT_TIMEOUT_S") or os.getenv("STUDY_MATERIALS_PREPLAN_TIMEOUT_S") or ""
             ).strip()
             try:
                 timeout_s = float(timeout_raw) if timeout_raw else 25.0
@@ -247,7 +248,6 @@ class KnowledgePointsToolsMixin:
 
         topic = str(args.get("topic") or ctx.current_task).strip()
         subject = str(args.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
-        strict_llm = self._strict_llm(ctx, args)
 
         min_points = int(args.get("min_points") or 2)
         max_points = int(args.get("max_points") or 8)
@@ -292,14 +292,13 @@ class KnowledgePointsToolsMixin:
             # Allow override, but default to a faster model for this small JSON-only task.
             model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or "").strip()
             if not model:
-                model = str(getattr(self.config, "summarizer_model", "") or "").strip() or str(
-                    getattr(self.config, "planner_model", "") or ""
-                ).strip()
+                model = (
+                    str(getattr(self.config, "summarizer_model", "") or "").strip()
+                    or str(getattr(self.config, "planner_model", "") or "").strip()
+                )
 
             timeout_raw = (
-                os.getenv("STUDY_MATERIALS_KP_REVIEW_TIMEOUT_S")
-                or os.getenv("STUDY_MATERIALS_PREPLAN_TIMEOUT_S")
-                or ""
+                os.getenv("STUDY_MATERIALS_KP_REVIEW_TIMEOUT_S") or os.getenv("STUDY_MATERIALS_PREPLAN_TIMEOUT_S") or ""
             ).strip()
             try:
                 timeout_s = float(timeout_raw) if timeout_raw else 30.0
@@ -362,7 +361,9 @@ class KnowledgePointsToolsMixin:
                 break
 
             if source != "llm":
-                note = (note + "；" if note else "") + f"LLM 审核不可用/超时（{last_err or 'unknown'}），已回退为规则清洗。"
+                note = (
+                    note + "；" if note else ""
+                ) + f"LLM 审核不可用/超时（{last_err or 'unknown'}），已回退为规则清洗。"
 
         if topic and len(points) < min_points:
             pads = [
@@ -400,6 +401,6 @@ class KnowledgePointsToolsMixin:
                 "note": note,
             }
         except Exception:
-            pass
+            logger.debug("knowledge_points_store_review_failed", exc_info=True)
 
         return out

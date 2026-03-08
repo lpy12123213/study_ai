@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 import json
+import re
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
@@ -87,7 +87,9 @@ class ContentReviewToolsMixin:
                 elif preset == "research":
                     min_web = 5
 
-                sources_ok = bool(wiki_summary or mw_summary) or web_n >= min_web or pages_n >= 1 or se_n >= 1 or gh_n >= 1
+                sources_ok = (
+                    bool(wiki_summary or mw_summary) or web_n >= min_web or pages_n >= 1 or se_n >= 1 or gh_n >= 1
+                )
                 if enforce_sources and not sources_ok:
                     heuristic_issues.append(
                         f"知识点《{kp}》资料来源不足：建议增加 web_search_knowledge 轮次，并补充 query_hint（定义/性质/反例/证明/应用）。"

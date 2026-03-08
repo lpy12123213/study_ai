@@ -92,8 +92,12 @@ class TestUserScopingRepositories(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await papers_repo.get_paper(user_id="user-a", paper_id=paper_a))
 
     async def test_canvas_boards_are_scoped_by_user(self) -> None:
-        board_a = await canvas_repo.create_canvas_board(user_id="user-a", title="Board A", subject="math", snapshot="{}")
-        board_b = await canvas_repo.create_canvas_board(user_id="user-b", title="Board B", subject="physics", snapshot="{}")
+        board_a = await canvas_repo.create_canvas_board(
+            user_id="user-a", title="Board A", subject="math", snapshot="{}"
+        )
+        board_b = await canvas_repo.create_canvas_board(
+            user_id="user-b", title="Board B", subject="physics", snapshot="{}"
+        )
 
         self.assertIsNotNone(await canvas_repo.get_canvas_board(user_id="user-a", board_id=board_a["id"]))
         self.assertIsNone(await canvas_repo.get_canvas_board(user_id="user-b", board_id=board_a["id"]))
@@ -110,4 +114,3 @@ class TestUserScopingRepositories(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(update_denied["success"])
         self.assertEqual(update_denied["error"], "board_not_found")
-

@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
+
+logger = get_logger(__name__)
 
 
 class ExportToolsMixin:
@@ -66,32 +70,29 @@ class ExportToolsMixin:
         if not markdown:
             raise ValueError("markdown_empty")
 
-        data = (markdown + ("\n" if not markdown.endswith("\n") else "")).encode("utf-8")
-
-        import hashlib
-
-        sha = hashlib.sha256(data).hexdigest()
-        filename = f"{sha}.md"
-        url = f"/api/media/generated/{filename}"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-
-        if not out_path.exists():
-            out_path.write_bytes(data)
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_text(
+            markdown,
+            user_id=user_id,
+            ext=".md",
+            file_type="md",
+            mime_type="text/markdown; charset=utf-8",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        url = str(published.get("url") or "")
+        filename = str(published.get("filename") or "")
+        sha = str(published.get("sha256") or "")
+        size = int(published.get("bytes") or 0)
 
         try:
             ctx.working_memory["md_url"] = url
             ctx.working_memory["md_filename"] = filename
         except Exception:
-            pass
+            logger.debug("export_store_working_memory_failed", exc_info=True)
 
         return {
             "md_url": url,
             "filename": filename,
             "sha256": sha,
-            "bytes": len(data),
+            "bytes": size,
         }
-

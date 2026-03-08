@@ -39,4 +39,3 @@ class CanvasBoardListResponse(BaseModel):
 class CanvasBoardVersionsResponse(BaseModel):
     success: bool = True
     versions: List[dict]
-

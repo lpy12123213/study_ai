@@ -59,8 +59,12 @@ class StudyMaterialsPolicyConfig:
     @classmethod
     def from_env(cls) -> "StudyMaterialsPolicyConfig":
         # Back-compat: keep honoring existing knobs.
-        auto_research = _env_truthy("STUDY_MATERIALS_POLICY_AUTO_RESEARCH", _env_truthy("STUDY_MATERIALS_AUTO_RESEARCH", True))
-        auto_revise = _env_truthy("STUDY_MATERIALS_POLICY_AUTO_REVISE", _env_truthy("STUDY_MATERIALS_AUTO_REVISE", True))
+        auto_research = _env_truthy(
+            "STUDY_MATERIALS_POLICY_AUTO_RESEARCH", _env_truthy("STUDY_MATERIALS_AUTO_RESEARCH", True)
+        )
+        auto_revise = _env_truthy(
+            "STUDY_MATERIALS_POLICY_AUTO_REVISE", _env_truthy("STUDY_MATERIALS_AUTO_REVISE", True)
+        )
 
         return cls(
             auto_research=auto_research,

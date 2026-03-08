@@ -9,16 +9,19 @@ API 路由在 `backend/api/` 下；此文件负责：
 
 from __future__ import annotations
 
-import os
-import sys
 import asyncio
 import hashlib
+import ipaddress
+import os
+import re
+import sys
 import time
 import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -30,15 +33,17 @@ if __package__ is None or __package__ == "":
     # Allow running as a script: `python backend/app.py`
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from backend.api.media import close_proxy_http_client
 from backend.api.router import api_router
-from backend.crawler_manager import close_crawler
-from backend.core.logging_utils import configure_logging, set_request_id
+from backend.auth import validate_access_token
 from backend.core.llm_client import (
     reset_llm_api_key_override,
     reset_moonshot_api_key_override,
     set_llm_api_key_override,
     set_moonshot_api_key_override,
 )
+from backend.core.logging_utils import configure_logging, get_logger, get_request_id, set_client_ip, set_request_id
+from backend.crawler_manager import close_crawler
 from backend.database.models import init_db
 from backend.question_library.worker import run_question_library_scoring_worker
 
@@ -49,26 +54,160 @@ DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
 
 _log_format = (os.getenv("LOG_FORMAT") or "").strip().lower()
 configure_logging(force=(not _log_format or _log_format == "json"))
+logger = get_logger(__name__)
+
+
+def _env_truthy(name: str, *, default: bool = False) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP extraction with optional proxy header trust."""
+
+    if _env_truthy("TRUST_PROXY_HEADERS", default=False) and _is_trusted_proxy(request):
+        # RFC 7239 Forwarded: for=...
+        forwarded = str(request.headers.get("Forwarded") or "").strip()
+        if forwarded:
+            try:
+                first = forwarded.split(",", 1)[0]
+                m = re.search(r"(?i)(?:^|;|\\s)for=(\"[^\"]+\"|[^;\\s]+)", first)
+                if m:
+                    v = str(m.group(1) or "").strip().strip('"')
+                    if v.startswith("[") and "]" in v:
+                        v = v[1 : v.index("]")]
+                    # Strip IPv4 :port (keep IPv6 intact).
+                    if ":" in v and "." in v:
+                        host, _, port = v.partition(":")
+                        if port.isdigit():
+                            v = host
+                    if v and v.lower() != "unknown":
+                        return v
+            except Exception:
+                logger.debug("failed to parse Forwarded header", exc_info=True)
+
+        # X-Forwarded-For can be a list: client, proxy1, proxy2...
+        xff = str(request.headers.get("X-Forwarded-For") or "").strip()
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+        xri = str(request.headers.get("X-Real-IP") or "").strip()
+        if xri:
+            return xri
+        cfip = str(request.headers.get("CF-Connecting-IP") or "").strip()
+        if cfip:
+            return cfip
+
+    return (request.client.host if request.client else "") or "unknown"
+
+
+def _parse_trusted_proxies(raw: str) -> list[ipaddress._BaseNetwork]:
+    value = str(raw or "").strip()
+    if not value:
+        return []
+    parts = re.split(r"[,\n;\\s]+", value)
+    nets: list[ipaddress._BaseNetwork] = []
+    for p in parts:
+        p = str(p or "").strip()
+        if not p:
+            continue
+        if p == "*":
+            return [ipaddress.ip_network("0.0.0.0/0"), ipaddress.ip_network("::/0")]
+        try:
+            if "/" in p:
+                nets.append(ipaddress.ip_network(p, strict=False))
+                continue
+            addr = ipaddress.ip_address(p)
+            if addr.version == 4:
+                nets.append(ipaddress.ip_network(f"{p}/32"))
+            else:
+                nets.append(ipaddress.ip_network(f"{p}/128"))
+        except ValueError:
+            continue
+        except Exception:
+            logger.debug("failed to parse TRUSTED_PROXIES entry", extra={"value": p}, exc_info=True)
+    return nets
+
+
+@lru_cache(maxsize=1)
+def _trusted_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
+    raw = str(os.getenv("TRUSTED_PROXIES") or "").strip()
+    return tuple(_parse_trusted_proxies(raw))
+
+
+def _is_trusted_proxy(request: Request) -> bool:
+    nets = _trusted_proxy_networks()
+    if not nets:
+        return False
+    host = (request.client.host if request.client else "") or ""
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    except Exception:
+        logger.debug("failed to parse request.client.host", extra={"host": host}, exc_info=True)
+        return False
+    return any(ip in net for net in nets)
+
+
+def _ensure_request_id(request: Request) -> str:
+    """Return a stable request_id for this request, generating one if needed.
+
+    This is used by exception handlers so even error responses produced before
+    middleware completion still include a request_id.
+    """
+
+    rid = get_request_id() or str(request.headers.get("X-Request-ID") or "").strip()
+    if rid:
+        return rid
+    rid = f"req_{uuid.uuid4().hex[:12]}"
+    try:
+        set_request_id(rid)
+    except Exception:
+        logger.debug("failed to set request_id context", exc_info=True)
+    return rid
+
+
+class _CachedAssetFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        resp = await super().get_response(path, scope)
+        try:
+            if resp.status_code == 200:
+                resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        except Exception:
+            logger.debug("failed to set cache headers for asset", exc_info=True)
+        return resp
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
     stop = asyncio.Event()
-    worker_task = asyncio.create_task(run_question_library_scoring_worker(stop=stop))
+    worker_task: Optional[asyncio.Task] = None
+    if _env_truthy(
+        "QUESTION_LIBRARY_WORKER_ENABLED", default=_env_truthy("QUESTION_LIBRARY_AUTO_SCORE", default=False)
+    ):
+        worker_task = asyncio.create_task(run_question_library_scoring_worker(stop=stop))
     try:
         yield
     finally:
         stop.set()
-        try:
-            await asyncio.wait_for(worker_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            worker_task.cancel()
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        if worker_task is not None:
+            try:
+                await asyncio.wait_for(worker_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                worker_task.cancel()
+            except asyncio.CancelledError:
+                logger.info("worker_cancelled")
+            except Exception:
+                logger.exception("worker_shutdown_failed")
         await close_crawler()
+        await close_proxy_http_client()
 
 
 def create_app() -> FastAPI:
@@ -91,16 +230,81 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        try:
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "DENY")
+            response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+            response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+            response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        except Exception:
+            logger.debug("failed to set security headers", exc_info=True)
+        return response
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        rid = _ensure_request_id(request)
+        detail = exc.detail
+        msg = detail if isinstance(detail, str) else "http_error"
+        code = f"http_{int(exc.status_code or 500)}"
+        if isinstance(detail, str):
+            candidate = detail.strip()
+            if candidate and re.fullmatch(r"[a-z0-9_]{1,80}", candidate.lower() or ""):
+                code = candidate
+        response = JSONResponse(
+            status_code=int(exc.status_code or 500),
+            content={
+                "detail": detail,
+                "error": {"code": code, "message": msg if isinstance(msg, str) else str(msg), "request_id": rid},
+            },
+        )
+        response.headers.setdefault("X-Request-ID", rid)
+        return response
+
     @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        rid = _ensure_request_id(request)
         errors = exc.errors()
         for err in errors:
             if str(err.get("type") or "").strip() != "string_too_long":
                 continue
             loc = [str(part).strip() for part in list(err.get("loc") or []) if str(part).strip() not in {"body"}]
             field = "_".join(loc) or "input"
-            return JSONResponse(status_code=400, content={"detail": f"{field}_too_long"})
-        return JSONResponse(status_code=422, content={"detail": errors})
+            response = JSONResponse(
+                status_code=400,
+                content={
+                    "detail": f"{field}_too_long",
+                    "error": {"code": f"{field}_too_long", "message": "input_too_long", "request_id": rid},
+                },
+            )
+            response.headers.setdefault("X-Request-ID", rid)
+            return response
+
+        response = JSONResponse(
+            status_code=422,
+            content={
+                "detail": errors,
+                "error": {"code": "validation_error", "message": "validation_error", "request_id": rid},
+            },
+        )
+        response.headers.setdefault("X-Request-ID", rid)
+        return response
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unhandled_exception", extra={"path": str(request.url.path or "")})
+        rid = _ensure_request_id(request)
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "detail": "internal_error",
+                "error": {"code": "internal_error", "message": "internal_error", "request_id": rid},
+            },
+        )
+        response.headers.setdefault("X-Request-ID", rid)
+        return response
 
     rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
     rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")
@@ -115,11 +319,15 @@ def create_app() -> FastAPI:
         incoming = str(request.headers.get("X-Request-ID") or "").strip()
         rid = incoming or f"req_{uuid.uuid4().hex[:12]}"
         set_request_id(rid)
+        try:
+            set_client_ip(_client_ip(request))
+        except Exception:
+            logger.debug("failed to set client_ip context", exc_info=True)
         response = await call_next(request)
         try:
             response.headers["X-Request-ID"] = rid
         except Exception:
-            pass
+            logger.debug("failed to set X-Request-ID header", exc_info=True)
         return response
 
     @app.middleware("http")
@@ -142,7 +350,7 @@ def create_app() -> FastAPI:
                 key = f"token:{digest}"
 
         if not key:
-            host = (request.client.host if request.client else "") or "unknown"
+            host = _client_ip(request)
             key = f"ip:{host}"
 
         now = time.monotonic()
@@ -151,7 +359,16 @@ def create_app() -> FastAPI:
             while bucket and (now - bucket[0]) > rate_limit_window_s:
                 bucket.popleft()
             if len(bucket) >= rate_limit_max:
-                return JSONResponse(status_code=429, content={"detail": "rate_limited"})
+                rid = _ensure_request_id(request)
+                response = JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": "rate_limited",
+                        "error": {"code": "rate_limited", "message": "rate_limited", "request_id": rid},
+                    },
+                )
+                response.headers.setdefault("X-Request-ID", rid)
+                return response
             bucket.append(now)
 
             # Best-effort pruning to avoid unbounded memory in long-running processes.
@@ -173,11 +390,28 @@ def create_app() -> FastAPI:
         - Never persist/log the key (tasks snapshots, events, db, etc.).
         """
 
-        llm_key_header = request.headers.get("X-LLM-API-Key", "")
-        moonshot_key_header = request.headers.get("X-Moonshot-API-Key", "")
+        llm_key_header = str(request.headers.get("X-LLM-API-Key") or "").strip()
+        moonshot_key_header = str(request.headers.get("X-Moonshot-API-Key") or "").strip()
+        has_override_headers = bool(llm_key_header or moonshot_key_header)
 
-        llm_token = set_llm_api_key_override(llm_key_header)
-        moonshot_token = set_moonshot_api_key_override(moonshot_key_header)
+        allow_override = _env_truthy("LLM_API_KEY_OVERRIDE_ENABLED", default=False)
+        require_admin = _env_truthy("LLM_API_KEY_OVERRIDE_REQUIRE_ADMIN", default=True)
+        permitted = allow_override
+
+        if has_override_headers and not allow_override:
+            raise HTTPException(status_code=403, detail="llm_api_key_override_disabled")
+
+        if permitted and require_admin and has_override_headers:
+            payload = None
+            auth = str(request.headers.get("Authorization") or "")
+            if auth.lower().startswith("bearer "):
+                payload = validate_access_token(auth[7:].strip())
+            role = str((payload or {}).get("role") or "").strip()
+            if role != "admin":
+                raise HTTPException(status_code=403, detail="llm_api_key_override_forbidden")
+
+        llm_token = set_llm_api_key_override(llm_key_header if permitted else "")
+        moonshot_token = set_moonshot_api_key_override(moonshot_key_header if permitted else "")
         try:
             return await call_next(request)
         finally:
@@ -188,7 +422,7 @@ def create_app() -> FastAPI:
 
     assets_path = DIST_PATH / "assets"
     if assets_path.exists():
-        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+        app.mount("/assets", _CachedAssetFiles(directory=assets_path), name="assets")
 
     @app.api_route(
         "/{full_path:path}",

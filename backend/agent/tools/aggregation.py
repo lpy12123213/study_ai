@@ -78,20 +78,22 @@ class AggregationToolsMixin:
                 "knowledge_points": len(points),
                 "web": len([x for x in web_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
                 "pages": len([x for x in browse_map.values() if isinstance(x, dict) and (x.get("pages") or [])]),
-                "wiki": len([x for x in wiki_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]),
-                "mediawiki": len([x for x in mw_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]),
+                "wiki": len(
+                    [x for x in wiki_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]
+                ),
+                "mediawiki": len(
+                    [x for x in mw_map.values() if isinstance(x, dict) and (x.get("summary") or x.get("content"))]
+                ),
                 "github": len([x for x in gh_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
                 "stackexchange": len([x for x in se_map.values() if isinstance(x, dict) and (x.get("results") or [])]),
                 "questions": len(
                     [
                         x
                         for x in q_map.values()
-                        if isinstance(x, dict)
-                        and (x.get("questions") or x.get("examples") or x.get("exercises"))
+                        if isinstance(x, dict) and (x.get("questions") or x.get("examples") or x.get("exercises"))
                     ]
                 ),
             },
         }
         ctx.working_memory["aggregated"] = summary
         return summary
-

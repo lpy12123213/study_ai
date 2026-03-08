@@ -34,4 +34,3 @@ class ComposeBlueprintRequest(BaseModel):
     slot_concurrency: int = 0
     slot_delay_s: float = 0.0
     slot_retries: int = 1
-

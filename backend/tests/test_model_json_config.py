@@ -70,4 +70,3 @@ class ModelJsonConfigTests(unittest.TestCase):
         self.assertEqual(settings.main_model_max_tokens, 1234)
         self.assertAlmostEqual(settings.sub_model_temperature, 0.2, places=3)
         self.assertEqual(settings.sub_model_max_tokens, 567)
-

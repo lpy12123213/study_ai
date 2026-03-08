@@ -119,4 +119,3 @@ class StackExchangeToolsMixin:
             "query_hint": query_hint,
             "items": items,
         }
-

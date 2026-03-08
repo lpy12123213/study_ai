@@ -134,4 +134,3 @@ class CompressedContext:
 
 def agent_event(event: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"event": event, "data": data or {}}
-

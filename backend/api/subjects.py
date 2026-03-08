@@ -110,4 +110,3 @@ async def get_subject_filters(subject_code: str, user: dict = Depends(require_au
             oldest_key = min(_SUBJECT_FILTERS_CACHE, key=lambda key: _SUBJECT_FILTERS_CACHE[key][0])
             _SUBJECT_FILTERS_CACHE.pop(oldest_key, None)
     return payload
-

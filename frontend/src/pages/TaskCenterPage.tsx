@@ -1,0 +1,398 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
+import { Pause, Play, RefreshCcw, Loader2, ListChecks, XCircle, Ban, RotateCcw } from 'lucide-react'
+import { listTasks, pauseTask, resumeTask, cancelTask, retryTask, streamTask, type TaskStreamEvent, type UnifiedTask } from '@/api/tasks'
+import { TaskTimeline } from '@/components/task/TaskTimeline'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
+import type { TaskStep } from '@/types'
+
+function formatStatus(status: string): { label: string; tone: 'default' | 'secondary' | 'destructive' } {
+  const s = (status || '').toLowerCase()
+  if (s === 'running') return { label: '运行中', tone: 'secondary' }
+  if (s === 'paused') return { label: '已暂停', tone: 'secondary' }
+  if (s === 'completed') return { label: '已完成', tone: 'default' }
+  if (s === 'failed') return { label: '失败', tone: 'destructive' }
+  if (s === 'canceled' || s === 'cancelled') return { label: '已取消', tone: 'destructive' }
+  return { label: status || '未知', tone: 'secondary' }
+}
+
+function eventToStep(evt: TaskStreamEvent): TaskStep | null {
+  const kind = String(evt.type || '').trim() || 'event'
+  const data = evt.data ?? {}
+
+  if (kind === 'step' && data && typeof data === 'object' && (data as any).step && typeof (data as any).step === 'object') {
+    return (data as any).step as TaskStep
+  }
+
+  if (kind === 'ping') return null
+
+  const content =
+    (typeof (data as any)?.title === 'string' && (data as any).title.trim()) ||
+    (typeof (data as any)?.message === 'string' && (data as any).message.trim()) ||
+    (typeof (data as any)?.content === 'string' && (data as any).content.trim()) ||
+    ''
+
+  let title = content ? `${kind}: ${content}` : kind
+  if (title.length > 240) title = `${title.slice(0, 240)}…`
+
+  const failed = kind === 'error' || Boolean((data as any)?.error)
+  const step: TaskStep = {
+    id: `evt-${evt.seq}`,
+    title,
+    status: failed ? 'failed' : 'completed',
+    toolName: kind,
+    startTime: evt.created_at,
+    error: failed ? String((data as any)?.error || (data as any)?.message || '') : undefined,
+    input: undefined,
+    output: undefined,
+  }
+  return step
+}
+
+export default function TaskCenterPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedTaskId = searchParams.get('id') || ''
+
+  const [statusFilter, setStatusFilter] = useState<string>(() => searchParams.get('status') || 'running')
+  const [typeFilter, setTypeFilter] = useState<string>(() => searchParams.get('type') || '')
+  const [timeFilter, setTimeFilter] = useState<string>(() => searchParams.get('time') || '30d')
+  const [query, setQuery] = useState('')
+
+  const { data, refetch, isFetching } = useQuery({
+    queryKey: ['tasks', statusFilter, typeFilter],
+    queryFn: () =>
+      listTasks({
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        type: typeFilter || undefined,
+        limit: 200,
+      }),
+    refetchInterval: 5000,
+  })
+
+  const tasks = data?.tasks || []
+
+  const typeOptions = useMemo(() => {
+    const set = new Set<string>()
+    tasks.forEach((t) => {
+      const tp = String((t as any).task_type || '').trim()
+      if (tp) set.add(tp)
+    })
+    return Array.from(set).sort()
+  }, [tasks])
+
+  const filteredTasks = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const now = Date.now()
+    const windowMs =
+      timeFilter === '24h'
+        ? 24 * 60 * 60 * 1000
+        : timeFilter === '7d'
+          ? 7 * 24 * 60 * 60 * 1000
+          : timeFilter === '30d'
+            ? 30 * 24 * 60 * 60 * 1000
+            : null
+
+    return tasks.filter((t) => {
+      if (q) {
+        const ok =
+          String((t as any).title || '').toLowerCase().includes(q) || String((t as any).id || '').includes(q)
+        if (!ok) return false
+      }
+
+      if (windowMs != null) {
+        const ts = Date.parse(String((t as any).updated_at || (t as any).created_at || ''))
+        if (Number.isFinite(ts) && now - ts > windowMs) return false
+      }
+
+      return true
+    })
+  }, [tasks, query, timeFilter])
+
+  const selectedTask: UnifiedTask | undefined = useMemo(() => {
+    if (!selectedTaskId) return undefined
+    return filteredTasks.find((t) => String((t as any).id) === selectedTaskId) || tasks.find((t) => String((t as any).id) === selectedTaskId)
+  }, [selectedTaskId, filteredTasks, tasks])
+
+  const [steps, setSteps] = useState<TaskStep[]>([])
+  const [streamError, setStreamError] = useState<string | null>(null)
+  const lastSeqRef = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    setSteps([])
+    setStreamError(null)
+    lastSeqRef.current = 0
+
+    if (abortRef.current) abortRef.current.abort()
+    abortRef.current = null
+
+    if (!selectedTaskId) return
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    streamTask(
+      selectedTaskId,
+      0,
+      (evt) => {
+        lastSeqRef.current = Math.max(lastSeqRef.current, Number(evt.seq || 0))
+        const step = eventToStep(evt)
+        if (!step) return
+        setSteps((prev) => {
+          if (prev.some((s) => s.id === step.id)) return prev
+          return [...prev, step]
+        })
+      },
+      (err) => setStreamError(err.message || 'stream_error'),
+      undefined,
+      { signal: controller.signal }
+    )
+
+    return () => controller.abort()
+  }, [selectedTaskId])
+
+  const setUrlParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (!value) next.delete(key)
+    else next.set(key, value)
+    setSearchParams(next, { replace: true })
+  }
+
+  const handleSelectTask = (taskId: string) => {
+    setUrlParam('id', taskId)
+  }
+
+  const handlePause = async () => {
+    if (!selectedTaskId) return
+    await pauseTask(selectedTaskId)
+    refetch()
+  }
+
+  const handleResume = async () => {
+    if (!selectedTaskId) return
+    await resumeTask(selectedTaskId)
+    refetch()
+  }
+
+  const handleCancel = async () => {
+    if (!selectedTaskId) return
+    await cancelTask(selectedTaskId)
+    refetch()
+  }
+
+  const handleRetry = async () => {
+    if (!selectedTaskId) return
+    const res = await retryTask(selectedTaskId)
+    if (res.taskId) {
+      setUrlParam('id', res.taskId)
+    }
+    refetch()
+  }
+
+  const status = selectedTask ? formatStatus(String(selectedTask.status || '')) : null
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden min-h-0">
+      <div className="p-4 border-b border-border flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <ListChecks className="h-5 w-5 text-primary" />
+          <div className="font-semibold">任务中心</div>
+          {isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            <RefreshCcw className="h-4 w-4 mr-2" />
+            刷新
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Left: task list */}
+        <div className="w-[360px] max-w-[45%] border-r border-border flex flex-col min-h-0">
+          <div className="p-3 space-y-2 border-b border-border">
+            <Input placeholder="搜索任务标题/ID…" value={query} onChange={(e) => setQuery(e.target.value)} />
+
+            <div className="flex items-center gap-2">
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm flex-1"
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value)
+                  setUrlParam('status', e.target.value)
+                }}
+              >
+                <option value="running">运行中</option>
+                <option value="paused">已暂停</option>
+                <option value="failed">失败</option>
+                <option value="completed">已完成</option>
+                <option value="all">全部</option>
+              </select>
+
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm flex-1"
+                value={typeFilter}
+                onChange={(e) => {
+                  setTypeFilter(e.target.value)
+                  setUrlParam('type', e.target.value)
+                }}
+              >
+                <option value="">全部类型</option>
+                {typeOptions.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm w-full"
+              value={timeFilter}
+              onChange={(e) => {
+                setTimeFilter(e.target.value)
+                setUrlParam('time', e.target.value)
+              }}
+            >
+              <option value="24h">最近 24 小时</option>
+              <option value="7d">最近 7 天</option>
+              <option value="30d">最近 30 天</option>
+              <option value="all">不限时间</option>
+            </select>
+          </div>
+
+          <ScrollArea className="flex-1">
+            <div className="p-2 space-y-1">
+              {filteredTasks.map((t) => {
+                const tid = String((t as any).id)
+                const active = tid === selectedTaskId
+                const s = formatStatus(String((t as any).status || ''))
+                const progress = Number((t as any).progress || 0)
+                const eta = Number((t as any).eta_s || 0)
+
+                return (
+                  <button
+                    key={tid}
+                    type="button"
+                    onClick={() => handleSelectTask(tid)}
+                    className={cn(
+                      'w-full text-left rounded-md border border-border/60 px-3 py-2 hover:bg-accent/30 transition-colors',
+                      active && 'bg-accent/50 border-border'
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{String((t as any).title || tid)}</div>
+                        <div className="text-xs text-muted-foreground truncate">{tid}</div>
+                      </div>
+                      <Badge variant={s.tone}>{s.label}</Badge>
+                    </div>
+                    <div className="mt-2">
+                      <Progress value={progress} className="h-1.5" />
+                      <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span>{Math.round(progress)}%</span>
+                        {eta > 0 ? <span>预计剩余 {Math.ceil(eta)}s</span> : <span />}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+
+              {filteredTasks.length === 0 && (
+                <div className="text-sm text-muted-foreground text-center py-10">暂无任务</div>
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+
+        {/* Right: details */}
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+          {!selectedTask ? (
+            <div className="flex-1 flex items-center justify-center text-muted-foreground">
+              选择左侧任务查看详情
+            </div>
+          ) : (
+            <>
+              <div className="p-4 border-b border-border">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold truncate">{selectedTask.title}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      <span className="mr-2">ID: {selectedTask.id}</span>
+                      <span className="mr-2">类型: {selectedTask.task_type}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {status && <Badge variant={status.tone}>{status.label}</Badge>}
+                    {String(selectedTask.status) === 'running' && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={handlePause}>
+                          <Pause className="h-4 w-4 mr-2" />
+                          暂停
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={handleCancel}>
+                          <Ban className="h-4 w-4 mr-2" />
+                          取消
+                        </Button>
+                      </>
+                    )}
+                    {String(selectedTask.status) === 'paused' && (
+                      <>
+                        <Button size="sm" onClick={handleResume}>
+                          <Play className="h-4 w-4 mr-2" />
+                          恢复
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={handleCancel}>
+                          <Ban className="h-4 w-4 mr-2" />
+                          取消
+                        </Button>
+                      </>
+                    )}
+                    {['completed', 'failed', 'canceled', 'cancelled'].includes(String(selectedTask.status)) && (
+                      <Button size="sm" variant="secondary" onClick={handleRetry}>
+                        <RotateCcw className="h-4 w-4 mr-2" />
+                        重试
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>进度</span>
+                    <span>{Math.round(Number(selectedTask.progress || 0))}%</span>
+                  </div>
+                  <Progress value={Number(selectedTask.progress || 0)} className="h-2" />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-hidden min-h-0">
+                <ScrollArea className="h-full">
+                  <div className="p-4">
+                    {streamError && (
+                      <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm flex items-start gap-2">
+                        <XCircle className="h-4 w-4 text-destructive mt-0.5" />
+                        <div>
+                          <div className="font-medium text-destructive">事件流断开</div>
+                          <div className="text-muted-foreground">{streamError}</div>
+                        </div>
+                      </div>
+                    )}
+                    <TaskTimeline steps={steps} />
+                  </div>
+                </ScrollArea>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

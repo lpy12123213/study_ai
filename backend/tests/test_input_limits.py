@@ -1,19 +1,59 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import backend.auth as auth
 from backend.app import create_app
-from backend.auth import create_access_token
 
 
 class TestInputLengthLimits(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        token = create_access_token({"user_id": "test-user", "username": "tester", "role": "user"})
+        cls._original_users = dict(auth._users)
+        cls._original_revoked = dict(auth._revoked_tokens)
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        tmp = Path(cls._tmpdir.name)
+
+        cls._patchers = [
+            patch.object(auth, "LOCAL_DIR", tmp),
+            patch.object(auth, "USERS_PATH", tmp / "users.json"),
+            patch.object(auth, "REVOKED_TOKENS_PATH", tmp / "jwt_revoked.json"),
+            patch.object(auth, "JWT_SECRET", "test-secret-32-bytes-minimum-length!!"),
+        ]
+        for p in cls._patchers:
+            p.start()
+
+        auth._users.clear()
+        auth._revoked_tokens.clear()
+
+        user = auth.create_user("tester", "pw", role="user")
+        assert user is not None
+        token_ver = int(user.get("token_version") or 1)
+        token = auth.create_access_token(
+            {"user_id": user["user_id"], "username": user["username"], "role": "user", "ver": token_ver}
+        )
+
         cls.client = TestClient(create_app())
         cls.headers = {"Authorization": f"Bearer {token}"}
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            for p in reversed(getattr(cls, "_patchers", [])):
+                p.stop()
+            tmpdir = getattr(cls, "_tmpdir", None)
+            if tmpdir is not None:
+                tmpdir.cleanup()
+        finally:
+            auth._users.clear()
+            auth._users.update(getattr(cls, "_original_users", {}))
+            auth._revoked_tokens.clear()
+            auth._revoked_tokens.update(getattr(cls, "_original_revoked", {}))
 
     def test_chat_rejects_oversized_message_with_400(self) -> None:
         response = self.client.post(

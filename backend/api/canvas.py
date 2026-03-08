@@ -146,15 +146,21 @@ class CanvasPickQuestionsRequest(BaseModel):
 
 
 @router.get("/boards")
-async def list_boards(limit: int = Query(50, ge=1, le=200), q: str = Query(""), user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+async def list_boards(
+    limit: int = Query(50, ge=1, le=200), q: str = Query(""), user: dict = Depends(require_auth)
+) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     boards = await list_canvas_boards(user_id=user_id, limit=limit, query=q)
     return {"success": True, "boards": boards}
 
 
 @router.post("/boards")
 async def create_board(payload: CanvasBoardCreate, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     snapshot_raw = ""
     if payload.snapshot is not None:
         snapshot_raw = _serialize_snapshot(payload.snapshot)
@@ -170,7 +176,9 @@ async def create_board(payload: CanvasBoardCreate, user: dict = Depends(require_
 
 @router.get("/boards/{board_id}")
 async def get_board(board_id: int, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     board = await get_canvas_board(user_id=user_id, board_id=board_id)
     if not board:
         raise HTTPException(status_code=404, detail="board_not_found")
@@ -183,7 +191,9 @@ async def get_board(board_id: int, user: dict = Depends(require_auth)) -> dict:
 
 @router.put("/boards/{board_id}")
 async def put_board(board_id: int, payload: CanvasBoardUpdate, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     snapshot_raw = None
     if payload.snapshot is not None:
         snapshot_raw = _serialize_snapshot(payload.snapshot)
@@ -212,14 +222,18 @@ async def put_board(board_id: int, payload: CanvasBoardUpdate, user: dict = Depe
 
 @router.get("/boards/{board_id}/versions")
 async def get_versions(board_id: int, limit: int = Query(30, ge=1, le=200), user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     versions = await list_canvas_board_versions(user_id=user_id, board_id=board_id, limit=limit)
     return {"success": True, "versions": versions}
 
 
 @router.post("/boards/{board_id}/versions")
 async def create_version(board_id: int, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     result = await create_canvas_board_version(user_id=user_id, board_id=board_id)
     if not result.get("success"):
         raise HTTPException(status_code=404, detail=result.get("error") or "board_not_found")
@@ -228,7 +242,9 @@ async def create_version(board_id: int, user: dict = Depends(require_auth)) -> d
 
 @router.get("/boards/{board_id}/versions/{version_id}")
 async def get_version(board_id: int, version_id: int, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     version = await get_canvas_board_version(user_id=user_id, board_id=board_id, version_id=version_id)
     if not version:
         raise HTTPException(status_code=404, detail="version_not_found")
@@ -239,7 +255,9 @@ async def get_version(board_id: int, version_id: int, user: dict = Depends(requi
 
 
 @router.post("/boards/{board_id}/pick-questions")
-async def pick_questions(board_id: int, payload: CanvasPickQuestionsRequest, user: dict = Depends(require_auth)) -> dict:
+async def pick_questions(
+    board_id: int, payload: CanvasPickQuestionsRequest, user: dict = Depends(require_auth)
+) -> dict:
     """
     Use crawler + MCP sub-AI selector to pick questions, then return render-ready HTML.
 
@@ -247,7 +265,9 @@ async def pick_questions(board_id: int, payload: CanvasPickQuestionsRequest, use
     - Formula rendering: inline SVG (no svg2latex).
     - Images: rewritten to `/api/media/proxy` for on-demand download + cache.
     """
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     board = await get_canvas_board(user_id=user_id, board_id=board_id)
     if not board:
         raise HTTPException(status_code=404, detail="board_not_found")
@@ -342,9 +362,7 @@ async def pick_questions(board_id: int, payload: CanvasPickQuestionsRequest, use
     if not selected_ids:
         return {"success": False, "error": "select_failed_no_results", "details": selection}
 
-    tasks = [
-        crawler.get_question_detail(qid, formula_mode="svg", stem_mode="html") for qid in selected_ids
-    ]
+    tasks = [crawler.get_question_detail(qid, formula_mode="svg", stem_mode="html") for qid in selected_ids]
     details = await asyncio.gather(*tasks, return_exceptions=True)
 
     reason_by_id = {

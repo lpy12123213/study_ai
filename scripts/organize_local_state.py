@@ -11,7 +11,6 @@ import shutil
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DIR = PROJECT_ROOT / ".local"
 
@@ -156,4 +155,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

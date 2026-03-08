@@ -4,8 +4,11 @@ import json
 from typing import Any, Dict, List, Optional
 
 from backend.chat.tools_spec import TOOLS
+from backend.core.logging_utils import get_logger
 from backend.database.models import list_papers, save_paper, upsert_question_cache
 from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
+
+logger = get_logger(__name__)
 
 
 class ChatToolsMixin:
@@ -83,7 +86,7 @@ class ChatToolsMixin:
                     try:
                         value = json.loads(s)
                     except Exception:
-                        pass
+                        logger.debug("tool_schema_object_json_parse_failed", exc_info=True)
             if not isinstance(value, dict):
                 return value
             props = schema.get("properties") or {}
@@ -102,7 +105,7 @@ class ChatToolsMixin:
                     try:
                         value = json.loads(s)
                     except Exception:
-                        pass
+                        logger.debug("tool_schema_array_json_parse_failed", exc_info=True)
             if not isinstance(value, list):
                 return value
             item_schema = schema.get("items") or {}
@@ -192,7 +195,7 @@ class ChatToolsMixin:
         arguments: Dict[str, Any],
         *,
         sub_model: Optional[str] = None,
-        user_id: str = "1",
+        user_id: str = "",
     ) -> Dict[str, Any]:
         try:
             arguments = self._coerce_tool_args(tool_name, arguments)
@@ -331,17 +334,23 @@ class ChatToolsMixin:
                 return result
 
             if tool_name == "create_paper":
+                uid = str(user_id or "").strip()
+                if not uid:
+                    return {"success": False, "error": "missing_user_id"}
                 questions = [{"question_id": qid} for qid in (arguments.get("question_ids") or [])]
                 paper_id = await save_paper(
-                    user_id=str(user_id or "").strip() or "1",
+                    user_id=uid,
                     paper_name=arguments.get("paper_name", "未命名试卷"),
                     questions=questions,
                 )
                 return {"success": True, "paper_id": paper_id, "message": f"试卷创建成功，ID: {paper_id}"}
 
             if tool_name == "get_papers":
+                uid = str(user_id or "").strip()
+                if not uid:
+                    return {"success": False, "error": "missing_user_id"}
                 papers = await list_papers(
-                    user_id=str(user_id or "").strip() or "1",
+                    user_id=uid,
                     limit=int(arguments.get("limit") or 10),
                 )
                 return {"success": True, "papers": papers, "count": len(papers)}
@@ -360,7 +369,7 @@ class ChatToolsMixin:
                 try:
                     await upsert_question_cache(result.get("questions", []) if isinstance(result, dict) else [])
                 except Exception:
-                    pass
+                    logger.exception("upsert_question_cache_failed")
                 return result
 
             if tool_name == "select_best_question":
@@ -390,9 +399,11 @@ class ChatToolsMixin:
                             self.question_cache[str(qid)] = q
                             questions.append(q)
                     try:
-                        await upsert_question_cache(details_result.get("questions", []) if isinstance(details_result, dict) else [])
+                        await upsert_question_cache(
+                            details_result.get("questions", []) if isinstance(details_result, dict) else []
+                        )
                     except Exception:
-                        pass
+                        logger.exception("upsert_question_cache_failed")
 
                 if not questions:
                     return {"success": False, "error": "无法获取候选题目详情"}

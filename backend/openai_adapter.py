@@ -18,11 +18,11 @@ if __package__ is None or __package__ == "":
     # Allow running as a script: `python backend/openai_adapter.py`
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from backend.config import DEFAULT_SUBJECT
+from backend.crawler.zujuan_crawler import ZujuanCrawler
 from backend.crawler_manager import close_crawler as close_subject_crawlers
 from backend.crawler_manager import get_crawler as get_subject_crawler
-from backend.crawler.zujuan_crawler import ZujuanCrawler
 from backend.database.models import get_paper, init_db, list_papers, save_paper
-from backend.config import DEFAULT_SUBJECT
 from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 
 
@@ -149,7 +149,7 @@ class CreatePaperRequest(BaseModel):
 
 
 @app.post("/api/search-by-keyword")
-async def search_by_keyword(request: SearchByKeywordRequest) -> Dict[str, Any]:  
+async def search_by_keyword(request: SearchByKeywordRequest) -> Dict[str, Any]:
     """通过关键词搜索题目（可用于 OpenAI Function Calling）"""
     subject = request.subject or DEFAULT_SUBJECT
     try:

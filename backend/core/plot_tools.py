@@ -5,6 +5,10 @@ import io
 import math
 from typing import Any, Dict, List, Tuple
 
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 def _as_str(value: Any) -> str:
     return str(value or "").strip()
@@ -428,7 +432,7 @@ def render_3d_plot(spec: Dict[str, Any]) -> bytes:
     try:
         ax.view_init(elev=float(elev), azim=float(azim))
     except Exception:
-        pass
+        logger.debug("plot_view_init_failed", exc_info=True)
 
     return _to_png_bytes(fig, dpi=dpi)
 

@@ -20,4 +20,3 @@ class TestExecutorRegistry(unittest.TestCase):
             "review_content",
         ):
             self.assertIn(tool, handlers)
-

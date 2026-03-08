@@ -120,4 +120,3 @@ class MediaWikiToolsMixin:
             "max_content_length": max_content_length,
             "items": items,
         }
-

@@ -117,4 +117,3 @@ async def list_fireworks_models(force: bool = Query(False)) -> dict:
         "count": len(models),
         "models": models,
     }
-

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
-
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 FetchCandidatesFn = Callable[[int], Awaitable[Tuple[List[Dict[str, Any]], str]]]
 SortCandidatesFn = Callable[[List[Dict[str, Any]]], None]
@@ -182,4 +181,3 @@ async def select_slot_with_relax(
         "min_quality_score": quality_threshold,
         "dedup_by_stem": dedup_by_stem,
     }
-

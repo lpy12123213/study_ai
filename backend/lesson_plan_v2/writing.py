@@ -51,7 +51,9 @@ async def generate_lesson_plan_json(
     prompt_parts.append("")
     prompt_parts.append("输出要求：只输出严格 JSON，不要 Markdown 代码块，不要多余解释文字。")
     prompt_parts.append("JSON 必须包含：title, objectives, sections, summary。")
-    prompt_parts.append("sections 每项必须包含：title, duration_minutes(number), content, activities(string[]), resources(string[])。")
+    prompt_parts.append(
+        "sections 每项必须包含：title, duration_minutes(number), content, activities(string[]), resources(string[])。"
+    )
 
     last_err = ""
     for _ in range(3):
@@ -162,4 +164,3 @@ def lesson_plan_to_markdown(
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"
-

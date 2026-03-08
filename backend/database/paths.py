@@ -28,4 +28,3 @@ def resolve_db_path() -> Path:
         return db_path
     except Exception:
         return legacy_db_path
-

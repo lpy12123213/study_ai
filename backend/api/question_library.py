@@ -17,9 +17,9 @@ from backend.api.question_library_schemas import (
     QuestionLibraryGenerateRequest,
     QuestionLibraryScoreRequest,
 )
-from backend.crawler_manager import get_crawler
 from backend.core.llm_client import is_llm_configured
 from backend.core.settings import LESSON_PLAN_MODEL
+from backend.crawler_manager import get_crawler
 from backend.database.models import (
     bulk_delete_question_library_items,
     get_latest_study_archive,
@@ -79,7 +79,9 @@ async def list_items(
     offset: int = Query(0),
     user: dict = Depends(require_auth),
 ) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     return await list_question_library_items(
         user_id=user_id,
         subject=subject,
@@ -96,7 +98,9 @@ async def list_items(
 
 @router.get("/items/{question_id}", response_model=dict)
 async def get_item_detail(question_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     item = await get_question_library_item(user_id=user_id, question_id=question_id)
     if not item:
         raise HTTPException(status_code=404, detail="not_found")
@@ -107,7 +111,9 @@ async def get_item_detail(question_id: str, user: dict = Depends(require_auth)) 
 
 @router.post("/items/{question_id}/hide", response_model=dict)
 async def hide_item(question_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     ok = await set_hidden(user_id=user_id, question_id=question_id, hidden=True)
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
@@ -116,7 +122,9 @@ async def hide_item(question_id: str, user: dict = Depends(require_auth)) -> dic
 
 @router.post("/items/{question_id}/unhide", response_model=dict)
 async def unhide_item(question_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     ok = await set_hidden(user_id=user_id, question_id=question_id, hidden=False)
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
@@ -125,7 +133,9 @@ async def unhide_item(question_id: str, user: dict = Depends(require_auth)) -> d
 
 @router.post("/items/{question_id}/star", response_model=dict)
 async def star_item(question_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     ok = await set_starred(user_id=user_id, question_id=question_id, starred=True)
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
@@ -134,7 +144,9 @@ async def star_item(question_id: str, user: dict = Depends(require_auth)) -> dic
 
 @router.post("/items/{question_id}/unstar", response_model=dict)
 async def unstar_item(question_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     ok = await set_starred(user_id=user_id, question_id=question_id, starred=False)
     if not ok:
         raise HTTPException(status_code=404, detail="not_found")
@@ -143,7 +155,9 @@ async def unstar_item(question_id: str, user: dict = Depends(require_auth)) -> d
 
 @router.post("/items/bulk-delete", response_model=dict)
 async def bulk_delete_items(request: QuestionLibraryBulkDeleteRequest, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     ids = [str(x or "").strip() for x in (request.question_ids or []) if str(x or "").strip()]
     ids = list(dict.fromkeys(ids))
     if not ids:
@@ -157,7 +171,9 @@ async def bulk_delete_items(request: QuestionLibraryBulkDeleteRequest, user: dic
 
 @router.post("/items/{question_id}/export-to-basket", response_model=dict)
 async def export_item_to_basket(question_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     qid = str(question_id or "").strip()
     if not qid:
         raise HTTPException(status_code=400, detail="missing_question_id")
@@ -207,7 +223,9 @@ async def export_item_to_basket(question_id: str, user: dict = Depends(require_a
 
     crawler = await get_crawler(subject=subject, edu_level="", strict=True)
     try:
-        result = await crawler.export_to_basket([qid], question_details=[detail], auto_login=True, auto_switch_subject=True)
+        result = await crawler.export_to_basket(
+            [qid], question_details=[detail], auto_login=True, auto_switch_subject=True
+        )
     except Exception:
         raise HTTPException(status_code=500, detail="export_failed")
     return result if isinstance(result, dict) else {"success": False, "error": "export_failed"}
@@ -215,7 +233,9 @@ async def export_item_to_basket(question_id: str, user: dict = Depends(require_a
 
 @router.get("/tasks/{task_id}", response_model=dict)
 async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> dict:
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     payload = await _tasks.status_payload(task_id=task_id, user_id=user_id)
     if not payload:
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -223,8 +243,12 @@ async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> d
 
 
 @router.get("/tasks/{task_id}/stream")
-async def stream_task(task_id: str, after_seq: int = Query(0, ge=0), user: dict = Depends(require_auth)) -> StreamingResponse:
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+async def stream_task(
+    task_id: str, after_seq: int = Query(0, ge=0), user: dict = Depends(require_auth)
+) -> StreamingResponse:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     task = await _tasks.get_task(task_id)
     if not task or task.user_id != user_id:
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -233,7 +257,9 @@ async def stream_task(task_id: str, after_seq: int = Query(0, ge=0), user: dict 
 
 @router.post("/crawl")
 async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depends(require_auth)) -> StreamingResponse:
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     subject = (request.subject or "").strip()
     edu_level = (request.edu_level or "").strip()
@@ -271,7 +297,11 @@ async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depe
         difficulty_value_min = max(0.0, min(1.0, difficulty_value_min))
     if difficulty_value_max is not None:
         difficulty_value_max = max(0.0, min(1.0, difficulty_value_max))
-    if difficulty_value_min is not None and difficulty_value_max is not None and difficulty_value_min > difficulty_value_max:
+    if (
+        difficulty_value_min is not None
+        and difficulty_value_max is not None
+        and difficulty_value_min > difficulty_value_max
+    ):
         difficulty_value_min, difficulty_value_max = difficulty_value_max, difficulty_value_min
 
     require_difficulty_value = bool(request.require_difficulty_value) and (
@@ -416,13 +446,19 @@ async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depe
             if task.status == "running":
                 await _tasks.fail_task(task, "Task ended unexpectedly")
 
-    task = await _tasks.create_task(task_id=task_id, user_id=user_id, kind="crawl", request=request.model_dump(), runner_factory=runner_factory)  # type: ignore[attr-defined]
+    task = await _tasks.create_task(
+        task_id=task_id, user_id=user_id, kind="crawl", request=request.model_dump(), runner_factory=runner_factory
+    )  # type: ignore[attr-defined]
     return await _stream_task(task.task_id, after_seq=0)
 
 
 @router.post("/generate")
-async def generate_and_save(request: QuestionLibraryGenerateRequest, user: dict = Depends(require_auth)) -> StreamingResponse:
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+async def generate_and_save(
+    request: QuestionLibraryGenerateRequest, user: dict = Depends(require_auth)
+) -> StreamingResponse:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     if not is_llm_configured():
         raise HTTPException(status_code=500, detail="llm_not_configured")
@@ -468,7 +504,9 @@ async def generate_and_save(request: QuestionLibraryGenerateRequest, user: dict 
                 question_type=question_type,
                 config=None,
             )
-            await _tasks.append_event(task, {"type": "progress", "data": {"progress": 55, "stage": "Draft Realization"}})
+            await _tasks.append_event(
+                task, {"type": "progress", "data": {"progress": 55, "stage": "Draft Realization"}}
+            )
 
             # Skeleton stages (solver/judge) are currently no-ops but we still emit them for UI.
             await _tasks.append_event(task, {"type": "progress", "data": {"progress": 70, "stage": "Solver"}})
@@ -531,7 +569,9 @@ async def generate_and_save(request: QuestionLibraryGenerateRequest, user: dict 
                 )
 
                 pct = 85 + int((idx / max(1, count)) * 13)
-                await _tasks.append_event(task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Save"}})
+                await _tasks.append_event(
+                    task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Save"}}
+                )
 
             if not saved_ids:
                 raise RuntimeError("no_questions_generated")
@@ -570,8 +610,12 @@ async def generate_and_save(request: QuestionLibraryGenerateRequest, user: dict 
 
 
 @router.post("/score")
-async def score_question_library(request: QuestionLibraryScoreRequest, user: dict = Depends(require_auth)) -> StreamingResponse:
-    user_id = str((user or {}).get("user_id") or "").strip() or "anonymous"
+async def score_question_library(
+    request: QuestionLibraryScoreRequest, user: dict = Depends(require_auth)
+) -> StreamingResponse:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     if not is_llm_configured():
         raise HTTPException(status_code=500, detail="llm_not_configured")
@@ -688,7 +732,9 @@ async def score_question_library(request: QuestionLibraryScoreRequest, user: dic
                 )
 
                 pct = 10 + int((idx / max(1, total)) * 88)
-                await _tasks.append_event(task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Score"}})
+                await _tasks.append_event(
+                    task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Score"}}
+                )
 
             await _tasks.append_event(
                 task,

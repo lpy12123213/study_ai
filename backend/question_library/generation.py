@@ -86,7 +86,7 @@ def seed_root_specs(source_pack: dict, count: int, difficulty: str, question_typ
     for i in range(n):
         specs.append(
             {
-                "spec_id": f"spec_{i+1}",
+                "spec_id": f"spec_{i + 1}",
                 "subject": subj,
                 "topic": top,
                 "difficulty": str(difficulty or "").strip(),
@@ -278,4 +278,3 @@ async def generate_questions(
 
     finals = select_final(drafts, count=count)
     return finals
-

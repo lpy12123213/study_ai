@@ -4,13 +4,15 @@ import asyncio
 from typing import Dict, Tuple
 
 from backend.config import DEFAULT_SUBJECT
-from backend.subjects import resolve_subject
+from backend.core.logging_utils import get_logger
 from backend.crawler.zujuan_crawler import ZujuanCrawler
+from backend.subjects import resolve_subject
 
 # Keep per-subject crawler instances to avoid cross-request races when switching subjects.
 _crawlers: Dict[Tuple[str, str], ZujuanCrawler] = {}
 _inflight: Dict[Tuple[str, str], asyncio.Future] = {}
 _lock = asyncio.Lock()
+logger = get_logger(__name__)
 
 
 async def get_crawler(*, subject: str = "", edu_level: str = "", strict: bool = True) -> ZujuanCrawler:
@@ -80,10 +82,10 @@ async def close_crawler() -> None:
             if not fut.done():
                 fut.set_exception(RuntimeError("crawler_closed"))
         except Exception:
-            pass
+            logger.debug("failed to cancel inflight crawler future", exc_info=True)
 
     for crawler in crawlers:
         try:
             await crawler.close()
         except Exception:
-            pass
+            logger.exception("crawler_close_failed")

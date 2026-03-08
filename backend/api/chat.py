@@ -17,6 +17,7 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 
 logger = logging.getLogger(__name__)
 
+
 def _truncate_display_width(text: str, max_width: int) -> str:
     s = str(text or "").strip()
     if not s or max_width <= 0:
@@ -47,7 +48,9 @@ async def chat_endpoint(request: ChatRequest, user: dict = Depends(require_auth)
     model_override = (request.model or "").strip() or None
     sub_model_override = (request.sub_model or "").strip() or None
 
-    user_id = str((user or {}).get("user_id") or "").strip() or "1"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     conv = await get_conversation(user_id=user_id, conv_id=conv_id)
     if not conv:

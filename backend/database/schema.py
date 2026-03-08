@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from backend.database.base import Base
@@ -211,6 +211,9 @@ class StudyArchive(Base):
     user_id = Column(String(64), index=True, default="")
     subject = Column(String(100), default="")
     topic = Column(String(200), default="")
+    # Deterministic fingerprint (user+subject+topic+requirements) used for cache lookup.
+    # Versions of the same content share the same base_fingerprint while keeping a unique `fingerprint`.
+    base_fingerprint = Column(String(32), index=True, default="")
     fingerprint = Column(String(32), index=True, unique=True, nullable=False)
     preset = Column(String(32), default="")
     requirements = Column(Text, default="")
@@ -219,3 +222,225 @@ class StudyArchive(Base):
     sections_json = Column(Text, default="[]")
 
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class UsedQuestionUser(Base):
+    """用户维度的去重集（用于组卷避免重复题目）。"""
+
+    __tablename__ = "used_questions_user"
+
+    user_id = Column(String(64), primary_key=True)
+    question_id = Column(String(50), primary_key=True)
+    subject = Column(String(100), default="")
+    used_at = Column(DateTime, default=datetime.utcnow)
+
+
+class GeneratedFile(Base):
+    """Metadata for locally generated files served from `.local/media/generated/`."""
+
+    __tablename__ = "generated_files"
+
+    filename = Column(String(200), primary_key=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    file_type = Column(String(32), default="", index=True)  # md|tex|pdf|image|zip|...
+    mime_type = Column(String(100), default="")
+    sha256 = Column(String(64), default="", index=True)
+    bytes = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+
+
+class Task(Base):
+    """Unified persisted task record (cross-feature)."""
+
+    __tablename__ = "tasks"
+
+    id = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+
+    task_type = Column(String(50), nullable=False, index=True, default="")
+    title = Column(String(200), nullable=False, default="")
+    status = Column(
+        String(20), nullable=False, index=True, default="running"
+    )  # running|paused|completed|failed|canceled
+    progress = Column(Float, default=0.0)
+    last_seq = Column(Integer, default=0)
+
+    parent_task_id = Column(String(64), index=True)
+
+    request_json = Column(Text, default="")
+    result_json = Column(Text, default="")
+    error_json = Column(Text, default="")
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    started_at = Column(DateTime, nullable=True, index=True)
+    ended_at = Column(DateTime, nullable=True, index=True)
+
+    events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")
+
+
+class TaskEvent(Base):
+    """Streaming events for tasks (SSE replay)."""
+
+    __tablename__ = "task_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String(64), ForeignKey("tasks.id"), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)
+    event_type = Column(String(50), index=True, default="")
+    payload_json = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    task = relationship("Task", back_populates="events")
+
+    __table_args__ = (UniqueConstraint("task_id", "seq", name="ux_task_events_task_id_seq"),)
+
+
+class UserItemMeta(Base):
+    """Generic per-user metadata for arbitrary items (star/pin/tags)."""
+
+    __tablename__ = "user_item_meta"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    item_type = Column(String(32), nullable=False, index=True, default="")
+    item_id = Column(String(64), nullable=False, index=True, default="")
+
+    starred = Column(Integer, default=0, index=True)
+    pinned = Column(Integer, default=0, index=True)
+    tags_json = Column(Text, default="[]")
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    __table_args__ = (UniqueConstraint("user_id", "item_type", "item_id", name="ux_user_item_meta"),)
+
+
+class UserSettings(Base):
+    """Cross-device synced user settings (JSON)."""
+
+    __tablename__ = "user_settings"
+
+    user_id = Column(String(64), primary_key=True)
+    settings_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class ShareLink(Base):
+    """Public read-only share tokens for selected items."""
+
+    __tablename__ = "share_links"
+
+    token = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    item_type = Column(String(32), nullable=False, index=True, default="")
+    item_id = Column(String(64), nullable=False, index=True, default="")
+
+    expires_at = Column(DateTime, nullable=True, index=True)
+    password_hash = Column(String(200), default="")
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class LearningPlan(Base):
+    """Learning plan with todo items and optional reminders."""
+
+    __tablename__ = "learning_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    title = Column(String(200), default="", index=True)
+    archived = Column(Integer, default=0, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    items = relationship("LearningPlanItem", back_populates="plan", cascade="all, delete-orphan")
+
+
+class LearningPlanItem(Base):
+    """Single item within a learning plan."""
+
+    __tablename__ = "learning_plan_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("learning_plans.id"), nullable=False, index=True)
+    title = Column(String(200), default="")
+    description = Column(Text, default="")
+    due_at = Column(DateTime, nullable=True, index=True)
+    completed = Column(Integer, default=0, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    sort_order = Column(Integer, default=0, index=True)
+    source_ref_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    plan = relationship("LearningPlan", back_populates="items")
+
+
+class Annotation(Base):
+    """User annotations on a document/paragraph/question, with anchors for deep links."""
+
+    __tablename__ = "annotations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    item_type = Column(String(32), nullable=False, index=True, default="")
+    item_id = Column(String(64), nullable=False, index=True, default="")
+    anchor = Column(String(120), default="", index=True)
+    snippet = Column(String(300), default="")
+    content = Column(Text, default="")
+    tags_json = Column(Text, default="[]")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class FeedbackReport(Base):
+    """User feedback report with captured context for maintainers."""
+
+    __tablename__ = "feedback_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    title = Column(String(200), default="")
+    description = Column(Text, default="")
+    context_json = Column(Text, default="{}")
+    status = Column(String(32), index=True, default="received")  # received|triaged|in_progress|done
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class UserTemplate(Base):
+    """Reusable prompt/parameter templates."""
+
+    __tablename__ = "user_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    template_type = Column(String(32), index=True, default="")  # study_materials|paper_compose|lesson_plan|...
+    name = Column(String(200), default="", index=True)
+    body_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class WrongQuestion(Base):
+    """Per-user wrongbook entry (question ids + review metadata)."""
+
+    __tablename__ = "wrong_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    question_id = Column(String(50), nullable=False, index=True)
+    subject = Column(String(100), default="", index=True)
+    knowledge_point = Column(String(200), default="", index=True)
+    mastery = Column(Integer, default=0, index=True)  # 0..100
+    note = Column(Text, default="")
+    tags_json = Column(Text, default="[]")
+    source_ref_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    __table_args__ = (UniqueConstraint("user_id", "question_id", name="ux_wrong_questions_user_question"),)

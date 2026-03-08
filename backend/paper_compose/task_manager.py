@@ -5,6 +5,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 def _now_s() -> float:
     return time.time()
@@ -132,6 +136,42 @@ class PaperComposeTaskManager:
                     "status": "paused",
                     "startTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "toolName": "compose_paper",
+                },
+            },
+        )
+        async with task.cond:
+            task.cond.notify_all()
+        return True
+
+    async def cancel_task(self, *, task_id: str, user_id: str) -> bool:
+        tid = (task_id or "").strip()
+        uid = (user_id or "").strip() or "anonymous"
+        if not tid:
+            return False
+
+        async with self._lock:
+            task = self._tasks.get(tid)
+            if not task or task.user_id != uid:
+                return False
+            if task.status in {"completed", "failed", "canceled", "cancelled"}:
+                return True
+            task.status = "canceled"
+            task.error = "Task cancelled"
+
+            if task.runner and not task.runner.done():
+                task.runner.cancel()
+
+        await self._append_event(
+            task,
+            {
+                "type": "step",
+                "step": {
+                    "id": "task_canceled",
+                    "title": "任务已取消",
+                    "status": "failed",
+                    "startTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "toolName": "compose_paper",
+                    "error": "Task cancelled",
                 },
             },
         )
@@ -275,7 +315,7 @@ class PaperComposeTaskManager:
             try:
                 task.progress = float((data or {}).get("progress") or 0.0)
             except Exception:
-                pass
+                logger.debug("paper_compose_progress_parse_failed", extra={"task_id": task.task_id}, exc_info=True)
 
         async with task.cond:
             task.last_seq += 1
@@ -328,5 +368,5 @@ class PaperComposeTaskManager:
             if oldest.runner and not oldest.runner.done():
                 oldest.runner.cancel()
         except Exception:
-            pass
+            logger.debug("paper_compose_runner_cancel_failed", extra={"task_id": oldest.task_id}, exc_info=True)
         self._tasks.pop(oldest.task_id, None)

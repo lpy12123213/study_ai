@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
 
 class LessonPlanObjective(BaseModel):
     """Learning objective."""
+
     description: str
     type: str = "knowledge"  # knowledge, skill, attitude
 
 
 class LessonPlanSection(BaseModel):
     """A section of the lesson plan."""
+
     title: str
     duration_minutes: int
     content: str
@@ -23,6 +26,7 @@ class LessonPlanSection(BaseModel):
 
 class LessonPlanCreateRequest(BaseModel):
     """Request to create a lesson plan."""
+
     title: str = Field(..., min_length=1, max_length=255)
     subject: str
     grade: Optional[str] = None
@@ -34,6 +38,7 @@ class LessonPlanCreateRequest(BaseModel):
 
 class LessonPlanResponse(BaseModel):
     """Lesson plan response."""
+
     id: str
     title: str
     subject: str
@@ -49,12 +54,14 @@ class LessonPlanResponse(BaseModel):
 
 class LessonPlanListResponse(BaseModel):
     """List of lesson plans."""
+
     plans: List[LessonPlanResponse]
     total: int
 
 
 class LessonPlanGenerateRequest(BaseModel):
     """Request to generate a lesson plan using AI."""
+
     subject: str
     grade: str
     topic: str
@@ -67,12 +74,14 @@ class LessonPlanGenerateRequest(BaseModel):
 
 class LessonPlanExportRequest(BaseModel):
     """Request to export a lesson plan."""
+
     plan_id: str
     format: str = "markdown"  # markdown, docx, pdf
 
 
 class LessonPlanExportResponse(BaseModel):
     """Export response with download URL or content."""
+
     content: Optional[str] = None
     download_url: Optional[str] = None
     format: str
@@ -81,5 +90,6 @@ class LessonPlanExportResponse(BaseModel):
 
 class AgentEvent(BaseModel):
     """SSE event from lesson plan agent."""
+
     event: str  # thinking, tool_call, content, done, error
     data: Dict[str, Any]

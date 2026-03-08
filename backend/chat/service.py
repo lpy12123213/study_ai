@@ -62,12 +62,14 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
         user_message: str,
         subject: str = "高中数学",
         *,
-        user_id: str = "1",
+        user_id: str,
         model: Optional[str] = None,
         sub_model: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self.current_subject = subject
-        uid = str(user_id or "").strip() or "1"
+        uid = str(user_id or "").strip()
+        if not uid:
+            raise ValueError("missing_user_id")
 
         main_model = (model or MAIN_MODEL).strip() or MAIN_MODEL
         sub_model_effective = (sub_model or "").strip() or None
@@ -119,9 +121,18 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                             name = str((fn or {}).get("name") or "").strip()
                             if name:
                                 tool_names.append(name)
-                        assistant_content = f"（第 {iteration} 轮：调用工具 {', '.join(tool_names)}）" if tool_names else f"（第 {iteration} 轮：调用工具）"
+                        assistant_content = (
+                            f"（第 {iteration} 轮：调用工具 {', '.join(tool_names)}）"
+                            if tool_names
+                            else f"（第 {iteration} 轮：调用工具）"
+                        )
 
-                    yield {"type": "assistant", "content": assistant_content, "tool_calls": tool_calls, "iteration": iteration}
+                    yield {
+                        "type": "assistant",
+                        "content": assistant_content,
+                        "tool_calls": tool_calls,
+                        "iteration": iteration,
+                    }
 
                     tool_results: List[Dict[str, Any]] = []
                     for tool_call in tool_calls:
@@ -160,7 +171,11 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                             "iteration": iteration,
                         }
 
-                        tool_result_msg = {"tool_call_id": tool_id, "role": "tool", "content": json.dumps(tool_result, ensure_ascii=False)}
+                        tool_result_msg = {
+                            "tool_call_id": tool_id,
+                            "role": "tool",
+                            "content": json.dumps(tool_result, ensure_ascii=False),
+                        }
                         tool_results.append(tool_result_msg)
                         all_tool_results.append(tool_result_msg)
 
@@ -198,7 +213,8 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
 
             yield {
                 "type": "assistant_final",
-                "content": f"已完成 {MAX_TOOL_ITERATIONS} 轮操作。" + self._generate_fallback_response(all_tool_results),
+                "content": f"已完成 {MAX_TOOL_ITERATIONS} 轮操作。"
+                + self._generate_fallback_response(all_tool_results),
                 "total_iterations": iteration,
                 "max_reached": True,
             }

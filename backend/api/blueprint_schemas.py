@@ -20,4 +20,3 @@ class BlueprintResponse(BaseModel):
     slots: List[Dict[str, Any]]
     createdAt: str
     updatedAt: str
-

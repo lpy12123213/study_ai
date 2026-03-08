@@ -285,7 +285,11 @@ class ChatLLMMixin:
                             else ""
                         ),
                     )
-                    return {"success": True, "data": data} if isinstance(data, dict) else {"success": False, "error": "invalid_response"}
+                    return (
+                        {"success": True, "data": data}
+                        if isinstance(data, dict)
+                        else {"success": False, "error": "invalid_response"}
+                    )
 
                 last_error = RuntimeError(f"{provider} API error: {response.status_code} - {response.text}")
             except Exception as exc:

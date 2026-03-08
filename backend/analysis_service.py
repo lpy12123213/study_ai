@@ -1,8 +1,7 @@
-from typing import Any, Dict, List
-
 import os
 import time
 import uuid
+from typing import Any, Dict, List
 
 import httpx
 
@@ -33,12 +32,7 @@ def calculate_difficulty_score(questions: List[Dict[str, Any]]) -> float:
     if not questions:
         return 0.5
 
-    score_map = {
-        "简单": 0.3,
-        "中等": 0.6,
-        "困难": 0.9,
-        "": 0.5
-    }
+    score_map = {"简单": 0.3, "中等": 0.6, "困难": 0.9, "": 0.5}
 
     total_score = sum(score_map.get(q.get("difficulty") or "", 0.5) for q in questions)
     return round(total_score / len(questions), 2)
@@ -53,10 +47,7 @@ def generate_knowledge_distribution(questions: List[Dict[str, Any]], paper_name:
         q_type = q.get("type") or "其他"
         type_counts[q_type] = type_counts.get(q_type, 0) + 1
 
-    data = [
-        {"subject": k, "A": v, "fullMark": len(questions)}
-        for k, v in type_counts.items()
-    ]
+    data = [{"subject": k, "A": v, "fullMark": len(questions)} for k, v in type_counts.items()]
 
     # 如果数据太少，基于试卷名称推断一些能力维度
     if len(data) < 3:
@@ -64,11 +55,7 @@ def generate_knowledge_distribution(questions: List[Dict[str, Any]], paper_name:
         for i, topic in enumerate(base_topics):
             if len(data) >= 5:
                 break
-            data.append({
-                "subject": topic,
-                "A": max(1, len(questions) // (i + 2)),
-                "fullMark": len(questions)
-            })
+            data.append({"subject": topic, "A": max(1, len(questions) // (i + 2)), "fullMark": len(questions)})
 
     return data
 
@@ -137,12 +124,10 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
                 headers=_chat_headers(provider=provider, api_key=api_key),
                 json={
                     "model": model,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
+                    "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 300,
-                    "temperature": 0.7
-                }
+                    "temperature": 0.7,
+                },
             )
 
             if response.status_code == 200:
@@ -220,8 +205,4 @@ def analyze_paper(paper_data: Dict[str, Any]) -> Dict[str, Any]:
     radar_data = generate_knowledge_distribution(questions, paper_name)
     comment = generate_ai_comment(paper_name, difficulty, questions)
 
-    return {
-        "difficulty_score": difficulty,
-        "radar_data": radar_data,
-        "ai_comment": comment
-    }
+    return {"difficulty_score": difficulty, "radar_data": radar_data, "ai_comment": comment}

@@ -73,4 +73,3 @@ async def compose_blueprint(request: ComposeBlueprintRequest) -> Dict[str, Any]:
     if edu_level:
         result["applied_edu_level"] = edu_level
     return result
-

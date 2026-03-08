@@ -7,6 +7,7 @@
 - 使用 curl + Playwright获取的cookie 获取题目详情
 - 支持导出题目到组卷网题篮（需要登录）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -161,8 +162,10 @@ class ZujuanCrawler:
         try:
             import sys
             from pathlib import Path
+
             sys.path.append(str(Path(__file__).parent.parent))
             from backend.subjects import get_subject_config
+
             config = get_subject_config(self.subject)
             self.bank_id = config["bank_id"]
             self.category_id = config["category_id"]
@@ -317,13 +320,7 @@ class ZujuanCrawler:
                 or item.get("ProvinceID"),
                 0,
             )
-            pname = (
-                item.get("name")
-                or item.get("Name")
-                or item.get("province_name")
-                or item.get("provinceName")
-                or ""
-            )
+            pname = item.get("name") or item.get("Name") or item.get("province_name") or item.get("provinceName") or ""
             pname = str(pname).strip()
             if not pname:
                 continue
@@ -426,12 +423,12 @@ class ZujuanCrawler:
             try:
                 del self._cache[key]
             except Exception:
-                pass
+                logger.debug("zujuan_cache_delete_failed", extra={"key": str(key)}, exc_info=True)
             return None
         try:
             self._cache.move_to_end(key)
         except Exception:
-            pass
+            logger.debug("zujuan_cache_move_to_end_failed", extra={"key": str(key)}, exc_info=True)
         return value
 
     def _cache_set(self, key: str, value: Any, ttl: float) -> None:
@@ -527,7 +524,7 @@ class ZujuanCrawler:
         if not self.client:
             return
         try:
-            resp = await self.client.get(f"{self.base_url}/zujuan-api/base")    
+            resp = await self.client.get(f"{self.base_url}/zujuan-api/base")
             data = _parse_base_json(resp.text)
             if not data:
                 return
@@ -541,14 +538,14 @@ class ZujuanCrawler:
                             self.ques_type_map[name] = q.get("ID", 0)
             self._load_bank_meta_from_base()
         except Exception:
-            pass
+            logger.exception("zujuan_load_base_meta_failed", extra={"subject": str(getattr(self, "subject", "") or "")})
 
     async def _ai_search(self, keyword: str) -> Dict[str, Any]:
         """
         调用 /zujuan-api/search SSE，返回推荐的检索参数。
         """
         if not self.client:
-            return {"success": False, "error": "client not initialized"}        
+            return {"success": False, "error": "client not initialized"}
 
         keyword = (keyword or "").strip()
         cache_key = f"sse:{keyword}"
@@ -570,14 +567,14 @@ class ZujuanCrawler:
                 async for line in r.aiter_lines():
                     if not line:
                         continue
-                    if line.startswith("data:") and '"code":200' in line:       
+                    if line.startswith("data:") and '"code":200' in line:
                         try:
                             end_payload = json.loads(line.replace("data:", "").strip())
                             break
                         except Exception:
                             continue
                 if not end_payload:
-                    return {"success": False, "error": "未获取到搜索结果指引"}  
+                    return {"success": False, "error": "未获取到搜索结果指引"}
                 result = {"success": True, "payload": end_payload}
                 self._cache_set(cache_key, result, ttl=15 * 60)
                 return result
@@ -1077,7 +1074,7 @@ class ZujuanCrawler:
             )
             all_questions.extend(questions)
             debug_pages.append(dbg)
-            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):   
+            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):
                 break
 
         if not all_questions:
@@ -1309,7 +1306,7 @@ class ZujuanCrawler:
                 text = ""
             lowered = text.lower()
             is_js_challenge = (
-                "<body onload=\"check()\">" in lowered
+                '<body onload="check()">' in lowered
                 or "alicfw_gfver" in lowered
                 or "aliyun_waf_aa" in lowered
                 or "aliyun_waf_bb" in lowered
@@ -1317,7 +1314,9 @@ class ZujuanCrawler:
             )
             is_login_page = "login.css" in lowered or "login-popup.css" in lowered
             dbg = {
-                "error": "js_challenge" if is_js_challenge else ("login_page" if is_login_page else "json_parse_failed"),
+                "error": "js_challenge"
+                if is_js_challenge
+                else ("login_page" if is_login_page else "json_parse_failed"),
                 "raw_count": 0,
                 "page": cur_page,
                 "status": resp.status_code,
@@ -1458,7 +1457,9 @@ class ZujuanCrawler:
                 "date": "",
             }
 
-            root_bank_id = _safe_int(root.get("bankid"), 0) or _safe_int(bank_id, 0) or _safe_int(getattr(self, "bank_id", 0), 0)
+            root_bank_id = (
+                _safe_int(root.get("bankid"), 0) or _safe_int(bank_id, 0) or _safe_int(getattr(self, "bank_id", 0), 0)
+            )
             if root_bank_id:
                 q["bank_id"] = root_bank_id
             q["source_url"] = f"{self.base_url}/{root_bank_id}q{qid}.html" if root_bank_id else self._question_url(qid)
@@ -1502,11 +1503,7 @@ class ZujuanCrawler:
                 q["meta"] = meta
 
             # knowledge point names shown in the block.
-            kps = [
-                a.get_text(strip=True)
-                for a in root.select("a.knowledge-item")
-                if a.get_text(strip=True)
-            ]
+            kps = [a.get_text(strip=True) for a in root.select("a.knowledge-item") if a.get_text(strip=True)]
             q["knowledge_points"] = kps
 
             # Source paper link + title.
@@ -1621,11 +1618,7 @@ class ZujuanCrawler:
         def _is_fragmented_text(value: str) -> bool:
             if not re.search(r"[\r\n\u2028\u2029]", value or ""):
                 return False
-            lines = [
-                ln.strip()
-                for ln in re.split(r"\r\n|\r|\n|\u2028|\u2029", value or "")
-                if ln.strip()
-            ]
+            lines = [ln.strip() for ln in re.split(r"\r\n|\r|\n|\u2028|\u2029", value or "") if ln.strip()]
             if len(lines) < 8:
                 return False
             short2 = sum(1 for ln in lines if len(ln) <= 2)
@@ -1735,7 +1728,7 @@ class ZujuanCrawler:
                     for block in soup.select("p,div,li,section,tr,table,ul,ol,hr,h1,h2,h3,h4,h5,h6"):
                         block.append("\n")
                 except Exception:
-                    pass
+                    logger.debug("zujuan_soup_normalize_failed", exc_info=True)
                 text = soup.get_text("", strip=False)
             else:
                 text = re.sub(r"<[^>]+>", "", converted)
@@ -1823,7 +1816,11 @@ class ZujuanCrawler:
                     if date_year != year:
                         return False
                 except Exception:
-                    pass
+                    logger.debug(
+                        "zujuan_parse_date_year_failed",
+                        extra={"date": str(date_str or ""), "expected_year": int(year or 0)},
+                        exc_info=True,
+                    )
 
         if difficulty_value_min is not None or difficulty_value_max is not None:
             dv = _safe_float(question.get("difficulty_value"))
@@ -1831,9 +1828,9 @@ class ZujuanCrawler:
                 # Some questions don't expose the numeric difficulty coefficient. Keep the previous permissive
                 # behavior unless the caller explicitly requires a coefficient for strict filtering.
                 return not bool(require_difficulty_value)
-            if difficulty_value_min is not None and dv < difficulty_value_min:  
+            if difficulty_value_min is not None and dv < difficulty_value_min:
                 return False
-            if difficulty_value_max is not None and dv > difficulty_value_max:  
+            if difficulty_value_max is not None and dv > difficulty_value_max:
                 return False
 
         return True
@@ -1873,6 +1870,7 @@ class ZujuanCrawler:
         parse_content: bool = True,
     ) -> Dict[str, Any]:
         from backend.crawler.zujuan.search import search_by_keyword as impl
+
         kwargs = dict(locals())
         kwargs.pop("impl", None)
 
@@ -1920,6 +1918,7 @@ class ZujuanCrawler:
         parse_content: bool = True,
     ) -> Dict[str, Any]:
         from backend.crawler.zujuan.search import search_by_knowledge as impl
+
         kwargs = dict(locals())
         kwargs.pop("impl", None)
 
@@ -1941,8 +1940,7 @@ class ZujuanCrawler:
         await self._ensure_province_meta_loaded()
 
         grades = [
-            {"id": gid, "name": name}
-            for gid, name in sorted(self.learn_grade_id_to_name.items(), key=lambda x: x[0])
+            {"id": gid, "name": name} for gid, name in sorted(self.learn_grade_id_to_name.items(), key=lambda x: x[0])
         ]
         paper_types_by_grade = {}
         for gid, paper_types in (self.paper_types_by_grade or {}).items():
@@ -1989,6 +1987,7 @@ class ZujuanCrawler:
         slot_retries: int = 1,
     ) -> Dict[str, Any]:
         from backend.crawler.zujuan.blueprint import compose_paper_blueprint as impl
+
         kwargs = dict(locals())
         kwargs.pop("impl", None)
 
@@ -2097,6 +2096,7 @@ class ZujuanCrawler:
         stem_mode: str = "text",
     ) -> Dict[str, Any]:
         from backend.crawler.zujuan.detail import get_question_detail as impl
+
         kwargs = dict(locals())
         kwargs.pop("impl", None)
 
@@ -2167,27 +2167,19 @@ class ZujuanCrawler:
         results = []
         # 分批执行，避免并发过高
         for i in range(0, len(question_ids), max_concurrent):
-            batch = question_ids[i:i + max_concurrent]
+            batch = question_ids[i : i + max_concurrent]
             tasks = [self.get_question_detail(qid) for qid in batch]
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             for qid, result in zip(batch, batch_results):
                 if isinstance(result, Exception):
-                    results.append({
-                        "success": False,
-                        "question_id": qid,
-                        "error": str(result)
-                    })
+                    results.append({"success": False, "question_id": qid, "error": str(result)})
                 else:
                     results.append(result)
             # 添加小延迟避免请求过快（减少延迟以提升速度）
             if delay_s > 0 and i + max_concurrent < len(question_ids):
                 await asyncio.sleep(delay_s)
 
-        return {
-            "success": True,
-            "questions": results,
-            "count": len(results)
-        }
+        return {"success": True, "questions": results, "count": len(results)}
 
     async def export_to_basket(
         self,
@@ -2215,6 +2207,7 @@ class ZujuanCrawler:
         from backend.crawler.zujuan.basket import login_via_subprocess as impl
 
         return await impl(self)
+
 
 # 手动测试
 async def test_crawler():

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FileText, Search, Trash2, Loader2, Plus, Calendar } from 'lucide-react'
+import { FileText, Search, Trash2, Loader2, Plus, Calendar, Star, Pin, Tag } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -14,14 +14,52 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { usePapers, useDeletePaper } from '@/hooks/usePapers'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import * as metaApi from '@/api/meta'
 
 export default function PapersPage() {
   const [search, setSearch] = useState('')
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [tagFilter, setTagFilter] = useState('')
+  const queryClient = useQueryClient()
 
   const { data: papers, isLoading } = usePapers({ limit: 200 })
   const { mutate: deletePaper, isPending: isDeleting } = useDeletePaper()
+
+  const { data: paperMetaResp } = useQuery({
+    queryKey: ['itemMeta', 'paper'],
+    queryFn: () => metaApi.listMeta({ itemType: 'paper', limit: 500 }),
+  })
+
+  const paperMetaItems = (paperMetaResp as any)?.items || []
+  const paperMetaById = useMemo(() => {
+    const m = new Map<string, metaApi.ItemMeta>()
+    for (const row of paperMetaItems as metaApi.ItemMeta[]) {
+      m.set(String((row as any).item_id), row)
+    }
+    return m
+  }, [paperMetaItems])
+
+  const tagOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const row of paperMetaItems as metaApi.ItemMeta[]) {
+      const tags = Array.isArray((row as any).tags) ? ((row as any).tags as string[]) : []
+      for (const t of tags) {
+        const v = String(t || '').trim()
+        if (v) set.add(v)
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [paperMetaItems])
+
+  const updateMeta = useMutation({
+    mutationFn: (args: { itemId: string; patch: { starred?: boolean; pinned?: boolean; tags?: string[] } }) =>
+      metaApi.setMeta('paper', args.itemId, args.patch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['itemMeta', 'paper'] })
+    },
+  })
 
   const handleDelete = () => {
     if (deleteId) {
@@ -30,11 +68,26 @@ export default function PapersPage() {
     }
   }
 
-  const filtered =
-    papers?.filter((p) => {
-      if (!search.trim()) return true
-      return p.name.toLowerCase().includes(search.trim().toLowerCase())
-    }) ?? []
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const list = (papers || []).filter((p) => {
+      const meta = paperMetaById.get(String(p.id))
+      if (tagFilter && !(meta?.tags || []).includes(tagFilter)) return false
+      if (!q) return true
+      const inTitle = p.name.toLowerCase().includes(q)
+      const inTags = (meta?.tags || []).some((t) => String(t || '').toLowerCase().includes(q))
+      return inTitle || inTags
+    })
+    list.sort((a, b) => {
+      const ma = paperMetaById.get(String(a.id))
+      const mb = paperMetaById.get(String(b.id))
+      const pa = ma?.pinned ? 1 : 0
+      const pb = mb?.pinned ? 1 : 0
+      if (pa !== pb) return pb - pa
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+    })
+    return list
+  }, [papers, paperMetaById, search, tagFilter])
 
   return (
     <div className="h-full p-6 overflow-auto">
@@ -63,6 +116,24 @@ export default function PapersPage() {
             className="pl-9 max-w-sm bg-background"
           />
         </div>
+
+        {tagOptions.length > 0 && (
+          <div className="mb-6 max-w-sm flex items-center gap-2">
+            <Tag className="h-4 w-4 text-muted-foreground" />
+            <select
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm flex-1"
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+            >
+              <option value="">全部标签</option>
+              {tagOptions.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
@@ -108,12 +179,43 @@ export default function PapersPage() {
                   className="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-muted/30 transition-colors group"
                 >
                   <div className="col-span-6 min-w-0">
-                    <Link
-                      to={`/papers/${paper.id}`}
-                      className="block font-medium truncate hover:text-primary transition-colors"
-                    >
-                      {paper.name}
-                    </Link>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          const meta = paperMetaById.get(String(paper.id))
+                          updateMeta.mutate({ itemId: String(paper.id), patch: { starred: !meta?.starred } })
+                        }}
+                        aria-label="收藏"
+                        title="收藏"
+                      >
+                        <Star className={cn('h-4 w-4', paperMetaById.get(String(paper.id))?.starred ? 'text-primary' : '')} />
+                      </button>
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          const meta = paperMetaById.get(String(paper.id))
+                          updateMeta.mutate({ itemId: String(paper.id), patch: { pinned: !meta?.pinned } })
+                        }}
+                        aria-label="置顶"
+                        title="置顶"
+                      >
+                        <Pin className={cn('h-4 w-4', paperMetaById.get(String(paper.id))?.pinned ? 'text-primary' : '')} />
+                      </button>
+                      <Link
+                        to={`/papers/${paper.id}`}
+                        className="block font-medium truncate hover:text-primary transition-colors min-w-0"
+                      >
+                        {paper.name}
+                      </Link>
+                      {(paperMetaById.get(String(paper.id))?.tags || []).slice(0, 2).map((t) => (
+                        <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                   <div className="col-span-2 text-center">
                     <Badge variant="secondary" className="font-normal text-xs">
@@ -125,14 +227,39 @@ export default function PapersPage() {
                     {paper.createdAt ? formatDate(paper.createdAt) : '-'}
                   </div>
                   <div className="col-span-1 text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => setDeleteId(String(paper.id))}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        onClick={() => {
+                          const meta = paperMetaById.get(String(paper.id))
+                          const current = (meta?.tags || []).join(', ')
+                          const raw = window.prompt('标签（逗号分隔）', current)
+                          if (raw == null) return
+                          const tags = raw
+                            .split(',')
+                            .map((t) => t.trim())
+                            .filter((t) => t.length > 0)
+                            .slice(0, 20)
+                          updateMeta.mutate({ itemId: String(paper.id), patch: { tags } })
+                        }}
+                        aria-label="设置标签"
+                        title="设置标签"
+                      >
+                        <Tag className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => setDeleteId(String(paper.id))}
+                        aria-label="删除"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}

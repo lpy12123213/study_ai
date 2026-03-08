@@ -238,10 +238,12 @@ async def diagnose_export(
         diagnosis["overall_status"] = f"⚠️ 发现 {len(diagnosis['issues'])} 个问题"
 
         if any("未登录" in issue or "ZUJUAN_USER_ID" in issue for issue in diagnosis["issues"]):
-            diagnosis["recommendations"].append(f"🔧 请运行 scripts/登录组卷网.bat \"{current_subject}\" 进行登录")
+            diagnosis["recommendations"].append(f'🔧 请运行 scripts/登录组卷网.bat "{current_subject}" 进行登录')
 
         if any("BankID不匹配" in issue for issue in diagnosis["issues"]):
-            diagnosis["recommendations"].append("🔧 如需导出到其他学科题篮，请在浏览器中切换到目标学科后重新登录保存Cookie")
+            diagnosis["recommendations"].append(
+                "🔧 如需导出到其他学科题篮，请在浏览器中切换到目标学科后重新登录保存Cookie"
+            )
             diagnosis["recommendations"].append(
                 f"🔧 例如：访问 https://zujuan.xkw.com/ 并切换到“{current_subject}”后重新运行登录脚本"
             )
@@ -256,4 +258,3 @@ async def diagnose_export(
     }
 
     return diagnosis
-

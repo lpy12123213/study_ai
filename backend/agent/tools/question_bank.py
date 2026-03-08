@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.crawler_manager import get_crawler
 from backend.core.llm_client import is_llm_configured
+from backend.crawler_manager import get_crawler
 
 
 class QuestionBankToolsMixin:

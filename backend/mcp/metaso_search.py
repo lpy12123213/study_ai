@@ -16,8 +16,10 @@ from typing import Any, Dict, List
 
 import httpx
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import METASO_API_KEY, METASO_BASE_URL, METASO_TIMEOUT
 
+logger = get_logger(__name__)
 
 _SCOPE_TO_KEY = {
     "webpage": "webpages",
@@ -430,6 +432,6 @@ async def metaso_reader(*, url: str) -> Dict[str, Any]:
                     "error": str(obj.get("errMsg") or f"Metaso error code {obj.get('errCode')}").strip(),
                 }
         except Exception:
-            pass
+            logger.debug("metaso_error_payload_parse_failed", exc_info=True)
 
     return {"success": True, "provider": "metaso", "url": url_value, "text": text}

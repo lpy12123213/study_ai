@@ -16,16 +16,17 @@ SVG公式转LaTeX工具（增强版）
 - 自动学习新签名
 - 可视化签名分析
 """
+
 import argparse
 import asyncio
 import hashlib
 import json
 import os
 import re
-from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Set
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
-from collections import defaultdict, OrderedDict
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
 
 from backend.core.logging_utils import get_logger
 
@@ -61,6 +62,7 @@ def _svg_latex_cache_set(svg_url: str, use_advanced: bool, latex: str, unknown: 
 @dataclass
 class Glyph:
     """字形数据结构"""
+
     x: float
     y: float
     width: float
@@ -89,6 +91,7 @@ class Glyph:
 @dataclass
 class FractionBar:
     """分数线数据结构"""
+
     x1: float
     x2: float
     y: float
@@ -105,14 +108,16 @@ class FractionBar:
 @dataclass
 class FormulaStructure:
     """公式结构"""
+
     type: str  # 'simple', 'fraction', 'sqrt', 'superscript', 'subscript'
     content: str
-    children: List['FormulaStructure'] = field(default_factory=list)
+    children: List["FormulaStructure"] = field(default_factory=list)
 
 
 @dataclass
 class SqrtRegion:
     """根号区域数据结构"""
+
     x1: float  # 根号覆盖的起始x
     x2: float  # 根号覆盖的结束x
     y_top: float  # 根号顶部y坐标
@@ -131,6 +136,7 @@ class SqrtRegion:
 @dataclass
 class CasesRegion:
     """方程组（大括号）区域数据结构"""
+
     x: float
     y_top: float
     y_bottom: float
@@ -140,16 +146,38 @@ class CasesRegion:
 
 # 大型运算符列表（需要上下限的符号）
 LARGE_OPERATORS = {
-    "\\sum", "\\prod", "\\int", "\\oint", "\\iint", "\\iiint",
-    "\\bigcup", "\\bigcap", "\\bigsqcup", "\\bigvee", "\\bigwedge",
-    "\\coprod", "\\lim", "\\max", "\\min", "\\sup", "\\inf",
-    "\\limsup", "\\liminf", "\\varlimsup", "\\varliminf",
+    "\\sum",
+    "\\prod",
+    "\\int",
+    "\\oint",
+    "\\iint",
+    "\\iiint",
+    "\\bigcup",
+    "\\bigcap",
+    "\\bigsqcup",
+    "\\bigvee",
+    "\\bigwedge",
+    "\\coprod",
+    "\\lim",
+    "\\max",
+    "\\min",
+    "\\sup",
+    "\\inf",
+    "\\limsup",
+    "\\liminf",
+    "\\varlimsup",
+    "\\varliminf",
 }
 
 # 需要下标而非上下限的运算符（如 lim）
 SUBSCRIPT_ONLY_OPERATORS = {
-    "\\lim", "\\max", "\\min", "\\sup", "\\inf",
-    "\\limsup", "\\liminf",
+    "\\lim",
+    "\\max",
+    "\\min",
+    "\\sup",
+    "\\inf",
+    "\\limsup",
+    "\\liminf",
 }
 
 
@@ -201,7 +229,6 @@ GLYPH_SIGNATURES: Dict[str, str] = {
     "5a9f14b0": "5",
     "71e8b9a1": "6",
     "96aeade1": "1",
-
     # === 小写字母 ===
     "cf58f988": "x",
     "6cb4ef65": "y",
@@ -226,7 +253,6 @@ GLYPH_SIGNATURES: Dict[str, str] = {
     "1d0fc683": "v",
     "2fd59755": "w",
     "b1fb51b4": "z",
-
     # === 大写字母 ===
     "ee8570c5": "P",
     "d7198a8e": "O",
@@ -241,14 +267,12 @@ GLYPH_SIGNATURES: Dict[str, str] = {
     "10fb4c81": "I",
     "d45c14ff": "J",
     "e407c344": "K",
-
     # === 运算符 ===
     "7cbdeebe": "-",
     "e113c1a7": "+",
     "a1040187": "=",
     "aecc1ab6": "<",
     "3a890ca6": ">",
-
     # === 特殊符号 ===
     "8c6104df": ":",
     "cadf428a": "\\sqrt",
@@ -278,7 +302,7 @@ def load_signatures() -> Dict[str, str]:
                     if not key.startswith("_comment"):
                         GLYPH_SIGNATURES[key] = value
         except Exception:
-            pass
+            logger.debug("svg_signatures_load_failed", extra={"path": SIGNATURES_FILE}, exc_info=True)
 
     # 更新大型运算符签名集合
     update_large_op_signatures()
@@ -319,50 +343,48 @@ def is_operand_char(char: Optional[str]) -> bool:
 
 
 def resolve_ambiguous_char(
-    glyph: 'Glyph',
-    prev_glyph: Optional['Glyph'] = None,
-    next_glyph: Optional['Glyph'] = None
+    glyph: "Glyph", prev_glyph: Optional["Glyph"] = None, next_glyph: Optional["Glyph"] = None
 ) -> str:
     """
     根据上下文解析可能有歧义的字符
-    
+
     用于解决如 D 签名在某些上下文中可能是减号的问题
-    
+
     Args:
         glyph: 当前字形
         prev_glyph: 前一个字形
         next_glyph: 后一个字形
-    
+
     Returns:
         解析后的字符
     """
     sig = glyph.signature
-    
+
     # 如果没有在模糊签名表中，直接返回原字符
     if sig not in AMBIGUOUS_SIGNATURES:
         return glyph.char
-    
+
     ambig = AMBIGUOUS_SIGNATURES[sig]
     default_char = ambig.get("default", glyph.char)
-    
+
     # 检查是否在运算符上下文中
     # 规则：如果前后都是操作数，则可能是运算符
     prev_is_operand = prev_glyph and is_operand_char(prev_glyph.char)
     next_is_operand = next_glyph and is_operand_char(next_glyph.char)
-    
+
     if prev_is_operand and next_is_operand:
         # 在操作数之间，可能是运算符
         return ambig.get("operator_context", default_char)
-    
+
     # 检查位置关系：如果字符很窄且在两个操作数之间居中，更可能是运算符
     if prev_glyph and next_glyph:
         gap_to_prev = glyph.x - (prev_glyph.x + prev_glyph.width)
         gap_to_next = next_glyph.x - (glyph.x + glyph.width)
-        
+
         # 如果前后间隙相近，说明在中间位置，可能是运算符
         if abs(gap_to_prev - gap_to_next) < 5 and glyph.width < 10:
             return ambig.get("operator_context", default_char)
-    
+
     return default_char
 
 
@@ -396,17 +418,17 @@ def _is_geometry_like_latex(latex: str) -> bool:
     # - 大写字母后跟字母/数字（点名/线段名）
     # - 数字后跟大写字母（如 A1、B2 变体）
     score = 0
-    zero_point = bool(re.search(r'(?<![0-9\\])0(?=[1-9A-Za-z])', latex))
+    zero_point = bool(re.search(r"(?<![0-9\\])0(?=[1-9A-Za-z])", latex))
     score += 1 if zero_point else 0
-    score += len(re.findall(r'(?<!\\)[A-Z](?=[0-9A-Za-z])', latex))
-    score += len(re.findall(r'(?<![0-9\\])[0-9](?=[A-Z])', latex))
+    score += len(re.findall(r"(?<!\\)[A-Z](?=[0-9A-Za-z])", latex))
+    score += len(re.findall(r"(?<![0-9\\])[0-9](?=[A-Z])", latex))
     # 数字 + 单独的 i（点 I 常被误识别为 i；避免误伤 sin/lim 等：要求 i 后面不是小写字母）
     # - 若同式里出现了 “0 + 字母/数字” 的点名特征（如 03、0P），则更倾向为几何，
     #   放宽对 i 前一个字符的限制（允许 ...35i 这类点名）。
     if zero_point:
-        score += len(re.findall(r'[0-9](?=i(?![a-z]))', latex))
+        score += len(re.findall(r"[0-9](?=i(?![a-z]))", latex))
     else:
-        score += len(re.findall(r'(?<![a-z0-9\\])[0-9](?=i(?![a-z]))', latex))
+        score += len(re.findall(r"(?<![a-z0-9\\])[0-9](?=i(?![a-z]))", latex))
 
     # 两处及以上“点名式相邻字符”基本可视为几何上下文（如 03=0i=6 或 035i）
     return score >= 2
@@ -461,32 +483,32 @@ def postprocess_latex(latex: str) -> str:
 
     # 1) \sqrt 的单字符参数补全：\sqrt3 -> \sqrt{3}，\sqrt[?xxxx] -> \sqrt{[?xxxx]}
     latex = re.sub(
-        r'\\sqrt\s*(?!\{)(\[\?[0-9a-f]{8}\]|[A-Za-z0-9])',
-        r'\\sqrt{\1}',
+        r"\\sqrt\s*(?!\{)(\[\?[0-9a-f]{8}\]|[A-Za-z0-9])",
+        r"\\sqrt{\1}",
         latex,
     )
 
     # 2) 角：lABC / l35I -> \angleABC（只在 l 后跟 3 个字母数字时触发，避免误伤 ln/lim）
     latex = re.sub(
-        r'(?<![A-Za-z\\])l(?=[A-Za-z0-9]{3})',
-        r'\\angle',
+        r"(?<![A-Za-z\\])l(?=[A-Za-z0-9]{3})",
+        r"\\angle",
         latex,
     )
 
     # 3) O0 标签：Oo: -> O0:（仅在大写字母后、且后面紧跟 :/大写/数字/_/} 时触发）
     latex = re.sub(
-        r'(?<=[A-Z])o(?=[:A-Z0-9_\\}])',
-        '0',
+        r"(?<=[A-Z])o(?=[:A-Z0-9_\\}])",
+        "0",
         latex,
     )
 
     # 4) 几何上下文：0->O、i->I（避免误伤 sin/lim 等由多个小写字母组成的函数名）
     if _is_geometry_like_latex(latex):
         # 0 作为点 O：03/0P/0i -> O3/OP/OI
-        latex = re.sub(r'(?<![0-9\\])0(?=[1-9A-Za-z])', 'O', latex)
+        latex = re.sub(r"(?<![0-9\\])0(?=[1-9A-Za-z])", "O", latex)
         # P0（点 O）这类：P0\perp... -> PO\perp...（排除 O0 这种索引式写法）
-        latex = re.sub(r'(?<=[A-NP-Z])0(?=[^0-9A-Za-z]|$)', 'O', latex)
-        latex = re.sub(r'(?<![a-z\\])i(?![a-z])', 'I', latex)
+        latex = re.sub(r"(?<=[A-NP-Z])0(?=[^0-9A-Za-z]|$)", "O", latex)
+        latex = re.sub(r"(?<![a-z\\])i(?![a-z])", "I", latex)
 
     # 5) 常见 LaTeX 命令与后续字母分隔：
     #    例如 \sinx -> \sin x，\odotO -> \odot O（避免被 TeX 解析为更长的未知命令）。
@@ -502,34 +524,32 @@ def is_sqrt_signature(sig: str) -> bool:
 
 
 def detect_sqrt_regions(
-    glyphs: List['Glyph'],
-    svg_lines: List[Tuple[float, float, float, float]]
-) -> List['SqrtRegion']:
+    glyphs: List["Glyph"], svg_lines: List[Tuple[float, float, float, float]]
+) -> List["SqrtRegion"]:
     """
     检测 SVG 中的根号区域
-    
+
     根号通常由以下元素组成：
     1. 根号符号本身 (\\sqrt 签名)
     2. 斜线（根号的左侧部分）
     3. 水平线（根号顶部覆盖内容的横线）
-    
+
     Args:
         glyphs: 字形列表
         svg_lines: SVG 中的线段列表 [(x1, y1, x2, y2), ...]
-    
+
     Returns:
         根号区域列表
     """
     sqrt_regions = []
-    
+
     # 方法1：通过根号符号签名检测
     sqrt_glyphs = [g for g in glyphs if is_sqrt_signature(g.signature)]
-    
+
     for sqrt_g in sqrt_glyphs:
         # 找到根号符号右侧的水平线
-        sqrt_x = sqrt_g.x + sqrt_g.width
         sqrt_y = sqrt_g.y
-        
+
         # 查找可能的根号顶部水平线
         for x1, y1, x2, y2 in svg_lines:
             is_horizontal = abs(y1 - y2) < 2
@@ -537,24 +557,20 @@ def detect_sqrt_regions(
             if is_horizontal and x1 >= sqrt_g.x - 5:
                 # 检查y坐标是否接近根号顶部
                 if abs(y1 - sqrt_y) < 20:
-                    sqrt_regions.append(SqrtRegion(
-                        x1=x1,
-                        x2=x2,
-                        y_top=y1,
-                        y_bottom=sqrt_g.y + sqrt_g.height,
-                        sqrt_glyph=sqrt_g
-                    ))
+                    sqrt_regions.append(
+                        SqrtRegion(x1=x1, x2=x2, y_top=y1, y_bottom=sqrt_g.y + sqrt_g.height, sqrt_glyph=sqrt_g)
+                    )
                     break
-    
+
     # 方法2：通过线段组合检测（斜线+水平线的组合）
     # 找到所有斜线（非水平、非垂直）
     for i, (x1, y1, x2, y2) in enumerate(svg_lines):
         is_horizontal = abs(y1 - y2) < 2
         is_vertical = abs(x1 - x2) < 2
-        
+
         if is_horizontal or is_vertical:
             continue
-        
+
         # 这是一条斜线，检查是否有水平线与其右端点相连
         # 根号的斜线通常向右上倾斜
         if x2 > x1 and y2 < y1:  # 右上方向
@@ -567,20 +583,19 @@ def detect_sqrt_regions(
                     if abs(x2 - ox1) < 10 and abs(y2 - oy1) < 10:
                         # 找到一个根号结构
                         # 但需要检查这个是否已经被方法1检测到
-                        already_detected = any(
-                            abs(sr.x1 - ox1) < 5 and abs(sr.x2 - ox2) < 5
-                            for sr in sqrt_regions
-                        )
+                        already_detected = any(abs(sr.x1 - ox1) < 5 and abs(sr.x2 - ox2) < 5 for sr in sqrt_regions)
                         if not already_detected:
-                            sqrt_regions.append(SqrtRegion(
-                                x1=ox1,
-                                x2=ox2,
-                                y_top=oy1,
-                                y_bottom=max(y1, oy1) + 20,  # 估算底部
-                                sqrt_glyph=None
-                            ))
+                            sqrt_regions.append(
+                                SqrtRegion(
+                                    x1=ox1,
+                                    x2=ox2,
+                                    y_top=oy1,
+                                    y_bottom=max(y1, oy1) + 20,  # 估算底部
+                                    sqrt_glyph=None,
+                                )
+                            )
                         break
-    
+
     return sqrt_regions
 
 
@@ -593,10 +608,10 @@ def is_brace_signature(sig: str) -> bool:
 def detect_cases_regions(glyphs: List[Glyph]) -> List[CasesRegion]:
     """检测方程组（大括号）区域"""
     cases_regions = []
-    
+
     # Sort glyphs by x to process left-to-right
     sorted_glyphs = sorted(glyphs, key=lambda g: g.x)
-    
+
     for g in sorted_glyphs:
         # Check if it's a brace
         is_brace = is_brace_signature(g.signature)
@@ -604,21 +619,21 @@ def detect_cases_regions(glyphs: List[Glyph]) -> List[CasesRegion]:
             # Heuristic for unknown braces: tall and narrow
             if g.height > 30 and g.width < g.height / 4:
                 is_brace = True
-        
+
         if is_brace:
-            brace_right_x = g.x + g.width
             y_top = g.y
             y_bottom = g.y + g.height
-            
+
             # Find glyphs inside this region
             inner_glyphs = []
             for other in glyphs:
-                if other == g: continue
+                if other == g:
+                    continue
                 # Check if it's generally to the right and within y-bounds
                 if other.x > g.x - 5 and other.y >= y_top - 5 and other.y <= y_bottom + 5:
                     if other.center_x > g.center_x:
                         inner_glyphs.append(other)
-            
+
             if inner_glyphs:
                 # Group into rows
                 inner_glyphs.sort(key=lambda ig: ig.y)
@@ -627,25 +642,19 @@ def detect_cases_regions(glyphs: List[Glyph]) -> List[CasesRegion]:
                 if inner_glyphs:
                     current_row.append(inner_glyphs[0])
                     current_y = inner_glyphs[0].y
-                    
+
                     for ig in inner_glyphs[1:]:
                         # Threshold for row separation
-                        if abs(ig.y - current_y) < 12: 
+                        if abs(ig.y - current_y) < 12:
                             current_row.append(ig)
                         else:
                             rows.append(current_row)
                             current_row = [ig]
                             current_y = ig.y
                     rows.append(current_row)
-                
-                cases_regions.append(CasesRegion(
-                    x=g.x,
-                    y_top=y_top,
-                    y_bottom=y_bottom,
-                    brace_glyph=g,
-                    rows=rows
-                ))
-                
+
+                cases_regions.append(CasesRegion(x=g.x, y_top=y_top, y_bottom=y_bottom, brace_glyph=g, rows=rows))
+
     return cases_regions
 
 
@@ -657,7 +666,7 @@ def compute_path_signature(path_d: str) -> str:
 def estimate_glyph_bounds(path_d: str) -> Tuple[float, float]:
     """估算字形的宽度和高度（从path数据）"""
     # 提取所有数值
-    numbers = re.findall(r'-?\d+\.?\d*', path_d)
+    numbers = re.findall(r"-?\d+\.?\d*", path_d)
     if len(numbers) < 4:
         return 10.0, 10.0
 
@@ -672,7 +681,9 @@ def estimate_glyph_bounds(path_d: str) -> Tuple[float, float]:
     return max(width, 1.0), max(height, 1.0)
 
 
-def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], List[Tuple[float, float, float, float]]]:
+def parse_svg_glyphs(
+    svg_content: str,
+) -> Tuple[List[Glyph], List[FractionBar], List[Tuple[float, float, float, float]]]:
     """
     解析SVG，提取每个字形的信息、分数线和所有线段
 
@@ -691,7 +702,7 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
     load_signatures()
 
     # 检测<line>元素（分数线）- 使用更灵活的匹配
-    line_elements = re.findall(r'<line([^>]*)/?>', svg_content)
+    line_elements = re.findall(r"<line([^>]*)/?>", svg_content)
     all_lines = []  # 存储所有线段信息
 
     for line_attrs in line_elements:
@@ -723,10 +734,12 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
                 other_horizontal = abs(oy1 - oy2) < 2
                 if other_horizontal:
                     # 检查是否端点相连（容差5像素）
-                    if (abs(x2 - ox1) < 5 and abs(y2 - oy1) < 5) or \
-                       (abs(x2 - ox2) < 5 and abs(y2 - oy2) < 5) or \
-                       (abs(x1 - ox1) < 5 and abs(y1 - oy1) < 5) or \
-                       (abs(x1 - ox2) < 5 and abs(y1 - oy2) < 5):
+                    if (
+                        (abs(x2 - ox1) < 5 and abs(y2 - oy1) < 5)
+                        or (abs(x2 - ox2) < 5 and abs(y2 - oy2) < 5)
+                        or (abs(x1 - ox1) < 5 and abs(y1 - oy1) < 5)
+                        or (abs(x1 - ox2) < 5 and abs(y1 - oy2) < 5)
+                    ):
                         sqrt_horizontal_lines.add(j)
 
     # 只将非根号的水平线作为分数线
@@ -741,16 +754,17 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
         """解析transform，返回 (tx, ty, sx, sy)"""
         tx, ty = 0.0, 0.0
         sx, sy = 1.0, 1.0
-        
-        t_match = re.search(r'translate\(([^)]+)\)', transform_str)
+
+        t_match = re.search(r"translate\(([^)]+)\)", transform_str)
         if t_match:
-            parts = [float(x.strip()) for x in t_match.group(1).split(',')]
+            parts = [float(x.strip()) for x in t_match.group(1).split(",")]
             tx = parts[0]
-            if len(parts) > 1: ty = parts[1]
-            
-        m_match = re.search(r'matrix\(([^)]+)\)', transform_str)
+            if len(parts) > 1:
+                ty = parts[1]
+
+        m_match = re.search(r"matrix\(([^)]+)\)", transform_str)
         if m_match:
-            parts = [float(x.strip()) for x in m_match.group(1).split(',')]
+            parts = [float(x.strip()) for x in m_match.group(1).split(",")]
             if len(parts) >= 4:
                 sx = parts[0]
                 sy = parts[3]
@@ -785,7 +799,7 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
 
     for inner in stroke_matches:
         # 在stroke组内查找所有path元素（更灵活的匹配）
-        path_elements = re.findall(r'<path([^>]*)/?>', inner)
+        path_elements = re.findall(r"<path([^>]*)/?>", inner)
         for path_attrs in path_elements:
             # 提取d属性
             d_match = re.search(r'd="([^"]+)"', path_attrs)
@@ -794,7 +808,7 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
             path_d = d_match.group(1)
 
             tx, ty, sx, sy = 0.0, 0.0, 1.0, 1.0
-            
+
             # 提取transform属性（如果有）
             transform_match = re.search(r'transform="([^"]+)"', path_attrs)
             if transform_match:
@@ -802,10 +816,10 @@ def parse_svg_glyphs(svg_content: str) -> Tuple[List[Glyph], List[FractionBar], 
 
             sig = compute_path_signature(path_d)
             width, height = estimate_glyph_bounds(path_d)
-            
+
             width *= sx
             height *= sy
-            
+
             char = GLYPH_SIGNATURES.get(sig)
             glyphs.append(Glyph(tx, ty, width, height, path_d, sig, char, scale_x=sx, scale_y=sy))
 
@@ -854,9 +868,7 @@ def detect_fraction_lines(glyphs: List[Glyph]) -> List[Tuple[Glyph, List[Glyph],
 
 
 def detect_superscripts_subscripts(
-    glyphs: List[Glyph],
-    baseline_y: float,
-    y_threshold: float = 3.0
+    glyphs: List[Glyph], baseline_y: float, y_threshold: float = 3.0
 ) -> Tuple[List[Glyph], List[Glyph], List[Glyph]]:
     """
     检测上标和下标
@@ -888,32 +900,31 @@ def is_large_operator(char: Optional[str]) -> bool:
 
 
 def detect_large_operator_limits(
-    glyphs: List[Glyph],
-    operator_glyph: Glyph
+    glyphs: List[Glyph], operator_glyph: Glyph
 ) -> Tuple[List[Glyph], List[Glyph], List[Glyph]]:
     """
     检测大型运算符的上下限
-    
+
     大型运算符（如∑、∫、∏）的上下限位于符号的正上方和正下方
-    
+
     Returns:
         (剩余字形, 上限字形, 下限字形)
     """
     op_center_x = operator_glyph.center_x
     op_y = operator_glyph.y
     op_width = operator_glyph.width
-    
+
     # 定义上下限的x范围（运算符中心附近）
     x_tolerance = max(op_width * 1.5, 10)
-    
+
     upper_limit = []  # 上限（在运算符上方）
     lower_limit = []  # 下限（在运算符下方）
     remaining = []
-    
+
     for g in glyphs:
         if g == operator_glyph:
             continue
-            
+
         # 检查是否在运算符的x范围内（中心对齐）
         glyph_center_x = g.center_x
         if abs(glyph_center_x - op_center_x) <= x_tolerance:
@@ -927,36 +938,34 @@ def detect_large_operator_limits(
                 remaining.append(g)
         else:
             remaining.append(g)
-    
+
     return remaining, upper_limit, lower_limit
 
 
 def format_large_operator(
-    operator_char: str,
-    upper_limit: List[Glyph],
-    lower_limit: List[Glyph]
+    operator_char: str, upper_limit: List[Glyph], lower_limit: List[Glyph]
 ) -> Tuple[str, List[str]]:
     """
     格式化大型运算符及其上下限
-    
+
     对于求和、积分等：\\sum_{下限}^{上限}
     对于极限等：\\lim_{下标}（通常没有上标）
-    
+
     Returns:
         (LaTeX字符串, 未知签名列表)
     """
     unknown = []
     result = operator_char
-    
+
     # 检查是否为只需要下标的运算符
     is_subscript_only = operator_char in SUBSCRIPT_ONLY_OPERATORS
-    
+
     # 处理下限
     if lower_limit:
         lower_latex, lower_unknown = glyphs_to_latex(sorted(lower_limit, key=lambda g: g.x))
         unknown.extend(lower_unknown)
         result += "_{" + lower_latex + "}"
-    
+
     # 处理上限（对于只需下标的运算符，上限可能是普通后续内容，不添加 ^ 符号）
     if upper_limit and not is_subscript_only:
         upper_latex, upper_unknown = glyphs_to_latex(sorted(upper_limit, key=lambda g: g.x))
@@ -967,7 +976,7 @@ def format_large_operator(
         upper_latex, upper_unknown = glyphs_to_latex(sorted(upper_limit, key=lambda g: g.x))
         unknown.extend(upper_unknown)
         result += upper_latex
-    
+
     return result, unknown
 
 
@@ -999,17 +1008,16 @@ def glyphs_to_latex(glyphs: List[Glyph]) -> Tuple[str, List[str]]:
 
     result = []
     unknown = []
-    current_mode = 'normal'  # 'normal', 'superscript', 'subscript'
-    prev_x = -float('inf')
+    current_mode = "normal"  # 'normal', 'superscript', 'subscript'
 
     for i, g in enumerate(sorted_glyphs):
         # 上下文感知识别：获取前后字形
         prev_glyph = sorted_glyphs[i - 1] if i > 0 else None
         next_glyph = sorted_glyphs[i + 1] if i < len(sorted_glyphs) - 1 else None
-        
+
         # 优先使用字形的字符，如果有模糊签名则解析
         char = g.char
-        
+
         if char is None:
             unknown.append(g.signature)
             char = f"[?{g.signature}]"
@@ -1022,48 +1030,47 @@ def glyphs_to_latex(glyphs: List[Glyph]) -> Tuple[str, List[str]]:
 
         # 确定当前字符的模式
         if y_diff < -2:
-            new_mode = 'superscript'
+            new_mode = "superscript"
         elif y_diff > 2:
-            new_mode = 'subscript'
+            new_mode = "subscript"
         else:
-            new_mode = 'normal'
+            new_mode = "normal"
 
         # 处理模式切换
         if new_mode != current_mode:
             # 关闭之前的模式
-            if current_mode == 'superscript':
+            if current_mode == "superscript":
                 result.append("}")
-            elif current_mode == 'subscript':
+            elif current_mode == "subscript":
                 result.append("}")
 
             # 开启新模式
-            if new_mode == 'superscript':
+            if new_mode == "superscript":
                 result.append("^{")
-            elif new_mode == 'subscript':
+            elif new_mode == "subscript":
                 result.append("_{")
 
             current_mode = new_mode
 
         result.append(char)
-        prev_x = g.x
 
     # 关闭未闭合的括号
-    if current_mode in ('superscript', 'subscript'):
+    if current_mode in ("superscript", "subscript"):
         result.append("}")
 
     return "".join(result), unknown
 
 
 def glyphs_to_latex_advanced(
-    glyphs: List[Glyph], 
+    glyphs: List[Glyph],
     fraction_bars: List[FractionBar] = None,
-    svg_lines: List[Tuple[float, float, float, float]] = None
+    svg_lines: List[Tuple[float, float, float, float]] = None,
 ) -> Tuple[str, List[str]]:
     """
     高级转换：支持分数、大型运算符、根号等复杂结构
 
     支持的结构:
-    - 分数 \\frac{}{} 
+    - 分数 \\frac{}{}
     - 大型运算符上下限 \\sum_{下限}^{上限}
     - 积分上下限 \\int_{下限}^{上限}
     - 极限 \\lim_{下标}
@@ -1085,55 +1092,58 @@ def glyphs_to_latex_advanced(
 
     # 第-1步：检测方程组区域
     cases_regions = detect_cases_regions(glyphs)
-    
+
     for cases_region in cases_regions:
         used_glyphs.add(id(cases_region.brace_glyph))
-        
+
         row_latexs = []
-        
+
         for row_glyphs in cases_region.rows:
             # Mark as used
             for g in row_glyphs:
                 used_glyphs.add(id(g))
-            
+
             # Recurse
-            if not row_glyphs: continue
+            if not row_glyphs:
+                continue
             min_x = min(g.x for g in row_glyphs)
             max_x = max(g.x + g.width for g in row_glyphs)
             min_y = min(g.y for g in row_glyphs)
             max_y = max(g.y + g.height for g in row_glyphs)
-            
+
             row_bars = [
-                b for b in fraction_bars 
+                b
+                for b in fraction_bars
                 if b.x1 >= min_x - 5 and b.x2 <= max_x + 5 and b.y >= min_y - 5 and b.y <= max_y + 5
             ]
             row_lines = [
-                l for l in svg_lines
-                if l[0] >= min_x - 5 and l[2] <= max_x + 5 and l[1] >= min_y - 5 and l[3] <= max_y + 5
+                line
+                for line in svg_lines
+                if line[0] >= min_x - 5 and line[2] <= max_x + 5 and line[1] >= min_y - 5 and line[3] <= max_y + 5
             ]
-            
+
             row_latex, row_unknown = glyphs_to_latex_advanced(row_glyphs, row_bars, row_lines)
             row_latexs.append(row_latex)
             unknown.extend(row_unknown)
-            
+
         cases_latex = "\\begin{cases} " + " \\\\ ".join(row_latexs) + " \\end{cases}"
         result_parts.append((cases_region.x, cases_latex))
 
     # 第零步：检测根号区域
     sqrt_regions = detect_sqrt_regions(glyphs, svg_lines) if svg_lines else []
-    
+
     # 处理根号结构
     for sqrt_region in sqrt_regions:
         # 标记根号符号本身为已使用
         if sqrt_region.sqrt_glyph:
             used_glyphs.add(id(sqrt_region.sqrt_glyph))
-        
+
         # 找到根号覆盖范围内的字形
         sqrt_inner_glyphs = []
         for g in glyphs:
             if id(g) in used_glyphs:
                 continue
-            
+
             # 检查字形是否在根号覆盖范围内
             glyph_center_x = g.x + g.width / 2
             if sqrt_region.x1 <= glyph_center_x <= sqrt_region.x2:
@@ -1142,27 +1152,24 @@ def glyphs_to_latex_advanced(
                 if g.y >= sqrt_region.y_top - 5:  # 在根号顶线下方
                     sqrt_inner_glyphs.append(g)
                     used_glyphs.add(id(g))
-        
+
         if sqrt_inner_glyphs:
             # 检查根号内部是否有分数结构
-            inner_fraction_bars = [
-                bar for bar in fraction_bars 
-                if sqrt_region.x1 <= bar.center_x <= sqrt_region.x2
-            ]
-            
+            inner_fraction_bars = [bar for bar in fraction_bars if sqrt_region.x1 <= bar.center_x <= sqrt_region.x2]
+
             if inner_fraction_bars:
                 # 根号内有分数，递归处理（不传递svg_lines避免重复检测根号）
                 inner_latex, inner_unknown = glyphs_to_latex_advanced(
                     sqrt_inner_glyphs,
                     inner_fraction_bars,
-                    []  # 不传递svg_lines，避免无限递归
+                    [],  # 不传递svg_lines，避免无限递归
                 )
             else:
                 # 普通内容
                 inner_latex, inner_unknown = glyphs_to_latex(sqrt_inner_glyphs)
-            
+
             unknown.extend(inner_unknown)
-            
+
             # 确定根号的x位置用于排序
             sqrt_x = sqrt_region.sqrt_glyph.x if sqrt_region.sqrt_glyph else sqrt_region.x1
             sqrt_y = min((g.y for g in sqrt_inner_glyphs), default=sqrt_region.y_top)
@@ -1170,20 +1177,17 @@ def glyphs_to_latex_advanced(
 
     # 第一步：处理大型运算符及其上下限
     large_ops = [g for g in glyphs if is_large_operator(g.char) and id(g) not in used_glyphs]
-    
+
     for op in large_ops:
         used_glyphs.add(id(op))
-        
+
         # 检测上下限
-        remaining, upper, lower = detect_large_operator_limits(
-            [g for g in glyphs if id(g) not in used_glyphs],
-            op
-        )
-        
+        remaining, upper, lower = detect_large_operator_limits([g for g in glyphs if id(g) not in used_glyphs], op)
+
         # 标记已使用的字形
         for g in upper + lower:
             used_glyphs.add(id(g))
-        
+
         # 格式化运算符
         op_latex, op_unknown = format_large_operator(op.char, upper, lower)
         unknown.extend(op_unknown)
@@ -1195,11 +1199,12 @@ def glyphs_to_latex_advanced(
         for bar in fraction_bars:
             if sqrt_region.x1 <= bar.center_x <= sqrt_region.x2:
                 processed_fraction_bars.add(id(bar))
-    
+
     remaining_fraction_bars = [bar for bar in fraction_bars if id(bar) not in processed_fraction_bars]
     consumed_sqrt_parts: Set[int] = set()
-    
+
     if remaining_fraction_bars:
+
         def render_fraction_side(side_glyphs: List[Glyph], side_sqrts: List[Tuple[float, str]]) -> str:
             if not side_glyphs and not side_sqrts:
                 return ""
@@ -1340,6 +1345,7 @@ def glyphs_to_latex_advanced(
 # 异步网络函数
 # ============================================================================
 
+
 async def svg_url_to_latex(
     svg_url: str,
     client=None,
@@ -1468,6 +1474,7 @@ async def batch_svg_to_latex(
 # 同步便捷函数
 # ============================================================================
 
+
 def svg_content_to_latex(svg_content: str) -> Tuple[str, List[str]]:
     """同步转换SVG内容为LaTeX"""
     load_signatures()
@@ -1536,10 +1543,11 @@ def quick_svg_to_latex(source: str, use_advanced: bool = False) -> Tuple[Optiona
 # HTML处理函数
 # ============================================================================
 
+
 def extract_formula_urls_from_html(html: str) -> List[str]:
     """从HTML中提取公式图片URL并转为SVG格式"""
     urls = re.findall(r'https://[^"\']+/formula/[^"\']+\.png', html)
-    svg_urls = [url.replace('.png', '.svg') for url in urls]
+    svg_urls = [url.replace(".png", ".svg") for url in urls]
     return list(set(svg_urls))
 
 
@@ -1560,14 +1568,14 @@ async def replace_formulas_with_latex(
     if not matches:
         return html, {}
 
-    svg_urls = [url.replace('.png', '.svg') for url in matches]
+    svg_urls = [url.replace(".png", ".svg") for url in matches]
     latex_map = await batch_svg_to_latex(svg_urls, concurrency=concurrency, use_advanced=use_advanced)
 
     result = html
     all_unknown = {}
 
     for png_url in matches:
-        svg_url = png_url.replace('.png', '.svg')
+        svg_url = png_url.replace(".png", ".svg")
         if svg_url in latex_map:
             latex, unknown = latex_map[svg_url]
             if unknown:
@@ -1575,8 +1583,8 @@ async def replace_formulas_with_latex(
             # 用LaTeX替换img标签
             # 注意：替换字符串中的反斜杠需要转义，避免被re.sub解释为正则回引用
             img_pattern = f'<img[^>]*src="{re.escape(png_url)}"[^>]*>'
-            latex_escaped = latex.replace('\\', '\\\\')
-            result = re.sub(img_pattern, f'${latex_escaped}$', result)
+            latex_escaped = latex.replace("\\", "\\\\")
+            result = re.sub(img_pattern, f"${latex_escaped}$", result)
 
     return result, all_unknown
 
@@ -1584,6 +1592,7 @@ async def replace_formulas_with_latex(
 # ============================================================================
 # 签名学习和分析工具
 # ============================================================================
+
 
 def analyze_svg_for_learning(svg_content: str, known_latex: str = None):
     """
@@ -1617,29 +1626,25 @@ def collect_signatures_from_urls(svg_urls: List[str]) -> Dict[str, Dict]:
     """
     import urllib.request
 
-    all_sigs = defaultdict(lambda: {'count': 0, 'paths': []})
+    all_sigs = defaultdict(lambda: {"count": 0, "paths": []})
 
     for svg_url in svg_urls:
         try:
             with urllib.request.urlopen(svg_url, timeout=10) as resp:
-                svg = resp.read().decode('utf-8')
+                svg = resp.read().decode("utf-8")
 
             glyphs, _, _ = parse_svg_glyphs(svg)
             for g in glyphs:
-                all_sigs[g.signature]['count'] += 1
-                if len(all_sigs[g.signature]['paths']) < 3:
-                    all_sigs[g.signature]['paths'].append(g.path_d[:200])
+                all_sigs[g.signature]["count"] += 1
+                if len(all_sigs[g.signature]["paths"]) < 3:
+                    all_sigs[g.signature]["paths"].append(g.path_d[:200])
         except Exception:
-            pass
+            logger.debug("svg_signature_fetch_failed", extra={"url": svg_url}, exc_info=True)
 
     return dict(all_sigs)
 
 
-def generate_signature_analyzer_html(
-    signatures: Dict[str, Dict],
-    output_path: str,
-    title: str = "字形签名分析器"
-):
+def generate_signature_analyzer_html(signatures: Dict[str, Dict], output_path: str, title: str = "字形签名分析器"):
     """
     生成可视化HTML页面用于分析和标注签名
 
@@ -1648,7 +1653,7 @@ def generate_signature_analyzer_html(
         output_path: 输出HTML文件路径
         title: 页面标题
     """
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1714,39 +1719,46 @@ def generate_signature_analyzer_html(
         <span id="stats">总计 {len(signatures)} 个签名</span>
     </div>
     <div class="grid" id="grid">
-'''
+"""
 
     known_sigs = load_signatures()
-    sorted_sigs = sorted(signatures.items(), key=lambda x: -x[1]['count'])
+    sorted_sigs = sorted(signatures.items(), key=lambda x: -x[1]["count"])
 
     for sig, data in sorted_sigs:
-        if data['count'] < 1:
+        if data["count"] < 1:
             continue
 
         known_char = known_sigs.get(sig, "")
         card_class = "known" if known_char else "unknown"
 
-        path_d = data['paths'][0] if data['paths'] else ""
-        svg_content = f'''<svg class="glyph" xmlns="http://www.w3.org/2000/svg" viewBox="-5 -15 25 25">
+        path_d = data["paths"][0] if data["paths"] else ""
+        svg_content = (
+            f'''<svg class="glyph" xmlns="http://www.w3.org/2000/svg" viewBox="-5 -15 25 25">
             <path d="{path_d}" fill="black" stroke="none" transform="scale(0.8,-0.8)"/>
-        </svg>''' if path_d else '<div class="glyph"></div>'
+        </svg>'''
+            if path_d
+            else '<div class="glyph"></div>'
+        )
 
-        display_char = known_char.replace('\\', '\\\\') if known_char else ''
+        display_char = known_char.replace("\\", "\\\\") if known_char else ""
 
         html += f'''
         <div class="card {card_class}" data-sig="{sig}" data-known="{1 if known_char else 0}">
             {svg_content}
             <div class="sig">{sig}</div>
-            <div class="count">出现 {data['count']} 次</div>
-            <div class="current-char">{known_char or '?'}</div>
+            <div class="count">出现 {data["count"]} 次</div>
+            <div class="current-char">{known_char or "?"}</div>
             <input type="text" class="char-input" value="{display_char}" placeholder="LaTeX">
         </div>
 '''
 
-    html += '''
+    html += (
+        """
     </div>
     <script>
-        const knownSigs = ''' + json.dumps(known_sigs) + ''';
+        const knownSigs = """
+        + json.dumps(known_sigs)
+        + """;
 
         function exportData() {
             const cards = document.querySelectorAll('.card');
@@ -1812,9 +1824,10 @@ def generate_signature_analyzer_html(
     </script>
 </body>
 </html>
-'''
+"""
+    )
 
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
 
     print(f"已生成签名分析页面: {output_path}")
@@ -1824,6 +1837,7 @@ def generate_signature_analyzer_html(
 # ============================================================================
 # 测试函数
 # ============================================================================
+
 
 async def test():
     """运行内置测试"""
@@ -1866,6 +1880,7 @@ async def test():
 # 命令行入口
 # ============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="SVG数学公式转LaTeX工具（字形签名精确匹配，非OCR）",
@@ -1877,7 +1892,7 @@ def main():
   %(prog)s -H page.html -o output.html
   %(prog)s --collect -q 29811335 29811336 -o sigs.html
   %(prog)s --test
-        """
+        """,
     )
 
     parser.add_argument("-u", "--url", action="append", help="SVG公式URL（可多次指定）")
@@ -1923,13 +1938,13 @@ def main():
 
         print(f"从 {len(question_ids)} 个题目收集公式...")
         for qid in question_ids:
-            url = f'https://zujuan.xkw.com/11q{qid}.html'
+            url = f"https://zujuan.xkw.com/11q{qid}.html"
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                html = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', errors='ignore')
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", errors="ignore")
                 formulas = list(set(re.findall(r'https://[^"]+/formula/([^"]+)\.png', html)))[:30]
                 for f_id in formulas:
-                    svg_urls.append(f'https://staticzujuan.xkw.com/quesimg/Upload/formula/{f_id}.svg')
+                    svg_urls.append(f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{f_id}.svg")
                 print(f"  题目 {qid}: 找到 {len(formulas)} 个公式")
             except Exception as e:
                 print(f"  题目 {qid}: 获取失败 - {e}")
@@ -1938,7 +1953,7 @@ def main():
         signatures = collect_signatures_from_urls(svg_urls)
         print(f"收集到 {len(signatures)} 个不同签名")
 
-        output_path = args.output or os.path.join(os.path.dirname(__file__), 'signature_analyzer.html')
+        output_path = args.output or os.path.join(os.path.dirname(__file__), "signature_analyzer.html")
         generate_signature_analyzer_html(signatures, output_path)
         return
 

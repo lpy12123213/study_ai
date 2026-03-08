@@ -1,9 +1,11 @@
 """
 测试登录脚本 - 检查 cookie 是否正确保存
 """
-from playwright.sync_api import sync_playwright
-from pathlib import Path
+
 import time
+from pathlib import Path
+
+from playwright.sync_api import sync_playwright
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DATA_DIR = str(PROJECT_ROOT / "crawler" / ".playwright_data")
@@ -41,8 +43,8 @@ with sync_playwright() as p:
 
     user_id = None
     for c in cookies:
-        if c['name'] == 'userId':
-            user_id = c['value']
+        if c["name"] == "userId":
+            user_id = c["value"]
         print(f"  {c['name']}: {c['value'][:40]}...")
 
     print()

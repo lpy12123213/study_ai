@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import time
@@ -11,9 +10,10 @@ from typing import Any, Dict, List, Optional
 from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, PlanStep, ReflectionResult, StepResult, UserProfile
 from backend.core.llm_client import chat_completion_text
-
+from backend.core.logging_utils import get_logger
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+logger = get_logger(__name__)
 
 
 class ContextManager:
@@ -86,7 +86,9 @@ class ContextManager:
             out = dict(prev)
             for k, v in nxt.items():
                 # Tools differ in naming; support both the search-style keys and study-materials keys.
-                if k in {"results", "pages", "web_results", "web_pages", "examples", "exercises"} and isinstance(v, list):
+                if k in {"results", "pages", "web_results", "web_pages", "examples", "exercises"} and isinstance(
+                    v, list
+                ):
                     prev_list = out.get(k) if isinstance(out.get(k), list) else []
                     merged_list = _dedup_list([*prev_list, *v])
                     cap = {
@@ -168,7 +170,9 @@ class ContextManager:
         out[list_key] = [merged[kp] for kp in order if kp in merged]
         return out
 
-    def create_context(self, *, user_profile: UserProfile, system_instructions: str, current_task: str) -> CompressedContext:
+    def create_context(
+        self, *, user_profile: UserProfile, system_instructions: str, current_task: str
+    ) -> CompressedContext:
         return CompressedContext(
             user_profile=user_profile,
             system_instructions=system_instructions,
@@ -330,7 +334,7 @@ class ContextManager:
                 if text:
                     return text
             except Exception:
-                pass
+                logger.debug("context_compact_text_extract_failed", exc_info=True)
 
         # Final fallback: never raise; produce a compact local summary.
         parts = []
@@ -341,4 +345,3 @@ class ContextManager:
                 parts.append(f"{role}: {content}")
         joined = " | ".join(parts)
         return joined[:target_chars]
-

@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import json
-import httpx
 import time
 import uuid
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, Optional
 
+import httpx
+
+from backend.core import llm_console
 from backend.core.settings import (
     ZHIPU_API_KEY,
     ZHIPU_BASE_URL,
     ZHIPU_MODEL,
     ZHIPU_TIMEOUT,
 )
-from backend.core import llm_console
 
 
 async def bigmodel_web_search(
@@ -24,12 +25,12 @@ async def bigmodel_web_search(
 ) -> Dict[str, Any]:
     """
     Search the web using Zhipu BigModel's web search capability.
-    
+
     Args:
         query: The search query
         search_type: Type of search (general, news, academic)
         max_results: Maximum number of results
-    
+
     Returns:
         Dict with search results
     """
@@ -53,12 +54,12 @@ async def bigmodel_web_search(
     usage: Dict[str, Any] = {}
     content_chars = 0
     err = ""
-    
+
     headers = {
         "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
-    
+
     # Use the chat completions endpoint with web search tool
     payload = {
         "model": ZHIPU_MODEL,
@@ -79,7 +80,7 @@ async def bigmodel_web_search(
         ],
         "tool_choice": "auto",
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=ZHIPU_TIMEOUT) as client:
             response = await client.post(
@@ -96,33 +97,35 @@ async def bigmodel_web_search(
                 finish_reason = ""
             if isinstance(data, dict) and isinstance(data.get("usage"), dict):
                 usage = dict(data.get("usage") or {})
-            
+
             # Extract the response content
             choices = data.get("choices", [])
             if not choices:
                 err = "empty_choices"
                 return {"error": "No response from API", "results": []}
-            
+
             message = choices[0].get("message", {})
             content = message.get("content", "")
             if isinstance(content, str) and content:
                 content_chars = len(content)
                 llm_console.log_delta(req_id=req_id, channel="content", text=content)
-            
+
             # Extract web search results from tool calls if present
             tool_calls = message.get("tool_calls", [])
             web_results = []
-            
+
             for tool_call in tool_calls:
                 if tool_call.get("type") == "web_search":
                     search_results = tool_call.get("web_search", {}).get("results", [])
                     for result in search_results:
-                        web_results.append({
-                            "title": result.get("title", ""),
-                            "url": result.get("link", ""),
-                            "snippet": result.get("content", ""),
-                        })
-            
+                        web_results.append(
+                            {
+                                "title": result.get("title", ""),
+                                "url": result.get("link", ""),
+                                "snippet": result.get("content", ""),
+                            }
+                        )
+
             return {
                 "results": web_results[:max_results],
                 "summary": content,
@@ -158,10 +161,10 @@ async def bigmodel_web_search(
 async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
     """
     Summarize the content of a URL using Zhipu BigModel.
-    
+
     Args:
         url: The URL to summarize
-    
+
     Returns:
         Dict with summary
     """
@@ -182,12 +185,12 @@ async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
     usage: Dict[str, Any] = {}
     content_chars = 0
     err = ""
-    
+
     headers = {
         "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
-    
+
     payload = {
         "model": ZHIPU_MODEL,
         "messages": [
@@ -197,7 +200,7 @@ async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
             }
         ],
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=ZHIPU_TIMEOUT) as client:
             response = await client.post(
@@ -214,12 +217,12 @@ async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
                 finish_reason = ""
             if isinstance(data, dict) and isinstance(data.get("usage"), dict):
                 usage = dict(data.get("usage") or {})
-            
+
             choices = data.get("choices", [])
             if not choices:
                 err = "empty_choices"
                 return {"error": "No response from API"}
-            
+
             content = choices[0].get("message", {}).get("content", "")
             if isinstance(content, str) and content:
                 content_chars = len(content)
@@ -263,7 +266,7 @@ def _strip_code_fences(text: str) -> str:
     if first_newline != -1:
         stripped = stripped[first_newline + 1 :]
     if stripped.endswith("```"):
-        stripped = stripped[: -3]
+        stripped = stripped[:-3]
     return stripped.strip()
 
 

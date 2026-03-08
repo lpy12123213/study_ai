@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
@@ -49,7 +49,9 @@ def _heuristic_knowledge_type(kp: str) -> str:
     if any(x in s for x in ["历史", "发展", "人物", "年代", "起源", "背景", "里程碑"]):
         return "history"
 
-    if any(x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]):
+    if any(
+        x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]
+    ):
         return "theorem"
 
     if any(
@@ -99,10 +101,26 @@ def _default_outline_sections(knowledge_type: str, preset: str) -> List[Dict[str
 
     if kt == "theorem":
         sections = [
-            sec("定理陈述（先写清条件）", ["用一句话说清楚结论是什么", "把所有适用条件显式写出"], ["出现“条件/结论”拆分", "不遗漏边界条件"]),
-            sec("直观理解（为什么可能成立）", ["用图像/类比解释直觉", "解释结论在极端情况下是否合理"], ["有直观解释，不是纯符号复述"]),
-            sec("条件与边界/反例", ["哪些条件不可缺？缺了会怎样？", "给出典型反例或边界情况"], ["至少1个边界/反例或陷阱"]),
-            sec("证明思路骨架（选读）" if deep else "证明思路（可跳过）", ["给出3~8行推导骨架", "标注关键一步为什么这么做"], ["不要求写满细节，但要可追踪"]),
+            sec(
+                "定理陈述（先写清条件）",
+                ["用一句话说清楚结论是什么", "把所有适用条件显式写出"],
+                ["出现“条件/结论”拆分", "不遗漏边界条件"],
+            ),
+            sec(
+                "直观理解（为什么可能成立）",
+                ["用图像/类比解释直觉", "解释结论在极端情况下是否合理"],
+                ["有直观解释，不是纯符号复述"],
+            ),
+            sec(
+                "条件与边界/反例",
+                ["哪些条件不可缺？缺了会怎样？", "给出典型反例或边界情况"],
+                ["至少1个边界/反例或陷阱"],
+            ),
+            sec(
+                "证明思路骨架（选读）" if deep else "证明思路（可跳过）",
+                ["给出3~8行推导骨架", "标注关键一步为什么这么做"],
+                ["不要求写满细节，但要可追踪"],
+            ),
             sec("常见误区与易错点", ["列出3个常见误解", "解释为什么会错"], ["至少2条误区（若适用）"]),
             sec("应用/题型与解题框架", ["遇到题目时怎么用", "常用变形/等价表述"], ["给出可执行的步骤/框架"]),
         ]
@@ -120,7 +138,9 @@ def _default_outline_sections(knowledge_type: str, preset: str) -> List[Dict[str
             sec("实现细节与常见坑", ["边界条件", "容易写错的地方"], ["至少2个实现坑"]),
         ]
         if deep:
-            sections.append(sec("变体与拓展（选读）", ["有哪些常见变体", "何时选择变体"], ["至少提到1个变体（如适用）"]))
+            sections.append(
+                sec("变体与拓展（选读）", ["有哪些常见变体", "何时选择变体"], ["至少提到1个变体（如适用）"])
+            )
         return sections
 
     if kt == "history":
@@ -255,7 +275,12 @@ class StudyMaterialGenerationToolsMixin:
                     raise RuntimeError("llm_not_configured")
                 outline = {"sections": _default_outline_sections(knowledge_type, preset)}
                 ctx.working_memory.setdefault("outlines", {})[kp] = outline
-                return {"knowledge_point": kp, "outline": outline, "source": "heuristic", "knowledge_type": knowledge_type}
+                return {
+                    "knowledge_point": kp,
+                    "outline": outline,
+                    "source": "heuristic",
+                    "knowledge_type": knowledge_type,
+                }
 
             prompt = {
                 "topic": topic,
@@ -271,7 +296,7 @@ class StudyMaterialGenerationToolsMixin:
                 "constraints": [
                     "请为该知识点设计一份『讲解结构提纲』，用于后续分段写作。",
                     f"sections 数量建议：{sec_min}~{sec_max} 个（不必凑满，但要覆盖核心内容）。",
-                    "输出严格 JSON：{\"sections\":[{\"title\":\"...\",\"hints\":[\"...\"],\"verify\":[\"...\"]}, ...]}。",
+                    '输出严格 JSON：{"sections":[{"title":"...","hints":["..."],"verify":["..."]}, ...]}。',
                     "title 用中文短语，避免机械复用固定模板标题；要体现本知识点特点。",
                     "hints 每节 1~4 条，短提示即可。",
                     "verify 为该节写完后的『验证标准』，每节 2~5 条，越可操作越好。",
@@ -326,7 +351,9 @@ class StudyMaterialGenerationToolsMixin:
             aggregated = {}
 
         topic = str(args.get("topic") or aggregated.get("topic") or ctx.current_task).strip()
-        subject = str(args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        subject = str(
+            args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or ""
+        ).strip()
         items_in = aggregated.get("items") if isinstance(aggregated.get("items"), list) else []
         items_in = [x for x in items_in if isinstance(x, dict)]
 
@@ -484,7 +511,14 @@ class StudyMaterialGenerationToolsMixin:
                         lines.append(f"- {h}")
                     # Use a few brief signals so the output isn't empty.
                     if not hints_list:
-                        for k in ["definition", "core_ideas", "key_properties", "conditions_and_boundaries", "common_misconceptions", "applications"]:
+                        for k in [
+                            "definition",
+                            "core_ideas",
+                            "key_properties",
+                            "conditions_and_boundaries",
+                            "common_misconceptions",
+                            "applications",
+                        ]:
                             v = brief.get(k)
                             if isinstance(v, list) and v:
                                 lines.append(f"- {str(v[0]).strip()}")
@@ -496,21 +530,21 @@ class StudyMaterialGenerationToolsMixin:
                     "knowledge_point": kp,
                     "knowledge_type": knowledge_type,
                     "preset": preset,
-                     "ability_level": str(ctx.user_profile.ability_level or "unknown"),
-                     "ability_score": float(ctx.user_profile.ability_score or 0.5),
-                     "requirements": requirements,
-                     "source_brief": brief,
-                     "source_facts": facts,
-                     "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
-                     "instructions": [
-                         "请只撰写这一个小节的内容。",
-                         f"输出必须以 `#### {title}` 开头。",
-                         "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
-                         "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
-                         "若 source_facts 中存在低置信度事实（confidence<0.6），对应表述必须使用「推断/可能/建议」等措辞避免强断言。",
-                         "若信息不足，请明确标注「推断」或「建议」。",
-                     ],
-                 }
+                    "ability_level": str(ctx.user_profile.ability_level or "unknown"),
+                    "ability_score": float(ctx.user_profile.ability_score or 0.5),
+                    "requirements": requirements,
+                    "source_brief": brief,
+                    "source_facts": facts,
+                    "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
+                    "instructions": [
+                        "请只撰写这一个小节的内容。",
+                        f"输出必须以 `#### {title}` 开头。",
+                        "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
+                        "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
+                        "若 source_facts 中存在低置信度事实（confidence<0.6），对应表述必须使用「推断/可能/建议」等措辞避免强断言。",
+                        "若信息不足，请明确标注「推断」或「建议」。",
+                    ],
+                }
 
                 async with sem:
                     res = await self._call_llm_markdown_with_continuation(
@@ -524,7 +558,12 @@ class StudyMaterialGenerationToolsMixin:
                         model=writer_model,
                         temperature=0.25,
                         max_tokens=section_max_tokens,
-                        continuation_context={"topic": topic, "subject": subject, "knowledge_point": kp, "section_title": title},
+                        continuation_context={
+                            "topic": topic,
+                            "subject": subject,
+                            "knowledge_point": kp,
+                            "section_title": title,
+                        },
                         max_continuations=cont_limit,
                         raise_on_fail=strict_llm,
                     )
@@ -553,10 +592,12 @@ class StudyMaterialGenerationToolsMixin:
                     finish_reasons.append(fr)
                 if isinstance(usage, dict):
                     for k in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+                        raw_val = usage.get(k)
                         try:
-                            usage_sum[k] += int(usage.get(k) or 0)
+                            n = int(raw_val or 0)
                         except Exception:
-                            pass
+                            n = 0
+                        usage_sum[k] += n
                 cont_sum += int(conts or 0)
                 if fr:
                     any_llm = True
@@ -565,7 +606,9 @@ class StudyMaterialGenerationToolsMixin:
             explanation_md = _sanitize_explanation_markdown(explanation_md, knowledge_point=kp)
 
             explanation_source = "llm_sectioned" if any_llm else "fallback"
-            explanation_finish_reason = "length" if any((x or "").strip().lower() == "length" for x in finish_reasons) else "stop"
+            explanation_finish_reason = (
+                "length" if any((x or "").strip().lower() == "length" for x in finish_reasons) else "stop"
+            )
             explanation_usage: Dict[str, Any] = {k: v for k, v in usage_sum.items() if v}
 
             diagram = _first_existing_diagram(ctx, kp)

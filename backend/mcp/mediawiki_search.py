@@ -25,7 +25,7 @@ from backend.core.settings import API_TIMEOUT
 def _clip(text: str, *, max_len: int) -> str:
     if max_len <= 0:
         return ""
-    t = (text or "")
+    t = text or ""
     if len(t) <= max_len:
         return t
     return t[: max_len - 1].rstrip() + "…"

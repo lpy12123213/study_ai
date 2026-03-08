@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import time
 import hashlib
-from typing import Optional, Dict, Any, TypeVar, Generic
-from dataclasses import dataclass, field
+import time
 from collections import OrderedDict
+from dataclasses import dataclass
+from typing import Any, Dict, Generic, Optional, TypeVar
 
 T = TypeVar("T")
 
@@ -14,6 +14,7 @@ T = TypeVar("T")
 @dataclass
 class CacheEntry(Generic[T]):
     """A single cache entry."""
+
     value: T
     created_at: float
     ttl: float
@@ -73,10 +74,7 @@ class LRUCache(Generic[T]):
 
     def cleanup_expired(self) -> int:
         """Remove all expired entries. Returns count of removed entries."""
-        expired_keys = [
-            key for key, entry in self._cache.items()
-            if entry.is_expired()
-        ]
+        expired_keys = [key for key, entry in self._cache.items() if entry.is_expired()]
         for key in expired_keys:
             del self._cache[key]
         return len(expired_keys)

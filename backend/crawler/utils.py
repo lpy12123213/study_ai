@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 import html
-from typing import Optional, List
-from urllib.parse import urljoin, urlparse
+import re
+from typing import List, Optional
+from urllib.parse import urljoin
 
 
 def clean_html(text: str) -> str:
@@ -56,7 +56,7 @@ def extract_question_id(url: str) -> Optional[str]:
 def parse_difficulty(text: str) -> Optional[float]:
     """Parse difficulty from text representation."""
     text = text.lower().strip()
-    
+
     # Chinese difficulty names
     difficulty_map = {
         "容易": 0.2,
@@ -67,11 +67,11 @@ def parse_difficulty(text: str) -> Optional[float]:
         "困难": 0.8,
         "难": 0.8,
     }
-    
+
     for name, value in difficulty_map.items():
         if name in text:
             return value
-    
+
     # Try to extract numeric value
     match = re.search(r"(\d+(?:\.\d+)?)", text)
     if match:
@@ -80,14 +80,14 @@ def parse_difficulty(text: str) -> Optional[float]:
         if value > 1:
             value = value / 100 if value <= 100 else value / 1000
         return min(1.0, max(0.0, value))
-    
+
     return None
 
 
 def parse_question_type(text: str) -> Optional[str]:
     """Parse question type from text."""
     text = text.lower().strip()
-    
+
     type_map = {
         "选择": "choice",
         "单选": "choice",
@@ -100,11 +100,11 @@ def parse_question_type(text: str) -> Optional[str]:
         "证明": "proof",
         "作图": "drawing",
     }
-    
+
     for name, qtype in type_map.items():
         if name in text:
             return qtype
-    
+
     return None
 
 
@@ -120,4 +120,4 @@ def truncate_text(text: str, max_length: int, suffix: str = "...") -> str:
     """Truncate text to a maximum length."""
     if len(text) <= max_length:
         return text
-    return text[:max_length - len(suffix)] + suffix
+    return text[: max_length - len(suffix)] + suffix

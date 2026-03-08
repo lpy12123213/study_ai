@@ -101,4 +101,3 @@ class RecordReplayStore:
         except Exception:
             return key
         return key
-

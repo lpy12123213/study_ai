@@ -69,7 +69,76 @@
   
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    line-height: var(--app-line-height, 1.6);
   }
+}
+
+/* UI preference tokens (runtime-toggled via `useUiPreferencesStore`) */
+:root {
+  --app-line-height: 1.6;
+
+  --control-h: 2.25rem;   /* 36px */
+  --control-h-sm: 2rem;   /* 32px */
+  --control-h-lg: 2.5rem; /* 40px */
+
+  --control-px: 1rem;
+  --control-px-sm: 0.75rem;
+  --control-px-lg: 1.25rem;
+
+  --control-py: 0.5rem;
+  --control-py-sm: 0.375rem;
+  --control-py-lg: 0.5rem;
+}
+
+:root[data-density="compact"] {
+  --control-h: 2rem;      /* 32px */
+  --control-h-sm: 1.75rem;/* 28px */
+  --control-h-lg: 2.25rem;/* 36px */
+
+  --control-px: 0.75rem;
+  --control-px-sm: 0.6rem;
+  --control-px-lg: 1rem;
+
+  --control-py: 0.375rem;
+  --control-py-sm: 0.25rem;
+  --control-py-lg: 0.375rem;
+}
+
+/* Contrast modes */
+:root.contrast-high {
+  --color-muted-foreground: oklch(0.40 0.01 260);
+  --color-border: oklch(0.84 0.006 260);
+  --color-input: oklch(0.84 0.006 260);
+}
+
+.dark.contrast-high {
+  --color-muted-foreground: oklch(0.78 0.01 260);
+  --color-border: oklch(0.32 0.01 260);
+  --color-input: oklch(0.32 0.01 260);
+}
+
+:root.contrast-eye {
+  --color-background: oklch(0.99 0.01 90);
+  --color-card: oklch(0.995 0.01 90);
+  --color-popover: oklch(0.995 0.01 90);
+  --color-muted: oklch(0.965 0.01 90);
+  --color-accent: oklch(0.965 0.01 90);
+  --color-border: oklch(0.90 0.01 90);
+  --color-input: oklch(0.90 0.01 90);
+}
+
+.dark.contrast-eye {
+  /* Keep dark mode readable; slightly lift background for comfort. */
+  --color-background: oklch(0.15 0.01 260);
+  --color-card: oklch(0.18 0.01 260);
+  --color-popover: oklch(0.18 0.01 260);
+}
+
+:root.reduce-motion *,
+:root.reduce-motion *::before,
+:root.reduce-motion *::after {
+  transition-duration: 0ms !important;
+  scroll-behavior: auto !important;
 }
 
 /* Dark mode - Cold Dark Grey Tones */

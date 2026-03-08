@@ -114,4 +114,3 @@ def load_model_json_config(*, repo_root: Path) -> Optional[ModelJsonConfig]:
         params=dict(params) if isinstance(params, dict) else {},
         pinned=pinned,
     )
-

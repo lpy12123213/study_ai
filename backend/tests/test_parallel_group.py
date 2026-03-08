@@ -78,4 +78,3 @@ class TestParallelGroup(unittest.IsolatedAsyncioTestCase):
         t_a = self.executor.starts["a2"]
         t_b = self.executor.starts["b2"]
         self.assertGreater(t_b - t_a, 0.15)
-

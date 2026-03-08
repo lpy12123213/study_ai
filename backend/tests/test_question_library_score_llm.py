@@ -22,4 +22,3 @@ class TestQuestionLibraryScoreLlm(unittest.IsolatedAsyncioTestCase):
             out = await score_stem_with_llm(subject="高中数学", stem="题干", model="dummy")
         self.assertEqual(out["overall_score"], 85)
         self.assertEqual(out["verdict"], "好题")
-

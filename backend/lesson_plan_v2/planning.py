@@ -99,9 +99,12 @@ async def review_knowledge_points(
     min_points: int,
     max_points: int,
 ) -> List[str]:
-    model = str(
-        os.getenv("LESSON_PLAN_KP_REVIEW_MODEL") or os.getenv("LESSON_PLAN_SPLIT_MODEL") or LESSON_PLAN_MODEL
-    ).strip() or LESSON_PLAN_MODEL
+    model = (
+        str(
+            os.getenv("LESSON_PLAN_KP_REVIEW_MODEL") or os.getenv("LESSON_PLAN_SPLIT_MODEL") or LESSON_PLAN_MODEL
+        ).strip()
+        or LESSON_PLAN_MODEL
+    )
 
     prompt = {
         "topic": topic,
@@ -139,4 +142,3 @@ async def review_knowledge_points(
             last_err = "invalid_json"
 
     raise RuntimeError(f"llm_review_failed: {last_err or 'unknown'} model={model}")
-

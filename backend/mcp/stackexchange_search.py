@@ -19,8 +19,10 @@ from typing import Any, Dict, List
 import httpx
 from bs4 import BeautifulSoup
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import API_TIMEOUT
 
+logger = get_logger(__name__)
 
 _STACKEXCHANGE_API_BASE = (os.getenv("STACKEXCHANGE_API_BASE_URL") or "https://api.stackexchange.com/2.3").rstrip("/")
 _STACKEXCHANGE_KEY = (os.getenv("STACKEXCHANGE_KEY") or "").strip()
@@ -46,7 +48,7 @@ def _html_to_text(html: str) -> str:
             try:
                 tag.decompose()
             except Exception:
-                pass
+                logger.debug("stackexchange_html_sanitize_failed", exc_info=True)
         text = soup.get_text("\n", strip=True)
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
         return text

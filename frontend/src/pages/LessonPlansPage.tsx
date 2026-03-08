@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
-import rehypeKatex from 'rehype-katex'
+import { SecureMarkdown } from '@/components/shared/SecureMarkdown'
 import 'katex/dist/katex.min.css'
 import {
   BookOpenCheck,
@@ -26,14 +23,18 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
+import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { useSubjects } from '@/hooks/useSubjects'
+import { useFormDraft } from '@/hooks/useFormDraft'
 import { fetchSSERequest, resolveApiResourceUrl } from '@/api/client'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import type { ConversationItem, Message, Subject, TaskStep } from '@/types'
+import * as tasksApi from '@/api/tasks'
 
 const grades = [
   '一年级', '二年级', '三年级', '四年级', '五年级', '六年级',
@@ -239,35 +240,7 @@ function MessageBubble({ message }: { message: Message }) {
       </div>
 
       <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
-          components={{
-            a: ({ href, children, ...props }) => {
-              const url = typeof href === 'string' ? href : ''
-              const isGenerated = url.startsWith('/api/media/generated/')
-              const isDownload = isGenerated && /\.(md|pdf|tex)$/i.test(url)
-              const className = isDownload
-                ? 'inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground no-underline hover:bg-primary/90'
-                : 'text-primary underline underline-offset-4 hover:opacity-90'
-
-              return (
-                <a
-                  href={url}
-                  className={className}
-                  target={isDownload ? '_blank' : undefined}
-                  rel={isDownload ? 'noreferrer' : undefined}
-                  download={isDownload ? '' : undefined}
-                  {...props}
-                >
-                  {children}
-                </a>
-              )
-            },
-          }}
-        >
-          {message.content}
-        </ReactMarkdown>
+        <SecureMarkdown markdown={message.content} />
       </div>
 
       {message.attachment?.type === 'lesson_plan' && (
@@ -470,9 +443,14 @@ function LessonPlansPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
+  const userId = useAuthStore((s) => s.user?.id || '')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const reuseTaskId = String(searchParams.get('reuse_task') || '').trim()
 
   const [input, setInput] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
+  const [activeUnifiedTaskId, setActiveUnifiedTaskId] = useState('')
+  const activeUnifiedTaskIdRef = useRef<string>('')
   const [error, setError] = useState<string | null>(null)
 
   // Split pane: left panel width ratio (0.25 to 0.75)
@@ -500,6 +478,56 @@ function LessonPlansPage() {
     return current?.type === 'lesson_plan' ? currentConversationId : null
   }, [conversations, currentConversationId])
 
+  const draftKey = `draft:lesson-plans:v1:${userId || 'anon'}`
+  const { clearDraft } = useFormDraft({
+    storageKey: draftKey,
+    enabled: !activeConversationId && !isGenerating,
+    value: { input },
+    shouldSave: (v: any) => Boolean(String(v?.input || '').trim()),
+    onRestore: (data: any) => {
+      setInput(String(data?.input || ''))
+    },
+  })
+
+  useEffect(() => {
+    if (!reuseTaskId) return
+    let active = true
+    const run = async () => {
+      try {
+        const task = await tasksApi.getTask(reuseTaskId)
+        if (!active) return
+        const req = (task as any)?.request
+        if (!req || typeof req !== 'object' || Array.isArray(req)) return
+
+        setCurrentConversation(null, 'lesson_plan')
+
+        const subject = String((req as any).subject || '').trim()
+        const grade = String((req as any).grade || '').trim()
+        const topic = String((req as any).topic || '').trim()
+        const duration = (req as any).duration_minutes
+        const extra = String((req as any).additional_requirements || '').trim()
+
+        const parts = [
+          [subject, grade, topic ? `《${topic}》` : ''].filter(Boolean).join(' '),
+          duration ? `${String(duration)}分钟` : '',
+          '教案',
+          extra,
+        ].filter(Boolean)
+
+        setInput(parts.join('\n'))
+      } finally {
+        const next = new URLSearchParams(searchParams)
+        next.delete('reuse_task')
+        setSearchParams(next, { replace: true })
+      }
+    }
+    void run()
+    return () => {
+      active = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reuseTaskId])
+
   const messages = useConversationStore((state) =>
     state.getMessages(activeConversationId ?? '')
   )
@@ -518,6 +546,8 @@ function LessonPlansPage() {
       streamAbortRef.current = null
     }
     setIsGenerating(false)
+    setActiveUnifiedTaskId('')
+    activeUnifiedTaskIdRef.current = ''
     setInput('')
     setError(null)
     setSubAgentActivities([])
@@ -539,6 +569,8 @@ function LessonPlansPage() {
       streamAbortRef.current = null
     }
     setIsGenerating(false)
+    setActiveUnifiedTaskId('')
+    activeUnifiedTaskIdRef.current = ''
 
     const id = generateId()
     const now = new Date().toISOString()
@@ -636,6 +668,8 @@ function LessonPlansPage() {
       return
     }
 
+    clearDraft()
+
     const titleCandidate = toConversationTitle(resolvedTopic)
     const current = conversations.find((c) => c.id === conversationId)
     if (!current || current.title.startsWith('新教案')) {
@@ -700,6 +734,11 @@ function LessonPlansPage() {
       (data: unknown) => {
         if (streamAbortRef.current !== controller) return
         const evt = data as LessonPlanAgentEvent
+        const unifiedTaskId = typeof (evt as any)?.taskId === 'string' ? String((evt as any).taskId) : ''
+        if (unifiedTaskId && !activeUnifiedTaskIdRef.current) {
+          activeUnifiedTaskIdRef.current = unifiedTaskId
+          setActiveUnifiedTaskId(unifiedTaskId)
+        }
         const kind = typeof (evt as any)?.event === 'string' ? (evt as any).event : ''
         const payload = (evt as any)?.data
 
@@ -1039,6 +1078,11 @@ function LessonPlansPage() {
           >
             <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
               <div className="py-6">
+                {!!activeUnifiedTaskId && (
+                  <div className="sticky top-0 z-10 pb-3 bg-background/80 backdrop-blur-sm">
+                    <TaskProgressHeader taskId={activeUnifiedTaskId} compact />
+                  </div>
+                )}
                 <AnimatePresence mode="popLayout">
                   {messages.map((m) => (
                     <MessageBubble key={m.id} message={m} />

@@ -8,7 +8,6 @@ from sqlalchemy import engine_from_config, pool
 from backend.database.paths import resolve_db_path
 from backend.database.schema import Base
 
-
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -59,4 +58,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

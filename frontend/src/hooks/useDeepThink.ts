@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DeepThinkEvent, DeepThinkNode } from '@/api/deepthink'
 import { solveDeepThinkStream } from '@/api/deepthink'
+import { cancelTask } from '@/api/tasks'
 
 export type DeepThinkStatus = 'idle' | 'searching' | 'answering' | 'done' | 'error'
 
@@ -31,6 +32,7 @@ const EMPTY_METRICS: DeepThinkMetrics = {
 
 export function useDeepThink() {
   const [status, setStatus] = useState<DeepThinkStatus>('idle')
+  const [taskId, setTaskId] = useState<string>('')
   const [nodes, setNodes] = useState<Record<string, ThinkingNode>>({})
   const [bestPath, setBestPath] = useState<string[]>([])
   const [answer, setAnswer] = useState<string>('')
@@ -39,6 +41,7 @@ export function useDeepThink() {
   const [config, setConfig] = useState<Record<string, unknown> | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
+  const taskIdRef = useRef<string>('')
 
   const nodesRef = useRef<Record<string, ThinkingNode>>({})
   const nodesFlushRafRef = useRef<number | null>(null)
@@ -75,6 +78,11 @@ export function useDeepThink() {
       abortRef.current.abort()
       abortRef.current = null
     }
+    if (taskIdRef.current) {
+      cancelTask(taskIdRef.current).catch(() => {
+        // ignore: page still shows partial progress
+      })
+    }
     // Keep existing nodes/answer so users can inspect partial progress.
     if (status === 'searching' || status === 'answering') {
       setStatus('idle')
@@ -87,6 +95,8 @@ export function useDeepThink() {
   const reset = useCallback(() => {
     cancel('reset')
     setStatus('idle')
+    setTaskId('')
+    taskIdRef.current = ''
     nodesRef.current = {}
     setNodes({})
     setBestPath([])
@@ -98,6 +108,13 @@ export function useDeepThink() {
   }, [cancel])
 
   const applyEvent = useCallback((event: DeepThinkEvent) => {
+    if (typeof (event as any)?.taskId === 'string') {
+      const tid = String((event as any).taskId || '').trim()
+      if (tid && tid !== taskIdRef.current) {
+        taskIdRef.current = tid
+        setTaskId(tid)
+      }
+    }
     switch (event.type) {
       case 'search_start': {
         setStatus('searching')
@@ -278,6 +295,7 @@ export function useDeepThink() {
 
   return {
     status,
+    taskId,
     nodes,
     bestPath,
     answer,

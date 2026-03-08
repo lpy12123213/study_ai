@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Dict
 
-
 PLAN_TAG_OPEN = "<EXAM_PAPER_PLAN>"
 PLAN_TAG_CLOSE = "</EXAM_PAPER_PLAN>"
 
@@ -56,4 +55,3 @@ def get_system_prompt(subject: str) -> str:
         plan_open=PLAN_TAG_OPEN,
         plan_close=PLAN_TAG_CLOSE,
     )
-

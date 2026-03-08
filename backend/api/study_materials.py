@@ -12,29 +12,24 @@ import json
 import os
 import time
 import uuid
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.agent.executor import Executor
 from backend.agent.types import CompressedContext, PlanStep, UserProfile, agent_event
-from backend.api.auth import get_current_user, require_auth
+from backend.api.auth import require_auth
 from backend.api.study_materials_schemas import (
     StudyMaterialsContinueRequest,
     StudyMaterialsConvertMarkdownToLatexRequest,
     StudyMaterialsConvertMarkdownToLatexResponse,
     StudyMaterialsGenerateRequest,
 )
-from backend.study_materials.task_manager import StudyMaterialsTaskManager
+from backend.core.logging_utils import get_logger
+from backend.study_materials.tasks_singleton import study_material_tasks as _tasks
 
 router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependencies=[Depends(require_auth)])
-
-_tasks = StudyMaterialsTaskManager(
-    max_tasks=int(os.getenv("STUDY_MATERIALS_MAX_TASKS") or "50"),
-    task_ttl_s=int(os.getenv("STUDY_MATERIALS_TASK_TTL_S") or str(60 * 60)),
-    max_events_per_task=int(os.getenv("STUDY_MATERIALS_TASK_MAX_EVENTS") or "8000"),
-)
+logger = get_logger(__name__)
 
 
 def _env_truthy(name: str) -> bool:
@@ -45,7 +40,7 @@ def _env_truthy(name: str) -> bool:
 def _clip_text(text: str, *, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
-    t = (text or "")
+    t = text or ""
     if len(t) <= max_chars:
         return t
     return t[: max_chars - 1].rstrip() + "…"
@@ -76,11 +71,13 @@ async def _stream_task(task_id: str, *, after_seq: int) -> StreamingResponse:
 @router.post("/generate")
 async def generate_study_materials(
     request: StudyMaterialsGenerateRequest,
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(require_auth),
 ):
     """Start a new study-materials generation task and stream events."""
 
-    user_id = (user.get("user_id") if user else None) or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     query = (request.query or "").strip()
     if not query:
@@ -115,9 +112,11 @@ async def generate_study_materials(
 @router.post("/convert-markdown-to-latex", response_model=StudyMaterialsConvertMarkdownToLatexResponse)
 async def convert_markdown_to_latex(
     request: StudyMaterialsConvertMarkdownToLatexRequest,
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(require_auth),
 ):
-    user_id = (user.get("user_id") if user else None) or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     markdown = (request.markdown or "").strip()
     if not markdown:
@@ -131,7 +130,7 @@ async def convert_markdown_to_latex(
         try:
             profile.preferences["subject"] = subject
         except Exception:
-            pass
+            logger.debug("study_materials_set_subject_pref_failed", extra={"subject": subject}, exc_info=True)
 
     ctx = CompressedContext(
         user_profile=profile,
@@ -152,9 +151,11 @@ async def convert_markdown_to_latex(
 @router.post("/convert-markdown-to-latex/stream")
 async def convert_markdown_to_latex_stream(
     request: StudyMaterialsConvertMarkdownToLatexRequest,
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(require_auth),
 ):
-    user_id = (user.get("user_id") if user else None) or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     markdown = (request.markdown or "").strip()
     if not markdown:
@@ -168,7 +169,7 @@ async def convert_markdown_to_latex_stream(
         try:
             profile.preferences["subject"] = subject
         except Exception:
-            pass
+            logger.debug("study_materials_set_subject_pref_failed", extra={"subject": subject}, exc_info=True)
 
     ctx = CompressedContext(
         user_profile=profile,
@@ -234,7 +235,7 @@ async def convert_markdown_to_latex_stream(
                     if isinstance(evt, dict) and evt.get("event"):
                         yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
             except Exception:
-                pass
+                logger.debug("study_materials_event_queue_drain_failed", exc_info=True)
 
             step_result = await tool_task
             elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -293,11 +294,13 @@ async def get_study_materials_task(task_id: str):
 async def continue_study_materials_task(
     task_id: str,
     request: StudyMaterialsContinueRequest,
-    user: Optional[dict] = Depends(get_current_user),
+    user: dict = Depends(require_auth),
 ):
     """Continue a completed/failed task with one bounded improvement iteration (streams SSE events)."""
 
-    user_id = (user.get("user_id") if user else None) or "anonymous"
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     mode = str(request.mode or "").strip() or "improve"
 
     try:

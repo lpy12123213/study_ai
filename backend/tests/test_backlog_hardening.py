@@ -192,14 +192,18 @@ class TestPaperAnalysisCaching(unittest.IsolatedAsyncioTestCase):
 class TestSubjectFiltersCaching(unittest.IsolatedAsyncioTestCase):
     async def test_subject_filters_cache_reuses_recent_result(self) -> None:
         subjects_api.clear_subject_filters_cache()
-        crawler = SimpleNamespace(get_available_filters=AsyncMock(return_value={
-            "success": True,
-            "grades": [{"id": 1, "name": "高一"}],
-            "textbook_versions": [],
-            "provinces": [],
-            "question_types": [],
-            "paper_types_by_grade": {},
-        }))
+        crawler = SimpleNamespace(
+            get_available_filters=AsyncMock(
+                return_value={
+                    "success": True,
+                    "grades": [{"id": 1, "name": "高一"}],
+                    "textbook_versions": [],
+                    "provinces": [],
+                    "question_types": [],
+                    "paper_types_by_grade": {},
+                }
+            )
+        )
 
         with patch.dict(os.environ, {"SUBJECT_FILTERS_CACHE_TTL_S": "600"}):
             with patch("backend.api.subjects.resolve_subject", return_value="高中数学"):

@@ -14,4 +14,3 @@ from __future__ import annotations
 from backend.crawler.zujuan.client import ZujuanCrawler
 
 __all__ = ["ZujuanCrawler"]
-

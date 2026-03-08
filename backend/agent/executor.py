@@ -11,13 +11,15 @@ from backend.agent.tools.registry import TOOL_MIXINS
 from backend.agent.tools.text_utils import _looks_truncated_markdown, _repair_incomplete_markdown, _trim_overlap
 from backend.agent.types import CompressedContext, PlanStep, StepResult, agent_event
 from backend.core.llm_client import ChatCompletionResult, chat_completion
+from backend.core.logging_utils import get_logger
 from backend.core.settings import API_TIMEOUT, LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_TEMPERATURE
-
 
 _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]]] = ContextVar(
     "agent_emit_event",
     default=None,
 )
+
+logger = get_logger(__name__)
 
 
 class _ToolBox(
@@ -180,7 +182,7 @@ class Executor:
             try:
                 _emit_event_var.reset(token)
             except Exception:
-                pass
+                logger.debug("executor_reset_emit_event_var_failed", exc_info=True)
 
     async def _call_llm(
         self,
@@ -212,9 +214,7 @@ class Executor:
                 return None
 
             effort_raw = (
-                os.getenv("STUDY_MATERIALS_THINKING_EFFORT")
-                or os.getenv("STUDY_MATERIALS_REASONING_EFFORT")
-                or "xhigh"
+                os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT") or "xhigh"
             )
             effort = (effort_raw or "").strip().lower().replace("-", "").replace("_", "")
             if effort in {"max", "maximum", "highest"}:
@@ -240,7 +240,9 @@ class Executor:
                 merged.update(dict(reasoning))
                 reasoning = merged
 
-        stream_reasoning = _truthy(os.getenv("STUDY_MATERIALS_STREAM_REASONING") or os.getenv("AGENT_STREAM_REASONING") or "1")
+        stream_reasoning = _truthy(
+            os.getenv("STUDY_MATERIALS_STREAM_REASONING") or os.getenv("AGENT_STREAM_REASONING") or "1"
+        )
 
         async def _emit_thinking_delta(text: str) -> None:
             cb = _emit_event_var.get()
@@ -342,7 +344,11 @@ class Executor:
             retries=retries,
             req_id_prefix="exec-resp",
         )
-        return {"content": str(res.content or ""), "finish_reason": str(res.finish_reason or ""), "usage": dict(res.usage or {})}
+        return {
+            "content": str(res.content or ""),
+            "finish_reason": str(res.finish_reason or ""),
+            "usage": dict(res.usage or {}),
+        }
 
     async def _call_llm_markdown_with_continuation(
         self,
@@ -459,14 +465,14 @@ class Executor:
             if first_newline != -1:
                 stripped = stripped[first_newline + 1 :]
             if stripped.endswith("```"):
-                stripped = stripped[: -3]
+                stripped = stripped[:-3]
             raw = stripped.strip()
         # Fast path: whole string is JSON.
         try:
             obj = json.loads(raw)
             return obj if isinstance(obj, dict) else {}
         except Exception:
-            pass
+            logger.debug("executor_parse_json_fast_failed", extra={"chars": len(raw)}, exc_info=True)
 
         # Robust path: find the last valid JSON object in the string.
         try:
@@ -480,7 +486,7 @@ class Executor:
                 if isinstance(obj, dict):
                     return obj
         except Exception:
-            pass
+            logger.debug("executor_parse_json_robust_failed", extra={"chars": len(raw)}, exc_info=True)
         return {}
 
     def _pick_questions(self, questions: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:

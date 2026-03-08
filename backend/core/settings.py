@@ -10,11 +10,37 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from dotenv import load_dotenv
 
 from backend.core.model_config import load_model_json_config
+
+_dotenv_loaded = False
+
+
+def load_project_dotenv(*, override: bool = False) -> None:
+    """Load `.env` from the repo root with a stable resolution strategy.
+
+    We keep dotenv loading centralized to avoid inconsistent CWD-dependent behavior.
+    """
+
+    global _dotenv_loaded
+    if _dotenv_loaded and not override:
+        return
+
+    repo_root = Path(__file__).resolve().parents[2]
+    dotenv_path = repo_root / ".env"
+    if not dotenv_path.exists():
+        # Legacy fallback (older setups placed `.env` under `backend/`).
+        dotenv_path = repo_root / "backend" / ".env"
+
+    if dotenv_path.exists():
+        load_dotenv(dotenv_path=str(dotenv_path), override=override)
+    else:
+        load_dotenv(override=override)
+
+    _dotenv_loaded = True
 
 
 def _get_str(name: str, default: str) -> str:
@@ -145,14 +171,7 @@ class Settings:
         # External MCP clients often spawn the stdio server with an arbitrary CWD,
         # so relying on python-dotenv's default CWD search can miss the project's `.env`.
         repo_root = Path(__file__).resolve().parents[2]
-        dotenv_path = repo_root / ".env"
-        if not dotenv_path.exists():
-            # Legacy fallback (older setups placed `.env` under `backend/`).
-            dotenv_path = repo_root / "backend" / ".env"
-        if dotenv_path.exists():
-            load_dotenv(dotenv_path=str(dotenv_path), override=False)
-        else:
-            load_dotenv(override=False)
+        load_project_dotenv(override=False)
 
         model_json = load_model_json_config(repo_root=repo_root)
         llm_provider_pinned = bool(model_json and model_json.pinned)

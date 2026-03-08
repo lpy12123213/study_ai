@@ -5,10 +5,14 @@ import os
 from typing import Any, List, Optional
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.core.logging_utils import get_logger
 from backend.database.engine import async_session_maker
 from backend.database.schema import Paper, PaperQuestion, QuestionCache
+
+logger = get_logger(__name__)
 
 
 def _to_json_str(value: Any) -> str:
@@ -26,6 +30,13 @@ def _normalize_user_id(user_id: str) -> str:
     return str(user_id or "").strip()[:64]
 
 
+def _require_user_id(user_id: str) -> str:
+    uid = _normalize_user_id(user_id)
+    if not uid:
+        raise ValueError("missing_user_id")
+    return uid
+
+
 def _env_truthy(name: str, *, default: bool = False) -> bool:
     raw = str(os.getenv(name) or "").strip().lower()
     if not raw:
@@ -41,183 +52,74 @@ def _paper_storage_flags() -> tuple[bool, bool, bool]:
     return store_stem, store_answer, store_analysis
 
 
-async def save_paper(*, user_id: str, paper_name: str, questions: List[dict]) -> int:
+async def save_paper(
+    *,
+    user_id: str,
+    paper_name: str,
+    questions: List[dict],
+    session: Optional[AsyncSession] = None,
+) -> int:
     """保存试卷并写入题目快照（以及本地题目缓存）。"""
 
-    uid = _normalize_user_id(user_id) or "1"
-    async with async_session_maker() as session:
-        paper = Paper(user_id=uid, paper_name=str(paper_name or "").strip() or "未命名试卷")
-        session.add(paper)
-        await session.commit()
-        await session.refresh(paper)
+    uid = _require_user_id(user_id)
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            paper_id = await save_paper(user_id=uid, paper_name=paper_name, questions=questions, session=session)
+            await session.commit()
+            return paper_id
 
-        cache_items: List[QuestionCache] = []
-        store_stem, store_answer, store_analysis = _paper_storage_flags()
+    paper = Paper(user_id=uid, paper_name=str(paper_name or "").strip() or "未命名试卷")
+    session.add(paper)
+    await session.flush()
+    await session.refresh(paper)
 
-        for i, q_data in enumerate(questions or []):
-            if isinstance(q_data, str):
-                payload: dict = {"question_id": q_data}
-            else:
-                payload = dict(q_data or {})
+    cache_items: List[QuestionCache] = []
+    store_stem, store_answer, store_analysis = _paper_storage_flags()
 
-            qid = str(payload.get("question_id") or "").strip()
-            q_type = str(payload.get("type") or payload.get("question_type") or "").strip()
-            q_diff = str(payload.get("difficulty") or "").strip()
-            q_knowledge = str(payload.get("knowledge_point") or "").strip()
-            q_source_url = str(payload.get("source_url") or "").strip()
+    for i, q_data in enumerate(questions or []):
+        payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
 
-            stem = str(payload.get("stem") or "").strip() if store_stem else ""
-            stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if store_stem else ""
-            difficulty_value = payload.get("difficulty_value")
-            quality_score = int(payload.get("quality_score") or 0)
-            quality_flags = payload.get("quality_flags") or ""
-            knowledge_points_json = payload.get("knowledge_points_json") or payload.get("knowledge_points") or ""
-            source = str(payload.get("source") or "").strip()
-            date = str(payload.get("date") or "").strip()
+        qid = str(payload.get("question_id") or "").strip()
+        q_type = str(payload.get("type") or payload.get("question_type") or "").strip()
+        q_diff = str(payload.get("difficulty") or "").strip()
+        q_knowledge = str(payload.get("knowledge_point") or "").strip()
+        q_source_url = str(payload.get("source_url") or "").strip()
 
-            answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
-            analysis = (
-                str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
-            )
+        stem = str(payload.get("stem") or "").strip() if store_stem else ""
+        stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if store_stem else ""
+        difficulty_value = payload.get("difficulty_value")
+        quality_score = int(payload.get("quality_score") or 0)
+        quality_flags = payload.get("quality_flags") or ""
+        knowledge_points_json = payload.get("knowledge_points_json") or payload.get("knowledge_points") or ""
+        source = str(payload.get("source") or "").strip()
+        date = str(payload.get("date") or "").strip()
 
-            pq = PaperQuestion(
-                paper_id=paper.id,
-                question_id=qid,
-                question_order=i + 1,
-                question_type=q_type,
-                difficulty=q_diff,
-                knowledge_point=q_knowledge,
-                source_url=q_source_url,
-                stem=stem,
-                stem_fingerprint=stem_fp,
-                difficulty_value=difficulty_value,
-                quality_score=quality_score,
-                quality_flags=_to_json_str(quality_flags),
-                knowledge_points_json=_to_json_str(knowledge_points_json),
-                source=source,
-                date=date,
-                answer=answer,
-                analysis=analysis,
-            )
-            session.add(pq)
+        answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
+        analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
 
-            if qid:
-                cache_items.append(
-                    QuestionCache(
-                        question_id=qid,
-                        subject=str(payload.get("subject") or "").strip(),
-                        question_type=q_type,
-                        difficulty=q_diff,
-                        knowledge_point=q_knowledge,
-                        source_url=q_source_url,
-                        stem=stem,
-                        stem_fingerprint=stem_fp,
-                        answer=answer,
-                        analysis=analysis,
-                        difficulty_value=difficulty_value,
-                        quality_score=quality_score,
-                        quality_flags=_to_json_str(quality_flags),
-                        knowledge_points_json=_to_json_str(knowledge_points_json),
-                        source=source,
-                        date=date,
-                    )
-                )
-
-        # Upsert cache entries (best-effort). SQLite supports INSERT OR REPLACE for PK rows.
-        for item in cache_items:
-            try:
-                await session.merge(item)
-            except Exception:
-                pass
-
-        await session.commit()
-        return int(paper.id)
-
-
-async def add_questions_to_paper(*, user_id: str, paper_id: int, questions: List[dict]) -> int:
-    """向现有试卷追加题目（并写入题目缓存）。
-
-    Returns:
-        appended_count
-    """
-
-    pid = int(paper_id or 0)
-    if pid <= 0:
-        raise ValueError("invalid_paper_id")
-
-    entries = [q for q in (questions or []) if isinstance(q, (dict, str))]
-    if not entries:
-        return 0
-
-    uid = _normalize_user_id(user_id) or "1"
-    async with async_session_maker() as session:
-        result = await session.execute(select(Paper).where(Paper.id == pid, Paper.user_id == uid))
-        paper = result.scalar_one_or_none()
-        if not paper:
-            raise ValueError("paper_not_found")
-
-        max_order_res = await session.execute(
-            select(func.max(PaperQuestion.question_order)).where(PaperQuestion.paper_id == pid)
+        pq = PaperQuestion(
+            paper_id=paper.id,
+            question_id=qid,
+            question_order=i + 1,
+            question_type=q_type,
+            difficulty=q_diff,
+            knowledge_point=q_knowledge,
+            source_url=q_source_url,
+            stem=stem,
+            stem_fingerprint=stem_fp,
+            difficulty_value=difficulty_value,
+            quality_score=quality_score,
+            quality_flags=_to_json_str(quality_flags),
+            knowledge_points_json=_to_json_str(knowledge_points_json),
+            source=source,
+            date=date,
+            answer=answer,
+            analysis=analysis,
         )
-        max_order = int(max_order_res.scalar() or 0)
+        session.add(pq)
 
-        existing_ids_res = await session.execute(
-            select(PaperQuestion.question_id).where(PaperQuestion.paper_id == pid)
-        )
-        existing_ids = {str(x).strip() for x in existing_ids_res.scalars().all() if str(x or "").strip()}
-
-        cache_items: List[QuestionCache] = []
-        appended = 0
-        store_stem, store_answer, store_analysis = _paper_storage_flags()
-
-        for q_data in entries:
-            payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
-            qid = str(payload.get("question_id") or "").strip()
-            if not qid or qid in existing_ids:
-                continue
-            existing_ids.add(qid)
-
-            q_type = str(payload.get("type") or payload.get("question_type") or "").strip()
-            q_diff = str(payload.get("difficulty") or "").strip()
-            q_knowledge = str(payload.get("knowledge_point") or "").strip()
-            q_source_url = str(payload.get("source_url") or "").strip()
-
-            stem = str(payload.get("stem") or "").strip() if store_stem else ""
-            stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if store_stem else ""
-            difficulty_value = payload.get("difficulty_value")
-            quality_score = int(payload.get("quality_score") or 0)
-            quality_flags = payload.get("quality_flags") or ""
-            knowledge_points_json = payload.get("knowledge_points_json") or payload.get("knowledge_points") or ""
-            source = str(payload.get("source") or "").strip()
-            date = str(payload.get("date") or "").strip()
-
-            answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
-            analysis = (
-                str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
-            )
-
-            pq = PaperQuestion(
-                paper_id=pid,
-                question_id=qid,
-                question_order=max_order + appended + 1,
-                question_type=q_type,
-                difficulty=q_diff,
-                knowledge_point=q_knowledge,
-                source_url=q_source_url,
-                stem=stem,
-                stem_fingerprint=stem_fp,
-                difficulty_value=difficulty_value,
-                quality_score=quality_score,
-                quality_flags=_to_json_str(quality_flags),
-                knowledge_points_json=_to_json_str(knowledge_points_json),
-                source=source,
-                date=date,
-                answer=answer,
-                analysis=analysis,
-            )
-            session.add(pq)
-            appended += 1
-
+        if qid:
             cache_items.append(
                 QuestionCache(
                     question_id=qid,
@@ -239,84 +141,239 @@ async def add_questions_to_paper(*, user_id: str, paper_id: int, questions: List
                 )
             )
 
-        for item in cache_items:
-            try:
-                await session.merge(item)
-            except Exception:
-                pass
+    for item in cache_items:
+        try:
+            await session.merge(item)
+        except Exception:
+            logger.debug("paper_question_cache_merge_failed", exc_info=True)
 
-        await session.commit()
-        return appended
+    await session.flush()
+    return int(paper.id)
 
 
-async def get_paper(*, user_id: str, paper_id: int) -> Optional[dict]:
-    uid = _normalize_user_id(user_id) or "1"
-    async with async_session_maker() as session:
-        result = await session.execute(select(Paper).where(Paper.id == int(paper_id), Paper.user_id == uid))
-        paper = result.scalar_one_or_none()
-        if not paper:
-            return None
+async def add_questions_to_paper(
+    *,
+    user_id: str,
+    paper_id: int,
+    questions: List[dict],
+    session: Optional[AsyncSession] = None,
+) -> int:
+    """向现有试卷追加题目（并写入题目缓存）。
 
-        questions_result = await session.execute(
-            select(PaperQuestion)
-            .where(PaperQuestion.paper_id == int(paper_id))
-            .order_by(PaperQuestion.question_order)
+    Returns:
+        appended_count
+    """
+
+    pid = int(paper_id or 0)
+    if pid <= 0:
+        raise ValueError("invalid_paper_id")
+
+    entries = [q for q in (questions or []) if isinstance(q, (dict, str))]
+    if not entries:
+        return 0
+
+    uid = _require_user_id(user_id)
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            appended_count = await add_questions_to_paper(
+                user_id=uid,
+                paper_id=pid,
+                questions=questions,
+                session=session,
+            )
+            await session.commit()
+            return appended_count
+
+    result = await session.execute(select(Paper).where(Paper.id == pid, Paper.user_id == uid))
+    paper = result.scalar_one_or_none()
+    if not paper:
+        raise ValueError("paper_not_found")
+
+    max_order_res = await session.execute(
+        select(func.max(PaperQuestion.question_order)).where(PaperQuestion.paper_id == pid)
+    )
+    max_order = int(max_order_res.scalar() or 0)
+
+    existing_ids_res = await session.execute(select(PaperQuestion.question_id).where(PaperQuestion.paper_id == pid))
+    existing_ids = {str(x).strip() for x in existing_ids_res.scalars().all() if str(x or "").strip()}
+
+    cache_items: List[QuestionCache] = []
+    appended = 0
+    store_stem, store_answer, store_analysis = _paper_storage_flags()
+
+    for q_data in entries:
+        payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
+        qid = str(payload.get("question_id") or "").strip()
+        if not qid or qid in existing_ids:
+            continue
+        existing_ids.add(qid)
+
+        q_type = str(payload.get("type") or payload.get("question_type") or "").strip()
+        q_diff = str(payload.get("difficulty") or "").strip()
+        q_knowledge = str(payload.get("knowledge_point") or "").strip()
+        q_source_url = str(payload.get("source_url") or "").strip()
+
+        stem = str(payload.get("stem") or "").strip() if store_stem else ""
+        stem_fp = str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if store_stem else ""
+        difficulty_value = payload.get("difficulty_value")
+        quality_score = int(payload.get("quality_score") or 0)
+        quality_flags = payload.get("quality_flags") or ""
+        knowledge_points_json = payload.get("knowledge_points_json") or payload.get("knowledge_points") or ""
+        source = str(payload.get("source") or "").strip()
+        date = str(payload.get("date") or "").strip()
+
+        answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
+        analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
+
+        pq = PaperQuestion(
+            paper_id=pid,
+            question_id=qid,
+            question_order=max_order + appended + 1,
+            question_type=q_type,
+            difficulty=q_diff,
+            knowledge_point=q_knowledge,
+            source_url=q_source_url,
+            stem=stem,
+            stem_fingerprint=stem_fp,
+            difficulty_value=difficulty_value,
+            quality_score=quality_score,
+            quality_flags=_to_json_str(quality_flags),
+            knowledge_points_json=_to_json_str(knowledge_points_json),
+            source=source,
+            date=date,
+            answer=answer,
+            analysis=analysis,
         )
-        questions = questions_result.scalars().all()
+        session.add(pq)
+        appended += 1
 
-        return {
-            "paper_id": paper.id,
-            "user_id": paper.user_id,
-            "paper_name": paper.paper_name,
-            "created_at": paper.created_at.isoformat() if paper.created_at else "",
-            "updated_at": paper.updated_at.isoformat() if paper.updated_at else "",
-            "questions": [
-                {
-                    "question_id": q.question_id,
-                    "order": q.question_order,
-                    "type": q.question_type,
-                    "difficulty": q.difficulty,
-                    "knowledge_point": q.knowledge_point,
-                    "source_url": q.source_url,
-                    "stem": q.stem or "",
-                    "answer": q.answer or "",
-                    "analysis": q.analysis or "",
-                }
-                for q in questions
-            ],
-        }
-
-
-async def list_papers(*, user_id: str, limit: int = 50) -> List[dict]:
-    uid = _normalize_user_id(user_id) or "1"
-    async with async_session_maker() as session:
-        result = await session.execute(
-            select(Paper)
-            .options(selectinload(Paper.questions))
-            .where(Paper.user_id == uid)
-            .order_by(Paper.created_at.desc())
-            .limit(int(limit or 50))
+        cache_items.append(
+            QuestionCache(
+                question_id=qid,
+                subject=str(payload.get("subject") or "").strip(),
+                question_type=q_type,
+                difficulty=q_diff,
+                knowledge_point=q_knowledge,
+                source_url=q_source_url,
+                stem=stem,
+                stem_fingerprint=stem_fp,
+                answer=answer,
+                analysis=analysis,
+                difficulty_value=difficulty_value,
+                quality_score=quality_score,
+                quality_flags=_to_json_str(quality_flags),
+                knowledge_points_json=_to_json_str(knowledge_points_json),
+                source=source,
+                date=date,
+            )
         )
-        papers = result.scalars().all()
-        return [
+
+    for item in cache_items:
+        try:
+            await session.merge(item)
+        except Exception:
+            logger.debug("paper_question_cache_merge_failed", exc_info=True)
+
+    await session.flush()
+    return appended
+
+
+async def get_paper(
+    *,
+    user_id: str,
+    paper_id: int,
+    session: Optional[AsyncSession] = None,
+) -> Optional[dict]:
+    uid = _require_user_id(user_id)
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            return await get_paper(user_id=uid, paper_id=paper_id, session=session)
+
+    result = await session.execute(select(Paper).where(Paper.id == int(paper_id), Paper.user_id == uid))
+    paper = result.scalar_one_or_none()
+    if not paper:
+        return None
+
+    questions_result = await session.execute(
+        select(PaperQuestion).where(PaperQuestion.paper_id == int(paper_id)).order_by(PaperQuestion.question_order)
+    )
+    questions = questions_result.scalars().all()
+
+    return {
+        "paper_id": paper.id,
+        "user_id": paper.user_id,
+        "paper_name": paper.paper_name,
+        "created_at": paper.created_at.isoformat() if paper.created_at else "",
+        "updated_at": paper.updated_at.isoformat() if paper.updated_at else "",
+        "questions": [
             {
-                "paper_id": p.id,
-                "user_id": p.user_id,
-                "paper_name": p.paper_name,
-                "created_at": p.created_at.isoformat() if p.created_at else "",
-                "question_count": len(p.questions),
+                "question_id": q.question_id,
+                "order": q.question_order,
+                "type": q.question_type,
+                "difficulty": q.difficulty,
+                "knowledge_point": q.knowledge_point,
+                "source_url": q.source_url,
+                "stem": q.stem or "",
+                "answer": q.answer or "",
+                "analysis": q.analysis or "",
             }
-            for p in papers
-        ]
+            for q in questions
+        ],
+    }
 
 
-async def delete_paper(*, user_id: str, paper_id: int) -> bool:
-    uid = _normalize_user_id(user_id) or "1"
-    async with async_session_maker() as session:
-        result = await session.execute(select(Paper).where(Paper.id == int(paper_id), Paper.user_id == uid))
-        paper = result.scalar_one_or_none()
-        if not paper:
-            return False
-        await session.delete(paper)
-        await session.commit()
-        return True
+async def list_papers(
+    *,
+    user_id: str,
+    limit: int = 50,
+    session: Optional[AsyncSession] = None,
+) -> List[dict]:
+    uid = _require_user_id(user_id)
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            return await list_papers(user_id=uid, limit=limit, session=session)
+
+    result = await session.execute(
+        select(Paper)
+        .options(selectinload(Paper.questions))
+        .where(Paper.user_id == uid)
+        .order_by(Paper.created_at.desc())
+        .limit(int(limit or 50))
+    )
+    papers = result.scalars().all()
+    return [
+        {
+            "paper_id": p.id,
+            "user_id": p.user_id,
+            "paper_name": p.paper_name,
+            "created_at": p.created_at.isoformat() if p.created_at else "",
+            "question_count": len(p.questions),
+        }
+        for p in papers
+    ]
+
+
+async def delete_paper(
+    *,
+    user_id: str,
+    paper_id: int,
+    session: Optional[AsyncSession] = None,
+) -> bool:
+    uid = _require_user_id(user_id)
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            ok = await delete_paper(user_id=uid, paper_id=paper_id, session=session)
+            await session.commit()
+            return ok
+
+    result = await session.execute(select(Paper).where(Paper.id == int(paper_id), Paper.user_id == uid))
+    paper = result.scalar_one_or_none()
+    if not paper:
+        return False
+    await session.delete(paper)
+    await session.flush()
+    return True

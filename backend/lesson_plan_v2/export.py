@@ -1,61 +1,105 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import shutil
 import subprocess
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Dict
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.lesson_plan_v2.common import GENERATED_DIR, extract_json_obj, lpv2_infinite_max_tokens
+from backend.lesson_plan_v2.common import GENERATED_DIR, lpv2_infinite_max_tokens
 from backend.lesson_plan_v2.llm import call_llm_text
+from backend.media.generated import default_generated_media_ttl_s
+from backend.media.generated import publish_generated_bytes as _publish_bytes
+from backend.media.generated import publish_generated_text as _publish_text
+
+logger = get_logger(__name__)
 
 
-def publish_generated_bytes(data: bytes, *, ext: str) -> Dict[str, Any]:
+async def publish_generated_bytes(
+    data: bytes, *, user_id: str, ext: str, file_type: str = "", mime_type: str = ""
+) -> Dict[str, Any]:
     suffix = (ext or "").strip().lower()
-    if not suffix.startswith("."):
-        suffix = f".{suffix}"
-    sha = hashlib.sha256(data).hexdigest()
-    filename = f"{sha}{suffix}"
-    url = f"/api/media/generated/{filename}"
+    kind = (file_type or "").strip().lower()
+    if not kind:
+        if suffix in {".md", "md"}:
+            kind = "md"
+        elif suffix in {".tex", ".latex", "tex", "latex"}:
+            kind = "tex"
+        elif suffix in {".pdf", "pdf"}:
+            kind = "pdf"
+        else:
+            kind = "file"
+    return await _publish_bytes(
+        data,
+        user_id=user_id,
+        ext=ext,
+        file_type=kind,
+        mime_type=mime_type,
+        ttl_s=default_generated_media_ttl_s(),
+    )
 
-    out_path = (GENERATED_DIR / filename).resolve()
-    if not out_path.exists():
-        out_path.write_bytes(data)
 
-    return {"url": url, "filename": filename, "sha256": sha, "bytes": len(data)}
-
-
-def publish_generated_text(text: str, *, ext: str) -> Dict[str, Any]:
-    t = text or ""
-    if not t.endswith("\n"):
-        t += "\n"
-    return publish_generated_bytes(t.encode("utf-8"), ext=ext)
+async def publish_generated_text(
+    text: str, *, user_id: str, ext: str, file_type: str = "", mime_type: str = ""
+) -> Dict[str, Any]:
+    suffix = (ext or "").strip().lower()
+    kind = (file_type or "").strip().lower()
+    if not kind:
+        if suffix in {".md", "md"}:
+            kind = "md"
+        elif suffix in {".tex", ".latex", "tex", "latex"}:
+            kind = "tex"
+        else:
+            kind = "text"
+    return await _publish_text(
+        text,
+        user_id=user_id,
+        ext=ext,
+        file_type=kind,
+        mime_type=mime_type,
+        ttl_s=default_generated_media_ttl_s(),
+    )
 
 
 async def convert_markdown_to_latex(*, markdown: str, title: str, subject: str) -> str:
-    model = str(
-        os.getenv("LESSON_PLAN_LATEX_MODEL") or os.getenv("STUDY_MATERIALS_LATEX_MODEL") or LESSON_PLAN_MODEL
-    ).strip() or LESSON_PLAN_MODEL
+    model = (
+        str(
+            os.getenv("LESSON_PLAN_LATEX_MODEL") or os.getenv("STUDY_MATERIALS_LATEX_MODEL") or LESSON_PLAN_MODEL
+        ).strip()
+        or LESSON_PLAN_MODEL
+    )
 
     safe_title = (title or "").replace("{", "\\{").replace("}", "\\}").strip() or "教案"
     template = (
-        r"\documentclass[lang=cn]{elegantbook}" "\n"
-        r"\usepackage{amsmath,amssymb}" "\n"
-        r"\usepackage{graphicx}" "\n"
-        r"\usepackage{hyperref}" "\n"
-        r"\usepackage{booktabs,longtable}" "\n"
-        r"\usepackage{xcolor}" "\n"
-        r"\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}" "\n"
-        r"\title{" + safe_title + r"}" "\n"
-        r"\author{}" "\n"
-        r"\date{\today}" "\n"
-        r"\begin{document}" "\n"
-        r"\maketitle" "\n\n"
-        r"% --- BEGIN_BODY ---" "\n"
+        r"\documentclass[lang=cn]{elegantbook}"
+        "\n"
+        r"\usepackage{amsmath,amssymb}"
+        "\n"
+        r"\usepackage{graphicx}"
+        "\n"
+        r"\usepackage{hyperref}"
+        "\n"
+        r"\usepackage{booktabs,longtable}"
+        "\n"
+        r"\usepackage{xcolor}"
+        "\n"
+        r"\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}"
+        "\n"
+        r"\title{" + safe_title + r"}"
+        "\n"
+        r"\author{}"
+        "\n"
+        r"\date{\today}"
+        "\n"
+        r"\begin{document}"
+        "\n"
+        r"\maketitle"
+        "\n\n"
+        r"% --- BEGIN_BODY ---"
+        "\n"
     )
     tail = "\n% --- END_BODY ---\n\\end{document}\n"
 
@@ -94,7 +138,12 @@ async def convert_markdown_to_latex(*, markdown: str, title: str, subject: str) 
 
 
 async def refine_latex(*, latex: str, topic: str, subject: str, compile_error: str = "") -> str:
-    model = str(os.getenv("LESSON_PLAN_LATEX_REFINE_MODEL") or os.getenv("LESSON_PLAN_LATEX_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
+    model = (
+        str(
+            os.getenv("LESSON_PLAN_LATEX_REFINE_MODEL") or os.getenv("LESSON_PLAN_LATEX_MODEL") or LESSON_PLAN_MODEL
+        ).strip()
+        or LESSON_PLAN_MODEL
+    )
 
     prompt = {
         "subject": subject,
@@ -122,7 +171,7 @@ async def refine_latex(*, latex: str, topic: str, subject: str, compile_error: s
     return cleaned if cleaned else latex
 
 
-def compile_latex_to_pdf(*, latex: str) -> Dict[str, Any]:
+async def compile_latex_to_pdf(*, latex: str, user_id: str) -> Dict[str, Any]:
     if shutil.which("xelatex") is None:
         raise RuntimeError("latex_engine_not_found: xelatex")
 
@@ -133,7 +182,9 @@ def compile_latex_to_pdf(*, latex: str) -> Dict[str, Any]:
         tex_path = build_dir / "main.tex"
         tex_path.write_text(latex or "", encoding="utf-8")
 
-        timeout_raw = (os.getenv("LESSON_PLAN_LATEX_TIMEOUT_S") or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or "").strip()
+        timeout_raw = (
+            os.getenv("LESSON_PLAN_LATEX_TIMEOUT_S") or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or ""
+        ).strip()
         try:
             timeout_s = float(timeout_raw) if timeout_raw else 40.0
         except Exception:
@@ -162,10 +213,11 @@ def compile_latex_to_pdf(*, latex: str) -> Dict[str, Any]:
         if not pdf_path.exists() or not pdf_path.is_file():
             raise RuntimeError("pdf_missing")
 
-        return publish_generated_bytes(pdf_path.read_bytes(), ext=".pdf")
+        return await publish_generated_bytes(
+            pdf_path.read_bytes(), user_id=user_id, ext=".pdf", file_type="pdf", mime_type="application/pdf"
+        )
     finally:
         try:
             shutil.rmtree(build_dir, ignore_errors=True)
         except Exception:
-            pass
-
+            logger.debug("lesson_plan_export_cleanup_failed", extra={"build_dir": str(build_dir)}, exc_info=True)

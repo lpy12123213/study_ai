@@ -57,4 +57,3 @@ SYNTHESIZER_SYSTEM_PROMPT_TEMPLATE = """你是一位精通【{subject}】的解�
   - 最终答案（加粗）
 - 不要输出与题目无关的内容。
 """
-

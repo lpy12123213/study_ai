@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import random
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import httpx
 
 from backend.core import llm_console
 from backend.core.settings import (
     API_TIMEOUT,
-    LLM_PROVIDER_PINNED,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_PROVIDER,
+    LLM_PROVIDER_PINNED,
     MOONSHOT_API_KEY,
     MOONSHOT_BASE_URL,
 )
@@ -126,7 +125,9 @@ async def call_llm_text(
                     wait_s = 0.0
                 if wait_s <= 0:
                     wait_s = min(8.0, (2**attempt) * 0.9 + random.random() * 0.6)
-                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=f"http_status_{resp.status_code}")
+                llm_console.log_end(
+                    req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=f"http_status_{resp.status_code}"
+                )
                 await asyncio.sleep(wait_s)
                 continue
 

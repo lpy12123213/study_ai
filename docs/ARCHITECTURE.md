@@ -58,6 +58,54 @@
 └──────────────┘
 ```
 
+## 模块索引（入口与路由）
+
+后端入口：
+- FastAPI 应用入口：`backend/app.py`
+- API 路由汇总（所有 `/api/*`）：`backend/api/router.py`
+
+主要路由模块（按 `backend/api/router.py` 注册顺序）：
+- 系统与健康检查：`backend/api/system.py`
+- 兼容模型/老接口：`backend/api/models.py`（legacy/shim）
+- 爬虫工具封装：`backend/api/crawler_tools.py`
+- 学习画布：`backend/api/canvas.py`
+- 媒体代理与下载：`backend/api/media.py`
+- 试卷与题目：`backend/api/papers.py`
+- 学科与筛选项：`backend/api/subjects.py`
+- 对话（会话/消息）：`backend/api/conversations.py`
+- Chat 对话：`backend/api/chat.py`
+- 认证（JWT）：`backend/api/auth.py`
+- DeepThink：`backend/api/deepthink.py`
+- 教案：`backend/api/lesson_plan.py`
+- 自学资料（SSE 任务）：`backend/api/study_materials.py`
+- 题目质量评估：`backend/api/question_evaluate.py`
+- 组卷蓝图：`backend/api/blueprints.py`
+- 本地题库：`backend/api/question_library.py`
+- 任务中心（统一任务与事件）：`backend/api/tasks.py`
+- 收藏/置顶/标签（通用 meta）：`backend/api/item_meta.py`
+- 自学资料归档：`backend/api/study_archives.py`
+- 分享链接（含公开只读访问）：`backend/api/share_links.py`
+- 模板库：`backend/api/templates.py`
+- 批注/标注：`backend/api/annotations.py`
+- 反馈与问题上报：`backend/api/feedback.py`
+- 错题本：`backend/api/wrongbook.py`
+- 学习计划：`backend/api/learning_plans.py`
+- 导出中心：`backend/api/exports.py`
+- 个人学习数据面板：`backend/api/dashboard.py`
+
+新增域模块时：在此列表按顺序补充一行，格式为 `- <功能>：\`backend/api/<file>.py\``。
+
+数据库与存储：
+- SQLAlchemy 模型：`backend/database/schema.py`
+- Engine / session / init：`backend/database/engine.py`
+- CRUD 仓库层：`backend/database/repositories/`
+- 兼容入口：`backend/database/models.py`（只做导出旧路径，推荐新路径）
+
+## Legacy / Shim 说明
+
+- `backend/database/models.py`：历史上把 schema+engine+CRUD 混在一个文件；现在已拆分到 `backend/database/*`，该文件仅保留旧 import 路径兼容。
+- `docs/ARCHITECTURE.md`：以“索引 + 入口定位”为准；旧段落中若出现历史文件名（例如早期爬虫入口）以代码实际路径为准。
+
 ## 模块详解
 
 ### 1. MCP服务器 (`backend/mcp/stdio_server.py`)
@@ -96,7 +144,9 @@
 - 不存储题目内容，只返回编号
 
 **关键文件：**
-- `zujuan_crawler.py` - 爬虫核心类
+- `backend/crawler/zujuan/client.py` - 组卷网检索/列表抓取（visitor + cookie）
+- `backend/crawler/zujuan/detail.py` - 题目详情抓取与解析（题干/解析等）
+- `backend/crawler/zujuan/basket.py` - 题篮导出与登录辅助（可选）
 
 **技术特点：**
 - 异步操作（async/await）
@@ -137,13 +187,17 @@
 - 异步数据库访问
 
 **关键文件：**
-- `models.py` - 数据模型定义
+- `backend/database/schema.py` - SQLAlchemy 数据模型定义
+- `backend/database/engine.py` - engine/session/init_db
+- `backend/database/repositories/` - 领域 CRUD（async session 注入友好）
+- `backend/database/models.py` - 兼容层（保留旧 import 路径）
 
 **数据模型：**
 
 ```
 Paper (试卷表)
 ├── id: int (主键)
+├── user_id: str (用户隔离)
 ├── paper_name: str (试卷名称)
 ├── created_at: datetime (创建时间)
 ├── updated_at: datetime (更新时间)
@@ -182,7 +236,9 @@ SearchHistory (搜索历史表)
 **关键文件：**
 - `app.py` - FastAPI应用主程序
 
-**API端点：**
+**API端点（示例，非完整列表）：**
+
+完整 API 列表以 OpenAPI 为准：启动后访问 `GET /docs`，或直接查看 `backend/api/router.py` 注册的路由模块。
 
 ```
 GET  /                           - 前端页面

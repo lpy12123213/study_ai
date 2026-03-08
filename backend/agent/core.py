@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -11,12 +10,13 @@ from backend.agent.config import AgentConfig
 from backend.agent.context import ContextManager
 from backend.agent.executor import Executor
 from backend.agent.memory import MemoryStore
-from backend.agent.policy import StudyMaterialsPolicy
 from backend.agent.planner import Planner
+from backend.agent.policy import StudyMaterialsPolicy
 from backend.agent.reflector import Reflector
 from backend.agent.types import (
     ActionResults,
     AgentState,
+    CompressedContext,
     ExecutionPlan,
     PlanStep,
     ReflectionResult,
@@ -24,6 +24,9 @@ from backend.agent.types import (
     UserProfile,
     agent_event,
 )
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 SYSTEM_INSTRUCTIONS = """你是一位经验丰富的教育专家，擅长将复杂概念拆解为可自学的清晰讲解。
@@ -135,11 +138,7 @@ class AgentCore:
         split_res = ctx.working_memory.get("split_knowledge_points") or {}
         kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
         kps = (
-            [
-                str(x or "").strip()
-                for x in (kps_raw or [])
-                if isinstance(x, (str, int, float)) and str(x or "").strip()
-            ]
+            [str(x or "").strip() for x in (kps_raw or []) if isinstance(x, (str, int, float)) and str(x or "").strip()]
             if isinstance(kps_raw, list)
             else []
         )
@@ -221,7 +220,7 @@ class AgentCore:
             try:
                 await t
             except Exception:
-                pass
+                logger.debug("agent_parallel_task_join_failed", exc_info=True)
 
     async def _execute_step_block(
         self,
@@ -313,29 +312,31 @@ class AgentCore:
             ):
                 step_args["knowledge_points"] = [export_kp]
 
-            if concrete_step.tool in {
-                "web_search_knowledge",
-                "browse_web_pages",
-                "wikipedia_search",
-                "mediawiki_search",
-                "github_search",
-                "stackexchange_search",
-                "search_questions_by_knowledge",
-                "aggregate_knowledge",
-                "synthesize_sources",
-                "detect_knowledge_type",
-                "generate_outline",
-                "generate_study_material",
-                "critique_draft",
-                "refine_draft",
-                "generate_diagrams",
-            } and "knowledge_points" not in step_args:
+            if (
+                concrete_step.tool
+                in {
+                    "web_search_knowledge",
+                    "browse_web_pages",
+                    "wikipedia_search",
+                    "mediawiki_search",
+                    "github_search",
+                    "stackexchange_search",
+                    "search_questions_by_knowledge",
+                    "aggregate_knowledge",
+                    "synthesize_sources",
+                    "detect_knowledge_type",
+                    "generate_outline",
+                    "generate_study_material",
+                    "critique_draft",
+                    "refine_draft",
+                    "generate_diagrams",
+                }
+                and "knowledge_points" not in step_args
+            ):
                 split_res = ctx.working_memory.get("split_knowledge_points")
                 if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
                     kps = [
-                        str(x or "").strip()
-                        for x in (split_res.get("knowledge_points") or [])
-                        if str(x or "").strip()
+                        str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()
                     ][:15]
                     if kps:
                         step_args["knowledge_points"] = kps
@@ -538,7 +539,7 @@ class AgentCore:
                 if isinstance(evt, dict) and evt.get("event"):
                     yield evt
         except Exception:
-            pass
+            logger.debug("agent_step_event_drain_failed", exc_info=True)
 
         step_result = await tool_task
         elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -568,7 +569,7 @@ class AgentCore:
         except _StopStepExecution:
             return
         except Exception:
-            pass
+            logger.debug("agent_step_failure_handler_failed", exc_info=True)
 
         self._maybe_capture_markdown_artifact(step_result=step_result, results=results)
 
@@ -646,7 +647,7 @@ class AgentCore:
                     prefs.update(pref_patch)
                     profile.preferences = prefs
                 except Exception:
-                    pass
+                    logger.debug("agent_profile_preference_fallback_failed", exc_info=True)
 
         ctx = self.context_manager.create_context(
             user_profile=profile,
@@ -826,15 +827,19 @@ class AgentCore:
         try:
             ctx.working_memory["_export_subagent_kp"] = kp
         except Exception:
-            pass
-        yield agent_event("subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
+            logger.debug("agent_export_subagent_state_set_failed", exc_info=True)
+        yield agent_event(
+            "subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"}
+        )
         yield agent_event("status", {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
 
-    async def _end_export_subagent(self, *, ctx: "CompressedContext", kp: str, content: str) -> AsyncIterator[Dict[str, Any]]:
+    async def _end_export_subagent(
+        self, *, ctx: "CompressedContext", kp: str, content: str
+    ) -> AsyncIterator[Dict[str, Any]]:
         try:
             ctx.working_memory.pop("_export_subagent_kp", None)
         except Exception:
-            pass
+            logger.debug("agent_export_subagent_state_clear_failed", exc_info=True)
         yield agent_event("subagent_end", {"knowledge_point": kp, "content": content})
         yield agent_event("status", {"content": content})
 
@@ -871,7 +876,7 @@ class AgentCore:
             if preset == "research":
                 subagent_concurrency = min(subagent_concurrency, 2)
         except Exception:
-            pass
+            logger.debug("agent_subagent_concurrency_adjust_failed", exc_info=True)
 
         if subagent_concurrency <= 1 or len(kps) <= 1:
             for kp in kps:
@@ -888,7 +893,10 @@ class AgentCore:
                     yield evt
                 yield agent_event(
                     "subagent_end",
-                    {"knowledge_point": kp, "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}"},
+                    {
+                        "knowledge_point": kp,
+                        "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
+                    },
                 )
                 yield agent_event(
                     "status",
@@ -919,7 +927,7 @@ class AgentCore:
             try:
                 await t
             except Exception:
-                pass
+                logger.debug("agent_parallel_task_join_failed", exc_info=True)
 
     async def _execute_plan_steps(
         self,
@@ -961,7 +969,9 @@ class AgentCore:
                 while i < len(steps) and getattr(steps[i], "foreach_knowledge_point", False):
                     block.append(steps[i])
                     i += 1
-                async for evt in self._execute_foreach_block(ctx=ctx, results=results, block=block, fallback_kp=user_input):
+                async for evt in self._execute_foreach_block(
+                    ctx=ctx, results=results, block=block, fallback_kp=user_input
+                ):
                     yield evt
                 continue
 
@@ -1265,9 +1275,7 @@ class AgentCore:
         try:
             before_tokens = self.context_manager.estimate_tokens(ctx)
             compress_timeout_s = float(
-                os.getenv("STUDY_MATERIALS_COMPRESS_TIMEOUT_S")
-                or os.getenv("AGENT_COMPRESS_TIMEOUT_S")
-                or "12"
+                os.getenv("STUDY_MATERIALS_COMPRESS_TIMEOUT_S") or os.getenv("AGENT_COMPRESS_TIMEOUT_S") or "12"
             )
             compress_timeout_s = max(2.0, min(compress_timeout_s, 120.0))
             await asyncio.wait_for(self.context_manager.compress_if_needed(ctx), timeout=compress_timeout_s)
@@ -1323,9 +1331,7 @@ class AgentCore:
         t0 = time.monotonic()
         try:
             profile_timeout_s = float(
-                os.getenv("STUDY_MATERIALS_PROFILE_TIMEOUT_S")
-                or os.getenv("AGENT_PROFILE_TIMEOUT_S")
-                or "5"
+                os.getenv("STUDY_MATERIALS_PROFILE_TIMEOUT_S") or os.getenv("AGENT_PROFILE_TIMEOUT_S") or "5"
             )
             profile_timeout_s = max(1.0, min(profile_timeout_s, 60.0))
             await asyncio.wait_for(
@@ -1406,18 +1412,14 @@ class AgentCore:
                 )
             sections_blob = material_blob.get("sections") if isinstance(material_blob, dict) else None
             sections_list = (
-                [s for s in (sections_blob or []) if isinstance(s, dict)]
-                if isinstance(sections_blob, list)
-                else []
+                [s for s in (sections_blob or []) if isinstance(s, dict)] if isinstance(sections_blob, list) else []
             )
 
             preferred: List[str] = []
             split_res = ctx.working_memory.get("split_knowledge_points")
             if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
                 preferred = [
-                    str(x or "").strip()
-                    for x in (split_res.get("knowledge_points") or [])
-                    if str(x or "").strip()
+                    str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()
                 ][:20]
             if not preferred:
                 preferred = [
@@ -1492,9 +1494,7 @@ class AgentCore:
         try:
             timings_blob = ctx.working_memory.get("_tool_timings")
             timings_list = (
-                [dict(x) for x in (timings_blob or []) if isinstance(x, dict)]
-                if isinstance(timings_blob, list)
-                else []
+                [dict(x) for x in (timings_blob or []) if isinstance(x, dict)] if isinstance(timings_blob, list) else []
             )
 
             def _safe_int(v: Any) -> int:
@@ -1556,7 +1556,11 @@ class AgentCore:
                 split_res = ctx.working_memory.get("split_knowledge_points")
                 if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
                     kp_count = len(
-                        [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()]
+                        [
+                            str(x or "").strip()
+                            for x in (split_res.get("knowledge_points") or [])
+                            if str(x or "").strip()
+                        ]
                     )
 
             tokens_total = 0
@@ -1748,11 +1752,12 @@ class AgentCore:
             plan = iter_state.get("plan") if isinstance(iter_state.get("plan"), ExecutionPlan) else plan
             results = iter_state.get("results") if isinstance(iter_state.get("results"), ActionResults) else results
             reflection = (
-                iter_state.get("reflection") if isinstance(iter_state.get("reflection"), ReflectionResult) else reflection
+                iter_state.get("reflection")
+                if isinstance(iter_state.get("reflection"), ReflectionResult)
+                else reflection
             )
 
             resolved = self._resolve_markdown_and_archive_path(ctx=ctx, user_input=user_input, results=results)
-            markdown = resolved["markdown"]
             archive_path = resolved["archive_path"]
 
             async for evt in self._compress_context(ctx=ctx):

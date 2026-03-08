@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from urllib.parse import urlparse
-
 
 _PDF_URL_RE = re.compile(r"\.pdf(?:$|[?#])", re.IGNORECASE)
 
@@ -17,7 +16,7 @@ def _looks_like_pdf_url(url: str) -> bool:
         if path.endswith(".pdf"):
             return True
     except Exception:
-        pass
+        return bool(_PDF_URL_RE.search(u))
     return bool(_PDF_URL_RE.search(u))
 
 
@@ -108,21 +107,25 @@ def _is_ui_noise_line(line: str) -> bool:
         return True
 
     # Cookie / consent banners and sign-in gates are extremely common "junk" around extracted content.
-    if ("cookie" in lower or "cookies" in lower) and len(s) <= 200 and any(
-        tok in lower
-        for tok in (
-            "we use",
-            "use cookies",
-            "policy",
-            "consent",
-            "preferences",
-            "privacy",
-            "使用",
-            "同意",
-            "拒绝",
-            "隐私",
-            "条款",
-            "政策",
+    if (
+        ("cookie" in lower or "cookies" in lower)
+        and len(s) <= 200
+        and any(
+            tok in lower
+            for tok in (
+                "we use",
+                "use cookies",
+                "policy",
+                "consent",
+                "preferences",
+                "privacy",
+                "使用",
+                "同意",
+                "拒绝",
+                "隐私",
+                "条款",
+                "政策",
+            )
         )
     ):
         return True
@@ -130,7 +133,10 @@ def _is_ui_noise_line(line: str) -> bool:
         return True
     if any(tok in lower for tok in ("sign in", "log in", "subscribe")) and len(s) <= 120:
         return True
-    if any(tok in s for tok in ("验证码", "机器人验证", "请启用JavaScript", "启用JavaScript", "请开启JavaScript")) and len(s) <= 80:
+    if (
+        any(tok in s for tok in ("验证码", "机器人验证", "请启用JavaScript", "启用JavaScript", "请开启JavaScript"))
+        and len(s) <= 80
+    ):
         return True
     if any(tok in s for tok in ("登录后", "请登录", "注册后", "注册")) and len(s) <= 60:
         return True

@@ -1,53 +1,18 @@
 """Zujuan question detail fetcher."""
+
 from __future__ import annotations
 
-
 import asyncio
-import base64
-import hashlib
-import html as html_module
-import json
-import os
 import re
 import subprocess
-import time
-import urllib.parse
-from collections import OrderedDict
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-import httpx
-
-from backend.config import DIFFICULTY_QUERY_MODE
+from backend.core.logging_utils import get_logger
 from backend.crawler.zujuan.cookies import (
-    DEFAULT_USER_AGENT,
-    build_cookie_string,
-    fetch_csrf_token_from_page,
-    get_cookies_with_playwright,
-    get_login_session_with_playwright,
-    load_antibot_cookie_cache,
     load_env_login,
-    missing_antibot_keys,
-    parse_cookie_string,
-    save_antibot_cookie_cache,
 )
-from backend.crawler.zujuan.parsing import FORMULA_HASH_PATTERN, FORMULA_IMG_TAG_PATTERN, IMG_TAG_PATTERN
-from backend.crawler.zujuan.utils import (
-    PROVINCE_UNLIMITED_ALIASES,
-    _extract_js_var_json,
-    _normalize_province_name,
-    _parse_base_json,
-    _parse_province_list_json,
-    _safe_float,
-    _safe_int,
-)
-from backend.subjects import (
-    DEFAULT_DIFFICULTY,
-    DIFFICULTY_LEVELS,
-    SUBJECTS,
-    normalize_difficulty,
-    resolve_subject,
-)
+
+logger = get_logger(__name__)
 
 
 async def get_question_detail(
@@ -77,18 +42,11 @@ async def get_question_detail(
         # 使用curl获取页面（在线程池中运行避免阻塞）
         loop = asyncio.get_event_loop()
         cmd = self._build_curl_cmd(url)
-        result = await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=30
-            )
-        )
-        html = result.stdout.decode('utf-8', errors='ignore')
+        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=30))
+        html = result.stdout.decode("utf-8", errors="ignore")
 
         def _looks_like_login_page(text: str) -> bool:
-            s = (text or "")
+            s = text or ""
             if not s:
                 return False
             lower = s.lower()
@@ -115,8 +73,8 @@ async def get_question_detail(
                         "1. 双击运行 scripts/登录组卷网.bat",
                         "2. 在弹出的浏览器中登录组卷网",
                         "3. 登录成功后按回车保存",
-                        "4. 重新获取题目详情"
-                    ]
+                        "4. 重新获取题目详情",
+                    ],
                 }
             else:
                 return {
@@ -130,8 +88,8 @@ async def get_question_detail(
                         "1. 双击运行 scripts/登录组卷网.bat",
                         "2. 在弹出的浏览器中登录组卷网",
                         "3. 登录成功后按回车保存",
-                        "4. 重新获取题目详情"
-                    ]
+                        "4. 重新获取题目详情",
+                    ],
                 }
 
         res = {
@@ -163,8 +121,8 @@ async def get_question_detail(
                 res["stem_html"] = stem_html
 
             # 清理HTML标签（保留 LaTeX 或 [公式:<svg...>] 标记）
-            stem_text = re.sub(r'<[^>]+>', '', stem_html)
-            stem_text = re.sub(r'\s+', ' ', stem_text).strip()
+            stem_text = re.sub(r"<[^>]+>", "", stem_html)
+            stem_text = re.sub(r"\s+", " ", stem_text).strip()
             res["stem"] = stem_text[:3000]
         else:
             res["stem"] = ""
@@ -173,7 +131,7 @@ async def get_question_detail(
 
         # 提取知识点
         kp_matches = re.findall(r'class="knowledge-name[^"]*"[^>]*>([^<]+)</a>', html)
-        res["knowledge_points"] = ', '.join(kp_matches) if kp_matches else ""
+        res["knowledge_points"] = ", ".join(kp_matches) if kp_matches else ""
 
         # 提取来源
         source_match = re.search(r'class="src-item[^"]*"[^>]*title="([^"]+)"', html)
@@ -279,23 +237,11 @@ async def get_question_detail(
             if ana:
                 res["analysis"] = ana
         except Exception:
-            pass
+            logger.debug("zujuan_parse_answer_or_analysis_failed", exc_info=True)
 
         return res
 
     except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "question_id": question_id,
-            "error": "请求超时",
-            "url": url
-        }
+        return {"success": False, "question_id": question_id, "error": "请求超时", "url": url}
     except Exception as e:
-        return {
-            "success": False,
-            "question_id": question_id,
-            "error": str(e),
-            "url": url
-        }
-
-
+        return {"success": False, "question_id": question_id, "error": str(e), "url": url}

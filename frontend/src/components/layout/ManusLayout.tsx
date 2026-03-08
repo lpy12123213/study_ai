@@ -1,6 +1,8 @@
 import { Outlet, useLocation } from 'react-router-dom'
 import { HistorySidebar } from './HistorySidebar'
 import { Header } from './Header'
+import { ToastHost } from '@/components/shared/ToastHost'
+import { CommandPalette } from '@/components/shared/CommandPalette'
 import { cn } from '@/lib/utils'
 
 export function ManusLayout() {
@@ -38,6 +40,8 @@ export function ManusLayout() {
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-background text-foreground">
       {/* Header */}
       <Header />
+      <ToastHost />
+      <CommandPalette />
       
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">

@@ -1,22 +1,33 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useState, useRef, useEffect } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, ChevronDown, ChevronUp, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
+import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { useChatStream, useMessages } from '@/hooks/useChat'
+import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { cn } from '@/lib/utils'
 import { BrandMark } from '@/components/shared/BrandMark'
 import * as chatApi from '@/api/chat'
 import type { Message } from '@/types'
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message, disableMotion }: { message: Message; disableMotion: boolean }) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
 
   if (isUser) {
+    if (disableMotion) {
+      return (
+        <div className="flex justify-end mb-6">
+          <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          </div>
+        </div>
+      )
+    }
     return (
       <motion.div
         initial={{ opacity: 0, y: 10 }}
@@ -27,6 +38,46 @@ function MessageBubble({ message }: { message: Message }) {
           <div className="whitespace-pre-wrap">{message.content}</div>
         </div>
       </motion.div>
+    )
+  }
+
+  if (disableMotion) {
+    return (
+      <div className="flex flex-col gap-2 mb-8 max-w-3xl w-full">
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
+          <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+            <BrandMark size={12} />
+          </div>
+          <span>学习助手</span>
+        </div>
+
+        <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
+          <div className="whitespace-pre-wrap">{message.content}</div>
+        </div>
+
+        {message.steps && message.steps.length > 0 && (
+          <div className="mt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+              onClick={() => setShowSteps(!showSteps)}
+            >
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              {showSteps ? '隐藏' : '查看'} {message.steps.length} 个思考步骤
+              {showSteps ? <ChevronUp className="h-3 w-3 opacity-50" /> : <ChevronDown className="h-3 w-3 opacity-50" />}
+            </Button>
+
+            {showSteps && (
+              <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
+                <div className="p-4 bg-muted/30">
+                  <TaskTimeline steps={message.steps} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     )
   }
 
@@ -117,14 +168,16 @@ function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => v
 export default function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const targetMid = String(searchParams.get('mid') || '').trim()
+  const [highlightMid, setHighlightMid] = useState<string>('')
   const [input, setInput] = useState('')
-  const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const hydratedConversationIdRef = useRef<string | null>(null)
   const lastConversationIdRef = useRef<string | undefined>(conversationId)
   const [isCreatingConversation, setIsCreatingConversation] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
-  const stickToBottomRef = useRef(true)
+  const [createError, setCreateError] = useState<unknown>(null)
+  const stick = useStickToBottom({ thresholdPx: 120 })
 
   const {
     messages: historyMessages,
@@ -135,13 +188,31 @@ export default function ChatPage() {
   } = useMessages(conversationId)
   const { messages, setMessages, isStreaming, error, sendMessage, cancelStream } = useChatStream()
 
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
+  useEffect(() => {
+    if (!targetMid) return
+    setHighlightMid(targetMid)
+    const t = window.setTimeout(() => setHighlightMid(''), 6000)
+    return () => window.clearTimeout(t)
+  }, [targetMid])
 
-    const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
-    stickToBottomRef.current = distanceToBottom < 120
-  }, [])
+  useEffect(() => {
+    if (!targetMid) return
+    const exists = messages.some((m) => String(m.id) === targetMid)
+    if (exists) return
+    if (!hasNextPage || isFetchingNextPage) return
+    fetchNextPage()
+  }, [targetMid, messages, hasNextPage, isFetchingNextPage, fetchNextPage])
+
+  useEffect(() => {
+    if (!targetMid) return
+    const exists = messages.some((m) => String(m.id) === targetMid)
+    if (!exists) return
+    stick.setShouldStick(false)
+    window.setTimeout(() => {
+      const el = document.getElementById(`msg-${targetMid}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }, [targetMid, messages.length, stick])
 
   useEffect(() => {
     if (!conversationId) return
@@ -177,15 +248,8 @@ export default function ChatPage() {
   }, [conversationId, setMessages, setCreateError])
 
   useEffect(() => {
-    if (!stickToBottomRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    requestAnimationFrame(() => {
-      const target = scrollRef.current
-      if (!target) return
-      target.scrollTop = target.scrollHeight
-    })
-  }, [messages])
+    stick.maybeStick()
+  }, [messages, stick.maybeStick])
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -194,7 +258,7 @@ export default function ChatPage() {
 
     setInput('')
     setCreateError(null)
-    stickToBottomRef.current = true
+    stick.setShouldStick(true)
 
     if (conversationId) {
       sendMessage(conversationId, text)
@@ -211,8 +275,7 @@ export default function ChatPage() {
         sendMessage(newId, text)
       })
       .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err || 'create_conversation_failed')
-        setCreateError(`创建对话失败：${msg}`)
+        setCreateError(err)
       })
       .finally(() => {
         setIsCreatingConversation(false)
@@ -242,16 +305,13 @@ export default function ChatPage() {
             <WelcomeScreen onExampleClick={(text) => setInput(text)} />
             {createError && (
               <div className="max-w-3xl mx-auto w-full px-4 pb-6">
-                <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 text-sm text-destructive flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
-                  {createError}
-                </div>
+                <ErrorNotice error={createError} title="创建对话失败" onClose={() => setCreateError(null)} />
               </div>
             )}
           </>
         )
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
+        <div ref={stick.containerRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={stick.onScroll}>
           <div className="max-w-3xl mx-auto py-6">
             {(hasNextPage || isFetchingNextPage) && (
               <div className="flex justify-center mb-4">
@@ -270,35 +330,66 @@ export default function ChatPage() {
               </div>
             )}
 
-            <AnimatePresence mode="popLayout">
-              {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
-              ))}
-            </AnimatePresence>
+            {messages.length >= 500 ? (
+              messages.map((message) => (
+                <div
+                  key={message.id}
+                  id={`msg-${String(message.id)}`}
+                  className={cn(
+                    String(message.id) === highlightMid && 'rounded-xl ring-2 ring-primary/20 ring-offset-2 ring-offset-background'
+                  )}
+                >
+                  <MessageBubble message={message} disableMotion={true} />
+                </div>
+              ))
+            ) : (
+              <AnimatePresence mode="popLayout">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    id={`msg-${String(message.id)}`}
+                    className={cn(
+                      String(message.id) === highlightMid && 'rounded-xl ring-2 ring-primary/20 ring-offset-2 ring-offset-background'
+                    )}
+                  >
+                    <MessageBubble message={message} disableMotion={false} />
+                  </div>
+                ))}
+              </AnimatePresence>
+            )}
 
             {isStreaming && messages[messages.length - 1]?.content === '' && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex gap-3 mb-4 max-w-3xl"
-              >
+              <div className="flex gap-3 mb-4 max-w-3xl">
                 <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
                 </div>
                 <div className="text-sm text-muted-foreground pt-0.5">
                    正在思考...
                 </div>
-              </motion.div>
+              </div>
             )}
 
-            {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
-                {error}
-              </div>
+            {Boolean(error) && (
+              <ErrorNotice error={error} title="生成失败" />
             )}
           </div>
         </div>
+      )}
+
+      {!stick.isNearBottom && messages.length > 0 && (
+        <Button
+          type="button"
+          size="icon"
+          variant="secondary"
+          className="absolute right-6 bottom-28 z-20 h-10 w-10 rounded-full shadow"
+          onClick={() => {
+            stick.scrollToBottom('smooth')
+            stick.setShouldStick(true)
+          }}
+          aria-label="回到底部"
+        >
+          <ChevronDown className="h-4 w-4" />
+        </Button>
       )}
 
       <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">

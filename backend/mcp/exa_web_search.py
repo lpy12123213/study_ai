@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
-import httpx
-from typing import Optional, List, Dict, Any
-from dotenv import load_dotenv
+from typing import Any, Dict, List, Optional
 
-load_dotenv(override=False)
+import httpx
+
+from backend.core.settings import load_project_dotenv
+
+load_project_dotenv(override=False)
 
 # NOTE: `EXA_API` is a legacy alias kept for compatibility.
 EXA_API_KEY = (os.getenv("EXA_API_KEY") or os.getenv("EXA_API") or "").strip()
@@ -67,12 +69,14 @@ async def exa_answer(
 
             citations = []
             for c in data.get("citations", []):
-                citations.append({
-                    "title": c.get("title", ""),
-                    "url": c.get("url", ""),
-                    "text": (c.get("text", "") or "")[:text_max_length],
-                    "published_date": c.get("publishedDate"),
-                })
+                citations.append(
+                    {
+                        "title": c.get("title", ""),
+                        "url": c.get("url", ""),
+                        "text": (c.get("text", "") or "")[:text_max_length],
+                        "published_date": c.get("publishedDate"),
+                    }
+                )
 
             return {
                 "answer": data.get("answer", ""),
@@ -121,7 +125,7 @@ async def exa_search(
 ) -> Dict[str, Any]:
     """
     使用 Exa AI 搜索网页。
-    
+
     Args:
         query: 搜索查询字符串
         num_results: 返回结果数量（最多 10 个）
@@ -136,7 +140,7 @@ async def exa_search(
         end_published_date: 按发布日期筛选
         include_text: 是否包含文本内容
         text_max_length: 文本内容最大长度
-    
+
     Returns:
         包含搜索结果的字典
     """
@@ -148,19 +152,19 @@ async def exa_search(
             "error": "Exa API key not configured",
             "results": [],
         }
-    
+
     headers = {
         "x-api-key": EXA_API_KEY,
         "Content-Type": "application/json",
     }
-    
+
     payload: Dict[str, Any] = {
         "query": query,
         "numResults": min(num_results, 10),
         "useAutoprompt": use_autoprompt,
         "type": type,
     }
-    
+
     if category:
         payload["category"] = category
     if include_domains:
@@ -175,7 +179,7 @@ async def exa_search(
         payload["startPublishedDate"] = start_published_date
     if end_published_date:
         payload["endPublishedDate"] = end_published_date
-    
+
     # Contents configuration
     contents: Dict[str, Any] = {}
     if include_text:
@@ -197,7 +201,7 @@ async def exa_search(
 
     if contents:
         payload["contents"] = contents
-    
+
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -207,7 +211,7 @@ async def exa_search(
             )
             response.raise_for_status()
             data = response.json()
-            
+
             return {
                 "success": True,
                 "provider": "exa",
@@ -253,14 +257,14 @@ async def exa_find_similar(
 ) -> Dict[str, Any]:
     """
     使用 Exa AI 查找与给定 URL 相似的页面。
-    
+
     Args:
         url: 要查找相似页面的 URL
         num_results: 返回的结果数量
         include_domains: 要包含的域名列表
         exclude_domains: 要排除的域名列表
         exclude_source_domain: 是否排除源域名
-    
+
     Returns:
         包含相似页面结果的字典
     """
@@ -269,23 +273,23 @@ async def exa_find_similar(
             "error": "Exa API key not configured",
             "results": [],
         }
-    
+
     headers = {
         "x-api-key": EXA_API_KEY,
         "Content-Type": "application/json",
     }
-    
+
     payload: Dict[str, Any] = {
         "url": url,
         "numResults": min(num_results, 10),
         "excludeSourceDomain": exclude_source_domain,
     }
-    
+
     if include_domains:
         payload["includeDomains"] = include_domains
     if exclude_domains:
         payload["excludeDomains"] = exclude_domains
-    
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -295,7 +299,7 @@ async def exa_find_similar(
             )
             response.raise_for_status()
             data = response.json()
-            
+
             return {
                 "results": [
                     {

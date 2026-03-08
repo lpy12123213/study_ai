@@ -6,6 +6,7 @@
 
 文件位置: utils/unknown_signatures.json
 """
+
 import json
 import os
 import threading
@@ -59,9 +60,7 @@ def _save_records(records: Dict) -> None:
 
 
 def record_unknown_signatures(
-    unknown_sigs: List[str],
-    source_url: Optional[str] = None,
-    context: Optional[str] = None
+    unknown_sigs: List[str], source_url: Optional[str] = None, context: Optional[str] = None
 ) -> int:
     """
     记录未知签名
@@ -95,7 +94,7 @@ def record_unknown_signatures(
                     "last_seen": timestamp,
                     "count": 1,
                     "sources": [],
-                    "status": "pending"  # pending, analyzed, added
+                    "status": "pending",  # pending, analyzed, added
                 }
                 new_count += 1
             else:
@@ -137,11 +136,7 @@ def get_unknown_signatures_summary() -> Dict:
         records = _load_records()
 
         # 按出现次数排序
-        sorted_sigs = sorted(
-            records["signatures"].items(),
-            key=lambda x: x[1]["count"],
-            reverse=True
-        )
+        sorted_sigs = sorted(records["signatures"].items(), key=lambda x: x[1]["count"], reverse=True)
 
         # 获取待处理的高频签名（前20个）
         pending_high_freq = [
@@ -149,7 +144,7 @@ def get_unknown_signatures_summary() -> Dict:
                 "signature": sig,
                 "count": data["count"],
                 "first_seen": data["first_seen"],
-                "sources": data["sources"][:3]  # 最多3个来源
+                "sources": data["sources"][:3],  # 最多3个来源
             }
             for sig, data in sorted_sigs
             if data.get("status") == "pending"
@@ -159,9 +154,8 @@ def get_unknown_signatures_summary() -> Dict:
             "total_unique": records["stats"].get("unique_count", 0),
             "total_occurrences": records["stats"].get("total_occurrences", 0),
             "last_updated": records["stats"].get("last_updated"),
-            "pending_count": sum(1 for sig, data in records["signatures"].items()
-                                if data.get("status") == "pending"),
-            "high_frequency_pending": pending_high_freq
+            "pending_count": sum(1 for sig, data in records["signatures"].items() if data.get("status") == "pending"),
+            "high_frequency_pending": pending_high_freq,
         }
 
 
@@ -198,10 +192,7 @@ def clear_added_signatures() -> int:
         records = _load_records()
 
         # 找出已添加的签名
-        to_remove = [
-            sig for sig, data in records["signatures"].items()
-            if data.get("status") == "added"
-        ]
+        to_remove = [sig for sig, data in records["signatures"].items() if data.get("status") == "added"]
 
         # 移除
         for sig in to_remove:
@@ -245,15 +236,11 @@ def export_for_analysis(output_path: Optional[str] = None) -> str:
             "-" * 60,
             "待处理签名（按出现频率排序）:",
             "-" * 60,
-            ""
+            "",
         ]
 
         # 按出现次数排序
-        sorted_sigs = sorted(
-            records["signatures"].items(),
-            key=lambda x: x[1]["count"],
-            reverse=True
-        )
+        sorted_sigs = sorted(records["signatures"].items(), key=lambda x: x[1]["count"], reverse=True)
 
         for sig, data in sorted_sigs:
             if data.get("status") != "pending":
@@ -263,7 +250,7 @@ def export_for_analysis(output_path: Optional[str] = None) -> str:
             lines.append(f"  出现次数: {data['count']}")
             lines.append(f"  首次发现: {data['first_seen']}")
             if data.get("sources"):
-                lines.append(f"  示例来源:")
+                lines.append("  示例来源:")
                 for src in data["sources"][:3]:
                     lines.append(f"    - {src}")
             lines.append("")
@@ -285,11 +272,7 @@ def export_for_analysis(output_path: Optional[str] = None) -> str:
 
 
 # 便捷函数：在公式转换后调用
-def log_unknown_from_conversion(
-    svg_url: str,
-    unknown_sigs: List[str],
-    context: Optional[str] = None
-) -> None:
+def log_unknown_from_conversion(svg_url: str, unknown_sigs: List[str], context: Optional[str] = None) -> None:
     """
     记录公式转换中发现的未知签名（便捷接口）
 
@@ -299,11 +282,7 @@ def log_unknown_from_conversion(
         context: 上下文（可选）
     """
     if unknown_sigs:
-        record_unknown_signatures(
-            unknown_sigs=unknown_sigs,
-            source_url=svg_url,
-            context=context
-        )
+        record_unknown_signatures(unknown_sigs=unknown_sigs, source_url=svg_url, context=context)
 
 
 if __name__ == "__main__":
@@ -312,11 +291,7 @@ if __name__ == "__main__":
 
     # 模拟记录
     test_sigs = ["abc12345", "def67890"]
-    count = record_unknown_signatures(
-        test_sigs,
-        source_url="https://example.com/formula/test.svg",
-        context="测试题目"
-    )
+    count = record_unknown_signatures(test_sigs, source_url="https://example.com/formula/test.svg", context="测试题目")
     print(f"新增签名数: {count}")
 
     # 获取摘要

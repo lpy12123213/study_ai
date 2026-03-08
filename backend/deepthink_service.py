@@ -8,8 +8,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Tuple
 
 import httpx
 
-from backend.core.settings import settings
 from backend.core import llm_console
+from backend.core.settings import settings
 from backend.deepthink.prompts import (
     EVALUATOR_SYSTEM_PROMPT_TEMPLATE,
     GENERATOR_SYSTEM_PROMPT_TEMPLATE,
@@ -78,11 +78,11 @@ def _extract_first_json_array(text: str) -> Optional[List[Any]]:
     raw = _strip_code_fences(text)
     if not raw:
         return None
-    l = raw.find("[")
-    r = raw.rfind("]")
-    if l < 0 or r <= l:
+    left = raw.find("[")
+    right = raw.rfind("]")
+    if left < 0 or right <= left:
         return None
-    candidate = raw[l : r + 1].strip()
+    candidate = raw[left : right + 1].strip()
     try:
         data = json.loads(candidate)
         return data if isinstance(data, list) else None
@@ -94,11 +94,11 @@ def _extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
     raw = _strip_code_fences(text)
     if not raw:
         return None
-    l = raw.find("{")
-    r = raw.rfind("}")
-    if l < 0 or r <= l:
+    left = raw.find("{")
+    right = raw.rfind("}")
+    if left < 0 or right <= left:
         return None
-    candidate = raw[l : r + 1].strip()
+    candidate = raw[left : right + 1].strip()
     try:
         data = json.loads(candidate)
         return data if isinstance(data, dict) else None
@@ -235,11 +235,7 @@ class DeepThinkService:
         n: int,
     ) -> List[Dict[str, Any]]:
         system_prompt = GENERATOR_SYSTEM_PROMPT_TEMPLATE.format(subject=subject)
-        user_text = (
-            f"题目：{question}\n\n"
-            f"已有推理路径：\n{_format_path(path)}\n\n"
-            f"请生成 {n} 个不同的解题下一步。"
-        )
+        user_text = f"题目：{question}\n\n已有推理路径：\n{_format_path(path)}\n\n请生成 {n} 个不同的解题下一步。"
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": _build_user_content(user_text, image_url)},
@@ -332,11 +328,7 @@ class DeepThinkService:
             steps_lines.append(f"{step_idx}. {thought}")
         steps_text = "\n".join(steps_lines) if steps_lines else "（无）"
 
-        user_text = (
-            f"题目：{question}\n\n"
-            f"最优推理路径（按顺序）：\n{steps_text}\n\n"
-            "请基于该路径写出完整解答。"
-        )
+        user_text = f"题目：{question}\n\n最优推理路径（按顺序）：\n{steps_text}\n\n请基于该路径写出完整解答。"
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": _build_user_content(user_text, image_url)},
@@ -544,4 +536,3 @@ class DeepThinkService:
 
 
 deepthink_service = DeepThinkService()
-

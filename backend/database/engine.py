@@ -10,7 +10,6 @@ from backend.database.legacy_migrations import sync_migrate_db_schema
 from backend.database.paths import resolve_db_path
 from backend.database.schema import Base
 
-
 logger = get_logger(__name__)
 
 DB_PATH = resolve_db_path()
@@ -42,4 +41,3 @@ async def init_db() -> None:
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
         yield session
-

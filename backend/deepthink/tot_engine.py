@@ -262,4 +262,3 @@ class ToTEngine:
             "bestScore": float(best_leaf.score or 0.0),
             "elapsed": round(time.monotonic() - self.started_at, 3),
         }
-

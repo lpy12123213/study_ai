@@ -65,7 +65,7 @@ def get_stdio_tools() -> List[Tool]:
                     },
                     "max_pages": {
                         "type": "integer",
-                        "description": "最多翻页数（默认 2 页）",       
+                        "description": "最多翻页数（默认 2 页）",
                         "default": 2,
                     },
                     "year": {
@@ -211,7 +211,7 @@ def get_stdio_tools() -> List[Tool]:
                     },
                     "max_pages": {
                         "type": "integer",
-                        "description": "最多翻页数（默认 2 页）",       
+                        "description": "最多翻页数（默认 2 页）",
                         "default": 2,
                     },
                     "year": {
@@ -872,7 +872,11 @@ def get_stdio_tools() -> List[Tool]:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "知乎链接（文章/回答/专栏）"},
-                    "cookies": {"type": "string", "description": "可选：登录态 Cookie（优先级高于环境变量）", "default": ""},
+                    "cookies": {
+                        "type": "string",
+                        "description": "可选：登录态 Cookie（优先级高于环境变量）",
+                        "default": "",
+                    },
                     "timeout_seconds": {"type": "integer", "description": "请求超时（5-60秒）", "default": 30},
                 },
                 "required": ["url"],
@@ -902,4 +906,3 @@ def get_stdio_tools() -> List[Tool]:
             },
         ),
     ]
-

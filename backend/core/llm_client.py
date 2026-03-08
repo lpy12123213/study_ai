@@ -19,10 +19,10 @@ from backend.core.logging_utils import get_logger
 from backend.core.record_replay import RecordReplayStore, record_enabled, replay_enabled
 from backend.core.settings import (
     API_TIMEOUT,
-    LLM_PROVIDER_PINNED,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_PROVIDER,
+    LLM_PROVIDER_PINNED,
     MOONSHOT_API_KEY,
     MOONSHOT_BASE_URL,
 )
@@ -153,7 +153,7 @@ def _model_context_length(model: str) -> int:
                     if kk and vv > 0:
                         builtin[kk] = vv
         except Exception:
-            pass
+            logger.debug("failed to parse builtin model max tokens", exc_info=True)
 
     return int(builtin.get(m) or 0)
 
@@ -165,12 +165,7 @@ def _estimate_text_tokens(text: str) -> int:
     cjk = 0
     for ch in t:
         o = ord(ch)
-        if (
-            0x4E00 <= o <= 0x9FFF
-            or 0x3400 <= o <= 0x4DBF
-            or 0x3040 <= o <= 0x30FF
-            or 0xAC00 <= o <= 0xD7AF
-        ):
+        if 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0x3040 <= o <= 0x30FF or 0xAC00 <= o <= 0xD7AF:
             cjk += 1
     ratio = float(cjk) / float(len(t) or 1)
     if ratio >= 0.25:
@@ -545,7 +540,6 @@ async def chat_completion(
 
     requested_max_tokens = int(max_tokens)
     payload_max_tokens = 0
-    adjusted_for_ctx = False
     if resolved_provider == "openrouter":
         ctx_len, max_comp = await _openrouter_model_limits(
             base_url=resolved_base_url,
@@ -559,7 +553,6 @@ async def chat_completion(
                 requested_max_tokens=requested_max_tokens,
                 max_completion_tokens=max_comp,
             )
-            adjusted_for_ctx = payload_max_tokens != requested_max_tokens
 
     if payload_max_tokens <= 0:
         payload_max_tokens = cap_max_tokens_for_messages(
@@ -567,7 +560,6 @@ async def chat_completion(
             model=resolved_model,
             requested_max_tokens=requested_max_tokens,
         )
-        adjusted_for_ctx = payload_max_tokens != requested_max_tokens
 
     payload: Dict[str, Any] = {
         "model": resolved_model,
@@ -642,7 +634,11 @@ async def chat_completion(
                             try:
                                 await resp.aread()
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "llm_response_drain_failed",
+                                    extra={"status": int(getattr(resp, "status_code", 0) or 0)},
+                                    exc_info=True,
+                                )
                         resp.raise_for_status()
 
                         content_parts: List[str] = []
@@ -701,7 +697,10 @@ async def chat_completion(
                             if r_chunk:
                                 reasoning_buf += r_chunk
                                 now_t = loop.time()
-                                if len(reasoning_buf) >= reasoning_emit_chars or (now_t - last_emit_t) >= reasoning_emit_interval_s:
+                                if (
+                                    len(reasoning_buf) >= reasoning_emit_chars
+                                    or (now_t - last_emit_t) >= reasoning_emit_interval_s
+                                ):
                                     await _maybe_emit_reasoning(reasoning_buf)
                                     llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_buf)
                                     reasoning_buf = ""
@@ -735,7 +734,11 @@ async def chat_completion(
                         if record_enabled():
                             rr_store.save(
                                 request=rr_request,
-                                response={"content": result.content, "finish_reason": result.finish_reason, "usage": result.usage},
+                                response={
+                                    "content": result.content,
+                                    "finish_reason": result.finish_reason,
+                                    "usage": result.usage,
+                                },
                             )
                         return result
 
@@ -781,7 +784,11 @@ async def chat_completion(
                 if record_enabled():
                     rr_store.save(
                         request=rr_request,
-                        response={"content": result.content, "finish_reason": result.finish_reason, "usage": result.usage},
+                        response={
+                            "content": result.content,
+                            "finish_reason": result.finish_reason,
+                            "usage": result.usage,
+                        },
                     )
                 return result
             except Exception:
@@ -818,8 +825,9 @@ async def chat_completion(
                             cur = 0
                         if cur > new_allowed:
                             payload["max_tokens"] = int(new_allowed)
-                            adjusted_for_ctx = True
-                            llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
+                            llm_console.log_end(
+                                req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error
+                            )
                             await asyncio.sleep(0.2)
                             continue
 
@@ -881,10 +889,7 @@ async def chat_completion(
             return ChatCompletionResult()
 
     if last_error:
-        try:
-            logger.warning("llm request failed after retries", extra={"error": last_error, "model": resolved_model})
-        except Exception:
-            pass
+        logger.warning("llm request failed after retries", extra={"error": last_error, "model": resolved_model})
     if raise_on_fail:
         raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error or 'unknown'}")
     return ChatCompletionResult()

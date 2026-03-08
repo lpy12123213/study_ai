@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -16,8 +17,12 @@ import {
   Moon,
   Sun,
   Menu,
+  ListChecks,
+  Bug,
 } from 'lucide-react'
 import { BrandMark } from '@/components/shared/BrandMark'
+import { NotificationCenter } from '@/components/shared/NotificationCenter'
+import { FeedbackDialog } from '@/components/shared/FeedbackDialog'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
 import { cn } from '@/lib/utils'
@@ -52,6 +57,7 @@ export function Header() {
   const navigate = useNavigate()
   const { setTheme, theme } = useThemeStore()
   const { user, isAuthenticated, logout } = useAuthStore()
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   const initials = (user?.username || 'U').slice(0, 1).toUpperCase()
 
@@ -97,6 +103,30 @@ export function Header() {
 
       {/* Right actions */}
       <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label="任务中心"
+          onClick={() => navigate('/tasks')}
+        >
+          <ListChecks className="h-4 w-4" />
+        </Button>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label="反馈"
+          onClick={() => setFeedbackOpen(true)}
+        >
+          <Bug className="h-4 w-4" />
+        </Button>
+
+        <NotificationCenter />
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -133,12 +163,12 @@ export function Header() {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <div className="cursor-pointer">
+            <Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label="打开用户菜单">
               <Avatar className="h-8 w-8 transition-opacity hover:opacity-80">
                 <AvatarImage src="" />
                 <AvatarFallback className="text-xs">{initials}</AvatarFallback>
               </Avatar>
-            </div>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>{isAuthenticated && user ? user.username : '未登录'}</DropdownMenuLabel>
@@ -193,6 +223,8 @@ export function Header() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </header>
   )
 }

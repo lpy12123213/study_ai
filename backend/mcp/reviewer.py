@@ -2,27 +2,27 @@
 
 from __future__ import annotations
 
-import httpx
 import time
 import uuid
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
+import httpx
+
+from backend.core import llm_console
 from backend.core.settings import (
-    REVIEW_PROVIDER,
     FIREWORKS_API_KEY,
     FIREWORKS_BASE_URL,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
-    REVIEW_MODEL,
-    REVIEW_MODEL_TEMPERATURE,
-    REVIEW_MODEL_MAX_TOKENS,
-    REVIEW_TIMEOUT,
-    REVIEW_MAX_STEM_CHARS,
     REVIEW_HTTP_REFERER,
+    REVIEW_MAX_STEM_CHARS,
+    REVIEW_MODEL,
+    REVIEW_MODEL_MAX_TOKENS,
+    REVIEW_MODEL_TEMPERATURE,
+    REVIEW_PROVIDER,
+    REVIEW_TIMEOUT,
     REVIEW_X_TITLE,
 )
-from backend.core import llm_console
-
 
 REVIEW_SYSTEM_PROMPT = """You are an expert educational content reviewer.
 Your task is to evaluate exam questions for quality, accuracy, and pedagogical value.
@@ -55,7 +55,7 @@ async def review_question(
 ) -> Dict[str, Any]:
     """
     Review a question using AI.
-    
+
     Args:
         stem: The question text
         answer: The answer (if provided)
@@ -63,7 +63,7 @@ async def review_question(
         question_type: Type of question (e.g., multiple_choice, short_answer)
         subject: The subject area
         difficulty: Difficulty level (0-1)
-    
+
     Returns:
         Dict with review results
     """
@@ -74,7 +74,7 @@ async def review_question(
     else:  # openrouter
         api_key = OPENROUTER_API_KEY
         base_url = OPENROUTER_BASE_URL
-    
+
     if not api_key:
         return {
             "error": f"{REVIEW_PROVIDER} API key not configured",
@@ -95,45 +95,47 @@ async def review_question(
     usage: Dict[str, Any] = {}
     content_chars = 0
     err = ""
-    
+
     # Truncate stem if too long
     truncated_stem = stem[:REVIEW_MAX_STEM_CHARS]
     if len(stem) > REVIEW_MAX_STEM_CHARS:
         truncated_stem += "... [truncated]"
-    
+
     # Build the review prompt
     prompt_parts = [
-        f"Please review the following exam question:",
+        "Please review the following exam question:",
         "",
-        f"**Question:**",
+        "**Question:**",
         truncated_stem,
     ]
-    
+
     if answer:
-        prompt_parts.extend(["", f"**Answer:**", answer])
+        prompt_parts.extend(["", "**Answer:**", answer])
     if analysis:
-        prompt_parts.extend(["", f"**Analysis:**", analysis[:500]])
+        prompt_parts.extend(["", "**Analysis:**", analysis[:500]])
     if question_type:
         prompt_parts.extend(["", f"**Question Type:** {question_type}"])
     if subject:
         prompt_parts.extend(["", f"**Subject:** {subject}"])
     if difficulty is not None:
         prompt_parts.extend(["", f"**Difficulty:** {difficulty:.2f}"])
-    
-    prompt_parts.extend([
-        "",
-        "Provide your detailed review following the structured format.",
-    ])
-    
+
+    prompt_parts.extend(
+        [
+            "",
+            "Provide your detailed review following the structured format.",
+        ]
+    )
+
     user_prompt = "\n".join(prompt_parts)
-    
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": REVIEW_HTTP_REFERER,
         "X-Title": REVIEW_X_TITLE,
     }
-    
+
     payload = {
         "model": REVIEW_MODEL,
         "messages": [
@@ -143,7 +145,7 @@ async def review_question(
         "temperature": REVIEW_MODEL_TEMPERATURE,
         "max_tokens": REVIEW_MODEL_MAX_TOKENS,
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=REVIEW_TIMEOUT) as client:
             response = await client.post(
@@ -160,17 +162,17 @@ async def review_question(
                 finish_reason = ""
             if isinstance(data, dict) and isinstance(data.get("usage"), dict):
                 usage = dict(data.get("usage") or {})
-            
+
             choices = data.get("choices", [])
             if not choices:
                 err = "empty_choices"
                 return {"error": "No response from API", "verdict": "ERROR"}
-            
+
             review_text = choices[0].get("message", {}).get("content", "")
             if isinstance(review_text, str) and review_text:
                 content_chars = len(review_text)
                 llm_console.log_delta(req_id=req_id, channel="content", text=review_text)
-            
+
             # Parse the review to extract structured data
             return _parse_review(review_text)
     except httpx.HTTPStatusError as e:
@@ -213,17 +215,18 @@ def _parse_review(review_text: str) -> Dict[str, Any]:
         "suggestions": [],
         "verdict": "NEEDS_REVISION",
     }
-    
+
     # Try to extract scores
     lines = review_text.lower()
-    
+
     if "approve" in lines:
         result["verdict"] = "APPROVE"
     elif "reject" in lines:
         result["verdict"] = "REJECT"
-    
+
     # Extract numerical scores (simple heuristic)
     import re
+
     score_pattern = r"(\d+)\s*/\s*10"
     scores = re.findall(score_pattern, review_text)
     if scores:
@@ -232,7 +235,7 @@ def _parse_review(review_text: str) -> Dict[str, Any]:
             result["clarity_score"] = int(scores[1])
         if len(scores) > 2:
             result["accuracy_score"] = int(scores[2])
-    
+
     return result
 
 
@@ -241,10 +244,10 @@ async def batch_review_questions(
 ) -> List[Dict[str, Any]]:
     """
     Review multiple questions.
-    
+
     Args:
         questions: List of question dicts with stem, answer, etc.
-    
+
     Returns:
         List of review results
     """
@@ -336,10 +339,10 @@ async def review_questions_with_openrouter(
 
         questions_text += f"""
 【第{i}题】
-- ID: {q.get('question_id', 'N/A')}
-- 题型: {q.get('type', '未知')}
-- 难度系数: {q.get('difficulty', '未知')}
-- 知识点: {q.get('knowledge_points', '未知')}
+- ID: {q.get("question_id", "N/A")}
+- 题型: {q.get("type", "未知")}
+- 难度系数: {q.get("difficulty", "未知")}
+- 知识点: {q.get("knowledge_points", "未知")}
 - 题干: {stem}
 """
 

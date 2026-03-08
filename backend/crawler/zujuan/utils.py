@@ -4,7 +4,6 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-
 PROVINCE_UNLIMITED_ALIASES = {
     "不限",
     "不限地区",
@@ -158,4 +157,3 @@ def _safe_float(value: Any) -> Optional[float]:
         return float(s)
     except Exception:
         return None
-

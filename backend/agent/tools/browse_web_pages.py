@@ -9,8 +9,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
-from backend.agent.types import CompressedContext
 from backend.agent.tools.text_utils import _remove_ui_noise
+from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class BrowseWebPagesToolsMixin:
@@ -78,7 +81,9 @@ class BrowseWebPagesToolsMixin:
             cache_ttl_s = 86400.0
         cache_ttl_s = max(30.0, min(cache_ttl_s, 60.0 * 60.0 * 24.0 * 7.0))
 
-        max_entries_raw = args.get("cache_max_entries") or os.getenv("STUDY_MATERIALS_BROWSE_CACHE_MAX_ENTRIES") or "256"
+        max_entries_raw = (
+            args.get("cache_max_entries") or os.getenv("STUDY_MATERIALS_BROWSE_CACHE_MAX_ENTRIES") or "256"
+        )
         try:
             cache_max_entries = int(max_entries_raw)
         except Exception:
@@ -267,12 +272,12 @@ class BrowseWebPagesToolsMixin:
                     try:
                         tag.decompose()
                     except Exception:
-                        pass
+                        logger.debug("browse_decompose_tag_failed", exc_info=True)
                 for tag in soup(["header", "footer", "nav", "aside"]):
                     try:
                         tag.decompose()
                     except Exception:
-                        pass
+                        logger.debug("browse_decompose_tag_failed", exc_info=True)
                 try:
                     for tag in soup.find_all(
                         attrs={"role": re.compile(r"^(navigation|banner|contentinfo|complementary)$", re.I)}
@@ -280,9 +285,9 @@ class BrowseWebPagesToolsMixin:
                         try:
                             tag.decompose()
                         except Exception:
-                            pass
+                            logger.debug("browse_decompose_tag_failed", exc_info=True)
                 except Exception:
-                    pass
+                    logger.debug("browse_find_role_tags_failed", exc_info=True)
 
                 title = ""
                 try:
@@ -312,11 +317,11 @@ class BrowseWebPagesToolsMixin:
                         )
                     )
                 except Exception:
-                    pass
+                    logger.debug("browse_find_candidate_failed", exc_info=True)
                 try:
                     _add(body.find("div", id=re.compile(r"(content|main|article|post|entry|text)", re.I)))
                 except Exception:
-                    pass
+                    logger.debug("browse_find_candidate_failed", exc_info=True)
 
                 def _len_text(node: Any) -> int:
                     try:
@@ -353,7 +358,7 @@ class BrowseWebPagesToolsMixin:
                 try:
                     cache_stats["hits"] += 1
                 except Exception:
-                    pass
+                    logger.debug("browse_cache_stats_update_failed", exc_info=True)
                 return cached
             async with sem:
                 if _is_zhihu_url(normalized):
@@ -369,7 +374,7 @@ class BrowseWebPagesToolsMixin:
                     try:
                         cache_stats["writes"] += 1
                     except Exception:
-                        pass
+                        logger.debug("browse_cache_stats_update_failed", exc_info=True)
             return out
 
         headers = {
@@ -435,7 +440,7 @@ class BrowseWebPagesToolsMixin:
                             cache_stats["inline"] += 1
                             cache_stats["writes"] += 1
                         except Exception:
-                            pass
+                            logger.debug("browse_cache_stats_update_failed", exc_info=True)
 
                 _add_urls(_extract_urls(web.get("results")))
 

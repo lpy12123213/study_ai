@@ -94,7 +94,7 @@ export function useDeleteConversation() {
 export function useChatStream() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
 
   const queryClient = useQueryClient()
   const { startTask, addStep, updateStep, completeTask, failTask } = useTaskStore()
@@ -293,8 +293,9 @@ export function useChatStream() {
         },
         (err) => {
           if (streamKeyRef.current !== streamKey) return
-          setError(err.message)
-          failTask(taskId, err.message)
+          const msg = err instanceof Error ? err.message : String(err || 'stream_failed')
+          setError(err)
+          failTask(taskId, msg)
           setIsStreaming(false)
           streamAbortRef.current = null
           streamKeyRef.current = null

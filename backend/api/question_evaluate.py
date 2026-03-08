@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -17,11 +17,10 @@ from backend.api.question_evaluate_schemas import (
     QuestionSearchResponse,
 )
 from backend.config import DEFAULT_SUBJECT
-from backend.crawler_manager import get_crawler
-from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.core.llm_client import chat_completion_text
+from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.crawler_manager import get_crawler
 from backend.subjects import resolve_subject
-
 
 router = APIRouter(prefix="/question-evaluate", tags=["question-evaluate"], dependencies=[Depends(require_auth)])
 
@@ -268,7 +267,9 @@ async def search_questions(payload: QuestionSearchRequest) -> QuestionSearchResp
                 date=str(q.get("date") or "").strip(),
                 quality_score=q.get("quality_score") if isinstance(q.get("quality_score"), int) else None,
                 quality_flags=list(q.get("quality_flags") or []) if isinstance(q.get("quality_flags"), list) else [],
-                difficulty_value=q.get("difficulty_value") if isinstance(q.get("difficulty_value"), (int, float)) else None,
+                difficulty_value=q.get("difficulty_value")
+                if isinstance(q.get("difficulty_value"), (int, float))
+                else None,
             )
         )
 

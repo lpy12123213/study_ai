@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { fetchSSERequest, resolveApiResourceUrl } from '@/api/client'
+import { useSearchParams } from 'react-router-dom'
+import { ApiError, downloadText, fetchSSERequest, isApiError, resolveApiResourceUrl } from '@/api/client'
 import { getStudyMaterialsTask } from '@/api/studyMaterials'
+import { useFormDraft } from '@/hooks/useFormDraft'
+import { useStickToBottom } from '@/hooks/useStickToBottom'
+import { useAuthStore } from '@/stores/useAuthStore'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -16,18 +20,30 @@ import {
 } from '@/pages/studyMaterials/utils'
 import type { ConversationItem, Message, TaskStep } from '@/types'
 import type { LatexLessonPlanOption, SubAgentActivity, TriState } from '@/pages/studyMaterials/types'
+import * as tasksApi from '@/api/tasks'
+
+type StudyMaterialsPreset = '' | 'quick' | 'standard' | 'deep' | 'research'
+
+function toStudyMaterialsPreset(value: unknown): StudyMaterialsPreset {
+  const v = String(value ?? '').trim()
+  if (v === 'quick' || v === 'standard' || v === 'deep' || v === 'research') return v
+  return ''
+}
 
 export function useStudyMaterialsController() {
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const stickToBottomRef = useRef(true)
+  const stick = useStickToBottom({ thresholdPx: 120 })
+  const scrollRef = stick.containerRef
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
   const streamKeyRef = useRef<string | null>(null)
+  const userId = useAuthStore((s) => s.user?.id || '')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const reuseTaskId = String(searchParams.get('reuse_task') || '').trim()
 
   const [input, setInput] = useState('')
   const [isGeneratingLocal, setIsGeneratingLocal] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
 
   // Split pane: left panel width ratio (0.25 to 0.75)
   const [leftRatio, setLeftRatio] = useState(0.38)
@@ -43,7 +59,7 @@ export function useStudyMaterialsController() {
   // Advanced options (optional; when unset, backend uses `.env` defaults)
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [subject, setSubject] = useState('')
-  const [preset, setPreset] = useState<'quick' | 'standard' | 'deep' | 'research' | ''>('')
+  const [preset, setPreset] = useState<StudyMaterialsPreset>('')
   const [requirements, setRequirements] = useState('')
   const [withQuestions, setWithQuestions] = useState<TriState>('default')
   const [withDiagrams, setWithDiagrams] = useState<TriState>('default')
@@ -166,27 +182,100 @@ export function useStudyMaterialsController() {
   const isLastExportFailure = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf'].includes(lastTaskErrorTool)
   const isGenerating = isGeneratingLocal
 
+  const draftKey = `draft:study-materials:v1:${userId || 'anon'}`
+  const { clearDraft } = useFormDraft({
+    storageKey: draftKey,
+    enabled: !activeConversationId && !isGeneratingLocal,
+    value: {
+      input,
+      subject,
+      preset,
+      requirements,
+      withQuestions,
+      withDiagrams,
+      enableExtraTools,
+      maxPoints,
+    },
+    shouldSave: (v: any) => {
+      return Boolean(
+        String(v?.input || '').trim() ||
+          String(v?.subject || '').trim() ||
+          String(v?.requirements || '').trim() ||
+          String(v?.preset || '').trim(),
+      )
+    },
+    onRestore: (data: any) => {
+      setInput(String(data?.input || ''))
+      setSubject(String(data?.subject || ''))
+      setPreset(toStudyMaterialsPreset(data?.preset))
+      setRequirements(String(data?.requirements || ''))
+      setWithQuestions((data?.withQuestions as TriState) || 'default')
+      setWithDiagrams((data?.withDiagrams as TriState) || 'default')
+      setEnableExtraTools((data?.enableExtraTools as TriState) || 'default')
+      setMaxPoints(String(data?.maxPoints || ''))
+    },
+  })
+
+  useEffect(() => {
+    if (!reuseTaskId) return
+    let active = true
+
+    const toTriState = (v: unknown): TriState => {
+      if (v === true) return 'on'
+      if (v === false) return 'off'
+      return 'default'
+    }
+
+    const run = async () => {
+      try {
+        const task = await tasksApi.getTask(reuseTaskId)
+        if (!active) return
+        const req = (task as any)?.request
+        if (!req || typeof req !== 'object' || Array.isArray(req)) return
+
+        // Start from a clean draft state.
+        setCurrentConversation(null, 'study_materials')
+
+        const query = String((req as any).query || '').trim()
+        const subject = String((req as any).subject || '').trim()
+        const options = (req as any).options && typeof (req as any).options === 'object' && !Array.isArray((req as any).options) ? (req as any).options : {}
+
+        const presetRaw = String((options as any).preset || (req as any).preset || '').trim()
+        const preset = toStudyMaterialsPreset(presetRaw)
+        const requirements = String((options as any).requirements || (req as any).requirements || '').trim()
+
+        setInput(query)
+        setSubject(subject)
+        setPreset(preset)
+        setRequirements(requirements)
+
+        setWithQuestions(toTriState((options as any).with_questions ?? (req as any).with_questions))
+        setWithDiagrams(toTriState((options as any).with_diagrams ?? (req as any).with_diagrams))
+        setEnableExtraTools(toTriState((options as any).enable_extra_tools ?? (req as any).enable_extra_tools))
+
+        const mp = (options as any).max_points ?? (req as any).max_points
+        setMaxPoints(mp != null ? String(mp) : '')
+      } finally {
+        const next = new URLSearchParams(searchParams)
+        next.delete('reuse_task')
+        setSearchParams(next, { replace: true })
+      }
+    }
+
+    void run()
+    return () => {
+      active = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reuseTaskId])
+
   const messages = useConversationStore((state) =>
     state.getMessages(activeConversationId ?? '')
   )
 
-  const handleMessageScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
-    stickToBottomRef.current = distanceToBottom < 120
-  }, [])
-
   useEffect(() => {
-    if (!stickToBottomRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    requestAnimationFrame(() => {
-      const target = scrollRef.current
-      if (!target) return
-      target.scrollTop = target.scrollHeight
-    })
-  }, [messages])
+    stick.maybeStick()
+  }, [messages, stick.maybeStick])
 
   const hasSubAgentPane = isGenerating || subAgentActivities.length > 0
 
@@ -312,12 +401,7 @@ export function useStudyMaterialsController() {
     latexSourceAbortRef.current = controller
     setLatexIsLoadingSource(true)
     try {
-      const href = resolveApiResourceUrl(mdUrl)
-      const res = await fetch(href, { signal: controller.signal })
-      if (!res.ok) {
-        throw new Error(`加载 Markdown 失败（${res.status}）`)
-      }
-      const text = await res.text()
+      const text = await downloadText(mdUrl, { signal: controller.signal })
       setLatexMarkdown(text)
     } catch (err: any) {
       const msg = toText(err?.message) || '加载 Markdown 失败'
@@ -421,9 +505,7 @@ export function useStudyMaterialsController() {
       setLatexProgressPercent(100)
       setLatexProgressStage('加载 LaTeX…')
 
-      const href = resolveApiResourceUrl(texUrl)
-      const texRes = await fetch(href)
-      const texText = await texRes.text()
+      const texText = await downloadText(texUrl, { signal: controller.signal })
       setLatexTexText(texText)
     } catch (err: any) {
       const msg = toText(err?.message) || '转换失败'
@@ -1072,8 +1154,20 @@ export function useStudyMaterialsController() {
         if (streamAbortRef.current !== controller) return
         if (done) return
 
-        const msg = formatStudyMaterialsError(err.message || '生成失败')
-        setError(msg)
+        const normalizedError = isApiError(err)
+          ? new ApiError({
+              code: err.code,
+              message: formatStudyMaterialsError(err.message || '生成失败'),
+              status: err.status,
+              requestId: err.requestId,
+              detail: err.detail,
+              retriable: err.retriable,
+              actions: err.actions,
+            })
+          : formatStudyMaterialsError((err as any)?.message || '生成失败')
+
+        const msg = isApiError(normalizedError) ? normalizedError.message : String(normalizedError || '生成失败')
+        setError(normalizedError)
         if (localTaskId) {
           useTaskStore.getState().failTask(localTaskId, msg)
         }
@@ -1200,7 +1294,7 @@ export function useStudyMaterialsController() {
     e?.preventDefault()
     const prompt = input.trim()
     if (!prompt || isGenerating) return
-    stickToBottomRef.current = true
+    stick.setShouldStick(true)
 
     const normalized = prompt.replace(/\s+/g, '').trim().toLowerCase()
     const isContinueIntent =
@@ -1230,6 +1324,8 @@ export function useStudyMaterialsController() {
       })
       return
     }
+
+    clearDraft()
 
     const now = new Date().toISOString()
 
@@ -1337,7 +1433,7 @@ export function useStudyMaterialsController() {
       const baseTaskId = String(lastTask?.taskId || '').trim()
       if (!baseTaskId) return
       if (isGenerating) return
-      stickToBottomRef.current = true
+      stick.setShouldStick(true)
 
       const now = new Date().toISOString()
       const userText =
@@ -1437,7 +1533,11 @@ export function useStudyMaterialsController() {
 
   return {
     scrollRef,
-    stickToBottomRef,
+    isNearBottom: stick.isNearBottom,
+    scrollToBottom: () => {
+      stick.scrollToBottom('smooth')
+      stick.setShouldStick(true)
+    },
     textareaRef,
     containerRef,
     input,
@@ -1445,7 +1545,7 @@ export function useStudyMaterialsController() {
     isGeneratingLocal,
     isGenerating,
     error,
-    setError,
+    clearError: () => setError(null),
     leftRatio,
     setLeftRatio,
     subAgentActivities,
@@ -1512,7 +1612,7 @@ export function useStudyMaterialsController() {
     latexLessonPlanOptionById,
     hasResumableStream,
     isLastExportFailure,
-    handleMessageScroll,
+    handleMessageScroll: stick.onScroll,
     abortActiveStream,
     stopGenerating,
     resumeActiveStream,

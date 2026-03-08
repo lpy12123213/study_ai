@@ -24,7 +24,7 @@ class TestCanvasSanitization(unittest.TestCase):
 
         sanitized = _sanitize_question_html(html, base_url="https://zujuan.xkw.com")
 
-        self.assertIn('/api/media/proxy?url=https%3A%2F%2Fzujuan.xkw.com%2Fstatic%2Fquestion.png', sanitized)
+        self.assertIn("/api/media/proxy?url=https%3A%2F%2Fzujuan.xkw.com%2Fstatic%2Fquestion.png", sanitized)
         self.assertNotIn("onload", sanitized)
 
 
@@ -66,4 +66,3 @@ class TestSubjects(unittest.TestCase):
     def test_get_all_subjects_deduplicates_names(self) -> None:
         names = [item["name"] for item in get_all_subjects()]
         self.assertEqual(len(names), len(set(names)))
-

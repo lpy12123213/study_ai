@@ -24,7 +24,7 @@ export interface DeepThinkNode {
   isFinal: boolean
 }
 
-export type DeepThinkEvent =
+export type DeepThinkEvent = (
   | {
       type: 'search_start'
       question: string
@@ -61,6 +61,7 @@ export type DeepThinkEvent =
       totalNodes?: number
     }
   | { type: 'error'; message: string }
+  ) & { taskId?: string }
 
 export function solveDeepThinkStream(
   request: DeepThinkSolveRequest,

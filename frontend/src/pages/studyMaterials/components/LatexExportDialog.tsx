@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { resolveApiResourceUrl } from '@/api/client'
+import { downloadObjectUrl } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -52,6 +52,16 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
     handleCopyLatex,
     handleConvertToLatex,
   } = controller
+
+  const downloadTex = async () => {
+    if (!latexTexUrl) return
+    const { objectUrl, revoke, filename } = await downloadObjectUrl(latexTexUrl)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = latexTexFilename || filename || ''
+    a.click()
+    window.setTimeout(revoke, 60_000)
+  }
 
   const options = latexLessonPlanOptions.filter((opt) => opt.id.trim().length > 0)
   const canClear = Boolean(latexLessonPlanId || latexMarkdown)
@@ -180,15 +190,8 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
                   >
                     复制 LaTeX
                   </Button>
-                  <Button asChild size="sm" className="h-8 px-2 text-xs">
-                    <a
-                      href={resolveApiResourceUrl(latexTexUrl)}
-                      target="_blank"
-                      rel="noreferrer"
-                      download={latexTexFilename || ''}
-                    >
-                      下载 .tex
-                    </a>
+                  <Button type="button" size="sm" className="h-8 px-2 text-xs" onClick={() => void downloadTex()}>
+                    下载 .tex
                   </Button>
                 </div>
               </div>
@@ -219,4 +222,3 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
     </Dialog>
   )
 }
-

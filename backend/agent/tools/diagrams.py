@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import os
 import shutil
 import subprocess
@@ -12,6 +11,13 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
+
+logger = get_logger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_GENERATED_DIR = (_REPO_ROOT / ".local" / "media" / "generated").resolve()
 
 
 def _tikz_missing_hint() -> str:
@@ -51,23 +57,19 @@ class DiagramToolsMixin:
         svg = render_svg_diagram(spec)
         svg_bytes = (svg or "").encode("utf-8")
 
-        import hashlib
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            svg_bytes,
+            user_id=user_id,
+            ext=".svg",
+            file_type="image",
+            mime_type="image/svg+xml",
+            ttl_s=default_generated_media_ttl_s(),
+        )
 
-        media_id = hashlib.sha256(svg_bytes).hexdigest()
-        filename = f"{media_id}.svg"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-
-        try:
-            if not out_path.exists():
-                out_path.write_bytes(svg_bytes)
-        except Exception as exc:
-            return {"success": False, "error": str(exc), "filename": filename}
-
-        url = f"/api/media/generated/{filename}"
+        media_id = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
         markdown = f"![{alt}]({url})"
         return {
             "success": True,
@@ -75,7 +77,7 @@ class DiagramToolsMixin:
             "filename": filename,
             "url": url,
             "markdown": markdown,
-            "bytes": len(svg_bytes),
+            "bytes": int(published.get("bytes") or len(svg_bytes)),
         }
 
     async def _tool_draw_diagram(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
@@ -101,23 +103,19 @@ class DiagramToolsMixin:
         except Exception as exc:
             return {"success": False, "error": str(exc), "knowledge_point": kp}
 
-        import hashlib
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            png_bytes,
+            user_id=user_id,
+            ext=".png",
+            file_type="image",
+            mime_type="image/png",
+            ttl_s=default_generated_media_ttl_s(),
+        )
 
-        media_id = hashlib.sha256(png_bytes).hexdigest()
-        filename = f"{media_id}.png"
-
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / filename
-
-        try:
-            if not out_path.exists():
-                out_path.write_bytes(png_bytes)
-        except Exception as exc:
-            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
-
-        url = f"/api/media/generated/{filename}"
+        media_id = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
         markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
@@ -155,7 +153,7 @@ class DiagramToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            pass
+            logger.debug("diagram_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -165,7 +163,7 @@ class DiagramToolsMixin:
             "filename": filename,
             "url": url,
             "markdown": markdown,
-            "bytes": len(png_bytes),
+            "bytes": int(published.get("bytes") or len(png_bytes)),
         }
 
     async def _tool_tikz_to_svg(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
@@ -221,9 +219,6 @@ class DiagramToolsMixin:
         tex = "\n".join(tex_lines)
 
         repo_root = Path(__file__).resolve().parents[3]
-        gen_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        gen_dir.mkdir(parents=True, exist_ok=True)
-
         build_dir = (repo_root / ".local" / "latex_build" / uuid.uuid4().hex[:12]).resolve()
         build_dir.mkdir(parents=True, exist_ok=True)
 
@@ -314,16 +309,18 @@ class DiagramToolsMixin:
             return {"success": False, "error": "svg_missing", "knowledge_point": kp}
 
         svg_bytes = svg_path.read_bytes()
-        media_id = hashlib.sha256(svg_bytes).hexdigest()
-        filename = f"{media_id}.svg"
-        out_path = gen_dir / filename
-        try:
-            if not out_path.exists():
-                out_path.write_bytes(svg_bytes)
-        except Exception as exc:
-            return {"success": False, "error": str(exc), "filename": filename, "knowledge_point": kp}
-
-        url = f"/api/media/generated/{filename}"
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            svg_bytes,
+            user_id=user_id,
+            ext=".svg",
+            file_type="image",
+            mime_type="image/svg+xml",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        media_id = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
         markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
@@ -361,7 +358,7 @@ class DiagramToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            pass
+            logger.debug("diagram_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -410,7 +407,9 @@ class DiagramToolsMixin:
         if not model:
             return {"success": False, "error": "seedream_model_missing", "knowledge_point": kp}
 
-        size = str(args.get("size") or os.getenv("SEEDREAM_SIZE") or os.getenv("ARK_IMAGES_SIZE") or "1024x1024").strip()
+        size = str(
+            args.get("size") or os.getenv("SEEDREAM_SIZE") or os.getenv("ARK_IMAGES_SIZE") or "1024x1024"
+        ).strip()
         try:
             n = int(args.get("n") or os.getenv("SEEDREAM_N") or 1)
         except Exception:
@@ -427,7 +426,9 @@ class DiagramToolsMixin:
         if response_format:
             payload["response_format"] = response_format
 
-        timeout_raw = os.getenv("SEEDREAM_TIMEOUT_S") or os.getenv("ARK_IMAGES_TIMEOUT_S") or os.getenv("API_TIMEOUT") or "120"
+        timeout_raw = (
+            os.getenv("SEEDREAM_TIMEOUT_S") or os.getenv("ARK_IMAGES_TIMEOUT_S") or os.getenv("API_TIMEOUT") or "120"
+        )
         try:
             timeout_s = float(timeout_raw)
         except Exception:
@@ -491,10 +492,6 @@ class DiagramToolsMixin:
                     return "bmp"
                 return "png"
 
-            repo_root = Path(__file__).resolve().parents[3]
-            gen_dir = (repo_root / ".local" / "media" / "generated").resolve()
-            gen_dir.mkdir(parents=True, exist_ok=True)
-
             diagrams: List[Dict[str, Any]] = []
             for it in [x for x in data_list if isinstance(x, dict)][:n]:
                 img_bytes = b""
@@ -522,16 +519,27 @@ class DiagramToolsMixin:
                     continue
 
                 ext = _guess_ext(img_bytes)
-                media_id = hashlib.sha256(img_bytes).hexdigest()
-                filename = f"{media_id}.{ext}"
-                out_path = gen_dir / filename
-                try:
-                    if not out_path.exists():
-                        out_path.write_bytes(img_bytes)
-                except Exception:
-                    continue
+                mime = {
+                    "png": "image/png",
+                    "jpg": "image/jpeg",
+                    "jpeg": "image/jpeg",
+                    "gif": "image/gif",
+                    "webp": "image/webp",
+                    "bmp": "image/bmp",
+                }.get(str(ext or "").strip().lower() or "png", "application/octet-stream")
 
-                url = f"/api/media/generated/{filename}"
+                user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+                published = await publish_generated_bytes(
+                    img_bytes,
+                    user_id=user_id,
+                    ext=f".{ext}",
+                    file_type="image",
+                    mime_type=mime,
+                    ttl_s=default_generated_media_ttl_s(),
+                )
+                media_id = str(published.get("sha256") or "")
+                filename = str(published.get("filename") or "")
+                url = str(published.get("url") or "")
                 markdown = f"![{alt}]({url})"
                 diagram = {
                     "knowledge_point": kp,
@@ -570,18 +578,20 @@ class DiagramToolsMixin:
                     dlist = []
                 for d in diagrams:
                     fn = str(d.get("filename") or "").strip()
-                    if fn and not any(isinstance(x, dict) and str(x.get("filename") or "").strip() == fn for x in dlist):
+                    if fn and not any(
+                        isinstance(x, dict) and str(x.get("filename") or "").strip() == fn for x in dlist
+                    ):
                         dlist.append(d)
                 kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
                 blob["items"] = [x for x in items if isinstance(x, dict)]
                 ctx.working_memory["diagrams"] = blob
             except Exception:
-                pass
+                logger.debug("diagram_store_working_memory_failed", exc_info=True)
 
             first = diagrams[0]
             first_bytes = 0
             try:
-                fp = gen_dir / str(first.get("filename") or "")
+                fp = _GENERATED_DIR / str(first.get("filename") or "")
                 if fp.exists() and fp.is_file():
                     first_bytes = int(fp.stat().st_size)
             except Exception:

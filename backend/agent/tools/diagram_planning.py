@@ -7,6 +7,9 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def _has_tool(name: str) -> bool:
@@ -112,10 +115,20 @@ class DiagramPlanningToolsMixin:
             existing = _existing_diagrams(ctx, kp)
             need = max(0, max_diagrams - len(existing))
             if need <= 0:
-                return {"knowledge_point": kp, "skipped": True, "reason": "already_have_diagrams", "existing": len(existing)}
+                return {
+                    "knowledge_point": kp,
+                    "skipped": True,
+                    "reason": "already_have_diagrams",
+                    "existing": len(existing),
+                }
 
             if not is_llm_configured():
-                return {"knowledge_point": kp, "skipped": True, "reason": "llm_not_configured", "existing": len(existing)}
+                return {
+                    "knowledge_point": kp,
+                    "skipped": True,
+                    "reason": "llm_not_configured",
+                    "existing": len(existing),
+                }
 
             brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
 
@@ -132,7 +145,7 @@ class DiagramPlanningToolsMixin:
                 },
                 "requirements": [
                     f"Generate up to {need} teaching diagrams for the knowledge point: {kp}.",
-                    "Output STRICT JSON only: {\"diagrams\":[...]} (or {\"diagrams\":[]}).",
+                    'Output STRICT JSON only: {"diagrams":[...]} (or {"diagrams":[]}).',
                     f"Allowed kinds: {', '.join(allowed_kinds)}.",
                     "Prefer `draw_diagram` (pure Python/Matplotlib). Use `tikz_to_svg` only when available and truly necessary.",
                     "Use `seedream_generate` only when available and only as a last resort.",
@@ -174,7 +187,9 @@ class DiagramPlanningToolsMixin:
 
             obj = self._extract_json_obj(raw)  # type: ignore[attr-defined]
             diagrams_field = obj.get("diagrams") if isinstance(obj, dict) else None
-            specs = [x for x in (diagrams_field or []) if isinstance(x, dict)] if isinstance(diagrams_field, list) else []
+            specs = (
+                [x for x in (diagrams_field or []) if isinstance(x, dict)] if isinstance(diagrams_field, list) else []
+            )
             specs = specs[:need]
 
             created: List[Dict[str, Any]] = []
@@ -287,8 +302,16 @@ class DiagramPlanningToolsMixin:
                 "allowed_kinds": allowed_kinds,
                 "tikz_available": tikz_ok,
                 "seedream_available": seedream_ok,
-                "items": [{"knowledge_point": it.get("knowledge_point"), "created": it.get("created"), "error": it.get("error")} for it in items if isinstance(it, dict)],
+                "items": [
+                    {
+                        "knowledge_point": it.get("knowledge_point"),
+                        "created": it.get("created"),
+                        "error": it.get("error"),
+                    }
+                    for it in items
+                    if isinstance(it, dict)
+                ],
             }
         except Exception:
-            pass
+            logger.debug("diagram_generation_report_store_failed", exc_info=True)
         return {"topic": topic, "subject": subject, "items": items, "allowed_kinds": allowed_kinds}

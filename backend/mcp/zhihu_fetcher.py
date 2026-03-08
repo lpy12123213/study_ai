@@ -21,12 +21,12 @@ import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
+from backend.core.logging_utils import get_logger
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
+logger = get_logger(__name__)
+
+
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 
 class ZhihuFetchError(RuntimeError):
@@ -95,7 +95,7 @@ def _extract_author(soup: BeautifulSoup) -> str:
             if meta and meta.get("content"):
                 return str(meta.get("content")).strip()
     except Exception:
-        pass
+        logger.debug("zhihu_author_parse_failed", exc_info=True)
 
     # 兜底：找可能的作者名节点
     candidates = [
@@ -445,7 +445,11 @@ class ZhihuFetcher:
                     if not it_title and isinstance(it.get("question"), dict):
                         it_title = str(it["question"].get("title") or "").strip()
 
-                    it_author = str(it.get("author", {}).get("name") or "").strip() if isinstance(it.get("author"), dict) else ""
+                    it_author = (
+                        str(it.get("author", {}).get("name") or "").strip()
+                        if isinstance(it.get("author"), dict)
+                        else ""
+                    )
                     it_date = _ts_to_yyyymmdd(it.get("created_time") or it.get("updated_time") or "")
 
                     it_url = ""
@@ -493,4 +497,3 @@ class ZhihuFetcher:
             items=items,
             content_markdown=content_markdown,
         )
-

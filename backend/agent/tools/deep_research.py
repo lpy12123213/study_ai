@@ -8,7 +8,6 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from backend.agent.tools.text_utils import _clip_text, _postprocess_web_search_result
 from backend.mcp.exa_web_search import EXA_API_KEY, exa_search
 
-
 CallLLMText = Callable[..., Awaitable[str]]
 ExtractJsonObj = Callable[[str], Dict[str, Any]]
 
@@ -238,7 +237,9 @@ async def _extract_learnings(
         "preset": preset,
         "requirements": [
             f"从下面的网页片段提炼 <= {n_learn} 条学习要点（信息密集，尽量包含条件/数字/日期）。",
-            f"同时给出 <= {n_fup} 个 follow_up_questions 作为下一步深挖方向。" if n_fup > 0 else "follow_up_questions 返回空数组。",
+            f"同时给出 <= {n_fup} 个 follow_up_questions 作为下一步深挖方向。"
+            if n_fup > 0
+            else "follow_up_questions 返回空数组。",
             "不要编造；不确定的信息不要输出。",
             "只输出 JSON：{learnings:string[], follow_up_questions:string[]}。",
         ],
@@ -397,10 +398,24 @@ async def deep_research_exa(
             q = str(serp_item.get("query") or "").strip()
             goal = str(serp_item.get("research_goal") or "").strip()
             if not q:
-                return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+                return {
+                    "learnings": [],
+                    "queries": [],
+                    "results": [],
+                    "summary_parts": [],
+                    "errors": [],
+                    "directions": [],
+                }
             ok = await reserve(q)
             if not ok:
-                return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+                return {
+                    "learnings": [],
+                    "queries": [],
+                    "results": [],
+                    "summary_parts": [],
+                    "errors": [],
+                    "directions": [],
+                }
 
             res = await run_search(q)
             raw_results = res.get("results") if isinstance(res, dict) else []
@@ -418,18 +433,22 @@ async def deep_research_exa(
             if isinstance(res, dict) and res.get("error") and not cleaned:
                 errors.append(f"{q}: {str(res.get('error') or '').strip()}")
 
-            learnings, directions = await _extract_learnings(
-                call_llm_text=call_llm_text,
-                extract_json_obj=extract_json_obj,
-                strict_llm=strict_llm,
-                llm_model=llm_model,
-                preset=preset,
-                query=q,
-                cleaned_results=cleaned,
-                num_learnings=learn_per_q,
-                num_followups=max(0, min(6, (breadth_now + 1) // 2)),
-                llm_sem=llm_sem,
-            ) if (include_summary or depth_now > 1) else ([], [])
+            learnings, directions = (
+                await _extract_learnings(
+                    call_llm_text=call_llm_text,
+                    extract_json_obj=extract_json_obj,
+                    strict_llm=strict_llm,
+                    llm_model=llm_model,
+                    preset=preset,
+                    query=q,
+                    cleaned_results=cleaned,
+                    num_learnings=learn_per_q,
+                    num_followups=max(0, min(6, (breadth_now + 1) // 2)),
+                    llm_sem=llm_sem,
+                )
+                if (include_summary or depth_now > 1)
+                else ([], [])
+            )
 
             summary_parts: List[str] = []
             if include_summary and learnings:
@@ -446,9 +465,21 @@ async def deep_research_exa(
                         *[f"- {x}" for x in directions[: max(1, min(6, new_breadth))]],
                     ]
                 ).strip()
-                deeper = await recurse(next_seed, breadth_now=new_breadth, depth_now=depth_now - 1, learnings_now=[*learnings_now, *learnings])
+                deeper = await recurse(
+                    next_seed,
+                    breadth_now=new_breadth,
+                    depth_now=depth_now - 1,
+                    learnings_now=[*learnings_now, *learnings],
+                )
             else:
-                deeper = {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+                deeper = {
+                    "learnings": [],
+                    "queries": [],
+                    "results": [],
+                    "summary_parts": [],
+                    "errors": [],
+                    "directions": [],
+                }
 
             return {
                 "learnings": [*learnings, *list(deeper.get("learnings") or [])],
@@ -460,7 +491,14 @@ async def deep_research_exa(
             }
 
         branches = await asyncio.gather(*[one(it) for it in serp])
-        merged: Dict[str, Any] = {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+        merged: Dict[str, Any] = {
+            "learnings": [],
+            "queries": [],
+            "results": [],
+            "summary_parts": [],
+            "errors": [],
+            "directions": [],
+        }
         for b in branches:
             if not isinstance(b, dict):
                 continue

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -106,7 +109,7 @@ class SelfCritiqueToolsMixin:
             if preset == "research":
                 threshold = max(threshold, 8.0)
         except Exception:
-            pass
+            logger.debug("self_critique_threshold_adjust_failed", exc_info=True)
 
         async def _critique_one(kp: str) -> Dict[str, Any]:
             sec = _find_section(material, kp) or {}

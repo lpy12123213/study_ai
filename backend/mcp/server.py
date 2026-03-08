@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Dict, Any, List, Callable, Awaitable
 import json
-
+from typing import Any, Awaitable, Callable, Dict, List
 
 # Tool registry
 _tools: Dict[str, Dict[str, Any]] = {}
@@ -50,7 +49,7 @@ async def execute_tool(name: str, arguments: Dict[str, Any]) -> Any:
     """Execute a registered tool."""
     if name not in _tool_handlers:
         raise ValueError(f"Unknown tool: {name}")
-    
+
     handler = _tool_handlers[name]
     return await handler(**arguments)
 
@@ -59,7 +58,7 @@ async def handle_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     """Handle a tool call from an AI model."""
     name = tool_call.get("function", {}).get("name", "")
     arguments_str = tool_call.get("function", {}).get("arguments", "{}")
-    
+
     try:
         arguments = json.loads(arguments_str)
     except json.JSONDecodeError:
@@ -67,7 +66,7 @@ async def handle_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
             "tool_call_id": tool_call.get("id", ""),
             "output": json.dumps({"error": "Invalid arguments JSON"}),
         }
-    
+
     try:
         result = await execute_tool(name, arguments)
         return {
@@ -87,7 +86,7 @@ def _register_default_tools():
     from backend.mcp.bigmodel_web_search import bigmodel_web_search
     from backend.mcp.exa_web_search import exa_search
     from backend.mcp.reviewer import review_question
-    
+
     register_tool(
         name="web_search",
         description="Search the web for information",
@@ -108,7 +107,7 @@ def _register_default_tools():
         },
         handler=lambda query, max_results=5: bigmodel_web_search(query, max_results=max_results),
     )
-    
+
     register_tool(
         name="exa_search",
         description="Search the web using Exa AI for high-quality results",
@@ -129,7 +128,7 @@ def _register_default_tools():
         },
         handler=lambda query, num_results=10: exa_search(query, num_results=num_results),
     )
-    
+
     register_tool(
         name="review_question",
         description="Review an exam question for quality and accuracy",

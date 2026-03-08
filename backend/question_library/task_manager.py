@@ -5,6 +5,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 def _now_s() -> float:
     return time.time()
@@ -215,7 +219,7 @@ class QuestionLibraryTaskManager:
             try:
                 task.progress = float((data or {}).get("progress") or 0.0)
             except Exception:
-                pass
+                logger.debug("question_library_progress_parse_failed", extra={"task_id": task.task_id}, exc_info=True)
 
         async with task.cond:
             task.last_seq += 1
@@ -268,6 +272,5 @@ class QuestionLibraryTaskManager:
             if oldest.runner and not oldest.runner.done():
                 oldest.runner.cancel()
         except Exception:
-            pass
+            logger.debug("question_library_runner_cancel_failed", extra={"task_id": oldest.task_id}, exc_info=True)
         self._tasks.pop(oldest.task_id, None)
-

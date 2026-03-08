@@ -7,7 +7,10 @@ from typing import Any, Dict, List, Optional
 from backend.agent.tools.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
+from backend.core.logging_utils import get_logger
 from backend.core.settings import MAIN_MODEL
+
+logger = get_logger(__name__)
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -70,7 +73,7 @@ class RefineDraftToolsMixin:
             if preset == "research":
                 threshold = max(threshold, 8.5)
         except Exception:
-            pass
+            logger.debug("refine_draft_threshold_adjust_failed", exc_info=True)
 
         points = _extract_points(args, ctx)
         critiques = ctx.working_memory.get("critiques")
@@ -96,7 +99,9 @@ class RefineDraftToolsMixin:
                 score = 0.0
             score = max(0.0, min(score, 10.0))
             instructions = critique.get("revision_instructions")
-            instructions_list = [str(x).strip() for x in instructions if str(x).strip()] if isinstance(instructions, list) else []
+            instructions_list = (
+                [str(x).strip() for x in instructions if str(x).strip()] if isinstance(instructions, list) else []
+            )
 
             if score >= threshold or not instructions_list:
                 return {
@@ -110,7 +115,13 @@ class RefineDraftToolsMixin:
             sec = _find_section(material, kp) or {}
             draft = str(sec.get("explanation_markdown") or "").strip()
             if not draft:
-                return {"knowledge_point": kp, "skipped": True, "reason": "no_draft", "score": score, "threshold": threshold}
+                return {
+                    "knowledge_point": kp,
+                    "skipped": True,
+                    "reason": "no_draft",
+                    "score": score,
+                    "threshold": threshold,
+                }
 
             if not is_llm_configured():
                 if strict_llm:
@@ -152,7 +163,13 @@ class RefineDraftToolsMixin:
             )
             revised_md = _sanitize_explanation_markdown(str(revised or ""), knowledge_point=kp)
             if not revised_md:
-                return {"knowledge_point": kp, "skipped": True, "reason": "empty_revision", "score": score, "threshold": threshold}
+                return {
+                    "knowledge_point": kp,
+                    "skipped": True,
+                    "reason": "empty_revision",
+                    "score": score,
+                    "threshold": threshold,
+                }
 
             # Patch the canonical material so downstream assemble/export stays compatible.
             try:
@@ -169,7 +186,7 @@ class RefineDraftToolsMixin:
                         s["refine_threshold"] = threshold
                         break
             except Exception:
-                pass
+                logger.debug("refine_draft_patch_working_memory_failed", exc_info=True)
 
             return {
                 "knowledge_point": kp,

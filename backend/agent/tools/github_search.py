@@ -152,4 +152,3 @@ class GithubSearchToolsMixin:
             "query_hint": query_hint,
             "items": items,
         }
-

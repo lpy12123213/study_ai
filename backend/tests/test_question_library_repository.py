@@ -79,7 +79,9 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         visible = await lib_repo.list_question_library_items(user_id="user-a", subject="高中数学", hidden="0", limit=10)
         self.assertEqual(len(visible["items"]), 0)
 
-        hidden_list = await lib_repo.list_question_library_items(user_id="user-a", subject="高中数学", hidden="1", limit=10)
+        hidden_list = await lib_repo.list_question_library_items(
+            user_id="user-a", subject="高中数学", hidden="1", limit=10
+        )
         self.assertEqual(len(hidden_list["items"]), 1)
 
         ok_unhide = await lib_repo.set_hidden(user_id="user-a", question_id="q1", hidden=False)
@@ -124,8 +126,12 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         deleted = await lib_repo.bulk_delete_question_library_items(user_id="user-a", question_ids=["q1", "q2"])  # type: ignore[attr-defined]
         self.assertEqual(deleted, 2)
 
-        list_a = await lib_repo.list_question_library_items(user_id="user-a", subject="高中数学", hidden="all", limit=10)
-        list_b = await lib_repo.list_question_library_items(user_id="user-b", subject="高中数学", hidden="all", limit=10)
+        list_a = await lib_repo.list_question_library_items(
+            user_id="user-a", subject="高中数学", hidden="all", limit=10
+        )
+        list_b = await lib_repo.list_question_library_items(
+            user_id="user-b", subject="高中数学", hidden="all", limit=10
+        )
 
         self.assertEqual(len(list_a["items"]), 0)
         self.assertEqual({it["question_id"] for it in list_b["items"]}, {"q1"})

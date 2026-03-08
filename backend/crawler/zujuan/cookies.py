@@ -9,18 +9,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
-from dotenv import dotenv_values
 
 from backend.core.logging_utils import get_logger
-
+from backend.core.settings import load_project_dotenv
 
 logger = get_logger(__name__)
 
+load_project_dotenv(override=False)
+
 
 DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 CSRF_TOKEN_PATTERN = re.compile(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', re.IGNORECASE)
@@ -55,8 +54,9 @@ async def get_cookies_with_playwright() -> str:
     """Use Playwright to fetch a basic (anti-bot) cookie jar without logging in."""
 
     try:
-        from playwright.sync_api import sync_playwright
         import concurrent.futures
+
+        from playwright.sync_api import sync_playwright
 
         def _sync_get_cookies() -> str:
             with sync_playwright() as p:
@@ -80,7 +80,10 @@ async def get_cookies_with_playwright() -> str:
 
 
 def load_env_login() -> Dict[str, Any]:
-    """Load login cookies from env vars or `.env` (highest priority: env)."""
+    """Load login cookies from env vars.
+
+    `.env` is loaded centrally by `backend.core.settings.load_project_dotenv`.
+    """
 
     user_id = (os.getenv("ZUJUAN_USER_ID") or "").strip() or None
     csrf_token = (os.getenv("ZUJUAN_CSRF_TOKEN") or "").strip() or None
@@ -95,25 +98,7 @@ def load_env_login() -> Dict[str, Any]:
             "source": "env",
         }
 
-    env_path = _PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False, "source": "none"}
-
-    try:
-        env_data = dotenv_values(str(env_path))
-        user_id = str(env_data.get("ZUJUAN_USER_ID") or "").strip() or None
-        csrf_token = str(env_data.get("ZUJUAN_CSRF_TOKEN") or "").strip() or None
-        cookies = str(env_data.get("ZUJUAN_COOKIES") or "").strip()
-        return {
-            "cookies": cookies,
-            "user_id": user_id,
-            "csrf_token": csrf_token,
-            "is_logged_in": bool(user_id or cookies),
-            "source": "dotenv",
-        }
-    except Exception as exc:
-        logger.warning("failed to read .env", extra={"error": str(exc)})
-        return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False, "source": "error"}
+    return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False, "source": "none"}
 
 
 def _load_cookie_cache(path: str, *, ttl_s: int) -> str:
@@ -216,8 +201,9 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
         }
 
     try:
-        from playwright.sync_api import sync_playwright
         import concurrent.futures
+
+        from playwright.sync_api import sync_playwright
 
         def _sync_get_session() -> Dict[str, Any]:
             with sync_playwright() as p:

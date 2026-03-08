@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
 
 def export_to_markdown(plan: Dict[str, Any]) -> str:
@@ -20,15 +20,15 @@ def export_to_markdown(plan: Dict[str, Any]) -> str:
         "## Learning Objectives",
         "",
     ]
-    
+
     for obj in plan.get("objectives", []):
         if isinstance(obj, dict):
             lines.append(f"- {obj.get('description', '')}")
         else:
             lines.append(f"- {obj}")
-    
+
     lines.extend(["", "## Lesson Sections", ""])
-    
+
     for section in plan.get("sections", []):
         title = section.get("title", "Untitled Section")
         duration = section.get("duration_minutes", 0)
@@ -36,32 +36,32 @@ def export_to_markdown(plan: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(section.get("content", ""))
         lines.append("")
-        
+
         activities = section.get("activities", [])
         if activities:
             lines.append("**Activities:**")
             for activity in activities:
                 lines.append(f"- {activity}")
             lines.append("")
-        
+
         resources = section.get("resources", [])
         if resources:
             lines.append("**Resources:**")
             for resource in resources:
                 lines.append(f"- {resource}")
             lines.append("")
-    
+
     summary = plan.get("summary")
     if summary:
         lines.extend(["## Summary", "", summary, ""])
-    
+
     return "\n".join(lines)
 
 
 def export_to_html(plan: Dict[str, Any]) -> str:
     """Export lesson plan to HTML format."""
     md_content = export_to_markdown(plan)
-    
+
     # Simple Markdown to HTML conversion
     html_lines = [
         "<!DOCTYPE html>",
@@ -80,7 +80,7 @@ def export_to_html(plan: Dict[str, Any]) -> str:
         "</head>",
         "<body>",
     ]
-    
+
     # Convert markdown to basic HTML
     for line in md_content.split("\n"):
         if line.startswith("# "):
@@ -95,6 +95,6 @@ def export_to_html(plan: Dict[str, Any]) -> str:
             html_lines.append(f"<strong>{line[2:-2]}</strong>")
         elif line:
             html_lines.append(f"<p>{line}</p>")
-    
+
     html_lines.extend(["</body>", "</html>"])
     return "\n".join(html_lines)

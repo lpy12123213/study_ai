@@ -102,6 +102,19 @@ npm install
 npm run dev
 ```
 
+## Frontend API base URL
+
+The frontend uses a single API base setting:
+
+- `VITE_API_BASE_URL` (defaults to `/api`)
+
+Same-origin deploy (recommended): keep the default `/api` and let the backend serve `frontend/dist`.
+
+Cross-origin deploy (frontend hosted separately): set `VITE_API_BASE_URL` to an absolute URL like `https://your-backend.example/api`
+and rebuild the frontend.
+
+See `docs/DEPLOYMENT.md` for more deployment notes.
+
 Start the MCP server:
 
 ```bash
@@ -197,6 +210,10 @@ Example path entry:
 - Remote SVG proxying is blocked for security reasons.
 - Paper detail pages do not fetch AI analysis by default; analysis is loaded on demand.
 - Subject filters are cached server-side and client-side to reduce first-load latency.
+
+## Architecture
+
+See `docs/ARCHITECTURE.md` for module and router indexing.
 
 ## Docs
 

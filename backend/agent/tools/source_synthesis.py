@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.llm_client import is_llm_configured
@@ -49,9 +49,17 @@ class SourceSynthesisToolsMixin:
         points = _extract_points(args, ctx)
 
         aggregated = ctx.working_memory.get("aggregated") or ctx.working_memory.get("aggregate_knowledge") or {}
-        agg_items = aggregated.get("items") if isinstance(aggregated, dict) and isinstance(aggregated.get("items"), list) else []
+        agg_items = (
+            aggregated.get("items")
+            if isinstance(aggregated, dict) and isinstance(aggregated.get("items"), list)
+            else []
+        )
         agg_items = [x for x in agg_items if isinstance(x, dict)]
-        agg_by_kp = {str(x.get("knowledge_point") or "").strip(): x for x in agg_items if str(x.get("knowledge_point") or "").strip()}
+        agg_by_kp = {
+            str(x.get("knowledge_point") or "").strip(): x
+            for x in agg_items
+            if str(x.get("knowledge_point") or "").strip()
+        }
 
         max_web_results = max(3, min(int(args.get("max_web_results") or 10), 30))
         max_web_pages = max(0, min(int(args.get("max_web_pages") or 2), 8))
@@ -78,15 +86,26 @@ class SourceSynthesisToolsMixin:
 
             wiki_summary = _clip_text(str(wiki.get("summary") or wiki.get("content") or ""), 2200)
             if wiki_summary:
-                sources.append({"id": "wiki", "kind": "wikipedia", "title": str(wiki.get("title") or "Wikipedia"), "text": wiki_summary})
+                sources.append(
+                    {
+                        "id": "wiki",
+                        "kind": "wikipedia",
+                        "title": str(wiki.get("title") or "Wikipedia"),
+                        "text": wiki_summary,
+                    }
+                )
 
             mw_summary = _clip_text(str(mw.get("summary") or mw.get("content") or ""), 2200)
             if mw_summary:
-                sources.append({"id": "mw", "kind": "mediawiki", "title": str(mw.get("title") or "MediaWiki"), "text": mw_summary})
+                sources.append(
+                    {"id": "mw", "kind": "mediawiki", "title": str(mw.get("title") or "MediaWiki"), "text": mw_summary}
+                )
 
             web_summary = _clip_text(str(web.get("summary") or ""), 2400)
             if web_summary:
-                sources.append({"id": "web_summary", "kind": "web_summary", "title": "Web summary", "text": web_summary})
+                sources.append(
+                    {"id": "web_summary", "kind": "web_summary", "title": "Web summary", "text": web_summary}
+                )
 
             web_results = web.get("results") if isinstance(web.get("results"), list) else []
             for idx, r in enumerate([x for x in web_results if isinstance(x, dict)][:max_web_results]):
@@ -226,7 +245,9 @@ class SourceSynthesisToolsMixin:
             brief = {
                 "definition": [str(x).strip() for x in (brief_obj.get("definition") or []) if str(x).strip()][:8],
                 "core_ideas": [str(x).strip() for x in (brief_obj.get("core_ideas") or []) if str(x).strip()][:10],
-                "key_properties": [str(x).strip() for x in (brief_obj.get("key_properties") or []) if str(x).strip()][:12],
+                "key_properties": [str(x).strip() for x in (brief_obj.get("key_properties") or []) if str(x).strip()][
+                    :12
+                ],
                 "conditions_and_boundaries": [
                     str(x).strip() for x in (brief_obj.get("conditions_and_boundaries") or []) if str(x).strip()
                 ][:10],

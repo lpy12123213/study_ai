@@ -7,15 +7,21 @@ import mimetypes
 import os
 import socket
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from backend.api.auth import require_auth
+from backend.core.logging_utils import get_logger
+from backend.database.models import get_generated_file
+
 router = APIRouter()
+logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEDIA_DIR = PROJECT_ROOT / ".local" / "media"
@@ -45,6 +51,9 @@ _PROXY_CACHE_STATS = {
     "evicted_bytes": 0,
 }
 
+_proxy_http_client: Optional[httpx.AsyncClient] = None
+_proxy_http_client_lock = asyncio.Lock()
+
 
 def _env_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
@@ -69,6 +78,36 @@ def _bump_proxy_cache_stat(key: str, amount: int = 1) -> None:
     if key not in _PROXY_CACHE_STATS:
         return
     _PROXY_CACHE_STATS[key] = int(_PROXY_CACHE_STATS.get(key, 0) or 0) + int(amount or 0)
+
+
+async def _get_proxy_http_client() -> httpx.AsyncClient:
+    global _proxy_http_client
+    if _proxy_http_client is not None:
+        return _proxy_http_client
+
+    async with _proxy_http_client_lock:
+        if _proxy_http_client is not None:
+            return _proxy_http_client
+        _proxy_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=False,
+            headers={"User-Agent": "ExamPaperAssistant/1.0"},
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+        )
+        return _proxy_http_client
+
+
+async def close_proxy_http_client() -> None:
+    global _proxy_http_client
+    async with _proxy_http_client_lock:
+        client = _proxy_http_client
+        _proxy_http_client = None
+    if client is None:
+        return
+    try:
+        await client.aclose()
+    except Exception:
+        return
 
 
 def _get_allowed_domains() -> list[str]:
@@ -229,11 +268,32 @@ def _file_response(path: Path, *, filename: Optional[str] = None) -> FileRespons
 
 
 @router.get("/media/generated/{filename}")
-async def get_generated_media(filename: str) -> FileResponse:
+async def get_generated_media(filename: str, user: dict = Depends(require_auth)) -> FileResponse:
     """Serve locally generated media from `.local/media/generated/`."""
 
     if not _is_safe_generated_filename(filename):
         raise HTTPException(status_code=400, detail="invalid_filename")
+
+    meta = await get_generated_file(filename=filename)
+    if not meta:
+        raise HTTPException(status_code=404, detail="not_found")
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id or str(meta.get("user_id") or "").strip() != user_id:
+        # Avoid leaking existence across users.
+        raise HTTPException(status_code=404, detail="not_found")
+
+    expires_at = str(meta.get("expires_at") or "").strip()
+    if expires_at:
+        try:
+            exp_dt = datetime.fromisoformat(expires_at)
+            if exp_dt and exp_dt < datetime.utcnow():
+                raise HTTPException(status_code=410, detail="link_expired")
+        except HTTPException:
+            raise
+        except Exception:
+            # If metadata is malformed, fail closed.
+            raise HTTPException(status_code=410, detail="link_expired")
 
     path = (GENERATED_DIR / filename).resolve()
     try:
@@ -325,7 +385,7 @@ def _prune_proxy_cache() -> dict[str, int]:
                 stats["evicted_files"] += 1
                 stats["evicted_bytes"] += int(size or 0)
             except Exception:
-                pass
+                logger.debug("media_proxy_cache_evict_file_failed", extra={"path": str(p)}, exc_info=True)
         survivors = survivors[-max_files:]
 
     # 3) Enforce max_bytes.
@@ -341,7 +401,7 @@ def _prune_proxy_cache() -> dict[str, int]:
             stats["evicted_files"] += 1
             stats["evicted_bytes"] += int(s or 0)
         except Exception:
-            pass
+            logger.debug("media_proxy_cache_evict_bytes_failed", extra={"path": str(p)}, exc_info=True)
         total -= s
         if total <= max_bytes:
             break
@@ -370,7 +430,7 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
         try:
             os.utime(cached, None)
         except Exception:
-            pass
+            logger.debug("media_proxy_cache_touch_failed", extra={"path": str(cached)}, exc_info=True)
         _bump_proxy_cache_stat("hits")
         return _file_response(cached)
 
@@ -385,89 +445,82 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
         max_bytes = 10 * 1024 * 1024
     max_bytes = max(256 * 1024, min(max_bytes, 200 * 1024 * 1024))
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=10.0),
-        follow_redirects=False,
-        headers={"User-Agent": "ExamPaperAssistant/1.0"},
-    ) as client:
-        current = normalized
-        for _ in range(6):
-            try:
-                async with client.stream("GET", current) as resp:
-                    if resp.status_code in {301, 302, 303, 307, 308}:
-                        loc = (resp.headers.get("location") or "").strip()
-                        if not loc:
-                            raise HTTPException(status_code=502, detail="redirect_missing_location")
-                        try:
-                            next_url = urljoin(current, loc)
-                            current = await _normalize_remote_url(next_url)
-                        except ValueError as exc:
-                            raise HTTPException(status_code=400, detail=str(exc))
-                        continue
+    client = await _get_proxy_http_client()
+    current = normalized
+    for _ in range(6):
+        try:
+            async with client.stream("GET", current) as resp:
+                if resp.status_code in {301, 302, 303, 307, 308}:
+                    loc = (resp.headers.get("location") or "").strip()
+                    if not loc:
+                        raise HTTPException(status_code=502, detail="redirect_missing_location")
+                    try:
+                        next_url = urljoin(current, loc)
+                        current = await _normalize_remote_url(next_url)
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc))
+                    continue
 
-                    if resp.status_code != 200:
-                        raise HTTPException(status_code=502, detail=f"fetch_failed_status: {resp.status_code}")
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"fetch_failed_status: {resp.status_code}")
 
-                    content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-                    if content_type in {"image/svg+xml"}:
-                        raise HTTPException(status_code=415, detail="svg_not_allowed")
+                content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                if content_type in {"image/svg+xml"}:
+                    raise HTTPException(status_code=415, detail="svg_not_allowed")
 
-                    url_suffix = Path(urlparse(current).path or "").suffix.lower()
-                    if content_type:
-                        if content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
-                            # Some sites return `application/octet-stream` for images; allow only if URL suffix is safe.
-                            if url_suffix not in ALLOWED_IMAGE_EXTENSIONS:
-                                raise HTTPException(status_code=415, detail="unsupported_media_type")
-                    else:
+                url_suffix = Path(urlparse(current).path or "").suffix.lower()
+                if content_type:
+                    if content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+                        # Some sites return `application/octet-stream` for images; allow only if URL suffix is safe.
                         if url_suffix not in ALLOWED_IMAGE_EXTENSIONS:
                             raise HTTPException(status_code=415, detail="unsupported_media_type")
-
-                    content_len = resp.headers.get("content-length") or ""
-                    try:
-                        if content_len.strip() and int(content_len) > max_bytes:
-                            raise HTTPException(status_code=413, detail="media_too_large")
-                    except ValueError:
-                        pass
-
-                    ext = _pick_extension(current, content_type)
-                    if ext == ".bin":
+                else:
+                    if url_suffix not in ALLOWED_IMAGE_EXTENSIONS:
                         raise HTTPException(status_code=415, detail="unsupported_media_type")
 
-                    out_path = MEDIA_DIR / f"{media_id}{ext}"
-                    tmp_path = MEDIA_DIR / f"{media_id}{ext}.tmp"
+                content_len = resp.headers.get("content-length") or ""
+                try:
+                    if content_len.strip() and int(content_len) > max_bytes:
+                        raise HTTPException(status_code=413, detail="media_too_large")
+                except ValueError:
+                    pass
 
-                    total = 0
+                ext = _pick_extension(current, content_type)
+                if ext == ".bin":
+                    raise HTTPException(status_code=415, detail="unsupported_media_type")
+
+                out_path = MEDIA_DIR / f"{media_id}{ext}"
+                tmp_path = MEDIA_DIR / f"{media_id}{ext}.tmp"
+
+                total = 0
+                try:
+                    with tmp_path.open("wb") as f:
+                        async for chunk in resp.aiter_bytes():
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise HTTPException(status_code=413, detail="media_too_large")
+                            f.write(chunk)
+                    tmp_path.replace(out_path)
+                except HTTPException:
                     try:
-                        with tmp_path.open("wb") as f:
-                            async for chunk in resp.aiter_bytes():
-                                if not chunk:
-                                    continue
-                                total += len(chunk)
-                                if total > max_bytes:
-                                    raise HTTPException(status_code=413, detail="media_too_large")
-                                f.write(chunk)
-                        tmp_path.replace(out_path)
-                    except HTTPException:
-                        try:
-                            tmp_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        raise
-                    except Exception as exc:
-                        try:
-                            tmp_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        logger.debug("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
+                    raise
+                except Exception as exc:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        logger.debug("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
+                    raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
 
-                    _prune_proxy_cache()
-                    return _file_response(out_path)
-            except HTTPException:
-                raise
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
+                _prune_proxy_cache()
+                return _file_response(out_path)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
 
-        raise HTTPException(status_code=400, detail="too_many_redirects")
-
-    raise HTTPException(status_code=502, detail="fetch_failed")
-
+    raise HTTPException(status_code=400, detail="too_many_redirects")

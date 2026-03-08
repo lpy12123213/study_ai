@@ -9,11 +9,14 @@ from typing import Any, Dict, List, Optional
 from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, ExecutionPlan, PlanStep, UserProfile
 from backend.core.llm_client import chat_completion_text, is_llm_configured
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     DEFAULT_SUBJECT,
     LESSON_PLAN_MAX_TOKENS,
     LESSON_PLAN_TEMPERATURE,
 )
+
+logger = get_logger(__name__)
 
 
 def _env_truthy(name: str) -> bool:
@@ -59,6 +62,7 @@ _EXTRA_TOOLS: Dict[str, str] = {
     "github_search": "GitHub 仓库检索（笔记/教程/代码示例等）",
     "browse_web_pages": "Browse and extract page text (best-effort)",
 }
+
 
 def _build_allowed_tools(*, enable_questions: bool, enable_extra_tools: bool, enable_diagrams: bool) -> Dict[str, str]:
     tools: Dict[str, str] = dict(_CORE_TOOLS)
@@ -218,8 +222,16 @@ class Planner:
         if preset not in {"quick", "standard", "deep", "research"}:
             preset = "standard"
 
-        use_questions = bool(flags.get("enable_questions")) if "enable_questions" in flags else _env_truthy("STUDY_MATERIALS_ENABLE_QUESTIONS")
-        enable_extra_tools = bool(flags.get("enable_extra_tools")) if "enable_extra_tools" in flags else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
+        use_questions = (
+            bool(flags.get("enable_questions"))
+            if "enable_questions" in flags
+            else _env_truthy("STUDY_MATERIALS_ENABLE_QUESTIONS")
+        )
+        enable_extra_tools = (
+            bool(flags.get("enable_extra_tools"))
+            if "enable_extra_tools" in flags
+            else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
+        )
         enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
         requirements = str(flags.get("requirements") or "").strip()
         max_points_override = 0
@@ -358,7 +370,13 @@ class Planner:
                         id=sid("wikipedia_search"),
                         title="百科检索（Wikipedia）",
                         tool="wikipedia_search",
-                        arguments={"topic": topic, "subject": subject, "lang": "zh", "sentences": 4, "max_content_length": 2500},
+                        arguments={
+                            "topic": topic,
+                            "subject": subject,
+                            "lang": "zh",
+                            "sentences": 4,
+                            "max_content_length": 2500,
+                        },
                         foreach_knowledge_point=True,
                         parallel_group=extra_sources_pg,
                         thought="补充百科级定义与背景，便于建立直观框架。",
@@ -409,7 +427,12 @@ class Planner:
                         id=sid("browse_web_pages"),
                         title="提取网页正文（节选）",
                         tool="browse_web_pages",
-                        arguments={"topic": topic, "subject": subject, "top_k": 2 if preset != "quick" else 1, "max_chars": 12000},
+                        arguments={
+                            "topic": topic,
+                            "subject": subject,
+                            "top_k": 2 if preset != "quick" else 1,
+                            "max_chars": 12000,
+                        },
                         foreach_knowledge_point=True,
                         thought="从检索结果中抽取可读正文片段，用于写作阶段重组表达。",
                     ),
@@ -492,7 +515,9 @@ class Planner:
         if use_questions:
             rationale = f"计划：拆分/审核（已完成）→逐点网搜→逐点题库→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
         else:
-            rationale = f"计划：拆分/审核（已完成）→逐点网搜→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+            rationale = (
+                f"计划：拆分/审核（已完成）→逐点网搜→聚合→生成→组装→保存→审查（学科：{subject}，难度：{difficulty}）"
+            )
         return ExecutionPlan(topic=topic, steps=steps, rationale=rationale)
 
     def _default_step_spec(
@@ -980,7 +1005,7 @@ class Planner:
                 gen_args["with_diagrams"] = False
                 steps[gen_idx].arguments = gen_args
             except Exception:
-                pass
+                logger.debug("planner_adjust_generate_step_args_failed", exc_info=True)
 
             # Post-write pipeline: critique_draft ∥ generate_diagrams → refine_draft
             assemble_idx = _find_first("assemble_study_archive", start=gen_idx + 1)
@@ -1049,7 +1074,7 @@ class Planner:
                     try:
                         steps[critique_idx].parallel_group = "kp_postwrite"
                     except Exception:
-                        pass
+                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
                     spec = self._default_step_spec(
                         "generate_diagrams",
                         topic=topic,
@@ -1081,7 +1106,7 @@ class Planner:
                     try:
                         steps[diagrams_idx].parallel_group = "kp_postwrite"
                     except Exception:
-                        pass
+                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
                     spec = self._default_step_spec(
                         "critique_draft",
                         topic=topic,
@@ -1116,11 +1141,11 @@ class Planner:
                     try:
                         steps[critique_idx].parallel_group = steps[critique_idx].parallel_group or "kp_postwrite"
                     except Exception:
-                        pass
+                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
                     try:
                         steps[diagrams_idx].parallel_group = steps[diagrams_idx].parallel_group or "kp_postwrite"
                     except Exception:
-                        pass
+                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
             else:
                 if critique_idx == -1:
                     spec = self._default_step_spec(
@@ -1261,8 +1286,8 @@ class Planner:
                     "你可以自主决定是否画图，并自行调度绘图工具多次（总计建议 3~12 次，按需要可更多/更少）。",
                     "推荐：优先调用 generate_diagrams（高层工具，会自动规划并调用 tikz_to_svg/seedream_generate）。",
                     "绘图工具支持 foreach_knowledge_point=true（推荐用于逐知识点配图）。每次绘图应传入 knowledge_point 或使用 foreach_knowledge_point 让执行器自动注入 knowledge_points=[kp]。",
-                    "tikz_to_svg 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"tikz\":\"\\\\begin{tikzpicture}...\\\\end{tikzpicture}\",\"preamble\":\"\\\\usetikzlibrary{arrows.meta,calc}\"}",
-                    "seedream_generate 参数示例：{\"knowledge_point\":\"...\",\"alt\":\"...\",\"caption\":\"...\",\"prompt\":\"一张用于教学的简洁插图：...\",\"size\":\"1024x1024\",\"n\":1}",
+                    'tikz_to_svg 参数示例：{"knowledge_point":"...","alt":"...","caption":"...","tikz":"\\\\begin{tikzpicture}...\\\\end{tikzpicture}","preamble":"\\\\usetikzlibrary{arrows.meta,calc}"}',
+                    'seedream_generate 参数示例：{"knowledge_point":"...","alt":"...","caption":"...","prompt":"一张用于教学的简洁插图：...","size":"1024x1024","n":1}',
                     "说明：绘图工具会把图片结果累积保存，assemble_study_archive 会自动插入到对应知识点。",
                 ]
             )
@@ -1271,10 +1296,14 @@ class Planner:
             notes.append("当前 preset=quick：优先保证速度与结构清晰，尽量减少额外检索工具与轮次。")
         elif preset == "deep":
             notes.append("当前 preset=deep：允许更多检索与更深入讲解；来源不足时可追加检索轮次。")
-            notes.append("建议：对每个知识点至少做 2 轮 web_search_knowledge（第一轮概念/直观，第二轮条件/反例/推导）。")
+            notes.append(
+                "建议：对每个知识点至少做 2 轮 web_search_knowledge（第一轮概念/直观，第二轮条件/反例/推导）。"
+            )
         elif preset == "research":
             notes.append("当前 preset=research：研究型输出（多轮检索 + 更严格的条件/反例/推导覆盖），可能更慢。")
-            notes.append("建议：对每个知识点做 2~3 轮 web_search_knowledge（概念/直观 → 条件/反例/推导 → 应用/典型问题），不足再追加。")
+            notes.append(
+                "建议：对每个知识点做 2~3 轮 web_search_knowledge（概念/直观 → 条件/反例/推导 → 应用/典型问题），不足再追加。"
+            )
 
         requirements = str(flags.get("requirements") or "").strip()
         if requirements:
@@ -1336,7 +1365,7 @@ class Planner:
             if parsed is not None:
                 return parsed
         except Exception:
-            pass
+            logger.debug("planner_llm_plan_parse_failed; fallback", exc_info=True)
 
         return self._fallback_plan(
             topic=topic,

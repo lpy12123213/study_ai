@@ -9,4 +9,3 @@ from __future__ import annotations
 from backend.crawler.zujuan import ZujuanCrawler
 
 __all__ = ["ZujuanCrawler"]
-

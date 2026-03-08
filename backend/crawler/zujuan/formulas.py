@@ -84,7 +84,7 @@ def formula_cache_get(crawler: Any, formula_hash: str) -> Optional[str]:
     try:
         crawler._formula_cache.move_to_end(key)
     except Exception:
-        pass
+        logger.debug("zujuan_formula_cache_touch_failed", extra={"hash": key}, exc_info=True)
     return cached
 
 
@@ -205,9 +205,9 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
 
                         record_unknown_signatures(unknown_sigs=unknown, source_url=svg_url, context=None)
                     except Exception:
-                        pass
+                        logger.debug("zujuan_record_unknown_signatures_failed", exc_info=True)
             except Exception:
-                pass
+                logger.debug("zujuan_svg_formula_fallback_failed", extra={"hash": formula_hash}, exc_info=True)
 
         latex = _ensure_inline_math_wrapped(latex)
         formula_cache_set(crawler, formula_hash, latex)
@@ -229,7 +229,9 @@ async def replace_formulas_with_latex_mml(crawler: Any, html: str) -> Tuple[str,
     if not hashes:
         return raw, []
 
-    latex_list = await asyncio.gather(*[get_formula_latex(crawler, formula_hash) for formula_hash in hashes], return_exceptions=True)
+    latex_list = await asyncio.gather(
+        *[get_formula_latex(crawler, formula_hash) for formula_hash in hashes], return_exceptions=True
+    )
     hash_to_latex: Dict[str, str] = {}
     for formula_hash, value in zip(hashes, latex_list):
         if isinstance(value, Exception):
@@ -264,7 +266,7 @@ async def fetch_formula_svg(_crawler: Any, png_url: str) -> str:
         if svg.startswith("<svg"):
             return svg
     except Exception:
-        pass
+        logger.debug("zujuan_fetch_formula_svg_failed", extra={"url": svg_url}, exc_info=True)
     return ""
 
 
@@ -273,7 +275,7 @@ async def replace_formulas_with_latex(crawler: Any, html: str) -> str:
         replaced, _hashes = await replace_formulas_with_latex_mml(crawler, html)
         return replaced
     except Exception:
-        pass
+        logger.debug("zujuan_replace_formulas_mml_failed; fallback", exc_info=True)
 
     try:
         from backend.core.svg_utils.svg_to_latex import replace_formulas_with_latex as replace_svg_formulas

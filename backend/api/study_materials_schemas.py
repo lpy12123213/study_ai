@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 class StudyMaterialsGenerateRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="要学习的知识点/主题（自然语言即可）")
     subject: str = Field("", max_length=100, description="可选：学科全名（如：高中数学）")
-    preset: str = Field("", max_length=50, description="可选：生成预设 quick|standard|deep|research（影响检索深度与篇幅）")
+    preset: str = Field(
+        "", max_length=50, description="可选：生成预设 quick|standard|deep|research（影响检索深度与篇幅）"
+    )
     requirements: str = Field("", max_length=2000, description="可选：额外要求（如：更通俗/更严谨/偏推导/偏直观等）")
     with_questions: Optional[bool] = Field(None, description="可选：是否生成例题/练习题（默认按环境变量）")
     with_diagrams: Optional[bool] = Field(None, description="可选：是否生成示意图（默认开启）")

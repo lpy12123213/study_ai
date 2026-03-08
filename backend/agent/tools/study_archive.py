@@ -21,7 +21,9 @@ class StudyArchiveToolsMixin:
             )
 
         topic = str(args.get("topic") or material.get("topic") or ctx.current_task).strip()
-        subject = str(args.get("subject") or material.get("subject") or ctx.user_profile.preferences.get("subject") or "").strip()
+        subject = str(
+            args.get("subject") or material.get("subject") or ctx.user_profile.preferences.get("subject") or ""
+        ).strip()
         preset = str(args.get("preset") or material.get("preset") or "").strip().lower()
         if preset and preset not in {"quick", "standard", "deep", "research"}:
             preset = ""
@@ -230,7 +232,11 @@ class StudyArchiveToolsMixin:
             explanation = str(sec.get("explanation_markdown") or "").strip()
             lines.append(explanation or "（讲解为空：可能是模型调用失败或资料不足，建议重试或提供更具体的范围。）")
             explanation_source = str(sec.get("explanation_source") or "").strip()
-            if explanation_source and explanation_source != "llm" and not explanation_source.lower().startswith("metaso"):
+            if (
+                explanation_source
+                and explanation_source != "llm"
+                and not explanation_source.lower().startswith("metaso")
+            ):
                 lines.append("")
                 lines.append(
                     f"> 注：本段讲解未成功使用模型生成（source={explanation_source}），已退回到摘要/兜底内容。若你已配置模型，请稍后重试或更换模型。"

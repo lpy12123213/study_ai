@@ -92,6 +92,7 @@ export interface PaperAnalysis {
 export interface Paper {
   id: number
   name: string
+  subject?: string
   createdAt: string
   questions: Question[]
   analysis?: PaperAnalysis
