@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ApiError, downloadText, fetchSSERequest, isApiError, resolveApiResourceUrl } from '@/api/client'
-import { getStudyMaterialsTask } from '@/api/studyMaterials'
+import { getStudyMaterialsTask, type StudyMaterialsTaskStatus } from '@/api/studyMaterials'
 import { useFormDraft } from '@/hooks/useFormDraft'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -181,6 +181,37 @@ export function useStudyMaterialsController() {
   const lastTaskErrorTool = toText(lastTask?.materialError?.tool)
   const isLastExportFailure = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf'].includes(lastTaskErrorTool)
   const isGenerating = isGeneratingLocal
+
+  const [lastTaskStatus, setLastTaskStatus] = useState<StudyMaterialsTaskStatus | null>(null)
+  const [lastTaskStatusError, setLastTaskStatusError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const taskId = String(activeConversation?.lastTask?.taskId || '').trim()
+    if (!taskId || activeConversation?.status !== 'failed') {
+      setLastTaskStatus(null)
+      setLastTaskStatusError(null)
+      return
+    }
+
+    let active = true
+    setLastTaskStatusError(null)
+
+    void (async () => {
+      try {
+        const status = await getStudyMaterialsTask(taskId)
+        if (!active) return
+        setLastTaskStatus(status)
+      } catch (err: any) {
+        if (!active) return
+        setLastTaskStatus(null)
+        setLastTaskStatusError(toText(err?.message) || '任务状态获取失败')
+      }
+    })()
+
+    return () => {
+      active = false
+    }
+  }, [activeConversation?.lastTask?.taskId, activeConversation?.status])
 
   const draftKey = `draft:study-materials:v1:${userId || 'anon'}`
   const { clearDraft } = useFormDraft({
@@ -1117,7 +1148,7 @@ export function useStudyMaterialsController() {
 
         if (kind === 'error') {
           done = true
-          const msg = formatStudyMaterialsError(toText(payload?.message) || '生成失败')
+          const msg = formatStudyMaterialsError(toText(payload?.error) || toText(payload?.message) || '生成失败')
           setError(msg)
 
           const t = new Date().toISOString()
@@ -1138,9 +1169,22 @@ export function useStudyMaterialsController() {
 
           useConversationStore.getState().updateConversation(conversationId, {
             updatedAt: new Date().toISOString(),
-            status: 'active',
+            status: 'failed',
             activeStream: undefined,
             resumable: false,
+            ...(serverTaskId
+              ? {
+                  lastTask: {
+                    taskType: 'study_materials',
+                    taskId: serverTaskId,
+                    lastSeq,
+                    materialError: {
+                      tool: toText(payload?.tool) || undefined,
+                      error: toText(payload?.error) || toText(payload?.message) || msg,
+                    },
+                  },
+                }
+              : {}),
           })
 
           if (localTaskId) {
@@ -1428,7 +1472,16 @@ export function useStudyMaterialsController() {
   }
 
   const startContinueIteration = useCallback(
-    (mode: 'improve' | 'deepen_research' | 'fix_export' | 'skip_export') => {
+    (
+      mode:
+        | 'improve'
+        | 'deepen_research'
+        | 'fix_export'
+        | 'skip_export'
+        | 'resume_failed_stage'
+        | 'retry_search'
+        | 'replan_from_failure'
+    ) => {
       if (!activeConversationId) return
       const baseTaskId = String(lastTask?.taskId || '').trim()
       if (!baseTaskId) return
@@ -1437,7 +1490,13 @@ export function useStudyMaterialsController() {
 
       const now = new Date().toISOString()
       const userText =
-        mode === 'deepen_research'
+        mode === 'retry_search'
+          ? '继续：重试检索（仅重跑检索阶段）'
+          : mode === 'resume_failed_stage'
+            ? '继续：从失败阶段继续'
+            : mode === 'replan_from_failure'
+              ? '继续：重新规划并续跑'
+              : mode === 'deepen_research'
           ? '继续迭代：加深检索与补充边界/反例'
           : mode === 'fix_export'
             ? '继续：修复导出（LaTeX/PDF）'
@@ -1606,6 +1665,8 @@ export function useStudyMaterialsController() {
     currentConversationId,
     activeConversationId,
     activeConversation,
+    lastTaskStatus,
+    lastTaskStatusError,
     messagesByConversation,
     messages,
     latexLessonPlanOptions,

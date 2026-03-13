@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronUp, Loader2, XCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { cn } from '@/lib/utils'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -29,6 +31,7 @@ export function RunPanel(props: Props) {
   const [expanded, setExpanded] = useState(false)
 
   const taskId = String(task?.taskId || '').trim()
+  const showUnifiedHeader = Boolean(taskId && task?.kind === 'generate')
   const steps = useTaskStore((s) => (taskId ? s.getTaskSteps(taskId) : EMPTY_STEPS))
 
   useEffect(() => {
@@ -71,6 +74,14 @@ export function RunPanel(props: Props) {
           </div>
         </button>
 
+        {taskId && (
+          <Button type="button" variant="outline" size="sm" className="h-9" asChild>
+            <Link to={`/tasks?id=${encodeURIComponent(taskId)}`}>
+              任务中心
+            </Link>
+          </Button>
+        )}
+
         <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setExpanded((v) => !v)}>
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         </Button>
@@ -81,6 +92,7 @@ export function RunPanel(props: Props) {
           <ScrollArea className="h-full">
             <div className="p-4">
               {task.error && <div className="text-sm text-destructive mb-3">{task.error}</div>}
+              {showUnifiedHeader && <TaskProgressHeader taskId={taskId} compact className="mb-3" />}
               <TaskTimeline steps={steps} />
             </div>
           </ScrollArea>

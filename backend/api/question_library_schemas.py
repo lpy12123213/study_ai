@@ -60,6 +60,36 @@ class QuestionLibraryGenerateRequest(BaseModel):
     task_id: str = ""
 
 
+class QuestionLibraryDraftQuestion(BaseModel):
+    question_id: str = ""
+    stem: str = ""
+    answer: str = ""
+    analysis: str = ""
+    keep: bool = True
+
+
+class QuestionLibraryPreviewResponse(BaseModel):
+    success: bool = True
+    preview_id: str = ""
+    subject: str = ""
+    topic: str = ""
+    count: int = 0
+    draft_questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
+
+
+class QuestionLibraryCommitPreviewRequest(BaseModel):
+    questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
+
+
+class QuestionLibraryCommitPreviewResponse(BaseModel):
+    success: bool = True
+    preview_id: str = ""
+    inserted: int = 0
+    subject: str = ""
+    count: int = 0
+    question_ids: List[str] = Field(default_factory=list)
+
+
 class QuestionLibraryScoreRequest(BaseModel):
     subject: str = ""
     limit: int = 50

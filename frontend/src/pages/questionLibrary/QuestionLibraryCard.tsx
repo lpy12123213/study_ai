@@ -1,15 +1,17 @@
 import { useMemo, useState } from 'react'
-import { Bookmark, Check, CircleHelp, Info, MessageSquareWarning, ShoppingCart, Square } from 'lucide-react'
+import { Bookmark, Check, ChevronDown, ChevronUp, CircleHelp, Info, Loader2, MessageSquareWarning, ShoppingCart, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { QuestionContent } from '@/components/shared/QuestionContent'
 import { cn } from '@/lib/utils'
 import {
-  exportQuestionToBasket,
+  getQuestionLibraryItem,
   starQuestion,
   unstarQuestion,
   type QuestionLibraryListItem,
 } from '@/api/questionLibrary'
+import { useQuestionBarStore } from '@/stores/useQuestionBarStore'
+import { useToastStore } from '@/stores/useToastStore'
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -97,11 +99,21 @@ export function QuestionLibraryCard(props: Props) {
   const { item, onOpenDetail, onSearchSimilar, onMutated, bulk } = props
 
   const [isStarring, setIsStarring] = useState(false)
-  const [isExporting, setIsExporting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [inlineOpen, setInlineOpen] = useState(false)
+  const [inlineLoading, setInlineLoading] = useState(false)
+  const [inlineAnswer, setInlineAnswer] = useState<string>('')
+  const [inlineAnalysis, setInlineAnalysis] = useState<string>('')
 
   const qid = String(item.question_id || '').trim()
   const stem = String(item.stem || '').trim()
+  const addItem = useQuestionBarStore((s) => s.addItem)
+  const pushToast = useToastStore((s) => s.pushToast)
+
+  const canInlineExpand = useMemo(() => {
+    if (item.has_answer || item.has_analysis) return true
+    return String(item.origin || '').trim() === 'ai'
+  }, [item.has_analysis, item.has_answer, item.origin])
 
   const tags = useMemo(() => {
     const list: string[] = []
@@ -119,11 +131,6 @@ export function QuestionLibraryCard(props: Props) {
     if (diff) parts.push(diff)
     return parts.join(' | ')
   }, [item.difficulty, item.difficulty_value, item.question_type])
-
-  const canExport = useMemo(() => {
-    if (String(item.origin || '').trim() !== 'crawled') return false
-    return /^\d+$/.test(qid)
-  }, [item.origin, qid])
 
   const toggleStar = async () => {
     if (!qid) return
@@ -157,28 +164,50 @@ export function QuestionLibraryCard(props: Props) {
     }
   }
 
-  const exportToBasket = async () => {
+  const toggleInline = async () => {
     if (!qid) return
-    if (!canExport) return
-    if (isExporting) return
-    setIsExporting(true)
+    if (!canInlineExpand) return
+    setActionError(null)
+    setInlineOpen((v) => !v)
+    if (inlineOpen) return
+    if (inlineAnswer || inlineAnalysis) return
+
+    setInlineLoading(true)
+    try {
+      const detail = await getQuestionLibraryItem(qid)
+      const cache = (detail as any)?.question_cache || null
+      const answer = String(cache?.answer || '').trim()
+      const analysis = String(cache?.analysis || '').trim()
+      setInlineAnswer(answer)
+      setInlineAnalysis(analysis)
+      if (!answer && !analysis) {
+        setInlineOpen(false)
+      }
+    } catch (err: any) {
+      setActionError(err?.message || '加载答案解析失败')
+      setInlineOpen(false)
+    } finally {
+      setInlineLoading(false)
+    }
+  }
+
+  const addToBar = () => {
+    if (!qid) return
     setActionError(null)
     try {
-      const res = await exportQuestionToBasket(qid)
-      if (res?.success) {
-        const url = String(res?.basket_url || 'https://zujuan.xkw.com/basket/').trim()
-        if (url) {
-          window.open(url, '_blank', 'noopener,noreferrer')
-        }
+      const res = addItem({
+        questionId: qid,
+        origin: String(item.origin || '').trim(),
+        stem,
+        sourceUrl: String(item.source_url || '').trim(),
+      })
+      if (!res.ok) {
+        setActionError(res.error || '加入试题栏失败')
         return
       }
-      const msg = String(res?.error || res?.message || '').trim()
-      const help = String(res?.help || '').trim()
-      setActionError([msg, help].filter(Boolean).join(' | ') || '加入试题篮失败')
+      pushToast({ id: `qb-add-${qid}`, title: '已加入试题栏', status: 'completed' })
     } catch (err: any) {
-      setActionError(err?.message || '加入试题篮失败')
-    } finally {
-      setIsExporting(false)
+      setActionError(err?.message || '加入试题栏失败')
     }
   }
 
@@ -224,13 +253,42 @@ export function QuestionLibraryCard(props: Props) {
         )}
       </div>
 
-      <div className="mt-3">
+      <button type="button" className="mt-3 w-full text-left" onClick={toggleInline} disabled={!qid}>
         {stem ? (
-          <QuestionContent content={stem} className="text-sm text-foreground/90" />
+          <QuestionContent content={stem} className={cn('text-sm text-foreground/90', canInlineExpand && 'cursor-pointer')} />
         ) : (
           <div className="text-sm text-muted-foreground">暂无题干</div>
         )}
-      </div>
+        {canInlineExpand && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            {inlineLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : inlineOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            <span>{inlineOpen ? '收起答案解析' : '展开答案解析'}</span>
+          </div>
+        )}
+      </button>
+
+      {inlineOpen && (inlineAnswer || inlineAnalysis || inlineLoading) && (
+        <div className="mt-3 rounded-lg border bg-muted/20 p-3 space-y-3">
+          {inlineLoading && (
+            <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              加载中…
+            </div>
+          )}
+          {!inlineLoading && inlineAnswer && (
+            <div>
+              <div className="text-xs text-muted-foreground mb-2">答案</div>
+              <QuestionContent content={inlineAnswer} className="text-sm" />
+            </div>
+          )}
+          {!inlineLoading && inlineAnalysis && (
+            <div>
+              <div className="text-xs text-muted-foreground mb-2">解析</div>
+              <QuestionContent content={inlineAnalysis} className="text-sm" />
+            </div>
+          )}
+        </div>
+      )}
 
       {actionError && <div className="mt-3 text-sm text-destructive">{actionError}</div>}
 
@@ -296,12 +354,12 @@ export function QuestionLibraryCard(props: Props) {
             type="button"
             size="sm"
             className="h-8 px-3 text-xs gap-2"
-            disabled={!canExport || isExporting}
-            onClick={exportToBasket}
-            title={!canExport ? '仅支持爬取题加入组卷网题篮' : ''}
+            disabled={!qid}
+            onClick={addToBar}
+            title="加入试题栏（来源模式会被锁定）"
           >
-            <ShoppingCart className={cn('h-4 w-4', isExporting && 'opacity-70')} />
-            加入试题篮
+            <ShoppingCart className="h-4 w-4" />
+            加入试题栏
           </Button>
         </div>
       </div>

@@ -15,7 +15,7 @@ from backend.analysis_service import analyze_paper
 from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
 from backend.core.logging_utils import get_logger
-from backend.database.models import delete_paper, get_paper, list_papers, save_paper
+from backend.database.models import delete_paper, get_paper, get_question_cache, list_papers, save_paper
 from backend.database.repositories.tasks import append_task_event as db_append_task_event
 from backend.database.repositories.tasks import update_task_status as db_update_task_status
 from backend.database.repositories.tasks import upsert_task as db_upsert_task
@@ -31,6 +31,15 @@ _PAPER_ANALYSIS_CACHE: dict[tuple[int, str], dict] = {}
 
 def clear_paper_analysis_cache() -> None:
     _PAPER_ANALYSIS_CACHE.clear()
+
+
+def _infer_paper_source_mode(question_ids: list[str]) -> str:
+    ids = [str(x or "").strip() for x in (question_ids or []) if str(x or "").strip()]
+    has_digits = any(x.isdigit() for x in ids)
+    has_non_digits = any(not x.isdigit() for x in ids)
+    if has_digits and has_non_digits:
+        return "mixed"
+    return "zujuan" if has_digits else "local"
 
 
 async def _get_cached_paper_analysis(*, paper_id: int, paper: dict) -> dict:
@@ -58,8 +67,18 @@ async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     try:
         q_dicts = paper.to_question_dicts()
+        qids = [str((q or {}).get("question_id") or "").strip() for q in q_dicts if isinstance(q, dict)]
+        mode = _infer_paper_source_mode(qids)
+        if mode == "mixed":
+            raise HTTPException(status_code=400, detail="paper_mixed_sources")
+
         paper_id = await save_paper(user_id=user_id, paper_name=paper.paper_name, questions=q_dicts)
         return {"success": True, "paper_id": paper_id, "message": f"试卷 '{paper.paper_name}' 创建成功"}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        # repository-level validation
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -116,14 +135,26 @@ async def get_download_link(paper_id: int, user: dict = Depends(require_auth)) -
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
 
-    question_ids = [q["question_id"] for q in paper["questions"]]
+    question_ids = [str(q.get("question_id") or "").strip() for q in paper.get("questions") or [] if isinstance(q, dict)]
+    mode = _infer_paper_source_mode(question_ids)
+    if mode != "zujuan":
+        raise HTTPException(status_code=400, detail="paper_not_zujuan")
+
+    cache = await get_question_cache(question_ids=question_ids)
     question_links = []
-    for q in paper["questions"]:
-        qid = q.get("question_id")
+    for q in paper.get("questions") or []:
+        if not isinstance(q, dict):
+            continue
+        qid = str(q.get("question_id") or "").strip()
         if not qid:
             continue
+        if not qid.isdigit():
+            continue
         # Prefer the stored source URL (includes correct bankId), fall back to a canonical URL by question_id.
-        question_links.append(q.get("source_url") or f"https://zujuan.xkw.com/q/{qid}")
+        src = str(q.get("source_url") or "").strip()
+        if not src:
+            src = str((cache.get(qid) or {}).get("source_url") or "").strip()
+        question_links.append(src or f"https://zujuan.xkw.com/q/{qid}")
 
     return {
         "success": True,

@@ -287,6 +287,12 @@ async def get_study_materials_task(task_id: str):
         "updated_at_s": task.updated_at_s,
         "first_seq": task.seq_offset + 1,
         "last_seq": task.last_seq,
+        "last_success_step": task.last_success_step,
+        "last_failed_step": task.last_failed_step,
+        "last_success_stage": task.last_success_stage,
+        "last_failed_stage": task.last_failed_stage,
+        "per_kp_state": task.per_kp_state,
+        "search_summary_by_kp": task.search_summary_by_kp,
     }
 
 

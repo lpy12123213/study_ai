@@ -41,5 +41,7 @@ class StudyMaterialsContinueRequest(BaseModel):
     mode: str = Field(
         "improve",
         max_length=50,
-        description="继续模式：improve|deepen_research|fix_export|skip_export",
+        description=(
+            "继续模式：improve|deepen_research|fix_export|skip_export|resume_failed_stage|retry_search|replan_from_failure"
+        ),
     )

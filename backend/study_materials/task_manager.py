@@ -41,6 +41,346 @@ def _truthy(value: Any) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
+def _clip_text(text: str, *, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    s = str(text or "").strip()
+    if len(s) <= max_chars:
+        return s
+    return s[: max_chars - 1].rstrip() + "…"
+
+
+def _infer_stage_from_tool(tool_name: str) -> str:
+    """Map a tool name to a coarse stage label used for resumable/continue UX."""
+
+    t = str(tool_name or "").strip()
+    if not t:
+        return ""
+
+    # Retrieval/search stage
+    if t in {
+        "web_search_knowledge",
+        "browse_web_pages",
+        "wikipedia_search",
+        "mediawiki_search",
+        "github_search",
+        "stackexchange_search",
+        "search_questions_by_knowledge",
+    }:
+        return "search"
+
+    # Aggregation/synthesis stage (still "pre-write")
+    if t in {"aggregate_knowledge", "synthesize_sources", "detect_knowledge_type"}:
+        return "aggregate"
+
+    # Writing/review stage
+    if t in {
+        "generate_outline",
+        "generate_study_material",
+        "critique_draft",
+        "refine_draft",
+        "generate_diagrams",
+        "assemble_study_archive",
+        "review_content",
+        "revise_markdown",
+    }:
+        return "write"
+
+    # Export stage
+    if t in {"export_study_markdown", "convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}:
+        return "export"
+
+    return ""
+
+
+def _derive_resume_state(wm: Dict[str, Any]) -> Dict[str, Any]:
+    """Derive best-effort resume metadata from a working_memory snapshot."""
+
+    step_results = wm.get("step_results") if isinstance(wm, dict) else None
+    step_results = step_results if isinstance(step_results, list) else []
+
+    last_success_step: Dict[str, Any] = {}
+    last_failed_step: Dict[str, Any] = {}
+    last_success_stage = ""
+    last_failed_stage = ""
+
+    for it in step_results:
+        if not isinstance(it, dict):
+            continue
+        tool = str(it.get("tool") or "").strip()
+        if not tool:
+            continue
+        success = bool(it.get("success"))
+        stage = _infer_stage_from_tool(tool)
+        record = {
+            "step_id": str(it.get("step_id") or "").strip(),
+            "tool": tool,
+            "success": success,
+            "error": str(it.get("error") or "").strip() or None,
+        }
+        if success:
+            last_success_step = record
+            last_success_stage = stage or last_success_stage
+        else:
+            last_failed_step = record
+            last_failed_stage = stage or last_failed_stage
+
+    out: Dict[str, Any] = {}
+    if last_success_step:
+        out["last_success_step"] = last_success_step
+    if last_failed_step:
+        out["last_failed_step"] = last_failed_step
+    if last_success_stage:
+        out["last_success_stage"] = last_success_stage
+    if last_failed_stage:
+        out["last_failed_stage"] = last_failed_stage
+    return out
+
+
+def _prune_resume_working_memory(
+    wm: Dict[str, Any],
+    *,
+    mode: str,
+    last_failed_stage: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a pruned working_memory snapshot for stage-based continuation modes."""
+
+    mode_norm = str(mode or "").strip().lower()
+    stage = str(last_failed_stage or "").strip().lower()
+    if mode_norm == "retry_search":
+        stage = "search"
+    elif mode_norm == "resume_failed_stage" and not stage:
+        stage = "write"
+
+    # Always keep knowledge-point split & options; everything else can be recomputed.
+    keep_keys = {"split_knowledge_points", "review_knowledge_points", "study_options"}
+
+    drop_keys: set[str] = set()
+    if stage == "search":
+        drop_keys |= {
+            # Retrieval
+            "web_search_knowledge",
+            "browse_web_pages",
+            "wikipedia_search",
+            "mediawiki_search",
+            "github_search",
+            "stackexchange_search",
+            "search_questions_by_knowledge",
+            # Aggregation/synthesis
+            "aggregate_knowledge",
+            "aggregated",
+            "aggregate",
+            "source_briefs",
+            "source_facts",
+            "knowledge_types",
+            "outlines",
+            # Draft/write/export artifacts
+            "generate_outline",
+            "generate_study_material",
+            "study_material",
+            "critique_draft",
+            "refine_draft",
+            "diagrams",
+            "assemble_study_archive",
+            "review_content",
+            "revise_markdown",
+            "markdown",
+            "md_url",
+            "md_filename",
+            "tex_url",
+            "tex_filename",
+            "pdf_url",
+            "pdf_filename",
+            # LaTeX state
+            "latex_tex",
+            "_latex_compile_round",
+            "_latex_last_compile_error",
+        }
+    elif stage == "aggregate":
+        drop_keys |= {
+            "aggregate_knowledge",
+            "aggregated",
+            "aggregate",
+            "source_briefs",
+            "source_facts",
+            "knowledge_types",
+            "outlines",
+            "generate_outline",
+            "generate_study_material",
+            "study_material",
+            "critique_draft",
+            "refine_draft",
+            "diagrams",
+            "assemble_study_archive",
+            "review_content",
+            "revise_markdown",
+            "markdown",
+            "md_url",
+            "md_filename",
+            "tex_url",
+            "tex_filename",
+            "pdf_url",
+            "pdf_filename",
+        }
+    elif stage == "write":
+        drop_keys |= {
+            "outlines",
+            "generate_outline",
+            "generate_study_material",
+            "study_material",
+            "critique_draft",
+            "refine_draft",
+            "diagrams",
+            "assemble_study_archive",
+            "review_content",
+            "revise_markdown",
+            "markdown",
+            "md_url",
+            "md_filename",
+            "tex_url",
+            "tex_filename",
+            "pdf_url",
+            "pdf_filename",
+        }
+    elif stage == "export":
+        drop_keys |= {
+            "md_url",
+            "md_filename",
+            "tex_url",
+            "tex_filename",
+            "pdf_url",
+            "pdf_filename",
+            "latex_tex",
+            "_latex_compile_round",
+            "_latex_last_compile_error",
+        }
+
+    out = {}
+    for k, v in (wm or {}).items():
+        key = str(k or "").strip()
+        if not key:
+            continue
+        if key in keep_keys:
+            out[key] = v
+            continue
+        if key in drop_keys:
+            continue
+        out[key] = v
+    return out
+
+
+def _refresh_task_resume_meta(task: "StudyMaterialsTask") -> None:
+    """Best-effort: refresh resume metadata based on the latest working_memory snapshot."""
+
+    try:
+        wm = dict(task.resume_working_memory or {}) if isinstance(task.resume_working_memory, dict) else {}
+    except Exception:
+        wm = {}
+
+    state = _derive_resume_state(wm)
+    try:
+        task.last_success_step = state.get("last_success_step") if isinstance(state.get("last_success_step"), dict) else None
+        task.last_failed_step = state.get("last_failed_step") if isinstance(state.get("last_failed_step"), dict) else None
+        task.last_success_stage = str(state.get("last_success_stage") or "").strip()
+        task.last_failed_stage = str(state.get("last_failed_stage") or "").strip()
+    except Exception:
+        # Never block snapshotting.
+        pass
+
+    def _extract_kps() -> List[str]:
+        split_res = wm.get("split_knowledge_points")
+        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
+            kps = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()]
+            if kps:
+                return kps[:15]
+        return []
+
+    def _map_by_kp(blob: Any) -> Dict[str, Dict[str, Any]]:
+        if not isinstance(blob, dict):
+            return {}
+        if isinstance(blob.get("items"), list):
+            out: Dict[str, Dict[str, Any]] = {}
+            for it in blob.get("items") or []:
+                if not isinstance(it, dict):
+                    continue
+                kp = str(it.get("knowledge_point") or "").strip()
+                if not kp:
+                    continue
+                out[kp] = dict(it)
+            return out
+        kp = str(blob.get("knowledge_point") or "").strip()
+        return {kp: dict(blob)} if kp else {}
+
+    # Compact search summary for UI buttons / debug.
+    web_map = _map_by_kp(wm.get("web_search_knowledge"))
+    search_summary_by_kp: Dict[str, Any] = {}
+    for kp, it in web_map.items():
+        provider = str(it.get("provider") or "").strip()
+        query = str(it.get("query") or it.get("base_query") or "").strip()
+        results = it.get("results") if isinstance(it.get("results"), list) else []
+        summarized_results: List[Dict[str, Any]] = []
+        for r in [x for x in results if isinstance(x, dict)][:8]:
+            url = str(r.get("url") or "").strip()
+            if not url:
+                continue
+            summarized_results.append(
+                {
+                    "title": str(r.get("title") or "").strip(),
+                    "url": url,
+                    "snippet": _clip_text(str(r.get("snippet") or ""), max_chars=240),
+                    "source_query": str(r.get("source_query") or r.get("sourceQuery") or "").strip(),
+                }
+            )
+        search_summary_by_kp[kp] = {
+            "provider": provider,
+            "query": query,
+            "results": summarized_results,
+        }
+    task.search_summary_by_kp = search_summary_by_kp
+
+    # Per-knowledge-point coarse status for stage-based continue.
+    kps = _extract_kps() or list(search_summary_by_kp.keys())[:15]
+    aggregated_map = _map_by_kp(wm.get("aggregated") or wm.get("aggregate_knowledge"))
+    wiki_map = _map_by_kp(wm.get("wikipedia_search"))
+    mw_map = _map_by_kp(wm.get("mediawiki_search"))
+
+    material_blob = wm.get("generate_study_material") if isinstance(wm.get("generate_study_material"), dict) else None
+    if material_blob is None:
+        material_blob = wm.get("study_material") if isinstance(wm.get("study_material"), dict) else {}
+    sections_blob = material_blob.get("sections") if isinstance(material_blob, dict) else None
+    sections_list = [s for s in (sections_blob or []) if isinstance(s, dict)] if isinstance(sections_blob, list) else []
+    sec_by_kp: Dict[str, Dict[str, Any]] = {}
+    for sec in sections_list:
+        kp = str(sec.get("knowledge_point") or "").strip()
+        if kp and kp not in sec_by_kp:
+            sec_by_kp[kp] = sec
+
+    per_kp_state: Dict[str, Any] = {}
+    for kp in kps:
+        web = web_map.get(kp) or {}
+        web_results = web.get("results") if isinstance(web.get("results"), list) else []
+        web_n = len([x for x in web_results if isinstance(x, dict)])
+
+        wiki = wiki_map.get(kp) or {}
+        mw = mw_map.get(kp) or {}
+        wiki_has = bool(str(wiki.get("summary") or wiki.get("content") or "").strip())
+        mw_has = bool(str(mw.get("summary") or mw.get("content") or "").strip())
+
+        search_ok = web_n > 0 or wiki_has or mw_has
+        aggregate_ok = bool(aggregated_map.get(kp))
+        sec = sec_by_kp.get(kp) or {}
+        write_ok = bool(str(sec.get("explanation_markdown") or "").strip())
+
+        per_kp_state[kp] = {
+            "knowledge_point": kp,
+            "search": search_ok,
+            "aggregate": aggregate_ok,
+            "write": write_ok,
+            "web_results": web_n,
+        }
+    task.per_kp_state = per_kp_state
+
+
 async def _export_markdown_to_media(*, markdown: str, user_id: str) -> Dict[str, Any]:
     published = await publish_generated_text(
         markdown,
@@ -76,6 +416,14 @@ class StudyMaterialsTask:
     iteration_offset: int = 0
     max_iterations: Optional[int] = None
     iterations_done: int = 0
+
+    # Resume metadata for failure-stage continuation UX.
+    last_success_step: Optional[Dict[str, Any]] = None
+    last_failed_step: Optional[Dict[str, Any]] = None
+    last_success_stage: str = ""
+    last_failed_stage: str = ""
+    per_kp_state: Dict[str, Any] = field(default_factory=dict)
+    search_summary_by_kp: Dict[str, Any] = field(default_factory=dict)
 
     # seq starts at 1; `events[i-1]["seq"] == i`.
     events: List[Dict[str, Any]] = field(default_factory=list)
@@ -153,6 +501,14 @@ class StudyMaterialsTaskManager:
                 "iteration_offset": int(task.iteration_offset or 0),
                 "max_iterations": task.max_iterations,
                 "iterations_done": int(task.iterations_done or 0),
+                "last_success_step": dict(task.last_success_step or {}) if isinstance(task.last_success_step, dict) else None,
+                "last_failed_step": dict(task.last_failed_step or {}) if isinstance(task.last_failed_step, dict) else None,
+                "last_success_stage": str(task.last_success_stage or ""),
+                "last_failed_stage": str(task.last_failed_stage or ""),
+                "per_kp_state": dict(task.per_kp_state or {}) if isinstance(task.per_kp_state, dict) else {},
+                "search_summary_by_kp": dict(task.search_summary_by_kp or {})
+                if isinstance(task.search_summary_by_kp, dict)
+                else {},
                 "events": list(task.events or [])[-self._max_events_per_task :],
                 "last_seq": int(task.last_seq or 0),
                 "seq_offset": int(task.seq_offset or 0),
@@ -202,6 +558,21 @@ class StudyMaterialsTaskManager:
                 last_seq=max(0, last_seq),
                 seq_offset=int(obj.get("seq_offset") or 0),
             )
+
+            task.last_success_step = (
+                dict(obj.get("last_success_step") or {}) if isinstance(obj.get("last_success_step"), dict) else None
+            )
+            task.last_failed_step = (
+                dict(obj.get("last_failed_step") or {}) if isinstance(obj.get("last_failed_step"), dict) else None
+            )
+            task.last_success_stage = str(obj.get("last_success_stage") or "").strip()
+            task.last_failed_stage = str(obj.get("last_failed_stage") or "").strip()
+            task.per_kp_state = dict(obj.get("per_kp_state") or {}) if isinstance(obj.get("per_kp_state"), dict) else {}
+            task.search_summary_by_kp = (
+                dict(obj.get("search_summary_by_kp") or {}) if isinstance(obj.get("search_summary_by_kp"), dict) else {}
+            )
+            if task.resume_working_memory and (not task.last_failed_stage or not task.search_summary_by_kp):
+                _refresh_task_resume_meta(task)
 
             # A "running" task cannot continue after restart; mark as failed with a clear reason.
             if task.status == "running":
@@ -584,7 +955,15 @@ class StudyMaterialsTaskManager:
         tid = (task_id or "").strip()
         uid = (user_id or "").strip() or "anonymous"
         mode_norm = (mode or "").strip().lower() or "improve"
-        if mode_norm not in {"improve", "deepen_research", "fix_export", "skip_export"}:
+        if mode_norm not in {
+            "improve",
+            "deepen_research",
+            "fix_export",
+            "skip_export",
+            "resume_failed_stage",
+            "retry_search",
+            "replan_from_failure",
+        }:
             mode_norm = "improve"
 
         parent = await self.get_task(tid)
@@ -608,13 +987,21 @@ class StudyMaterialsTaskManager:
         # Continuations should be snappy: one Plan-Act-Reflect loop per click by default.
         max_iters = 1
 
+        resume_wm = parent.resume_working_memory
+        if mode_norm in {"resume_failed_stage", "retry_search", "replan_from_failure"}:
+            failed_stage = str(parent.last_failed_stage or "").strip()
+            if not failed_stage:
+                derived = _derive_resume_state(resume_wm)
+                failed_stage = str(derived.get("last_failed_stage") or "").strip()
+            resume_wm = _prune_resume_working_memory(resume_wm, mode=mode_norm, last_failed_stage=failed_stage)
+
         return await self.create_task(
             query=parent.query,
             user_id=uid,
             subject=parent.subject,
             options=options,
             parent_task_id=parent.task_id,
-            resume_working_memory=parent.resume_working_memory,
+            resume_working_memory=resume_wm,
             iteration_offset=int(parent.iterations_done or 0),
             max_iterations=max_iters,
         )
@@ -855,6 +1242,7 @@ class StudyMaterialsTaskManager:
                 if isinstance(wm, dict) and wm:
                     # Shallow copy; values are expected to be JSON-ish.
                     task.resume_working_memory = dict(wm)
+                    _refresh_task_resume_meta(task)
             except Exception:
                 logger.debug(
                     "study_material_task_resume_snapshot_failed",

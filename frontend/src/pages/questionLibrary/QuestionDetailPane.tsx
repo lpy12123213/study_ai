@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, ShoppingCart } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -11,6 +11,8 @@ import {
   type QuestionLibraryDetailResponse,
   type QuestionLibraryListItem,
 } from '@/api/questionLibrary'
+import { useQuestionBarStore } from '@/stores/useQuestionBarStore'
+import { useToastStore } from '@/stores/useToastStore'
 
 function originLabel(origin: string): string {
   if (origin === 'ai') return 'AI 出题'
@@ -50,6 +52,8 @@ export function QuestionDetailPane(props: Props) {
   const { selectedId, listItem, detail, isLoading, error, onMutated } = props
   const [isMutating, setIsMutating] = useState(false)
   const [mutateError, setMutateError] = useState<string | null>(null)
+  const addItem = useQuestionBarStore((s) => s.addItem)
+  const pushToast = useToastStore((s) => s.pushToast)
 
   const qid = String(selectedId || '').trim()
 
@@ -85,27 +89,56 @@ export function QuestionDetailPane(props: Props) {
     }
   }
 
+  const addToBar = () => {
+    if (!qid) return
+    setMutateError(null)
+    const res = addItem({
+      questionId: qid,
+      origin: String(libItem?.origin || '').trim(),
+      stem: stemText,
+      sourceUrl: String(cache?.source_url || libItem?.source_url || '').trim(),
+    })
+    if (!res.ok) {
+      setMutateError(res.error || '加入试题栏失败')
+      return
+    }
+    pushToast({ id: `qb-add-${qid}`, title: '已加入试题栏', status: 'completed' })
+  }
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="p-4 border-b flex items-center justify-between gap-3">
         <div className="text-sm font-medium">详情</div>
-        <Button
-          type="button"
-          variant={libItem?.hidden ? 'secondary' : 'outline'}
-          size="sm"
-          disabled={!qid || isMutating || isLoading || !libItem}
-          onClick={toggleHidden}
-          className="gap-2"
-        >
-          {isMutating ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : libItem?.hidden ? (
-            <Eye className="h-4 w-4" />
-          ) : (
-            <EyeOff className="h-4 w-4" />
-          )}
-          {libItem?.hidden ? '取消隐藏' : '隐藏'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!qid || isMutating || isLoading || !libItem}
+            onClick={addToBar}
+            className="gap-2"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            加入试题栏
+          </Button>
+          <Button
+            type="button"
+            variant={libItem?.hidden ? 'secondary' : 'outline'}
+            size="sm"
+            disabled={!qid || isMutating || isLoading || !libItem}
+            onClick={toggleHidden}
+            className="gap-2"
+          >
+            {isMutating ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : libItem?.hidden ? (
+              <Eye className="h-4 w-4" />
+            ) : (
+              <EyeOff className="h-4 w-4" />
+            )}
+            {libItem?.hidden ? '取消隐藏' : '隐藏'}
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0">
@@ -158,24 +191,20 @@ export function QuestionDetailPane(props: Props) {
                 )}
               </div>
 
-              {libItem.origin === 'ai' && (
+              {(answerText || analysisText) && (
                 <div className="rounded-lg border p-3 space-y-3">
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-2">答案</div>
-                    {answerText ? (
+                  {answerText && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-2">答案</div>
                       <QuestionContent content={answerText} className="text-sm" />
-                    ) : (
-                      <div className="text-sm text-muted-foreground">暂无答案</div>
-                    )}
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-2">解析</div>
-                    {analysisText ? (
+                    </div>
+                  )}
+                  {analysisText && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-2">解析</div>
                       <QuestionContent content={analysisText} className="text-sm" />
-                    ) : (
-                      <div className="text-sm text-muted-foreground">暂无解析</div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               )}
 

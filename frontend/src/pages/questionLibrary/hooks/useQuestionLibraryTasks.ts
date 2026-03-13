@@ -7,6 +7,7 @@ import { useTaskStore } from '@/stores/useTaskStore'
 import {
   crawlQuestions,
   generateQuestions,
+  type QuestionLibraryDraftQuestion,
   type CrawlQuestionsPayload,
   type GenerateQuestionsPayload,
   type QuestionLibraryListItem,
@@ -26,6 +27,15 @@ export interface QuestionLibraryTaskMeta {
   stage?: string
   error?: string
   lastSeq: number
+}
+
+export interface QuestionLibraryDraftPreview {
+  previewId: string
+  subject: string
+  topic: string
+  count: number
+  draftQuestions: QuestionLibraryDraftQuestion[]
+  taskId: string
 }
 
 function nowIso(): string {
@@ -68,9 +78,33 @@ export function useQuestionLibraryTasks(options: {
   const { startTask, addStep, updateStep, completeTask, failTask, getTaskSteps } = useTaskStore()
 
   const [tasks, setTasks] = useState<QuestionLibraryTaskMeta[]>([])
+  const [draftPreview, setDraftPreview] = useState<QuestionLibraryDraftPreview | null>(null)
 
   const stageByTaskIdRef = useRef<Record<string, string>>({})
   const seenStepIdsRef = useRef<Record<string, Record<string, boolean>>>({})
+
+  const clearDraftPreview = useCallback(() => setDraftPreview(null), [])
+
+  const normalizeDraftQuestions = useCallback((input: unknown): QuestionLibraryDraftQuestion[] => {
+    const list = Array.isArray(input) ? (input as any[]) : []
+    const out: QuestionLibraryDraftQuestion[] = []
+    for (const it of list) {
+      if (!it || typeof it !== 'object') continue
+      const qid = String((it as any).question_id || (it as any).questionId || '').trim()
+      const stem = String((it as any).stem || '').trim()
+      const answer = String((it as any).answer || '').trim()
+      const analysis = String((it as any).analysis || '').trim()
+      if (!qid) continue
+      out.push({
+        question_id: qid,
+        stem,
+        answer,
+        analysis,
+        keep: (it as any).keep === false ? false : true,
+      })
+    }
+    return out
+  }, [])
 
   const upsertTask = useCallback((meta: Partial<QuestionLibraryTaskMeta> & { taskId: string }) => {
     setTasks((prev) => {
@@ -180,6 +214,20 @@ export function useQuestionLibraryTasks(options: {
       }
 
       if (env.type === 'done') {
+        const previewId = String(payload?.preview_id || payload?.previewId || '').trim()
+        if (previewId) {
+          const drafts = normalizeDraftQuestions(payload?.draft_questions || payload?.draftQuestions)
+          if (drafts.length > 0) {
+            setDraftPreview({
+              previewId,
+              subject: String(payload?.subject || '').trim(),
+              topic: String(payload?.topic || '').trim(),
+              count: Math.max(0, Number(payload?.count || drafts.length || 0)) || drafts.length,
+              draftQuestions: drafts,
+              taskId: id,
+            })
+          }
+        }
         upsertTask({ taskId: id, status: 'completed', progress: 100 })
         completeTask(id)
         onDone?.()
@@ -193,7 +241,7 @@ export function useQuestionLibraryTasks(options: {
         return
       }
     },
-    [addStep, completeTask, failTask, onDone, patchListOnItemSaved, upsertTask, updateStep]
+    [addStep, completeTask, failTask, normalizeDraftQuestions, onDone, patchListOnItemSaved, upsertTask, updateStep]
   )
 
   const runCrawl = useCallback(
@@ -228,6 +276,7 @@ export function useQuestionLibraryTasks(options: {
   const runGenerate = useCallback(
     (payload: Omit<GenerateQuestionsPayload, 'task_id'> & { task_id?: string }) => {
       const taskId = String(payload.task_id || '').trim() || `ql-gen-${generateId()}`
+      clearDraftPreview()
       startTask(taskId)
       upsertTask({ taskId, kind: 'generate', status: 'running', progress: 0, stage: 'AI 出题', lastSeq: 0 })
 
@@ -250,7 +299,7 @@ export function useQuestionLibraryTasks(options: {
 
       return taskId
     },
-    [failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
+    [clearDraftPreview, failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
   )
 
   const runScore = useCallback(
@@ -293,5 +342,7 @@ export function useQuestionLibraryTasks(options: {
     runCrawl,
     runGenerate,
     runScore,
+    draftPreview,
+    clearDraftPreview,
   }
 }

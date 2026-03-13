@@ -73,6 +73,98 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+type WebSearchKnowledgeResult = {
+  title?: string
+  url?: string
+  snippet?: string
+  provider?: string
+  source_query?: string
+}
+
+type WebSearchKnowledgeItem = {
+  knowledge_point?: string
+  query?: string
+  provider?: string
+  results: WebSearchKnowledgeResult[]
+  summary?: string
+  error?: string
+  errors?: string[]
+}
+
+function toOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function toWebSearchKnowledgeItem(raw: unknown): WebSearchKnowledgeItem | null {
+  if (!isObject(raw)) return null
+
+  const knowledgePoint = toOptionalString(raw.knowledge_point) || toOptionalString(raw.knowledgePoint)
+  const query = toOptionalString(raw.query)
+  const provider = toOptionalString(raw.provider)
+
+  const rawResults = Array.isArray(raw.results) ? raw.results : []
+  const results: WebSearchKnowledgeResult[] = rawResults
+    .filter((r) => isObject(r))
+    .map((r) => {
+      const title = toOptionalString(r.title) || toOptionalString(r.name) || toOptionalString(r.url) || toOptionalString(r.link)
+      const url = toOptionalString(r.url) || toOptionalString(r.link)
+      const snippet = toOptionalString(r.snippet) || toOptionalString(r.summary) || toOptionalString(r.text)
+      const resultProvider = toOptionalString(r.provider) || provider
+      const sourceQuery =
+        toOptionalString((r as any).source_query) ||
+        toOptionalString((r as any).sourceQuery) ||
+        toOptionalString((r as any).source_query_hint) ||
+        query
+
+      return {
+        title,
+        url,
+        snippet,
+        provider: resultProvider,
+        source_query: sourceQuery,
+      }
+    })
+    .filter((r) => Boolean(r.title || r.url))
+
+  const summary = toOptionalString(raw.summary)
+  const error = toOptionalString(raw.error)
+  const errors = Array.isArray(raw.errors)
+    ? raw.errors.map((e) => extractText(e, 1)).filter((e) => Boolean(e))
+    : undefined
+
+  if (!knowledgePoint && !query && results.length === 0 && !summary && !error && (!errors || errors.length === 0)) {
+    return null
+  }
+
+  return {
+    knowledge_point: knowledgePoint,
+    query,
+    provider,
+    results,
+    summary,
+    error,
+    errors,
+  }
+}
+
+function toWebSearchKnowledgeItems(output: unknown): WebSearchKnowledgeItem[] {
+  if (!isObject(output)) return []
+
+  if (Array.isArray((output as any).items)) {
+    const items: WebSearchKnowledgeItem[] = []
+    for (const it of (output as any).items as unknown[]) {
+      const parsed = toWebSearchKnowledgeItem(it)
+      if (parsed) items.push(parsed)
+    }
+    return items
+  }
+
+  const single = toWebSearchKnowledgeItem(output)
+  return single ? [single] : []
+}
+
 function renderRelaxTraceEntry(entry: RelaxTraceEntry): string {
   const action = typeof entry.action === 'string' ? entry.action : ''
 
@@ -209,6 +301,156 @@ export function StepDetail({ step }: StepDetailProps) {
         )}
       </div>
     )
+  }
+
+  if (step.toolName === 'web_search_knowledge') {
+    const items = toWebSearchKnowledgeItems(step.output)
+    if (items.length > 0) {
+      const inputEntries = hasInput ? flattenToEntries(step.input) : []
+      return (
+        <div className="mt-2 pt-2 border-t border-border/50 space-y-3 text-xs">
+          {purpose && (
+            <div>
+              <div className="text-muted-foreground/60 mb-1 font-medium uppercase tracking-wider text-[10px]">
+                用意
+              </div>
+              <div className="text-foreground/80 leading-5">{purpose}</div>
+            </div>
+          )}
+
+          {inputEntries.length > 0 && (
+            <div>
+              <div className="text-muted-foreground/60 mb-1 font-medium uppercase tracking-wider text-[10px]">输入</div>
+              <div className="space-y-1 text-foreground/80">
+                {inputEntries.map(([key, value], i) => (
+                  <div key={i} className={key ? "flex gap-2" : ""}>
+                    {key && <span className="text-muted-foreground shrink-0">{displayKey(key)}</span>}
+                    <span className="break-all whitespace-pre-wrap">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="text-muted-foreground/60 mb-1 font-medium uppercase tracking-wider text-[10px]">
+              结果链接
+            </div>
+            <div className="space-y-4">
+              {items.map((item, idx) => {
+                const header = item.knowledge_point || item.query || `#${idx + 1}`
+                const results = item.results || []
+                const shown = results.slice(0, 8)
+
+                return (
+                  <div key={`${header}:${idx}`} className="space-y-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="text-foreground/90 font-medium">{header}</div>
+                      {item.provider && <div className="text-[10px] text-muted-foreground">{item.provider}</div>}
+                    </div>
+
+                    {shown.length > 0 ? (
+                      <div className="space-y-2">
+                        {shown.map((r, i) => {
+                          const title = r.title || r.url || `#${i + 1}`
+                          const metaParts = [r.provider, r.source_query].filter(Boolean)
+                          const meta = metaParts.length > 0 ? metaParts.join(' · ') : ''
+
+                          const body = (
+                            <div className="rounded-md border border-border/60 bg-background/40 hover:bg-muted/40 transition-colors p-2">
+                              <div className="text-foreground/90 font-medium leading-5">{title}</div>
+                              {r.url && <div className="text-[10px] text-muted-foreground break-all mt-0.5">{r.url}</div>}
+                              {r.snippet && <div className="text-foreground/80 leading-5 mt-1">{r.snippet}</div>}
+                              {meta && <div className="text-[10px] text-muted-foreground mt-1">{meta}</div>}
+                            </div>
+                          )
+
+                          return r.url ? (
+                            <a
+                              key={i}
+                              href={r.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block"
+                            >
+                              {body}
+                            </a>
+                          ) : (
+                            <div key={i}>{body}</div>
+                          )
+                        })}
+                        {results.length > shown.length && (
+                          <div className="text-muted-foreground/70 text-[11px]">
+                            仅展示前 {shown.length} 条（共 {results.length} 条）
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground/70">未返回可用搜索结果</div>
+                    )}
+
+                    {(item.summary || item.error || (item.errors && item.errors.length > 0)) && (
+                      <details className="rounded-md border border-border/40 bg-background/40">
+                        <summary className="cursor-pointer px-2 py-1.5 text-[11px] text-muted-foreground/70 select-none">
+                          查看摘要/错误
+                        </summary>
+                        <div className="space-y-2 p-2 text-foreground/80">
+                          {item.summary && (
+                            <pre className="whitespace-pre-wrap leading-5 bg-muted/30 rounded-md p-2">
+                              {item.summary}
+                            </pre>
+                          )}
+                          {item.error && (
+                            <div className="text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+                              {item.error}
+                            </div>
+                          )}
+                          {item.errors && item.errors.length > 0 && (
+                            <div className="text-muted-foreground/80 whitespace-pre-wrap">
+                              {item.errors.slice(0, 6).map((e, i) => (
+                                <div key={i}>{e}</div>
+                              ))}
+                              {item.errors.length > 6 && (
+                                <div className="text-muted-foreground/70 pt-1">
+                                  仅展示前 6 条（共 {item.errors.length} 条）
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {hasError && (
+            <div className="text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+              {step.error}
+            </div>
+          )}
+
+          {(hasInput || hasOutput) && (
+            <details className="rounded-md border border-border/40 bg-background/40">
+              <summary className="cursor-pointer px-2 py-1.5 text-[11px] text-muted-foreground/70 select-none">
+                查看原始数据（JSON）
+              </summary>
+              <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words p-2 text-[11px] text-foreground/80 leading-5">
+                {(() => {
+                  try {
+                    return JSON.stringify({ input: step.input, output: step.output }, null, 2)
+                  } catch {
+                    return '(无法序列化)'
+                  }
+                })()}
+              </pre>
+            </details>
+          )}
+        </div>
+      )
+    }
   }
 
   const inputEntries = hasInput ? flattenToEntries(step.input) : []

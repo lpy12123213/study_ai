@@ -87,7 +87,10 @@ def _heuristic_knowledge_type(kp: str) -> str:
 
 
 def _default_outline_sections(knowledge_type: str, preset: str) -> List[Dict[str, Any]]:
-    """A deterministic outline fallback used when outline tool isn't called or LLM isn't configured."""
+    """A minimal outline fallback used when outline tool isn't called or LLM isn't configured.
+
+    The goal is to keep the pipeline usable without forcing a rigid template across knowledge points.
+    """
 
     kt = (knowledge_type or "").strip().lower()
     if kt not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
@@ -101,79 +104,61 @@ def _default_outline_sections(knowledge_type: str, preset: str) -> List[Dict[str
 
     if kt == "theorem":
         sections = [
-            sec(
-                "定理陈述（先写清条件）",
-                ["用一句话说清楚结论是什么", "把所有适用条件显式写出"],
-                ["出现“条件/结论”拆分", "不遗漏边界条件"],
-            ),
-            sec(
-                "直观理解（为什么可能成立）",
-                ["用图像/类比解释直觉", "解释结论在极端情况下是否合理"],
-                ["有直观解释，不是纯符号复述"],
-            ),
-            sec(
-                "条件与边界/反例",
-                ["哪些条件不可缺？缺了会怎样？", "给出典型反例或边界情况"],
-                ["至少1个边界/反例或陷阱"],
-            ),
-            sec(
-                "证明思路骨架（选读）" if deep else "证明思路（可跳过）",
-                ["给出3~8行推导骨架", "标注关键一步为什么这么做"],
-                ["不要求写满细节，但要可追踪"],
-            ),
-            sec("常见误区与易错点", ["列出3个常见误解", "解释为什么会错"], ["至少2条误区（若适用）"]),
-            sec("应用/题型与解题框架", ["遇到题目时怎么用", "常用变形/等价表述"], ["给出可执行的步骤/框架"]),
+            sec("结论与适用条件", ["一句话说明结论", "把适用条件写全"], ["条件明确", "结论明确"]),
+            sec("直观理解与例子", ["用图像/类比解释直觉", "给一个最简单例子"], ["有直觉", "有例子"]),
+            sec("边界情况/反例与易错点", ["哪些条件不可缺？缺了会怎样？", "给出典型反例或陷阱"], ["至少1个反例/陷阱（如适用）"]),
+            sec("用法与题型思路", ["遇到题目时怎么用", "常用变形/等价表述（如适用）"], ["给出可执行步骤"]),
         ]
+        if deep:
+            sections.insert(
+                3,
+                sec(
+                    "证明/推导思路（选读）",
+                    ["给出推导/证明骨架（非细节）", "标注关键一步为什么这么做"],
+                    ["有骨架（如适用）"],
+                ),
+            )
         if research:
-            sections.append(sec("自检清单", ["列出5个学完应能回答的问题"], ["有可操作自检项"]))
+            sections.append(sec("自检清单（选读）", ["列出3~6个自测问题"], ["有可操作自检项"]))
         return sections
 
     if kt == "algorithm":
         sections = [
-            sec("要解决的问题与适用场景", ["这个算法解决什么问题", "输入/输出是什么"], ["说明适用范围"]),
-            sec("核心思想（直觉）", ["一句话概括策略", "用例子说明为什么这样做"], ["有直觉说明"]),
-            sec("步骤/伪代码", ["分步骤列出流程", "关键状态/变量含义"], ["步骤清晰可执行"]),
-            sec("正确性要点（为什么对）", ["说明关键不变式/贪心选择理由"], ["给出正确性理由"]),
-            sec("复杂度与瓶颈", ["时间复杂度/空间复杂度", "最坏/平均情况（如适用）"], ["复杂度明确"]),
-            sec("实现细节与常见坑", ["边界条件", "容易写错的地方"], ["至少2个实现坑"]),
+            sec("目标与核心思路", ["这个方法解决什么问题", "一句话概括核心策略"], ["目标明确", "策略清晰"]),
+            sec("步骤与复杂度", ["分步骤描述流程/伪代码", "时间/空间复杂度（如适用）"], ["步骤可执行", "复杂度明确（如适用）"]),
+            sec("边界/易错点", ["边界条件", "常见实现坑"], ["至少2个易错点（如适用）"]),
+            sec("例题/应用", ["给一个典型场景或题型", "说明如何落地使用"], ["有落地用法"]),
         ]
         if deep:
-            sections.append(
-                sec("变体与拓展（选读）", ["有哪些常见变体", "何时选择变体"], ["至少提到1个变体（如适用）"])
-            )
-        return sections
-
-    if kt == "history":
-        sections = [
-            sec("它是什么（一句话概括）", ["先给出结论式摘要"], ["有一句话概括"]),
-            sec("时间线/发展脉络", ["按时间或阶段描述", "点出关键转折"], ["至少3个关键节点"]),
-            sec("关键人物/事件/思想", ["列出核心贡献", "避免八卦式细节"], ["有关键贡献点"]),
-            sec("影响与今天怎么看", ["它解决了什么问题", "留下了什么方法/观点"], ["有影响总结"]),
-        ]
+            sections.append(sec("正确性要点（选读）", ["关键不变式/贪心理由（如适用）"], ["有正确性理由（如适用）"]))
         return sections
 
     if kt == "experiment":
-        sections = [
-            sec("实验目的与核心结论", ["要验证/测量什么", "预期观察到什么"], ["目的明确"]),
-            sec("装置与变量", ["装置结构", "自变量/因变量/控制变量"], ["变量划分清晰"]),
-            sec("步骤与数据处理", ["流程步骤", "如何计算/拟合/作图"], ["步骤可复现"]),
-            sec("误差来源与注意事项", ["系统误差/随机误差", "如何减小误差"], ["至少2个误差来源"]),
+        return [
+            sec("目的与原理", ["要验证/测量什么", "核心原理是什么"], ["目的明确", "原理清楚"]),
+            sec("装置/变量与步骤", ["装置结构与变量控制", "操作步骤与现象观察"], ["步骤可复现"]),
+            sec("数据处理与误差", ["如何计算/作图/拟合", "主要误差来源与减小方式"], ["至少2个误差来源（如适用）"]),
+            sec("常见问题与改进", ["常见失败原因", "如何改进/排错"], ["有可执行建议"]),
         ]
-        return sections
+
+    if kt == "history":
+        return [
+            sec("一句话概括与背景", ["先给出结论式摘要", "交代背景与动机"], ["有一句话概括"]),
+            sec("发展脉络与关键节点", ["按时间/阶段梳理", "点出关键转折"], ["至少2~4个关键节点（如适用）"]),
+            sec("影响与联系", ["它改变了什么", "与今天/相近概念的联系"], ["有影响总结"]),
+        ]
 
     # concept / definition
     sections = [
-        sec("为什么需要它（动机）", ["它解决什么问题", "没有它会怎样"], ["有动机说明"]),
-        sec("定义与核心表述", ["给出严格定义/核心公式", "解释每个术语/符号含义"], ["定义清晰且自洽"]),
-        sec("直观理解（类比/图像）", ["用类比帮助理解", "给一个最简单例子"], ["有直觉+例子"]),
-        sec("关键性质/结论", ["列出3~6条性质", "每条写清适用条件（若有）"], ["性质不少于3条（若适用）"]),
-        sec("常见误区与易错点", ["误区→为何错→正确理解"], ["至少2条误区（若适用）"]),
-        sec("应用/解题框架", ["遇到相关问题怎么用", "常用思路2~4步"], ["给出可执行步骤"]),
+        sec("动机与定义", ["它解决什么问题", "给出定义/核心表述"], ["定义清晰且自洽（如适用）"]),
+        sec("直观理解与例子", ["用图像/类比解释", "给一个最简单例子"], ["有直觉+例子（如适用）"]),
+        sec("关键性质/条件与易错点", ["列出关键性质/条件", "补充边界/反例/常见误区（如适用）"], ["性质/条件不自相矛盾"]),
+        sec("应用/题型思路", ["如何使用/何时使用", "常见题型或场景"], ["有可执行步骤"]),
     ]
     if deep:
-        sections.append(sec("推导/证明思路（选读）", ["给出推导骨架或证明框架"], ["有推导骨架（如适用）"]))
+        sections.append(sec("推导/证明/方法骨架（选读）", ["给出推导/证明/方法的骨架（如适用）"], ["有骨架（如适用）"]))
     if research:
-        sections.append(sec("自检清单（选读）", ["列出5个自测问题"], ["有自检项"]))
+        sections.append(sec("自检清单（选读）", ["列出3~6个自测问题"], ["有可操作自检项"]))
     return sections
 
 
@@ -239,12 +224,12 @@ class StudyMaterialGenerationToolsMixin:
 
         def _sec_bounds() -> Tuple[int, int]:
             if preset == "quick":
-                return (5, 7)
+                return (3, 6)
             if preset == "deep":
-                return (8, 11)
+                return (4, 9)
             if preset == "research":
-                return (9, 13)
-            return (6, 9)
+                return (5, 11)
+            return (4, 8)
 
         sec_min, sec_max = _sec_bounds()
 
@@ -300,7 +285,7 @@ class StudyMaterialGenerationToolsMixin:
                     "title 用中文短语，避免机械复用固定模板标题；要体现本知识点特点。",
                     "hints 每节 1~4 条，短提示即可。",
                     "verify 为该节写完后的『验证标准』，每节 2~5 条，越可操作越好。",
-                    "必须覆盖：定义/表述、直观理解、关键结论或性质/条件、常见误区、应用/解题框架或总结。",
+                    "尽量覆盖：定义/表述、直观理解、关键结论或性质/条件、常见误区、应用/解题框架或总结。允许合并/拆分；不适用可省略，但请在 verify 中体现覆盖意图或说明省略/替代。",
                     "如提供了 source_facts：请在 verify 中加入 1~2 条『与关键事实一致/不矛盾』的校验点；低置信度事实需提示为推断。",
                     "不要输出例题/练习题；不要输出 URL；不要输出 Markdown。",
                 ],
@@ -537,8 +522,9 @@ class StudyMaterialGenerationToolsMixin:
                     "source_facts": facts,
                     "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
                     "instructions": [
-                        "请只撰写这一个小节的内容。",
-                        f"输出必须以 `#### {title}` 开头。",
+                        "请只撰写这一个小节的正文内容。",
+                        "不要输出任何标题行（不要输出 `####`）；标题会由系统统一添加。",
+                        "你可以自由组织段落/列表，不需要固定模板；优先清晰、可执行、便于自学。",
                         "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
                         "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
                         "若 source_facts 中存在低置信度事实（confidence<0.6），对应表述必须使用「推断/可能/建议」等措辞避免强断言。",
@@ -569,6 +555,10 @@ class StudyMaterialGenerationToolsMixin:
                     )
                 md = str(res.get("content") or "").strip()
                 md = _sanitize_explanation_markdown(md, knowledge_point=kp)
+                md = md.lstrip()
+                if md.startswith("####"):
+                    md = "\n".join(md.splitlines()[1:]).lstrip()
+                md = f"#### {title}\n\n{md}".strip() if md else f"#### {title}"
                 finish_reason = str(res.get("finish_reason") or "").strip()
                 usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
                 try:

@@ -9,6 +9,8 @@ export interface QuestionLibraryListItem {
   origin: QuestionOrigin
   hidden: boolean
   starred?: boolean
+  has_answer?: boolean
+  has_analysis?: boolean
   ai_score?: number | null
   ai_verdict?: string
   ai_dimensions_json?: string
@@ -88,6 +90,32 @@ export interface GenerateQuestionsPayload {
   task_id?: string
 }
 
+export interface QuestionLibraryDraftQuestion {
+  question_id: string
+  stem: string
+  answer: string
+  analysis: string
+  keep?: boolean
+}
+
+export interface QuestionLibraryPreviewResponse {
+  success: boolean
+  preview_id: string
+  subject: string
+  topic: string
+  count: number
+  draft_questions: QuestionLibraryDraftQuestion[]
+}
+
+export interface QuestionLibraryCommitPreviewResponse {
+  success: boolean
+  preview_id: string
+  inserted: number
+  subject: string
+  count: number
+  question_ids: string[]
+}
+
 export interface ScoreQuestionLibraryBatchPayload {
   subject: string
   limit?: number
@@ -148,6 +176,30 @@ export async function bulkDeleteQuestionLibraryItems(questionIds: string[]): Pro
   )
   if (ids.length === 0) throw new Error('question_ids_required')
   const resp = await apiClient.post('/question-library/items/bulk-delete', { question_ids: ids })
+  return resp.data as any
+}
+
+export async function getQuestionLibraryPreview(previewId: string): Promise<QuestionLibraryPreviewResponse> {
+  const pid = String(previewId || '').trim()
+  if (!pid) throw new Error('missing_preview_id')
+  const resp = await apiClient.get(`/question-library/previews/${encodeURIComponent(pid)}`)
+  return resp.data as QuestionLibraryPreviewResponse
+}
+
+export async function commitQuestionLibraryPreview(
+  previewId: string,
+  questions: QuestionLibraryDraftQuestion[]
+): Promise<QuestionLibraryCommitPreviewResponse> {
+  const pid = String(previewId || '').trim()
+  if (!pid) throw new Error('missing_preview_id')
+  const resp = await apiClient.post(`/question-library/previews/${encodeURIComponent(pid)}/commit`, { questions })
+  return resp.data as QuestionLibraryCommitPreviewResponse
+}
+
+export async function discardQuestionLibraryPreview(previewId: string): Promise<{ success: boolean }> {
+  const pid = String(previewId || '').trim()
+  if (!pid) throw new Error('missing_preview_id')
+  const resp = await apiClient.post(`/question-library/previews/${encodeURIComponent(pid)}/discard`)
   return resp.data as any
 }
 

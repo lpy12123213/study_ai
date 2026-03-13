@@ -150,6 +150,8 @@ async def list_question_library_items(
             QuestionCache.quality_score,
             QuestionCache.source,
             QuestionCache.date,
+            func.length(func.trim(func.coalesce(QuestionCache.answer, ""))),
+            func.length(func.trim(func.coalesce(QuestionCache.analysis, ""))),
         )
         .select_from(QuestionLibraryItem)
         .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
@@ -180,6 +182,8 @@ async def list_question_library_items(
 
     items: List[Dict[str, Any]] = []
     for r in rows:
+        has_answer = int(r[19] or 0) > 0
+        has_analysis = int(r[20] or 0) > 0
         items.append(
             {
                 "question_id": r[0],
@@ -201,6 +205,8 @@ async def list_question_library_items(
                 "quality_score": int(r[16] or 0),
                 "source": r[17] or "",
                 "date": r[18] or "",
+                "has_answer": has_answer,
+                "has_analysis": has_analysis,
             }
         )
 

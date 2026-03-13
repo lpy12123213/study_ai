@@ -1054,7 +1054,7 @@ class AgentCore:
                 "text_max_length": 6000,
                 "query_hint": "定义 直观理解 关键结论 适用条件 充分必要条件 等价表述 证明 推导 反例 边界情况 易错点",
                 "scope": "webpage",
-                "include_summary": True,
+                "include_summary": False,
                 "concurrency": 3,
                 "decompose": True,
                 "sub_questions": 4 if preset in {"deep", "research"} else 3,

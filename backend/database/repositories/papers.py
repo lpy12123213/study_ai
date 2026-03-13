@@ -52,6 +52,15 @@ def _paper_storage_flags() -> tuple[bool, bool, bool]:
     return store_stem, store_answer, store_analysis
 
 
+def _infer_paper_source_mode(question_ids: list[str]) -> str:
+    ids = [str(x or "").strip() for x in (question_ids or []) if str(x or "").strip()]
+    has_digits = any(x.isdigit() for x in ids)
+    has_non_digits = any(not x.isdigit() for x in ids)
+    if has_digits and has_non_digits:
+        return "mixed"
+    return "zujuan" if has_digits else "local"
+
+
 async def save_paper(
     *,
     user_id: str,
@@ -62,6 +71,16 @@ async def save_paper(
     """保存试卷并写入题目快照（以及本地题目缓存）。"""
 
     uid = _require_user_id(user_id)
+
+    qids = []
+    for q_data in questions or []:
+        payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
+        qid = str(payload.get("question_id") or "").strip()
+        if qid:
+            qids.append(qid)
+    if _infer_paper_source_mode(qids) == "mixed":
+        raise ValueError("paper_mixed_sources")
+
     own = session is None
     if own:
         async with async_session_maker() as session:
@@ -197,6 +216,19 @@ async def add_questions_to_paper(
 
     existing_ids_res = await session.execute(select(PaperQuestion.question_id).where(PaperQuestion.paper_id == pid))
     existing_ids = {str(x).strip() for x in existing_ids_res.scalars().all() if str(x or "").strip()}
+    existing_mode = _infer_paper_source_mode(list(existing_ids))
+
+    incoming_ids = []
+    for q_data in entries:
+        payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
+        qid = str(payload.get("question_id") or "").strip()
+        if qid and qid not in existing_ids:
+            incoming_ids.append(qid)
+    incoming_mode = _infer_paper_source_mode(incoming_ids)
+    if incoming_mode == "mixed":
+        raise ValueError("paper_mixed_sources")
+    if existing_ids and incoming_ids and existing_mode != incoming_mode:
+        raise ValueError("paper_mixed_sources")
 
     cache_items: List[QuestionCache] = []
     appended = 0

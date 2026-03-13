@@ -30,7 +30,7 @@ export interface ResumableTask {
 
 // Conversation types
 export type ConversationType = 'chat' | 'blueprint' | 'lesson_plan' | 'study_materials';
-export type ConversationStatus = 'active' | 'completed' | 'paused';
+export type ConversationStatus = 'active' | 'completed' | 'paused' | 'failed';
 
 export interface ConversationItem {
   id: string;

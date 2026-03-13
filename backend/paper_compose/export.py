@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
@@ -7,7 +8,13 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from backend.database.models import get_question_cache
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
+
+try:
+    from docx import Document  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover
+    Document = None  # type: ignore[assignment]
 
 
 def render_paper_markdown(
@@ -85,6 +92,60 @@ def render_paper_markdown(
                     lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_paper_docx_bytes(
+    paper: dict,
+    *,
+    include_stem: bool = False,
+    include_answer: bool = False,
+    include_analysis: bool = False,
+) -> bytes:
+    if Document is None:
+        raise ValueError("docx_not_available")
+
+    doc = Document()
+    name = str(paper.get("paper_name") or paper.get("name") or "试卷").strip()
+    pid = paper.get("paper_id") or paper.get("id") or ""
+    created = str(paper.get("created_at") or paper.get("createdAt") or "").strip()
+    questions = paper.get("questions") if isinstance(paper.get("questions"), list) else []
+
+    doc.add_heading(name, level=0)
+    meta_parts = []
+    if pid:
+        meta_parts.append(f"试卷 ID：{pid}")
+    if created:
+        meta_parts.append(f"创建时间：{created}")
+    if meta_parts:
+        doc.add_paragraph(" | ".join(meta_parts))
+
+    def _add_block(title: str, content: str) -> None:
+        doc.add_paragraph(title)
+        text = str(content or "")
+        if not text.strip():
+            doc.add_paragraph("")
+            return
+        for line in text.splitlines():
+            doc.add_paragraph(line)
+
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        order = q.get("order") or q.get("question_order") or ""
+        qid = str(q.get("question_id") or q.get("questionId") or "").strip()
+        heading = f"{order}. {qid}".strip(". ").strip() or qid or "题目"
+        doc.add_heading(heading, level=2)
+
+        if include_stem:
+            _add_block("题干：", str(q.get("stem") or "").strip())
+        if include_answer:
+            _add_block("答案：", str(q.get("answer") or "").strip())
+        if include_analysis:
+            _add_block("解析：", str(q.get("analysis") or "").strip())
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def render_paper_latex(
@@ -235,10 +296,37 @@ async def export_paper(
 ) -> Dict[str, Any]:
     """Export paper into `.local/media/generated` and return URLs."""
 
+    hydrated_paper = dict(paper or {})
+    questions = hydrated_paper.get("questions") if isinstance(hydrated_paper.get("questions"), list) else []
+    if (include_stem or include_answer or include_analysis) and questions:
+        qids = []
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("question_id") or q.get("questionId") or "").strip()
+            if qid:
+                qids.append(qid)
+        cache = await get_question_cache(question_ids=qids)
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("question_id") or q.get("questionId") or "").strip()
+            rec = cache.get(qid) if qid else None
+            if not isinstance(rec, dict):
+                continue
+            if include_stem and not str(q.get("stem") or "").strip():
+                q["stem"] = str(rec.get("stem") or "").strip()
+            if include_answer and not str(q.get("answer") or "").strip():
+                q["answer"] = str(rec.get("answer") or "").strip()
+            if include_analysis and not str(q.get("analysis") or "").strip():
+                q["analysis"] = str(rec.get("analysis") or "").strip()
+            if not str(q.get("source_url") or "").strip():
+                q["source_url"] = str(rec.get("source_url") or "").strip()
+
     fmt_norm = (fmt or "").strip().lower()
     if fmt_norm in {"md", "markdown"}:
         md = render_paper_markdown(
-            paper,
+            hydrated_paper,
             include_stem=include_stem,
             include_answer=include_answer,
             include_analysis=include_analysis,
@@ -255,7 +343,7 @@ async def export_paper(
 
     if fmt_norm in {"tex", "latex"}:
         tex = render_paper_latex(
-            paper,
+            hydrated_paper,
             include_stem=include_stem,
             include_answer=include_answer,
             include_analysis=include_analysis,
@@ -272,7 +360,7 @@ async def export_paper(
 
     if fmt_norm == "pdf":
         tex = render_paper_latex(
-            paper,
+            hydrated_paper,
             include_stem=include_stem,
             include_answer=include_answer,
             include_analysis=include_analysis,
@@ -311,5 +399,22 @@ async def export_paper(
             "tex_url": tex_out["url"],
             "tex_filename": tex_out["filename"],
         }
+
+    if fmt_norm in {"docx", "word"}:
+        docx_bytes = render_paper_docx_bytes(
+            hydrated_paper,
+            include_stem=include_stem,
+            include_answer=include_answer,
+            include_analysis=include_analysis,
+        )
+        out = await publish_generated_bytes(
+            docx_bytes,
+            user_id=user_id,
+            ext=".docx",
+            file_type="docx",
+            mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        return {"format": "docx", "success": True, **out}
 
     raise ValueError("unsupported_format")

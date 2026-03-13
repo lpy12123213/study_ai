@@ -18,6 +18,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Switch } from '@/components/ui/switch'
 import { downloadObjectUrl } from '@/api/client'
 import { usePaper, usePaperDownloadLink, usePaperExport } from '@/hooks/usePapers'
 import { cn, formatDate } from '@/lib/utils'
@@ -50,6 +51,8 @@ export default function PaperDetailPage() {
   const [annotateOpen, setAnnotateOpen] = useState(false)
   const [annotateAnchor, setAnnotateAnchor] = useState<string>('')
   const [annotateSnippet, setAnnotateSnippet] = useState<string>('')
+  const [docxIncludeAnswer, setDocxIncludeAnswer] = useState(true)
+  const [docxIncludeAnalysis, setDocxIncludeAnalysis] = useState(true)
 
   useEffect(() => {
     const anchor = String(location.hash || '').replace(/^#/, '').trim()
@@ -65,14 +68,16 @@ export default function PaperDetailPage() {
     window.print()
   }
 
-  const handleExport = async (format: 'markdown' | 'pdf') => {
+  const handleExport = async (format: 'markdown' | 'pdf' | 'docx') => {
     if (!paperId) return
     try {
+      const includeAnswer = format === 'docx' ? docxIncludeAnswer : false
+      const includeAnalysis = format === 'docx' ? docxIncludeAnalysis : false
       const { taskId } = await tasksApi.exportPaperTask(paperId, {
         format,
         includeStem: true,
-        includeAnswer: false,
-        includeAnalysis: false,
+        includeAnswer,
+        includeAnalysis,
       })
       if (taskId) {
         pushToast({
@@ -88,7 +93,7 @@ export default function PaperDetailPage() {
       // Fallback: legacy export (should be rare).
       const res = await exportPaper({
         id: paperId,
-        req: { format, includeStem: true, includeAnswer: false, includeAnalysis: false },
+        req: { format, includeStem: true, includeAnswer, includeAnalysis },
       })
       const url = res.url || res.pdfUrl || res.texUrl
       if (url) {
@@ -129,7 +134,7 @@ export default function PaperDetailPage() {
         },
       })
       pushToast({ id: `wrongbook-${qid}`, title: '已加入错题本' })
-    } catch (e) {
+    } catch {
       pushToast({ id: `wrongbook-failed-${qid}`, title: '加入错题本失败' })
     }
   }
@@ -143,6 +148,14 @@ export default function PaperDetailPage() {
       groups[key].push(q)
     }
     return groups
+  }, [paper])
+
+  const sourceMode = useMemo(() => {
+    const ids = (paper?.questions || []).map((q) => String(q.questionId || '').trim()).filter(Boolean)
+    const hasDigits = ids.some((x) => /^\d+$/.test(x))
+    const hasNonDigits = ids.some((x) => x && !/^\d+$/.test(x))
+    if (hasDigits && hasNonDigits) return 'mixed'
+    return hasDigits ? 'zujuan' : 'local'
   }, [paper])
 
   if (isLoading) {
@@ -217,19 +230,50 @@ export default function PaperDetailPage() {
             )}
             导出 PDF
           </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => paperId && loadDownloadLinks(paperId)}
-            disabled={!paperId || isLoadingLinks}
-          >
-            {isLoadingLinks ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <Link2 className="h-4 w-4 mr-2" />
-            )}
-            获取链接
-          </Button>
+
+          {sourceMode === 'local' && (
+            <>
+              <div className="flex items-center gap-2 rounded-lg border px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Switch checked={docxIncludeAnswer} onCheckedChange={(v: boolean) => setDocxIncludeAnswer(Boolean(v))} />
+                  <div className="text-xs text-muted-foreground select-none">答案</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch checked={docxIncludeAnalysis} onCheckedChange={(v: boolean) => setDocxIncludeAnalysis(Boolean(v))} />
+                  <div className="text-xs text-muted-foreground select-none">解析</div>
+                </div>
+              </div>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => handleExport('docx')}
+                disabled={!paperId || isExporting}
+              >
+                {isExporting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4 mr-2" />
+                )}
+                导出 DOCX
+              </Button>
+            </>
+          )}
+
+          {sourceMode === 'zujuan' && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => paperId && loadDownloadLinks(paperId)}
+              disabled={!paperId || isLoadingLinks}
+            >
+              {isLoadingLinks ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Link2 className="h-4 w-4 mr-2" />
+              )}
+              导出到组卷网
+            </Button>
+          )}
         </div>
       </div>
 

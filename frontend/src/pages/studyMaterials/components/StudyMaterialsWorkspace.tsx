@@ -25,6 +25,8 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
     discardResumableStream,
     isLastExportFailure,
     startContinueIteration,
+    lastTaskStatus,
+    lastTaskStatusError,
     error,
     clearError,
     hasSubAgentPane,
@@ -35,6 +37,17 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
   } = controller
 
   const lastTask = activeConversation?.lastTask
+  const lastFailedStage = lastTaskStatus?.last_failed_stage || ''
+  const lastFailedStageLabel =
+    lastFailedStage === 'search'
+      ? '检索'
+      : lastFailedStage === 'aggregate'
+        ? '聚合'
+        : lastFailedStage === 'write'
+          ? '写作'
+          : lastFailedStage === 'export'
+            ? '导出'
+            : ''
   const disableMotion = messages.length >= 500
 
   return (
@@ -64,6 +77,42 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
                     </Button>
                     <Button size="sm" variant="ghost" onClick={discardResumableStream}>
                       放弃
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!isGenerating && activeConversationId && activeConversation?.status === 'failed' && lastTask?.taskId && (
+              <div className="mt-3 mb-4 rounded-xl border border-border bg-card p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-muted-foreground">
+                    任务失败{lastFailedStageLabel ? `（上次失败阶段：${lastFailedStageLabel}）` : ''}。你可以从失败阶段继续，或重新规划后续跑。
+                    {lastTaskStatusError && <div className="text-xs text-destructive mt-1">任务状态获取失败：{lastTaskStatusError}</div>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {lastFailedStage === 'search' && (
+                      <Button size="sm" onClick={() => startContinueIteration('retry_search')}>
+                        继续检索
+                      </Button>
+                    )}
+                    {(lastFailedStage === 'aggregate' || lastFailedStage === 'write') && (
+                      <Button size="sm" onClick={() => startContinueIteration('resume_failed_stage')}>
+                        继续写作
+                      </Button>
+                    )}
+                    {lastFailedStage === 'export' && (
+                      <>
+                        <Button size="sm" variant="secondary" onClick={() => startContinueIteration('fix_export')}>
+                          修复导出
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => startContinueIteration('skip_export')}>
+                          跳过导出
+                        </Button>
+                      </>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => startContinueIteration('replan_from_failure')}>
+                      重新规划
                     </Button>
                   </div>
                 </div>

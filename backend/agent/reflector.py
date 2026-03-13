@@ -65,16 +65,42 @@ class Reflector:
                 if hi or lo:
                     facts_by_kp[str(kp).strip() or "（未知知识点）"] = {"high_confidence": hi, "low_confidence": lo}
 
+        outline_verify_by_kp = {}
+        outlines_raw = context.working_memory.get("outlines")
+        if isinstance(outlines_raw, dict):
+            for kp, outline in list(outlines_raw.items())[:10]:
+                if not isinstance(outline, dict):
+                    continue
+                secs_raw = outline.get("sections")
+                if not isinstance(secs_raw, list):
+                    continue
+                secs = []
+                for sec in secs_raw[:14]:
+                    if not isinstance(sec, dict):
+                        continue
+                    title = str(sec.get("title") or "").strip()
+                    verify_raw = sec.get("verify")
+                    verify_list = (
+                        [str(x).strip() for x in verify_raw if str(x).strip()][:6] if isinstance(verify_raw, list) else []
+                    )
+                    if not title and not verify_list:
+                        continue
+                    secs.append({"title": title or "（无标题）", "verify": verify_list})
+                if secs:
+                    outline_verify_by_kp[str(kp).strip() or "（未知知识点）"] = secs
+
         prompt = (
             "请审查下面的自学资料 Markdown 是否满足：\n"
             "- 结构是否清晰（按知识点分段；讲解逻辑顺畅）\n"
-            "- 是否覆盖关键维度：动机/直观、定义/表述、性质/结论、条件/适用范围、反例/边界、常见误区、应用/题型\n"
+            "- 覆盖度：根据知识点类型尽量覆盖核心定义/直观、关键性质与条件、常见误区、应用/题型；不适用可省略，但不应遗漏核心概念解释。\n"
+            "- 若提供了 outline_verify_by_kp：以其为主要审查基准（允许合并/调整顺序/省略不适用项，但应满足 verify 的意图）。\n"
             "- 是否有明显事实/逻辑错误，或过度强断言\n"
             "- 若提供了 facts_by_kp：检查内容是否与高置信度事实矛盾；低置信度事实相关表述需用“推断/可能/建议”等措辞\n"
             "\n"
             "输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n"
             "\n"
             f"主题：{topic}\n\n"
+            f"outline_verify_by_kp（可为空）：{json.dumps(outline_verify_by_kp, ensure_ascii=False)}\n\n"
             f"facts_by_kp（可为空）：{json.dumps(facts_by_kp, ensure_ascii=False)}\n\n"
             f"Markdown:\n{markdown}\n"
         )

@@ -86,7 +86,7 @@ export async function retryTask(taskId: string): Promise<{ taskId: string }> {
 
 export async function exportPaperTask(
   paperId: number | string,
-  input: { format: 'markdown' | 'pdf' | 'latex' | 'tex'; includeStem?: boolean; includeAnswer?: boolean; includeAnalysis?: boolean }
+  input: { format: 'markdown' | 'pdf' | 'latex' | 'tex' | 'docx'; includeStem?: boolean; includeAnswer?: boolean; includeAnalysis?: boolean }
 ): Promise<{ taskId: string }> {
   const res = await apiClient.post(`/tasks/export/papers/${encodeURIComponent(String(paperId))}`, {
     format: input.format,

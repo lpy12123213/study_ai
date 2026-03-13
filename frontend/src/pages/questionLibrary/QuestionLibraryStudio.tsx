@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { QuestionFilterPane } from '@/pages/questionLibrary/QuestionFilterPane'
 import { QuestionListPane } from '@/pages/questionLibrary/QuestionListPane'
 import { QuestionDetailPane } from '@/pages/questionLibrary/QuestionDetailPane'
+import { QuestionBar } from '@/pages/questionLibrary/QuestionBar'
 import { useQuestionLibrary } from '@/pages/questionLibrary/hooks/useQuestionLibrary'
 import { useQuestionLibraryTasks } from '@/pages/questionLibrary/hooks/useQuestionLibraryTasks'
 import { CrawlDialog } from '@/pages/questionLibrary/CrawlDialog'
@@ -115,6 +116,7 @@ export function QuestionLibraryStudio() {
           </div>
         </div>
 
+        <QuestionBar />
         <RunPanel task={tasks.preferredTask} />
       </div>
 

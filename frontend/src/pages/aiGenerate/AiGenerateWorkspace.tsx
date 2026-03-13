@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -6,13 +6,16 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { useSubjects } from '@/hooks/useSubjects'
-import { bulkDeleteQuestionLibraryItems } from '@/api/questionLibrary'
+import { bulkDeleteQuestionLibraryItems, commitQuestionLibraryPreview, discardQuestionLibraryPreview, type QuestionLibraryDraftQuestion } from '@/api/questionLibrary'
 import { useQuestionLibrary } from '@/pages/questionLibrary/hooks/useQuestionLibrary'
 import { useQuestionLibraryTasks } from '@/pages/questionLibrary/hooks/useQuestionLibraryTasks'
 import { QuestionLibraryCard } from '@/pages/questionLibrary/QuestionLibraryCard'
 import { QuestionDetailDialog } from '@/pages/questionLibrary/QuestionDetailDialog'
+import { QuestionBar } from '@/pages/questionLibrary/QuestionBar'
 import { RunPanel } from '@/pages/questionLibrary/RunPanel'
+import { useToastStore } from '@/stores/useToastStore'
 
 const DIFFICULTY_ANY = '__any__'
 
@@ -47,6 +50,30 @@ export function AiGenerateWorkspace() {
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({})
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const [bulkError, setBulkError] = useState<string | null>(null)
+
+  const pushToast = useToastStore((s) => s.pushToast)
+
+  const [draftQuestions, setDraftQuestions] = useState<QuestionLibraryDraftQuestion[]>([])
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [isCommitting, setIsCommitting] = useState(false)
+  const [isDiscarding, setIsDiscarding] = useState(false)
+
+  const previewId = String(tasks.draftPreview?.previewId || '').trim()
+
+  useEffect(() => {
+    if (!tasks.draftPreview) {
+      setDraftQuestions([])
+      setPreviewError(null)
+      return
+    }
+    setDraftQuestions(
+      (tasks.draftPreview.draftQuestions || []).map((q) => ({
+        ...q,
+        keep: q.keep === false ? false : true,
+      }))
+    )
+    setPreviewError(null)
+  }, [tasks.draftPreview])
 
   const selectedCount = useMemo(() => {
     return Object.values(selectedIds).filter(Boolean).length
@@ -143,6 +170,55 @@ export function AiGenerateWorkspace() {
     }
   }
 
+  const commitPreview = async () => {
+    if (!previewId) return
+    if (isCommitting) return
+    const kept = draftQuestions.filter((q) => q.keep)
+    if (kept.length === 0) {
+      setPreviewError('请至少选择 1 道题入库')
+      return
+    }
+
+    setIsCommitting(true)
+    setPreviewError(null)
+    try {
+      const res = await commitQuestionLibraryPreview(previewId, draftQuestions)
+      pushToast({
+        id: `ql-preview-commit-${previewId}`,
+        title: `已入库 ${Number(res.inserted || 0)} 道题`,
+        status: 'completed',
+      })
+      tasks.clearDraftPreview()
+      await lib.refreshList()
+      await lib.refreshDetail()
+    } catch (err: any) {
+      setPreviewError(err?.message || '入库失败')
+      pushToast({ id: `ql-preview-commit-failed-${previewId}`, title: '入库失败', status: 'failed' })
+    } finally {
+      setIsCommitting(false)
+    }
+  }
+
+  const discardPreview = async () => {
+    if (!previewId) return
+    if (isDiscarding) return
+    const ok = confirm('确定要丢弃本次生成的草稿吗？')
+    if (!ok) return
+
+    setIsDiscarding(true)
+    setPreviewError(null)
+    try {
+      await discardQuestionLibraryPreview(previewId)
+      pushToast({ id: `ql-preview-discard-${previewId}`, title: '草稿已丢弃', status: 'completed' })
+      tasks.clearDraftPreview()
+    } catch (err: any) {
+      setPreviewError(err?.message || '丢弃失败')
+      pushToast({ id: `ql-preview-discard-failed-${previewId}`, title: '丢弃失败', status: 'failed' })
+    } finally {
+      setIsDiscarding(false)
+    }
+  }
+
   return (
     <div className="h-full w-full flex flex-col overflow-hidden">
       <div className="px-6 py-4 border-b bg-background">
@@ -150,7 +226,7 @@ export function AiGenerateWorkspace() {
           <div className="min-w-0">
             <div className="text-lg font-semibold tracking-tight">AI 出题</div>
             <div className="text-xs text-muted-foreground">
-              根据学科与知识点生成题目（含答案与解析），并自动入库。
+              根据学科与知识点生成题目（含答案与解析）；生成后进入预览审核，通过后再入库。
             </div>
           </div>
         </div>
@@ -240,6 +316,112 @@ export function AiGenerateWorkspace() {
               </CardContent>
             </Card>
 
+            {tasks.draftPreview && (
+              <Card className="border-primary/20">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <CardTitle className="text-base">待审核草稿</CardTitle>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {tasks.draftPreview.subject} · {tasks.draftPreview.topic} · {tasks.draftPreview.count} 题 · {tasks.draftPreview.previewId}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isCommitting || isDiscarding}
+                        onClick={discardPreview}
+                      >
+                        {isDiscarding ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                        丢弃
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="default"
+                        size="sm"
+                        disabled={isCommitting || isDiscarding || draftQuestions.filter((q) => q.keep).length === 0}
+                        onClick={commitPreview}
+                      >
+                        {isCommitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                        入库选中 ({draftQuestions.filter((q) => q.keep).length})
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {previewError && <div className="text-sm text-destructive">{previewError}</div>}
+
+                  <div className="space-y-4">
+                    {draftQuestions.map((q, idx) => (
+                      <div key={q.question_id} className="rounded-lg border p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium">
+                            #{idx + 1} · {q.question_id}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-xs text-muted-foreground select-none">{q.keep ? '保留' : '丢弃'}</div>
+                            <Switch
+                              checked={Boolean(q.keep)}
+                              onCheckedChange={(v: boolean) => {
+                                const keep = Boolean(v)
+                                setDraftQuestions((prev) =>
+                                  prev.map((it) => (it.question_id === q.question_id ? { ...it, keep } : it))
+                                )
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="md:col-span-3">
+                            <div className="text-xs text-muted-foreground mb-2">题干</div>
+                            <Textarea
+                              value={q.stem}
+                              onChange={(e) => {
+                                const stem = e.target.value
+                                setDraftQuestions((prev) =>
+                                  prev.map((it) => (it.question_id === q.question_id ? { ...it, stem } : it))
+                                )
+                              }}
+                              className="min-h-[92px]"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground mb-2">答案</div>
+                            <Textarea
+                              value={q.answer}
+                              onChange={(e) => {
+                                const answer = e.target.value
+                                setDraftQuestions((prev) =>
+                                  prev.map((it) => (it.question_id === q.question_id ? { ...it, answer } : it))
+                                )
+                              }}
+                              className="min-h-[92px]"
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <div className="text-xs text-muted-foreground mb-2">解析</div>
+                            <Textarea
+                              value={q.analysis}
+                              onChange={(e) => {
+                                const analysis = e.target.value
+                                setDraftQuestions((prev) =>
+                                  prev.map((it) => (it.question_id === q.question_id ? { ...it, analysis } : it))
+                                )
+                              }}
+                              className="min-h-[92px]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="text-sm font-medium">最近 AI 题目</div>
@@ -320,6 +502,7 @@ export function AiGenerateWorkspace() {
         </ScrollArea>
       </div>
 
+      <QuestionBar />
       <RunPanel task={tasks.preferredTask} />
 
       <QuestionDetailDialog

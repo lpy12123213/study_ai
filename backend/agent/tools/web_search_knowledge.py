@@ -35,7 +35,13 @@ class WebSearchKnowledgeToolsMixin:
         limit = max(1, min(limit, 25))
         query_hint = str(args.get("query_hint") or "").strip()
         scope = str(args.get("scope") or "webpage").strip() or "webpage"
-        include_summary = bool(args.get("include_summary", True))
+        include_summary_raw = args.get("include_summary")
+        if include_summary_raw is None:
+            include_summary = False
+        elif isinstance(include_summary_raw, bool):
+            include_summary = include_summary_raw
+        else:
+            include_summary = str(include_summary_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
         text_max_length = int(args.get("text_max_length") or 2600)
         text_max_length = max(200, min(text_max_length, 8000))
         strict_llm = self._strict_llm(ctx, args)
@@ -74,6 +80,15 @@ class WebSearchKnowledgeToolsMixin:
             if not raw:
                 return default
             return raw in {"1", "true", "yes", "y", "on"}
+
+        def _normalize_result(r: Dict[str, Any], *, provider: str, source_query: str) -> Dict[str, Any]:
+            rr = dict(r or {})
+            if source_query:
+                rr.setdefault("source_query", source_query)
+            pr = _postprocess_web_search_result(rr)
+            if provider:
+                pr.setdefault("provider", provider)
+            return pr
 
         disable_metaso_raw = args.get("disable_metaso")
         if disable_metaso_raw is None:
@@ -450,19 +465,33 @@ class WebSearchKnowledgeToolsMixin:
                                 prev_summary=prev_summary,
                             )
                             if isinstance(deep, dict) and deep.get("success") and deep.get("results"):
+                                provider_value = str(deep.get("provider") or "exa-deepresearch")
+                                query_value = str(deep.get("query") or query or base_query).strip()
+
                                 results_value = deep.get("results") if isinstance(deep.get("results"), list) else []
+                                cleaned_results: List[Dict[str, Any]] = []
+                                for r in results_value:
+                                    if not isinstance(r, dict):
+                                        continue
+                                    cleaned_results.append(
+                                        _normalize_result(
+                                            r,
+                                            provider=provider_value,
+                                            source_query=str(r.get("source_query") or query_value).strip(),
+                                        )
+                                    )
                                 out: Dict[str, Any] = {
                                     "knowledge_point": point,
                                     "base_query": base_query,
-                                    "query": str(deep.get("query") or query or base_query).strip(),
+                                    "query": query_value,
                                     "queries": list(deep.get("queries") or [])[:40],
-                                    "provider": str(deep.get("provider") or "exa-deepresearch"),
+                                    "provider": provider_value,
                                     "scope": scope,
                                     "include_summary": bool(
                                         deep.get("include_summary") if "include_summary" in deep else include_summary
                                     ),
                                     "summary": str(deep.get("summary") or "").strip(),
-                                    "results": results_value[:keep_sources],
+                                    "results": cleaned_results[:keep_sources],
                                     "learnings": list(deep.get("learnings") or [])[:40],
                                     "directions": list(deep.get("directions") or [])[:12],
                                     "errors": list(deep.get("errors") or [])[:6],
@@ -477,6 +506,7 @@ class WebSearchKnowledgeToolsMixin:
                         if decompose is None:
                             decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
                         decompose = bool(decompose)
+                        provider_value = "exa-search+decompose" if decompose else "exa-search"
 
                         sub_questions = [query]
                         if decompose:
@@ -556,9 +586,7 @@ class WebSearchKnowledgeToolsMixin:
                             for r in raw_results:
                                 if not isinstance(r, dict):
                                     continue
-                                rr = dict(r)
-                                rr.setdefault("source_query", sub_q)
-                                pr = _postprocess_web_search_result(rr)
+                                pr = _normalize_result(r, provider=provider_value, source_query=sub_q)
                                 cleaned_results.append(pr)
                                 this_results.append(pr)
 
@@ -594,7 +622,7 @@ class WebSearchKnowledgeToolsMixin:
                                 "base_query": base_query,
                                 "query": query,
                                 "queries": queries[:12],
-                                "provider": "exa-search+decompose" if decompose else "exa-search",
+                                "provider": provider_value,
                                 "scope": scope,
                                 "include_summary": include_summary,
                                 "summary": summary_value,
@@ -605,19 +633,19 @@ class WebSearchKnowledgeToolsMixin:
                             return {k: v for k, v in out.items() if v not in ("", None, [], {})}
 
                         # If Exa failed completely, fall through to Metaso
-                        if errors:
-                            if force_search_mode:
-                                return {
-                                    "knowledge_point": point,
-                                    "base_query": base_query,
-                                    "query": query,
-                                    "queries": queries[:12],
-                                    "provider": "exa-search+decompose" if decompose else "exa-search",
-                                    "scope": scope,
-                                    "include_summary": include_summary,
-                                    "results": [],
-                                    "errors": errors[:6],
-                                    "error": "exa_search_failed",
+                            if errors:
+                                if force_search_mode:
+                                    return {
+                                        "knowledge_point": point,
+                                        "base_query": base_query,
+                                        "query": query,
+                                        "queries": queries[:12],
+                                        "provider": provider_value,
+                                        "scope": scope,
+                                        "include_summary": include_summary,
+                                        "results": [],
+                                        "errors": errors[:6],
+                                        "error": "exa_search_failed",
                                 }
 
                             if not disable_metaso:
@@ -659,6 +687,7 @@ class WebSearchKnowledgeToolsMixin:
                     if decompose is None:
                         decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
                     decompose = bool(decompose)
+                    provider_value = "metaso-ask+decompose" if decompose else "metaso-ask"
 
                     # How many sources to keep overall (not per sub-question)
                     keep_sources = _clamp_int(
@@ -767,7 +796,7 @@ class WebSearchKnowledgeToolsMixin:
                         for r in res.get("results") or []:
                             if not isinstance(r, dict):
                                 continue
-                            cleaned_results.append(_postprocess_web_search_result(r))
+                            cleaned_results.append(_normalize_result(r, provider=provider_value, source_query=sub_q))
 
                     # Deduplicate results by URL and keep bounded.
                     deduped: List[Dict[str, Any]] = []
@@ -791,7 +820,7 @@ class WebSearchKnowledgeToolsMixin:
                         "base_query": base_query,
                         "query": base_query,
                         "queries": queries[:12],
-                        "provider": "metaso-ask+decompose" if decompose else "metaso-ask",
+                        "provider": provider_value,
                         "scope": scope,
                         "include_summary": include_summary,
                         "summary": summary_value,
@@ -809,7 +838,7 @@ class WebSearchKnowledgeToolsMixin:
                     for r in metaso.get("results") or []:
                         if not isinstance(r, dict):
                             continue
-                        cleaned_results.append(_postprocess_web_search_result(r))
+                        cleaned_results.append(_normalize_result(r, provider="metaso", source_query=query))
                     cleaned_results = cleaned_results[: max(1, limit)]
 
                     summary_value = str(metaso.get("summary") or "").strip()
@@ -832,17 +861,18 @@ class WebSearchKnowledgeToolsMixin:
 
                 zhipu = await web_search_with_bigmodel_mcp(query=query, limit=limit)
                 if isinstance(zhipu, dict) and zhipu.get("success") and zhipu.get("results"):
+                    provider_value = str(zhipu.get("provider") or "zhipu-bigmodel-mcp-web-search")
                     cleaned_results: List[Dict[str, Any]] = []
                     for r in zhipu.get("results") or []:
                         if not isinstance(r, dict):
                             continue
-                        cleaned_results.append(_postprocess_web_search_result(r))
+                        cleaned_results.append(_normalize_result(r, provider=provider_value, source_query=query))
                     return {
                         "knowledge_point": point,
                         "base_query": base_query,
                         "query": query,
                         "queries": [query],
-                        "provider": str(zhipu.get("provider") or "zhipu-bigmodel-mcp-web-search"),
+                        "provider": provider_value,
                         "scope": scope,
                         "include_summary": include_summary,
                         "results": cleaned_results[: max(1, limit)],

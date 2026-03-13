@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,8 +14,11 @@ from fastapi.responses import StreamingResponse
 from backend.api.auth import require_auth
 from backend.api.question_library_schemas import (
     QuestionLibraryBulkDeleteRequest,
+    QuestionLibraryCommitPreviewRequest,
     QuestionLibraryCrawlRequest,
     QuestionLibraryGenerateRequest,
+    QuestionLibraryPreviewResponse,
+    QuestionLibraryCommitPreviewResponse,
     QuestionLibraryScoreRequest,
 )
 from backend.core.llm_client import is_llm_configured
@@ -31,7 +35,17 @@ from backend.database.models import (
     upsert_question_cache,
     upsert_question_library_items,
 )
+from backend.database.repositories.tasks import (
+    append_task_event as db_append_task_event,
+)
+from backend.database.repositories.tasks import (
+    update_task_status as db_update_task_status,
+)
+from backend.database.repositories.tasks import (
+    upsert_task as db_upsert_task,
+)
 from backend.question_library.generation import build_ai_question_id, build_source_pack, generate_questions
+from backend.question_library.preview_store import delete_preview, load_preview, new_preview_id, save_preview
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
 from backend.question_library.task_manager import QuestionLibraryTask, QuestionLibraryTaskManager
 
@@ -253,6 +267,139 @@ async def stream_task(
     if not task or task.user_id != user_id:
         raise HTTPException(status_code=404, detail="task_not_found")
     return await _stream_task(task.task_id, after_seq=after_seq)
+
+
+@router.get("/previews/{preview_id}", response_model=QuestionLibraryPreviewResponse)
+async def get_preview(preview_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    pid = str(preview_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="missing_preview_id")
+
+    obj = load_preview(pid)
+    if not obj or str(obj.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="preview_not_found")
+
+    drafts = obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else []
+    return {
+        "success": True,
+        "preview_id": pid,
+        "subject": str(obj.get("subject") or "").strip(),
+        "topic": str(obj.get("topic") or "").strip(),
+        "count": len(drafts),
+        "draft_questions": drafts,
+    }
+
+
+@router.post("/previews/{preview_id}/commit", response_model=QuestionLibraryCommitPreviewResponse)
+async def commit_preview(
+    preview_id: str, request: QuestionLibraryCommitPreviewRequest, user: dict = Depends(require_auth)
+) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    pid = str(preview_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="missing_preview_id")
+
+    obj = load_preview(pid)
+    if not obj or str(obj.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="preview_not_found")
+
+    status = str(obj.get("status") or "").strip().lower()
+    if status == "committed":
+        raise HTTPException(status_code=409, detail="preview_already_committed")
+
+    subject = str(obj.get("subject") or "").strip()
+    topic = str(obj.get("topic") or "").strip()
+    difficulty = str(obj.get("difficulty") or "").strip()
+    question_type = str(obj.get("question_type") or "").strip()
+
+    preview_items = obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else []
+    preview_by_id: dict[str, dict] = {}
+    for it in preview_items:
+        if not isinstance(it, dict):
+            continue
+        qid = str(it.get("question_id") or "").strip()
+        if qid:
+            preview_by_id[qid] = dict(it)
+
+    accepted_payload = []
+    inserted_ids: list[str] = []
+    for q in request.questions or []:
+        qid = str(q.question_id or "").strip()
+        if not qid or not q.keep:
+            continue
+        if qid not in preview_by_id:
+            continue
+        stem = str(q.stem or "").strip()
+        answer = str(q.answer or "").strip()
+        analysis = str(q.analysis or "").strip()
+        if not stem or not answer or not analysis:
+            continue
+        inserted_ids.append(qid)
+        accepted_payload.append(
+            {
+                "question_id": qid,
+                "subject": subject,
+                "question_type": question_type,
+                "difficulty": difficulty,
+                "knowledge_point": topic,
+                "source_url": "",
+                "stem": stem,
+                "answer": answer,
+                "analysis": analysis,
+            }
+        )
+
+    if not accepted_payload:
+        raise HTTPException(status_code=400, detail="no_questions_selected")
+
+    await upsert_question_cache(accepted_payload)
+    await upsert_question_library_items(
+        user_id=user_id,
+        items=[{"question_id": qid, "subject": subject, "origin": "ai"} for qid in inserted_ids],
+    )
+
+    obj = dict(obj)
+    obj["status"] = "committed"
+    obj["committed_at_s"] = time.time()
+    obj["committed"] = {
+        "inserted": len(inserted_ids),
+        "question_ids": inserted_ids,
+    }
+    save_preview(obj)
+
+    return {
+        "success": True,
+        "preview_id": pid,
+        "inserted": len(inserted_ids),
+        "subject": subject,
+        "count": len(inserted_ids),
+        "question_ids": inserted_ids,
+    }
+
+
+@router.post("/previews/{preview_id}/discard", response_model=dict)
+async def discard_preview(preview_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    pid = str(preview_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="missing_preview_id")
+
+    obj = load_preview(pid)
+    if not obj or str(obj.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="preview_not_found")
+
+    ok = delete_preview(pid)
+    return {"success": bool(ok)}
 
 
 @router.post("/crawl")
@@ -481,9 +628,60 @@ async def generate_and_save(
     task_id = (request.task_id or "").strip() or f"ql_gen_{uuid.uuid4().hex[:12]}"
     use_archive = bool(request.use_study_archive)
 
+    started_at = datetime.utcnow()
+    await db_upsert_task(
+        user_id=user_id,
+        task_id=task_id,
+        task_type="question_library_generate",
+        title=f"AI 出题：{subject} {topic}".strip(),
+        status="running",
+        progress=0.0,
+        request=request.model_dump(),
+        started_at=started_at,
+    )
+
     async def runner_factory(task: QuestionLibraryTask) -> None:
+        def _now_iso() -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        async def _emit_progress(progress: float, stage: str) -> None:
+            payload = {"progress": float(progress), "stage": str(stage or "").strip()}
+            await _tasks.append_event(task, {"type": "progress", "data": payload})
+            try:
+                await db_append_task_event(
+                    user_id=user_id,
+                    task_id=task_id,
+                    event_type="progress",
+                    payload=payload,
+                    progress=float(progress),
+                )
+            except Exception:
+                pass
+
+        async def _emit_step(step: dict) -> None:
+            await _tasks.append_event(task, {"type": "step", "step": step})
+            try:
+                await db_append_task_event(user_id=user_id, task_id=task_id, event_type="step", payload={"step": step})
+            except Exception:
+                pass
+
+        async def _emit_thinking(stage: str, content: str) -> None:
+            t = _now_iso()
+            await _emit_step(
+                {
+                    "id": f"thinking:{stage}:{uuid.uuid4().hex[:8]}",
+                    "title": f"思考：{stage}",
+                    "status": "completed",
+                    "toolName": "thinking",
+                    "startTime": t,
+                    "endTime": t,
+                    "output": str(content or "").strip(),
+                }
+            )
+
         try:
-            await _tasks.append_event(task, {"type": "progress", "data": {"progress": 5, "stage": "SourcePack"}})
+            await _emit_progress(5, "SourcePack")
+            await _emit_thinking("SourcePack", "整理出题上下文，构建一个包含主题/难度/题型约束的素材包。")
 
             study_markdown = ""
             if use_archive:
@@ -495,7 +693,8 @@ async def generate_and_save(
                     study_markdown = str(archive.get("markdown") or "")
 
             source_pack = await build_source_pack(study_markdown, subject, topic)
-            await _tasks.append_event(task, {"type": "progress", "data": {"progress": 20, "stage": "Spec Search"}})
+            await _emit_progress(20, "Spec Search")
+            await _emit_thinking("Spec Search", "为本次出题生成规格与候选方向，确保覆盖目标知识点并匹配难度与题型。")
 
             finals = await generate_questions(
                 source_pack=source_pack,
@@ -504,100 +703,122 @@ async def generate_and_save(
                 question_type=question_type,
                 config=None,
             )
-            await _tasks.append_event(
-                task, {"type": "progress", "data": {"progress": 55, "stage": "Draft Realization"}}
-            )
+            await _emit_progress(55, "Draft Realization")
+            await _emit_thinking("Draft Realization", "生成题目草稿（题干/答案/解析），并做基本一致性检查。")
 
             # Skeleton stages (solver/judge) are currently no-ops but we still emit them for UI.
-            await _tasks.append_event(task, {"type": "progress", "data": {"progress": 70, "stage": "Solver"}})
-            await _tasks.append_event(task, {"type": "progress", "data": {"progress": 80, "stage": "Judge"}})
-            await _tasks.append_event(task, {"type": "progress", "data": {"progress": 85, "stage": "Save"}})
+            await _emit_progress(80, "Judge")
+            await _emit_thinking("Judge", "检查题目可解性与答案/解析自洽性；不确定处保守表述，避免误导。")
 
-            saved_ids: list[str] = []
-            for idx, q in enumerate(finals[:count], start=1):
+            drafts: list[dict] = []
+            for q in finals[:count]:
                 if task.status != "running":
                     break
                 if not isinstance(q, dict):
                     continue
-
                 stem = str(q.get("stem") or "").strip()
                 answer = str(q.get("answer") or "").strip()
                 analysis = str(q.get("analysis") or "").strip()
                 if not stem or not answer or not analysis:
                     continue
-
                 qid = build_ai_question_id(suffix=uuid.uuid4().hex[:8])
-
-                await upsert_question_cache(
-                    [
-                        {
-                            "question_id": qid,
-                            "subject": subject,
-                            "question_type": question_type,
-                            "difficulty": difficulty,
-                            "knowledge_point": topic,
-                            "source_url": "",
-                            "stem": stem,
-                            "answer": answer,
-                            "analysis": analysis,
-                        }
-                    ]
-                )
-                await upsert_question_library_items(
-                    user_id=user_id,
-                    items=[{"question_id": qid, "subject": subject, "origin": "ai"}],
-                )
-
-                saved_ids.append(qid)
-                await _tasks.append_event(
-                    task,
+                drafts.append(
                     {
-                        "type": "item_saved",
-                        "data": {
-                            "item": {
-                                "question_id": qid,
-                                "subject": subject,
-                                "origin": "ai",
-                                "hidden": False,
-                                "stem": stem,
-                                "ai_score": None,
-                                "ai_verdict": "",
-                                "ai_summary": "",
-                            }
-                        },
-                    },
+                        "question_id": qid,
+                        "stem": stem,
+                        "answer": answer,
+                        "analysis": analysis,
+                        "keep": True,
+                    }
                 )
 
-                pct = 85 + int((idx / max(1, count)) * 13)
-                await _tasks.append_event(
-                    task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Save"}}
-                )
-
-            if not saved_ids:
+            if not drafts:
                 raise RuntimeError("no_questions_generated")
 
-            await _tasks.append_event(
-                task,
+            await _emit_progress(92, "Pending Review")
+            await _emit_thinking("Pending Review", "题目草稿已生成，进入预览审核；审核通过后才会写入本地题库。")
+
+            preview_id = new_preview_id()
+            save_preview(
                 {
-                    "type": "done",
-                    "data": {
-                        "success": True,
-                        "inserted": len(saved_ids),
-                        "subject": subject,
-                        "count": len(saved_ids),
-                        "question_ids": saved_ids,
-                    },
-                },
+                    "preview_id": preview_id,
+                    "status": "pending_review",
+                    "user_id": user_id,
+                    "task_id": task_id,
+                    "subject": subject,
+                    "topic": topic,
+                    "difficulty": difficulty,
+                    "question_type": question_type,
+                    "draft_questions": drafts,
+                }
             )
+
+            done_payload = {
+                "success": True,
+                "preview_id": preview_id,
+                "subject": subject,
+                "topic": topic,
+                "count": len(drafts),
+                "draft_questions": drafts,
+            }
+            await _tasks.append_event(task, {"type": "done", "data": done_payload})
+            try:
+                await db_append_task_event(user_id=user_id, task_id=task_id, event_type="done", payload=done_payload)
+                await db_update_task_status(
+                    user_id=user_id,
+                    task_id=task_id,
+                    status="completed",
+                    progress=100.0,
+                    result={"preview_id": preview_id, "subject": subject, "topic": topic, "count": len(drafts)},
+                    ended_at=datetime.utcnow(),
+                )
+            except Exception:
+                pass
             await _tasks.complete_task(task)
         except asyncio.CancelledError:
             await _tasks.fail_task(task, "Task cancelled")
+            try:
+                await db_update_task_status(
+                    user_id=user_id,
+                    task_id=task_id,
+                    status="canceled",
+                    error={"message": "Task cancelled"},
+                    ended_at=datetime.utcnow(),
+                )
+            except Exception:
+                pass
             raise
         except Exception as exc:  # pragma: no cover
             await _tasks.fail_task(task, str(exc))
+            try:
+                await db_append_task_event(
+                    user_id=user_id,
+                    task_id=task_id,
+                    event_type="error",
+                    payload={"error": {"message": str(exc)}},
+                )
+                await db_update_task_status(
+                    user_id=user_id,
+                    task_id=task_id,
+                    status="failed",
+                    error={"message": str(exc)},
+                    ended_at=datetime.utcnow(),
+                )
+            except Exception:
+                pass
         finally:
             if task.status == "running":
                 await _tasks.fail_task(task, "Task ended unexpectedly")
+                try:
+                    await db_update_task_status(
+                        user_id=user_id,
+                        task_id=task_id,
+                        status="failed",
+                        error={"message": "Task ended unexpectedly"},
+                        ended_at=datetime.utcnow(),
+                    )
+                except Exception:
+                    pass
 
     task = await _tasks.create_task(
         task_id=task_id,

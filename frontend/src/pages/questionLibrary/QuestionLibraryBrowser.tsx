@@ -7,6 +7,7 @@ import { CrawlDialog } from '@/pages/questionLibrary/CrawlDialog'
 import { QuestionDetailDialog } from '@/pages/questionLibrary/QuestionDetailDialog'
 import { QuestionLibraryCard } from '@/pages/questionLibrary/QuestionLibraryCard'
 import { QuestionLibraryFilterBar } from '@/pages/questionLibrary/QuestionLibraryFilterBar'
+import { QuestionBar } from '@/pages/questionLibrary/QuestionBar'
 import { RunPanel } from '@/pages/questionLibrary/RunPanel'
 import { useQuestionLibrary } from '@/pages/questionLibrary/hooks/useQuestionLibrary'
 import { useQuestionLibraryTasks } from '@/pages/questionLibrary/hooks/useQuestionLibraryTasks'
@@ -240,6 +241,7 @@ export function QuestionLibraryBrowser() {
         )}
       </div>
 
+      <QuestionBar />
       <RunPanel task={tasks.preferredTask} />
 
       <CrawlDialog

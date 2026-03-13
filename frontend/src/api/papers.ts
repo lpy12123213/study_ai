@@ -30,7 +30,7 @@ export interface PaperDownloadLink {
 }
 
 export interface PaperExportRequest {
-  format: 'markdown' | 'latex' | 'pdf'
+  format: 'markdown' | 'latex' | 'pdf' | 'docx'
   includeStem?: boolean
   includeAnswer?: boolean
   includeAnalysis?: boolean

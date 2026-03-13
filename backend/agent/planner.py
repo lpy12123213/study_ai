@@ -289,7 +289,7 @@ class Planner:
         steps: List[PlanStep] = [
             PlanStep(
                 id=sid("web_search_knowledge"),
-                title="联网搜索知识点（报告型摘要）",
+                title="联网搜索知识点（网址结果）",
                 tool="web_search_knowledge",
                 arguments={
                     "topic": topic,
@@ -298,7 +298,7 @@ class Planner:
                     "text_max_length": 6000,
                     "query_hint": "定义 概念 直观理解 性质 定理 证明 误区 应用",
                     "scope": "webpage",
-                    "include_summary": True,
+                    "include_summary": False,
                     "concurrency": 3,
                     # SubAgent behavior: decompose the knowledge point into smaller questions before asking.
                     "decompose": True,
@@ -308,7 +308,7 @@ class Planner:
                 },
                 foreach_knowledge_point=True,
                 parallel_group=retrieve_pg,
-                thought="为每个知识点检索可用讲解资料，并获取一段 summary 作为“报告型梳理”（概念为主）。",
+                thought="为每个知识点检索可用讲解资料，优先返回可点击的搜索结果链接（概念为主）。",
             ),
         ]
 
@@ -326,7 +326,7 @@ class Planner:
                         "text_max_length": 6000,
                         "query_hint": "充分必要条件 等价表述 证明 推导 反例 边界条件 易错点 常见错误",
                         "scope": "webpage",
-                        "include_summary": True,
+                        "include_summary": False,
                         "concurrency": 3,
                         "decompose": True,
                         "sub_questions": sub_q_pass2,
@@ -350,7 +350,7 @@ class Planner:
                         "text_max_length": 6000,
                         "query_hint": "应用场景 典型问题 常见问法 直观图像 题型 关键步骤",
                         "scope": "webpage",
-                        "include_summary": True,
+                        "include_summary": False,
                         "concurrency": 3,
                         "decompose": True,
                         "sub_questions": sub_q_pass3,
@@ -1312,13 +1312,13 @@ class Planner:
         if "browse_web_pages" in allowed_tools:
             notes.extend(
                 [
-                    "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（include_summary=true；query_hint 覆盖：定义/性质/证明/应用/误区），必要时再追加轮次或调用 browse_web_pages 提取网页正文摘录。",
+                    "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（默认 result-first；query_hint 覆盖：定义/性质/证明/应用/误区），必要时再追加轮次或调用 browse_web_pages 提取网页正文摘录。",
                     "可选来源：对关键知识点可补充 stackexchange_search（问答解释/易错）、github_search（笔记/教程仓库）、mediawiki_search（Wikibooks/ProofWiki 等）。",
                 ]
             )
         else:
             notes.append(
-                "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（include_summary=true；query_hint 覆盖：定义/性质/证明/应用/误区）；来源不足时再追加轮次。"
+                "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（默认 result-first；query_hint 覆盖：定义/性质/证明/应用/误区）；来源不足时再追加轮次。"
             )
         prompt = {
             "task": topic,
