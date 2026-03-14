@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { normalizeSseEnvelope, type SseEnvelope } from '@/lib/sse'
 import { generateId } from '@/lib/utils'
 import { fetchSSE } from '@/api/client'
+import { taskEventToStep } from '@/components/task/taskEventAdapter'
 import { useTaskStore } from '@/stores/useTaskStore'
 import {
   crawlQuestions,
   generateQuestions,
+  getLatestPendingQuestionLibraryPreview,
   type QuestionLibraryDraftQuestion,
   type CrawlQuestionsPayload,
   type GenerateQuestionsPayload,
@@ -14,7 +16,6 @@ import {
   type QuestionLibraryListResponse,
   type ScoreQuestionLibraryBatchPayload,
 } from '@/api/questionLibrary'
-import type { TaskStep } from '@/types'
 import type { QuestionLibraryFilters } from '@/pages/questionLibrary/hooks/useQuestionLibrary'
 
 export type QuestionLibraryTaskKind = 'crawl' | 'generate' | 'score'
@@ -36,10 +37,6 @@ export interface QuestionLibraryDraftPreview {
   count: number
   draftQuestions: QuestionLibraryDraftQuestion[]
   taskId: string
-}
-
-function nowIso(): string {
-  return new Date().toISOString()
 }
 
 function coerceNumber(value: unknown): number | null {
@@ -71,8 +68,9 @@ function shouldIncludeItem(item: any, filters: QuestionLibraryFilters): boolean 
 export function useQuestionLibraryTasks(options: {
   filters: QuestionLibraryFilters
   onDone?: () => void
+  restoreLatestPreview?: boolean
 }) {
-  const { filters, onDone } = options
+  const { filters, onDone, restoreLatestPreview = false } = options
   const queryClient = useQueryClient()
 
   const { startTask, addStep, updateStep, completeTask, failTask, getTaskSteps } = useTaskStore()
@@ -80,8 +78,8 @@ export function useQuestionLibraryTasks(options: {
   const [tasks, setTasks] = useState<QuestionLibraryTaskMeta[]>([])
   const [draftPreview, setDraftPreview] = useState<QuestionLibraryDraftPreview | null>(null)
 
-  const stageByTaskIdRef = useRef<Record<string, string>>({})
   const seenStepIdsRef = useRef<Record<string, Record<string, boolean>>>({})
+  const restoreAttemptedRef = useRef(false)
 
   const clearDraftPreview = useCallback(() => setDraftPreview(null), [])
 
@@ -159,11 +157,14 @@ export function useQuestionLibraryTasks(options: {
       if (seq && seq > 0) upsertTask({ taskId: id, lastSeq: seq })
 
       const payload = (env.data || {}) as any
-
-      if (env.type === 'step' && payload?.step) {
-        const step = payload.step as TaskStep
-        if (!step?.id) return
-
+      const step = taskEventToStep({
+        taskId: id,
+        seq: seq || 0,
+        type: String(env.type || ''),
+        data: payload,
+        created_at: env.created_at,
+      })
+      if (step?.id) {
         const seenForTask = (seenStepIdsRef.current[id] ||= {})
         if (seenForTask[step.id]) {
           updateStep(id, step.id, step)
@@ -171,40 +172,16 @@ export function useQuestionLibraryTasks(options: {
           seenForTask[step.id] = true
           addStep(id, step)
         }
-        return
       }
 
       if (env.type === 'progress') {
         const progress = coerceNumber(payload?.progress)
-        const stage = typeof payload?.stage === 'string' ? payload.stage.trim() : ''
+        const stage =
+          (typeof payload?.stage_label === 'string' && payload.stage_label.trim()) ||
+          (typeof payload?.stage === 'string' && payload.stage.trim()) ||
+          ''
         if (typeof progress === 'number') upsertTask({ taskId: id, progress })
-        if (stage) {
-          upsertTask({ taskId: id, stage })
-
-          const prevStage = stageByTaskIdRef.current[id] || ''
-          if (prevStage && prevStage !== stage) {
-            updateStep(id, `stage:${prevStage}`, { status: 'completed', endTime: nowIso() })
-          }
-
-          if (!prevStage || prevStage !== stage) {
-            stageByTaskIdRef.current[id] = stage
-            const seenForTask = (seenStepIdsRef.current[id] ||= {})
-            const stepId = `stage:${stage}`
-            const step: TaskStep = {
-              id: stepId,
-              title: stage,
-              status: 'running',
-              toolName: 'question_library',
-              startTime: nowIso(),
-            }
-            if (seenForTask[stepId]) {
-              updateStep(id, stepId, step)
-            } else {
-              seenForTask[stepId] = true
-              addStep(id, step)
-            }
-          }
-        }
+        if (stage) upsertTask({ taskId: id, stage })
         return
       }
 
@@ -335,6 +312,39 @@ export function useQuestionLibraryTasks(options: {
     const running = tasks.find((t) => t.status === 'running')
     return running || tasks[0] || null
   }, [tasks])
+
+  useEffect(() => {
+    if (!restoreLatestPreview || draftPreview || restoreAttemptedRef.current) return
+    restoreAttemptedRef.current = true
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const resp = await getLatestPendingQuestionLibraryPreview()
+        if (cancelled || !resp?.preview) return
+
+        const drafts = normalizeDraftQuestions(resp.preview.draft_questions)
+        if (drafts.length === 0) return
+
+        const taskId = String(resp.preview.task_id || '').trim() || `ql-preview-${resp.preview.preview_id}`
+        setDraftPreview({
+          previewId: String(resp.preview.preview_id || '').trim(),
+          subject: String(resp.preview.subject || '').trim(),
+          topic: String(resp.preview.topic || '').trim(),
+          count: Math.max(0, Number(resp.preview.count || drafts.length || 0)) || drafts.length,
+          draftQuestions: drafts,
+          taskId,
+        })
+        upsertTask({ taskId, kind: 'generate', status: 'completed', progress: 92, stage: 'Pending Review', lastSeq: 0 })
+      } catch {
+        // No pending preview is a normal state; keep the page quiet.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [draftPreview, normalizeDraftQuestions, restoreLatestPreview, upsertTask])
 
   return {
     tasks,

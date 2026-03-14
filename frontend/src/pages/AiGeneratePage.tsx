@@ -1,6 +1,6 @@
-import { AiGenerateWorkspace } from '@/pages/aiGenerate/AiGenerateWorkspace'
+import { AiGenerateStudioPage } from '@/pages/aiGenerate/AiGenerateStudioPage'
 
 export default function AiGeneratePage() {
-  return <AiGenerateWorkspace />
+  return <AiGenerateStudioPage />
 }
 

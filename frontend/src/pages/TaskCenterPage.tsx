@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Pause, Play, RefreshCcw, Loader2, ListChecks, XCircle, Ban, RotateCcw } from 'lucide-react'
 import { listTasks, pauseTask, resumeTask, cancelTask, retryTask, streamTask, type TaskStreamEvent, type UnifiedTask } from '@/api/tasks'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
+import { taskEventToStep, upsertTaskStep } from '@/components/task/taskEventAdapter'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -20,39 +21,6 @@ function formatStatus(status: string): { label: string; tone: 'default' | 'secon
   if (s === 'failed') return { label: '失败', tone: 'destructive' }
   if (s === 'canceled' || s === 'cancelled') return { label: '已取消', tone: 'destructive' }
   return { label: status || '未知', tone: 'secondary' }
-}
-
-function eventToStep(evt: TaskStreamEvent): TaskStep | null {
-  const kind = String(evt.type || '').trim() || 'event'
-  const data = evt.data ?? {}
-
-  if (kind === 'step' && data && typeof data === 'object' && (data as any).step && typeof (data as any).step === 'object') {
-    return (data as any).step as TaskStep
-  }
-
-  if (kind === 'ping') return null
-
-  const content =
-    (typeof (data as any)?.title === 'string' && (data as any).title.trim()) ||
-    (typeof (data as any)?.message === 'string' && (data as any).message.trim()) ||
-    (typeof (data as any)?.content === 'string' && (data as any).content.trim()) ||
-    ''
-
-  let title = content ? `${kind}: ${content}` : kind
-  if (title.length > 240) title = `${title.slice(0, 240)}…`
-
-  const failed = kind === 'error' || Boolean((data as any)?.error)
-  const step: TaskStep = {
-    id: `evt-${evt.seq}`,
-    title,
-    status: failed ? 'failed' : 'completed',
-    toolName: kind,
-    startTime: evt.created_at,
-    error: failed ? String((data as any)?.error || (data as any)?.message || '') : undefined,
-    input: undefined,
-    output: undefined,
-  }
-  return step
 }
 
 export default function TaskCenterPage() {
@@ -142,12 +110,9 @@ export default function TaskCenterPage() {
       0,
       (evt) => {
         lastSeqRef.current = Math.max(lastSeqRef.current, Number(evt.seq || 0))
-        const step = eventToStep(evt)
+        const step = taskEventToStep(evt as TaskStreamEvent)
         if (!step) return
-        setSteps((prev) => {
-          if (prev.some((s) => s.id === step.id)) return prev
-          return [...prev, step]
-        })
+        setSteps((prev) => upsertTaskStep(prev, step))
       },
       (err) => setStreamError(err.message || 'stream_error'),
       undefined,

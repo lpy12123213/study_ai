@@ -3,6 +3,7 @@ export type SseEnvelope<TData = unknown> = {
   seq?: number
   type: string
   data?: TData
+  created_at?: string
 }
 
 function toOptionalString(value: unknown): string | undefined {
@@ -45,6 +46,10 @@ export function normalizeSseEnvelope(input: unknown): SseEnvelope {
     (data ? toOptionalString(data.taskId) || toOptionalString(data.task_id) : undefined)
 
   const seq = toOptionalNumber(obj.seq) ?? (data ? toOptionalNumber(data.seq) : undefined)
+  const createdAt =
+    toOptionalString(obj.created_at) ||
+    toOptionalString(obj.createdAt) ||
+    (data ? toOptionalString(data.created_at) || toOptionalString(data.createdAt) : undefined)
 
   let type =
     toOptionalString(obj.type) ||
@@ -71,6 +76,6 @@ export function normalizeSseEnvelope(input: unknown): SseEnvelope {
 
   if (!type) type = 'message'
 
-  return { taskId, seq, type, data: normalizedData }
+  return { taskId, seq, type, data: normalizedData, created_at: createdAt }
 }
 

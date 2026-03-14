@@ -1711,6 +1711,54 @@ class ZujuanCrawler:
         except Exception:
             BeautifulSoup = None  # type: ignore
 
+        def _strip_math_wrappers(value: str) -> str:
+            token = str(value or "").strip()
+            while True:
+                next_token = token
+                if next_token.startswith("\\(") and next_token.endswith("\\)") and len(next_token) >= 4:
+                    next_token = next_token[2:-2].strip()
+                elif next_token.startswith("\\[") and next_token.endswith("\\]") and len(next_token) >= 4:
+                    next_token = next_token[2:-2].strip()
+                elif next_token.startswith("$$") and next_token.endswith("$$") and len(next_token) >= 4:
+                    next_token = next_token[2:-2].strip()
+                elif next_token.startswith("$") and next_token.endswith("$") and len(next_token) >= 2:
+                    next_token = next_token[1:-1].strip()
+                if next_token == token:
+                    return token
+                token = next_token
+
+        def _normalize_table_cell(value: str) -> str:
+            text = _strip_math_wrappers(html_module.unescape(value or ""))
+            text = re.sub(r"\s+", " ", text).strip()
+            if text in {"...", "…"}:
+                return "\\cdots"
+            return text.replace("&", "\\&")
+
+        def _table_to_latex(table: Any) -> str:
+            rows: List[List[str]] = []
+            for tr in table.select("tr"):
+                cells = tr.select("th,td")
+                if not cells:
+                    continue
+                row: List[str] = []
+                for cell in cells:
+                    try:
+                        for br in cell.select("br"):
+                            br.replace_with(" ")
+                    except Exception:
+                        pass
+                    row.append(_normalize_table_cell(cell.get_text("", strip=True)))
+                if any(token for token in row):
+                    rows.append(row)
+
+            if not rows:
+                return ""
+
+            width = max(len(row) for row in rows)
+            aligned_rows = [row + [""] * (width - len(row)) for row in rows]
+            body = " \\\\ ".join([" & ".join(row) for row in aligned_rows])
+            return f"\\[\\begin{{array}}{{{'c' * max(2, width)}}}{body}\\end{{array}}\\]"
+
         for idx, stem_html in question_stems:
             # 3) Replace formulas first, then replace remaining images.
             converted = _replace_formula_imgs(stem_html or "")
@@ -1723,9 +1771,13 @@ class ZujuanCrawler:
                 # We manually insert newlines for <br> and common block elements, then extract
                 # text with an empty separator so inline spans don't become one-char-per-line.
                 try:
+                    for table in soup.select("table"):
+                        latex_table = _table_to_latex(table)
+                        if latex_table:
+                            table.replace_with(soup.new_string(f"\n{latex_table}\n"))
                     for br in soup.select("br"):
                         br.replace_with("\n")
-                    for block in soup.select("p,div,li,section,tr,table,ul,ol,hr,h1,h2,h3,h4,h5,h6"):
+                    for block in soup.select("p,div,li,section,ul,ol,hr,h1,h2,h3,h4,h5,h6"):
                         block.append("\n")
                 except Exception:
                     logger.debug("zujuan_soup_normalize_failed", exc_info=True)

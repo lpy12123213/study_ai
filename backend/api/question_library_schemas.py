@@ -68,17 +68,31 @@ class QuestionLibraryDraftQuestion(BaseModel):
     keep: bool = True
 
 
-class QuestionLibraryPreviewResponse(BaseModel):
-    success: bool = True
+class QuestionLibraryPreviewData(BaseModel):
     preview_id: str = ""
+    task_id: str = ""
     subject: str = ""
     topic: str = ""
     count: int = 0
     draft_questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
 
 
+class QuestionLibraryPreviewResponse(QuestionLibraryPreviewData):
+    success: bool = True
+
+
+class QuestionLibraryLatestPendingPreviewResponse(BaseModel):
+    success: bool = True
+    preview: Optional[QuestionLibraryPreviewData] = None
+
+
 class QuestionLibraryCommitPreviewRequest(BaseModel):
     questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
+
+
+class QuestionLibraryRegenerateSectionRequest(BaseModel):
+    question_id: str = ""
+    section_key: Literal["stem", "answer", "analysis"] = "analysis"
 
 
 class QuestionLibraryCommitPreviewResponse(BaseModel):

@@ -58,6 +58,171 @@ function normalizeQuestionText(input: string): string {
   return out
 }
 
+function stripMathWrappers(value: string): string {
+  let token = String(value || '').trim()
+  while (true) {
+    let next = token
+    if (next.startsWith('\\(') && next.endsWith('\\)') && next.length >= 4) {
+      next = next.slice(2, -2).trim()
+    } else if (next.startsWith('\\[') && next.endsWith('\\]') && next.length >= 4) {
+      next = next.slice(2, -2).trim()
+    } else if (next.startsWith('$$') && next.endsWith('$$') && next.length >= 4) {
+      next = next.slice(2, -2).trim()
+    } else if (next.startsWith('$') && next.endsWith('$') && next.length >= 2) {
+      next = next.slice(1, -1).trim()
+    }
+    if (next === token) return token
+    token = next
+  }
+}
+
+function normalizeTableToken(value: string): string {
+  const token = stripMathWrappers(value).replace(/\s+/g, ' ').trim()
+  if (token === '...' || token === '…') return '\\cdots'
+  return token
+}
+
+function looksLikeValueToken(value: string): boolean {
+  const token = normalizeTableToken(value)
+  if (!token) return false
+  if (['\\cdots', '\\ldots'].includes(token)) return true
+  if (/^-?\d+(\.\d+)?$/.test(token)) return true
+  if (/^[a-zA-Z]$/.test(token)) return true
+  if (/^[a-zA-Z]_\d+$/.test(token)) return true
+  return ['ξ', '\\xi', 'n', 'm', 'k'].includes(token)
+}
+
+function looksLikeProbToken(value: string): boolean {
+  const token = normalizeTableToken(value)
+  if (!token) return false
+  if (['\\cdots', '\\ldots'].includes(token)) return true
+  if (/^[pqPQ]_\d+$/.test(token)) return true
+  if (/^[pqPQ]_[a-zA-Z0-9]+$/.test(token)) return true
+  return ['P', 'p', 'p_n', 'q_n'].includes(token)
+}
+
+function looksLikeGenericHeaderToken(value: string): boolean {
+  const token = normalizeTableToken(value)
+  if (!token) return false
+  if (/\d/.test(token)) return false
+  return token.length <= 16
+}
+
+function looksLikeGenericValueToken(value: string): boolean {
+  const token = normalizeTableToken(value)
+  if (!token) return false
+  if (['\\cdots', '\\ldots'].includes(token)) return true
+  if (/^-?\d+(\.\d+)?(次|个|人|项|分|天|%|cm|m|kg)?$/.test(token)) return true
+  if (/^-?\d+\/\d+$/.test(token)) return true
+  return token.startsWith('\\frac{')
+}
+
+function matchGenericMatrix(
+  paragraphs: string[],
+  index: number
+): { prefixLines: string[]; matrixRows: string[][]; nextIndex: number } | null {
+  const lines = paragraphs[index].split('\n').map((line) => line.trim()).filter(Boolean)
+  if (lines.length < 3) return null
+
+  for (let offset = 0; offset <= lines.length - 3; offset += 1) {
+    const headerRow = lines.slice(offset)
+    if (headerRow.length < 3 || !headerRow.every(looksLikeGenericHeaderToken)) continue
+
+    const matrixRows: string[][] = [headerRow]
+    let nextIndex = index + 1
+    while (nextIndex < paragraphs.length) {
+      const row = paragraphs[nextIndex].split('\n').map((line) => line.trim()).filter(Boolean)
+      if (
+        row.length === headerRow.length &&
+        looksLikeGenericHeaderToken(row[0] || '') &&
+        row.slice(1).every(looksLikeGenericValueToken)
+      ) {
+        matrixRows.push(row)
+        nextIndex += 1
+        continue
+      }
+      break
+    }
+
+    if (matrixRows.length >= 3) {
+      return {
+        prefixLines: lines.slice(0, offset),
+        matrixRows,
+        nextIndex,
+      }
+    }
+  }
+
+  return null
+}
+
+function repairBrokenTableBlocks(input: string): string {
+  const raw = String(input || '').replace(/\r\n?/g, '\n')
+  if (!raw.trim()) return raw
+
+  const paragraphs = raw
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+
+  if (paragraphs.length < 2) return raw
+
+  let changed = false
+  const rebuilt: string[] = []
+
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const first = paragraphs[index]
+    const second = paragraphs[index + 1]
+    if (first && second) {
+      const rowA = first.split('\n').map((line) => line.trim()).filter(Boolean)
+      const rowB = second.split('\n').map((line) => line.trim()).filter(Boolean)
+      const headerA = normalizeTableToken(rowA[0] || '').toLowerCase()
+      const headerB = normalizeTableToken(rowB[0] || '')
+      if (
+        rowA.length >= 4 &&
+        rowB.length >= 4 &&
+        ['ξ', '\\xi', 'xi'].includes(headerA) &&
+        ['P', 'p'].includes(headerB) &&
+        Math.abs(rowA.length - rowB.length) <= 1 &&
+        rowA.slice(1).every(looksLikeValueToken) &&
+        rowB.slice(1).every(looksLikeProbToken)
+      ) {
+        const width = Math.max(rowA.length, rowB.length)
+        const cellsA = [...rowA.map(normalizeTableToken), ...Array.from({ length: width - rowA.length }, () => '')]
+        const cellsB = [...rowB.map(normalizeTableToken), ...Array.from({ length: width - rowB.length }, () => '')]
+        rebuilt.push(`$$\\begin{array}{${'c'.repeat(Math.max(2, width))}}${cellsA.join(' & ')} \\\\ ${cellsB.join(' & ')}\\end{array}$$`)
+        changed = true
+        index += 1
+        continue
+      }
+    }
+
+    if (first) {
+      const genericMatrix = matchGenericMatrix(paragraphs, index)
+      if (genericMatrix) {
+        const { prefixLines, matrixRows, nextIndex } = genericMatrix
+        if (prefixLines.length > 0) {
+          rebuilt.push(prefixLines.join('\n'))
+        }
+        const width = Math.max(...matrixRows.map((row) => row.length))
+        const latexRows = matrixRows.map((row) => {
+          const normalized = row.map(normalizeTableToken)
+          return [...normalized, ...Array.from({ length: width - normalized.length }, () => '')].join(' & ')
+        })
+        rebuilt.push(`$$\\begin{array}{${'c'.repeat(Math.max(2, width))}}${latexRows.join(' \\\\ ')}\\end{array}$$`)
+        changed = true
+        index = nextIndex - 1
+        continue
+      }
+    }
+
+    rebuilt.push(first)
+  }
+
+  if (!changed) return raw
+  return rebuilt.join('\n\n')
+}
+
 function renderKatex(latex: string, displayMode: boolean): ReactNode {
   const src = String(latex || '').trim()
   if (!src) return null
@@ -82,14 +247,17 @@ export function QuestionContent(props: { content: string; className?: string }) 
   const { content, className } = props
 
   const nodes = useMemo(() => {
-    const text = normalizeQuestionText(String(content || ''))
+    const text = normalizeQuestionText(repairBrokenTableBlocks(String(content || '')))
     if (!text) return [] as ReactNode[]
 
     // Tokens:
     // - [图片:https://...]
     // - \( ... \)  (inline math)
     // - \[ ... \]  (display math)
-    const tokenRe = /(\[图片(?::([^\]]+))?\])|(\\\[([\s\S]*?)\\\])|(\\\(([\s\S]*?)\\\))/g
+    // - $ ... $    (inline math)
+    // - $$ ... $$  (display math)
+    const tokenRe =
+      /(\[图片(?::([^\]]+))?\])|(\\\[([\s\S]*?)\\\])|(\\\(([\s\S]*?)\\\))|(\$\$([\s\S]*?)\$\$)|(\$([^\n$]*?)\$)/g
 
     const out: ReactNode[] = []
     let lastIndex = 0
@@ -125,6 +293,12 @@ export function QuestionContent(props: { content: string; className?: string }) 
       } else if (match[5]) {
         const latex = match[6] || ''
         out.push(<span key={`math:inline:${index}`}>{renderKatex(latex, false)}</span>)
+      } else if (match[7]) {
+        const latex = match[8] || ''
+        out.push(<span key={`math:block2:${index}`}>{renderKatex(latex, true)}</span>)
+      } else if (match[9]) {
+        const latex = match[10] || ''
+        out.push(<span key={`math:inline2:${index}`}>{renderKatex(latex, false)}</span>)
       }
 
       lastIndex = index + match[0].length

@@ -63,6 +63,42 @@ def load_preview(preview_id: str) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
+def find_latest_pending_preview(user_id: str) -> Optional[dict]:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return None
+    if not _PREVIEWS_DIR.exists():
+        return None
+
+    latest_obj: Optional[dict] = None
+    latest_score = float("-inf")
+    for path in _PREVIEWS_DIR.glob("*.json"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            obj = json.loads(raw) if raw else {}
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if str(obj.get("user_id") or "").strip() != uid:
+            continue
+        if str(obj.get("status") or "").strip().lower() != "pending_review":
+            continue
+
+        try:
+            score = float(obj.get("created_at_s") or 0.0)
+        except Exception:
+            try:
+                score = path.stat().st_mtime
+            except Exception:
+                score = 0.0
+        if latest_obj is None or score > latest_score:
+            latest_obj = obj
+            latest_score = score
+
+    return latest_obj
+
+
 def delete_preview(preview_id: str) -> bool:
     try:
         path = _preview_path(preview_id)
@@ -74,4 +110,3 @@ def delete_preview(preview_id: str) -> bool:
         return True
     except Exception:
         return False
-

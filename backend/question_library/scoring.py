@@ -56,7 +56,6 @@ async def score_stem_with_llm(*, subject: str, stem: str, model: str, requiremen
         temperature=0.2,
         max_tokens=1800,
         response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
         stream=False,
         raise_on_fail=False,
         retries=2,

@@ -101,10 +101,16 @@ export interface QuestionLibraryDraftQuestion {
 export interface QuestionLibraryPreviewResponse {
   success: boolean
   preview_id: string
+  task_id?: string
   subject: string
   topic: string
   count: number
   draft_questions: QuestionLibraryDraftQuestion[]
+}
+
+export interface QuestionLibraryLatestPendingPreviewResponse {
+  success: boolean
+  preview: Omit<QuestionLibraryPreviewResponse, 'success'> | null
 }
 
 export interface QuestionLibraryCommitPreviewResponse {
@@ -114,6 +120,22 @@ export interface QuestionLibraryCommitPreviewResponse {
   subject: string
   count: number
   question_ids: string[]
+}
+
+export interface RegenerateQuestionLibrarySectionPayload {
+  question_id: string
+  section_key: 'stem' | 'answer' | 'analysis'
+}
+
+export interface RegenerateQuestionLibrarySectionEvent {
+  preview_id?: string
+  question_id?: string
+  section_key?: 'stem' | 'answer' | 'analysis'
+  content?: string
+  stage?: string
+  progress?: number
+  draft_question?: QuestionLibraryDraftQuestion
+  message?: string
 }
 
 export interface ScoreQuestionLibraryBatchPayload {
@@ -186,6 +208,11 @@ export async function getQuestionLibraryPreview(previewId: string): Promise<Ques
   return resp.data as QuestionLibraryPreviewResponse
 }
 
+export async function getLatestPendingQuestionLibraryPreview(): Promise<QuestionLibraryLatestPendingPreviewResponse> {
+  const resp = await apiClient.get('/question-library/previews/latest/pending')
+  return resp.data as QuestionLibraryLatestPendingPreviewResponse
+}
+
 export async function commitQuestionLibraryPreview(
   previewId: string,
   questions: QuestionLibraryDraftQuestion[]
@@ -201,6 +228,28 @@ export async function discardQuestionLibraryPreview(previewId: string): Promise<
   if (!pid) throw new Error('missing_preview_id')
   const resp = await apiClient.post(`/question-library/previews/${encodeURIComponent(pid)}/discard`)
   return resp.data as any
+}
+
+export function regenerateQuestionLibrarySection(
+  previewId: string,
+  payload: RegenerateQuestionLibrarySectionPayload,
+  onEvent: (event: SseEnvelope<RegenerateQuestionLibrarySectionEvent>) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void,
+  options?: {
+    signal?: AbortSignal
+  }
+): void {
+  const pid = String(previewId || '').trim()
+  if (!pid) throw new Error('missing_preview_id')
+  fetchSSE(
+    `/question-library/previews/${encodeURIComponent(pid)}/regenerate-section`,
+    payload,
+    (data) => onEvent(normalizeQuestionLibraryTaskEvent(data) as SseEnvelope<RegenerateQuestionLibrarySectionEvent>),
+    onError,
+    onComplete,
+    { signal: options?.signal }
+  )
 }
 
 export function crawlQuestions(

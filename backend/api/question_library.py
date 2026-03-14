@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -15,8 +15,10 @@ from backend.api.auth import require_auth
 from backend.api.question_library_schemas import (
     QuestionLibraryBulkDeleteRequest,
     QuestionLibraryCommitPreviewRequest,
+    QuestionLibraryRegenerateSectionRequest,
     QuestionLibraryCrawlRequest,
     QuestionLibraryGenerateRequest,
+    QuestionLibraryLatestPendingPreviewResponse,
     QuestionLibraryPreviewResponse,
     QuestionLibraryCommitPreviewResponse,
     QuestionLibraryScoreRequest,
@@ -44,8 +46,19 @@ from backend.database.repositories.tasks import (
 from backend.database.repositories.tasks import (
     upsert_task as db_upsert_task,
 )
-from backend.question_library.generation import build_ai_question_id, build_source_pack, generate_questions
-from backend.question_library.preview_store import delete_preview, load_preview, new_preview_id, save_preview
+from backend.question_library.generation import (
+    build_ai_question_id,
+    build_source_pack,
+    generate_questions,
+    regenerate_question_section,
+)
+from backend.question_library.preview_store import (
+    delete_preview,
+    find_latest_pending_preview,
+    load_preview,
+    new_preview_id,
+    save_preview,
+)
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
 from backend.question_library.task_manager import QuestionLibraryTask, QuestionLibraryTaskManager
 
@@ -287,10 +300,46 @@ async def get_preview(preview_id: str, user: dict = Depends(require_auth)) -> di
     return {
         "success": True,
         "preview_id": pid,
+        "task_id": str(obj.get("task_id") or "").strip(),
         "subject": str(obj.get("subject") or "").strip(),
         "topic": str(obj.get("topic") or "").strip(),
         "count": len(drafts),
         "draft_questions": drafts,
+    }
+
+
+@router.get("/previews/latest/pending", response_model=QuestionLibraryLatestPendingPreviewResponse)
+async def get_latest_pending_preview(user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    obj = find_latest_pending_preview(user_id)
+    if not obj:
+        return {"success": True, "preview": None}
+
+    drafts = [
+        {
+            "question_id": str(q.get("question_id") or "").strip(),
+            "stem": str(q.get("stem") or "").strip(),
+            "answer": str(q.get("answer") or "").strip(),
+            "analysis": str(q.get("analysis") or "").strip(),
+            "keep": bool(q.get("keep", True)),
+        }
+        for q in (obj.get("draft_questions") or [])
+        if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+    ]
+
+    return {
+        "success": True,
+        "preview": {
+            "preview_id": str(obj.get("preview_id") or "").strip(),
+            "task_id": str(obj.get("task_id") or "").strip(),
+            "subject": str(obj.get("subject") or "").strip(),
+            "topic": str(obj.get("topic") or "").strip(),
+            "count": len(drafts),
+            "draft_questions": drafts,
+        },
     }
 
 
@@ -400,6 +449,133 @@ async def discard_preview(preview_id: str, user: dict = Depends(require_auth)) -
 
     ok = delete_preview(pid)
     return {"success": bool(ok)}
+
+
+@router.post("/previews/{preview_id}/regenerate-section")
+async def regenerate_preview_section(
+    preview_id: str, request: QuestionLibraryRegenerateSectionRequest, user: dict = Depends(require_auth)
+) -> StreamingResponse:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    pid = str(preview_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="missing_preview_id")
+
+    obj = load_preview(pid)
+    if not isinstance(obj, dict):
+        raise HTTPException(status_code=404, detail="preview_not_found")
+    if str(obj.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="preview_not_found")
+    if str(obj.get("status") or "").strip().lower() == "committed":
+        raise HTTPException(status_code=409, detail="preview_already_committed")
+
+    question_id = str(request.question_id or "").strip()
+    section_key = str(request.section_key or "").strip()
+    if not question_id:
+        raise HTTPException(status_code=400, detail="missing_question_id")
+    if section_key not in {"stem", "answer", "analysis"}:
+        raise HTTPException(status_code=400, detail="invalid_section_key")
+
+    preview_items = obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else []
+    target_index = -1
+    target_question: dict | None = None
+    for index, item in enumerate(preview_items):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("question_id") or "").strip() != question_id:
+            continue
+        target_index = index
+        target_question = dict(item)
+        break
+
+    if target_index < 0 or not isinstance(target_question, dict):
+        raise HTTPException(status_code=404, detail="preview_question_not_found")
+
+    async def event_generator():
+        seq = 0
+
+        def format_event(event_type: str, data: dict) -> str:
+            nonlocal seq
+            seq += 1
+            payload = {"type": event_type, "seq": seq, "data": data}
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        try:
+            yield format_event(
+                "progress",
+                {
+                    "question_id": question_id,
+                    "section_key": section_key,
+                    "stage": "加载草稿上下文",
+                    "progress": 15,
+                },
+            )
+
+            study_markdown = str(obj.get("study_markdown") or "").strip()
+            if not study_markdown:
+                try:
+                    archive = await get_latest_study_archive(
+                        user_id=user_id,
+                        subject=str(obj.get("subject") or "").strip(),
+                        topic=str(obj.get("topic") or "").strip(),
+                    )
+                except Exception:
+                    archive = None
+                if isinstance(archive, dict):
+                    study_markdown = str(archive.get("markdown") or "").strip()
+
+            yield format_event(
+                "progress",
+                {
+                    "question_id": question_id,
+                    "section_key": section_key,
+                    "stage": "调用模型重写 section",
+                    "progress": 55,
+                },
+            )
+
+            content = await regenerate_question_section(
+                subject=str(obj.get("subject") or "").strip(),
+                topic=str(obj.get("topic") or "").strip(),
+                difficulty=str(obj.get("difficulty") or "").strip(),
+                question_type=str(obj.get("question_type") or "").strip(),
+                study_markdown=study_markdown,
+                section_key=section_key,
+                stem=str(target_question.get("stem") or "").strip(),
+                answer=str(target_question.get("answer") or "").strip(),
+                analysis=str(target_question.get("analysis") or "").strip(),
+            )
+            if not content:
+                raise RuntimeError("section_regeneration_failed")
+
+            target_question[section_key] = content
+            preview_items[target_index] = target_question
+            obj["draft_questions"] = preview_items
+            if study_markdown and not str(obj.get("study_markdown") or "").strip():
+                obj["study_markdown"] = study_markdown
+            save_preview(obj)
+
+            done_payload = {
+                "preview_id": pid,
+                "question_id": question_id,
+                "section_key": section_key,
+                "content": content,
+                "draft_question": target_question,
+            }
+            yield format_event("done", done_payload)
+        except Exception as exc:
+            yield format_event(
+                "error",
+                {
+                    "question_id": question_id,
+                    "section_key": section_key,
+                    "message": str(exc) or "section_regeneration_failed",
+                },
+            )
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=_sse_headers())
 
 
 @router.post("/crawl")
@@ -642,10 +818,54 @@ async def generate_and_save(
 
     async def runner_factory(task: QuestionLibraryTask) -> None:
         def _now_iso() -> str:
-            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
 
-        async def _emit_progress(progress: float, stage: str) -> None:
-            payload = {"progress": float(progress), "stage": str(stage or "").strip()}
+        stage_descriptions = {
+            "source_pack": "整理出题上下文，构建一个包含主题、难度与题型约束的素材包。",
+            "spec_search": "扩展题目规格树，筛出更有区分度和新意的候选方向。",
+            "draft_realization": "按规格生成题干、答案与解析草稿，并保留代表样例。",
+            "judge": "通过求解、歧义检查与评审筛掉低质题、套路题和不自洽题。",
+            "final_selection": "从通过判题的候选中选出最终入围草稿。",
+            "pending_review": "题目草稿已生成，进入预览审核；审核通过后才会写入本地题库。",
+        }
+        stage_labels = {
+            "source_pack": "素材整理",
+            "spec_search": "规格搜索",
+            "draft_realization": "草稿生成",
+            "judge": "判题筛选",
+            "final_selection": "终选入围",
+            "pending_review": "待审核预览",
+        }
+        stage_progress_defaults = {
+            "source_pack": 5.0,
+            "spec_search": 20.0,
+            "draft_realization": 55.0,
+            "judge": 80.0,
+            "final_selection": 92.0,
+            "pending_review": 96.0,
+        }
+        stage_started_at: Dict[str, str] = {}
+        stage_state: Dict[str, Dict[str, Any]] = {}
+        active_stage_id: str | None = None
+
+        async def _emit_progress(
+            progress: float,
+            *,
+            stage_id: str,
+            stage_label: str,
+            stats: Optional[dict] = None,
+            sample: Optional[dict] = None,
+        ) -> None:
+            payload: Dict[str, Any] = {
+                "progress": float(progress),
+                "stage": str(stage_label or "").strip(),
+                "stage_id": str(stage_id or "").strip(),
+                "stage_label": str(stage_label or "").strip(),
+            }
+            if isinstance(stats, dict) and stats:
+                payload["stats"] = stats
+            if isinstance(sample, dict) and sample:
+                payload["sample"] = sample
             await _tasks.append_event(task, {"type": "progress", "data": payload})
             try:
                 await db_append_task_event(
@@ -658,6 +878,26 @@ async def generate_and_save(
             except Exception:
                 pass
 
+        def _build_stage_output(
+            *,
+            stage_id: str,
+            stage_label: str,
+            summary: str = "",
+            stats: Optional[dict] = None,
+            sample: Optional[dict] = None,
+        ) -> dict:
+            output: Dict[str, Any] = {
+                "stage_id": str(stage_id or "").strip(),
+                "stage_label": str(stage_label or "").strip(),
+            }
+            if summary:
+                output["summary"] = summary
+            if isinstance(stats, dict) and stats:
+                output["stats"] = stats
+            if isinstance(sample, dict) and sample:
+                output["sample"] = sample
+            return output
+
         async def _emit_step(step: dict) -> None:
             await _tasks.append_event(task, {"type": "step", "step": step})
             try:
@@ -665,23 +905,111 @@ async def generate_and_save(
             except Exception:
                 pass
 
-        async def _emit_thinking(stage: str, content: str) -> None:
-            t = _now_iso()
-            await _emit_step(
-                {
-                    "id": f"thinking:{stage}:{uuid.uuid4().hex[:8]}",
-                    "title": f"思考：{stage}",
-                    "status": "completed",
-                    "toolName": "thinking",
-                    "startTime": t,
-                    "endTime": t,
-                    "output": str(content or "").strip(),
-                }
+        async def _update_stage_step(
+            *,
+            stage_id: str,
+            stage_label: str,
+            status: str,
+            progress: float,
+            summary: str = "",
+            stats: Optional[dict] = None,
+            sample: Optional[dict] = None,
+        ) -> None:
+            start_time = stage_started_at.get(stage_id) or _now_iso()
+            stage_started_at.setdefault(stage_id, start_time)
+            snapshot = stage_state.get(stage_id) or {}
+            summary_value = str(summary or snapshot.get("summary") or "").strip()
+            stats_value = stats if isinstance(stats, dict) and stats else snapshot.get("stats")
+            sample_value = sample if isinstance(sample, dict) and sample else snapshot.get("sample")
+            stage_state[stage_id] = {
+                "summary": summary_value,
+                "stats": stats_value,
+                "sample": sample_value,
+            }
+            step = {
+                "id": f"stage:{stage_id}",
+                "title": stage_label,
+                "status": status,
+                "toolName": "thinking",
+                "startTime": start_time,
+                "input": {"stage_id": stage_id, "stage_label": stage_label},
+                "output": _build_stage_output(
+                    stage_id=stage_id,
+                    stage_label=stage_label,
+                    summary=summary_value,
+                    stats=stats_value if isinstance(stats_value, dict) else None,
+                    sample=sample_value if isinstance(sample_value, dict) else None,
+                ),
+            }
+            if status == "completed":
+                step["endTime"] = _now_iso()
+            await _emit_step(step)
+            await _emit_progress(
+                progress,
+                stage_id=stage_id,
+                stage_label=stage_label,
+                stats=stats,
+                sample=sample,
             )
 
+        async def _switch_stage(
+            stage_id: str,
+            *,
+            progress: Optional[float] = None,
+            stats: Optional[dict] = None,
+            sample: Optional[dict] = None,
+        ) -> None:
+            nonlocal active_stage_id
+            normalized_stage = str(stage_id or "").strip()
+            if not normalized_stage:
+                return
+
+            label = stage_labels.get(normalized_stage) or normalized_stage
+            summary = stage_descriptions.get(normalized_stage) or ""
+            progress_value = float(progress if progress is not None else stage_progress_defaults.get(normalized_stage, 0.0))
+
+            if active_stage_id and active_stage_id != normalized_stage:
+                prev_label = stage_labels.get(active_stage_id) or active_stage_id
+                prev_summary = stage_descriptions.get(active_stage_id) or ""
+                await _update_stage_step(
+                    stage_id=active_stage_id,
+                    stage_label=prev_label,
+                    status="completed",
+                    progress=float(stage_progress_defaults.get(active_stage_id, progress_value)),
+                    summary=prev_summary,
+                )
+
+            active_stage_id = normalized_stage
+            await _update_stage_step(
+                stage_id=normalized_stage,
+                stage_label=label,
+                status="running",
+                progress=progress_value,
+                summary=summary,
+                stats=stats,
+                sample=sample,
+            )
+
+        async def _complete_active_stage(*, stats: Optional[dict] = None, sample: Optional[dict] = None) -> None:
+            nonlocal active_stage_id
+            if not active_stage_id:
+                return
+            stage_id = active_stage_id
+            label = stage_labels.get(stage_id) or stage_id
+            summary = stage_descriptions.get(stage_id) or ""
+            await _update_stage_step(
+                stage_id=stage_id,
+                stage_label=label,
+                status="completed",
+                progress=float(stage_progress_defaults.get(stage_id, 100.0)),
+                summary=summary,
+                stats=stats,
+                sample=sample,
+            )
+            active_stage_id = None
+
         try:
-            await _emit_progress(5, "SourcePack")
-            await _emit_thinking("SourcePack", "整理出题上下文，构建一个包含主题/难度/题型约束的素材包。")
+            await _switch_stage("source_pack")
 
             study_markdown = ""
             if use_archive:
@@ -693,22 +1021,51 @@ async def generate_and_save(
                     study_markdown = str(archive.get("markdown") or "")
 
             source_pack = await build_source_pack(study_markdown, subject, topic)
-            await _emit_progress(20, "Spec Search")
-            await _emit_thinking("Spec Search", "为本次出题生成规格与候选方向，确保覆盖目标知识点并匹配难度与题型。")
+            await _update_stage_step(
+                stage_id="source_pack",
+                stage_label=stage_labels["source_pack"],
+                status="completed",
+                progress=stage_progress_defaults["source_pack"],
+                summary=stage_descriptions["source_pack"],
+                stats={
+                    "use_study_archive": use_archive,
+                    "study_markdown_chars": len(study_markdown),
+                    "facts": len(source_pack.get("facts") or []),
+                    "skills": len(source_pack.get("skills") or []),
+                    "common_mistakes": len(source_pack.get("common_mistakes") or []),
+                    "forbidden_patterns": len(source_pack.get("forbidden_patterns") or []),
+                },
+                sample={
+                    "facts": list(source_pack.get("facts") or [])[:3],
+                    "skills": list(source_pack.get("skills") or [])[:3],
+                },
+            )
+            active_stage_id = None
+
+            async def _handle_generation_stage(event: dict) -> None:
+                if not isinstance(event, dict):
+                    return
+                phase = str(event.get("phase") or "").strip()
+                if not phase:
+                    return
+                stats = event.get("stats") if isinstance(event.get("stats"), dict) else None
+                sample = event.get("sample") if isinstance(event.get("sample"), dict) else None
+                await _switch_stage(
+                    phase,
+                    progress=float(event.get("progress") or stage_progress_defaults.get(phase, 0.0)),
+                    stats=stats,
+                    sample=sample,
+                )
 
             finals = await generate_questions(
                 source_pack=source_pack,
                 count=count,
                 difficulty=difficulty,
                 question_type=question_type,
+                on_stage_event=_handle_generation_stage,
                 config=None,
             )
-            await _emit_progress(55, "Draft Realization")
-            await _emit_thinking("Draft Realization", "生成题目草稿（题干/答案/解析），并做基本一致性检查。")
-
-            # Skeleton stages (solver/judge) are currently no-ops but we still emit them for UI.
-            await _emit_progress(80, "Judge")
-            await _emit_thinking("Judge", "检查题目可解性与答案/解析自洽性；不确定处保守表述，避免误导。")
+            await _complete_active_stage()
 
             drafts: list[dict] = []
             for q in finals[:count]:
@@ -735,8 +1092,16 @@ async def generate_and_save(
             if not drafts:
                 raise RuntimeError("no_questions_generated")
 
-            await _emit_progress(92, "Pending Review")
-            await _emit_thinking("Pending Review", "题目草稿已生成，进入预览审核；审核通过后才会写入本地题库。")
+            await _switch_stage(
+                "pending_review",
+                stats={"draft_count": len(drafts)},
+                sample={
+                    "question_id": str((drafts[0] or {}).get("question_id") or ""),
+                    "stem_preview": str((drafts[0] or {}).get("stem") or "")[:120],
+                }
+                if drafts
+                else None,
+            )
 
             preview_id = new_preview_id()
             save_preview(
@@ -749,8 +1114,18 @@ async def generate_and_save(
                     "topic": topic,
                     "difficulty": difficulty,
                     "question_type": question_type,
+                    "study_markdown": study_markdown,
                     "draft_questions": drafts,
                 }
+            )
+            await _complete_active_stage(
+                stats={"draft_count": len(drafts), "preview_id": preview_id},
+                sample={
+                    "question_id": str((drafts[0] or {}).get("question_id") or ""),
+                    "stem_preview": str((drafts[0] or {}).get("stem") or "")[:120],
+                }
+                if drafts
+                else None,
             )
 
             done_payload = {
@@ -776,6 +1151,14 @@ async def generate_and_save(
                 pass
             await _tasks.complete_task(task)
         except asyncio.CancelledError:
+            if active_stage_id:
+                await _update_stage_step(
+                    stage_id=active_stage_id,
+                    stage_label=stage_labels.get(active_stage_id) or active_stage_id,
+                    status="paused",
+                    progress=float(stage_progress_defaults.get(active_stage_id, 0.0)),
+                    summary="任务已取消。",
+                )
             await _tasks.fail_task(task, "Task cancelled")
             try:
                 await db_update_task_status(
@@ -789,6 +1172,14 @@ async def generate_and_save(
                 pass
             raise
         except Exception as exc:  # pragma: no cover
+            if active_stage_id:
+                await _update_stage_step(
+                    stage_id=active_stage_id,
+                    stage_label=stage_labels.get(active_stage_id) or active_stage_id,
+                    status="failed",
+                    progress=float(stage_progress_defaults.get(active_stage_id, 0.0)),
+                    summary=f"阶段执行失败：{str(exc)}",
+                )
             await _tasks.fail_task(task, str(exc))
             try:
                 await db_append_task_event(
@@ -808,6 +1199,14 @@ async def generate_and_save(
                 pass
         finally:
             if task.status == "running":
+                if active_stage_id:
+                    await _update_stage_step(
+                        stage_id=active_stage_id,
+                        stage_label=stage_labels.get(active_stage_id) or active_stage_id,
+                        status="failed",
+                        progress=float(stage_progress_defaults.get(active_stage_id, 0.0)),
+                        summary="任务意外终止。",
+                    )
                 await _tasks.fail_task(task, "Task ended unexpectedly")
                 try:
                     await db_update_task_status(

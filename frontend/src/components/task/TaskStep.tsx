@@ -155,6 +155,11 @@ function getDisplayTitle(step: TaskStepType): { title: string; ToolIcon: typeof 
   if (step.toolName) {
     const display = TOOL_DISPLAY[step.toolName]
     if (display) {
+      if (step.toolName === 'thinking') {
+        const raw = (step.title || '').trim()
+        const title = raw ? (raw.startsWith('思考') ? raw : `思考：${raw}`) : display.label
+        return { title, ToolIcon: display.icon }
+      }
       const ctx = extractContext(step)
       const label = ctx ? `${display.label}：${ctx}` : display.label
       return { title: label, ToolIcon: display.icon }

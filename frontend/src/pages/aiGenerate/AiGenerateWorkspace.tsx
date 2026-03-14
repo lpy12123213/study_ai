@@ -33,6 +33,7 @@ export function AiGenerateWorkspace() {
 
   const tasks = useQuestionLibraryTasks({
     filters: lib.filters,
+    restoreLatestPreview: true,
     onDone: async () => {
       await lib.refreshList()
       await lib.refreshDetail()
