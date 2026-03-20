@@ -6,7 +6,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type TouchEvent as ReactTouchEvent,
 } from 'react'
-import { ChevronDown, GripHorizontal, Sparkles, Wand2 } from 'lucide-react'
+import { ChevronDown, GripHorizontal, PauseCircle, SendHorizontal, Sparkles } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -19,6 +20,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { LATEX_RULE_TEXT } from '@/pages/aiGenerate/latexRules'
+import type { AiGenerateSessionMode } from '@/pages/aiGenerate/types'
 
 type SubjectOption = {
   id: number | string
@@ -33,15 +35,21 @@ interface MissionComposerProps {
   difficulty: string
   questionType: string
   useStudyArchive: boolean
+  mode: AiGenerateSessionMode
   subjects: SubjectOption[]
   isGenerating: boolean
+  primaryActionLabel?: string
+  canStop?: boolean
+  selectedKnowledgeCount?: number
   onMissionTextChange: (value: string) => void
   onSubjectChange: (value: string) => void
   onCountChange: (value: string) => void
   onDifficultyChange: (value: string) => void
   onQuestionTypeChange: (value: string) => void
   onUseStudyArchiveChange: (value: boolean) => void
+  onModeChange: (value: AiGenerateSessionMode) => void
   onGenerate: () => void
+  onStop?: () => void
 }
 
 const MIN_MISSION_HEIGHT = 124
@@ -56,15 +64,21 @@ export function MissionComposer(props: MissionComposerProps) {
     difficulty,
     questionType,
     useStudyArchive,
+    mode,
     subjects,
     isGenerating,
+    primaryActionLabel,
+    canStop = false,
+    selectedKnowledgeCount = 0,
     onMissionTextChange,
     onSubjectChange,
     onCountChange,
     onDifficultyChange,
     onQuestionTypeChange,
     onUseStudyArchiveChange,
+    onModeChange,
     onGenerate,
+    onStop,
   } = props
 
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -131,122 +145,134 @@ export function MissionComposer(props: MissionComposerProps) {
     }
   }, [resizing])
 
-  const beginResize = useCallback((clientY: number, mode: ResizeInputMode) => {
-    resizeModeRef.current = mode
-    dragStartYRef.current = clientY
+  const beginResize = useCallback(
+    (clientY: number, modeInput: ResizeInputMode) => {
+      resizeModeRef.current = modeInput
+      dragStartYRef.current = clientY
 
-    const currentHeight =
-      textareaRef.current?.getBoundingClientRect().height ||
-      textareaRef.current?.offsetHeight ||
-      missionHeight ||
-      MIN_MISSION_HEIGHT
+      const currentHeight =
+        textareaRef.current?.getBoundingClientRect().height ||
+        textareaRef.current?.offsetHeight ||
+        missionHeight ||
+        MIN_MISSION_HEIGHT
 
-    dragStartHeightRef.current = Math.max(MIN_MISSION_HEIGHT, currentHeight)
-    setResizing(true)
-  }, [missionHeight])
+      dragStartHeightRef.current = Math.max(MIN_MISSION_HEIGHT, currentHeight)
+      setResizing(true)
+    },
+    [missionHeight]
+  )
 
-  const handleMouseResizeStart = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
-    event.preventDefault()
-    beginResize(event.clientY, 'mouse')
-  }, [beginResize])
+  const handleMouseResizeStart = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+      beginResize(event.clientY, 'mouse')
+    },
+    [beginResize]
+  )
 
-  const handleTouchResizeStart = useCallback((event: ReactTouchEvent<HTMLButtonElement>) => {
-    const touch = event.touches[0]
-    if (!touch) return
-    event.preventDefault()
-    beginResize(touch.clientY, 'touch')
-  }, [beginResize])
+  const handleTouchResizeStart = useCallback(
+    (event: ReactTouchEvent<HTMLButtonElement>) => {
+      const touch = event.touches[0]
+      if (!touch) return
+      event.preventDefault()
+      beginResize(touch.clientY, 'touch')
+    },
+    [beginResize]
+  )
 
   const adjustMissionHeight = useCallback((delta: number) => {
     setMissionHeight((prev) => Math.max(MIN_MISSION_HEIGHT, Math.min(MAX_MISSION_HEIGHT, prev + delta)))
   }, [])
 
+  const actionLabel = primaryActionLabel || (isGenerating ? '生成中' : '开始生成')
+
   return (
-    <section className="overflow-hidden rounded-[32px] border border-border/70 bg-background/80 shadow-[0_30px_100px_rgba(33,38,56,0.08)] backdrop-blur dark:bg-[linear-gradient(180deg,rgba(18,20,30,0.88),rgba(12,14,20,0.82))] dark:shadow-[0_30px_110px_rgba(0,0,0,0.6)]">
-      <div className="flex flex-col gap-6 p-6 lg:p-8">
+    <section className="overflow-hidden rounded-[30px] border border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(245,240,229,0.92))] shadow-[0_24px_70px_rgba(30,33,45,0.08)] dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.96),rgba(16,18,28,0.94))] dark:shadow-[0_28px_90px_rgba(0,0,0,0.58)]">
+      <div className="flex flex-col gap-5 p-5 lg:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-3xl space-y-3">
+          <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/80 px-3 py-1 text-xs font-medium text-muted-foreground">
               <Sparkles className="h-3.5 w-3.5" />
-              Editorial AI Studio
+              Dialogue Composer
             </div>
             <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight lg:text-4xl">AI 出题工作台</h1>
-              <p className="max-w-2xl text-sm leading-6 text-muted-foreground lg:text-base">
-                像给 AI 下创作任务一样描述你的需求，题目会在下方按题干、答案、解析逐步展开。
+              <h2 className="text-2xl font-semibold tracking-tight">像对话一样继续给出题要求</h2>
+              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+                在这里补充新的知识点、难度和出题偏好。无限模式下会沿用同一会话持续追加，直到你点击停止。
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button type="button" size="lg" className="min-w-32 rounded-full" disabled={isGenerating} onClick={onGenerate}>
-              <Wand2 className="h-4 w-4" />
-              {isGenerating ? '生成中' : '开始生成'}
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="rounded-full">
+              {mode === 'infinite' ? '无限模式' : '标准模式'}
+            </Badge>
+            <Badge variant="outline" className="rounded-full">
+              已选知识点 {selectedKnowledgeCount}
+            </Badge>
+            {canStop ? (
+              <Button type="button" variant="outline" className="rounded-full" onClick={onStop}>
+                <PauseCircle className="h-4 w-4" />
+                停止追加
+              </Button>
+            ) : null}
+            <Button type="button" size="lg" className="rounded-full" disabled={isGenerating} onClick={onGenerate}>
+              <SendHorizontal className="h-4 w-4" />
+              {actionLabel}
             </Button>
           </div>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.8fr)]">
-          <div className="rounded-[28px] border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(252,249,242,0.95))] p-4 shadow-sm dark:bg-[linear-gradient(180deg,rgba(30,32,46,0.92),rgba(18,20,30,0.92))] lg:p-5">
-            <div className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">Mission Bar</div>
-            <div className="relative mt-3">
-              <Textarea
-                ref={textareaRef}
-                aria-label="出题任务描述"
-                value={missionText}
-                onChange={(event) => onMissionTextChange(event.target.value)}
-                style={{ height: `${missionHeight}px` }}
-                className="min-h-0 resize-none rounded-[24px] border-border/70 bg-background px-5 py-5 pb-10 text-base leading-7 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:bg-card/80 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
-                placeholder="例如：为高一数学生成 5 道函数单调性中等难度题，包含答案和解析，并优先参考最近自学资料。"
-              />
-              <div className="absolute right-16 bottom-3 z-10 inline-flex items-center gap-1">
-                <button
-                  type="button"
-                  aria-label="减小任务输入框高度"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/92 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground dark:bg-card/70"
-                  onClick={() => adjustMissionHeight(-24)}
-                >
-                  -
-                </button>
-                <button
-                  type="button"
-                  aria-label="增大任务输入框高度"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/92 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground dark:bg-card/70"
-                  onClick={() => adjustMissionHeight(24)}
-                >
-                  +
-                </button>
-              </div>
-              <button
-                type="button"
-                aria-label="调整任务输入框高度"
-                className="absolute right-4 bottom-3 z-10 inline-flex h-6 w-10 touch-none cursor-row-resize items-center justify-center rounded-full border border-border/70 bg-background/92 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground dark:bg-card/70"
-                onMouseDown={handleMouseResizeStart}
-                onTouchStart={handleTouchResizeStart}
-              >
-                <GripHorizontal className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="mt-3 rounded-[20px] border border-blue-200/80 bg-blue-50/70 px-4 py-3 text-sm text-blue-900 dark:border-sky-800/60 dark:bg-sky-950/35 dark:text-sky-100">
-              <div className="font-medium">LaTeX 公式规范</div>
-              <div className="mt-1 leading-6 text-blue-900/80 dark:text-sky-100/80">
-                {LATEX_RULE_TEXT} 例如行内写成 <code>{'\\(x^2+1\\)'}</code>，独立公式写成 <code>{'\\[x^2-1=0\\]'}</code>。
-              </div>
-            </div>
+        <div className="relative rounded-[28px] border border-border/70 bg-background/85 p-4 shadow-sm">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>支持自然语言任务描述</span>
+            <span>·</span>
+            <span>{subject || '未选择学科'}</span>
+            <span>·</span>
+            <span>{difficulty || '难度不限'}</span>
+            <span>·</span>
+            <span>{count || '5'} 题</span>
           </div>
-
-          <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
-            <div className="rounded-[24px] border border-border/70 bg-background/88 p-4 shadow-sm">
-              <div className="text-sm font-medium text-muted-foreground">学科</div>
-              <div className="mt-2 text-xl font-semibold">{subject || '未设置'}</div>
-            </div>
-            <div className="rounded-[24px] border border-border/70 bg-background/88 p-4 shadow-sm">
-              <div className="text-sm font-medium text-muted-foreground">题量</div>
-              <div className="mt-2 text-xl font-semibold">{count || '5'} 题</div>
-            </div>
-            <div className="rounded-[24px] border border-border/70 bg-background/88 p-4 shadow-sm">
-              <div className="text-sm font-medium text-muted-foreground">引用资料</div>
-              <div className="mt-2 text-xl font-semibold">{useStudyArchive ? '已启用' : '未启用'}</div>
+          <Textarea
+            ref={textareaRef}
+            aria-label="出题任务描述"
+            value={missionText}
+            onChange={(event) => onMissionTextChange(event.target.value)}
+            style={{ height: `${missionHeight}px` }}
+            className="min-h-0 resize-none rounded-[24px] border-border/70 bg-background px-5 py-5 pb-10 text-base leading-7 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:bg-card/80 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+            placeholder="例如：沿着函数单调性继续出 3 道压轴变式题，优先覆盖导数与分类讨论，审查不过的题不要自动确认。"
+          />
+          <div className="absolute right-16 bottom-7 z-10 inline-flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="减小任务输入框高度"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/92 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground dark:bg-card/70"
+              onClick={() => adjustMissionHeight(-24)}
+            >
+              -
+            </button>
+            <button
+              type="button"
+              aria-label="增大任务输入框高度"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/92 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground dark:bg-card/70"
+              onClick={() => adjustMissionHeight(24)}
+            >
+              +
+            </button>
+          </div>
+          <button
+            type="button"
+            aria-label="调整任务输入框高度"
+            className="absolute right-4 bottom-7 z-10 inline-flex h-6 w-10 touch-none cursor-row-resize items-center justify-center rounded-full border border-border/70 bg-background/92 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground dark:bg-card/70"
+            onMouseDown={handleMouseResizeStart}
+            onTouchStart={handleTouchResizeStart}
+          >
+            <GripHorizontal className="h-4 w-4" />
+          </button>
+          <div className="mt-3 rounded-[20px] border border-blue-200/80 bg-blue-50/70 px-4 py-3 text-sm text-blue-900 dark:border-sky-800/60 dark:bg-sky-950/35 dark:text-sky-100">
+            <div className="font-medium">LaTeX 公式规范</div>
+            <div className="mt-1 leading-6 text-blue-900/80 dark:text-sky-100/80">
+              {LATEX_RULE_TEXT} 例如行内写成 <code>{'\\(x^2+1\\)'}</code>，独立公式写成 <code>{'\\[x^2-1=0\\]'}</code>。
             </div>
           </div>
         </div>
@@ -262,12 +288,13 @@ export function MissionComposer(props: MissionComposerProps) {
             <ChevronDown className={`h-4 w-4 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
           </Button>
           <div className="text-sm text-muted-foreground">
-            {subject || '未选择学科'} · {difficulty || '难度不限'} · {count || '5'} 题 · {questionType || '题型不限'}
+            {subject || '未选择学科'} · {difficulty || '难度不限'} · {count || '5'} 题 · {questionType || '题型不限'} ·{' '}
+            {useStudyArchive ? '引用资料' : '不引用资料'}
           </div>
         </div>
 
-        {advancedOpen && (
-          <div className="grid gap-4 rounded-[28px] border border-border/70 bg-background/78 p-4 lg:grid-cols-2 xl:grid-cols-4">
+        {advancedOpen ? (
+          <div className="grid gap-4 rounded-[28px] border border-border/70 bg-background/78 p-4 lg:grid-cols-2 xl:grid-cols-5">
             <div className="space-y-2">
               <label htmlFor="ai-generate-subject" className="text-sm font-medium">
                 学科
@@ -282,6 +309,21 @@ export function MissionComposer(props: MissionComposerProps) {
                       {item.name}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="ai-generate-mode" className="text-sm font-medium">
+                模式
+              </label>
+              <Select value={mode} onValueChange={(value) => onModeChange(value as AiGenerateSessionMode)}>
+                <SelectTrigger id="ai-generate-mode" aria-label="模式" className="rounded-2xl">
+                  <SelectValue placeholder="选择模式" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="standard">标准模式</SelectItem>
+                  <SelectItem value="infinite">无限模式</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -303,7 +345,10 @@ export function MissionComposer(props: MissionComposerProps) {
               <label htmlFor="ai-generate-difficulty" className="text-sm font-medium">
                 难度
               </label>
-              <Select value={difficulty || '__any__'} onValueChange={(value) => onDifficultyChange(value === '__any__' ? '' : value)}>
+              <Select
+                value={difficulty || '__any__'}
+                onValueChange={(value) => onDifficultyChange(value === '__any__' ? '' : value)}
+              >
                 <SelectTrigger id="ai-generate-difficulty" aria-label="难度" className="rounded-2xl">
                   <SelectValue placeholder="难度不限" />
                 </SelectTrigger>
@@ -330,7 +375,7 @@ export function MissionComposer(props: MissionComposerProps) {
               />
             </div>
 
-            <div className="rounded-[24px] border border-border/70 bg-background/76 p-4 xl:col-span-4">
+            <div className="rounded-[24px] border border-border/70 bg-background/76 p-4 xl:col-span-5">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <div className="text-sm font-medium">引用自学资料</div>
@@ -342,7 +387,7 @@ export function MissionComposer(props: MissionComposerProps) {
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </section>
   )

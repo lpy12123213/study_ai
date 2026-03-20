@@ -18,6 +18,7 @@ const LoginPage = lazy(() => import('@/pages/LoginPage'))
 const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
 const QuestionLibraryPage = lazy(() => import('@/pages/QuestionLibraryPage'))
 const AiGeneratePage = lazy(() => import('@/pages/AiGeneratePage'))
+const QuestionReviewPage = lazy(() => import('@/pages/aiGenerate/QuestionReviewPage'))
 const DeepThinkPage = lazy(() => import('@/pages/DeepThinkPage'))
 const TaskCenterPage = lazy(() => import('@/pages/TaskCenterPage'))
 const SearchPage = lazy(() => import('@/pages/SearchPage'))
@@ -59,6 +60,7 @@ function App() {
             <Route path="question-evaluate" element={<QuestionEvaluatePage />} />
             <Route path="question-library" element={<QuestionLibraryPage />} />
             <Route path="ai-generate" element={<AiGeneratePage />} />
+            <Route path="ai-generate/review/:sessionId/:questionId" element={<QuestionReviewPage />} />
             <Route path="papers" element={<PapersPage />} />
             <Route path="papers/:paperId" element={<PaperDetailPage />} />
             <Route path="canvas" element={<CanvasPage />} />

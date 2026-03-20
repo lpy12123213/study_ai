@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -23,6 +23,7 @@ from backend.api.question_library_schemas import (
     QuestionLibraryCommitPreviewResponse,
     QuestionLibraryScoreRequest,
 )
+from backend.api.question_evaluate import evaluate_generated_question_review
 from backend.core.llm_client import is_llm_configured
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.crawler_manager import get_crawler
@@ -37,6 +38,9 @@ from backend.database.models import (
     set_starred,
     upsert_question_cache,
     upsert_question_library_items,
+)
+from backend.database.repositories.tasks import (
+    list_task_events as db_list_task_events,
 )
 from backend.database.repositories.tasks import (
     append_task_event as db_append_task_event,
@@ -54,11 +58,16 @@ from backend.question_library.generation import (
     regenerate_question_section,
 )
 from backend.question_library.preview_store import (
-    delete_preview,
     find_latest_pending_preview,
+    find_preview_by_session_id,
+    find_session_by_preview_id,
     load_preview,
+    load_session,
     new_preview_id,
+    new_session_id,
+    save_session,
     save_preview,
+    list_sessions as list_saved_sessions,
 )
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
 from backend.question_library.task_manager import QuestionLibraryTask, QuestionLibraryTaskManager
@@ -78,6 +87,170 @@ _QUESTION_TYPE_HINTS = {"选择题", "解答题", "填空题", "判断题", "证
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+_REVIEW_STATUSES = {"pending_review", "in_review", "approved", "rejected", "confirmed", "committed"}
+
+
+def _normalize_review_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in _REVIEW_STATUSES:
+        return raw
+    return "pending_review"
+
+
+def _normalize_draft_questions(input_value: Any) -> List[dict]:
+    out: List[dict] = []
+    for item in input_value or []:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("question_id") or "").strip()
+        if not qid:
+            continue
+        review = item.get("review") if isinstance(item.get("review"), dict) else None
+        out.append(
+            {
+                "question_id": qid,
+                "stem": str(item.get("stem") or "").strip(),
+                "answer": str(item.get("answer") or "").strip(),
+                "analysis": str(item.get("analysis") or "").strip(),
+                "keep": bool(item.get("keep", True)),
+                "review_status": _normalize_review_status(item.get("review_status")),
+                "review": dict(review) if review else None,
+            }
+        )
+    return out
+
+
+def _serialize_session_preview(obj: dict) -> dict:
+    drafts = _normalize_draft_questions(obj.get("draft_questions") if isinstance(obj, dict) else [])
+    return {
+        "preview_id": str((obj or {}).get("preview_id") or "").strip(),
+        "session_id": str((obj or {}).get("session_id") or "").strip(),
+        "task_id": str((obj or {}).get("task_id") or "").strip(),
+        "subject": str((obj or {}).get("subject") or "").strip(),
+        "topic": str((obj or {}).get("topic") or "").strip(),
+        "mode": str((obj or {}).get("mode") or "standard").strip() or "standard",
+        "count": len(drafts),
+        "draft_questions": drafts,
+    }
+
+
+def _find_draft_index(items: List[dict], question_id: str) -> int:
+    target_id = str(question_id or "").strip()
+    for index, item in enumerate(items):
+        if str((item or {}).get("question_id") or "").strip() == target_id:
+            return index
+    return -1
+
+
+def _merge_drafts(existing: List[dict], incoming: List[dict]) -> List[dict]:
+    merged = [dict(item) for item in _normalize_draft_questions(existing)]
+    for item in _normalize_draft_questions(incoming):
+        index = _find_draft_index(merged, str(item.get("question_id") or ""))
+        if index >= 0:
+            merged[index] = {**merged[index], **item}
+        else:
+            merged.append(dict(item))
+    return merged
+
+
+def _serialize_session_summary(session: dict) -> dict:
+    drafts = _normalize_draft_questions(session.get("draft_questions") if isinstance(session, dict) else [])
+    reasoning_blocks = session.get("reasoning_blocks") if isinstance(session.get("reasoning_blocks"), list) else []
+    return {
+        "session_id": str((session or {}).get("session_id") or "").strip(),
+        "preview_id": str((session or {}).get("preview_id") or "").strip(),
+        "status": str((session or {}).get("status") or "").strip(),
+        "mode": str((session or {}).get("mode") or "standard").strip() or "standard",
+        "subject": str((session or {}).get("subject") or "").strip(),
+        "topic": str((session or {}).get("topic") or "").strip(),
+        "count": len(drafts),
+        "task_ids": list(session.get("task_ids") or []) if isinstance(session.get("task_ids"), list) else [],
+        "latest_task_id": str((session or {}).get("latest_task_id") or "").strip(),
+        "updated_at_s": float((session or {}).get("updated_at_s") or (session or {}).get("created_at_s") or 0.0),
+        "created_at_s": float((session or {}).get("created_at_s") or 0.0),
+        "reasoning_blocks_count": len(reasoning_blocks),
+        "confirmed_question_ids": list(session.get("confirmed_question_ids") or [])
+        if isinstance(session.get("confirmed_question_ids"), list)
+        else [],
+        "stop_requested": bool((session or {}).get("stop_requested")),
+    }
+
+
+async def _load_session_task_events(user_id: str, task_ids: List[str]) -> List[dict]:
+    events: List[dict] = []
+    for task_id in task_ids[-6:]:
+        if not str(task_id or "").strip():
+            continue
+        try:
+            task_events = await db_list_task_events(user_id=user_id, task_id=str(task_id), after_seq=0, limit=500)
+        except Exception:
+            task_events = []
+        for event in task_events or []:
+            if isinstance(event, dict):
+                events.append(dict(event))
+    events.sort(key=lambda item: (str(item.get("created_at") or ""), int(item.get("seq") or 0)))
+    return events[-500:]
+
+
+def _ensure_session(
+    *,
+    session_id: str,
+    user_id: str,
+    preview_id: str,
+    subject: str,
+    topic: str,
+    difficulty: str,
+    question_type: str,
+    mode: str,
+    count: int,
+    use_study_archive: bool,
+    grade_id: str,
+    textbook_version_id: str,
+    knowledge_point_ids: List[str],
+    knowledge_points: List[str],
+    task_id: str,
+    stream_reasoning: bool,
+) -> dict:
+    existing = load_session(session_id) if session_id else None
+    session = dict(existing or {})
+    session["session_id"] = session_id
+    session["user_id"] = user_id
+    session["preview_id"] = preview_id
+    preview_ids = list(session.get("preview_ids") or []) if isinstance(session.get("preview_ids"), list) else []
+    if preview_id and preview_id not in preview_ids:
+        preview_ids.append(preview_id)
+    session["preview_ids"] = preview_ids
+    session["status"] = str(session.get("status") or "pending_review").strip() or "pending_review"
+    session["mode"] = str(mode or session.get("mode") or "standard").strip() or "standard"
+    session["subject"] = subject
+    session["topic"] = topic
+    session["difficulty"] = difficulty
+    session["question_type"] = question_type
+    session["count"] = int(count or 0)
+    session["use_study_archive"] = bool(use_study_archive)
+    session["grade_id"] = str(grade_id or "").strip()
+    session["textbook_version_id"] = str(textbook_version_id or "").strip()
+    session["knowledge_point_ids"] = [str(item or "").strip() for item in (knowledge_point_ids or []) if str(item or "").strip()]
+    session["knowledge_points"] = [str(item or "").strip() for item in (knowledge_points or []) if str(item or "").strip()]
+    session["stream_reasoning"] = bool(stream_reasoning)
+    session["stop_requested"] = False if task_id else bool(session.get("stop_requested"))
+    task_ids = list(session.get("task_ids") or []) if isinstance(session.get("task_ids"), list) else []
+    if task_id and task_id not in task_ids:
+        task_ids.append(task_id)
+    session["task_ids"] = task_ids
+    session["latest_task_id"] = task_ids[-1] if task_ids else ""
+    session.setdefault("reasoning_blocks", [])
+    session.setdefault("draft_questions", [])
+    session.setdefault("confirmed_question_ids", [])
+    return save_session(session)
+
+
+def _touch_session_status(session: dict, *, status: str) -> dict:
+    next_session = dict(session or {})
+    next_session["status"] = str(status or "").strip()
+    return save_session(next_session)
 
 
 def _normalize_topic_key(topic: str) -> str:
@@ -363,17 +536,7 @@ async def get_preview(preview_id: str, user: dict = Depends(require_auth)) -> di
     obj = load_preview(pid)
     if not obj or str(obj.get("user_id") or "").strip() != user_id:
         raise HTTPException(status_code=404, detail="preview_not_found")
-
-    drafts = obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else []
-    return {
-        "success": True,
-        "preview_id": pid,
-        "task_id": str(obj.get("task_id") or "").strip(),
-        "subject": str(obj.get("subject") or "").strip(),
-        "topic": str(obj.get("topic") or "").strip(),
-        "count": len(drafts),
-        "draft_questions": drafts,
-    }
+    return {"success": True, **_serialize_session_preview(obj)}
 
 
 @router.get("/previews/latest/pending", response_model=QuestionLibraryLatestPendingPreviewResponse)
@@ -385,30 +548,67 @@ async def get_latest_pending_preview(user: dict = Depends(require_auth)) -> dict
     obj = find_latest_pending_preview(user_id)
     if not obj:
         return {"success": True, "preview": None}
+    return {"success": True, "preview": _serialize_session_preview(obj)}
 
-    drafts = [
-        {
-            "question_id": str(q.get("question_id") or "").strip(),
-            "stem": str(q.get("stem") or "").strip(),
-            "answer": str(q.get("answer") or "").strip(),
-            "analysis": str(q.get("analysis") or "").strip(),
-            "keep": bool(q.get("keep", True)),
-        }
-        for q in (obj.get("draft_questions") or [])
-        if isinstance(q, dict) and str(q.get("question_id") or "").strip()
-    ]
 
-    return {
-        "success": True,
-        "preview": {
-            "preview_id": str(obj.get("preview_id") or "").strip(),
-            "task_id": str(obj.get("task_id") or "").strip(),
-            "subject": str(obj.get("subject") or "").strip(),
-            "topic": str(obj.get("topic") or "").strip(),
-            "count": len(drafts),
-            "draft_questions": drafts,
-        },
-    }
+@router.get("/sessions", response_model=dict)
+async def list_question_library_sessions(user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    sessions = [_serialize_session_summary(item) for item in list_saved_sessions(user_id, include_archived=True, limit=60)]
+    return {"success": True, "sessions": sessions}
+
+
+@router.get("/sessions/{session_id}", response_model=dict)
+async def get_question_library_session(session_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="missing_session_id")
+
+    session = load_session(sid)
+    if not session or str(session.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="session_not_found")
+
+    task_ids = list(session.get("task_ids") or []) if isinstance(session.get("task_ids"), list) else []
+    task_events = await _load_session_task_events(user_id, task_ids)
+    payload = dict(session)
+    payload["draft_questions"] = _normalize_draft_questions(session.get("draft_questions"))
+    payload["task_events"] = task_events
+    return {"success": True, "session": payload}
+
+
+@router.post("/sessions/{session_id}/stop", response_model=dict)
+async def stop_question_library_session(session_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    session = load_session(session_id)
+    if not session or str(session.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    session = dict(session)
+    session["stop_requested"] = True
+    session["status"] = "stopped"
+    save_session(session)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "status": "stopped"}
+
+
+@router.post("/sessions/{session_id}/archive", response_model=dict)
+async def archive_question_library_session(session_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    session = load_session(session_id)
+    if not session or str(session.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    session = dict(session)
+    session["status"] = "archived"
+    save_session(session)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "status": "archived"}
 
 
 @router.post("/previews/{preview_id}/commit", response_model=QuestionLibraryCommitPreviewResponse)
@@ -436,7 +636,7 @@ async def commit_preview(
     difficulty = str(obj.get("difficulty") or "").strip()
     question_type = str(obj.get("question_type") or "").strip()
 
-    preview_items = obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else []
+    preview_items = _normalize_draft_questions(obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else [])
     preview_by_id: dict[str, dict] = {}
     for it in preview_items:
         if not isinstance(it, dict):
@@ -453,6 +653,9 @@ async def commit_preview(
             continue
         if qid not in preview_by_id:
             continue
+        review_status = _normalize_review_status(preview_by_id[qid].get("review_status"))
+        if review_status not in {"approved", "confirmed"}:
+            raise HTTPException(status_code=409, detail="review_required_before_commit")
         stem = str(q.stem or "").strip()
         answer = str(q.answer or "").strip()
         analysis = str(q.analysis or "").strip()
@@ -489,7 +692,26 @@ async def commit_preview(
         "inserted": len(inserted_ids),
         "question_ids": inserted_ids,
     }
+    committed_set = set(inserted_ids)
+    updated_preview_items: List[dict] = []
+    for item in preview_items:
+        next_item = dict(item)
+        qid = str(next_item.get("question_id") or "").strip()
+        if qid in committed_set:
+            next_item["review_status"] = "committed"
+        updated_preview_items.append(next_item)
+    obj["draft_questions"] = updated_preview_items
     save_preview(obj)
+
+    session = find_session_by_preview_id(user_id, pid)
+    if isinstance(session, dict):
+        next_session = dict(session)
+        next_session["status"] = "committed"
+        next_session["draft_questions"] = updated_preview_items
+        next_session["committed_question_ids"] = inserted_ids
+        confirmed_ids = list(next_session.get("confirmed_question_ids") or []) if isinstance(next_session.get("confirmed_question_ids"), list) else []
+        next_session["confirmed_question_ids"] = [item for item in confirmed_ids if item in committed_set] or inserted_ids
+        save_session(next_session)
 
     return {
         "success": True,
@@ -514,9 +736,179 @@ async def discard_preview(preview_id: str, user: dict = Depends(require_auth)) -
     obj = load_preview(pid)
     if not obj or str(obj.get("user_id") or "").strip() != user_id:
         raise HTTPException(status_code=404, detail="preview_not_found")
+    obj = dict(obj)
+    obj["status"] = "archived_discarded"
+    obj["discarded_at_s"] = time.time()
+    save_preview(obj)
 
-    ok = delete_preview(pid)
-    return {"success": bool(ok)}
+    session = find_session_by_preview_id(user_id, pid)
+    if isinstance(session, dict):
+        next_session = dict(session)
+        next_session["status"] = "archived_discarded"
+        next_session["stop_requested"] = True
+        save_session(next_session)
+
+    return {"success": True}
+
+
+def _load_owned_session_or_404(session_id: str, user_id: str) -> dict:
+    session = load_session(session_id)
+    if not session or str(session.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    return dict(session)
+
+
+def _persist_session_draft_update(session: dict, draft: dict) -> dict:
+    drafts = _normalize_draft_questions(session.get("draft_questions"))
+    index = _find_draft_index(drafts, str(draft.get("question_id") or ""))
+    if index < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+    drafts[index] = {**drafts[index], **dict(draft)}
+    session["draft_questions"] = drafts
+    saved = save_session(session)
+
+    preview_id = str(saved.get("preview_id") or "").strip()
+    preview = load_preview(preview_id) if preview_id else None
+    if isinstance(preview, dict):
+        preview_drafts = _normalize_draft_questions(preview.get("draft_questions"))
+        preview_index = _find_draft_index(preview_drafts, str(draft.get("question_id") or ""))
+        if preview_index >= 0:
+            preview_drafts[preview_index] = {**preview_drafts[preview_index], **dict(draft)}
+            preview["draft_questions"] = preview_drafts
+            save_preview(preview)
+    return saved
+
+
+@router.post("/sessions/{session_id}/questions/{question_id}/review", response_model=dict)
+async def review_session_question(session_id: str, question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    session = _load_owned_session_or_404(session_id, user_id)
+    drafts = _normalize_draft_questions(session.get("draft_questions"))
+    index = _find_draft_index(drafts, question_id)
+    if index < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+
+    draft = dict(drafts[index])
+    review = await evaluate_generated_question_review(
+        subject=str(session.get("subject") or "").strip(),
+        stem=str(draft.get("stem") or "").strip(),
+        answer=str(draft.get("answer") or "").strip(),
+        analysis=str(draft.get("analysis") or "").strip(),
+        requirements=f"目标难度：{str(session.get('difficulty') or '').strip()}；题型：{str(session.get('question_type') or '').strip()}",
+        model=str(LESSON_PLAN_MODEL or "").strip(),
+    )
+    draft["review"] = review
+    if _normalize_review_status(draft.get("review_status")) in {"approved", "rejected", "confirmed", "committed"}:
+        draft["review_status"] = _normalize_review_status(draft.get("review_status"))
+    else:
+        draft["review_status"] = "in_review"
+
+    session = _persist_session_draft_update(session, draft)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "question": draft}
+
+
+@router.post("/sessions/{session_id}/questions/{question_id}/approve", response_model=dict)
+async def approve_session_question(session_id: str, question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    session = _load_owned_session_or_404(session_id, user_id)
+    drafts = _normalize_draft_questions(session.get("draft_questions"))
+    index = _find_draft_index(drafts, question_id)
+    if index < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+
+    draft = dict(drafts[index])
+    if not isinstance(draft.get("review"), dict):
+        review = await evaluate_generated_question_review(
+            subject=str(session.get("subject") or "").strip(),
+            stem=str(draft.get("stem") or "").strip(),
+            answer=str(draft.get("answer") or "").strip(),
+            analysis=str(draft.get("analysis") or "").strip(),
+            requirements=f"目标难度：{str(session.get('difficulty') or '').strip()}；题型：{str(session.get('question_type') or '').strip()}",
+            model=str(LESSON_PLAN_MODEL or "").strip(),
+        )
+        draft["review"] = review
+    draft["review_status"] = "approved"
+    session = _persist_session_draft_update(session, draft)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "question": draft}
+
+
+@router.post("/sessions/{session_id}/questions/{question_id}/reject", response_model=dict)
+async def reject_session_question(session_id: str, question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    session = _load_owned_session_or_404(session_id, user_id)
+    drafts = _normalize_draft_questions(session.get("draft_questions"))
+    index = _find_draft_index(drafts, question_id)
+    if index < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+
+    draft = dict(drafts[index])
+    if not isinstance(draft.get("review"), dict):
+        review = await evaluate_generated_question_review(
+            subject=str(session.get("subject") or "").strip(),
+            stem=str(draft.get("stem") or "").strip(),
+            answer=str(draft.get("answer") or "").strip(),
+            analysis=str(draft.get("analysis") or "").strip(),
+            requirements=f"目标难度：{str(session.get('difficulty') or '').strip()}；题型：{str(session.get('question_type') or '').strip()}",
+            model=str(LESSON_PLAN_MODEL or "").strip(),
+        )
+        draft["review"] = review
+    draft["review_status"] = "rejected"
+    session = _persist_session_draft_update(session, draft)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "question": draft}
+
+
+@router.post("/sessions/{session_id}/questions/{question_id}/confirm", response_model=dict)
+async def confirm_session_question(session_id: str, question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    session = _load_owned_session_or_404(session_id, user_id)
+    drafts = _normalize_draft_questions(session.get("draft_questions"))
+    index = _find_draft_index(drafts, question_id)
+    if index < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+
+    draft = dict(drafts[index])
+    if _normalize_review_status(draft.get("review_status")) != "approved":
+        raise HTTPException(status_code=409, detail="review_required_before_confirm")
+    draft["review_status"] = "confirmed"
+    confirmed_ids = list(session.get("confirmed_question_ids") or []) if isinstance(session.get("confirmed_question_ids"), list) else []
+    if question_id not in confirmed_ids:
+        confirmed_ids.append(question_id)
+    session["confirmed_question_ids"] = confirmed_ids
+    session = _persist_session_draft_update(session, draft)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "question": draft}
+
+
+@router.post("/sessions/{session_id}/questions/{question_id}/unconfirm", response_model=dict)
+async def unconfirm_session_question(session_id: str, question_id: str, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    session = _load_owned_session_or_404(session_id, user_id)
+    drafts = _normalize_draft_questions(session.get("draft_questions"))
+    index = _find_draft_index(drafts, question_id)
+    if index < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+
+    draft = dict(drafts[index])
+    if _normalize_review_status(draft.get("review_status")) == "confirmed":
+        draft["review_status"] = "approved"
+    confirmed_ids = [item for item in (session.get("confirmed_question_ids") or []) if str(item or "").strip() and str(item or "").strip() != question_id]
+    session["confirmed_question_ids"] = confirmed_ids
+    session = _persist_session_draft_update(session, draft)
+    return {"success": True, "session_id": str(session.get("session_id") or ""), "question": draft}
 
 
 @router.post("/previews/{preview_id}/regenerate-section")
@@ -635,6 +1027,10 @@ async def regenerate_preview_section(
             if study_markdown and not str(obj.get("study_markdown") or "").strip():
                 obj["study_markdown"] = study_markdown
             save_preview(obj)
+            session = find_session_by_preview_id(user_id, pid)
+            if isinstance(session, dict):
+                session["draft_questions"] = _merge_drafts(session.get("draft_questions"), [target_question])
+                save_session(session)
 
             done_payload = {
                 "preview_id": pid,
@@ -875,6 +1271,16 @@ async def generate_and_save(
     difficulty = (request.difficulty or "").strip()
     question_type = (request.question_type or "").strip()
     topic_key = _normalize_topic_key(topic_raw) or topic_raw
+    session_id = str(request.session_id or "").strip()
+    mode = str(request.mode or "standard").strip() or "standard"
+    if mode not in {"standard", "infinite"}:
+        mode = "standard"
+    append_mode = bool(request.append)
+    stream_reasoning = bool(request.stream_reasoning)
+    grade_id = str(request.grade_id or "").strip()
+    textbook_version_id = str(request.textbook_version_id or "").strip()
+    knowledge_point_ids = [str(item or "").strip() for item in (request.knowledge_point_ids or []) if str(item or "").strip()]
+    knowledge_points = [str(item or "").strip() for item in (request.knowledge_points or []) if str(item or "").strip()]
     if not question_type:
         inferred = _infer_question_type_from_topic(topic_raw)
         if inferred:
@@ -887,6 +1293,39 @@ async def generate_and_save(
 
     task_id = (request.task_id or "").strip() or f"ql_gen_{uuid.uuid4().hex[:12]}"
     use_archive = bool(request.use_study_archive)
+    existing_session = load_session(session_id) if session_id else None
+    if session_id and existing_session and str(existing_session.get("user_id") or "").strip() != user_id:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    if not session_id:
+        session_id = new_session_id()
+
+    existing_preview = find_preview_by_session_id(user_id, session_id) if append_mode and session_id else None
+    preview_id = (
+        str((existing_session or {}).get("preview_id") or "").strip()
+        if append_mode and isinstance(existing_session, dict)
+        else ""
+    ) or str((existing_preview or {}).get("preview_id") or "").strip() or new_preview_id()
+
+    current_session = _ensure_session(
+        session_id=session_id,
+        user_id=user_id,
+        preview_id=preview_id,
+        subject=subject,
+        topic=topic_raw,
+        difficulty=difficulty,
+        question_type=question_type,
+        mode=mode,
+        count=count,
+        use_study_archive=use_archive,
+        grade_id=grade_id,
+        textbook_version_id=textbook_version_id,
+        knowledge_point_ids=knowledge_point_ids,
+        knowledge_points=knowledge_points,
+        task_id=task_id,
+        stream_reasoning=stream_reasoning,
+    )
+    current_session["status"] = "running"
+    save_session(current_session)
 
     started_at = _utcnow()
     await db_upsert_task(
@@ -989,6 +1428,50 @@ async def generate_and_save(
             except Exception:
                 pass
 
+        async def _emit_reasoning_event(event: dict) -> None:
+            if not isinstance(event, dict):
+                return
+            event_type = str(event.get("type") or "reasoning_delta").strip() or "reasoning_delta"
+            payload = {key: value for key, value in event.items() if key != "type"}
+            await _tasks.append_event(task, {"type": event_type, "data": payload})
+            try:
+                await db_append_task_event(user_id=user_id, task_id=task_id, event_type=event_type, payload=payload)
+            except Exception:
+                pass
+
+            current_session = load_session(session_id)
+            if not isinstance(current_session, dict):
+                return
+
+            if event_type == "reasoning_delta":
+                blocks = list(current_session.get("reasoning_blocks") or []) if isinstance(current_session.get("reasoning_blocks"), list) else []
+                blocks.append(
+                    {
+                        "id": f"reason-{uuid.uuid4().hex[:12]}",
+                        "task_id": task_id,
+                        "stage_id": str(payload.get("stage_id") or "").strip(),
+                        "stage_label": str(payload.get("stage_label") or "").strip(),
+                        "source": str(payload.get("source") or "").strip() or "trace",
+                        "content": str(payload.get("content") or "").strip(),
+                        "created_at": _utcnow().isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                    }
+                )
+                current_session["reasoning_blocks"] = blocks[-600:]
+            elif event_type == "reasoning_status":
+                statuses = list(current_session.get("reasoning_statuses") or []) if isinstance(current_session.get("reasoning_statuses"), list) else []
+                statuses.append(
+                    {
+                        "task_id": task_id,
+                        "stage_id": str(payload.get("stage_id") or "").strip(),
+                        "stage_label": str(payload.get("stage_label") or "").strip(),
+                        "mode": str(payload.get("mode") or "").strip() or "trace",
+                        "message": str(payload.get("message") or "").strip(),
+                        "created_at": _utcnow().isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                    }
+                )
+                current_session["reasoning_statuses"] = statuses[-200:]
+            save_session(current_session)
+
         async def _update_stage_step(
             *,
             stage_id: str,
@@ -1073,6 +1556,26 @@ async def generate_and_save(
                 stats=stats,
                 sample=sample,
             )
+            if not stream_reasoning:
+                await _emit_reasoning_event(
+                    {
+                        "type": "reasoning_status",
+                        "stage_id": normalized_stage,
+                        "stage_label": label,
+                        "mode": "trace",
+                        "message": "当前模型未启用原始 reasoning，已降级为事件级 trace。",
+                    }
+                )
+                if summary:
+                    await _emit_reasoning_event(
+                        {
+                            "type": "reasoning_delta",
+                            "stage_id": normalized_stage,
+                            "stage_label": label,
+                            "source": "trace",
+                            "content": summary,
+                        }
+                    )
 
         async def _complete_active_stage(*, stats: Optional[dict] = None, sample: Optional[dict] = None) -> None:
             nonlocal active_stage_id
@@ -1111,7 +1614,13 @@ async def generate_and_save(
                 if isinstance(archive, dict):
                     study_markdown = str(archive.get("markdown") or "")
 
-            source_pack = await build_source_pack(study_markdown, subject, topic_key)
+            source_pack = await build_source_pack(
+                study_markdown,
+                subject,
+                topic_key,
+                stream_reasoning=stream_reasoning,
+                on_reasoning_event=_emit_reasoning_event,
+            )
             await _update_stage_step(
                 stage_id="source_pack",
                 stage_label=stage_labels["source_pack"],
@@ -1154,6 +1663,8 @@ async def generate_and_save(
                 difficulty=difficulty,
                 question_type=question_type,
                 on_stage_event=_handle_generation_stage,
+                on_reasoning_event=_emit_reasoning_event,
+                stream_reasoning=stream_reasoning,
                 config=None,
             )
             await _complete_active_stage()
@@ -1194,10 +1705,16 @@ async def generate_and_save(
                 else None,
             )
 
-            preview_id = new_preview_id()
+            existing_preview = load_preview(preview_id) if append_mode else None
+            merged_drafts = _merge_drafts(
+                existing_preview.get("draft_questions") if isinstance(existing_preview, dict) else [],
+                drafts,
+            )
             save_preview(
                 {
                     "preview_id": preview_id,
+                    "session_id": session_id,
+                    "mode": mode,
                     "status": "pending_review",
                     "user_id": user_id,
                     "task_id": task_id,
@@ -1206,26 +1723,49 @@ async def generate_and_save(
                     "difficulty": difficulty,
                     "question_type": question_type,
                     "study_markdown": study_markdown,
-                    "draft_questions": drafts,
+                    "draft_questions": merged_drafts,
                 }
             )
+            current_session = _ensure_session(
+                session_id=session_id,
+                user_id=user_id,
+                preview_id=preview_id,
+                subject=subject,
+                topic=topic_raw,
+                difficulty=difficulty,
+                question_type=question_type,
+                mode=mode,
+                count=count,
+                use_study_archive=use_archive,
+                grade_id=grade_id,
+                textbook_version_id=textbook_version_id,
+                knowledge_point_ids=knowledge_point_ids,
+                knowledge_points=knowledge_points,
+                task_id=task_id,
+                stream_reasoning=stream_reasoning,
+            )
+            current_session["status"] = "pending_review"
+            current_session["draft_questions"] = merged_drafts
+            save_session(current_session)
             await _complete_active_stage(
-                stats={"draft_count": len(drafts), "preview_id": preview_id},
+                stats={"draft_count": len(merged_drafts), "preview_id": preview_id},
                 sample={
-                    "question_id": str((drafts[0] or {}).get("question_id") or ""),
-                    "stem_preview": str((drafts[0] or {}).get("stem") or "")[:120],
+                    "question_id": str((merged_drafts[0] or {}).get("question_id") or ""),
+                    "stem_preview": str((merged_drafts[0] or {}).get("stem") or "")[:120],
                 }
-                if drafts
+                if merged_drafts
                 else None,
             )
 
             done_payload = {
                 "success": True,
+                "session_id": session_id,
                 "preview_id": preview_id,
                 "subject": subject,
-                "topic": topic,
-                "count": len(drafts),
-                "draft_questions": drafts,
+                "topic": topic_raw,
+                "mode": mode,
+                "count": len(merged_drafts),
+                "draft_questions": merged_drafts,
             }
             await _tasks.append_event(task, {"type": "done", "data": done_payload})
             try:
@@ -1235,7 +1775,13 @@ async def generate_and_save(
                     task_id=task_id,
                     status="completed",
                     progress=100.0,
-                    result={"preview_id": preview_id, "subject": subject, "topic": topic, "count": len(drafts)},
+                    result={
+                        "session_id": session_id,
+                        "preview_id": preview_id,
+                        "subject": subject,
+                        "topic": topic_raw,
+                        "count": len(merged_drafts),
+                    },
                     ended_at=_utcnow(),
                 )
             except Exception:
@@ -1261,6 +1807,11 @@ async def generate_and_save(
                 )
             except Exception:
                 pass
+            current_session = load_session(session_id)
+            if isinstance(current_session, dict):
+                current_session["status"] = "stopped"
+                current_session["stop_requested"] = True
+                save_session(current_session)
             raise
         except Exception as exc:  # pragma: no cover
             if active_stage_id:
@@ -1288,6 +1839,10 @@ async def generate_and_save(
                 )
             except Exception:
                 pass
+            current_session = load_session(session_id)
+            if isinstance(current_session, dict):
+                current_session["status"] = "failed"
+                save_session(current_session)
         finally:
             if task.status == "running":
                 if active_stage_id:

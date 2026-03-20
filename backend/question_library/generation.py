@@ -90,6 +90,7 @@ _MATH_SURFACES = [
 ]
 
 StageEventHandler = Optional[Callable[[dict], Awaitable[None] | None]]
+ReasoningEventHandler = Optional[Callable[[dict], Awaitable[None] | None]]
 
 
 def _is_math_subject(subject: str) -> bool:
@@ -198,6 +199,117 @@ async def _emit_stage_event(
             await result
     except Exception:
         return
+
+
+async def _emit_reasoning_event(
+    on_reasoning_event: ReasoningEventHandler,
+    *,
+    event_type: str,
+    stage_id: str,
+    stage_label: str,
+    source: str = "",
+    content: str = "",
+    mode: str = "",
+    message: str = "",
+) -> None:
+    if on_reasoning_event is None:
+        return
+
+    payload = {
+        "type": str(event_type or "").strip() or "reasoning_delta",
+        "stage_id": str(stage_id or "").strip(),
+        "stage_label": str(stage_label or "").strip(),
+    }
+    if source:
+        payload["source"] = str(source or "").strip()
+    if content:
+        payload["content"] = str(content or "").strip()
+    if mode:
+        payload["mode"] = str(mode or "").strip()
+    if message:
+        payload["message"] = str(message or "").strip()
+
+    try:
+        result = on_reasoning_event(payload)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        return
+
+
+async def _chat_json_with_reasoning(
+    *,
+    messages: List[Dict[str, str]],
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    req_id_prefix: str,
+    retries: int,
+    raise_on_fail: bool,
+    stage_id: str,
+    stage_label: str,
+    stream_reasoning: bool,
+    on_reasoning_event: ReasoningEventHandler,
+) -> str:
+    emitted_chars = 0
+
+    async def _on_reasoning_delta(chunk: str) -> None:
+        nonlocal emitted_chars
+        text = str(chunk or "")
+        if not text.strip():
+            return
+        emitted_chars += len(text)
+        await _emit_reasoning_event(
+            on_reasoning_event,
+            event_type="reasoning_delta",
+            stage_id=stage_id,
+            stage_label=stage_label,
+            source="raw",
+            content=text,
+        )
+
+    if stream_reasoning:
+        await _emit_reasoning_event(
+            on_reasoning_event,
+            event_type="reasoning_status",
+            stage_id=stage_id,
+            stage_label=stage_label,
+            mode="raw",
+            message="尝试透传模型原始 reasoning。",
+        )
+
+    text = await chat_completion_text(
+        messages=messages,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+        reasoning={"effort": "high", "exclude": not bool(stream_reasoning)},
+        stream=bool(stream_reasoning),
+        on_reasoning_delta=_on_reasoning_delta if stream_reasoning else None,
+        raise_on_fail=raise_on_fail,
+        retries=retries,
+        req_id_prefix=req_id_prefix,
+    )
+
+    if stream_reasoning and emitted_chars <= 0:
+        await _emit_reasoning_event(
+            on_reasoning_event,
+            event_type="reasoning_status",
+            stage_id=stage_id,
+            stage_label=stage_label,
+            mode="trace",
+            message="当前模型未返回原始 reasoning，已降级为事件级 trace。",
+        )
+        await _emit_reasoning_event(
+            on_reasoning_event,
+            event_type="reasoning_delta",
+            stage_id=stage_id,
+            stage_label=stage_label,
+            source="trace",
+            content=f"{stage_label} 已完成一次模型调用。",
+        )
+    return text
 
 
 def _extract_json_obj(text: str) -> Dict[str, Any]:
@@ -400,7 +512,14 @@ def _normalize_question_item(q: dict, spec: dict) -> Optional[dict]:
     }
 
 
-async def build_source_pack(study_markdown: str, subject: str, topic: str) -> dict:
+async def build_source_pack(
+    study_markdown: str,
+    subject: str,
+    topic: str,
+    *,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
     subj = str(subject or "").strip()
     top = str(topic or "").strip()
     md = _clip(str(study_markdown or ""), 12000)
@@ -430,7 +549,7 @@ async def build_source_pack(study_markdown: str, subject: str, topic: str) -> di
         },
     }
 
-    text = await chat_completion_text(
+    text = await _chat_json_with_reasoning(
         messages=[
             {"role": "system", "content": "你是教研员助手，擅长把学习资料压缩成可用于出题的结构化要点。请严格输出 JSON object。"},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -438,12 +557,13 @@ async def build_source_pack(study_markdown: str, subject: str, topic: str) -> di
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
         temperature=0.2,
         max_tokens=1600,
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=False,
-        retries=2,
         req_id_prefix="ql_distill",
+        retries=2,
+        raise_on_fail=False,
+        stage_id="source_pack",
+        stage_label="素材整理",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
     )
 
     obj = _extract_json_obj(text)
@@ -627,7 +747,14 @@ def beam_select(specs: List[dict], config: dict) -> List[dict]:
     return scored[:bw]
 
 
-async def realize_drafts(spec: dict, *, source_pack: dict, n: int = 2) -> List[dict]:
+async def realize_drafts(
+    spec: dict,
+    *,
+    source_pack: dict,
+    n: int = 2,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> List[dict]:
     if not is_llm_configured():
         return []
 
@@ -673,17 +800,18 @@ async def realize_drafts(spec: dict, *, source_pack: dict, n: int = 2) -> List[d
                 *messages,
             ]
 
-        text = await chat_completion_text(
+        text = await _chat_json_with_reasoning(
             messages=messages,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"},
-            reasoning={"effort": "high", "exclude": True},
-            stream=False,
-            raise_on_fail=True,
-            retries=3,
             req_id_prefix="qlg",
+            retries=3,
+            raise_on_fail=True,
+            stage_id="draft_realization",
+            stage_label="草稿生成",
+            stream_reasoning=stream_reasoning,
+            on_reasoning_event=on_reasoning_event,
         )
 
         qs = _extract_question_items(_extract_json_value(text))
@@ -859,17 +987,18 @@ async def regenerate_question_section(
         analysis=analysis,
     )
 
-    text = await chat_completion_text(
+    text = await _chat_json_with_reasoning(
         messages=messages,
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
         temperature=float(LESSON_PLAN_TEMPERATURE),
         max_tokens=int(LESSON_PLAN_MAX_TOKENS),
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=False,
-        retries=3,
         req_id_prefix="qlr",
+        retries=3,
+        raise_on_fail=False,
+        stage_id="draft_realization",
+        stage_label="草稿生成",
+        stream_reasoning=False,
+        on_reasoning_event=None,
     )
 
     obj = _extract_json_obj(text)
@@ -883,7 +1012,13 @@ async def regenerate_question_section(
     return ""
 
 
-async def solve_draft(stem: str, options: dict) -> dict:
+async def solve_draft(
+    stem: str,
+    options: dict,
+    *,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
     if not is_llm_configured():
         return {"match": False, "final_answer": "", "issues": ["llm_not_configured"], "summary": ""}
 
@@ -902,7 +1037,7 @@ async def solve_draft(stem: str, options: dict) -> dict:
         },
     }
 
-    text = await chat_completion_text(
+    text = await _chat_json_with_reasoning(
         messages=[
             {
                 "role": "system",
@@ -913,12 +1048,13 @@ async def solve_draft(stem: str, options: dict) -> dict:
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
         temperature=0.2,
         max_tokens=1600,
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=False,
-        retries=2,
         req_id_prefix="ql_solver",
+        retries=2,
+        raise_on_fail=False,
+        stage_id="judge",
+        stage_label="判题筛选",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
     )
     obj = _extract_json_obj(text)
     match = bool(obj.get("match"))
@@ -931,7 +1067,12 @@ async def solve_draft(stem: str, options: dict) -> dict:
     }
 
 
-async def check_ambiguity(draft: dict) -> dict:
+async def check_ambiguity(
+    draft: dict,
+    *,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
     if not is_llm_configured():
         return {"ambiguous": True, "issues": ["llm_not_configured"], "summary": ""}
 
@@ -945,7 +1086,7 @@ async def check_ambiguity(draft: dict) -> dict:
         },
     }
 
-    text = await chat_completion_text(
+    text = await _chat_json_with_reasoning(
         messages=[
             {"role": "system", "content": "你是审题专家，专门寻找歧义与多解风险。严格输出 JSON object。"},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -953,12 +1094,13 @@ async def check_ambiguity(draft: dict) -> dict:
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
         temperature=0.2,
         max_tokens=1400,
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=False,
-        retries=2,
         req_id_prefix="ql_amb",
+        retries=2,
+        raise_on_fail=False,
+        stage_id="judge",
+        stage_label="判题筛选",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
     )
     obj = _extract_json_obj(text)
     issues = obj.get("issues")
@@ -969,7 +1111,13 @@ async def check_ambiguity(draft: dict) -> dict:
     }
 
 
-async def judge_draft(draft: dict, spec: dict) -> dict:
+async def judge_draft(
+    draft: dict,
+    spec: dict,
+    *,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
     if not is_llm_configured():
         return {"pass": False, "overall_score": 0, "issues": ["llm_not_configured"], "summary": ""}
 
@@ -1014,7 +1162,7 @@ async def judge_draft(draft: dict, spec: dict) -> dict:
         },
     }
 
-    text = await chat_completion_text(
+    text = await _chat_json_with_reasoning(
         messages=[
             {
                 "role": "system",
@@ -1025,12 +1173,13 @@ async def judge_draft(draft: dict, spec: dict) -> dict:
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
         temperature=0.2,
         max_tokens=int(LESSON_PLAN_MAX_TOKENS),
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=False,
-        retries=3,
         req_id_prefix="ql_judge",
+        retries=3,
+        raise_on_fail=False,
+        stage_id="judge",
+        stage_label="判题筛选",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
     )
     obj = _extract_json_obj(text)
     issues = obj.get("issues")
@@ -1049,7 +1198,13 @@ async def judge_draft(draft: dict, spec: dict) -> dict:
     }
 
 
-async def refine_draft(draft: dict, judge: dict) -> dict:
+async def refine_draft(
+    draft: dict,
+    judge: dict,
+    *,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
     if not is_llm_configured():
         return dict(draft or {})
 
@@ -1064,7 +1219,7 @@ async def refine_draft(draft: dict, judge: dict) -> dict:
         "output_schema": {"stem": "string", "answer": "string", "analysis": "string"},
     }
 
-    text = await chat_completion_text(
+    text = await _chat_json_with_reasoning(
         messages=[
             {
                 "role": "system",
@@ -1075,12 +1230,13 @@ async def refine_draft(draft: dict, judge: dict) -> dict:
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
         temperature=0.25,
         max_tokens=int(LESSON_PLAN_MAX_TOKENS),
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=False,
-        retries=2,
         req_id_prefix="ql_repair",
+        retries=2,
+        raise_on_fail=False,
+        stage_id="judge",
+        stage_label="判题筛选",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
     )
     obj = _extract_json_obj(text)
     out = dict(draft or {})
@@ -1151,6 +1307,8 @@ async def generate_questions(
     difficulty: str,
     question_type: str,
     on_stage_event: StageEventHandler = None,
+    on_reasoning_event: ReasoningEventHandler = None,
+    stream_reasoning: bool = False,
     config: Optional[dict] = None,
 ) -> List[dict]:
     cfg = dict(DEFAULT_SEARCH_CONFIG)
@@ -1166,6 +1324,8 @@ async def generate_questions(
                 str(source_pack.get("study_markdown") or ""),
                 str(source_pack.get("subject") or ""),
                 str(source_pack.get("topic") or ""),
+                stream_reasoning=stream_reasoning,
+                on_reasoning_event=on_reasoning_event,
             )
         except Exception:
             pass
@@ -1216,7 +1376,13 @@ async def generate_questions(
     realize_failures = 0
     for spec in specs:
         try:
-            ds = await realize_drafts(spec, source_pack=source_pack, n=per_spec)
+            ds = await realize_drafts(
+                spec,
+                source_pack=source_pack,
+                n=per_spec,
+                stream_reasoning=stream_reasoning,
+                on_reasoning_event=on_reasoning_event,
+            )
         except Exception as exc:
             realize_failures += 1
             logger.warning(
@@ -1275,7 +1441,12 @@ async def generate_questions(
         outcomes: List[dict] = []
         for _ in range(solver_consensus_n):
             try:
-                result = await solve_draft(stem_text, solve_options)
+                result = await solve_draft(
+                    stem_text,
+                    solve_options,
+                    stream_reasoning=stream_reasoning,
+                    on_reasoning_event=on_reasoning_event,
+                )
             except Exception as exc:
                 result = {
                     "match": False,
@@ -1333,9 +1504,18 @@ async def generate_questions(
                 str(current.get("stem") or ""),
                 {"subject": str(spec.get("subject") or ""), "proposed_answer": str(current.get("answer") or "")},
             )
-            amb = await check_ambiguity(current)
+            amb = await check_ambiguity(
+                current,
+                stream_reasoning=stream_reasoning,
+                on_reasoning_event=on_reasoning_event,
+            )
             ambiguous_issues = [str(x or "").strip() for x in (amb.get("issues") or []) if str(x or "").strip()][:6]
-            judge = await judge_draft(current, spec)
+            judge = await judge_draft(
+                current,
+                spec,
+                stream_reasoning=stream_reasoning,
+                on_reasoning_event=on_reasoning_event,
+            )
             judge = dict(judge or {})
 
             issues = list(judge.get("issues") or []) if isinstance(judge.get("issues"), list) else []
@@ -1428,7 +1608,12 @@ async def generate_questions(
             if not can_repair:
                 break
 
-            current = await refine_draft(current, judge)
+            current = await refine_draft(
+                current,
+                judge,
+                stream_reasoning=stream_reasoning,
+                on_reasoning_event=on_reasoning_event,
+            )
             repairs_attempted += 1
             attempt += 1
 

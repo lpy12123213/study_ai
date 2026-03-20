@@ -32,8 +32,10 @@ export interface QuestionLibraryTaskMeta {
 
 export interface QuestionLibraryDraftPreview {
   previewId: string
+  sessionId: string
   subject: string
   topic: string
+  mode?: 'standard' | 'infinite' | string
   count: number
   draftQuestions: QuestionLibraryDraftQuestion[]
   taskId: string
@@ -77,11 +79,20 @@ export function useQuestionLibraryTasks(options: {
 
   const [tasks, setTasks] = useState<QuestionLibraryTaskMeta[]>([])
   const [draftPreview, setDraftPreview] = useState<QuestionLibraryDraftPreview | null>(null)
+  const [taskEventsByTaskId, setTaskEventsByTaskId] = useState<Record<string, SseEnvelope[]>>({})
 
   const seenStepIdsRef = useRef<Record<string, Record<string, boolean>>>({})
   const restoreAttemptedRef = useRef(false)
 
   const clearDraftPreview = useCallback(() => setDraftPreview(null), [])
+
+  const getTaskEvents = useCallback(
+    (taskId: string): SseEnvelope[] => {
+      const id = String(taskId || '').trim()
+      return id ? taskEventsByTaskId[id] || [] : []
+    },
+    [taskEventsByTaskId]
+  )
 
   const normalizeDraftQuestions = useCallback((input: unknown): QuestionLibraryDraftQuestion[] => {
     const list = Array.isArray(input) ? (input as any[]) : []
@@ -99,6 +110,31 @@ export function useQuestionLibraryTasks(options: {
         answer,
         analysis,
         keep: (it as any).keep === false ? false : true,
+        review_status: (it as any).review_status || (it as any).reviewStatus || undefined,
+        review: (it as any).review && typeof (it as any).review === 'object'
+          ? {
+              verdict: String((it as any).review.verdict || '').trim(),
+              overall_score: Number((it as any).review.overall_score ?? (it as any).review.overallScore ?? 0) || 0,
+              dimensions: Array.isArray((it as any).review.dimensions)
+                ? (it as any).review.dimensions
+                    .filter((item: any) => item && typeof item === 'object')
+                    .map((item: any) => ({
+                      name: String(item.name || '').trim(),
+                      score: Number(item.score || 0) || 0,
+                      comment: String(item.comment || '').trim(),
+                    }))
+                    .filter((item: any) => item.name)
+                : [],
+              highlights: Array.isArray((it as any).review.highlights)
+                ? (it as any).review.highlights.filter((item: any) => typeof item === 'string')
+                : [],
+              issues: Array.isArray((it as any).review.issues)
+                ? (it as any).review.issues.filter((item: any) => typeof item === 'string')
+                : [],
+              summary: String((it as any).review.summary || '').trim(),
+              model: String((it as any).review.model || '').trim(),
+            }
+          : null,
       })
     }
     return out
@@ -153,6 +189,13 @@ export function useQuestionLibraryTasks(options: {
   const handleEnvelope = useCallback(
     (taskId: string, env: SseEnvelope) => {
       const id = String(env.taskId || taskId || '').trim() || taskId
+      setTaskEventsByTaskId((prev) => {
+        const existing = prev[id] || []
+        return {
+          ...prev,
+          [id]: [...existing, env].slice(-400),
+        }
+      })
       const seq = typeof env.seq === 'number' && Number.isFinite(env.seq) ? env.seq : null
       if (seq && seq > 0) upsertTask({ taskId: id, lastSeq: seq })
 
@@ -197,8 +240,10 @@ export function useQuestionLibraryTasks(options: {
           if (drafts.length > 0) {
             setDraftPreview({
               previewId,
+              sessionId: String(payload?.session_id || payload?.sessionId || '').trim(),
               subject: String(payload?.subject || '').trim(),
               topic: String(payload?.topic || '').trim(),
+              mode: String(payload?.mode || 'standard').trim() || 'standard',
               count: Math.max(0, Number(payload?.count || drafts.length || 0)) || drafts.length,
               draftQuestions: drafts,
               taskId: id,
@@ -329,8 +374,10 @@ export function useQuestionLibraryTasks(options: {
         const taskId = String(resp.preview.task_id || '').trim() || `ql-preview-${resp.preview.preview_id}`
         setDraftPreview({
           previewId: String(resp.preview.preview_id || '').trim(),
+          sessionId: String((resp.preview as any).session_id || '').trim(),
           subject: String(resp.preview.subject || '').trim(),
           topic: String(resp.preview.topic || '').trim(),
+          mode: String((resp.preview as any).mode || 'standard').trim() || 'standard',
           count: Math.max(0, Number(resp.preview.count || drafts.length || 0)) || drafts.length,
           draftQuestions: drafts,
           taskId,
@@ -352,7 +399,8 @@ export function useQuestionLibraryTasks(options: {
     runCrawl,
     runGenerate,
     runScore,
-    draftPreview,
+      draftPreview,
     clearDraftPreview,
+    getTaskEvents,
   }
 }

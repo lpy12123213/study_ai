@@ -87,6 +87,14 @@ export interface GenerateQuestionsPayload {
   question_type?: string
   count?: number
   use_study_archive?: boolean
+  session_id?: string
+  mode?: 'standard' | 'infinite'
+  grade_id?: string
+  textbook_version_id?: string
+  knowledge_point_ids?: string[]
+  knowledge_points?: string[]
+  append?: boolean
+  stream_reasoning?: boolean
   task_id?: string
 }
 
@@ -96,14 +104,26 @@ export interface QuestionLibraryDraftQuestion {
   answer: string
   analysis: string
   keep?: boolean
+  review_status?: 'pending_review' | 'in_review' | 'approved' | 'rejected' | 'confirmed' | 'committed'
+  review?: {
+    verdict: string
+    overall_score: number
+    dimensions: Array<{ name: string; score: number; comment: string }>
+    highlights: string[]
+    issues: string[]
+    summary: string
+    model: string
+  } | null
 }
 
 export interface QuestionLibraryPreviewResponse {
   success: boolean
   preview_id: string
+  session_id?: string
   task_id?: string
   subject: string
   topic: string
+  mode?: 'standard' | 'infinite'
   count: number
   draft_questions: QuestionLibraryDraftQuestion[]
 }
@@ -136,6 +156,47 @@ export interface RegenerateQuestionLibrarySectionEvent {
   progress?: number
   draft_question?: QuestionLibraryDraftQuestion
   message?: string
+}
+
+export interface QuestionLibraryReasoningBlock {
+  id: string
+  task_id?: string
+  stage_id?: string
+  stage_label?: string
+  source?: 'raw' | 'trace' | string
+  content: string
+  created_at?: string
+}
+
+export interface QuestionLibrarySessionSummary {
+  session_id: string
+  preview_id?: string
+  status: string
+  mode: 'standard' | 'infinite' | string
+  subject: string
+  topic: string
+  count: number
+  task_ids: string[]
+  latest_task_id?: string
+  updated_at_s?: number
+  created_at_s?: number
+  reasoning_blocks_count?: number
+  confirmed_question_ids?: string[]
+  stop_requested?: boolean
+}
+
+export interface QuestionLibrarySessionDetail extends QuestionLibrarySessionSummary {
+  difficulty?: string
+  question_type?: string
+  use_study_archive?: boolean
+  grade_id?: string
+  textbook_version_id?: string
+  knowledge_point_ids?: string[]
+  knowledge_points?: string[]
+  stream_reasoning?: boolean
+  draft_questions: QuestionLibraryDraftQuestion[]
+  reasoning_blocks: QuestionLibraryReasoningBlock[]
+  task_events: SseEnvelope[]
 }
 
 export interface ScoreQuestionLibraryBatchPayload {
@@ -211,6 +272,92 @@ export async function getQuestionLibraryPreview(previewId: string): Promise<Ques
 export async function getLatestPendingQuestionLibraryPreview(): Promise<QuestionLibraryLatestPendingPreviewResponse> {
   const resp = await apiClient.get('/question-library/previews/latest/pending')
   return resp.data as QuestionLibraryLatestPendingPreviewResponse
+}
+
+export async function listQuestionLibrarySessions(): Promise<{ success: boolean; sessions: QuestionLibrarySessionSummary[] }> {
+  const resp = await apiClient.get('/question-library/sessions')
+  return resp.data as { success: boolean; sessions: QuestionLibrarySessionSummary[] }
+}
+
+export async function getQuestionLibrarySession(sessionId: string): Promise<{ success: boolean; session: QuestionLibrarySessionDetail }> {
+  const sid = String(sessionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  const resp = await apiClient.get(`/question-library/sessions/${encodeURIComponent(sid)}`)
+  return resp.data as { success: boolean; session: QuestionLibrarySessionDetail }
+}
+
+export async function stopQuestionLibrarySession(sessionId: string): Promise<{ success: boolean; session_id: string; status: string }> {
+  const sid = String(sessionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/stop`)
+  return resp.data as { success: boolean; session_id: string; status: string }
+}
+
+export async function archiveQuestionLibrarySession(sessionId: string): Promise<{ success: boolean; session_id: string; status: string }> {
+  const sid = String(sessionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/archive`)
+  return resp.data as { success: boolean; session_id: string; status: string }
+}
+
+export async function reviewQuestionLibrarySessionQuestion(
+  sessionId: string,
+  questionId: string
+): Promise<{ success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }> {
+  const sid = String(sessionId || '').trim()
+  const qid = String(questionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/review`)
+  return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
+}
+
+export async function approveQuestionLibrarySessionQuestion(
+  sessionId: string,
+  questionId: string
+): Promise<{ success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }> {
+  const sid = String(sessionId || '').trim()
+  const qid = String(questionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/approve`)
+  return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
+}
+
+export async function rejectQuestionLibrarySessionQuestion(
+  sessionId: string,
+  questionId: string
+): Promise<{ success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }> {
+  const sid = String(sessionId || '').trim()
+  const qid = String(questionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/reject`)
+  return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
+}
+
+export async function confirmQuestionLibrarySessionQuestion(
+  sessionId: string,
+  questionId: string
+): Promise<{ success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }> {
+  const sid = String(sessionId || '').trim()
+  const qid = String(questionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/confirm`)
+  return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
+}
+
+export async function unconfirmQuestionLibrarySessionQuestion(
+  sessionId: string,
+  questionId: string
+): Promise<{ success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }> {
+  const sid = String(sessionId || '').trim()
+  const qid = String(questionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/unconfirm`)
+  return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
 }
 
 export async function commitQuestionLibraryPreview(

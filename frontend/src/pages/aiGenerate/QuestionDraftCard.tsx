@@ -1,8 +1,10 @@
-import { CheckCircle2, CircleDashed, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, CircleDashed, Eye, TriangleAlert } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ArtifactSection } from '@/pages/aiGenerate/ArtifactSection'
+import { canConfirmDraft } from '@/pages/aiGenerate/useAiGenerateSession'
 import type { AiGenerateDraftCard, AiGenerateSectionState } from '@/pages/aiGenerate/types'
 
 function cardStatusMeta(status: AiGenerateDraftCard['status']): {
@@ -16,8 +18,21 @@ function cardStatusMeta(status: AiGenerateDraftCard['status']): {
   return { label: '排队中', icon: CircleDashed, variant: 'outline' }
 }
 
+function reviewStatusMeta(status: AiGenerateDraftCard['reviewStatus']): {
+  label: string
+  variant: 'default' | 'secondary' | 'destructive' | 'outline'
+} {
+  if (status === 'approved') return { label: '已通过', variant: 'secondary' }
+  if (status === 'rejected') return { label: '已打回', variant: 'destructive' }
+  if (status === 'confirmed') return { label: '已确认', variant: 'default' }
+  if (status === 'committed') return { label: '已入库', variant: 'default' }
+  if (status === 'in_review') return { label: '审查中', variant: 'outline' }
+  return { label: '待审查', variant: 'outline' }
+}
+
 interface QuestionDraftCardProps {
   draft: AiGenerateDraftCard
+  sessionId?: string
   onSectionChange?: (sectionKey: keyof AiGenerateDraftCard['sections'], content: string) => void
   onToggleSectionLock?: (sectionKey: keyof AiGenerateDraftCard['sections']) => void
   onRegenerateSection?: (sectionKey: keyof AiGenerateDraftCard['sections']) => void
@@ -25,9 +40,15 @@ interface QuestionDraftCardProps {
 }
 
 export function QuestionDraftCard(props: QuestionDraftCardProps) {
-  const { draft, onConfirm, onRegenerateSection, onSectionChange, onToggleSectionLock } = props
+  const { draft, sessionId, onConfirm, onRegenerateSection, onSectionChange, onToggleSectionLock } = props
   const status = cardStatusMeta(draft.status)
   const StatusIcon = status.icon
+  const reviewStatus = reviewStatusMeta(draft.reviewStatus)
+  const confirmable = canConfirmDraft(draft)
+  const committed = draft.reviewStatus === 'committed'
+  const confirmed = draft.reviewStatus === 'confirmed'
+  const confirmLabel = committed ? '已入库' : confirmed ? '取消确认' : '确认入库'
+  const reviewHref = sessionId ? `/ai-generate/review/${encodeURIComponent(sessionId)}/${encodeURIComponent(draft.questionId)}` : ''
 
   const renderSection = (sectionKey: keyof AiGenerateDraftCard['sections'], section: AiGenerateSectionState) => (
     <ArtifactSection
@@ -58,8 +79,31 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
               <StatusIcon className="mr-1 h-3.5 w-3.5" />
               {status.label}
             </Badge>
-            <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={onConfirm}>
-              确认入库
+            <Badge variant={reviewStatus.variant} className="rounded-full px-3 py-1 text-xs">
+              {reviewStatus.label}
+            </Badge>
+            {typeof draft.review?.overallScore === 'number' && draft.reviewStatus !== 'pending_review' ? (
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
+                审查分 {draft.review.overallScore}
+              </Badge>
+            ) : null}
+            {reviewHref ? (
+              <Button asChild type="button" variant="outline" size="sm" className="rounded-full">
+                <Link to={reviewHref}>
+                  <Eye className="h-3.5 w-3.5" />
+                  进入审查
+                </Link>
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              disabled={committed || (!confirmable && !confirmed)}
+              onClick={onConfirm}
+            >
+              {confirmLabel}
             </Button>
           </div>
         </div>

@@ -15,6 +15,7 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        mode="standard"
         subjects={[
           { id: 1, code: '高中数学', name: '高中数学' },
           { id: 2, code: '初中数学', name: '初中数学' },
@@ -26,6 +27,7 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
     )
@@ -49,6 +51,7 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
         onMissionTextChange={vi.fn()}
@@ -57,6 +60,7 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
     )
@@ -82,6 +86,7 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
         onMissionTextChange={vi.fn()}
@@ -90,6 +95,7 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
     )
@@ -115,6 +121,7 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
         onMissionTextChange={vi.fn()}
@@ -123,6 +130,7 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
     )

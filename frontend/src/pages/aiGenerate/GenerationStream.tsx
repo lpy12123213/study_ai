@@ -3,6 +3,7 @@ import { QuestionDraftCard } from '@/pages/aiGenerate/QuestionDraftCard'
 import type { AiGenerateDraftCard } from '@/pages/aiGenerate/types'
 
 interface GenerationStreamProps {
+  sessionId?: string
   drafts: AiGenerateDraftCard[]
   getDraftRef?: (index: number) => (node: HTMLDivElement | null) => void
   onSectionChange?: (questionId: string, sectionKey: keyof AiGenerateDraftCard['sections'], content: string) => void
@@ -12,7 +13,7 @@ interface GenerationStreamProps {
 }
 
 export function GenerationStream(props: GenerationStreamProps) {
-  const { drafts, getDraftRef, onConfirm, onRegenerateSection, onSectionChange, onToggleSectionLock } = props
+  const { drafts, getDraftRef, onConfirm, onRegenerateSection, onSectionChange, onToggleSectionLock, sessionId } = props
 
   return (
     <ScrollArea className="h-full">
@@ -21,6 +22,7 @@ export function GenerationStream(props: GenerationStreamProps) {
           <div key={draft.id} ref={getDraftRef?.(index)}>
             <QuestionDraftCard
               draft={draft}
+              sessionId={sessionId}
               onConfirm={() => onConfirm?.(draft.questionId)}
               onRegenerateSection={(sectionKey) => onRegenerateSection?.(draft.questionId, sectionKey)}
               onSectionChange={(sectionKey, content) => onSectionChange?.(draft.questionId, sectionKey, content)}

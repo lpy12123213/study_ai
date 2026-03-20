@@ -20,3 +20,17 @@ export function useSubjectFilters(subjectCode: string | undefined) {
     retry: 1,
   })
 }
+
+export function useSubjectKnowledgeTree(
+  subjectCode: string | undefined,
+  params?: { gradeId?: string; textbookVersionId?: string }
+) {
+  return useQuery({
+    queryKey: ['subjectKnowledgeTree', subjectCode, params?.gradeId || '', params?.textbookVersionId || ''],
+    queryFn: () => subjectsApi.getSubjectKnowledgeTree(subjectCode!, params),
+    enabled: !!subjectCode,
+    staleTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    retry: 1,
+  })
+}

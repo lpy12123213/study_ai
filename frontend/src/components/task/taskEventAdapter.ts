@@ -98,6 +98,49 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
     }
   }
 
+  if (kind === 'reasoning_status') {
+    const stageLabel =
+      toOptionalString(data.stage_label) ||
+      humanizeStage(toOptionalString(data.stage_id) || '', toOptionalString(data.stage_label))
+    const mode = toOptionalString(data.mode) || 'trace'
+    const message = toOptionalString(data.message) || 'reasoning 状态更新'
+    return {
+      id: `reasoning-status:${evt.seq}`,
+      title: `${mode === 'raw' ? '原始 Reason' : '事件 Trace'}: ${message}`,
+      status: 'completed',
+      toolName: 'reasoning',
+      startTime: evt.created_at,
+      input: {
+        stage_label: stageLabel,
+        mode,
+      },
+      output: data,
+    }
+  }
+
+  if (kind === 'reasoning_delta') {
+    const source = toOptionalString(data.source) || 'trace'
+    const content = toOptionalString(data.content) || ''
+    const stageLabel =
+      toOptionalString(data.stage_label) ||
+      humanizeStage(toOptionalString(data.stage_id) || '', toOptionalString(data.stage_label))
+    const prefix = source === 'raw' ? '原始 Reason' : '事件 Trace'
+    let title = content ? `${prefix}: ${content}` : prefix
+    if (title.length > 240) title = `${title.slice(0, 240)}…`
+    return {
+      id: `reasoning:${evt.seq}`,
+      title,
+      status: 'completed',
+      toolName: 'reasoning',
+      startTime: evt.created_at,
+      input: {
+        source,
+        stage_label: stageLabel,
+      },
+      output: data,
+    }
+  }
+
   const content =
     toOptionalString(data.title) ||
     toOptionalString(data.message) ||

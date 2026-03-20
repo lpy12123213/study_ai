@@ -53,4 +53,39 @@ describe('taskEventAdapter', () => {
     expect(next[0].endTime).toBe('2026-03-14T10:00:08Z')
     expect(next[0].output).toEqual({ accepted: 2, rejected: 5 })
   })
+
+  it('labels reasoning deltas so raw reason and trace fallback stay distinguishable', () => {
+    const raw = taskEventToStep({
+      taskId: 'ql-gen-1',
+      seq: 9,
+      type: 'reasoning_delta',
+      created_at: '2026-03-20T10:00:00Z',
+      data: {
+        stage_id: 'draft_realization',
+        stage_label: '草稿生成',
+        source: 'raw',
+        content: '先拆解题干约束，再生成答案。',
+      },
+    })
+
+    const trace = taskEventToStep({
+      taskId: 'ql-gen-1',
+      seq: 10,
+      type: 'reasoning_delta',
+      created_at: '2026-03-20T10:00:01Z',
+      data: {
+        stage_id: 'judge',
+        stage_label: '判题筛选',
+        source: 'trace',
+        content: '判题筛选 已完成一次模型调用。',
+      },
+    })
+
+    expect(raw).not.toBeNull()
+    expect(raw?.title).toContain('原始 Reason')
+    expect(raw?.toolName).toBe('reasoning')
+    expect(trace).not.toBeNull()
+    expect(trace?.title).toContain('事件 Trace')
+    expect(trace?.toolName).toBe('reasoning')
+  })
 })

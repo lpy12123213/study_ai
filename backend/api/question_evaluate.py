@@ -75,6 +75,33 @@ def _normalize_verdict(overall_score: int) -> str:
     return "差题"
 
 
+def _normalize_dimensions(raw_dims: Any) -> List[Dict[str, Any]]:
+    dims: List[Dict[str, Any]] = []
+    if isinstance(raw_dims, list):
+        for it in raw_dims:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "").strip()
+            score = _coerce_int(it.get("score"), default=0)
+            if score < 0:
+                score = 0
+            if score > 10:
+                score = 10
+            comment = str(it.get("comment") or "").strip()
+            if not name:
+                continue
+            dims.append({"name": name, "score": score, "comment": comment})
+    if dims:
+        return dims
+    return [
+        {"name": "思维含量", "score": 0, "comment": ""},
+        {"name": "区分度", "score": 0, "comment": ""},
+        {"name": "知识覆盖", "score": 0, "comment": ""},
+        {"name": "表述规范", "score": 0, "comment": ""},
+        {"name": "创新性", "score": 0, "comment": ""},
+    ]
+
+
 async def _evaluate_one(
     q: QuestionInput,
     *,
@@ -156,31 +183,7 @@ async def _evaluate_one(
     if verdict not in {"好题", "普通题", "差题"}:
         verdict = _normalize_verdict(overall)
 
-    dims: List[Dict[str, Any]] = []
-    raw_dims = obj.get("dimensions")
-    if isinstance(raw_dims, list):
-        for it in raw_dims:
-            if not isinstance(it, dict):
-                continue
-            name = str(it.get("name") or "").strip()
-            score = _coerce_int(it.get("score"), default=0)
-            if score < 0:
-                score = 0
-            if score > 10:
-                score = 10
-            comment = str(it.get("comment") or "").strip()
-            if not name:
-                continue
-            dims.append({"name": name, "score": score, "comment": comment})
-    if not dims:
-        # ensure stable output
-        dims = [
-            {"name": "思维含量", "score": 0, "comment": ""},
-            {"name": "区分度", "score": 0, "comment": ""},
-            {"name": "知识覆盖", "score": 0, "comment": ""},
-            {"name": "表述规范", "score": 0, "comment": ""},
-            {"name": "创新性", "score": 0, "comment": ""},
-        ]
+    dims = _normalize_dimensions(obj.get("dimensions"))
 
     highlights = _clip_list(obj.get("highlights"), 8)
     issues = _clip_list(obj.get("issues"), 8)
@@ -202,6 +205,81 @@ async def _evaluate_one(
         issues=issues,
         summary=summary,
     )
+
+
+async def evaluate_generated_question_review(
+    *,
+    subject: str,
+    stem: str,
+    answer: str,
+    analysis: str,
+    requirements: str = "",
+    model: str = "",
+) -> Dict[str, Any]:
+    resolved_subject = resolve_subject((subject or "").strip() or DEFAULT_SUBJECT, strict=True)
+    resolved_model = (model or "").strip() or str(LESSON_PLAN_MODEL or "").strip()
+    if not resolved_model:
+        raise RuntimeError("llm_model_not_configured")
+
+    payload = {
+        "subject": resolved_subject,
+        "requirements": (requirements or "").strip(),
+        "question": {
+            "stem": str(stem or "").strip()[:1600],
+            "answer": str(answer or "").strip()[:1200],
+            "analysis": str(analysis or "").strip()[:2000],
+        },
+        "output_schema": {
+            "verdict": "string (好题|普通题|差题)",
+            "overall_score": "int 0-100",
+            "dimensions": [
+                {"name": "思维含量", "score": "int 1-10", "comment": "string"},
+                {"name": "区分度", "score": "int 1-10", "comment": "string"},
+                {"name": "知识覆盖", "score": "int 1-10", "comment": "string"},
+                {"name": "表述规范", "score": "int 1-10", "comment": "string"},
+                {"name": "创新性", "score": "int 1-10", "comment": "string"},
+            ],
+            "highlights": "string[]",
+            "issues": "string[]",
+            "summary": "string",
+        },
+    }
+
+    text = await chat_completion_text(
+        messages=[
+            {
+                "role": "system",
+                "content": "你是资深教研员，擅长审查 AI 生成试题。请严格输出 JSON object，不要输出Markdown或解释。",
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        model=resolved_model,
+        temperature=float(LESSON_PLAN_TEMPERATURE),
+        max_tokens=int(LESSON_PLAN_MAX_TOKENS),
+        response_format={"type": "json_object"},
+        reasoning={"effort": "high", "exclude": True},
+        stream=False,
+        raise_on_fail=False,
+        retries=3,
+        req_id_prefix="qe_review",
+    )
+
+    obj = _extract_json_obj(text)
+    overall = _coerce_int(obj.get("overall_score"), default=0)
+    overall = max(0, min(100, overall))
+    verdict = str(obj.get("verdict") or "").strip()
+    if verdict not in {"好题", "普通题", "差题"}:
+        verdict = _normalize_verdict(overall)
+
+    return {
+        "verdict": verdict,
+        "overall_score": overall,
+        "dimensions": _normalize_dimensions(obj.get("dimensions")),
+        "highlights": _clip_list(obj.get("highlights"), 8),
+        "issues": _clip_list(obj.get("issues"), 8),
+        "summary": str(obj.get("summary") or "").strip(),
+        "model": resolved_model,
+    }
 
 
 @router.post("/search", response_model=QuestionSearchResponse)

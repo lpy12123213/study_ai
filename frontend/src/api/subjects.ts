@@ -9,6 +9,22 @@ export interface SubjectFilters {
   questionTypes?: { id: string; name: string }[]
 }
 
+export interface SubjectKnowledgeTreeNode {
+  id: string
+  label: string
+  type: 'root' | 'chapter' | 'knowledge_point' | string
+  selectable?: boolean
+  children?: SubjectKnowledgeTreeNode[]
+}
+
+export interface SubjectKnowledgeTreeResponse {
+  success: boolean
+  subject: string
+  grade_id?: string
+  textbook_version_id?: string
+  nodes: SubjectKnowledgeTreeNode[]
+}
+
 // Get all subjects
 export async function getSubjects(): Promise<Subject[]> {
   const response = await apiClient.get<unknown>('/subjects')
@@ -62,6 +78,22 @@ export async function getSubjectFilters(
 ): Promise<SubjectFilters> {
   const response = await apiClient.get<SubjectFilters>(
     `/subjects/${subjectCode}/filters`
+  )
+  return response.data
+}
+
+export async function getSubjectKnowledgeTree(
+  subjectCode: string,
+  params?: { gradeId?: string; textbookVersionId?: string }
+): Promise<SubjectKnowledgeTreeResponse> {
+  const response = await apiClient.get<SubjectKnowledgeTreeResponse>(
+    `/subjects/${encodeURIComponent(subjectCode)}/knowledge-tree`,
+    {
+      params: {
+        grade_id: params?.gradeId,
+        textbook_version_id: params?.textbookVersionId,
+      },
+    }
   )
   return response.data
 }

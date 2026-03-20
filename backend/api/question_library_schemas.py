@@ -57,7 +57,31 @@ class QuestionLibraryGenerateRequest(BaseModel):
     question_type: str = ""
     count: int = 5
     use_study_archive: bool = True
+    session_id: str = ""
+    mode: Literal["standard", "infinite"] = "standard"
+    grade_id: str = ""
+    textbook_version_id: str = ""
+    knowledge_point_ids: List[str] = Field(default_factory=list)
+    knowledge_points: List[str] = Field(default_factory=list)
+    append: bool = False
+    stream_reasoning: bool = False
     task_id: str = ""
+
+
+class QuestionLibraryDraftReviewDimension(BaseModel):
+    name: str = ""
+    score: int = 0
+    comment: str = ""
+
+
+class QuestionLibraryDraftReview(BaseModel):
+    verdict: str = ""
+    overall_score: int = 0
+    dimensions: List[QuestionLibraryDraftReviewDimension] = Field(default_factory=list)
+    highlights: List[str] = Field(default_factory=list)
+    issues: List[str] = Field(default_factory=list)
+    summary: str = ""
+    model: str = ""
 
 
 class QuestionLibraryDraftQuestion(BaseModel):
@@ -66,13 +90,17 @@ class QuestionLibraryDraftQuestion(BaseModel):
     answer: str = ""
     analysis: str = ""
     keep: bool = True
+    review_status: Literal["pending_review", "in_review", "approved", "rejected", "confirmed", "committed"] = "pending_review"
+    review: Optional[QuestionLibraryDraftReview] = None
 
 
 class QuestionLibraryPreviewData(BaseModel):
     preview_id: str = ""
+    session_id: str = ""
     task_id: str = ""
     subject: str = ""
     topic: str = ""
+    mode: Literal["standard", "infinite"] = "standard"
     count: int = 0
     draft_questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
 
