@@ -141,3 +141,24 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
                 out = await generation.realize_drafts(spec, source_pack=source_pack, n=1)
         self.assertEqual(len(out), 1)
         self.assertQuestionCore(out[0], stem="题干C", answer="答案C", analysis="步骤1\n步骤2")
+
+    async def test_realize_drafts_uses_dedicated_higher_max_tokens_budget(self) -> None:
+        from backend.question_library import generation
+
+        seen_max_tokens: list[int] = []
+
+        async def _fake_chat_completion_text(**kwargs):
+            seen_max_tokens.append(int(kwargs.get("max_tokens") or 0))
+            return '{"questions":[{"stem":"题干D","answer":"答案D","analysis":"解析D"}]}'
+
+        spec = {"subject": "高中数学", "topic": "导数"}
+        source_pack = {"subject": "高中数学", "topic": "导数", "study_markdown": ""}
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.LESSON_PLAN_MAX_TOKENS", 2000
+        ), patch("backend.question_library.generation.chat_completion_text", new=_fake_chat_completion_text):
+            out = await generation.realize_drafts(spec, source_pack=source_pack, n=1)
+
+        self.assertEqual(len(out), 1)
+        self.assertTrue(seen_max_tokens)
+        self.assertGreaterEqual(seen_max_tokens[0], 5000)

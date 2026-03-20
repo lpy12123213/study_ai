@@ -16,7 +16,7 @@ export function ConfirmedShelf(props: ConfirmedShelfProps) {
   const { drafts, isCommitting, isDiscarding, onRemove, onCommit, onDiscard } = props
 
   return (
-    <Card className="rounded-[28px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,241,229,0.92))] shadow-[0_18px_50px_rgba(29,33,44,0.07)]">
+    <Card className="rounded-[28px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,241,229,0.92))] shadow-[0_18px_50px_rgba(29,33,44,0.07)] dark:bg-[linear-gradient(180deg,rgba(26,28,42,0.94),rgba(18,20,30,0.92))] dark:shadow-[0_18px_70px_rgba(0,0,0,0.55)]">
       <CardHeader className="flex flex-col gap-4 border-b border-border/60 pb-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <CardTitle className="text-lg">Confirmed Shelf</CardTitle>

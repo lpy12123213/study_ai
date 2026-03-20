@@ -96,6 +96,7 @@ from backend.database.repositories.share_links import (
 )
 from backend.database.repositories.study_archives import (
     get_latest_study_archive,
+    get_latest_study_archive_for_subject,
     get_study_archive_by_fingerprint,
     upsert_study_archive,
 )

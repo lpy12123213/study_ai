@@ -5,7 +5,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,6 +29,7 @@ from backend.crawler_manager import get_crawler
 from backend.database.models import (
     bulk_delete_question_library_items,
     get_latest_study_archive,
+    get_latest_study_archive_for_subject,
     get_question_cache,
     get_question_library_item,
     list_question_library_items,
@@ -69,6 +70,73 @@ _tasks = QuestionLibraryTaskManager(
     task_ttl_s=int(os.getenv("QUESTION_LIBRARY_TASK_TTL_S") or str(60 * 60)),
     max_events_per_task=int(os.getenv("QUESTION_LIBRARY_TASK_MAX_EVENTS") or "8000"),
 )
+
+
+_DIFFICULTY_HINTS = {"简单", "基础", "中等", "困难", "较难", "较易", "偏难", "偏易", "易", "难"}
+_QUESTION_TYPE_HINTS = {"选择题", "解答题", "填空题", "判断题", "证明题", "综合题", "问答题"}
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _normalize_topic_key(topic: str) -> str:
+    """
+    The frontend sometimes passes the whole mission text as `topic` (including output rules).
+
+    For LLM prompting / study-archive lookup, we want a short knowledge-point key instead of
+    a verbose instruction blob.
+    """
+
+    raw = str(topic or "").strip()
+    if not raw:
+        return ""
+
+    # Strip "output requirements" suffixes to reduce prompt length and avoid exact-match misses.
+    for marker in ("输出要求", "LaTeX 公式规范", "LaTeX公式规范", "Output requirements"):
+        idx = raw.find(marker)
+        if idx >= 0:
+            raw = raw[:idx].strip()
+            break
+
+    first_line = ""
+    for ln in raw.splitlines():
+        line = ln.strip()
+        if line:
+            first_line = line
+            break
+    if not first_line:
+        first_line = raw
+
+    # If it looks like a comma-separated token list, drop difficulty/type tokens.
+    if any(sep in first_line for sep in (",", "，", ";", "；", "+", "＋", "/", "|", "、")):
+        normalized = first_line
+        for sep in ("，", ";", "；", "+", "＋", "/", "|", "、"):
+            normalized = normalized.replace(sep, ",")
+        parts = [p.strip() for p in normalized.split(",") if p.strip()]
+        kept: list[str] = []
+        for p in parts:
+            if p in _DIFFICULTY_HINTS:
+                continue
+            if any(h in p for h in _QUESTION_TYPE_HINTS):
+                continue
+            if "LaTeX" in p or "公式" in p or "输出要求" in p:
+                continue
+            kept.append(p)
+        if kept:
+            first_line = "，".join(kept)
+
+    return first_line[:120].strip()
+
+
+def _infer_question_type_from_topic(topic: str) -> str:
+    raw = str(topic or "")
+    if "选择题" in raw and "解答题" in raw:
+        return "选择题+解答题"
+    for hint in ("选择题", "解答题", "填空题", "判断题", "证明题", "综合题", "问答题"):
+        if hint in raw:
+            return hint
+    return ""
 
 
 def _sse_headers() -> dict:
@@ -513,16 +581,27 @@ async def regenerate_preview_section(
                 },
             )
 
+            preview_topic_raw = str(obj.get("topic") or "").strip()
+            preview_topic_key = _normalize_topic_key(preview_topic_raw) or preview_topic_raw
             study_markdown = str(obj.get("study_markdown") or "").strip()
             if not study_markdown:
                 try:
                     archive = await get_latest_study_archive(
                         user_id=user_id,
                         subject=str(obj.get("subject") or "").strip(),
-                        topic=str(obj.get("topic") or "").strip(),
+                        topic=preview_topic_key,
                     )
                 except Exception:
                     archive = None
+                if not isinstance(archive, dict):
+                    # The preview topic is often a free-form mission string (not the canonical StudyArchive.topic).
+                    # Fall back to the latest archive for the subject so "use study archive" still works.
+                    try:
+                        archive = await get_latest_study_archive_for_subject(
+                            user_id=user_id, subject=str(obj.get("subject") or "").strip()
+                        )
+                    except Exception:
+                        archive = None
                 if isinstance(archive, dict):
                     study_markdown = str(archive.get("markdown") or "").strip()
 
@@ -538,7 +617,7 @@ async def regenerate_preview_section(
 
             content = await regenerate_question_section(
                 subject=str(obj.get("subject") or "").strip(),
-                topic=str(obj.get("topic") or "").strip(),
+                topic=preview_topic_key,
                 difficulty=str(obj.get("difficulty") or "").strip(),
                 question_type=str(obj.get("question_type") or "").strip(),
                 study_markdown=study_markdown,
@@ -787,14 +866,19 @@ async def generate_and_save(
         raise HTTPException(status_code=500, detail="llm_not_configured")
 
     subject = (request.subject or "").strip()
-    topic = (request.topic or "").strip()
+    topic_raw = (request.topic or "").strip()
     if not subject:
         raise HTTPException(status_code=400, detail="subject_required")
-    if not topic:
+    if not topic_raw:
         raise HTTPException(status_code=400, detail="topic_required")
 
     difficulty = (request.difficulty or "").strip()
     question_type = (request.question_type or "").strip()
+    topic_key = _normalize_topic_key(topic_raw) or topic_raw
+    if not question_type:
+        inferred = _infer_question_type_from_topic(topic_raw)
+        if inferred:
+            question_type = inferred
 
     try:
         count = max(1, min(int(request.count or 5), 10))
@@ -804,12 +888,12 @@ async def generate_and_save(
     task_id = (request.task_id or "").strip() or f"ql_gen_{uuid.uuid4().hex[:12]}"
     use_archive = bool(request.use_study_archive)
 
-    started_at = datetime.utcnow()
+    started_at = _utcnow()
     await db_upsert_task(
         user_id=user_id,
         task_id=task_id,
         task_type="question_library_generate",
-        title=f"AI 出题：{subject} {topic}".strip(),
+        title=f"AI 出题：{subject} {topic_key}".strip(),
         status="running",
         progress=0.0,
         request=request.model_dump(),
@@ -818,7 +902,7 @@ async def generate_and_save(
 
     async def runner_factory(task: QuestionLibraryTask) -> None:
         def _now_iso() -> str:
-            return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+            return _utcnow().isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
         stage_descriptions = {
             "source_pack": "整理出题上下文，构建一个包含主题、难度与题型约束的素材包。",
@@ -1014,13 +1098,20 @@ async def generate_and_save(
             study_markdown = ""
             if use_archive:
                 try:
-                    archive = await get_latest_study_archive(user_id=user_id, subject=subject, topic=topic)
+                    archive = await get_latest_study_archive(user_id=user_id, subject=subject, topic=topic_key)
                 except Exception:
                     archive = None
+                if not isinstance(archive, dict):
+                    # The frontend passes the whole mission text as `topic`, so exact topic matching can miss.
+                    # Use the latest subject-level archive as a best-effort "recent study materials" fallback.
+                    try:
+                        archive = await get_latest_study_archive_for_subject(user_id=user_id, subject=subject)
+                    except Exception:
+                        archive = None
                 if isinstance(archive, dict):
                     study_markdown = str(archive.get("markdown") or "")
 
-            source_pack = await build_source_pack(study_markdown, subject, topic)
+            source_pack = await build_source_pack(study_markdown, subject, topic_key)
             await _update_stage_step(
                 stage_id="source_pack",
                 stage_label=stage_labels["source_pack"],
@@ -1111,7 +1202,7 @@ async def generate_and_save(
                     "user_id": user_id,
                     "task_id": task_id,
                     "subject": subject,
-                    "topic": topic,
+                    "topic": topic_raw,
                     "difficulty": difficulty,
                     "question_type": question_type,
                     "study_markdown": study_markdown,
@@ -1145,7 +1236,7 @@ async def generate_and_save(
                     status="completed",
                     progress=100.0,
                     result={"preview_id": preview_id, "subject": subject, "topic": topic, "count": len(drafts)},
-                    ended_at=datetime.utcnow(),
+                    ended_at=_utcnow(),
                 )
             except Exception:
                 pass
@@ -1166,7 +1257,7 @@ async def generate_and_save(
                     task_id=task_id,
                     status="canceled",
                     error={"message": "Task cancelled"},
-                    ended_at=datetime.utcnow(),
+                    ended_at=_utcnow(),
                 )
             except Exception:
                 pass
@@ -1193,7 +1284,7 @@ async def generate_and_save(
                     task_id=task_id,
                     status="failed",
                     error={"message": str(exc)},
-                    ended_at=datetime.utcnow(),
+                    ended_at=_utcnow(),
                 )
             except Exception:
                 pass
@@ -1214,7 +1305,7 @@ async def generate_and_save(
                         task_id=task_id,
                         status="failed",
                         error={"message": "Task ended unexpectedly"},
-                        ended_at=datetime.utcnow(),
+                        ended_at=_utcnow(),
                     )
                 except Exception:
                     pass

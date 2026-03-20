@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
+import { humanizeAiGenerateTaskError } from '@/pages/aiGenerate/humanizeTaskError'
 
 interface ContextRailProps {
   missionText: string
@@ -14,10 +15,18 @@ interface ContextRailProps {
   progress: number
   stage: string
   taskStatus: string
+  taskError?: string
   draftCount: number
   confirmedCount: number
   libraryTotal: number
   onScrollToDraft: (index: number) => void
+}
+
+function statusVariant(taskStatus: string): 'secondary' | 'destructive' | 'outline' {
+  const status = String(taskStatus || '').trim()
+  if (status === 'failed') return 'destructive'
+  if (status === 'running' || status === 'completed') return 'secondary'
+  return 'outline'
 }
 
 export function ContextRail(props: ContextRailProps) {
@@ -31,17 +40,21 @@ export function ContextRail(props: ContextRailProps) {
     progress,
     stage,
     taskStatus,
+    taskError,
     draftCount,
     confirmedCount,
     libraryTotal,
     onScrollToDraft,
   } = props
 
+  const errorInfo = humanizeAiGenerateTaskError(taskError || '')
+  const errorText = String(errorInfo.display || '').trim()
+
   return (
-    <Card className="rounded-[32px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,241,231,0.92))] shadow-[0_20px_50px_rgba(29,33,44,0.08)]">
+    <Card className="rounded-[32px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,241,231,0.92))] shadow-[0_20px_50px_rgba(29,33,44,0.08)] dark:bg-[linear-gradient(180deg,rgba(26,28,42,0.92),rgba(18,20,30,0.92))] dark:shadow-[0_20px_70px_rgba(0,0,0,0.55)]">
       <CardHeader className="border-b border-border/60 pb-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
             <Orbit className="h-5 w-5" />
           </div>
           <div>
@@ -54,13 +67,23 @@ export function ContextRail(props: ContextRailProps) {
         <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs uppercase tracking-[0.24em] text-muted-foreground">Progress</div>
-            <Badge variant="secondary" className="rounded-full px-2.5 py-1 text-[11px]">
+            <Badge variant={statusVariant(taskStatus)} className="rounded-full px-2.5 py-1 text-[11px]">
               {taskStatus || 'idle'}
             </Badge>
           </div>
           <div className="mt-3 text-3xl font-semibold">{Math.round(progress)}%</div>
           <Progress value={progress} className="mt-3 h-2" />
           <div className="mt-3 text-sm text-muted-foreground">{stage || '等待启动生成任务'}</div>
+          {taskStatus === 'failed' && errorText ? (
+            <div className="mt-3 rounded-[18px] border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div>{errorText}</div>
+              {errorInfo.code ? (
+                <code className="mt-2 block w-fit rounded-full border border-destructive/20 bg-destructive/10 px-3 py-1 font-mono text-xs text-destructive/90">
+                  {errorInfo.code}
+                </code>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">

@@ -41,7 +41,7 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
   )
 
   return (
-    <Card className="rounded-[28px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(251,248,241,0.92))] shadow-[0_20px_60px_rgba(31,35,48,0.08)]">
+    <Card className="rounded-[28px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(251,248,241,0.92))] shadow-[0_20px_60px_rgba(31,35,48,0.08)] dark:bg-[linear-gradient(180deg,rgba(26,28,42,0.94),rgba(18,20,30,0.92))] dark:shadow-[0_20px_80px_rgba(0,0,0,0.55)]">
       <CardHeader className="gap-4 border-b border-border/60 pb-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-2">
@@ -64,7 +64,7 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="grid gap-4 p-4 lg:grid-cols-3 lg:p-6">
+      <CardContent className="grid gap-4 p-4 md:grid-cols-2 2xl:grid-cols-3 lg:p-6">
         {renderSection('stem', draft.sections.stem)}
         {renderSection('answer', draft.sections.answer)}
         {renderSection('analysis', draft.sections.analysis)}

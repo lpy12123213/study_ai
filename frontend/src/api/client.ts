@@ -122,6 +122,25 @@ async function responseToApiError(response: Response, fallbackCode: string): Pro
       if (env.code) code = env.code
       if (env.message) message = env.message
       if (env.actions) actions = env.actions
+
+      // FastAPI commonly returns errors as `{ detail: "some_code" }` (or a list of validation issues).
+      // Surface this as the message/code when we don't have an envelope-style `{ error: { ... } }` payload.
+      if (!env.code && !env.message && isRecord(payload)) {
+        const detailField = (payload as any).detail
+        const detailText = toOptionalString(detailField)
+        if (detailText) {
+          message = detailText
+          if (String(fallbackCode || '').startsWith('http_')) {
+            code = detailText
+          }
+        } else if (Array.isArray(detailField) && detailField.length > 0) {
+          const first = detailField[0]
+          if (isRecord(first)) {
+            const msg = toOptionalString((first as any).msg)
+            if (msg) message = msg
+          }
+        }
+      }
       const envelopeRequestId = env.requestId
       return new ApiError({
         code,

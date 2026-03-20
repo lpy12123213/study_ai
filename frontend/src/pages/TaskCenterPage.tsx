@@ -181,7 +181,7 @@ export default function TaskCenterPage() {
 
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left: task list */}
-        <div className="w-[360px] max-w-[45%] border-r border-border flex flex-col min-h-0">
+        <div className="w-[360px] max-w-[45%] shrink-0 border-r border-border flex flex-col min-h-0">
           <div className="p-3 space-y-2 border-b border-border">
             <Input placeholder="搜索任务标题/ID…" value={query} onChange={(e) => setQuery(e.target.value)} />
 
@@ -278,7 +278,7 @@ export default function TaskCenterPage() {
         </div>
 
         {/* Right: details */}
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden min-h-0">
           {!selectedTask ? (
             <div className="flex-1 flex items-center justify-center text-muted-foreground">
               选择左侧任务查看详情

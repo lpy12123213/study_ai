@@ -38,26 +38,29 @@ export function ArtifactSection(props: ArtifactSectionProps) {
 
   return (
     <div className="rounded-[24px] border border-border/70 bg-background/88 p-4 shadow-sm" data-section={sectionKey}>
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="text-sm font-semibold">{section.label}</div>
-            <Badge variant={statusVariant(section.status)} className="rounded-full px-2 py-0.5 text-[11px]">
+            <Badge
+              variant={statusVariant(section.status)}
+              className="shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px]"
+            >
               {statusLabel(section.status)}
             </Badge>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {section.updatedAt ? <span>{new Date(section.updatedAt).toLocaleTimeString('zh-CN')}</span> : <span>等待产出</span>}
-            {section.edited ? <span className="font-medium text-amber-700">已手动调整</span> : null}
+            {section.edited ? <span className="font-medium text-amber-700 dark:text-amber-300">已手动调整</span> : null}
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="rounded-full"
+            className="rounded-full whitespace-nowrap"
             onClick={onToggleLock}
           >
             {section.locked ? <LockKeyhole className="h-3.5 w-3.5" /> : <UnlockKeyhole className="h-3.5 w-3.5" />}
@@ -67,7 +70,7 @@ export function ArtifactSection(props: ArtifactSectionProps) {
             type="button"
             variant="outline"
             size="sm"
-            className="rounded-full"
+            className="rounded-full whitespace-nowrap"
             onClick={onRegenerate}
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -76,7 +79,7 @@ export function ArtifactSection(props: ArtifactSectionProps) {
         </div>
       </div>
 
-      <div className="mt-4 rounded-[20px] border border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(246,241,231,0.72))] p-4">
+      <div className="mt-4 rounded-[20px] border border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(246,241,231,0.72))] p-4 dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.92),rgba(18,20,30,0.88))]">
         <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">LaTeX Preview</div>
         {section.content ? (
           <QuestionContent content={section.content} className="text-sm leading-7 text-foreground/90" />
@@ -90,7 +93,7 @@ export function ArtifactSection(props: ArtifactSectionProps) {
         onChange={(event) => onChange?.(event.target.value)}
         className={cn(
           'mt-4 min-h-[132px] rounded-[20px] border-border/70 bg-background/80 text-sm leading-6 shadow-none',
-          section.status === 'streaming' && 'border-blue-200 bg-blue-50/40',
+          section.status === 'streaming' && 'border-blue-200 bg-blue-50/40 dark:border-sky-800/60 dark:bg-sky-950/20',
           section.status === 'failed' && 'border-destructive/40 bg-destructive/5'
         )}
         placeholder={SECTION_PLACEHOLDERS[sectionKey]}

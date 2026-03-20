@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, select
@@ -9,6 +9,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
 from backend.database.schema import Task, TaskEvent
+
+
+def _isoformat_utc_z(dt: Optional[datetime]) -> str:
+    """Serialize naive DB datetimes (stored as UTC) into an ISO-8601 UTC string.
+
+    Frontend `Date.parse()` treats ISO strings without timezone as local time, which
+    introduces an 8-hour offset in Asia/Shanghai. Always include timezone.
+    """
+
+    if not dt:
+        return ""
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.isoformat().replace("+00:00", "Z")
+    except Exception:
+        try:
+            raw = dt.isoformat()
+        except Exception:
+            return ""
+        return f"{raw}Z" if raw and not raw.endswith("Z") else raw
 
 
 def _normalize_user_id(user_id: str) -> str:
@@ -56,10 +79,10 @@ def _task_to_dict(task: Task) -> dict:
         "request": _json_loads(task.request_json, default={}),
         "result": _json_loads(task.result_json, default={}),
         "error": _json_loads(task.error_json, default={}),
-        "created_at": task.created_at.isoformat() if task.created_at else "",
-        "updated_at": task.updated_at.isoformat() if task.updated_at else "",
-        "started_at": task.started_at.isoformat() if task.started_at else "",
-        "ended_at": task.ended_at.isoformat() if task.ended_at else "",
+        "created_at": _isoformat_utc_z(task.created_at),
+        "updated_at": _isoformat_utc_z(task.updated_at),
+        "started_at": _isoformat_utc_z(task.started_at),
+        "ended_at": _isoformat_utc_z(task.ended_at),
     }
 
 
@@ -69,7 +92,7 @@ def _event_to_dict(evt: TaskEvent) -> dict:
         "seq": int(evt.seq or 0),
         "type": evt.event_type,
         "data": _json_loads(evt.payload_json, default={}),
-        "created_at": evt.created_at.isoformat() if evt.created_at else "",
+        "created_at": _isoformat_utc_z(evt.created_at),
     }
 
 

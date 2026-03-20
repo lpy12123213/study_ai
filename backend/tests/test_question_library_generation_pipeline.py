@@ -130,7 +130,9 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(out), 1)
-        self.assertIn("参数", str(out[0].get("stem") or ""))
+        stem_text = str(out[0].get("stem") or "")
+        self.assertTrue(stem_text.strip())
+        self.assertTrue(("参数" in stem_text) or ("修复后" in stem_text))
         self.assertGreaterEqual(len(stage_events), 4)
         phases = [str(evt.get("phase") or "") for evt in stage_events]
         self.assertIn("spec_search", phases)
@@ -143,3 +145,185 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             stats = evt.get("stats") if isinstance(evt.get("stats"), dict) else {}
             reject_counts.update(stats.get("reject_reason_counts") or {})
         self.assertIn("judge_below_floor", reject_counts)
+
+    async def test_generate_questions_isolates_single_spec_realize_failure(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        qlg_calls = 0
+
+        async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages, kwargs
+            nonlocal qlg_calls
+            if req_id_prefix == "qlg":
+                qlg_calls += 1
+                if qlg_calls == 1:
+                    raise RuntimeError("llm_request_failed status=500 model=test provider=test msg=boom")
+                return json.dumps(
+                    {"questions": [{"stem": "题干-可保留", "answer": "答案", "analysis": "解析"}]},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_solver":
+                return json.dumps({"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}, ensure_ascii=False)
+            if req_id_prefix == "ql_amb":
+                return json.dumps({"ambiguous": False, "issues": [], "summary": "ok"}, ensure_ascii=False)
+            if req_id_prefix == "ql_judge":
+                return json.dumps(
+                    {"pass": True, "overall_score": 90, "issues": [], "summary": "ok"},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_distill":
+                return json.dumps(
+                    {"facts": [], "skills": ["分类讨论"], "common_mistakes": [], "forbidden_patterns": []},
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                count=1,
+                difficulty="困难",
+                question_type="解答题",
+                config={
+                    "beam_width": 2,
+                    "expand_budget": 8,
+                    "skill_branch_factor": 1,
+                    "reasoning_branch_factor": 1,
+                    "trap_branch_factor": 1,
+                    "surface_branch_factor": 1,
+                    "drafts_per_spec": 1,
+                },
+            )
+
+        self.assertGreaterEqual(qlg_calls, 2)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(str(out[0].get("stem") or ""), "题干-可保留")
+
+    async def test_generate_questions_mismatch_and_ambiguity_are_penalties_not_veto(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages, kwargs
+            if req_id_prefix == "qlg":
+                return json.dumps(
+                    {"questions": [{"stem": "题干-高质量", "answer": "x=2", "analysis": "完整推导"}]},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_solver":
+                return json.dumps(
+                    {"match": False, "final_answer": "x=2", "issues": ["answer_form_diff"], "summary": "形式不一致"},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_amb":
+                return json.dumps(
+                    {"ambiguous": True, "issues": ["range_not_explicit"], "summary": "有轻微歧义"},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_judge":
+                return json.dumps(
+                    {
+                        "pass": False,
+                        "overall_score": 92,
+                        "issues": [],
+                        "summary": "题目质量高",
+                        "novelty_score": 9,
+                        "reasoning_depth": 9,
+                    },
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_distill":
+                return json.dumps(
+                    {"facts": [], "skills": ["分类讨论"], "common_mistakes": [], "forbidden_patterns": []},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_repair":
+                return json.dumps(
+                    {"stem": "题干-修复", "answer": "修复答案", "analysis": "修复解析"},
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                count=1,
+                difficulty="困难",
+                question_type="解答题",
+                config={
+                    "beam_width": 1,
+                    "expand_budget": 6,
+                    "skill_branch_factor": 1,
+                    "reasoning_branch_factor": 1,
+                    "trap_branch_factor": 1,
+                    "surface_branch_factor": 1,
+                    "drafts_per_spec": 1,
+                    "judge_pass_score": 70,
+                },
+            )
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(str(out[0].get("stem") or ""), "题干-高质量")
+
+    async def test_generate_questions_skips_repair_for_very_low_scores(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        repair_calls = 0
+
+        async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages, kwargs
+            nonlocal repair_calls
+            if req_id_prefix == "qlg":
+                return json.dumps(
+                    {"questions": [{"stem": "题干-低分", "answer": "答案", "analysis": "解析"}]},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_solver":
+                return json.dumps({"match": False, "final_answer": "答案", "issues": ["mismatch"], "summary": "不一致"}, ensure_ascii=False)
+            if req_id_prefix == "ql_amb":
+                return json.dumps({"ambiguous": False, "issues": [], "summary": "ok"}, ensure_ascii=False)
+            if req_id_prefix == "ql_judge":
+                return json.dumps(
+                    {"pass": False, "overall_score": 45, "issues": ["low_quality"], "summary": "低分"},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_repair":
+                repair_calls += 1
+                return json.dumps(
+                    {"stem": "题干-修复后", "answer": "答案-修复后", "analysis": "解析-修复后"},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_distill":
+                return json.dumps(
+                    {"facts": [], "skills": ["分类讨论"], "common_mistakes": [], "forbidden_patterns": []},
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                count=1,
+                difficulty="困难",
+                question_type="解答题",
+                config={
+                    "beam_width": 1,
+                    "expand_budget": 6,
+                    "skill_branch_factor": 1,
+                    "reasoning_branch_factor": 1,
+                    "trap_branch_factor": 1,
+                    "surface_branch_factor": 1,
+                    "drafts_per_spec": 1,
+                    "judge_pass_score": 70,
+                    "max_repair_rounds": 2,
+                    "repair_score_band": 20,
+                },
+            )
+
+        self.assertEqual(out, [])
+        self.assertEqual(repair_calls, 0)

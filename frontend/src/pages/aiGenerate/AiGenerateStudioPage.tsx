@@ -13,6 +13,7 @@ import { GenerationStream } from '@/pages/aiGenerate/GenerationStream'
 import { ContextRail } from '@/pages/aiGenerate/ContextRail'
 import { ConfirmedShelf } from '@/pages/aiGenerate/ConfirmedShelf'
 import { appendLatexConstraint } from '@/pages/aiGenerate/latexRules'
+import { humanizeAiGenerateTaskError } from '@/pages/aiGenerate/humanizeTaskError'
 import {
   applyRegeneratedDraftSection,
   createQueuedSession,
@@ -95,8 +96,33 @@ export function AiGenerateStudioPage() {
   const progress = Math.max(0, Math.min(100, Number(activeTask?.progress || 0)))
   const stage = String(activeTask?.stage || '').trim()
   const taskStatus = String(activeTask?.status || '').trim()
+  const taskError = String(activeTask?.error || '').trim()
+  const taskId = String(activeTask?.taskId || '').trim()
+  const taskErrorInfo = useMemo(() => humanizeAiGenerateTaskError(taskError), [taskError])
   const draftCount = session?.drafts.length || 0
   const confirmedDrafts = useMemo(() => byQuestionId(session, session?.confirmedIds || []), [session])
+
+  const lastFailedTaskToastRef = useRef('')
+
+  useEffect(() => {
+    if (taskStatus !== 'failed') return
+    const message =
+      (taskErrorInfo.code ? `${taskErrorInfo.display}（${taskErrorInfo.code}）` : taskErrorInfo.display) || '生成失败'
+    const toastId = taskId ? `ai-generate-task-failed-${taskId}` : 'ai-generate-task-failed'
+    const dedupeKey = `${toastId}:${message}`
+    if (lastFailedTaskToastRef.current !== dedupeKey) {
+      lastFailedTaskToastRef.current = dedupeKey
+      pushToast({ id: toastId, title: message, status: 'failed' })
+    }
+
+    setSession((prev) => {
+      if (!prev) return prev
+      if (prev.previewId) return prev
+      if (taskId && prev.taskId && prev.taskId !== taskId) return prev
+      // Clear the queued placeholders so the UI doesn't look "stuck streaming" after failure.
+      return null
+    })
+  }, [pushToast, taskErrorInfo.code, taskErrorInfo.display, taskId, taskStatus])
 
   const startGeneration = () => {
     const nextCount = clampCount(count)
@@ -278,8 +304,8 @@ export function AiGenerateStudioPage() {
   }
 
   return (
-    <div className="min-h-full bg-[radial-gradient(circle_at_top,_rgba(50,106,255,0.12),_transparent_32%),linear-gradient(180deg,_rgba(248,245,238,0.94),_rgba(246,241,231,0.78))] text-foreground">
-      <div className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-6 px-6 py-6 lg:px-8">
+    <div className="h-full overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(50,106,255,0.12),_transparent_32%),linear-gradient(180deg,_rgba(248,245,238,0.94),_rgba(246,241,231,0.78))] text-foreground dark:bg-[radial-gradient(circle_at_top,_rgba(92,140,255,0.18),_transparent_40%),radial-gradient(circle_at_70%_0%,_rgba(255,210,140,0.10),_transparent_42%),linear-gradient(180deg,_rgba(14,16,24,1),_rgba(10,12,18,1))]">
+      <div className="mx-auto flex min-h-full w-full max-w-[1600px] flex-col gap-6 px-6 py-6 lg:px-8">
         <MissionComposer
           missionText={missionText}
           subject={subject}
@@ -299,7 +325,7 @@ export function AiGenerateStudioPage() {
         />
 
         <section className="grid min-h-[560px] gap-6 xl:grid-cols-[minmax(0,1.6fr)_340px]">
-          <Card className="rounded-[32px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(251,248,241,0.9))] shadow-[0_22px_60px_rgba(29,33,44,0.08)]">
+          <Card className="rounded-[32px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(251,248,241,0.9))] shadow-[0_22px_60px_rgba(29,33,44,0.08)] dark:bg-[linear-gradient(180deg,rgba(26,28,42,0.94),rgba(18,20,30,0.92))] dark:shadow-[0_22px_70px_rgba(0,0,0,0.55)]">
             <CardHeader className="border-b border-border/60 pb-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -309,7 +335,7 @@ export function AiGenerateStudioPage() {
                   </div>
                 </div>
                 {taskStatus === 'running' && (
-                  <div className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-sky-800/70 dark:bg-sky-950/45 dark:text-sky-200">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     生成中
                   </div>
@@ -317,6 +343,16 @@ export function AiGenerateStudioPage() {
               </div>
             </CardHeader>
             <CardContent className="h-[640px] p-4 lg:p-6">
+              {taskStatus === 'failed' && taskErrorInfo.display ? (
+                <div className="mb-4 rounded-[24px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                  <div>{taskErrorInfo.display}</div>
+                  {taskErrorInfo.code ? (
+                    <code className="mt-2 block w-fit rounded-full border border-destructive/20 bg-destructive/10 px-3 py-1 font-mono text-xs text-destructive/90">
+                      {taskErrorInfo.code}
+                    </code>
+                  ) : null}
+                </div>
+              ) : null}
               {session ? (
                 <GenerationStream
                   drafts={session.drafts}
@@ -351,6 +387,7 @@ export function AiGenerateStudioPage() {
             progress={progress}
             stage={stage}
             taskStatus={taskStatus}
+            taskError={taskError}
             draftCount={draftCount}
             confirmedCount={confirmedDrafts.length}
             libraryTotal={lib.total}

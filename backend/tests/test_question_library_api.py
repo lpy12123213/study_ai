@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -88,3 +89,53 @@ class TestQuestionLibraryApi(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["preview"]["preview_id"], "pv-new")
         self.assertEqual(data["preview"]["topic"], "圆锥曲线")
+
+    def test_generate_stream_preserves_llm_request_failed_details(self) -> None:
+        app = create_app()
+        app.dependency_overrides[require_auth] = lambda: {"user_id": "u-1", "username": "alice", "role": "user"}
+
+        llm_error = (
+            "llm_request_failed status=404 model=Pro/moonshotai/Kimi-K2.5 "
+            "provider=fireworks msg=Model not found"
+        )
+
+        with patch("backend.api.question_library.is_llm_configured", return_value=True), patch(
+            "backend.api.question_library.build_source_pack",
+            new=AsyncMock(
+                return_value={
+                    "subject": "高中数学",
+                    "topic": "导数",
+                    "study_markdown": "",
+                    "facts": [],
+                    "skills": [],
+                    "common_mistakes": [],
+                    "forbidden_patterns": [],
+                }
+            ),
+        ), patch(
+            "backend.api.question_library.generate_questions",
+            new=AsyncMock(side_effect=RuntimeError(llm_error)),
+        ), patch("backend.api.question_library.db_upsert_task", new=AsyncMock()), patch(
+            "backend.api.question_library.db_append_task_event", new=AsyncMock()
+        ), patch("backend.api.question_library.db_update_task_status", new=AsyncMock()):
+            client = TestClient(app)
+            with client.stream(
+                "POST",
+                "/api/question-library/generate",
+                json={
+                    "subject": "高中数学",
+                    "topic": "导数",
+                    "difficulty": "困难",
+                    "question_type": "解答题",
+                    "count": 1,
+                    "use_study_archive": False,
+                    "task_id": "ql-gen-test-err-1",
+                },
+            ) as resp:
+                body = "\n".join(resp.iter_lines())
+
+        app.dependency_overrides.clear()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(llm_error, body)
+        self.assertNotIn("no_questions_generated", body)

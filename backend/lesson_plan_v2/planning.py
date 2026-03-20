@@ -4,13 +4,13 @@ import json
 import os
 from typing import Any, Dict, List
 
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, SUB_MODEL
 from backend.lesson_plan_v2.common import clean_points, extract_json_obj
 from backend.lesson_plan_v2.llm import call_llm_text
 
 
 async def split_knowledge_points(topic: str, subject: str, *, min_points: int = 3, max_points: int = 8) -> List[str]:
-    model = str(os.getenv("LESSON_PLAN_SPLIT_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
+    model = str(os.getenv("LESSON_PLAN_SPLIT_MODEL") or SUB_MODEL or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
 
     prompt = {
         "topic": topic,
@@ -49,7 +49,7 @@ async def split_knowledge_points(topic: str, subject: str, *, min_points: int = 
 
 
 async def research_knowledge_point(kp: str, subject: str, topic: str) -> Dict[str, Any]:
-    model = str(os.getenv("LESSON_PLAN_RESEARCH_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
+    model = str(os.getenv("LESSON_PLAN_RESEARCH_MODEL") or SUB_MODEL or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
 
     prompt = {
         "knowledge_point": kp,
@@ -101,7 +101,10 @@ async def review_knowledge_points(
 ) -> List[str]:
     model = (
         str(
-            os.getenv("LESSON_PLAN_KP_REVIEW_MODEL") or os.getenv("LESSON_PLAN_SPLIT_MODEL") or LESSON_PLAN_MODEL
+            os.getenv("LESSON_PLAN_KP_REVIEW_MODEL")
+            or os.getenv("LESSON_PLAN_SPLIT_MODEL")
+            or SUB_MODEL
+            or LESSON_PLAN_MODEL
         ).strip()
         or LESSON_PLAN_MODEL
     )

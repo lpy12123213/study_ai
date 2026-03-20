@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import re
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
 from backend.core.llm_client import chat_completion_text, is_llm_configured
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+
+logger = get_logger(__name__)
 
 DEFAULT_SEARCH_CONFIG = {
     "preset": "balanced-creative",
     "depth": 4,
-    "beam_width": 8,
+    "beam_width": 12,
     "expand_budget": 140,
     "skill_branch_factor": 4,
     "reasoning_branch_factor": 4,
@@ -24,13 +28,18 @@ DEFAULT_SEARCH_CONFIG = {
     "solvability_weight": 0.2,
     "ambiguity_penalty": 0.26,
     "template_penalty": 0.16,
-    "judge_pass_score": 80,
+    "judge_pass_score": 70,
     "difficulty_tolerance": 0.22,
     "solver_consensus_n": 2,
-    "max_repair_rounds": 1,
+    "max_repair_rounds": 2,
     # Only attempt a repair when the judge score is close to the pass floor.
     # Low-quality "template" questions should be discarded rather than rewritten.
-    "repair_score_band": 12,
+    "repair_score_band": 20,
+    "repair_min_score": 50,
+    "answer_mismatch_penalty": 12,
+    "ambiguity_penalty_score": 8,
+    "judge_require_pass_flag": False,
+    "realize_min_max_tokens": 5000,
     "drafts_per_spec": 3,
 }
 
@@ -206,6 +215,124 @@ def _strip_json_fence(text: str) -> str:
     return raw
 
 
+def _repair_json_backslashes(raw: str) -> str:
+    """
+    Best-effort repair for "almost JSON" emitted by some models when LaTeX is embedded
+    in JSON strings (e.g. `\\( ... \\)` is output as `\\( ... \\)` without JSON escaping,
+    or commands like `\\frac` are emitted as `\\frac` where `\\f` becomes a JSON escape).
+
+    Strategy: inside JSON string literals only, escape backslashes that would otherwise
+    create invalid or unintended JSON escapes, while preserving legit escapes like `\\n`.
+    """
+
+    s = str(raw or "")
+    if not s:
+        return s
+
+    out: list[str] = []
+    in_str = False
+    i = 0
+    hex_chars = set("0123456789abcdefABCDEF")
+
+    while i < len(s):
+        ch = s[i]
+        if not in_str:
+            out.append(ch)
+            if ch == '"':
+                in_str = True
+            i += 1
+            continue
+
+        # Inside a string literal.
+        if ch == '"':
+            out.append(ch)
+            in_str = False
+            i += 1
+            continue
+
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+
+        # Backslash inside a string: decide whether it is a valid JSON escape.
+        if i + 1 >= len(s):
+            out.append("\\\\")
+            i += 1
+            continue
+
+        nxt = s[i + 1]
+
+        # Always keep valid structural escapes.
+        if nxt in {'"', "\\", "/"}:
+            out.append("\\")
+            out.append(nxt)
+            i += 2
+            continue
+
+        if nxt in {"b", "f", "n", "r", "t"}:
+            # JSON escapes like \\n are valid, but LaTeX commands frequently start with
+            # these letters (e.g. \\neq, \\theta, \\frac). If the escape is followed by
+            # an ASCII letter, assume it's LaTeX and escape the backslash.
+            after = s[i + 2] if (i + 2) < len(s) else ""
+            if after.isascii() and after.isalpha():
+                out.append("\\\\")
+                out.append(nxt)
+                i += 2
+                continue
+            out.append("\\")
+            out.append(nxt)
+            i += 2
+            continue
+
+        if nxt == "u":
+            # Keep \\uXXXX unicode escapes, otherwise treat as LaTeX (e.g. \\underline).
+            if (i + 5) < len(s):
+                hex4 = s[i + 2 : i + 6]
+                if len(hex4) == 4 and all(c in hex_chars for c in hex4):
+                    out.append("\\")
+                    out.append("u")
+                    out.append(hex4)
+                    i += 6
+                    continue
+            out.append("\\\\")
+            out.append("u")
+            i += 2
+            continue
+
+        # Invalid JSON escape (common with LaTeX like \\(, \\[, \\alpha, etc.)
+        out.append("\\\\")
+        i += 1
+
+    return "".join(out)
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        if v in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _resolve_realize_max_tokens() -> int:
+    base = int(LESSON_PLAN_MAX_TOKENS)
+    minimum = int(DEFAULT_SEARCH_CONFIG.get("realize_min_max_tokens") or 5000)
+    raw = str(os.getenv("QUESTION_LIBRARY_REALIZE_MAX_TOKENS") or "").strip()
+    if raw:
+        try:
+            minimum = max(2000, int(raw))
+        except Exception:
+            minimum = int(DEFAULT_SEARCH_CONFIG.get("realize_min_max_tokens") or 5000)
+    return max(base, minimum)
+
+
 def _extract_json_value(text: str) -> Any:
     raw = _strip_json_fence(text)
     if not raw:
@@ -216,6 +343,12 @@ def _extract_json_value(text: str) -> Any:
             continue
         try:
             return json.loads(candidate)
+        except Exception:
+            pass
+        try:
+            repaired = _repair_json_backslashes(candidate)
+            if repaired != candidate:
+                return json.loads(repaired)
         except Exception:
             continue
     return {}
@@ -505,43 +638,67 @@ async def realize_drafts(spec: dict, *, source_pack: dict, n: int = 2) -> List[d
     study_md = str((source_pack or {}).get("study_markdown") or "").strip()
     n = max(1, min(int(n or 1), 4))
 
-    messages = build_generation_messages(
-        subject=subj,
-        topic=topic,
-        difficulty=difficulty,
-        question_type=qtype,
-        study_markdown=study_md,
-        count=n,
-        spec=spec,
-        source_pack=source_pack,
-    )
+    model = str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
+    temperature = min(0.35, float(LESSON_PLAN_TEMPERATURE))
+    max_tokens = _resolve_realize_max_tokens()
 
-    text = await chat_completion_text(
-        messages=messages,
-        model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
-        temperature=float(LESSON_PLAN_TEMPERATURE),
-        max_tokens=int(LESSON_PLAN_MAX_TOKENS),
-        response_format={"type": "json_object"},
-        reasoning={"effort": "high", "exclude": True},
-        stream=False,
-        raise_on_fail=True,
-        retries=3,
-        req_id_prefix="qlg",
-    )
+    # First attempt: generate `n` drafts in one shot.
+    # If the response is truncated/invalid JSON (common with LaTeX-heavy content),
+    # retry in a safer "short mode" that asks for only 1 question.
+    for attempt in range(2):
+        target_n = n if attempt == 0 else 1
+        messages = build_generation_messages(
+            subject=subj,
+            topic=topic,
+            difficulty=difficulty,
+            question_type=qtype,
+            study_markdown=study_md,
+            count=target_n,
+            spec=spec,
+            source_pack=source_pack,
+        )
+        if attempt > 0:
+            # Force a compact retry: keep the output short and avoid meta commentary
+            # that tends to bloat the response and trigger truncation.
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "上一次输出可能被截断或不符合 JSON。现在请重新输出，只生成 1 道题，并严格控制长度："
+                        "解析最多 6~8 行短句，不要写“陷阱/易错/点评/矛盾讨论/可行性分析”。"
+                        "若发现条件会导致无解或矛盾，请直接换一个更合理的题目。"
+                        "只输出严格 JSON object。"
+                    ),
+                },
+                *messages,
+            ]
 
-    qs = _extract_question_items(_extract_json_value(text))
-    if not qs:
-        return []
+        text = await chat_completion_text(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            reasoning={"effort": "high", "exclude": True},
+            stream=False,
+            raise_on_fail=True,
+            retries=3,
+            req_id_prefix="qlg",
+        )
 
-    out: List[dict] = []
-    for q in qs:
-        normalized = _normalize_question_item(q, spec)
-        if normalized is None:
-            continue
-        out.append(normalized)
-        if len(out) >= n:
-            break
-    return out
+        qs = _extract_question_items(_extract_json_value(text))
+        out: List[dict] = []
+        for q in qs:
+            normalized = _normalize_question_item(q, spec)
+            if normalized is None:
+                continue
+            out.append(normalized)
+            if len(out) >= n:
+                break
+        if out:
+            return out
+
+    return []
 
 
 def build_generation_messages(
@@ -578,10 +735,18 @@ def build_generation_messages(
             "preferred_skills": skills[:10],
             "common_mistakes": mistakes[:10],
             "forbidden_patterns": forbid[:12],
+            "length_budget": {
+                # Hard-ish caps to keep JSON responses small enough to be reliably
+                # parseable (avoid max_tokens truncation), especially on verbose models.
+                "max_sub_questions": 2,
+                "stem_max_chars": 520,
+                "answer_max_chars": 360,
+                "analysis_max_chars": 1100,
+            },
             "must_have": [
                 "多步推导 / 参数变化 / 分类讨论 / 构造反例 至少满足其一",
                 "题目具有区分度，不是教材例题换皮",
-                "解析要完整可复现，结论要明确",
+                "解析要可复现但尽量精炼，结论要明确",
             ],
         },
         "output_schema": {
@@ -599,11 +764,16 @@ def build_generation_messages(
         "你是资深高中教研员。请严格输出 JSON object，不要输出 Markdown，不要解释。"
         "所有数学公式必须使用 LaTeX 表达。"
         "行内公式必须写成 \\(...\\)，独立公式必须写成 \\[...\\]。"
+        "严禁使用 $...$ 作为公式包裹。"
         "若题目需要表格、分布列、矩阵或分类列举，必须写成 LaTeX 的 array/matrix/cases 结构。"
         "禁止输出纯文本竖排表格或用换行假装表格。"
         "禁止输出图片公式、MathML、SVG、伪代码公式或自然语言替代公式。"
         "题干、答案、解析中的公式都必须遵守同一 LaTeX 规范。"
         "优先生成具有区分度的中高难题，避免模板题和一步到位的基础题。"
+        "每道题最多 2 小问；控制长度，遵守 length_budget；避免输出大段冗长文字。"
+        "解析只写必要推导步骤（建议 6~8 行短句），禁止输出“陷阱/易错/点评/矛盾讨论/可行性分析”等元文本。"
+        "如发现题目条件会导致无解/矛盾/过长，请直接换一个更合理且可解的题目。"
+        "务必保证 JSON 完整闭合、可被解析（不要输出截断的 JSON）。"
     )
 
     return [
@@ -1000,11 +1170,12 @@ async def generate_questions(
         except Exception:
             pass
 
-    beam_width = max(1, int(cfg.get("beam_width") or 6))
+    beam_width = max(1, int(cfg.get("beam_width") or DEFAULT_SEARCH_CONFIG["beam_width"]))
+    search_beam_width = max(beam_width, int(max(1, count or 1) * 2))
 
     def _score_and_beam(items: List[dict]) -> List[dict]:
         scored = [score_spec(s, source_pack, cfg) for s in items if isinstance(s, dict)]
-        return beam_select(scored, {"beam_width": beam_width})
+        return beam_select(scored, {"beam_width": search_beam_width})
 
     root_specs = seed_root_specs(source_pack, count=count, difficulty=difficulty, question_type=question_type)
     root_beam = _score_and_beam(root_specs)
@@ -1017,8 +1188,8 @@ async def generate_questions(
     surface_specs = expand_surface_layer(trap_beam, cfg)
     specs = _score_and_beam(surface_specs)
 
-    per_spec = max(1, min(int(cfg.get("drafts_per_spec") or 2), 4))
-    max_specs = max(1, min(int(count or 1) * 2, max(3, beam_width)))
+    per_spec = max(1, min(int(cfg.get("drafts_per_spec") or DEFAULT_SEARCH_CONFIG["drafts_per_spec"]), 4))
+    max_specs = max(1, min(int(count or 1) * 3, max(4, search_beam_width)))
     specs = specs[:max_specs]
 
     await _emit_stage_event(
@@ -1034,6 +1205,7 @@ async def generate_questions(
             "trap_expanded": len(trap_specs),
             "surface_expanded": len(surface_specs),
             "kept_specs": len(specs),
+            "search_beam_width": search_beam_width,
             "sample_seed_tags": _clip_unique([str((s or {}).get("seed_tag") or "") for s in specs], 4),
             "sample_skills": _clip_unique([str((s or {}).get("skill") or "") for s in specs], 4),
         },
@@ -1041,8 +1213,21 @@ async def generate_questions(
     )
 
     raw_candidates: List[dict] = []
+    realize_failures = 0
     for spec in specs:
-        ds = await realize_drafts(spec, source_pack=source_pack, n=per_spec)
+        try:
+            ds = await realize_drafts(spec, source_pack=source_pack, n=per_spec)
+        except Exception as exc:
+            realize_failures += 1
+            logger.warning(
+                "question_library_realize_drafts_failed",
+                extra={
+                    "spec_id": str((spec or {}).get("spec_id") or "").strip(),
+                    "topic": str((spec or {}).get("topic") or "").strip(),
+                    "error": str(exc),
+                },
+            )
+            continue
         for d in ds:
             if isinstance(d, dict):
                 raw_candidates.append(dict(d))
@@ -1056,6 +1241,7 @@ async def generate_questions(
             "spec_count": len(specs),
             "drafts_per_spec": per_spec,
             "draft_count": len(raw_candidates),
+            "realize_failures": realize_failures,
             "empty_specs": max(0, len(specs) - len({str((d or {}).get("spec_id") or "").strip() for d in raw_candidates if isinstance(d, dict)})),
         },
         sample=_summarize_candidate_sample(raw_candidates[0]) if raw_candidates else None,
@@ -1066,9 +1252,14 @@ async def generate_questions(
 
     # Stage: solver + ambiguity + judge + optional repair.
     accepted: List[dict] = []
-    judge_floor = int(cfg.get("judge_pass_score") or 80)
+    judge_floor = int(cfg.get("judge_pass_score") or DEFAULT_SEARCH_CONFIG["judge_pass_score"])
+    judge_require_pass_flag = _as_bool(cfg.get("judge_require_pass_flag"), default=False)
+    solver_consensus_n = max(1, min(int(cfg.get("solver_consensus_n") or 1), 3))
+    answer_mismatch_penalty = max(0, int(cfg.get("answer_mismatch_penalty") or DEFAULT_SEARCH_CONFIG["answer_mismatch_penalty"]))
+    ambiguity_penalty_score = max(0, int(cfg.get("ambiguity_penalty_score") or DEFAULT_SEARCH_CONFIG["ambiguity_penalty_score"]))
     max_repairs = max(0, int(cfg.get("max_repair_rounds") or 0))
-    repair_band = max(0, int(cfg.get("repair_score_band") or 12))
+    repair_band = max(0, int(cfg.get("repair_score_band") or DEFAULT_SEARCH_CONFIG["repair_score_band"]))
+    repair_min_score = max(0, int(cfg.get("repair_min_score") or DEFAULT_SEARCH_CONFIG["repair_min_score"]))
     judged_total = 0
     repairs_attempted = 0
     reject_reason_counts: Dict[str, int] = {}
@@ -1079,6 +1270,46 @@ async def generate_questions(
             if not key:
                 continue
             reject_reason_counts[key] = int(reject_reason_counts.get(key) or 0) + 1
+
+    async def _solve_with_consensus(stem_text: str, solve_options: dict) -> dict:
+        outcomes: List[dict] = []
+        for _ in range(solver_consensus_n):
+            try:
+                result = await solve_draft(stem_text, solve_options)
+            except Exception as exc:
+                result = {
+                    "match": False,
+                    "final_answer": "",
+                    "issues": [f"solver_exception:{str(exc)}"],
+                    "summary": "",
+                }
+            outcomes.append(result if isinstance(result, dict) else {})
+
+        true_votes = sum(1 for item in outcomes if bool(item.get("match")))
+        target_match = true_votes * 2 >= len(outcomes) + 1
+
+        combined_issues: List[str] = []
+        best_result: dict = {}
+        for item in outcomes:
+            if not best_result and bool(item.get("match")) == target_match:
+                best_result = dict(item)
+            raw_issues = item.get("issues")
+            if isinstance(raw_issues, list):
+                for issue in raw_issues:
+                    txt = str(issue or "").strip()
+                    if txt:
+                        combined_issues.append(txt)
+        if not best_result and outcomes:
+            best_result = dict(outcomes[0])
+
+        return {
+            "match": target_match,
+            "final_answer": str(best_result.get("final_answer") or "").strip(),
+            "issues": _clip_unique(combined_issues, 8),
+            "summary": str(best_result.get("summary") or "").strip(),
+            "match_votes": true_votes,
+            "consensus_n": len(outcomes),
+        }
 
     for cand in raw_candidates:
         if not isinstance(cand, dict):
@@ -1098,33 +1329,42 @@ async def generate_questions(
         attempt = 0
         current = dict(cand)
         while True:
-            ambiguous_issues: List[str] = []
-            solved = await solve_draft(
+            solved = await _solve_with_consensus(
                 str(current.get("stem") or ""),
                 {"subject": str(spec.get("subject") or ""), "proposed_answer": str(current.get("answer") or "")},
             )
-            if not bool(solved.get("match")):
-                judge = {"pass": False, "overall_score": 0, "issues": ["answer_mismatch"], "summary": ""}
-            else:
-                amb = await check_ambiguity(current)
-                ambiguous_issues = [str(x or "").strip() for x in (amb.get("issues") or []) if str(x or "").strip()][:6]
-                judge = await judge_draft(current, spec)
-                if bool(amb.get("ambiguous")):
-                    judge = dict(judge or {})
-                    issues = list(judge.get("issues") or []) if isinstance(judge.get("issues"), list) else []
-                    issues.extend([f"ambiguous:{x}" for x in ambiguous_issues])
-                    judge["issues"] = issues
-                    judge["pass"] = False
+            amb = await check_ambiguity(current)
+            ambiguous_issues = [str(x or "").strip() for x in (amb.get("issues") or []) if str(x or "").strip()][:6]
+            judge = await judge_draft(current, spec)
+            judge = dict(judge or {})
 
-            overall = int(judge.get("overall_score") or 0)
-            passed = bool(judge.get("pass")) and overall >= judge_floor
+            issues = list(judge.get("issues") or []) if isinstance(judge.get("issues"), list) else []
+            judge_pass = bool(judge.get("pass"))
+            overall = max(0, int(judge.get("overall_score") or 0))
+            penalty_total = 0
+            if not bool(solved.get("match")):
+                penalty_total += answer_mismatch_penalty
+                issues.append("answer_mismatch")
+                solver_issues = solved.get("issues")
+                if isinstance(solver_issues, list):
+                    issues.extend([f"solver:{str(x or '').strip()}" for x in solver_issues if str(x or "").strip()])
+            if bool(amb.get("ambiguous")):
+                penalty_total += ambiguity_penalty_score
+                issues.extend([f"ambiguous:{x}" for x in ambiguous_issues])
+            if penalty_total > 0:
+                overall = max(0, overall - penalty_total)
+
+            judge["overall_score"] = overall
+            judge["issues"] = _clip_unique([str(x or "").strip() for x in issues if str(x or "").strip()], 12)
+            passed = overall >= judge_floor and (judge_pass if judge_require_pass_flag else True)
             judged_total += 1
 
-            issues = judge.get("issues") if isinstance(judge, dict) else []
-            issues_list = list(issues or []) if isinstance(issues, list) else []
+            issues_list = list(judge.get("issues") or []) if isinstance(judge.get("issues"), list) else []
             normalized_reasons = [str(x or "").strip() for x in issues_list if str(x or "").strip()]
             if overall < judge_floor:
                 normalized_reasons.append("judge_below_floor")
+            if judge_require_pass_flag and not judge_pass:
+                normalized_reasons.append("judge_pass_false")
 
             if passed:
                 keep = dict(current)
@@ -1155,8 +1395,12 @@ async def generate_questions(
             # low-quality template questions via a rewrite.
             has_answer_mismatch = any(reason == "answer_mismatch" for reason in normalized_reasons)
             has_ambiguity = any(reason.startswith("ambiguous:") for reason in normalized_reasons)
-            close_to_floor = overall > 0 and (judge_floor - overall) <= repair_band
-            can_repair = attempt < max_repairs and (has_answer_mismatch or has_ambiguity or close_to_floor)
+            close_to_floor = overall >= repair_min_score and overall < judge_floor and (judge_floor - overall) <= repair_band
+            can_repair = (
+                attempt < max_repairs
+                and overall >= repair_min_score
+                and (has_answer_mismatch or has_ambiguity or close_to_floor)
+            )
 
             await _emit_stage_event(
                 on_stage_event,

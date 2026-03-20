@@ -577,7 +577,14 @@ async def chat_completion(
         payload["stream"] = True
 
     if reasoning and is_openrouter:
-        payload["reasoning"] = dict(reasoning)
+        # OpenRouter's "reasoning" feature can cause some models (notably DeepSeek)
+        # to emit the entire completion as reasoning with an empty `message.content`.
+        # When we are not streaming, this client only reads `message.content`, so keep
+        # reasoning disabled to avoid returning an empty string to downstream JSON parsers.
+        if (not stream) and str(resolved_model or "").strip().lower().startswith("deepseek/"):
+            pass
+        else:
+            payload["reasoning"] = dict(reasoning)
 
     dropped_reasoning = False
     dropped_response_format = False
@@ -771,6 +778,25 @@ async def chat_completion(
                     finish_reason = ""
                 if isinstance(data, dict) and isinstance(data.get("usage"), dict):
                     usage = dict(data.get("usage") or {})
+                # OpenRouter can return an empty content when "reasoning" is enabled
+                # (especially with exclude=true). Retry once without `reasoning` to
+                # recover a normal content channel for downstream parsing.
+                if (not content) and (not dropped_reasoning) and ("reasoning" in payload):
+                    payload.pop("reasoning", None)
+                    dropped_reasoning = True
+                    last_error = "empty_content_drop_reasoning"
+                    logger.warning(
+                        "llm_empty_content_drop_reasoning",
+                        extra={
+                            "req_id": req_id,
+                            "model": resolved_model,
+                            "provider": resolved_provider,
+                            "base_url": resolved_base_url,
+                        },
+                    )
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                    await asyncio.sleep(0.2)
+                    continue
                 if content:
                     llm_console.log_delta(req_id=req_id, channel="content", text=content)
                 llm_console.log_end(

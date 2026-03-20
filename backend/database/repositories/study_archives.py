@@ -178,6 +178,59 @@ async def get_latest_study_archive(
     }
 
 
+async def get_latest_study_archive_for_subject(
+    *,
+    user_id: str,
+    subject: str,
+    session: Optional[AsyncSession] = None,
+) -> Optional[dict]:
+    """Fetch the most recent StudyArchive for a user+subject (ignores topic).
+
+    This is useful when callers pass a free-form "mission" string as `topic`,
+    which would never exactly match the stored StudyArchive topic but still
+    wants to reuse the user's most recent study materials.
+    """
+
+    uid = _require_user_id(user_id)
+    subj = str(subject or "").strip()
+
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            return await get_latest_study_archive_for_subject(user_id=uid, subject=subj, session=session)
+
+    result = await session.execute(
+        select(StudyArchive)
+        .where(StudyArchive.user_id == uid, StudyArchive.subject == subj)
+        .order_by(desc(StudyArchive.created_at))
+        .limit(1)
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        return None
+
+    try:
+        sections = json.loads(row.sections_json or "[]")
+        if not isinstance(sections, list):
+            sections = []
+    except Exception:
+        sections = []
+
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "subject": row.subject,
+        "topic": row.topic,
+        "base_fingerprint": getattr(row, "base_fingerprint", "") or "",
+        "fingerprint": row.fingerprint,
+        "preset": row.preset,
+        "requirements": row.requirements,
+        "markdown": row.markdown or "",
+        "sections": sections,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+    }
+
+
 async def get_study_archive_by_fingerprint(
     *,
     user_id: str,
