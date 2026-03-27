@@ -212,6 +212,13 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 }
             )
 
+            async def fake_generate_questions(*args, **kwargs):  # type: ignore[no-untyped-def]
+                _ = args, kwargs
+                session = preview_store.load_session("sess-append-1") or {}
+                session["stop_requested"] = True
+                preview_store.save_session(session)
+                return [{"stem": "新题干", "answer": "新答案", "analysis": "新解析"}]
+
             with patch("backend.api.question_library.is_llm_configured", return_value=True), patch(
                 "backend.api.question_library.build_source_pack",
                 new=AsyncMock(
@@ -227,7 +234,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 ),
             ), patch(
                 "backend.api.question_library.generate_questions",
-                new=AsyncMock(return_value=[{"stem": "新题干", "answer": "新答案", "analysis": "新解析"}]),
+                new=AsyncMock(side_effect=fake_generate_questions),
             ), patch("backend.api.question_library.db_upsert_task", new=AsyncMock()), patch(
                 "backend.api.question_library.db_append_task_event", new=AsyncMock()
             ), patch("backend.api.question_library.db_update_task_status", new=AsyncMock()), patch(
@@ -255,6 +262,79 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 self.assertEqual(session_resp.status_code, 200)
                 draft_questions = session_resp.json()["session"]["draft_questions"]
                 self.assertEqual(len(draft_questions), 2)
+        finally:
+            preview_store._PREVIEWS_DIR = original_previews
+            if original_sessions is not None:
+                preview_store._SESSIONS_DIR = original_sessions
+            app.dependency_overrides.clear()
+            tmp.cleanup()
+
+    def test_generate_infinite_mode_retries_batches_until_stop_requested(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        tmp, original_previews, original_sessions = self._with_temp_preview_dirs()
+        try:
+            generate_calls = 0
+
+            async def fake_generate_questions(*args, **kwargs):  # type: ignore[no-untyped-def]
+                nonlocal generate_calls
+                _ = args, kwargs
+                generate_calls += 1
+                if generate_calls == 1:
+                    raise RuntimeError("batch_boom")
+                if generate_calls == 2:
+                    return []
+                session = preview_store.load_session("sess-infinite-1") or {}
+                session["stop_requested"] = True
+                preview_store.save_session(session)
+                return [{"stem": "最终题干", "answer": "最终答案", "analysis": "最终解析"}]
+
+            with patch("backend.api.question_library.is_llm_configured", return_value=True), patch(
+                "backend.api.question_library.build_source_pack",
+                new=AsyncMock(
+                    return_value={
+                        "subject": "高中数学",
+                        "topic": "导数",
+                        "study_markdown": "",
+                        "facts": [],
+                        "skills": [],
+                        "common_mistakes": [],
+                        "forbidden_patterns": [],
+                    }
+                ),
+            ), patch(
+                "backend.api.question_library.generate_questions",
+                new=AsyncMock(side_effect=fake_generate_questions),
+            ), patch("backend.api.question_library.asyncio.sleep", new=AsyncMock()), patch(
+                "backend.api.question_library.db_upsert_task", new=AsyncMock()
+            ), patch("backend.api.question_library.db_append_task_event", new=AsyncMock()), patch(
+                "backend.api.question_library.db_update_task_status", new=AsyncMock()
+            ), patch("backend.api.question_library.db_list_task_events", new=AsyncMock(return_value=[])):
+                client = TestClient(app)
+                with client.stream(
+                    "POST",
+                    "/api/question-library/generate",
+                    json={
+                        "subject": "高中数学",
+                        "topic": "导数",
+                        "count": 1,
+                        "mode": "infinite",
+                        "session_id": "sess-infinite-1",
+                        "task_id": "ql-gen-infinite-1",
+                    },
+                ) as resp:
+                    body = "\n".join(resp.iter_lines())
+
+                self.assertEqual(resp.status_code, 200)
+                self.assertGreaterEqual(generate_calls, 3)
+                self.assertIn('"type": "done"', body)
+
+                session_resp = client.get("/api/question-library/sessions/sess-infinite-1")
+                self.assertEqual(session_resp.status_code, 200)
+                session_data = session_resp.json()["session"]
+                self.assertEqual(session_data["status"], "stopped")
+                self.assertEqual(len(session_data["draft_questions"]), 1)
+                self.assertEqual(session_data["draft_questions"][0]["stem"], "最终题干")
         finally:
             preview_store._PREVIEWS_DIR = original_previews
             if original_sessions is not None:
@@ -487,3 +567,76 @@ class TestQuestionLibraryApi(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn(llm_error, body)
         self.assertNotIn("no_questions_generated", body)
+
+    def test_generate_preserves_partial_drafts_when_pipeline_errors_after_accepting_candidates(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        tmp, original_previews, original_sessions = self._with_temp_preview_dirs()
+        try:
+            async def fake_generate_questions(**kwargs):
+                callback = kwargs.get("on_candidate_accepted")
+                if callable(callback):
+                    maybe_result = callback(
+                        {
+                            "stem": "中途保留题干",
+                            "answer": "中途保留答案",
+                            "analysis": "中途保留解析",
+                            "question_id": "accepted-1",
+                            "skill": "分类讨论",
+                            "reasoning": "多步推导",
+                            "surface": "综合题",
+                        }
+                    )
+                    if hasattr(maybe_result, "__await__"):
+                        await maybe_result
+                raise RuntimeError("judge_stage_boom")
+
+            with patch("backend.api.question_library.is_llm_configured", return_value=True), patch(
+                "backend.api.question_library.build_source_pack",
+                new=AsyncMock(
+                    return_value={
+                        "subject": "高中数学",
+                        "topic": "导数",
+                        "study_markdown": "",
+                        "facts": [],
+                        "skills": [],
+                        "common_mistakes": [],
+                        "forbidden_patterns": [],
+                    }
+                ),
+            ), patch(
+                "backend.api.question_library.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
+            ), patch("backend.api.question_library.db_upsert_task", new=AsyncMock()), patch(
+                "backend.api.question_library.db_append_task_event", new=AsyncMock()
+            ), patch("backend.api.question_library.db_update_task_status", new=AsyncMock()), patch(
+                "backend.api.question_library.db_list_task_events", new=AsyncMock(return_value=[])
+            ):
+                client = TestClient(app)
+                with client.stream(
+                    "POST",
+                    "/api/question-library/generate",
+                    json={
+                        "subject": "高中数学",
+                        "topic": "导数",
+                        "count": 1,
+                        "mode": "standard",
+                        "task_id": "ql-gen-partial-1",
+                    },
+                ) as resp:
+                    body = "\n".join(resp.iter_lines())
+
+                self.assertEqual(resp.status_code, 200)
+                self.assertIn("judge_stage_boom", body)
+
+                session_files = list((preview_store._SESSIONS_DIR).glob("*.json"))
+                self.assertTrue(session_files)
+                session_obj = preview_store.load_session(session_files[0].stem)
+                self.assertIsInstance(session_obj, dict)
+                self.assertEqual(session_obj["status"], "partial_failure")
+                self.assertEqual(len(session_obj["draft_questions"]), 1)
+        finally:
+            preview_store._PREVIEWS_DIR = original_previews
+            if original_sessions is not None:
+                preview_store._SESSIONS_DIR = original_sessions
+            app.dependency_overrides.clear()
+            tmp.cleanup()

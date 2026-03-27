@@ -539,35 +539,39 @@ async def chat_completion(
     headers = {"Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
 
     requested_max_tokens = int(max_tokens)
+    # max_tokens <= 0 means "unlimited" – omit the field from the payload so
+    # the API uses the model's default maximum output length.
     payload_max_tokens = 0
-    if resolved_provider == "openrouter":
-        ctx_len, max_comp = await _openrouter_model_limits(
-            base_url=resolved_base_url,
-            api_key=resolved_api_key,
-            model=resolved_model,
-        )
-        if ctx_len > 0:
-            payload_max_tokens = _cap_max_tokens_with_ctx_len(
-                messages=messages,
-                context_length=ctx_len,
-                requested_max_tokens=requested_max_tokens,
-                max_completion_tokens=max_comp,
+    if requested_max_tokens > 0:
+        if resolved_provider == "openrouter":
+            ctx_len, max_comp = await _openrouter_model_limits(
+                base_url=resolved_base_url,
+                api_key=resolved_api_key,
+                model=resolved_model,
             )
+            if ctx_len > 0:
+                payload_max_tokens = _cap_max_tokens_with_ctx_len(
+                    messages=messages,
+                    context_length=ctx_len,
+                    requested_max_tokens=requested_max_tokens,
+                    max_completion_tokens=max_comp,
+                )
 
-    if payload_max_tokens <= 0:
-        payload_max_tokens = cap_max_tokens_for_messages(
-            messages=messages,
-            model=resolved_model,
-            requested_max_tokens=requested_max_tokens,
-        )
+        if payload_max_tokens <= 0:
+            payload_max_tokens = cap_max_tokens_for_messages(
+                messages=messages,
+                model=resolved_model,
+                requested_max_tokens=requested_max_tokens,
+            )
 
     payload: Dict[str, Any] = {
         "model": resolved_model,
         "messages": messages,
         "temperature": effective_temperature,
-        "max_tokens": int(payload_max_tokens),
         "stream": False,
     }
+    if payload_max_tokens > 0:
+        payload["max_tokens"] = int(payload_max_tokens)
 
     if isinstance(response_format, dict) and response_format:
         payload["response_format"] = dict(response_format)

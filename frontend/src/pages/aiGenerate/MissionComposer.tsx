@@ -35,6 +35,9 @@ interface MissionComposerProps {
   difficulty: string
   questionType: string
   useStudyArchive: boolean
+  useReferenceQuestions: boolean
+  referenceSource: 'any' | 'gaokao' | 'mock' | 'joint' | string
+  referenceYearRange: 'all' | '3' | '5' | string
   mode: AiGenerateSessionMode
   subjects: SubjectOption[]
   isGenerating: boolean
@@ -47,6 +50,9 @@ interface MissionComposerProps {
   onDifficultyChange: (value: string) => void
   onQuestionTypeChange: (value: string) => void
   onUseStudyArchiveChange: (value: boolean) => void
+  onUseReferenceQuestionsChange: (value: boolean) => void
+  onReferenceSourceChange: (value: string) => void
+  onReferenceYearRangeChange: (value: string) => void
   onModeChange: (value: AiGenerateSessionMode) => void
   onGenerate: () => void
   onStop?: () => void
@@ -64,6 +70,9 @@ export function MissionComposer(props: MissionComposerProps) {
     difficulty,
     questionType,
     useStudyArchive,
+    useReferenceQuestions,
+    referenceSource,
+    referenceYearRange,
     mode,
     subjects,
     isGenerating,
@@ -76,6 +85,9 @@ export function MissionComposer(props: MissionComposerProps) {
     onDifficultyChange,
     onQuestionTypeChange,
     onUseStudyArchiveChange,
+    onUseReferenceQuestionsChange,
+    onReferenceSourceChange,
+    onReferenceYearRangeChange,
     onModeChange,
     onGenerate,
     onStop,
@@ -289,12 +301,13 @@ export function MissionComposer(props: MissionComposerProps) {
           </Button>
           <div className="text-sm text-muted-foreground">
             {subject || '未选择学科'} · {difficulty || '难度不限'} · {count || '5'} 题 · {questionType || '题型不限'} ·{' '}
-            {useStudyArchive ? '引用资料' : '不引用资料'}
+            {useStudyArchive ? '引用资料' : '不引用资料'} ·{' '}
+            {useReferenceQuestions ? `参考真题·${referenceSource === 'gaokao' ? '高考' : referenceSource === 'mock' ? '模考' : referenceSource === 'joint' ? '联考' : '不限'}·${referenceYearRange === '3' ? '近3年' : referenceYearRange === '5' ? '近5年' : '不限'}` : '不参考真题'}
           </div>
         </div>
 
         {advancedOpen ? (
-          <div className="grid gap-4 rounded-[28px] border border-border/70 bg-background/78 p-4 lg:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-4 rounded-[28px] border border-border/70 bg-background/78 p-4 lg:grid-cols-2 xl:grid-cols-6">
             <div className="space-y-2">
               <label htmlFor="ai-generate-subject" className="text-sm font-medium">
                 学科
@@ -375,7 +388,40 @@ export function MissionComposer(props: MissionComposerProps) {
               />
             </div>
 
-            <div className="rounded-[24px] border border-border/70 bg-background/76 p-4 xl:col-span-5">
+            <div className="space-y-2">
+              <label htmlFor="ai-generate-reference-source" className="text-sm font-medium">
+                参考来源
+              </label>
+              <Select value={referenceSource || 'any'} onValueChange={onReferenceSourceChange} disabled={!useReferenceQuestions}>
+                <SelectTrigger id="ai-generate-reference-source" aria-label="参考来源" className="rounded-2xl">
+                  <SelectValue placeholder="参考来源不限" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">不限</SelectItem>
+                  <SelectItem value="gaokao">高考真题</SelectItem>
+                  <SelectItem value="mock">模考题</SelectItem>
+                  <SelectItem value="joint">联考题</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="ai-generate-reference-year-range" className="text-sm font-medium">
+                参考年份
+              </label>
+              <Select value={referenceYearRange || 'all'} onValueChange={onReferenceYearRangeChange} disabled={!useReferenceQuestions}>
+                <SelectTrigger id="ai-generate-reference-year-range" aria-label="参考年份" className="rounded-2xl">
+                  <SelectValue placeholder="参考年份不限" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">不限</SelectItem>
+                  <SelectItem value="3">近3年</SelectItem>
+                  <SelectItem value="5">近5年</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="rounded-[24px] border border-border/70 bg-background/76 p-4 xl:col-span-3">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <div className="text-sm font-medium">引用自学资料</div>
@@ -384,6 +430,18 @@ export function MissionComposer(props: MissionComposerProps) {
                   </div>
                 </div>
                 <Switch checked={useStudyArchive} onCheckedChange={onUseStudyArchiveChange} />
+              </div>
+            </div>
+
+            <div className="rounded-[24px] border border-border/70 bg-background/76 p-4 xl:col-span-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium">参考真题</div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    在素材整理后补抓真实试题样本，提炼出题模式与难度标定；关闭后会跳过参考题学习阶段。
+                  </div>
+                </div>
+                <Switch checked={useReferenceQuestions} onCheckedChange={onUseReferenceQuestionsChange} />
               </div>
             </div>
           </div>

@@ -57,6 +57,9 @@ class QuestionLibraryGenerateRequest(BaseModel):
     question_type: str = ""
     count: int = 5
     use_study_archive: bool = True
+    use_reference_questions: bool = True
+    reference_source: Literal["any", "gaokao", "mock", "joint"] = "any"
+    reference_year_range: Literal["all", "3", "5"] = "all"
     session_id: str = ""
     mode: Literal["standard", "infinite"] = "standard"
     grade_id: str = ""
@@ -101,6 +104,9 @@ class QuestionLibraryPreviewData(BaseModel):
     subject: str = ""
     topic: str = ""
     mode: Literal["standard", "infinite"] = "standard"
+    use_reference_questions: bool = True
+    reference_source: Literal["any", "gaokao", "mock", "joint"] = "any"
+    reference_year_range: Literal["all", "3", "5"] = "all"
     count: int = 0
     draft_questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
 

@@ -1,9 +1,384 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
 
 class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
+    def test_build_generation_messages_changes_system_prompt_by_difficulty(self) -> None:
+        from backend.question_library.generation import build_generation_messages
+
+        easy = build_generation_messages(
+            subject="高中数学",
+            topic="函数单调性",
+            difficulty="简单",
+            question_type="解答题",
+            study_markdown="",
+            count=1,
+            spec={"skill": "概念辨析"},
+            source_pack={},
+        )
+        hard = build_generation_messages(
+            subject="高中数学",
+            topic="函数单调性",
+            difficulty="困难",
+            question_type="解答题",
+            study_markdown="",
+            count=1,
+            spec={"skill": "综合应用"},
+            source_pack={},
+        )
+
+        easy_system = str(easy[0].get("content") or "")
+        hard_system = str(hard[0].get("content") or "")
+
+        self.assertNotEqual(easy_system, hard_system)
+        self.assertIn("基础题", easy_system)
+        self.assertIn("高难度", hard_system)
+
+    def test_beam_select_preserves_seed_tag_diversity(self) -> None:
+        from backend.question_library.generation import beam_select
+
+        out = beam_select(
+            [
+                {"spec_id": "a-1", "seed_tag": "参数变化", "skill": "参数讨论", "score": 99},
+                {"spec_id": "a-2", "seed_tag": "参数变化", "skill": "综合应用", "score": 98},
+                {"spec_id": "b-1", "seed_tag": "构造反例", "skill": "构造反例", "score": 97},
+            ],
+            {"beam_width": 2},
+        )
+
+        self.assertEqual(len(out), 2)
+        self.assertEqual(len({str(item.get("seed_tag") or "") for item in out}), 2)
+
+    async def test_solve_and_ambiguity_can_use_lightweight_judge_model_override(self) -> None:
+        from backend.question_library.generation import check_ambiguity, solve_draft
+
+        seen_models: list[tuple[str, str]] = []
+
+        async def fake_chat_json_with_reasoning(*, model: str, req_id_prefix: str, **kwargs):  # type: ignore[no-untyped-def]
+            _ = kwargs
+            seen_models.append((req_id_prefix, model))
+            if req_id_prefix == "ql_solver":
+                return json.dumps(
+                    {"match": True, "final_answer": "x=1", "issues": [], "summary": "ok"},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_amb":
+                return json.dumps(
+                    {"ambiguous": False, "issues": [], "summary": "ok"},
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation._chat_json_with_reasoning",
+            new=AsyncMock(side_effect=fake_chat_json_with_reasoning),
+        ), patch.dict("os.environ", {"QUESTION_LIBRARY_JUDGE_MODEL": "openai/test-judge-mini"}, clear=False):
+            await solve_draft("题干", {"subject": "高中数学", "proposed_answer": "x=1"})
+            await check_ambiguity({"stem": "题干", "answer": "x=1"})
+
+        self.assertEqual(
+            seen_models,
+            [("ql_solver", "openai/test-judge-mini"), ("ql_amb", "openai/test-judge-mini")],
+        )
+
+    async def test_generate_questions_reduces_search_beam_for_small_request_count(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        stage_events: list[dict] = []
+
+        base_specs = [
+            {
+                "spec_id": f"spec-{idx}",
+                "subject": "高中数学",
+                "topic": "导数",
+                "difficulty": "中等",
+                "question_type": "解答题",
+                "seed_tag": "参数变化" if idx < 4 else "构造反例",
+                "skill": "参数讨论",
+                "reasoning": "分类讨论",
+                "trap": "边界点漏判",
+                "surface": "综合题",
+            }
+            for idx in range(10)
+        ]
+
+        def identity_expand(specs, config):  # type: ignore[no-untyped-def]
+            _ = config
+            return list(specs)
+
+        def fake_score_spec(spec, source_pack, config):  # type: ignore[no-untyped-def]
+            _ = source_pack, config
+            out = dict(spec)
+            out["score"] = 100 - int(str(spec.get("spec_id") or "spec-0").split("-")[-1])
+            return out
+
+        async def fake_realize_drafts(*args, **kwargs):  # type: ignore[no-untyped-def]
+            spec = args[0]
+            _ = kwargs
+            return [
+                {
+                    "spec_id": str(spec.get("spec_id") or ""),
+                    "stem": f"题干-{spec['spec_id']}",
+                    "answer": "答案",
+                    "analysis": "解析",
+                    "skill": str(spec.get("skill") or ""),
+                    "reasoning": str(spec.get("reasoning") or ""),
+                    "surface": str(spec.get("surface") or ""),
+                }
+            ]
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.seed_root_specs", return_value=base_specs
+        ), patch("backend.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
+            "backend.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
+        ), patch("backend.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
+            "backend.question_library.generation.expand_surface_layer", side_effect=identity_expand
+        ), patch("backend.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
+            "backend.question_library.generation.realize_drafts",
+            new=AsyncMock(side_effect=fake_realize_drafts),
+        ), patch(
+            "backend.question_library.generation.solve_draft",
+            new=AsyncMock(return_value={"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}),
+        ), patch(
+            "backend.question_library.generation.check_ambiguity",
+            new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
+        ), patch(
+            "backend.question_library.generation.judge_draft",
+            new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "中等"}),
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["参数讨论"]},
+                count=2,
+                difficulty="中等",
+                question_type="解答题",
+                on_stage_event=stage_events.append,
+            )
+
+        self.assertTrue(out)
+        spec_event = next(evt for evt in stage_events if str(evt.get("phase") or "") == "spec_search")
+        stats = spec_event.get("stats") if isinstance(spec_event.get("stats"), dict) else {}
+        self.assertLessEqual(int(stats.get("search_beam_width") or 0), 8)
+
+    async def test_generate_questions_realize_stage_runs_specs_concurrently(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        active_realize = 0
+        max_realize = 0
+        base_specs = [
+            {
+                "spec_id": f"spec-{idx}",
+                "subject": "高中数学",
+                "topic": "导数",
+                "difficulty": "困难",
+                "question_type": "解答题",
+                "seed_tag": f"seed-{idx}",
+                "skill": "参数讨论",
+                "reasoning": "分类讨论",
+                "trap": "边界点漏判",
+                "surface": "综合题",
+            }
+            for idx in range(4)
+        ]
+
+        def identity_expand(specs, config):  # type: ignore[no-untyped-def]
+            _ = config
+            return list(specs)
+
+        def fake_score_spec(spec, source_pack, config):  # type: ignore[no-untyped-def]
+            _ = source_pack, config
+            return {**spec, "score": 90}
+
+        async def fake_realize_drafts(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal active_realize, max_realize
+            spec = args[0]
+            _ = kwargs
+            active_realize += 1
+            max_realize = max(max_realize, active_realize)
+            await asyncio.sleep(0.01)
+            active_realize -= 1
+            return [
+                {
+                    "spec_id": str(spec.get("spec_id") or ""),
+                    "stem": f"题干-{spec['spec_id']}",
+                    "answer": "答案",
+                    "analysis": "解析",
+                    "skill": str(spec.get("skill") or ""),
+                    "reasoning": str(spec.get("reasoning") or ""),
+                    "surface": str(spec.get("surface") or ""),
+                }
+            ]
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.seed_root_specs", return_value=base_specs
+        ), patch("backend.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
+            "backend.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
+        ), patch("backend.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
+            "backend.question_library.generation.expand_surface_layer", side_effect=identity_expand
+        ), patch("backend.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
+            "backend.question_library.generation.realize_drafts",
+            new=AsyncMock(side_effect=fake_realize_drafts),
+        ), patch(
+            "backend.question_library.generation.solve_draft",
+            new=AsyncMock(return_value={"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}),
+        ), patch(
+            "backend.question_library.generation.check_ambiguity",
+            new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
+        ), patch(
+            "backend.question_library.generation.judge_draft",
+            new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "困难"}),
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["参数讨论"]},
+                count=2,
+                difficulty="困难",
+                question_type="解答题",
+                config={"beam_width": 4, "drafts_per_spec": 1},
+            )
+
+        self.assertTrue(out)
+        self.assertGreater(max_realize, 1)
+
+    async def test_generate_questions_judge_stage_runs_solve_concurrently(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        active_solves = 0
+        max_solves = 0
+        base_specs = [
+            {
+                "spec_id": f"spec-{idx}",
+                "subject": "高中数学",
+                "topic": "导数",
+                "difficulty": "困难",
+                "question_type": "解答题",
+                "seed_tag": f"seed-{idx}",
+                "skill": "参数讨论",
+                "reasoning": "分类讨论",
+                "trap": "边界点漏判",
+                "surface": "综合题",
+            }
+            for idx in range(3)
+        ]
+
+        def identity_expand(specs, config):  # type: ignore[no-untyped-def]
+            _ = config
+            return list(specs)
+
+        def fake_score_spec(spec, source_pack, config):  # type: ignore[no-untyped-def]
+            _ = source_pack, config
+            return {**spec, "score": 90}
+
+        async def fake_realize_drafts(*args, **kwargs):  # type: ignore[no-untyped-def]
+            spec = args[0]
+            _ = kwargs
+            return [
+                {
+                    "spec_id": str(spec.get("spec_id") or ""),
+                    "stem": f"题干-{spec['spec_id']}",
+                    "answer": "答案",
+                    "analysis": "解析",
+                    "skill": str(spec.get("skill") or ""),
+                    "reasoning": str(spec.get("reasoning") or ""),
+                    "surface": str(spec.get("surface") or ""),
+                }
+            ]
+
+        async def fake_solve(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal active_solves, max_solves
+            _ = args, kwargs
+            active_solves += 1
+            max_solves = max(max_solves, active_solves)
+            await asyncio.sleep(0.01)
+            active_solves -= 1
+            return {"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.seed_root_specs", return_value=base_specs
+        ), patch("backend.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
+            "backend.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
+        ), patch("backend.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
+            "backend.question_library.generation.expand_surface_layer", side_effect=identity_expand
+        ), patch("backend.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
+            "backend.question_library.generation.realize_drafts",
+            new=AsyncMock(side_effect=fake_realize_drafts),
+        ), patch(
+            "backend.question_library.generation.solve_draft",
+            new=AsyncMock(side_effect=fake_solve),
+        ), patch(
+            "backend.question_library.generation.check_ambiguity",
+            new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
+        ), patch(
+            "backend.question_library.generation.judge_draft",
+            new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "困难"}),
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["参数讨论"]},
+                count=2,
+                difficulty="困难",
+                question_type="解答题",
+                config={"beam_width": 3, "drafts_per_spec": 1, "solver_consensus_n": 2},
+            )
+
+        self.assertTrue(out)
+        self.assertGreater(max_solves, 1)
+
+    async def test_generate_questions_rejects_difficulty_mismatch_after_judge(self) -> None:
+        from backend.question_library.generation import generate_questions
+
+        async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
+            _ = messages, kwargs
+            if req_id_prefix == "qlg":
+                return json.dumps(
+                    {"questions": [{"stem": "题干-难度不匹配", "answer": "答案", "analysis": "解析"}]},
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_solver":
+                return json.dumps({"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}, ensure_ascii=False)
+            if req_id_prefix == "ql_amb":
+                return json.dumps({"ambiguous": False, "issues": [], "summary": "ok"}, ensure_ascii=False)
+            if req_id_prefix == "ql_judge":
+                return json.dumps(
+                    {
+                        "pass": True,
+                        "overall_score": 75,
+                        "issues": [],
+                        "summary": "题目可用但偏简单",
+                        "difficulty_estimate": "简单",
+                        "novelty_score": 8,
+                        "reasoning_depth": 7,
+                    },
+                    ensure_ascii=False,
+                )
+            if req_id_prefix == "ql_distill":
+                return json.dumps(
+                    {"facts": [], "skills": ["分类讨论"], "common_mistakes": [], "forbidden_patterns": []},
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
+
+        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        ):
+            out = await generate_questions(
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                count=1,
+                difficulty="困难",
+                question_type="解答题",
+                config={
+                    "beam_width": 1,
+                    "expand_budget": 6,
+                    "skill_branch_factor": 1,
+                    "reasoning_branch_factor": 1,
+                    "trap_branch_factor": 1,
+                    "surface_branch_factor": 1,
+                    "drafts_per_spec": 1,
+                    "judge_pass_score": 70,
+                },
+            )
+
+        self.assertEqual(out, [])
+
     async def test_generate_questions_filters_low_quality_and_keeps_novel(self) -> None:
         from backend.question_library.generation import generate_questions
         stage_events: list[dict] = []

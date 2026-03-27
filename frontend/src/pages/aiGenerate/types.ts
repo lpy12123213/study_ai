@@ -44,6 +44,9 @@ export interface AiGenerateMissionSummary {
   difficulty?: string
   questionType?: string
   useStudyArchive?: boolean
+  useReferenceQuestions?: boolean
+  referenceSource?: 'any' | 'gaokao' | 'mock' | 'joint' | string
+  referenceYearRange?: 'all' | '3' | '5' | string
   gradeId?: string
   textbookVersionId?: string
   knowledgePointIds?: string[]

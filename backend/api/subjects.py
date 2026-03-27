@@ -229,23 +229,34 @@ async def get_subject_knowledge_tree(
     if ttl_s > 0 and cached and (time.time() - cached[0]) <= ttl_s:
         return dict(cached[1])
 
+    crawler_nodes: list = []
+    grade_name = ""
+    textbook_name = ""
     try:
         crawler = await get_crawler(subject=subject, edu_level="", strict=True)
+        # Try fetching the real knowledge tree from 组卷网.
+        tree_result = await crawler.get_knowledge_tree()
+        if isinstance(tree_result, dict) and tree_result.get("success"):
+            crawler_nodes = tree_result.get("nodes") or []
+        # Also fetch filters for grade/textbook name resolution.
         filters = await crawler.get_available_filters()
+        if isinstance(filters, dict):
+            grades = filters.get("grades") or []
+            textbook_versions = filters.get("textbook_versions") or []
+            grade_name = _lookup_name(grades if isinstance(grades, list) else [], grade_id)
+            textbook_name = _lookup_name(textbook_versions if isinstance(textbook_versions, list) else [], textbook_version_id)
     except Exception:
-        filters = {}
+        pass
 
-    grades = filters.get("grades") if isinstance(filters, dict) else []
-    textbook_versions = filters.get("textbook_versions") if isinstance(filters, dict) else []
-    grade_name = _lookup_name(grades if isinstance(grades, list) else [], grade_id)
-    textbook_name = _lookup_name(textbook_versions if isinstance(textbook_versions, list) else [], textbook_version_id)
+    nodes = crawler_nodes if crawler_nodes else _fallback_tree(subject, grade_name, textbook_name)
 
     payload = {
         "success": True,
         "subject": subject,
         "grade_id": str(grade_id or "").strip(),
         "textbook_version_id": str(textbook_version_id or "").strip(),
-        "nodes": _fallback_tree(subject, grade_name, textbook_name),
+        "nodes": nodes,
+        "source": "zujuan" if crawler_nodes else "fallback",
     }
     if ttl_s > 0:
         _KNOWLEDGE_TREE_CACHE[cache_key] = (time.time(), dict(payload))

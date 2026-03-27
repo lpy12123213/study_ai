@@ -23,6 +23,7 @@ import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { useSubjectFilters, useSubjectKnowledgeTree, useSubjects } from '@/hooks/useSubjects'
+import { generateId } from '@/lib/utils'
 import { useToastStore } from '@/stores/useToastStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { ContextRail } from '@/pages/aiGenerate/ContextRail'
@@ -70,6 +71,7 @@ function clampCount(raw: string): number {
 function statusLabel(status: string): string {
   const normalized = String(status || '').trim().toLowerCase()
   if (normalized === 'pending_review') return '待审核'
+  if (normalized === 'partial_failure') return '部分完成'
   if (normalized === 'archived_discarded') return '已归档'
   if (normalized === 'committed') return '已入库'
   if (normalized === 'stopped') return '已停止'
@@ -114,6 +116,36 @@ function toReasonEntries(
     return String(block.taskId || '').trim() !== currentTaskId
   })
 
+  // Aggregate consecutive reasoning deltas with same stageLabel+source into one entry.
+  // This prevents streaming chunks from being shown as many tiny separate cards.
+  function aggregateBlocks(blocks: Array<{ id: string; stageLabel?: string; source?: string; content: string; createdAt?: string }>): ReasonConsoleEntry[] {
+    const result: ReasonConsoleEntry[] = []
+    let current: ReasonConsoleEntry | null = null
+    let currentKey = ''
+    for (const block of blocks) {
+      const label: '原始 Reason' | '事件 Trace' = String(block.source || '').trim() === 'raw' ? '原始 Reason' : '事件 Trace'
+      const stageLabel = String(block.stageLabel || '').trim() || '推理过程'
+      const key = `${label}:${stageLabel}`
+      if (current && key === currentKey) {
+        // Same stage+source: append content to the running entry
+        current.content += String(block.content || '').trim()
+      } else {
+        // Stage or source changed: start a new entry
+        if (current) result.push(current)
+        current = {
+          id: String(block.id || `${stageLabel}-${block.createdAt || ''}`),
+          label,
+          stageLabel,
+          content: String(block.content || '').trim(),
+          createdAt: block.createdAt,
+        }
+        currentKey = key
+      }
+    }
+    if (current) result.push(current)
+    return result
+  }
+
   for (const event of statusEvents) {
     const mode = String(event?.data?.mode || 'trace').trim() || 'trace'
     const message = String(event?.data?.message || '').trim()
@@ -127,22 +159,14 @@ function toReasonEntries(
     })
   }
 
-  for (const block of [...persistedBlocks, ...liveBlocks]) {
-    entries.push({
-      id: String(block.id || `${block.stageLabel}-${block.createdAt || ''}`),
-      label: String(block.source || '').trim() === 'raw' ? '原始 Reason' : '事件 Trace',
-      stageLabel: String(block.stageLabel || '').trim() || '推理过程',
-      content: String(block.content || '').trim(),
-      createdAt: block.createdAt,
-    })
-  }
+  entries.push(...aggregateBlocks([...persistedBlocks, ...liveBlocks]))
 
   const deduped = new Map<string, ReasonConsoleEntry>()
   for (const entry of entries) {
-    const key = `${entry.label}:${entry.stageLabel}:${entry.content}:${entry.createdAt || ''}`
+    const key = `${entry.label}:${entry.stageLabel}:${entry.content.slice(0, 200)}`
     if (!deduped.has(key)) deduped.set(key, entry)
   }
-  return [...deduped.values()].slice(-80)
+  return [...deduped.values()].slice(-40)
 }
 
 function historySort<T extends { updated_at_s?: number; created_at_s?: number }>(items: T[]): T[] {
@@ -178,6 +202,9 @@ export function AiGenerateStudioPage() {
   const [questionType, setQuestionType] = useState('')
   const [count, setCount] = useState('5')
   const [useStudyArchive, setUseStudyArchive] = useState(true)
+  const [useReferenceQuestions, setUseReferenceQuestions] = useState(true)
+  const [referenceSource, setReferenceSource] = useState<'any' | 'gaokao' | 'mock' | 'joint'>('any')
+  const [referenceYearRange, setReferenceYearRange] = useState<'all' | '3' | '5'>('all')
   const [mode, setMode] = useState<AiGenerateSessionMode>('standard')
   const [gradeId, setGradeId] = useState('')
   const [textbookVersionId, setTextbookVersionId] = useState('')
@@ -196,6 +223,7 @@ export function AiGenerateStudioPage() {
   const regenerateControllersRef = useRef<Record<string, AbortController>>({})
   const lastAutoAppendSourceTaskRef = useRef('')
   const lastLoadedSessionIdRef = useRef('')
+  const optimisticStopRequestedRef = useRef<boolean | null>(null)
 
   const { data: subjectFiltersData } = useSubjectFilters(lib.filters.subject || undefined)
   const subjectFilters = subjectFiltersData || {}
@@ -219,6 +247,12 @@ export function AiGenerateStudioPage() {
     queryFn: () => getQuestionLibrarySession(activeSessionId),
     enabled: Boolean(activeSessionId),
     retry: false,
+    refetchInterval: (query) => {
+      const incomingStatus = String((query.state.data as any)?.session?.status || '').trim().toLowerCase()
+      const localStatus = String(session?.status || '').trim().toLowerCase()
+      return incomingStatus === 'running' || localStatus === 'running' ? 2500 : false
+    },
+    refetchIntervalInBackground: true,
   })
 
   const hydrateComposerFromSession = useCallback(
@@ -228,6 +262,9 @@ export function AiGenerateStudioPage() {
       setQuestionType(next.mission.questionType || '')
       setCount(String(next.mission.count || 5))
       setUseStudyArchive(Boolean(next.mission.useStudyArchive))
+      setUseReferenceQuestions(next.mission.useReferenceQuestions !== false)
+      setReferenceSource((String(next.mission.referenceSource || 'any').trim() || 'any') as 'any' | 'gaokao' | 'mock' | 'joint')
+      setReferenceYearRange((String(next.mission.referenceYearRange || 'all').trim() || 'all') as 'all' | '3' | '5')
       setMode(next.mode)
       setGradeId(next.mission.gradeId || '')
       setTextbookVersionId(next.mission.textbookVersionId || '')
@@ -246,7 +283,21 @@ export function AiGenerateStudioPage() {
       if (!sid) return null
       const resp = await getQuestionLibrarySession(sid)
       queryClient.setQueryData(['questionLibrarySession', sid], resp)
-      const next = reduceSessionDetailToSession(resp.session)
+      lastLoadedSessionIdRef.current = ''
+      let next = reduceSessionDetailToSession(resp.session)
+      const optimisticStopRequested = optimisticStopRequestedRef.current
+      if (optimisticStopRequested !== null) {
+        const serverMatches = next.stopRequested === optimisticStopRequested
+        if (serverMatches) {
+          optimisticStopRequestedRef.current = null
+        } else {
+          next = {
+            ...next,
+            stopRequested: optimisticStopRequested,
+            status: optimisticStopRequested ? 'stopped' : next.status === 'stopped' ? 'running' : next.status,
+          }
+        }
+      }
       setSession(next)
       hydrateComposerFromSession(next)
       await queryClient.invalidateQueries({ queryKey: ['questionLibrarySessions'] })
@@ -258,9 +309,32 @@ export function AiGenerateStudioPage() {
   useEffect(() => {
     if (!sessionDetailQuery.data?.session) return
     if (!activeSessionId) return
-    if (lastLoadedSessionIdRef.current === activeSessionId) return
-    lastLoadedSessionIdRef.current = activeSessionId
-    const next = reduceSessionDetailToSession(sessionDetailQuery.data.session)
+    const detail = sessionDetailQuery.data.session
+    const signature = JSON.stringify([
+      activeSessionId,
+      String(detail.status || ''),
+      Number(detail.updated_at_s || 0),
+      String(detail.latest_task_id || ''),
+      Array.isArray(detail.draft_questions) ? detail.draft_questions.length : 0,
+      Array.isArray(detail.reasoning_blocks) ? detail.reasoning_blocks.length : 0,
+      Array.isArray(detail.task_events) ? detail.task_events.length : 0,
+    ])
+    if (lastLoadedSessionIdRef.current === signature) return
+    lastLoadedSessionIdRef.current = signature
+    let next = reduceSessionDetailToSession(detail)
+    const optimisticStopRequested = optimisticStopRequestedRef.current
+    if (optimisticStopRequested !== null) {
+      const serverMatches = next.stopRequested === optimisticStopRequested
+      if (serverMatches) {
+        optimisticStopRequestedRef.current = null
+      } else {
+        next = {
+          ...next,
+          stopRequested: optimisticStopRequested,
+          status: optimisticStopRequested ? 'stopped' : next.status === 'stopped' ? 'running' : next.status,
+        }
+      }
+    }
     setSession(next)
     hydrateComposerFromSession(next)
   }, [activeSessionId, hydrateComposerFromSession, sessionDetailQuery.data])
@@ -310,6 +384,10 @@ export function AiGenerateStudioPage() {
   const progress = Math.max(0, Math.min(100, Number(activeTask?.progress || (session?.status === 'committed' ? 100 : 0))))
   const stage = String(activeTask?.stage || '').trim()
   const taskStatus = String(activeTask?.status || '').trim()
+  const sessionStatus = String(session?.status || '').trim()
+  const isSessionRunning = sessionStatus === 'running'
+  const effectiveTaskStatus = isSessionRunning ? 'running' : taskStatus || sessionStatus
+  const isGenerating = effectiveTaskStatus === 'running'
   const taskError = String(activeTask?.error || '').trim()
   const taskErrorInfo = useMemo(() => humanizeAiGenerateTaskError(taskError), [taskError])
   const confirmedDrafts = useMemo(() => {
@@ -324,13 +402,19 @@ export function AiGenerateStudioPage() {
   )
 
   const restoreSession = useCallback(
-    (sessionId: string) => {
+    async (sessionId: string) => {
       setAutoAppendEnabled(false)
       tasks.clearDraftPreview()
-      lastLoadedSessionIdRef.current = ''
+      setSession(null)
       setSearchParams({ session: sessionId })
+      lastLoadedSessionIdRef.current = ''
+      try {
+        await syncSessionFromServer(sessionId)
+      } catch {
+        lastLoadedSessionIdRef.current = ''
+      }
     },
-    [setSearchParams, tasks]
+    [setSearchParams, syncSessionFromServer, tasks]
   )
 
   const selectedKnowledgeNodeLabels = useMemo(() => {
@@ -353,7 +437,7 @@ export function AiGenerateStudioPage() {
     const currentSessionId = String(session?.sessionId || '').trim()
     if (!autoAppendEnabled || mode !== 'infinite') return
     if (!doneTaskId || !currentSessionId) return
-    if (taskStatus === 'running') return
+    if (isGenerating) return
     if (session?.stopRequested) return
     if (lastAutoAppendSourceTaskRef.current === doneTaskId) return
 
@@ -365,6 +449,9 @@ export function AiGenerateStudioPage() {
       question_type: questionType.trim(),
       count: clampCount(count),
       use_study_archive: useStudyArchive,
+      use_reference_questions: useReferenceQuestions,
+      reference_source: referenceSource,
+      reference_year_range: referenceYearRange,
       session_id: currentSessionId,
       mode: 'infinite',
       grade_id: gradeId || undefined,
@@ -394,13 +481,16 @@ export function AiGenerateStudioPage() {
     missionText,
     mode,
     questionType,
+    referenceSource,
+    referenceYearRange,
     selectedKnowledgeNodeLabels,
     selectedKnowledgePointIds,
     session,
-    taskStatus,
+    isGenerating,
     tasks,
     tasks.draftPreview,
     textbookVersionId,
+    useReferenceQuestions,
     useStudyArchive,
   ])
 
@@ -415,7 +505,12 @@ export function AiGenerateStudioPage() {
 
     const topic = appendLatexConstraint(rawMission)
     const continuingInfinite = mode === 'infinite' && Boolean(session?.sessionId)
+    const nextSessionId =
+      mode === 'infinite'
+        ? String(session?.sessionId || activeSessionId || `ql-session-${generateId()}`).trim()
+        : String(session?.sessionId || '').trim()
     lastAutoAppendSourceTaskRef.current = ''
+    optimisticStopRequestedRef.current = mode === 'infinite' ? false : null
 
     const nextTaskId = tasks.runGenerate({
       subject,
@@ -424,7 +519,10 @@ export function AiGenerateStudioPage() {
       question_type: questionType.trim(),
       count: nextCount,
       use_study_archive: useStudyArchive,
-      session_id: continuingInfinite ? session?.sessionId : undefined,
+      use_reference_questions: useReferenceQuestions,
+      reference_source: referenceSource,
+      reference_year_range: referenceYearRange,
+      session_id: mode === 'infinite' ? nextSessionId : continuingInfinite ? session?.sessionId : undefined,
       mode,
       grade_id: gradeId || undefined,
       textbook_version_id: textbookVersionId || undefined,
@@ -439,6 +537,7 @@ export function AiGenerateStudioPage() {
     if (continuingInfinite && session) {
       setSession({
         ...session,
+        sessionId: nextSessionId,
         taskId: nextTaskId,
         status: 'running',
         stopRequested: false,
@@ -451,6 +550,9 @@ export function AiGenerateStudioPage() {
           difficulty: difficulty.trim(),
           questionType: questionType.trim(),
           useStudyArchive,
+          useReferenceQuestions,
+          referenceSource,
+          referenceYearRange,
           gradeId: gradeId || '',
           textbookVersionId: textbookVersionId || '',
           knowledgePointIds: [...selectedKnowledgePointIds],
@@ -462,6 +564,7 @@ export function AiGenerateStudioPage() {
 
     setSession(
       createQueuedSession({
+        sessionId: mode === 'infinite' ? nextSessionId : '',
         taskId: nextTaskId,
         subject,
         topic,
@@ -470,13 +573,20 @@ export function AiGenerateStudioPage() {
         difficulty: difficulty.trim(),
         questionType: questionType.trim(),
         useStudyArchive,
+        useReferenceQuestions,
+        referenceSource,
+        referenceYearRange,
         gradeId: gradeId || '',
         textbookVersionId: textbookVersionId || '',
         knowledgePointIds: [...selectedKnowledgePointIds],
         knowledgePoints: [...selectedKnowledgeNodeLabels],
       })
     )
-    setSearchParams({})
+    if (mode === 'infinite' && nextSessionId) {
+      setSearchParams({ session: nextSessionId })
+    } else {
+      setSearchParams({})
+    }
   }
 
   const handleToggleKnowledgePoint = (node: AiGenerateKnowledgeNode) => {
@@ -635,6 +745,7 @@ export function AiGenerateStudioPage() {
     setIsStopping(true)
     try {
       setAutoAppendEnabled(false)
+      optimisticStopRequestedRef.current = true
       if (session.sessionId) {
         await stopQuestionLibrarySession(session.sessionId)
         await syncSessionFromServer(session.sessionId)
@@ -643,6 +754,7 @@ export function AiGenerateStudioPage() {
       }
       pushToast({ id: 'ai-generate-stop', title: '已停止继续追加', status: 'completed' })
     } catch (error: any) {
+      optimisticStopRequestedRef.current = null
       pushToast({ id: 'ai-generate-stop-failed', title: error?.message || '停止失败', status: 'failed' })
     } finally {
       setIsStopping(false)
@@ -664,15 +776,15 @@ export function AiGenerateStudioPage() {
   }
 
   const primaryActionLabel = useMemo(() => {
-    if (taskStatus === 'running') return '生成中'
+    if (isGenerating) return '生成中'
     if (mode === 'infinite' && session?.sessionId) return '继续生成'
     return '开始生成'
-  }, [mode, session?.sessionId, taskStatus])
+  }, [isGenerating, mode, session?.sessionId])
 
   return (
     <div className="h-full overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(50,106,255,0.12),_transparent_32%),linear-gradient(180deg,_rgba(248,245,238,0.94),_rgba(246,241,231,0.78))] text-foreground dark:bg-[radial-gradient(circle_at_top,_rgba(92,140,255,0.18),_transparent_40%),radial-gradient(circle_at_70%_0%,_rgba(255,210,140,0.10),_transparent_42%),linear-gradient(180deg,_rgba(14,16,24,1),_rgba(10,12,18,1))]">
-      <div className="mx-auto flex min-h-full w-full max-w-[1680px] flex-col gap-6 px-4 py-6 lg:px-6 xl:px-8">
-        <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1.4fr)_360px]">
+      <div className="mx-auto flex min-h-full w-full max-w-[1920px] flex-col gap-6 px-4 py-6 lg:px-5 2xl:px-8">
+        <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:gap-6 2xl:grid-cols-[260px_minmax(0,1.55fr)_320px]">
           <Card className="overflow-hidden rounded-[30px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.97),rgba(247,242,232,0.93))] shadow-[0_20px_50px_rgba(29,33,44,0.08)] dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.95),rgba(16,18,28,0.94))] dark:shadow-[0_20px_70px_rgba(0,0,0,0.56)]">
             <CardHeader className="border-b border-border/60 pb-4">
               <div className="flex items-center justify-between gap-3">
@@ -784,7 +896,7 @@ export function AiGenerateStudioPage() {
                 <CollapsibleContent>
                   <CardContent className="space-y-4 p-4 lg:p-6">
                     <TaskProgressHeader taskId={currentTaskId || activeSessionId || undefined} />
-                    {taskStatus === 'failed' && taskErrorInfo.display ? (
+                    {taskStatus === 'failed' && !isSessionRunning && taskErrorInfo.display ? (
                       <div className="rounded-[20px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                         <div>{taskErrorInfo.display}</div>
                         {taskErrorInfo.code ? (
@@ -795,12 +907,12 @@ export function AiGenerateStudioPage() {
                       </div>
                     ) : null}
 
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_360px]">
+                    <div className="grid gap-4 2xl:grid-cols-[minmax(280px,0.95fr)_minmax(360px,1.25fr)]">
                       <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div>
                             <div className="text-sm font-medium">任务时间线</div>
-                            <div className="mt-1 text-sm text-muted-foreground">{stage || statusLabel(taskStatus || session?.status || '')}</div>
+                            <div className="mt-1 text-sm text-muted-foreground">{stage || statusLabel(effectiveTaskStatus || sessionStatus || '')}</div>
                           </div>
                           <Badge variant="outline" className="rounded-full">
                             进度 {Math.round(progress)}%
@@ -855,7 +967,7 @@ export function AiGenerateStudioPage() {
                     <CardTitle className="text-lg">Draft Stream</CardTitle>
                     <div className="mt-1 text-sm text-muted-foreground">恢复会话后可继续看见草稿、审查状态和局部重生成结果。</div>
                   </div>
-                  {taskStatus === 'running' ? (
+                  {isGenerating ? (
                     <div className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-sky-800/70 dark:bg-sky-950/45 dark:text-sky-200">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       生成中
@@ -876,6 +988,13 @@ export function AiGenerateStudioPage() {
                     onSectionChange={handleSectionChange}
                     onToggleSectionLock={handleToggleSectionLock}
                   />
+                ) : sessionDetailQuery.isFetching ? (
+                  <div className="flex h-full items-center justify-center rounded-[28px] border border-dashed border-border bg-background/60 px-6 text-center">
+                    <div className="max-w-xl space-y-3">
+                      <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                      <div className="text-sm text-muted-foreground">正在加载会话草稿…</div>
+                    </div>
+                  </div>
                 ) : (
                   <div className="flex h-full items-center justify-center rounded-[28px] border border-dashed border-border bg-background/60 px-6 text-center">
                     <div className="max-w-xl space-y-3">
@@ -896,12 +1015,16 @@ export function AiGenerateStudioPage() {
               difficulty={difficulty}
               questionType={questionType}
               useStudyArchive={useStudyArchive}
+              useReferenceQuestions={useReferenceQuestions}
+              referenceSource={referenceSource}
+              referenceYearRange={referenceYearRange}
               mode={mode}
               subjects={(subjects || []).filter((item) => String(item.code || '').trim())}
-              isGenerating={taskStatus === 'running'}
+              isGenerating={isGenerating}
               primaryActionLabel={primaryActionLabel}
               canStop={Boolean(
-                (mode === 'infinite' || session?.mode === 'infinite') && (autoAppendEnabled || isStopping || session?.stopRequested)
+                (mode === 'infinite' || session?.mode === 'infinite') &&
+                (autoAppendEnabled || isStopping || session?.stopRequested || isGenerating)
               )}
               selectedKnowledgeCount={selectedKnowledgePointIds.length}
               onMissionTextChange={setMissionText}
@@ -910,34 +1033,39 @@ export function AiGenerateStudioPage() {
               onDifficultyChange={setDifficulty}
               onQuestionTypeChange={setQuestionType}
               onUseStudyArchiveChange={setUseStudyArchive}
+              onUseReferenceQuestionsChange={setUseReferenceQuestions}
+              onReferenceSourceChange={(value) => setReferenceSource(value as 'any' | 'gaokao' | 'mock' | 'joint')}
+              onReferenceYearRangeChange={(value) => setReferenceYearRange(value as 'all' | '3' | '5')}
               onModeChange={setMode}
               onGenerate={startGeneration}
               onStop={handleStop}
             />
           </div>
 
-          <ContextRail
-            subject={lib.filters.subject}
-            mode={mode}
-            sessionStatus={statusLabel(session?.status || '')}
-            gradeId={gradeId}
-            textbookVersionId={textbookVersionId}
-            grades={subjectFilters.grades || []}
-            textbookVersions={subjectFilters.textbookVersions || []}
-            knowledgeTree={knowledgeTree}
-            isKnowledgeLoading={knowledgeTreeQuery.isFetching}
-            knowledgeError={knowledgeTreeQuery.error instanceof Error ? knowledgeTreeQuery.error.message : undefined}
-            selectedKnowledgeIds={selectedKnowledgePointIds}
-            selectedKnowledgeLabels={selectedKnowledgeNodeLabels}
-            libraryTotal={lib.total}
-            onGradeChange={setGradeId}
-            onTextbookVersionChange={setTextbookVersionId}
-            onToggleKnowledgePoint={handleToggleKnowledgePoint}
-            onClearKnowledgePoints={() => {
-              setSelectedKnowledgePointIds([])
-              setSelectedKnowledgePointLabels([])
-            }}
-          />
+          <div className="xl:col-span-2 2xl:col-auto">
+            <ContextRail
+              subject={lib.filters.subject}
+              mode={mode}
+              sessionStatus={statusLabel(session?.status || '')}
+              gradeId={gradeId}
+              textbookVersionId={textbookVersionId}
+              grades={subjectFilters.grades || []}
+              textbookVersions={subjectFilters.textbookVersions || []}
+              knowledgeTree={knowledgeTree}
+              isKnowledgeLoading={knowledgeTreeQuery.isFetching}
+              knowledgeError={knowledgeTreeQuery.error instanceof Error ? knowledgeTreeQuery.error.message : undefined}
+              selectedKnowledgeIds={selectedKnowledgePointIds}
+              selectedKnowledgeLabels={selectedKnowledgeNodeLabels}
+              libraryTotal={lib.total}
+              onGradeChange={setGradeId}
+              onTextbookVersionChange={setTextbookVersionId}
+              onToggleKnowledgePoint={handleToggleKnowledgePoint}
+              onClearKnowledgePoints={() => {
+                setSelectedKnowledgePointIds([])
+                setSelectedKnowledgePointLabels([])
+              }}
+            />
+          </div>
         </div>
 
         <Separator className="opacity-60" />

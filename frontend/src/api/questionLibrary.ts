@@ -87,6 +87,9 @@ export interface GenerateQuestionsPayload {
   question_type?: string
   count?: number
   use_study_archive?: boolean
+  use_reference_questions?: boolean
+  reference_source?: 'any' | 'gaokao' | 'mock' | 'joint'
+  reference_year_range?: 'all' | '3' | '5'
   session_id?: string
   mode?: 'standard' | 'infinite'
   grade_id?: string
@@ -124,6 +127,9 @@ export interface QuestionLibraryPreviewResponse {
   subject: string
   topic: string
   mode?: 'standard' | 'infinite'
+  use_reference_questions?: boolean
+  reference_source?: 'any' | 'gaokao' | 'mock' | 'joint'
+  reference_year_range?: 'all' | '3' | '5'
   count: number
   draft_questions: QuestionLibraryDraftQuestion[]
 }
@@ -176,6 +182,9 @@ export interface QuestionLibrarySessionSummary {
   subject: string
   topic: string
   count: number
+  use_reference_questions?: boolean
+  reference_source?: 'any' | 'gaokao' | 'mock' | 'joint'
+  reference_year_range?: 'all' | '3' | '5'
   task_ids: string[]
   latest_task_id?: string
   updated_at_s?: number

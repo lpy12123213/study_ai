@@ -36,6 +36,9 @@ export interface QuestionLibraryDraftPreview {
   subject: string
   topic: string
   mode?: 'standard' | 'infinite' | string
+  useReferenceQuestions?: boolean
+  referenceSource?: 'any' | 'gaokao' | 'mock' | 'joint' | string
+  referenceYearRange?: 'all' | '3' | '5' | string
   count: number
   draftQuestions: QuestionLibraryDraftQuestion[]
   taskId: string
@@ -210,7 +213,19 @@ export function useQuestionLibraryTasks(options: {
       if (step?.id) {
         const seenForTask = (seenStepIdsRef.current[id] ||= {})
         if (seenForTask[step.id]) {
-          updateStep(id, step.id, step)
+          // For reasoning deltas, append new content to existing title
+          let merged = step
+          if (step.toolName === 'reasoning' && step.input && typeof step.input === 'object' && '_deltaContent' in (step.input as Record<string, unknown>)) {
+            const delta = String((step.input as Record<string, unknown>)._deltaContent || '')
+            if (delta) {
+              const existing = getTaskSteps(id).find((s) => s.id === step.id)
+              const existingTitle = existing?.title || ''
+              const prefix = existingTitle.startsWith('原始 Reason: ') ? '原始 Reason: ' : existingTitle.startsWith('事件 Trace: ') ? '事件 Trace: ' : ''
+              const body = prefix ? existingTitle.slice(prefix.length) : existingTitle
+              merged = { ...step, title: prefix + body + delta }
+            }
+          }
+          updateStep(id, step.id, merged)
         } else {
           seenForTask[step.id] = true
           addStep(id, step)
@@ -244,6 +259,9 @@ export function useQuestionLibraryTasks(options: {
               subject: String(payload?.subject || '').trim(),
               topic: String(payload?.topic || '').trim(),
               mode: String(payload?.mode || 'standard').trim() || 'standard',
+              useReferenceQuestions: payload?.use_reference_questions !== false,
+              referenceSource: String(payload?.reference_source || 'any').trim() || 'any',
+              referenceYearRange: String(payload?.reference_year_range || 'all').trim() || 'all',
               count: Math.max(0, Number(payload?.count || drafts.length || 0)) || drafts.length,
               draftQuestions: drafts,
               taskId: id,
@@ -263,7 +281,7 @@ export function useQuestionLibraryTasks(options: {
         return
       }
     },
-    [addStep, completeTask, failTask, normalizeDraftQuestions, onDone, patchListOnItemSaved, upsertTask, updateStep]
+    [addStep, completeTask, failTask, getTaskSteps, normalizeDraftQuestions, onDone, patchListOnItemSaved, upsertTask, updateStep]
   )
 
   const runCrawl = useCallback(
@@ -378,6 +396,9 @@ export function useQuestionLibraryTasks(options: {
           subject: String(resp.preview.subject || '').trim(),
           topic: String(resp.preview.topic || '').trim(),
           mode: String((resp.preview as any).mode || 'standard').trim() || 'standard',
+          useReferenceQuestions: (resp.preview as any).use_reference_questions !== false,
+          referenceSource: String((resp.preview as any).reference_source || 'any').trim() || 'any',
+          referenceYearRange: String((resp.preview as any).reference_year_range || 'all').trim() || 'all',
           count: Math.max(0, Number(resp.preview.count || drafts.length || 0)) || drafts.length,
           draftQuestions: drafts,
           taskId,

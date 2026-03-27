@@ -115,6 +115,9 @@ export function reduceTaskPreviewToSession(preview: QuestionLibraryDraftPreview)
       topic: String(preview.topic || '').trim(),
       count: Math.max(0, Number(preview.count || 0)),
       useStudyArchive: undefined,
+      useReferenceQuestions: preview.useReferenceQuestions !== false,
+      referenceSource: String(preview.referenceSource || 'any').trim() || 'any',
+      referenceYearRange: String(preview.referenceYearRange || 'all').trim() || 'all',
     },
     drafts: (preview.draftQuestions || []).map((item, index) => mapDraftQuestion(index, item, confirmedIds)),
     confirmedIds,
@@ -141,6 +144,9 @@ export function reduceSessionDetailToSession(detail: QuestionLibrarySessionDetai
       difficulty: String((detail as any).difficulty || '').trim(),
       questionType: String((detail as any).question_type || '').trim(),
       useStudyArchive: Boolean((detail as any).use_study_archive),
+      useReferenceQuestions: (detail as any).use_reference_questions !== false,
+      referenceSource: String((detail as any).reference_source || 'any').trim() || 'any',
+      referenceYearRange: String((detail as any).reference_year_range || 'all').trim() || 'all',
       gradeId: String((detail as any).grade_id || '').trim(),
       textbookVersionId: String((detail as any).textbook_version_id || '').trim(),
       knowledgePointIds: [...((detail as any).knowledge_point_ids || [])],
@@ -163,6 +169,9 @@ export function createQueuedSession(input: {
   difficulty?: string
   questionType?: string
   useStudyArchive?: boolean
+  useReferenceQuestions?: boolean
+  referenceSource?: 'any' | 'gaokao' | 'mock' | 'joint' | string
+  referenceYearRange?: 'all' | '3' | '5' | string
   gradeId?: string
   textbookVersionId?: string
   knowledgePointIds?: string[]
@@ -202,6 +211,9 @@ export function createQueuedSession(input: {
       difficulty: String(input.difficulty || '').trim(),
       questionType: String(input.questionType || '').trim(),
       useStudyArchive: Boolean(input.useStudyArchive),
+      useReferenceQuestions: input.useReferenceQuestions !== false,
+      referenceSource: String(input.referenceSource || 'any').trim() || 'any',
+      referenceYearRange: String(input.referenceYearRange || 'all').trim() || 'all',
       gradeId: String(input.gradeId || '').trim(),
       textbookVersionId: String(input.textbookVersionId || '').trim(),
       knowledgePointIds: [...(input.knowledgePointIds || [])],

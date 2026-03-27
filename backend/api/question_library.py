@@ -52,8 +52,11 @@ from backend.database.repositories.tasks import (
     upsert_task as db_upsert_task,
 )
 from backend.question_library.generation import (
+    analyze_reference_questions,
     build_ai_question_id,
     build_source_pack,
+    collect_reference_questions,
+    enrich_source_pack_with_reference,
     generate_questions,
     regenerate_question_section,
 )
@@ -131,6 +134,9 @@ def _serialize_session_preview(obj: dict) -> dict:
         "subject": str((obj or {}).get("subject") or "").strip(),
         "topic": str((obj or {}).get("topic") or "").strip(),
         "mode": str((obj or {}).get("mode") or "standard").strip() or "standard",
+        "use_reference_questions": bool((obj or {}).get("use_reference_questions", True)),
+        "reference_source": str((obj or {}).get("reference_source") or "any").strip() or "any",
+        "reference_year_range": str((obj or {}).get("reference_year_range") or "all").strip() or "all",
         "count": len(drafts),
         "draft_questions": drafts,
     }
@@ -171,6 +177,9 @@ def _serialize_session_summary(session: dict) -> dict:
         "updated_at_s": float((session or {}).get("updated_at_s") or (session or {}).get("created_at_s") or 0.0),
         "created_at_s": float((session or {}).get("created_at_s") or 0.0),
         "reasoning_blocks_count": len(reasoning_blocks),
+        "use_reference_questions": bool((session or {}).get("use_reference_questions", True)),
+        "reference_source": str((session or {}).get("reference_source") or "any").strip() or "any",
+        "reference_year_range": str((session or {}).get("reference_year_range") or "all").strip() or "all",
         "confirmed_question_ids": list(session.get("confirmed_question_ids") or [])
         if isinstance(session.get("confirmed_question_ids"), list)
         else [],
@@ -206,6 +215,9 @@ def _ensure_session(
     mode: str,
     count: int,
     use_study_archive: bool,
+    use_reference_questions: bool,
+    reference_source: str,
+    reference_year_range: str,
     grade_id: str,
     textbook_version_id: str,
     knowledge_point_ids: List[str],
@@ -230,6 +242,9 @@ def _ensure_session(
     session["question_type"] = question_type
     session["count"] = int(count or 0)
     session["use_study_archive"] = bool(use_study_archive)
+    session["use_reference_questions"] = bool(use_reference_questions)
+    session["reference_source"] = str(reference_source or "any").strip() or "any"
+    session["reference_year_range"] = str(reference_year_range or "all").strip() or "all"
     session["grade_id"] = str(grade_id or "").strip()
     session["textbook_version_id"] = str(textbook_version_id or "").strip()
     session["knowledge_point_ids"] = [str(item or "").strip() for item in (knowledge_point_ids or []) if str(item or "").strip()]
@@ -1277,6 +1292,13 @@ async def generate_and_save(
         mode = "standard"
     append_mode = bool(request.append)
     stream_reasoning = bool(request.stream_reasoning)
+    use_reference_questions = bool(request.use_reference_questions)
+    reference_source = str(request.reference_source or "any").strip() or "any"
+    if reference_source not in {"any", "gaokao", "mock", "joint"}:
+        reference_source = "any"
+    reference_year_range = str(request.reference_year_range or "all").strip() or "all"
+    if reference_year_range not in {"all", "3", "5"}:
+        reference_year_range = "all"
     grade_id = str(request.grade_id or "").strip()
     textbook_version_id = str(request.textbook_version_id or "").strip()
     knowledge_point_ids = [str(item or "").strip() for item in (request.knowledge_point_ids or []) if str(item or "").strip()]
@@ -1317,6 +1339,9 @@ async def generate_and_save(
         mode=mode,
         count=count,
         use_study_archive=use_archive,
+        use_reference_questions=use_reference_questions,
+        reference_source=reference_source,
+        reference_year_range=reference_year_range,
         grade_id=grade_id,
         textbook_version_id=textbook_version_id,
         knowledge_point_ids=knowledge_point_ids,
@@ -1345,6 +1370,8 @@ async def generate_and_save(
 
         stage_descriptions = {
             "source_pack": "整理出题上下文，构建一个包含主题、难度与题型约束的素材包。",
+            "reference_crawl": "爬取匹配的高考真题/模考题作为参考样本，失败时自动降级到本地题库或跳过。",
+            "reference_analysis": "提炼参考题的出题模式、难度标定与解析格式，用于后续 few-shot 与筛选。",
             "spec_search": "扩展题目规格树，筛出更有区分度和新意的候选方向。",
             "draft_realization": "按规格生成题干、答案与解析草稿，并保留代表样例。",
             "judge": "通过求解、歧义检查与评审筛掉低质题、套路题和不自洽题。",
@@ -1353,6 +1380,8 @@ async def generate_and_save(
         }
         stage_labels = {
             "source_pack": "素材整理",
+            "reference_crawl": "参考题爬取",
+            "reference_analysis": "参考题分析",
             "spec_search": "规格搜索",
             "draft_realization": "草稿生成",
             "judge": "判题筛选",
@@ -1361,6 +1390,8 @@ async def generate_and_save(
         }
         stage_progress_defaults = {
             "source_pack": 5.0,
+            "reference_crawl": 10.0,
+            "reference_analysis": 16.0,
             "spec_search": 20.0,
             "draft_realization": 55.0,
             "judge": 80.0,
@@ -1370,6 +1401,109 @@ async def generate_and_save(
         stage_started_at: Dict[str, str] = {}
         stage_state: Dict[str, Dict[str, Any]] = {}
         active_stage_id: str | None = None
+        initial_progress_drafts = _normalize_draft_questions(
+            ((existing_preview or {}).get("draft_questions") if isinstance(existing_preview, dict) else [])
+            or ((current_session or {}).get("draft_questions") if isinstance(current_session, dict) else [])
+        )
+        progress_drafts: list[dict] = [dict(item) for item in initial_progress_drafts]
+        fallback_raw_drafts: list[dict] = []
+        draft_key_to_id: Dict[str, str] = {}
+
+        def _draft_identity(item: dict) -> str:
+            stem = str((item or {}).get("stem") or "").strip()
+            answer = str((item or {}).get("answer") or "").strip()
+            analysis = str((item or {}).get("analysis") or "").strip()
+            return json.dumps({"stem": stem, "answer": answer, "analysis": analysis}, ensure_ascii=False, sort_keys=True)
+
+        for draft in progress_drafts:
+            qid = str((draft or {}).get("question_id") or "").strip()
+            key = _draft_identity(draft)
+            if key and qid:
+                draft_key_to_id[key] = qid
+
+        def _materialize_draft(item: dict) -> Optional[dict]:
+            if not isinstance(item, dict):
+                return None
+            stem = str(item.get("stem") or "").strip()
+            answer = str(item.get("answer") or "").strip()
+            analysis = str(item.get("analysis") or "").strip()
+            if not stem or not answer or not analysis:
+                return None
+            key = _draft_identity(item)
+            qid = str(item.get("question_id") or "").strip() or draft_key_to_id.get(key) or build_ai_question_id(
+                suffix=uuid.uuid4().hex[:8]
+            )
+            draft_key_to_id[key] = qid
+            review = item.get("review") if isinstance(item.get("review"), dict) else None
+            return {
+                "question_id": qid,
+                "stem": stem,
+                "answer": answer,
+                "analysis": analysis,
+                "keep": bool(item.get("keep", True)),
+                "review_status": _normalize_review_status(item.get("review_status")),
+                "review": dict(review) if review else None,
+            }
+
+        def _persist_generation_snapshot(*, status: str, drafts: Optional[List[dict]] = None, preview_status: Optional[str] = None) -> List[dict]:
+            nonlocal progress_drafts
+            materialized: List[dict] = []
+            for item in drafts or []:
+                normalized = _materialize_draft(item)
+                if normalized is not None:
+                    materialized.append(normalized)
+            if materialized:
+                progress_drafts = _merge_drafts(progress_drafts, materialized)
+
+            existing_session = load_session(session_id)
+            preserved_stop_requested = (
+                bool(existing_session.get("stop_requested")) if isinstance(existing_session, dict) else False
+            )
+            save_preview(
+                {
+                    "preview_id": preview_id,
+                    "session_id": session_id,
+                    "mode": mode,
+                    "status": str(preview_status or status or "").strip() or "running",
+                    "user_id": user_id,
+                    "task_id": task_id,
+                    "subject": subject,
+                    "topic": topic_raw,
+                    "difficulty": difficulty,
+                    "question_type": question_type,
+                    "use_reference_questions": use_reference_questions,
+                    "reference_source": reference_source,
+                    "reference_year_range": reference_year_range,
+                    "study_markdown": "",
+                    "draft_questions": progress_drafts,
+                }
+            )
+            next_session = _ensure_session(
+                session_id=session_id,
+                user_id=user_id,
+                preview_id=preview_id,
+                subject=subject,
+                topic=topic_raw,
+                difficulty=difficulty,
+                question_type=question_type,
+                mode=mode,
+                count=count,
+                use_study_archive=use_archive,
+                use_reference_questions=use_reference_questions,
+                reference_source=reference_source,
+                reference_year_range=reference_year_range,
+                grade_id=grade_id,
+                textbook_version_id=textbook_version_id,
+                knowledge_point_ids=knowledge_point_ids,
+                knowledge_points=knowledge_points,
+                task_id=task_id,
+                stream_reasoning=stream_reasoning,
+            )
+            next_session["status"] = str(status or "").strip() or "running"
+            next_session["stop_requested"] = preserved_stop_requested
+            next_session["draft_questions"] = progress_drafts
+            save_session(next_session)
+            return progress_drafts
 
         async def _emit_progress(
             progress: float,
@@ -1445,18 +1579,31 @@ async def generate_and_save(
 
             if event_type == "reasoning_delta":
                 blocks = list(current_session.get("reasoning_blocks") or []) if isinstance(current_session.get("reasoning_blocks"), list) else []
-                blocks.append(
-                    {
-                        "id": f"reason-{uuid.uuid4().hex[:12]}",
-                        "task_id": task_id,
-                        "stage_id": str(payload.get("stage_id") or "").strip(),
-                        "stage_label": str(payload.get("stage_label") or "").strip(),
-                        "source": str(payload.get("source") or "").strip() or "trace",
-                        "content": str(payload.get("content") or "").strip(),
-                        "created_at": _utcnow().isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-                    }
-                )
-                current_session["reasoning_blocks"] = blocks[-600:]
+                new_stage = str(payload.get("stage_id") or "").strip()
+                new_source = str(payload.get("source") or "").strip() or "trace"
+                new_content = str(payload.get("content") or "").strip()
+                # Aggregate: append to last block if same task+stage+source
+                if (
+                    blocks
+                    and isinstance(blocks[-1], dict)
+                    and str(blocks[-1].get("task_id") or "").strip() == task_id
+                    and str(blocks[-1].get("stage_id") or "").strip() == new_stage
+                    and str(blocks[-1].get("source") or "").strip() == new_source
+                ):
+                    blocks[-1]["content"] = str(blocks[-1].get("content") or "").rstrip() + new_content
+                else:
+                    blocks.append(
+                        {
+                            "id": f"reason-{uuid.uuid4().hex[:12]}",
+                            "task_id": task_id,
+                            "stage_id": new_stage,
+                            "stage_label": str(payload.get("stage_label") or "").strip(),
+                            "source": new_source,
+                            "content": new_content,
+                            "created_at": _utcnow().isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                        }
+                    )
+                current_session["reasoning_blocks"] = blocks[-200:]
             elif event_type == "reasoning_status":
                 statuses = list(current_session.get("reasoning_statuses") or []) if isinstance(current_session.get("reasoning_statuses"), list) else []
                 statuses.append(
@@ -1596,9 +1743,21 @@ async def generate_and_save(
             active_stage_id = None
 
         try:
+            if progress_drafts:
+                _persist_generation_snapshot(status="running", drafts=[], preview_status="running")
             await _switch_stage("source_pack")
 
             study_markdown = ""
+            reference_questions: list[dict] = []
+            reference_analysis: dict = {}
+            reference_status: dict = {
+                "enabled": use_reference_questions,
+                "reference_source": reference_source,
+                "reference_year_range": reference_year_range,
+                "cache_hit": False,
+                "degraded": False,
+                "fallback_used": "",
+            }
             if use_archive:
                 try:
                     archive = await get_latest_study_archive(user_id=user_id, subject=subject, topic=topic_key)
@@ -1642,6 +1801,166 @@ async def generate_and_save(
             )
             active_stage_id = None
 
+            if use_reference_questions:
+                await _switch_stage("reference_crawl")
+                reference_result = await collect_reference_questions(
+                    user_id=user_id,
+                    subject=subject,
+                    topic=topic_key,
+                    difficulty=difficulty,
+                    question_type=question_type,
+                    knowledge_point_ids=knowledge_point_ids,
+                    knowledge_points=knowledge_points,
+                    desired_count=max(5, min(10, count + 3)),
+                    reference_source=reference_source,
+                    reference_year_range=reference_year_range,
+                )
+                if isinstance(reference_result, dict):
+                    reference_questions = [
+                        dict(item) for item in (reference_result.get("questions") or []) if isinstance(item, dict)
+                    ]
+                    reference_status = {
+                        **reference_status,
+                        "cache_hit": bool(reference_result.get("cache_hit")),
+                        "degraded": bool(reference_result.get("degraded")),
+                        "fallback_used": str(reference_result.get("fallback_used") or "").strip(),
+                        "result_source": str(reference_result.get("source") or "").strip(),
+                        "error": str(reference_result.get("error") or "").strip(),
+                        "count": len(reference_questions),
+                    }
+                crawl_sample = (
+                    {
+                        "question_id": str((reference_questions[0] or {}).get("question_id") or ""),
+                        "source": str((reference_questions[0] or {}).get("source") or ""),
+                        "stem_preview": str((reference_questions[0] or {}).get("stem") or "")[:120],
+                    }
+                    if reference_questions
+                    else None
+                )
+                await _update_stage_step(
+                    stage_id="reference_crawl",
+                    stage_label=stage_labels["reference_crawl"],
+                    status="completed",
+                    progress=stage_progress_defaults["reference_crawl"],
+                    summary=stage_descriptions["reference_crawl"],
+                    stats={
+                        "enabled": True,
+                        "reference_count": len(reference_questions),
+                        "cache_hit": bool(reference_status.get("cache_hit")),
+                        "degraded": bool(reference_status.get("degraded")),
+                        "fallback_used": str(reference_status.get("fallback_used") or ""),
+                        "result_source": str(reference_status.get("result_source") or ""),
+                        "reference_source": reference_source,
+                        "reference_year_range": reference_year_range,
+                    },
+                    sample=crawl_sample,
+                )
+                active_stage_id = None
+
+                if bool(reference_status.get("cache_hit")):
+                    await _emit_reasoning_event(
+                        {
+                            "type": "reasoning_status",
+                            "stage_id": "reference_crawl",
+                            "stage_label": stage_labels["reference_crawl"],
+                            "mode": "trace",
+                            "message": f"参考题命中 24 小时缓存，共复用 {len(reference_questions)} 道样题。",
+                        }
+                    )
+                elif str(reference_status.get("fallback_used") or "").strip() == "local_library":
+                    await _emit_reasoning_event(
+                        {
+                            "type": "reasoning_status",
+                            "stage_id": "reference_crawl",
+                            "stage_label": stage_labels["reference_crawl"],
+                            "mode": "trace",
+                            "message": "参考题爬取失败，已自动降级为本地题库兜底，不影响后续生成。",
+                        }
+                    )
+                elif not reference_questions:
+                    message = str(reference_status.get("error") or "").strip() or "未找到可用参考题"
+                    await _emit_reasoning_event(
+                        {
+                            "type": "reasoning_status",
+                            "stage_id": "reference_crawl",
+                            "stage_label": stage_labels["reference_crawl"],
+                            "mode": "trace",
+                            "message": f"{message}，已跳过参考题学习并继续生成。",
+                        }
+                    )
+
+                await _switch_stage("reference_analysis")
+                if reference_questions:
+                    reference_analysis = await analyze_reference_questions(
+                        subject=subject,
+                        topic=topic_key,
+                        difficulty=difficulty,
+                        question_type=question_type,
+                        reference_questions=reference_questions,
+                        stream_reasoning=stream_reasoning,
+                        on_reasoning_event=_emit_reasoning_event,
+                    )
+                    source_pack = enrich_source_pack_with_reference(source_pack, reference_analysis, reference_questions)
+                    analysis_examples = (
+                        reference_analysis.get("representative_examples")
+                        if isinstance(reference_analysis, dict) and isinstance(reference_analysis.get("representative_examples"), list)
+                        else []
+                    )
+                    analysis_sample = None
+                    if analysis_examples:
+                        example = analysis_examples[0] if isinstance(analysis_examples[0], dict) else {}
+                        analysis_sample = {
+                            "question_id": str(example.get("question_id") or ""),
+                            "source": str(example.get("source") or ""),
+                            "why_selected": str(example.get("why_selected") or ""),
+                            "stem_preview": str(example.get("stem") or "")[:120],
+                        }
+                    await _update_stage_step(
+                        stage_id="reference_analysis",
+                        stage_label=stage_labels["reference_analysis"],
+                        status="completed",
+                        progress=stage_progress_defaults["reference_analysis"],
+                        summary=stage_descriptions["reference_analysis"],
+                        stats={
+                            "enabled": True,
+                            "reference_count": len(reference_questions),
+                            "question_patterns": len(reference_analysis.get("question_patterns") or []) if isinstance(reference_analysis, dict) else 0,
+                            "difficulty_markers": len(reference_analysis.get("difficulty_markers") or []) if isinstance(reference_analysis, dict) else 0,
+                            "representative_examples": len(analysis_examples),
+                        },
+                        sample=analysis_sample,
+                    )
+                else:
+                    await _update_stage_step(
+                        stage_id="reference_analysis",
+                        stage_label=stage_labels["reference_analysis"],
+                        status="completed",
+                        progress=stage_progress_defaults["reference_analysis"],
+                        summary="未获取到可用参考题，已跳过模式分析。",
+                        stats={"enabled": True, "skipped": True, "reference_count": 0},
+                        sample=None,
+                    )
+                active_stage_id = None
+
+                session_snapshot = load_session(session_id)
+                if isinstance(session_snapshot, dict):
+                    session_snapshot["reference_status"] = dict(reference_status)
+                    session_snapshot["reference_questions"] = reference_questions[:10]
+                    session_snapshot["reference_analysis"] = reference_analysis if isinstance(reference_analysis, dict) else {}
+                    save_session(session_snapshot)
+
+            def _cache_fallback_drafts(items: Any) -> None:
+                nonlocal fallback_raw_drafts
+                if not isinstance(items, list):
+                    return
+                materialized = []
+                for item in items:
+                    normalized = _materialize_draft(item) if isinstance(item, dict) else None
+                    if normalized is not None:
+                        materialized.append(normalized)
+                if materialized:
+                    fallback_raw_drafts = _merge_drafts(fallback_raw_drafts, materialized)
+
             async def _handle_generation_stage(event: dict) -> None:
                 if not isinstance(event, dict):
                     return
@@ -1657,105 +1976,144 @@ async def generate_and_save(
                     sample=sample,
                 )
 
-            finals = await generate_questions(
-                source_pack=source_pack,
-                count=count,
-                difficulty=difficulty,
-                question_type=question_type,
-                on_stage_event=_handle_generation_stage,
-                on_reasoning_event=_emit_reasoning_event,
-                stream_reasoning=stream_reasoning,
-                config=None,
-            )
-            await _complete_active_stage()
+            async def _handle_candidate_accepted(candidate: dict) -> None:
+                _persist_generation_snapshot(status="running", drafts=[candidate], preview_status="running")
 
-            drafts: list[dict] = []
-            for q in finals[:count]:
-                if task.status != "running":
-                    break
-                if not isinstance(q, dict):
-                    continue
-                stem = str(q.get("stem") or "").strip()
-                answer = str(q.get("answer") or "").strip()
-                analysis = str(q.get("analysis") or "").strip()
-                if not stem or not answer or not analysis:
-                    continue
-                qid = build_ai_question_id(suffix=uuid.uuid4().hex[:8])
-                drafts.append(
+            async def _handle_generation_snapshot(snapshot: dict) -> None:
+                if not isinstance(snapshot, dict):
+                    return
+                accepted_items = snapshot.get("accepted")
+                raw_items = snapshot.get("raw_candidates")
+                if isinstance(accepted_items, list) and accepted_items:
+                    _cache_fallback_drafts(accepted_items)
+                elif isinstance(raw_items, list) and raw_items:
+                    _cache_fallback_drafts(raw_items)
+
+            def _is_stop_requested() -> bool:
+                session_record = load_session(session_id)
+                return bool(session_record.get("stop_requested")) if isinstance(session_record, dict) else False
+
+            async def _emit_infinite_retry_notice(message: str) -> None:
+                await _emit_reasoning_event(
                     {
-                        "question_id": qid,
-                        "stem": stem,
-                        "answer": answer,
-                        "analysis": analysis,
-                        "keep": True,
+                        "type": "reasoning_status",
+                        "stage_id": "pending_review",
+                        "stage_label": stage_labels["pending_review"],
+                        "mode": "trace",
+                        "message": message,
                     }
                 )
 
-            if not drafts:
-                raise RuntimeError("no_questions_generated")
+            retry_delay_s = 5.0
+            infinite_mode = mode == "infinite"
+            merged_drafts: list[dict] = []
+            batch_index = 0
 
-            await _switch_stage(
-                "pending_review",
-                stats={"draft_count": len(drafts)},
-                sample={
-                    "question_id": str((drafts[0] or {}).get("question_id") or ""),
-                    "stem_preview": str((drafts[0] or {}).get("stem") or "")[:120],
-                }
-                if drafts
-                else None,
-            )
+            while task.status == "running":
+                if infinite_mode and _is_stop_requested():
+                    break
 
-            existing_preview = load_preview(preview_id) if append_mode else None
-            merged_drafts = _merge_drafts(
-                existing_preview.get("draft_questions") if isinstance(existing_preview, dict) else [],
-                drafts,
-            )
-            save_preview(
-                {
-                    "preview_id": preview_id,
-                    "session_id": session_id,
-                    "mode": mode,
-                    "status": "pending_review",
-                    "user_id": user_id,
-                    "task_id": task_id,
-                    "subject": subject,
-                    "topic": topic_raw,
-                    "difficulty": difficulty,
-                    "question_type": question_type,
-                    "study_markdown": study_markdown,
-                    "draft_questions": merged_drafts,
-                }
-            )
-            current_session = _ensure_session(
-                session_id=session_id,
-                user_id=user_id,
-                preview_id=preview_id,
-                subject=subject,
-                topic=topic_raw,
-                difficulty=difficulty,
-                question_type=question_type,
-                mode=mode,
-                count=count,
-                use_study_archive=use_archive,
-                grade_id=grade_id,
-                textbook_version_id=textbook_version_id,
-                knowledge_point_ids=knowledge_point_ids,
-                knowledge_points=knowledge_points,
-                task_id=task_id,
-                stream_reasoning=stream_reasoning,
-            )
-            current_session["status"] = "pending_review"
-            current_session["draft_questions"] = merged_drafts
-            save_session(current_session)
-            await _complete_active_stage(
-                stats={"draft_count": len(merged_drafts), "preview_id": preview_id},
-                sample={
-                    "question_id": str((merged_drafts[0] or {}).get("question_id") or ""),
-                    "stem_preview": str((merged_drafts[0] or {}).get("stem") or "")[:120],
-                }
-                if merged_drafts
-                else None,
-            )
+                batch_index += 1
+                try:
+                    finals = await generate_questions(
+                        source_pack=source_pack,
+                        count=count,
+                        difficulty=difficulty,
+                        question_type=question_type,
+                        on_stage_event=_handle_generation_stage,
+                        on_reasoning_event=_emit_reasoning_event,
+                        on_candidate_accepted=_handle_candidate_accepted,
+                        on_generation_snapshot=_handle_generation_snapshot,
+                        stream_reasoning=stream_reasoning,
+                        config=None,
+                    )
+                    await _complete_active_stage()
+                except Exception as exc:
+                    if not infinite_mode:
+                        raise
+                    if _is_stop_requested():
+                        break
+                    await _emit_infinite_retry_notice(
+                        f"第 {batch_index} 轮生成失败：{str(exc)}；将在 {int(retry_delay_s)} 秒后自动重试。"
+                    )
+                    await asyncio.sleep(retry_delay_s)
+                    continue
+
+                drafts: list[dict] = []
+                for q in finals[:count]:
+                    if task.status != "running":
+                        break
+                    if not isinstance(q, dict):
+                        continue
+                    normalized = _materialize_draft(q)
+                    if normalized is not None:
+                        drafts.append(normalized)
+
+                if not drafts:
+                    if not infinite_mode:
+                        raise RuntimeError("no_questions_generated")
+                    if _is_stop_requested():
+                        break
+                    await _emit_infinite_retry_notice(
+                        f"第 {batch_index} 轮未产出待审题，已在后台保留会话，将在 {int(retry_delay_s)} 秒后自动重试。"
+                    )
+                    await asyncio.sleep(retry_delay_s)
+                    continue
+
+                if infinite_mode:
+                    merged_drafts = _persist_generation_snapshot(status="running", drafts=drafts, preview_status="running")
+                    await _emit_infinite_retry_notice(
+                        f"第 {batch_index} 轮已新增 {len(drafts)} 道待审题，继续生成下一轮；点击“停止追加”可结束后台循环。"
+                    )
+                    if _is_stop_requested():
+                        break
+                    continue
+
+                await _switch_stage(
+                    "pending_review",
+                    stats={"draft_count": len(drafts)},
+                    sample={
+                        "question_id": str((drafts[0] or {}).get("question_id") or ""),
+                        "stem_preview": str((drafts[0] or {}).get("stem") or "")[:120],
+                    }
+                    if drafts
+                    else None,
+                )
+
+                merged_drafts = _persist_generation_snapshot(
+                    status="pending_review",
+                    drafts=drafts,
+                    preview_status="pending_review",
+                )
+                break
+
+            final_status = "stopped" if infinite_mode and _is_stop_requested() else "pending_review"
+            if infinite_mode or merged_drafts or progress_drafts:
+                merged_drafts = _persist_generation_snapshot(
+                    status=final_status,
+                    drafts=[],
+                    preview_status=final_status,
+                )
+            preview_obj = load_preview(preview_id)
+            if isinstance(preview_obj, dict):
+                preview_obj["study_markdown"] = study_markdown
+                save_preview(preview_obj)
+            if merged_drafts:
+                await _switch_stage(
+                    "pending_review",
+                    stats={"draft_count": len(merged_drafts), "preview_id": preview_id},
+                    sample={
+                        "question_id": str((merged_drafts[0] or {}).get("question_id") or ""),
+                        "stem_preview": str((merged_drafts[0] or {}).get("stem") or "")[:120],
+                    },
+                )
+                await _complete_active_stage(
+                    stats={"draft_count": len(merged_drafts), "preview_id": preview_id},
+                    sample={
+                        "question_id": str((merged_drafts[0] or {}).get("question_id") or ""),
+                        "stem_preview": str((merged_drafts[0] or {}).get("stem") or "")[:120],
+                    },
+                )
 
             done_payload = {
                 "success": True,
@@ -1764,6 +2122,9 @@ async def generate_and_save(
                 "subject": subject,
                 "topic": topic_raw,
                 "mode": mode,
+                "use_reference_questions": use_reference_questions,
+                "reference_source": reference_source,
+                "reference_year_range": reference_year_range,
                 "count": len(merged_drafts),
                 "draft_questions": merged_drafts,
             }
@@ -1807,11 +2168,32 @@ async def generate_and_save(
                 )
             except Exception:
                 pass
-            current_session = load_session(session_id)
-            if isinstance(current_session, dict):
-                current_session["status"] = "stopped"
-                current_session["stop_requested"] = True
-                save_session(current_session)
+            session_record = load_session(session_id)
+            if isinstance(session_record, dict):
+                session_record["status"] = "stopped"
+                session_record["stop_requested"] = True
+                if progress_drafts or fallback_raw_drafts:
+                    session_record["draft_questions"] = _merge_drafts(progress_drafts, fallback_raw_drafts)
+                save_session(session_record)
+                save_preview(
+                    {
+                        "preview_id": preview_id,
+                        "session_id": session_id,
+                        "mode": mode,
+                        "status": "stopped",
+                        "user_id": user_id,
+                        "task_id": task_id,
+                        "subject": subject,
+                        "topic": topic_raw,
+                        "difficulty": difficulty,
+                        "question_type": question_type,
+                        "use_reference_questions": use_reference_questions,
+                        "reference_source": reference_source,
+                        "reference_year_range": reference_year_range,
+                        "study_markdown": "",
+                        "draft_questions": session_record.get("draft_questions") or [],
+                    }
+                )
             raise
         except Exception as exc:  # pragma: no cover
             if active_stage_id:
@@ -1839,10 +2221,31 @@ async def generate_and_save(
                 )
             except Exception:
                 pass
-            current_session = load_session(session_id)
-            if isinstance(current_session, dict):
-                current_session["status"] = "failed"
-                save_session(current_session)
+            session_record = load_session(session_id)
+            if isinstance(session_record, dict):
+                preserved = _merge_drafts(progress_drafts, fallback_raw_drafts)
+                session_record["draft_questions"] = preserved
+                session_record["status"] = "partial_failure" if preserved else "failed"
+                save_session(session_record)
+                save_preview(
+                    {
+                        "preview_id": preview_id,
+                        "session_id": session_id,
+                        "mode": mode,
+                        "status": str(session_record.get("status") or "failed"),
+                        "user_id": user_id,
+                        "task_id": task_id,
+                        "subject": subject,
+                        "topic": topic_raw,
+                        "difficulty": difficulty,
+                        "question_type": question_type,
+                        "use_reference_questions": use_reference_questions,
+                        "reference_source": reference_source,
+                        "reference_year_range": reference_year_range,
+                        "study_markdown": "",
+                        "draft_questions": preserved,
+                    }
+                )
         finally:
             if task.status == "running":
                 if active_stage_id:

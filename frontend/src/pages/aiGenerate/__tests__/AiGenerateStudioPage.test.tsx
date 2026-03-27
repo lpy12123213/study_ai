@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { act } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiGenerateStudioPage } from '@/pages/aiGenerate/AiGenerateStudioPage'
 
 const apiMocks = vi.hoisted(() => ({
@@ -106,6 +107,13 @@ function renderPage(initialEntry = '/ai-generate?session=session-001') {
 }
 
 describe('AiGenerateStudioPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.listQuestionLibrarySessions.mockReset()
+    apiMocks.getQuestionLibrarySession.mockReset()
+    vi.useRealTimers()
+  })
+
   it('renders session history, restored reasoning labels, and review-gated drafts', async () => {
     apiMocks.listQuestionLibrarySessions.mockResolvedValue({
       success: true,
@@ -202,5 +210,258 @@ describe('AiGenerateStudioPage', () => {
     expect(await screen.findByRole('button', { name: '停止追加' })).toBeInTheDocument()
     expect(await screen.findByRole('link', { name: '进入审查' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '确认入库' })).toBeDisabled()
+  })
+
+  it('polls running sessions and restores drafts after refresh', async () => {
+    vi.useFakeTimers()
+    try {
+      apiMocks.listQuestionLibrarySessions.mockResolvedValue({
+        success: true,
+        sessions: [
+          {
+            session_id: 'session-running-1',
+            preview_id: 'preview-running-1',
+            status: 'running',
+            mode: 'standard',
+            subject: '高中数学',
+            topic: '导数',
+            count: 1,
+            task_ids: ['task-running-1'],
+            latest_task_id: 'task-running-1',
+            updated_at_s: 1710000100,
+            created_at_s: 1710000000,
+            reasoning_blocks_count: 0,
+            confirmed_question_ids: [],
+            stop_requested: false,
+          },
+        ],
+      })
+
+      apiMocks.getQuestionLibrarySession
+        .mockResolvedValueOnce({
+          success: true,
+          session: {
+            session_id: 'session-running-1',
+            preview_id: 'preview-running-1',
+            status: 'running',
+            mode: 'standard',
+            subject: '高中数学',
+            topic: '导数',
+            count: 1,
+            task_ids: ['task-running-1'],
+            latest_task_id: 'task-running-1',
+            updated_at_s: 1710000100,
+            created_at_s: 1710000000,
+            reasoning_blocks_count: 0,
+            confirmed_question_ids: [],
+            stop_requested: false,
+            difficulty: '中等',
+            question_type: '解答题',
+            use_study_archive: false,
+            grade_id: '1',
+            textbook_version_id: 'tj-rjb-a',
+            knowledge_point_ids: [],
+            knowledge_points: [],
+            stream_reasoning: true,
+            draft_questions: [],
+            reasoning_blocks: [],
+            task_events: [],
+          },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          session: {
+            session_id: 'session-running-1',
+            preview_id: 'preview-running-1',
+            status: 'running',
+            mode: 'standard',
+            subject: '高中数学',
+            topic: '导数',
+            count: 1,
+            task_ids: ['task-running-1'],
+            latest_task_id: 'task-running-1',
+            updated_at_s: 1710000200,
+            created_at_s: 1710000000,
+            reasoning_blocks_count: 0,
+            confirmed_question_ids: [],
+            stop_requested: false,
+            difficulty: '中等',
+            question_type: '解答题',
+            use_study_archive: false,
+            grade_id: '1',
+            textbook_version_id: 'tj-rjb-a',
+            knowledge_point_ids: [],
+            knowledge_points: [],
+            stream_reasoning: true,
+            draft_questions: [
+              {
+                question_id: 'q-running-1',
+                stem: '轮询恢复题干',
+                answer: '轮询恢复答案',
+                analysis: '轮询恢复解析',
+                keep: true,
+                review_status: 'pending_review',
+                review: null,
+              },
+            ],
+            reasoning_blocks: [],
+            task_events: [],
+          },
+      })
+
+      renderPage('/ai-generate?session=session-running-1')
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000)
+        await Promise.resolve()
+      })
+
+      expect(apiMocks.getQuestionLibrarySession).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('button', { name: '生成中' })).toBeDisabled()
+      expect(screen.getAllByText('轮询恢复题干').length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps infinite continue-generation optimistic state while stale stop_requested is still polling back', async () => {
+    vi.useFakeTimers()
+    try {
+      apiMocks.listQuestionLibrarySessions.mockResolvedValue({
+        success: true,
+        sessions: [
+          {
+            session_id: 'session-race-1',
+            preview_id: 'preview-race-1',
+            status: 'stopped',
+            mode: 'infinite',
+            subject: '高中数学',
+            topic: '导数',
+            count: 1,
+            task_ids: ['task-race-0'],
+            latest_task_id: 'task-race-0',
+            updated_at_s: 1710000500,
+            created_at_s: 1710000000,
+            reasoning_blocks_count: 0,
+            confirmed_question_ids: [],
+            stop_requested: true,
+          },
+        ],
+      })
+
+      apiMocks.getQuestionLibrarySession.mockResolvedValue({
+        success: true,
+        session: {
+          session_id: 'session-race-1',
+          preview_id: 'preview-race-1',
+          status: 'stopped',
+          mode: 'infinite',
+          subject: '高中数学',
+          topic: '导数',
+          count: 1,
+          task_ids: ['task-race-0'],
+          latest_task_id: 'task-race-0',
+          updated_at_s: 1710000500,
+          created_at_s: 1710000000,
+          reasoning_blocks_count: 0,
+          confirmed_question_ids: [],
+          stop_requested: true,
+          difficulty: '中等',
+          question_type: '解答题',
+          use_study_archive: false,
+          grade_id: '1',
+          textbook_version_id: 'tj-rjb-a',
+          knowledge_point_ids: [],
+          knowledge_points: [],
+          stream_reasoning: true,
+          draft_questions: [],
+          reasoning_blocks: [],
+          task_events: [],
+        },
+      })
+
+      renderPage('/ai-generate?session=session-race-1')
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(screen.getByRole('button', { name: '继续生成' })).toBeEnabled()
+      screen.getByRole('button', { name: '继续生成' }).click()
+
+      expect(screen.getAllByRole('button', { name: '生成中' }).some((button) => (button as HTMLButtonElement).disabled)).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+        await Promise.resolve()
+      })
+
+      expect(screen.getAllByRole('button', { name: '生成中' }).some((button) => (button as HTMLButtonElement).disabled)).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 15000)
+
+  it('renders partial failure sessions with a localized status label', async () => {
+    apiMocks.listQuestionLibrarySessions.mockResolvedValue({
+      success: true,
+      sessions: [
+        {
+          session_id: 'session-partial-1',
+          preview_id: 'preview-partial-1',
+          status: 'partial_failure',
+          mode: 'standard',
+          subject: '高中数学',
+          topic: '导数',
+          count: 1,
+          task_ids: ['task-partial-1'],
+          latest_task_id: 'task-partial-1',
+          updated_at_s: 1710000300,
+          created_at_s: 1710000000,
+          reasoning_blocks_count: 0,
+          confirmed_question_ids: [],
+          stop_requested: false,
+        },
+      ],
+    })
+
+    apiMocks.getQuestionLibrarySession.mockResolvedValue({
+      success: true,
+      session: {
+        session_id: 'session-partial-1',
+        preview_id: 'preview-partial-1',
+        status: 'partial_failure',
+        mode: 'standard',
+        subject: '高中数学',
+        topic: '导数',
+        count: 1,
+        task_ids: ['task-partial-1'],
+        latest_task_id: 'task-partial-1',
+        updated_at_s: 1710000300,
+        created_at_s: 1710000000,
+        reasoning_blocks_count: 0,
+        confirmed_question_ids: [],
+        stop_requested: false,
+        difficulty: '中等',
+        question_type: '解答题',
+        use_study_archive: false,
+        grade_id: '1',
+        textbook_version_id: 'tj-rjb-a',
+        knowledge_point_ids: [],
+        knowledge_points: [],
+        stream_reasoning: true,
+        draft_questions: [],
+        reasoning_blocks: [],
+        task_events: [],
+      },
+    })
+
+    renderPage('/ai-generate?session=session-partial-1')
+
+    expect((await screen.findAllByText('部分完成')).length).toBeGreaterThan(0)
   })
 })

@@ -121,21 +121,23 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
   if (kind === 'reasoning_delta') {
     const source = toOptionalString(data.source) || 'trace'
     const content = toOptionalString(data.content) || ''
+    const stageId = normalizeStageId(toOptionalString(data.stage_id) || '')
     const stageLabel =
       toOptionalString(data.stage_label) ||
-      humanizeStage(toOptionalString(data.stage_id) || '', toOptionalString(data.stage_label))
+      humanizeStage(stageId, toOptionalString(data.stage_label))
     const prefix = source === 'raw' ? '原始 Reason' : '事件 Trace'
     let title = content ? `${prefix}: ${content}` : prefix
     if (title.length > 240) title = `${title.slice(0, 240)}…`
     return {
-      id: `reasoning:${evt.seq}`,
+      id: `reasoning:${stageId || 'default'}:${source}`,
       title,
-      status: 'completed',
+      status: 'running',
       toolName: 'reasoning',
       startTime: evt.created_at,
       input: {
         source,
         stage_label: stageLabel,
+        _deltaContent: content,
       },
       output: data,
     }

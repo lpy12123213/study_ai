@@ -15,6 +15,9 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        useReferenceQuestions
+        referenceSource="any"
+        referenceYearRange="all"
         mode="standard"
         subjects={[
           { id: 1, code: '高中数学', name: '高中数学' },
@@ -27,6 +30,9 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onUseReferenceQuestionsChange={vi.fn()}
+        onReferenceSourceChange={vi.fn()}
+        onReferenceYearRangeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -51,6 +57,9 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        useReferenceQuestions
+        referenceSource="any"
+        referenceYearRange="all"
         mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
@@ -60,6 +69,9 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onUseReferenceQuestionsChange={vi.fn()}
+        onReferenceSourceChange={vi.fn()}
+        onReferenceYearRangeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -86,6 +98,9 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        useReferenceQuestions
+        referenceSource="any"
+        referenceYearRange="all"
         mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
@@ -95,6 +110,9 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onUseReferenceQuestionsChange={vi.fn()}
+        onReferenceSourceChange={vi.fn()}
+        onReferenceYearRangeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -121,6 +139,9 @@ describe('MissionComposer', () => {
         difficulty="中等"
         questionType=""
         useStudyArchive
+        useReferenceQuestions
+        referenceSource="any"
+        referenceYearRange="all"
         mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
@@ -130,6 +151,9 @@ describe('MissionComposer', () => {
         onDifficultyChange={vi.fn()}
         onQuestionTypeChange={vi.fn()}
         onUseStudyArchiveChange={vi.fn()}
+        onUseReferenceQuestionsChange={vi.fn()}
+        onReferenceSourceChange={vi.fn()}
+        onReferenceYearRangeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
