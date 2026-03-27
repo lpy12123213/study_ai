@@ -85,6 +85,8 @@ desktop.ini
 # Cache
 .cache/
 *.cache
+backend\crawler\.playwright_data
+backend\crawler\zujuan\.playwright_data
 
 # Testing
 .pytest_cache/
