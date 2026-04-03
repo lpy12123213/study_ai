@@ -5,7 +5,7 @@ from typing import Optional
 
 from backend.agent.config import AgentConfig
 from backend.agent.types import ActionResults, CompressedContext, ExecutionPlan, ReflectionResult
-from backend.core.llm_client import chat_completion_text
+from backend.llm.client import chat_completion_text
 
 
 class Reflector:

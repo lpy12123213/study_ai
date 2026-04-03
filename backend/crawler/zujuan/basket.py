@@ -321,7 +321,7 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
                     "message": "登录成功" if user_id else "未检测到登录",
                 }
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, _sync_login)
     except Exception as exc:

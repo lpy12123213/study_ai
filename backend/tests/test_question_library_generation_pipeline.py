@@ -5,6 +5,77 @@ from unittest.mock import AsyncMock, patch
 
 
 class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
+    async def test_chat_json_with_reasoning_executes_scientific_compute_tool_and_emits_logs(self) -> None:
+        from backend.llm.client import ChatCompletionResult
+        from backend.question_library import gen_llm
+
+        seen_messages: list[list[dict]] = []
+        reasoning_events: list[dict] = []
+
+        async def fake_chat_completion(**kwargs):  # type: ignore[no-untyped-def]
+            seen_messages.append(list(kwargs.get("messages") or []))
+            if len(seen_messages) == 1:
+                return ChatCompletionResult(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "tool-1",
+                            "type": "function",
+                            "function": {
+                                "name": "python_scientific_compute",
+                                "arguments": json.dumps(
+                                    {
+                                        "code": "result = math.sqrt(144)",
+                                        "purpose": "验证答案",
+                                        "timeout_seconds": 5,
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        }
+                    ],
+                )
+            return ChatCompletionResult(content='{"ok": true}', tool_calls=[])
+
+        async def on_reasoning_event(event: dict) -> None:
+            reasoning_events.append(dict(event))
+
+        with patch("backend.question_library.gen_llm.chat_completion", new=AsyncMock(side_effect=fake_chat_completion)), patch(
+            "backend.question_library.gen_llm.python_scientific_compute",
+            new=AsyncMock(
+                return_value={
+                    "success": True,
+                    "result_repr": "12.0",
+                    "result_type": "float",
+                    "stdout": "",
+                    "warnings": [],
+                }
+            ),
+        ):
+            text = await gen_llm._chat_json_with_reasoning(
+                messages=[{"role": "user", "content": "请输出 JSON"}],
+                model="openai/test-mini",
+                temperature=0.2,
+                max_tokens=300,
+                req_id_prefix="qlg",
+                retries=1,
+                raise_on_fail=True,
+                stage_id="draft_realization",
+                stage_label="草稿生成",
+                stream_reasoning=False,
+                on_reasoning_event=on_reasoning_event,
+            )
+
+        self.assertEqual(text, '{"ok": true}')
+        self.assertEqual(len(seen_messages), 2)
+        self.assertTrue(any(msg.get("role") == "tool" for msg in seen_messages[1]))
+        messages = [str(evt.get("message") or "") for evt in reasoning_events if str(evt.get("message") or "").strip()]
+        joined = "\n".join(messages)
+        self.assertIn("[tool_call] python_scientific_compute", joined)
+        self.assertIn("验证答案", joined)
+        self.assertIn("[tool_result] python_scientific_compute", joined)
+        self.assertIn("12.0", joined)
+
     def test_build_generation_messages_changes_system_prompt_by_difficulty(self) -> None:
         from backend.question_library.generation import build_generation_messages
 
@@ -71,8 +142,8 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation._chat_json_with_reasoning",
+        with patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.question_library.judging._chat_json_with_reasoning",
             new=AsyncMock(side_effect=fake_chat_json_with_reasoning),
         ), patch.dict("os.environ", {"QUESTION_LIBRARY_JUDGE_MODEL": "openai/test-judge-mini"}, clear=False):
             await solve_draft("题干", {"subject": "高中数学", "proposed_answer": "x=1"})
@@ -357,8 +428,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.question_library.gen_llm.chat_completion",
+            new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
@@ -481,8 +557,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
 
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.question_library.gen_llm.chat_completion",
+            new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数应用", "study_markdown": ""},
@@ -553,8 +634,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.question_library.gen_llm.chat_completion",
+            new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
@@ -620,8 +706,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.question_library.gen_llm.chat_completion",
+            new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
@@ -678,8 +769,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.question_library.gen_llm.chat_completion",
+            new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},

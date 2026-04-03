@@ -21,6 +21,16 @@ export interface AiGenerateReviewSummary {
   model: string
 }
 
+export interface AiGenerateDiagram {
+  kind?: string
+  url: string
+  filename?: string
+  mediaId?: string
+  alt?: string
+  caption?: string
+  markdown?: string
+}
+
 export interface AiGenerateDraftCard {
   id: string
   questionId: string
@@ -30,6 +40,7 @@ export interface AiGenerateDraftCard {
   status: 'queued' | 'streaming' | 'ready' | 'failed'
   reviewStatus: AiGenerateReviewStatus
   review: AiGenerateReviewSummary | null
+  diagrams?: AiGenerateDiagram[]
   sections: {
     stem: AiGenerateSectionState
     answer: AiGenerateSectionState

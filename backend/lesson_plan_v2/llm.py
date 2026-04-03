@@ -8,12 +8,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from backend.core import llm_console
-from backend.core.llm_client import (
-    cap_max_tokens_for_messages,
-    get_llm_api_key_override,
-    get_moonshot_api_key_override,
-)
+from backend.llm import console as llm_console
+from backend.llm.client import cap_max_tokens_for_messages, get_llm_api_key_override, get_moonshot_api_key_override
 from backend.core.settings import (
     API_TIMEOUT,
     LESSON_PLAN_API_KEY,

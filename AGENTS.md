@@ -23,3 +23,16 @@ Follow Conventional Commits, as seen in history: `feat(agent): ...`, `refactor(f
 ## Security & Configuration Tips
 
 Copy `.env.example` to `.env`; never commit real API keys, scraped content, or local database artifacts. Keep crawlers rate-limited and aligned with target-site terms.
+
+## Superpowers 本地覆写
+- 轻量任务不进入完整 brainstorming / writing-plans / using-git-worktrees / subagentdriven-development 链路。
+- 轻量任务定义：单文件或小范围修改、明确 bug 修复、配置调整、文案修改、小测试补充。
+- 轻量任务默认直接分析代码并实现；只有遇到关键不确定性时才提问，且首次最多问 1 个问题。
+- 如果项目上下文、AGENTS.md、现有代码已经能回答的问题，不要重复提问。
+- 非我明确要求时，不要默认创建 worktree。
+- 非我明确要求时，不要默认把 spec / plan 提交到 git。
+- 在 Codex 环境中，默认优先使用 executing-plans，而不是 subagent-driven-development。
+- 只有在任务明确适合并行、且平台对子代理支持良好时，才使用 subagent-driven-development。
+- 需要确认时，优先一次性给出 2 到 3 个可选方案和推荐，不要把确认拆成过多轮。
+- 以下操作仍然必须确认：删除文件、大规模重构、修改 git 历史、推送远程、改环境配置、改 CI、数据
+库变更。

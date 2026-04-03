@@ -9,7 +9,7 @@ from backend.crawler.zujuan.utils import (
     _safe_float,
     _safe_int,
 )
-from backend.subjects import (
+from backend.core.subjects import (
     DIFFICULTY_LEVELS,
     SUBJECTS,
 )

@@ -73,8 +73,8 @@ vi.mock('@/pages/questionLibrary/hooks/useQuestionLibraryTasks', () => ({
   }),
 }))
 
-vi.mock('@/stores/useToastStore', () => ({
-  useToastStore: (selector: (state: { pushToast: ReturnType<typeof vi.fn> }) => unknown) =>
+vi.mock('@/stores/useNotificationStore', () => ({
+  useNotificationStore: (selector: (state: { pushToast: ReturnType<typeof vi.fn> }) => unknown) =>
     selector({ pushToast: vi.fn() }),
 }))
 
@@ -114,7 +114,7 @@ describe('AiGenerateStudioPage', () => {
     vi.useRealTimers()
   })
 
-  it('renders session history, restored reasoning labels, and review-gated drafts', async () => {
+  it('renders session history, restored reasoning labels, and direct review-to-library actions', async () => {
     apiMocks.listQuestionLibrarySessions.mockResolvedValue({
       success: true,
       sessions: [
@@ -209,7 +209,7 @@ describe('AiGenerateStudioPage', () => {
     expect(await screen.findByText('事件 Trace')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: '停止追加' })).toBeInTheDocument()
     expect(await screen.findByRole('link', { name: '进入审查' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '确认入库' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '审核通过并入库' })).toBeEnabled()
   })
 
   it('polls running sessions and restores drafts after refresh', async () => {

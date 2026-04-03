@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { sanitizeMessageForState, sanitizeMessagesForPersist, sanitizeMessagesForState } from '@/lib/taskPayload'
 import type { ConversationItem, ConversationType, Message } from '@/types'
 
 const EMPTY_MESSAGES: Message[] = []
@@ -50,6 +51,10 @@ function trimMessages(messages: Message[]): Message[] {
   if (!Array.isArray(messages)) return EMPTY_MESSAGES
   if (messages.length <= MAX_MESSAGES_PER_CONVERSATION) return messages
   return messages.slice(-MAX_MESSAGES_PER_CONVERSATION)
+}
+
+function normalizeMessages(messages: Message[]): Message[] {
+  return trimMessages(sanitizeMessagesForState(messages))
 }
 
 export const useConversationStore = create<ConversationState>()(
@@ -121,14 +126,14 @@ export const useConversationStore = create<ConversationState>()(
         set((state) => ({
           messagesByConversation: {
             ...state.messagesByConversation,
-            [conversationId]: trimMessages(messages),
+            [conversationId]: normalizeMessages(messages),
           },
         })),
 
       addMessage: (conversationId, message) =>
         set((state) => {
           const prev = state.messagesByConversation[conversationId] ?? EMPTY_MESSAGES
-          const nextMessages = trimMessages([...prev, message])
+          const nextMessages = normalizeMessages([...prev, sanitizeMessageForState(message)])
           return {
             messagesByConversation: {
               ...state.messagesByConversation,
@@ -140,11 +145,13 @@ export const useConversationStore = create<ConversationState>()(
       updateMessage: (conversationId, messageId, patch) =>
         set((state) => {
           const prev = state.messagesByConversation[conversationId] ?? EMPTY_MESSAGES
-          const next = prev.map((m) => (m.id === messageId ? { ...m, ...patch } : m))
+          const next = prev.map((m) =>
+            m.id === messageId ? sanitizeMessageForState({ ...m, ...patch } as Message) : m
+          )
           return {
             messagesByConversation: {
               ...state.messagesByConversation,
-              [conversationId]: trimMessages(next),
+              [conversationId]: normalizeMessages(next),
             },
           }
         }),
@@ -164,7 +171,7 @@ export const useConversationStore = create<ConversationState>()(
     }),
     {
       name: 'conversation-storage',
-      version: 4,
+      version: 5,
       migrate: (persistedState: unknown) => {
         const state = (persistedState || {}) as Partial<ConversationState>
 
@@ -177,7 +184,7 @@ export const useConversationStore = create<ConversationState>()(
         const messagesByConversation: Record<string, Message[]> = {}
         for (const [id, messages] of Object.entries(rawMessages)) {
           if (!allowedIds.has(id)) continue
-          if (Array.isArray(messages)) messagesByConversation[id] = messages as Message[]
+          if (Array.isArray(messages)) messagesByConversation[id] = normalizeMessages(messages as Message[])
         }
 
         // Back-compat: older builds reused `lesson_plan` for “自学资料”。
@@ -234,7 +241,7 @@ export const useConversationStore = create<ConversationState>()(
         const messagesByConversation = Object.fromEntries(
           Object.entries(state.messagesByConversation || {})
             .filter(([id]) => allowedIds.has(id))
-            .map(([id, messages]) => [id, trimMessages(messages)])
+            .map(([id, messages]) => [id, sanitizeMessagesForPersist(trimMessages(messages))])
         ) as Record<string, Message[]>
 
         return {

@@ -240,6 +240,53 @@ def find_preview_by_session_id(user_id: str, session_id: str) -> Optional[dict]:
     return latest_obj
 
 
+def mark_running_sessions_interrupted(*, reason: str = "server_restarted", limit: int = 5000) -> int:
+    """Best-effort local recovery: prevent sessions stuck in 'running' after restart.
+
+    Question-library sessions/previews are stored as JSON under `.local/question_library/`.
+    If the process restarts mid-run, these JSON blobs can remain at status=running which
+    confuses the frontend (it keeps waiting for streaming events).
+
+    This helper downgrades running sessions to `interrupted` so they become reviewable
+    or restartable.
+    """
+
+    if not _SESSIONS_DIR.exists():
+        return 0
+
+    try:
+        limit_n = int(limit or 0)
+    except Exception:
+        limit_n = 5000
+    limit_n = max(1, min(limit_n, 50_000))
+
+    changed = 0
+    for idx, path in enumerate(_SESSIONS_DIR.glob("*.json")):
+        if idx >= limit_n:
+            break
+        try:
+            raw = path.read_text(encoding="utf-8")
+            obj = json.loads(raw) if raw else {}
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        status = str(obj.get("status") or "").strip().lower()
+        if status != "running":
+            continue
+        obj = dict(obj)
+        obj["status"] = "interrupted"
+        obj["stop_requested"] = True
+        obj["interrupted_reason"] = str(reason or "server_restarted").strip() or "server_restarted"
+        obj["interrupted_at_s"] = time.time()
+        try:
+            path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+            changed += 1
+        except Exception:
+            continue
+    return changed
+
+
 def delete_preview(preview_id: str) -> bool:
     try:
         path = _preview_path(preview_id)

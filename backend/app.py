@@ -34,18 +34,23 @@ if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from backend.api.media import close_proxy_http_client
+from backend.api.error_codes import ErrorCode, build_error_payload, is_safe_error_code
 from backend.api.router import api_router
-from backend.auth import validate_access_token
-from backend.core.llm_client import (
+from backend.api.middleware.input_validation import InputValidationMiddleware
+from backend.core.auth import validate_access_token
+from backend.core.audit import AuditAction, audit_logger
+from backend.llm.client import (
     reset_llm_api_key_override,
     reset_moonshot_api_key_override,
     set_llm_api_key_override,
     set_moonshot_api_key_override,
 )
 from backend.core.logging_utils import configure_logging, get_logger, get_request_id, set_client_ip, set_request_id
-from backend.crawler_manager import close_crawler
+from backend.crawler.manager import close_crawler
 from backend.database.models import init_db
+from backend.media.generated import cleanup_expired_generated_files
 from backend.question_library.worker import run_question_library_scoring_worker
+from backend.core.metrics import instrument_app
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
@@ -62,6 +67,31 @@ def _env_truthy(name: str, *, default: bool = False) -> bool:
     if not raw:
         return bool(default)
     return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, *, default: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+async def _run_generated_files_cleanup_worker(*, stop: asyncio.Event) -> None:
+    # Default: cleanup every 30 minutes.
+    interval_s = max(60, min(_env_int("GENERATED_FILES_CLEANUP_INTERVAL_S", default=30 * 60), 24 * 60 * 60))
+    while not stop.is_set():
+        try:
+            await cleanup_expired_generated_files(limit=_env_int("GENERATED_FILES_CLEANUP_BATCH", default=500))
+        except Exception:
+            logger.exception("generated_files_cleanup_failed")
+
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=float(interval_s))
+        except asyncio.TimeoutError:
+            continue
 
 
 def _client_ip(request: Request) -> str:
@@ -187,16 +217,56 @@ class _CachedAssetFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
+
+    # Fail orphaned DB tasks that were left as `running` by a previous process.
+    # This avoids hanging SSE/polling clients after a server restart.
+    try:
+        from backend.database.repositories.tasks import fail_running_tasks_on_startup
+
+        await fail_running_tasks_on_startup(reason="server_restarted")
+    except Exception:
+        logger.debug("fail_running_tasks_on_startup_failed", exc_info=True)
+
+    # Question-library sessions/previews are stored as local JSON snapshots. If the
+    # process restarts mid-run, some sessions may remain at status=running and the
+    # frontend will keep waiting. Downgrade them to an interrupted state.
+    try:
+        from backend.question_library.preview_store import mark_running_sessions_interrupted
+
+        changed = mark_running_sessions_interrupted(reason="server_restarted")
+        if changed:
+            logger.info("question_library_sessions_interrupted_on_startup", extra={"count": int(changed or 0)})
+    except Exception:
+        logger.debug("question_library_sessions_interrupted_on_startup_failed", exc_info=True)
+
     stop = asyncio.Event()
     worker_task: Optional[asyncio.Task] = None
+    cleanup_task: Optional[asyncio.Task] = None
     if _env_truthy(
         "QUESTION_LIBRARY_WORKER_ENABLED", default=_env_truthy("QUESTION_LIBRARY_AUTO_SCORE", default=False)
     ):
         worker_task = asyncio.create_task(run_question_library_scoring_worker(stop=stop))
+    if _env_truthy("GENERATED_FILES_CLEANUP_ENABLED", default=True):
+        cleanup_task = asyncio.create_task(_run_generated_files_cleanup_worker(stop=stop))
     try:
         yield
     finally:
         stop.set()
+        # Best-effort: cancel long-running tasks so DB isn't stuck at `running`.
+        try:
+            from backend.study_materials.tasks_singleton import study_material_tasks
+
+            await study_material_tasks.shutdown(reason="server_shutdown")
+        except Exception:
+            logger.debug("study_materials_shutdown_failed", exc_info=True)
+
+        try:
+            from backend.question_library import runner as ql_runner
+
+            await ql_runner.task_manager.shutdown(reason="server_shutdown")
+        except Exception:
+            logger.debug("question_library_shutdown_failed", exc_info=True)
+
         if worker_task is not None:
             try:
                 await asyncio.wait_for(worker_task, timeout=5.0)
@@ -206,6 +276,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 logger.info("worker_cancelled")
             except Exception:
                 logger.exception("worker_shutdown_failed")
+        if cleanup_task is not None:
+            try:
+                await asyncio.wait_for(cleanup_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                cleanup_task.cancel()
+            except asyncio.CancelledError:
+                logger.info("cleanup_task_cancelled")
+            except Exception:
+                logger.exception("cleanup_task_shutdown_failed")
         await close_crawler()
         await close_proxy_http_client()
 
@@ -218,6 +297,17 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Prometheus /metrics + request instrumentation (configurable).
+    instrument_app(app)
+
+    # Optional OpenTelemetry tracing (disabled by default; enable with OTEL_ENABLE=1).
+    try:
+        from backend.core.otel import setup_otel
+
+        setup_otel(app)
+    except Exception:
+        logger.debug("otel_setup_failed", exc_info=True)
+
     # CORS: restrict origins in production; allow localhost for dev.
     cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
     cors_origins = [o.strip() for o in cors_origins if o.strip()]
@@ -229,6 +319,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(InputValidationMiddleware)
 
     @app.middleware("http")
     async def security_headers_middleware(request: Request, call_next):
@@ -247,19 +338,20 @@ def create_app() -> FastAPI:
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         rid = _ensure_request_id(request)
         detail = exc.detail
-        msg = detail if isinstance(detail, str) else "http_error"
+        msg = detail if isinstance(detail, str) else str(ErrorCode.HTTP_ERROR)
         code = f"http_{int(exc.status_code or 500)}"
         if isinstance(detail, str):
             candidate = detail.strip()
-            if candidate and re.fullmatch(r"[a-z0-9_]{1,80}", candidate.lower() or ""):
+            if is_safe_error_code(candidate):
                 code = candidate
-        response = JSONResponse(
-            status_code=int(exc.status_code or 500),
-            content={
-                "detail": detail,
-                "error": {"code": code, "message": msg if isinstance(msg, str) else str(msg), "request_id": rid},
-            },
+        payload = build_error_payload(
+            code=code,
+            message=str(msg if isinstance(msg, str) else str(msg)),
+            details=detail,
+            request_id=rid,
+            http_status=int(exc.status_code or 500),
         )
+        response = JSONResponse(status_code=int(exc.status_code or 500), content=payload)
         response.headers.setdefault("X-Request-ID", rid)
         return response
 
@@ -272,23 +364,26 @@ def create_app() -> FastAPI:
                 continue
             loc = [str(part).strip() for part in list(err.get("loc") or []) if str(part).strip() not in {"body"}]
             field = "_".join(loc) or "input"
-            response = JSONResponse(
-                status_code=400,
-                content={
-                    "detail": f"{field}_too_long",
-                    "error": {"code": f"{field}_too_long", "message": "input_too_long", "request_id": rid},
-                },
+            code = f"{field}_too_long"
+            payload = build_error_payload(
+                code=code,
+                message="input_too_long",
+                details=code,
+                request_id=rid,
+                http_status=400,
             )
+            response = JSONResponse(status_code=400, content=payload)
             response.headers.setdefault("X-Request-ID", rid)
             return response
 
-        response = JSONResponse(
-            status_code=422,
-            content={
-                "detail": errors,
-                "error": {"code": "validation_error", "message": "validation_error", "request_id": rid},
-            },
+        payload = build_error_payload(
+            code=str(ErrorCode.VALIDATION_ERROR),
+            message=str(ErrorCode.VALIDATION_ERROR),
+            details=errors,
+            request_id=rid,
+            http_status=422,
         )
+        response = JSONResponse(status_code=422, content=payload)
         response.headers.setdefault("X-Request-ID", rid)
         return response
 
@@ -296,13 +391,14 @@ def create_app() -> FastAPI:
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled_exception", extra={"path": str(request.url.path or "")})
         rid = _ensure_request_id(request)
-        response = JSONResponse(
-            status_code=500,
-            content={
-                "detail": "internal_error",
-                "error": {"code": "internal_error", "message": "internal_error", "request_id": rid},
-            },
+        payload = build_error_payload(
+            code=str(ErrorCode.INTERNAL_ERROR),
+            message=str(ErrorCode.INTERNAL_ERROR),
+            details=str(ErrorCode.INTERNAL_ERROR),
+            request_id=rid,
+            http_status=500,
         )
+        response = JSONResponse(status_code=500, content=payload)
         response.headers.setdefault("X-Request-ID", rid)
         return response
 
@@ -409,6 +505,19 @@ def create_app() -> FastAPI:
             role = str((payload or {}).get("role") or "").strip()
             if role != "admin":
                 raise HTTPException(status_code=403, detail="llm_api_key_override_forbidden")
+            try:
+                audit_logger.log(
+                    user_id=str((payload or {}).get("user_id") or "").strip(),
+                    action=AuditAction.API_KEY_USE,
+                    resource="/api/* (llm_api_key_override)",
+                    details={
+                        "llm_key_override": bool(llm_key_header),
+                        "moonshot_key_override": bool(moonshot_key_header),
+                    },
+                )
+            except Exception:
+                # Best-effort only; never block request on audit failures.
+                logger.debug("audit_api_key_use_failed", exc_info=True)
 
         llm_token = set_llm_api_key_override(llm_key_header if permitted else "")
         moonshot_token = set_moonshot_api_key_override(moonshot_key_header if permitted else "")

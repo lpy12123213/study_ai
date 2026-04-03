@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.config import AgentConfig
+from backend.agent.mcp.registry import MCPToolRegistry
+from backend.agent.tools.schemas import get_tool_input_schema
 from backend.agent.tools.registry import TOOL_MIXINS
-from backend.agent.tools.text_utils import _looks_truncated_markdown, _repair_incomplete_markdown, _trim_overlap
+from backend.agent.tools.utils.schema_validation import validate_and_coerce_args
+from backend.agent.tools.utils.text_utils import _looks_truncated_markdown, _repair_incomplete_markdown, _trim_overlap
 from backend.agent.types import CompressedContext, PlanStep, StepResult, agent_event
-from backend.core.llm_client import ChatCompletionResult, chat_completion
+from backend.llm.client import ChatCompletionResult, chat_completion
 from backend.core.logging_utils import get_logger
 from backend.core.settings import API_TIMEOUT, LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_TEMPERATURE
 
@@ -46,6 +50,11 @@ class Executor:
         self.config = config or AgentConfig.from_env()
         self._toolbox = _ToolBox(executor=self)
         self._tool_handlers = self._build_tool_handlers()
+        self._tool_registry = self._build_tool_registry()
+
+    @property
+    def tool_registry(self) -> MCPToolRegistry:
+        return self._tool_registry
 
     def _build_tool_handlers(self) -> Dict[str, Callable[[Dict[str, Any], CompressedContext], Awaitable[Any]]]:
         """Build a stable `{tool_name -> handler}` dispatch table.
@@ -67,6 +76,22 @@ class Executor:
                     raise RuntimeError(f"duplicate_tool_registration: {tool_name}")
                 handlers[tool_name] = getattr(self._toolbox, attr_name)
         return handlers
+
+    def _build_tool_registry(self) -> MCPToolRegistry:
+        reg = MCPToolRegistry()
+
+        for name, handler in self._tool_handlers.items():
+            doc = inspect.getdoc(handler) or ""
+            first_line = (doc.splitlines()[0].strip() if doc else "").strip()
+            desc = first_line or name
+            reg.register(
+                name=name,
+                description=desc,
+                input_schema=get_tool_input_schema(name),
+                execute=handler,
+            )
+
+        return reg
 
     @staticmethod
     def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -137,6 +162,13 @@ class Executor:
         if handler is None:
             return StepResult(step_id=step.id, tool=tool, success=False, error=f"Unknown tool: {tool}")
 
+        # Validate/coerce arguments against tool schema (prevents shape mismatches from propagating).
+        try:
+            schema = get_tool_input_schema(tool)
+            args = validate_and_coerce_args(schema=schema, args=step.arguments or {}, tool_name=tool)
+        except Exception as exc:
+            return StepResult(step_id=step.id, tool=tool, success=False, error=str(exc))
+
         timeout_raw = (
             os.getenv("STUDY_MATERIALS_STEP_TIMEOUT_S")
             or os.getenv("AGENT_STEP_TIMEOUT_S")
@@ -149,9 +181,8 @@ class Executor:
             timeout_s = float(API_TIMEOUT or 120)
         timeout_s = max(30.0, min(timeout_s, 60.0 * 30.0))  # clamp to [30s, 30m]
 
-        # LaTeX export pipeline can involve multiple long LLM calls (chunking + continuations),
-        # so its overall wall-clock time may exceed a generic single-step timeout.
-        if tool in {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}:
+        # LaTeX export pipeline can involve multiple long LLM calls (chunking + continuations).
+        if tool in {"convert_markdown_to_latex", "refine_latex"}:
             latex_step_timeout_raw = os.getenv("STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S") or ""
             try:
                 latex_step_timeout_s = float(latex_step_timeout_raw) if latex_step_timeout_raw.strip() else 0.0
@@ -165,9 +196,26 @@ class Executor:
             latex_step_timeout_s = max(60.0 * 5.0, min(latex_step_timeout_s, 60.0 * 30.0))
             timeout_s = max(timeout_s, latex_step_timeout_s)
 
+        # PDF compilation should have a tighter default (avoid hanging on TeX package installs).
+        if tool == "compile_latex_to_pdf":
+            compile_timeout_raw = (
+                os.getenv("AGENT_LATEX_COMPILE_TIMEOUT_S")
+                or os.getenv("PAPER_EXPORT_LATEX_TIMEOUT_S")
+                or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S")
+                or ""
+            )
+            try:
+                compile_timeout_s = float(compile_timeout_raw) if str(compile_timeout_raw).strip() else 0.0
+            except Exception:
+                compile_timeout_s = 0.0
+            if compile_timeout_s <= 0:
+                compile_timeout_s = 30.0
+            compile_timeout_s = max(30.0, min(compile_timeout_s, 60.0 * 20.0))
+            timeout_s = compile_timeout_s
+
         token = _emit_event_var.set(emit_event)
         try:
-            output = await asyncio.wait_for(handler(step.arguments or {}, context), timeout=timeout_s)
+            output = await asyncio.wait_for(handler(args, context), timeout=timeout_s)
             return StepResult(step_id=step.id, tool=tool, success=True, output=output)
         except asyncio.TimeoutError:
             return StepResult(

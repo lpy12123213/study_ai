@@ -16,11 +16,11 @@ from backend.api.question_evaluate_schemas import (
     QuestionSearchRequest,
     QuestionSearchResponse,
 )
-from backend.config import DEFAULT_SUBJECT
-from backend.core.llm_client import chat_completion_text
+from backend.core.settings import DEFAULT_SUBJECT
+from backend.llm.client import chat_completion_text
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
-from backend.crawler_manager import get_crawler
-from backend.subjects import resolve_subject
+from backend.crawler.manager import get_crawler
+from backend.core.subjects import resolve_subject
 
 router = APIRouter(prefix="/question-evaluate", tags=["question-evaluate"], dependencies=[Depends(require_auth)])
 

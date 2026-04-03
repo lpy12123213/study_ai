@@ -7,7 +7,7 @@ import mimetypes
 import os
 import socket
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_naive
 from backend.database.models import get_generated_file
 
 router = APIRouter()
@@ -286,8 +287,10 @@ async def get_generated_media(filename: str, user: dict = Depends(require_auth))
     expires_at = str(meta.get("expires_at") or "").strip()
     if expires_at:
         try:
-            exp_dt = datetime.fromisoformat(expires_at)
-            if exp_dt and exp_dt < datetime.utcnow():
+            exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if exp_dt.tzinfo is not None:
+                exp_dt = exp_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            if exp_dt and exp_dt < utcnow_naive():
                 raise HTTPException(status_code=410, detail="link_expired")
         except HTTPException:
             raise
@@ -514,13 +517,21 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
                         tmp_path.unlink(missing_ok=True)
                     except Exception:
                         logger.debug("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
-                    raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
+                    logger.exception(
+                        "media_proxy_fetch_failed",
+                        extra={"url": current, "media_id": media_id},
+                    )
+                    raise HTTPException(status_code=502, detail="fetch_failed") from exc
 
                 _prune_proxy_cache()
                 return _file_response(out_path)
         except HTTPException:
             raise
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"fetch_failed: {str(exc)}")
+            logger.exception(
+                "media_proxy_fetch_failed",
+                extra={"url": current, "media_id": media_id},
+            )
+            raise HTTPException(status_code=502, detail="fetch_failed") from exc
 
     raise HTTPException(status_code=400, detail="too_many_redirects")

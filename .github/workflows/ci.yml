@@ -26,8 +26,30 @@ jobs:
       - name: Ruff
         run: ruff check .
 
-      - name: Backend tests
-        run: python -m unittest discover -s backend/tests -p "test_*.py"
+      - name: mypy (non-blocking)
+        continue-on-error: true
+        run: python -m mypy backend
+
+      - name: pip-audit (non-blocking)
+        continue-on-error: true
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt -r requirements-dev.txt
+
+      - name: Backend compile check
+        run: python -m compileall backend
+
+      - name: Backend tests (coverage)
+        run: |
+          python -m coverage run -m unittest discover -s backend/tests -p "test_*.py"
+          python -m coverage report -m
+          python -m coverage xml -o coverage.xml
+
+      - name: Upload backend coverage.xml
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-xml
+          path: coverage.xml
 
   frontend:
     runs-on: ubuntu-latest
@@ -46,11 +68,35 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: npm audit (non-blocking)
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
       - name: Frontend lint
         working-directory: frontend
         run: npm run lint
 
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm run test
+
       - name: Frontend build
         working-directory: frontend
         run: npm run build
+
+      - name: Install Playwright (Chromium)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Frontend E2E (Playwright)
+        working-directory: frontend
+        run: npm run e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
 

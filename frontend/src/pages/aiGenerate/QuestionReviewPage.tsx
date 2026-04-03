@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 
 function reviewLabel(status: string): string {
   const normalized = String(status || '').trim()
@@ -26,6 +26,29 @@ function reviewLabel(status: string): string {
   if (normalized === 'committed') return '已入库'
   if (normalized === 'in_review') return '审查中'
   return '待审查'
+}
+
+function isTerminalReviewStatus(status: string): boolean {
+  const normalized = String(status || '').trim()
+  return normalized === 'committed' || normalized === 'rejected'
+}
+
+function findNextReviewQuestionId(
+  drafts: QuestionLibraryDraftQuestion[] | undefined,
+  currentQuestionId: string
+): string {
+  const items = Array.isArray(drafts) ? drafts : []
+  if (items.length === 0) return ''
+
+  const currentIndex = items.findIndex((item) => String(item.question_id || '').trim() === currentQuestionId)
+  const startIndex = currentIndex >= 0 ? currentIndex : -1
+  for (let offset = 1; offset <= items.length; offset += 1) {
+    const item = items[(startIndex + offset) % items.length]
+    const questionId = String(item?.question_id || '').trim()
+    if (!questionId || questionId === currentQuestionId) continue
+    if (!isTerminalReviewStatus(item?.review_status || '')) return questionId
+  }
+  return ''
 }
 
 function ReviewSection(props: {
@@ -60,7 +83,7 @@ function ReviewSection(props: {
 
 export function QuestionReviewPage() {
   const navigate = useNavigate()
-  const pushToast = useToastStore((state) => state.pushToast)
+  const pushToast = useNotificationStore((state) => state.pushToast)
   const { sessionId = '', questionId = '' } = useParams()
   const sessionIdRef = String(sessionId || '').trim()
   const questionIdRef = String(questionId || '').trim()
@@ -98,6 +121,7 @@ export function QuestionReviewPage() {
     const draft =
       next.data?.session?.draft_questions?.find((item) => String(item.question_id || '').trim() === questionIdRef) || null
     setQuestion(draft)
+    return next.data?.session || null
   }
 
   const handleReviewAction = async (action: 'review' | 'approve' | 'reject') => {
@@ -111,10 +135,23 @@ export function QuestionReviewPage() {
       } else {
         await rejectQuestionLibrarySessionQuestion(sessionIdRef, questionIdRef)
       }
-      await refreshQuestion()
+      const nextSession = await refreshQuestion()
+      if (action !== 'review') {
+        const nextQuestionId = findNextReviewQuestionId(nextSession?.draft_questions, questionIdRef)
+        if (nextQuestionId) {
+          navigate(`/ai-generate/review/${encodeURIComponent(sessionIdRef)}/${encodeURIComponent(nextQuestionId)}`, { replace: true })
+        } else {
+          navigate(`/ai-generate?session=${encodeURIComponent(sessionIdRef)}`, { replace: true })
+        }
+      }
       pushToast({
         id: `question-review-${action}-${questionIdRef}`,
-        title: action === 'review' ? '审查意见已生成' : action === 'approve' ? '该题已通过审查' : '该题已打回',
+        title:
+          action === 'review'
+            ? '审查意见已生成'
+            : action === 'approve'
+              ? '该题已通过审核并入库'
+              : '该题已打回并切换到下一题',
         status: 'completed',
       })
     } catch (error: any) {
@@ -245,7 +282,7 @@ export function QuestionReviewPage() {
                     onClick={() => handleReviewAction('approve')}
                   >
                     {actionLoading === 'approve' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                    通过
+                    通过并入库，下一题
                   </Button>
                   <Button
                     type="button"
@@ -255,7 +292,7 @@ export function QuestionReviewPage() {
                     onClick={() => handleReviewAction('reject')}
                   >
                     {actionLoading === 'reject' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldX className="h-4 w-4" />}
-                    打回
+                    打回并下一题
                   </Button>
                 </CardContent>
               </Card>

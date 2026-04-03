@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
-from backend.database.models import upsert_generated_file
+from backend.core.time_utils import utcnow_naive
+from backend.database.models import delete_generated_file, list_expired_generated_files, upsert_generated_file
 
 logger = get_logger(__name__)
 
@@ -51,7 +52,7 @@ def _expires_at_from_ttl(ttl_s: Optional[int]) -> Optional[datetime]:
         ttl = 0
     if ttl <= 0:
         return None
-    return datetime.utcnow() + timedelta(seconds=ttl)
+    return utcnow_naive() + timedelta(seconds=ttl)
 
 
 def _safe_filename_for_bytes(data: bytes, ext: str) -> Tuple[str, str]:
@@ -129,3 +130,57 @@ def default_generated_media_ttl_s() -> int:
     """Default TTL for generated files served over HTTP."""
 
     return max(60, min(_env_int("GENERATED_MEDIA_TTL_SECONDS", 7 * 24 * 3600), 365 * 24 * 3600))
+
+
+async def cleanup_expired_generated_files(*, limit: int = 200) -> Dict[str, Any]:
+    """Best-effort cleanup for expired generated files.
+
+    - Deletes files from `.local/media/generated/`.
+    - Deletes corresponding DB metadata rows.
+    """
+
+    limit = max(1, min(int(limit or 200), 5000))
+    expired = await list_expired_generated_files(limit=limit)
+
+    deleted_files = 0
+    missing_files = 0
+    deleted_rows = 0
+    errors: list[str] = []
+
+    for meta in expired:
+        filename = str((meta or {}).get("filename") or "").strip()
+        if not filename:
+            continue
+
+        path = (_GENERATED_DIR / filename).resolve()
+        try:
+            path.relative_to(_GENERATED_DIR)
+        except Exception:
+            # Never delete outside the generated dir.
+            continue
+
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+                deleted_files += 1
+            else:
+                missing_files += 1
+        except Exception as exc:  # pragma: no cover (best-effort)
+            errors.append(f"unlink_failed:{filename}:{exc}")
+
+        try:
+            ok = await delete_generated_file(filename=filename)
+            if ok:
+                deleted_rows += 1
+        except Exception as exc:  # pragma: no cover (best-effort)
+            errors.append(f"db_delete_failed:{filename}:{exc}")
+
+    return {
+        "success": True,
+        "checked": len(expired),
+        "deleted_files": deleted_files,
+        "missing_files": missing_files,
+        "deleted_rows": deleted_rows,
+        "errors": errors[:50],
+        "now": utcnow_naive().isoformat(),
+    }

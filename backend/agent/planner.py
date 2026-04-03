@@ -7,8 +7,9 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from backend.agent.config import AgentConfig
+from backend.agent.mcp.registry import MCPToolRegistry
 from backend.agent.types import CompressedContext, ExecutionPlan, PlanStep, UserProfile
-from backend.core.llm_client import chat_completion_text, is_llm_configured
+from backend.llm.client import chat_completion_text, is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     DEFAULT_SUBJECT,
@@ -64,14 +65,42 @@ _EXTRA_TOOLS: Dict[str, str] = {
 }
 
 
-def _build_allowed_tools(*, enable_questions: bool, enable_extra_tools: bool, enable_diagrams: bool) -> Dict[str, str]:
-    tools: Dict[str, str] = dict(_CORE_TOOLS)
-    if enable_diagrams:
-        tools.update(_DRAW_TOOLS)
-    if enable_questions:
-        tools.update(_QUESTION_TOOLS)
-    if enable_extra_tools:
-        tools.update(_EXTRA_TOOLS)
+def _build_allowed_tools(
+    *,
+    enable_questions: bool,
+    enable_extra_tools: bool,
+    enable_diagrams: bool,
+    tool_registry: Optional[MCPToolRegistry] = None,
+) -> Dict[str, str]:
+    if tool_registry is None:
+        tools: Dict[str, str] = dict(_CORE_TOOLS)
+        if enable_diagrams:
+            tools.update(_DRAW_TOOLS)
+        if enable_questions:
+            tools.update(_QUESTION_TOOLS)
+        if enable_extra_tools:
+            tools.update(_EXTRA_TOOLS)
+        return tools
+
+    optional_diagram_tools = set(_DRAW_TOOLS.keys())
+    optional_question_tools = set(_QUESTION_TOOLS.keys())
+    optional_extra_tools = set(_EXTRA_TOOLS.keys())
+
+    tools: Dict[str, str] = {}
+    for tool in tool_registry.list_tools():
+        if not isinstance(tool, dict):
+            continue
+        name = str(tool.get("name") or "").strip()
+        if not name:
+            continue
+        if not enable_diagrams and name in optional_diagram_tools:
+            continue
+        if not enable_questions and name in optional_question_tools:
+            continue
+        if not enable_extra_tools and name in optional_extra_tools:
+            continue
+        desc = str(tool.get("description") or "").strip() or name
+        tools[name] = desc
     return tools
 
 
@@ -1244,6 +1273,7 @@ class Planner:
         user_profile: UserProfile,
         context: CompressedContext,
         iteration: int = 0,
+        tool_registry: Optional[MCPToolRegistry] = None,
     ) -> ExecutionPlan:
         topic = (topic or "").strip()
         subject = str(user_profile.preferences.get("subject") or DEFAULT_SUBJECT).strip() or DEFAULT_SUBJECT
@@ -1253,6 +1283,7 @@ class Planner:
             enable_questions=bool(flags.get("enable_questions")),
             enable_extra_tools=bool(flags.get("enable_extra_tools")),
             enable_diagrams=bool(flags.get("enable_diagrams")),
+            tool_registry=tool_registry,
         )
 
         last_reflection = context.working_memory.get("last_reflection") or {}

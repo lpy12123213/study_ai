@@ -70,7 +70,7 @@ EXPECT_BANKNAME = os.getenv("ZUJUAN_EXPECT_BANKNAME", "gzsx").strip() or "gzsx"
 
 if subject:
     try:
-        from backend.subjects import SUBJECTS, get_subject_config
+        from backend.core.subjects import SUBJECTS, get_subject_config
 
         resolved_subject = subject
         if resolved_subject not in SUBJECTS:

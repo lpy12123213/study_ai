@@ -18,15 +18,16 @@ import os
 import re
 import time
 import urllib.parse
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from backend.config import DIFFICULTY_QUERY_MODE
+from backend.core.cache import TTLCache
+from backend.core.settings import DIFFICULTY_QUERY_MODE
 from backend.core.logging_utils import get_logger
 from backend.core.record_replay import RecordReplayStore, record_enabled, replay_enabled
+from backend.crawler.rate_limiter import get_rate_limiter
 from backend.crawler.zujuan.cookies import (
     DEFAULT_USER_AGENT,
     build_cookie_string,
@@ -47,7 +48,7 @@ from backend.crawler.zujuan.utils import (
     _safe_float,
     _safe_int,
 )
-from backend.subjects import (
+from backend.core.subjects import (
     DEFAULT_DIFFICULTY,
     normalize_difficulty,
     resolve_subject,
@@ -81,8 +82,11 @@ class ZujuanCrawler:
         self.province_name_to_id: Dict[str, int] = {}
         self._base_meta_data: Optional[List[Dict[str, Any]]] = None
         self._bank_meta_loaded_for: Optional[int] = None
-        self._cache: "OrderedDict[str, Tuple[float, float, Any]]" = OrderedDict()
-        self._cache_max_entries = 256
+        self._cache = TTLCache(
+            name=f"zujuan_cache:{subject}",
+            max_entries=int(os.getenv("ZUJIAN_CACHE_MAX_ENTRIES") or "256"),
+            default_ttl_s=0.0,
+        )
 
         # /zujuan-api/base: QuesBankList[].courseId / courseIdPy
         # - courseId: observed as required by /zujuan-api/question/list (visitor mode)
@@ -91,11 +95,28 @@ class ZujuanCrawler:
         self.course_id_py: str = ""
 
         # Formula cache: {hash -> latex}, populated via {hash}.mml (MathML base64) + pandoc.
-        self._formula_cache: "OrderedDict[str, str]" = OrderedDict()
-        self._formula_cache_max_entries = 4096
+        self._formula_cache = TTLCache(
+            name=f"zujuan_formula_cache:{subject}",
+            max_entries=int(os.getenv("ZUJIAN_FORMULA_CACHE_MAX_ENTRIES") or "4096"),
+            default_ttl_s=float(os.getenv("ZUJIAN_FORMULA_CACHE_TTL_S") or str(30 * 24 * 60 * 60)),
+        )
         self._formula_inflight: Dict[str, "asyncio.Future[str]"] = {}
         self._formula_http_sem = asyncio.Semaphore(20)
         self._formula_pandoc_sem = asyncio.Semaphore(8)
+
+        # Global crawler rate limiter (process-local). This limits outbound requests
+        # to reduce anti-bot triggers when multiple tasks run concurrently.
+        rps_raw = os.getenv("ZUJUAN_RATE_LIMIT_RPS") or os.getenv("ZUJIAN_RATE_LIMIT_RPS") or "2.0"
+        burst_raw = os.getenv("ZUJUAN_RATE_LIMIT_BURST") or os.getenv("ZUJIAN_RATE_LIMIT_BURST") or "4"
+        try:
+            rps = float(rps_raw)
+        except Exception:
+            rps = 2.0
+        try:
+            burst = int(burst_raw)
+        except Exception:
+            burst = 4
+        self._http_rate_limiter = get_rate_limiter(key="zujuan", rate_per_s=rps, burst=burst)
 
         # 学科配置
         self.subject = subject
@@ -164,7 +185,7 @@ class ZujuanCrawler:
             from pathlib import Path
 
             sys.path.append(str(Path(__file__).parent.parent))
-            from backend.subjects import get_subject_config
+            from backend.core.subjects import get_subject_config
 
             config = get_subject_config(self.subject)
             self.bank_id = config["bank_id"]
@@ -281,12 +302,16 @@ class ZujuanCrawler:
             else:
                 logger.info("zujuan cookie mode: antibot" if not missing_antibot else "zujuan cookie mode: incomplete")
 
+        async def _rate_limit(_request: httpx.Request) -> None:
+            await self._http_rate_limiter.acquire(1.0)
+
         client_kwargs = dict(
             headers={
                 "User-Agent": self.user_agent,
                 "Cookie": self.cookies or "",
             },
             timeout=30.0,
+            event_hooks={"request": [_rate_limit]},
         )
         try:
             self.client = httpx.AsyncClient(http2=True, **client_kwargs)
@@ -415,30 +440,10 @@ class ZujuanCrawler:
         logger.info("zujuan http client closed")
 
     def _cache_get(self, key: str) -> Optional[Any]:
-        item = self._cache.get(key)
-        if not item:
-            return None
-        ts, ttl, value = item
-        if ttl > 0 and (time.time() - ts) > ttl:
-            try:
-                del self._cache[key]
-            except Exception:
-                logger.debug("zujuan_cache_delete_failed", extra={"key": str(key)}, exc_info=True)
-            return None
-        try:
-            self._cache.move_to_end(key)
-        except Exception:
-            logger.debug("zujuan_cache_move_to_end_failed", extra={"key": str(key)}, exc_info=True)
-        return value
+        return self._cache.get(str(key or "").strip())
 
     def _cache_set(self, key: str, value: Any, ttl: float) -> None:
-        try:
-            self._cache[key] = (time.time(), float(ttl or 0), value)
-            self._cache.move_to_end(key)
-            while len(self._cache) > int(self._cache_max_entries or 256):
-                self._cache.popitem(last=False)
-        except Exception:
-            return
+        self._cache.set(str(key or "").strip(), value, ttl_s=float(ttl or 0.0))
 
     def _find_bank_in_base_meta(self, bank_id: int) -> Optional[Dict[str, Any]]:
         bank_id = _safe_int(bank_id, 0)

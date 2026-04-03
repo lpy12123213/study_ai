@@ -1,14 +1,14 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CheckCircle2, XCircle, X } from 'lucide-react'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import { cn } from '@/lib/utils'
 
 const AUTO_DISMISS_MS = 6000
 
 export function ToastHost() {
   const navigate = useNavigate()
-  const { toasts, removeToast } = useToastStore()
+  const { toasts, removeToast } = useNotificationStore()
 
   useEffect(() => {
     if (toasts.length === 0) return

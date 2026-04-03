@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { sanitizeLessonPlan } from '@/lib/taskPayload'
 import type { LessonPlan } from '@/types'
 
 interface LessonPlanStoreState {
@@ -17,7 +18,7 @@ export const useLessonPlanStore = create<LessonPlanStoreState>()(
 
       savePlan: (plan) =>
         set((state) => ({
-          plansById: { ...state.plansById, [plan.id]: plan },
+          plansById: { ...state.plansById, [plan.id]: sanitizeLessonPlan(plan) },
         })),
 
       removePlan: (id) =>
@@ -31,7 +32,20 @@ export const useLessonPlanStore = create<LessonPlanStoreState>()(
     }),
     {
       name: 'lesson-plan-storage',
-      partialize: (state) => ({ plansById: state.plansById }),
+      version: 2,
+      migrate: (persistedState: unknown) => {
+        const state = (persistedState || {}) as Partial<LessonPlanStoreState>
+        const rawPlans = state.plansById && typeof state.plansById === 'object' ? state.plansById : {}
+        const plansById = Object.fromEntries(
+          Object.entries(rawPlans as Record<string, LessonPlan>).map(([id, plan]) => [id, sanitizeLessonPlan(plan)])
+        ) as Record<string, LessonPlan>
+        return { ...state, plansById } as LessonPlanStoreState
+      },
+      partialize: (state) => ({
+        plansById: Object.fromEntries(
+          Object.entries(state.plansById || {}).map(([id, plan]) => [id, sanitizeLessonPlan(plan)])
+        ) as Record<string, LessonPlan>,
+      }),
     }
   )
 )

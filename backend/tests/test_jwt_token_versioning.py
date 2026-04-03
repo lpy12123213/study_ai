@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import shutil
 
-import backend.auth as auth
+import backend.core.auth as auth
 
 
 class TestJwtTokenVersioning(unittest.TestCase):
@@ -14,7 +15,13 @@ class TestJwtTokenVersioning(unittest.TestCase):
         original_revoked = dict(auth._revoked_tokens)
 
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
+            # Windows sandbox environments sometimes deny deleting system-temp folders (WinError 5).
+            # Keep test tmp under project-local `.local/` and do best-effort cleanup.
+            repo_root = Path(__file__).resolve().parents[2]
+            tmp_root = repo_root / ".local" / "tmp" / "unittest"
+            tmp_root.mkdir(parents=True, exist_ok=True)
+            tmpdir = tempfile.mkdtemp(dir=str(tmp_root))
+            try:
                 tmp = Path(tmpdir)
                 with patch.object(auth, "LOCAL_DIR", tmp):
                     with patch.object(auth, "USERS_PATH", tmp / "users.json"):
@@ -47,6 +54,11 @@ class TestJwtTokenVersioning(unittest.TestCase):
                                     {"user_id": user_id, "username": username, "role": "user", "ver": token_ver_2}
                                 )
                                 self.assertIsNotNone(auth.validate_access_token(token_2))
+            finally:
+                try:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                except Exception:
+                    pass
         finally:
             auth._users.clear()
             auth._users.update(original_users)

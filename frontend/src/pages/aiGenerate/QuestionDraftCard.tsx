@@ -46,8 +46,8 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
   const reviewStatus = reviewStatusMeta(draft.reviewStatus)
   const confirmable = canConfirmDraft(draft)
   const committed = draft.reviewStatus === 'committed'
-  const confirmed = draft.reviewStatus === 'confirmed'
-  const confirmLabel = committed ? '已入库' : confirmed ? '取消确认' : '确认入库'
+  const rejected = draft.reviewStatus === 'rejected'
+  const confirmLabel = committed ? '已入库' : rejected ? '已打回' : '审核通过并入库'
   const reviewHref = sessionId ? `/ai-generate/review/${encodeURIComponent(sessionId)}/${encodeURIComponent(draft.questionId)}` : ''
 
   const renderSection = (sectionKey: keyof AiGenerateDraftCard['sections'], section: AiGenerateSectionState) => (
@@ -100,7 +100,7 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
               variant="outline"
               size="sm"
               className="rounded-full"
-              disabled={committed || (!confirmable && !confirmed)}
+              disabled={committed || !confirmable}
               onClick={onConfirm}
             >
               {confirmLabel}
@@ -112,6 +112,30 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
         {renderSection('stem', draft.sections.stem)}
         {renderSection('answer', draft.sections.answer)}
         {renderSection('analysis', draft.sections.analysis)}
+        {Array.isArray(draft.diagrams) && draft.diagrams.length > 0 ? (
+          <div className="md:col-span-2 2xl:col-span-3">
+            <div className="rounded-[22px] border border-border/60 bg-background/60 p-4 shadow-sm">
+              <div className="text-xs uppercase tracking-[0.22em] text-muted-foreground">配图</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {draft.diagrams
+                  .filter((item) => item && typeof item.url === 'string')
+                  .map((item, idx) => (
+                    <figure key={`${item.filename || item.url}-${idx}`} className="space-y-2">
+                      <img
+                        src={item.url}
+                        alt={item.alt || 'diagram'}
+                        loading="lazy"
+                        className="w-full rounded-2xl border border-border/60 bg-white/70 object-contain shadow-sm dark:bg-white/10"
+                      />
+                      {item.caption ? (
+                        <figcaption className="text-sm text-muted-foreground">{item.caption}</figcaption>
+                      ) : null}
+                    </figure>
+                  ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )

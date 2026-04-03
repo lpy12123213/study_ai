@@ -6,13 +6,12 @@ from typing import Any, Dict, List, Optional
 from backend.chat.tools_spec import TOOLS
 from backend.core.logging_utils import get_logger
 from backend.database.models import list_papers, save_paper, upsert_question_cache
-from backend.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
+from backend.core.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 
 logger = get_logger(__name__)
 
 
 class ChatToolsMixin:
-    crawler = None
     current_subject = "高中数学"
     question_cache: Dict[str, Dict[str, Any]]
 
@@ -38,17 +37,11 @@ class ChatToolsMixin:
         return self._tools_by_names(["get_available_filters", "search_questions"])
 
     async def _get_crawler(self, subject: Optional[str] = None, *, edu_level: str = ""):
-        from backend.crawler.zujuan_crawler import ZujuanCrawler
+        from backend.crawler.manager import get_crawler
 
         subj = resolve_subject(subject or self.current_subject, edu_level=edu_level, strict=True)
         self.current_subject = subj
-
-        if self.crawler is None:
-            self.crawler = ZujuanCrawler(subject=subj)
-            await self.crawler.initialize()
-        elif getattr(self.crawler, "subject", None) != subj:
-            self.crawler.set_subject(subj)
-        return self.crawler
+        return await get_crawler(subject=subj, edu_level=edu_level, strict=True)
 
     def _lookup_tool_schema(self, tool_name: str) -> Optional[Dict[str, Any]]:
         name = (tool_name or "").strip()
@@ -373,7 +366,7 @@ class ChatToolsMixin:
                 return result
 
             if tool_name == "select_best_question":
-                from backend.mcp.sub_ai_selector import select_best_question as sub_ai_select
+                from backend.mcp.core.sub_ai_selector import select_best_question as sub_ai_select
 
                 question_ids = list(arguments.get("question_ids") or [])[:5]
                 requirement = str(arguments.get("requirement") or "")

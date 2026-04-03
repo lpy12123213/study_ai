@@ -48,7 +48,7 @@ async def list_fireworks_models(force: bool = Query(False)) -> dict:
     This endpoint is safe to expose to the frontend because it returns only model IDs
     (no API keys / secrets). Results are cached in-memory for a short TTL.
     """
-    if not (settings.fireworks_api_key or "").strip():
+    if not settings.fireworks_api_key.get_secret_value().strip():
         return {"success": False, "provider": "fireworks", "error": "未配置 FIREWORKS_API_KEY"}
 
     ttl_seconds = 10 * 60
@@ -66,7 +66,7 @@ async def list_fireworks_models(force: bool = Query(False)) -> dict:
         }
 
     url = f"{(settings.fireworks_base_url or '').rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {settings.fireworks_api_key}"}
+    headers = {"Authorization": f"Bearer {settings.fireworks_api_key.get_secret_value().strip()}"}
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=10.0)) as client:

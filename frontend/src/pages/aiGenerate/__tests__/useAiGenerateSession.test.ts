@@ -187,7 +187,7 @@ describe('reduceTaskPreviewToSession', () => {
     expect(session.taskEvents[0]?.type).toBe('reasoning_status')
   })
 
-  it('requires approval before a draft can be confirmed', () => {
+  it('marks ready drafts as committed on a single confirm action', () => {
     const session = createQueuedSession({
       taskId: 'task-queued',
       subject: '高中数学',
@@ -197,16 +197,18 @@ describe('reduceTaskPreviewToSession', () => {
 
     session.drafts[0].questionId = 'q-001'
     session.drafts[0].reviewStatus = 'approved'
+    session.drafts[0].status = 'ready'
     session.drafts[1].questionId = 'q-002'
     session.drafts[1].reviewStatus = 'pending_review'
+    session.drafts[1].status = 'ready'
 
     const next = toggleDraftConfirmed(session, 'q-001')
-    const blocked = toggleDraftConfirmed(next, 'q-002')
+    const following = toggleDraftConfirmed(next, 'q-002')
 
     expect(next.confirmedIds).toEqual(['q-001'])
-    expect(next.drafts[0].reviewStatus).toBe('confirmed')
-    expect(blocked.confirmedIds).toEqual(['q-001'])
-    expect(blocked.drafts[1].reviewStatus).toBe('pending_review')
+    expect(next.drafts[0].reviewStatus).toBe('committed')
+    expect(following.confirmedIds).toEqual(['q-001', 'q-002'])
+    expect(following.drafts[1].reviewStatus).toBe('committed')
   })
 
   it('marks the session as stopped when the user requests infinite mode to stop', () => {

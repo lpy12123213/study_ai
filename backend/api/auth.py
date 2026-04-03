@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.api.auth_schemas import (
@@ -15,7 +15,7 @@ from backend.api.auth_schemas import (
     UserInfo,
     UserListResponse,
 )
-from backend.auth import (
+from backend.core.auth import (
     authenticate_user,
     change_user_password,
     create_access_token,
@@ -24,6 +24,7 @@ from backend.auth import (
     revoke_token_jti,
     validate_access_token,
 )
+from backend.core.audit import AuditAction, audit_logger
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
@@ -92,14 +93,35 @@ async def require_admin(user: dict = Depends(require_auth)) -> dict:
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
+async def login(payload: LoginRequest, http_request: Request):
     """Login and get access token."""
-    user = authenticate_user(request.username, request.password)
+    def _ip(req: Request) -> str:
+        try:
+            return str(getattr(req.client, "host", "") or "").strip()
+        except Exception:
+            return ""
+
+    user = authenticate_user(payload.username, payload.password)
     if not user:
+        audit_logger.log(
+            user_id="",
+            action=AuditAction.LOGIN_FAILED,
+            resource="/api/auth/login",
+            ip=_ip(http_request),
+            details={"username": str(payload.username or "").strip()},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+
+    audit_logger.log(
+        user_id=str(user.get("user_id") or "").strip(),
+        action=AuditAction.LOGIN,
+        resource="/api/auth/login",
+        ip=_ip(http_request),
+        details={"username": str(user.get("username") or "").strip(), "role": str(user.get("role") or "").strip()},
+    )
 
     token_version = 1
     try:
@@ -135,14 +157,32 @@ async def get_me(user: dict = Depends(require_auth)):
 
 
 @router.post("/register", response_model=UserInfo)
-async def register(request: RegisterRequest, admin: dict = Depends(require_admin)):
+async def register(payload: RegisterRequest, http_request: Request, admin: dict = Depends(require_admin)):
     """Register a new user (admin only)."""
-    user = create_user(request.username, request.password, request.role)
+    def _ip(req: Request) -> str:
+        try:
+            return str(getattr(req.client, "host", "") or "").strip()
+        except Exception:
+            return ""
+
+    user = create_user(payload.username, payload.password, payload.role)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists",
         )
+
+    audit_logger.log(
+        user_id=str((admin or {}).get("user_id") or "").strip(),
+        action=AuditAction.USER_REGISTER,
+        resource="/api/auth/register",
+        ip=_ip(http_request),
+        details={
+            "created_user_id": str((user or {}).get("user_id") or "").strip(),
+            "created_username": str((user or {}).get("username") or "").strip(),
+            "created_role": str((user or {}).get("role") or "").strip(),
+        },
+    )
 
     return UserInfo(
         user_id=user["user_id"],
@@ -154,25 +194,37 @@ async def register(request: RegisterRequest, admin: dict = Depends(require_admin
 
 @router.post("/change-password")
 async def change_password(
-    request: ChangePasswordRequest,
+    payload: ChangePasswordRequest,
+    http_request: Request,
     user: dict = Depends(require_auth),
 ):
     """Change current user's password."""
     success = change_user_password(
         user["username"],
-        request.old_password,
-        request.new_password,
+        payload.old_password,
+        payload.new_password,
     )
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid old password",
         )
+    try:
+        ip = str(getattr(http_request.client, "host", "") or "").strip()
+    except Exception:
+        ip = ""
+    audit_logger.log(
+        user_id=str((user or {}).get("user_id") or "").strip(),
+        action=AuditAction.PASSWORD_CHANGE,
+        resource="/api/auth/change-password",
+        ip=ip,
+        details={"username": str((user or {}).get("username") or "").strip()},
+    )
     return {"message": "Password changed successfully"}
 
 
 @router.post("/logout")
-async def logout(user: dict = Depends(require_auth)) -> dict:
+async def logout(http_request: Request, user: dict = Depends(require_auth)) -> dict:
     """Revoke the current JWT (best-effort)."""
 
     jti = str((user or {}).get("jti") or "").strip()
@@ -182,6 +234,17 @@ async def logout(user: dict = Depends(require_auth)) -> dict:
         exp_ts = 0
     if jti:
         revoke_token_jti(jti=jti, exp_ts=exp_ts)
+    try:
+        ip = str(getattr(http_request.client, "host", "") or "").strip()
+    except Exception:
+        ip = ""
+    audit_logger.log(
+        user_id=str((user or {}).get("user_id") or "").strip(),
+        action=AuditAction.LOGOUT,
+        resource="/api/auth/logout",
+        ip=ip,
+        details={"username": str((user or {}).get("username") or "").strip()},
+    )
     return {"success": True}
 
 

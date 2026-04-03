@@ -52,10 +52,12 @@ export function TaskProgressHeader(props: {
 
   const task = data as UnifiedTask | any
 
+  const isRunning = String(task?.status || '').toLowerCase() === 'running'
   useEffect(() => {
+    if (!isRunning) return
     const id = window.setInterval(() => setTick((v) => v + 1), 1000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [isRunning])
 
   useEffect(() => {
     if (!taskId) return

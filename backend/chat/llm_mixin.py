@@ -13,15 +13,15 @@ import httpx
 
 from backend.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
 from backend.chat.tools_spec import TOOLS
-from backend.config import (
+from backend.core.settings import (
     API_TIMEOUT,
     CHAT_PROVIDER,
     MAIN_MODEL,
     MAIN_MODEL_MAX_TOKENS,
     MAIN_MODEL_TEMPERATURE,
+    settings,
 )
-from backend.core import llm_console
-from backend.core.settings import settings
+from backend.llm import console as llm_console
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class ChatLLMMixin:
             or ml.startswith("kimi-")
             or ml.startswith("moonshot-")
         )
-        if moonshot_like and (settings.moonshot_api_key or "").strip():
+        if moonshot_like and bool(settings.moonshot_api_key):
             return "moonshot"
         if m.startswith("accounts/"):
             return "fireworks"
@@ -76,7 +76,7 @@ class ChatLLMMixin:
             return {
                 "provider": provider,
                 "base_url": (settings.chat_base_url or "").rstrip("/"),
-                "api_key": (settings.chat_api_key or "").strip(),
+                "api_key": settings.chat_api_key.get_secret_value().strip(),
             }
 
         provider = self._infer_provider_for_model(model)
@@ -84,18 +84,18 @@ class ChatLLMMixin:
             return {
                 "provider": "fireworks",
                 "base_url": (settings.fireworks_base_url or "").rstrip("/"),
-                "api_key": (settings.fireworks_api_key or "").strip(),
+                "api_key": settings.fireworks_api_key.get_secret_value().strip(),
             }
         if provider == "moonshot":
             return {
                 "provider": "moonshot",
                 "base_url": (settings.moonshot_base_url or "").rstrip("/"),
-                "api_key": (settings.moonshot_api_key or "").strip(),
+                "api_key": settings.moonshot_api_key.get_secret_value().strip(),
             }
         return {
             "provider": "openrouter",
             "base_url": (settings.openrouter_base_url or "").rstrip("/"),
-            "api_key": (settings.openrouter_api_key or "").strip(),
+            "api_key": settings.openrouter_api_key.get_secret_value().strip(),
         }
 
     def _chat_headers(self, provider: str, api_key: str) -> Dict[str, str]:

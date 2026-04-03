@@ -40,7 +40,7 @@ async def get_question_detail(
 
     try:
         # 使用curl获取页面（在线程池中运行避免阻塞）
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         cmd = self._build_curl_cmd(url)
         result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=30))
         html = result.stdout.decode("utf-8", errors="ignore")

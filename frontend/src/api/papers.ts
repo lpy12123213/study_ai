@@ -1,4 +1,4 @@
-import { apiClient } from './client'
+import { apiClient, fetchSSE } from './client'
 import type { Paper, PaperAnalysis, PaperSummary, Question } from '@/types'
 
 export interface GetPapersParams {
@@ -48,6 +48,54 @@ export interface PaperExportResponse {
   texFilename?: string
   error?: string
   log?: string
+}
+
+export interface GenerateFullPaperRequest {
+  taskId?: string
+  subject: string
+  topic?: string
+  paperName?: string
+  totalPoints?: number
+  timeLimit?: number
+  difficultyDistribution?: Record<string, unknown>
+  useStudyArchive?: boolean
+  streamReasoning?: boolean
+}
+
+export interface GenerateFullPaperStreamEvent {
+  type: 'step' | 'progress' | 'result' | 'error' | string
+  taskId?: string
+  progress?: number
+  step?: Record<string, unknown>
+  result?: Record<string, unknown>
+  error?: string
+  data?: Record<string, unknown>
+  message?: string
+  [key: string]: any
+}
+
+export function generateFullPaperStream(
+  request: GenerateFullPaperRequest,
+  onEvent: (event: GenerateFullPaperStreamEvent) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void,
+  options?: { signal?: AbortSignal }
+): void {
+  fetchSSE(
+    '/papers/generate-full',
+    {
+      ...request,
+      totalPoints: request.totalPoints ?? (request as any).total_points,
+      timeLimit: request.timeLimit ?? (request as any).time_limit,
+      difficultyDistribution: request.difficultyDistribution ?? (request as any).difficulty_distribution,
+      streamReasoning: request.streamReasoning ?? (request as any).stream_reasoning,
+      useStudyArchive: request.useStudyArchive ?? (request as any).use_study_archive,
+    },
+    (data) => onEvent(data as GenerateFullPaperStreamEvent),
+    onError,
+    onComplete,
+    { signal: options?.signal }
+  )
 }
 
 function toPaperAnalysis(input: any): PaperAnalysis | undefined {

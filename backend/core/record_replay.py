@@ -15,15 +15,27 @@ def _truthy(value: Any) -> bool:
 
 def replay_enabled() -> bool:
     mode = str(os.getenv("RECORD_REPLAY_MODE") or "").strip().lower()
-    if mode == "replay":
-        return True
+    if mode:
+        # Explicit mode takes precedence over legacy flags.
+        if mode == "replay":
+            return True
+        if mode == "record":
+            return False
+        if mode in {"off", "none", "disable", "disabled", "0"}:
+            return False
     return _truthy(os.getenv("REPLAY"))
 
 
 def record_enabled() -> bool:
     mode = str(os.getenv("RECORD_REPLAY_MODE") or "").strip().lower()
-    if mode == "record":
-        return True
+    if mode:
+        # Explicit mode takes precedence over legacy flags.
+        if mode == "record":
+            return True
+        if mode == "replay":
+            return False
+        if mode in {"off", "none", "disable", "disabled", "0"}:
+            return False
     return _truthy(os.getenv("RECORD"))
 
 

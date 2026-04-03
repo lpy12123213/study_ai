@@ -5,6 +5,37 @@
 - 基础URL: `http://localhost:8000`
 - 内容类型: `application/json`
 
+## 通用错误格式（重要）
+
+后端错误通常返回 JSON（HTTP 4xx/5xx），并尽量遵循统一字段：
+
+```json
+{
+  "code": "validation_error",
+  "message": "validation_error",
+  "details": { "field": "reason" },
+  "request_id": "req_abc123",
+  "detail": { "field": "reason" },
+  "error": {
+    "code": "validation_error",
+    "message": "validation_error",
+    "request_id": "req_abc123"
+  }
+}
+```
+
+说明：
+- `code/message/request_id` 用于前端展示与排障定位
+- 为兼容历史实现，会保留 `detail`（FastAPI 默认字段）与 `error` envelope
+
+常见 `code`（节选，见后端 `backend/api/error_codes.py`）：
+- `invalid_or_expired_token`
+- `validation_error`
+- `paper_create_failed`
+- `paper_export_failed`
+- `convert_markdown_to_latex_failed`
+- `filters_failed`
+
 ## 认证（JWT）
 
 Web UI 的「对话」功能需要登录后才能使用。登录成功后，后端返回 JWT token；调用受保护接口时需要携带：
@@ -251,6 +282,76 @@ Authorization: Bearer <access_token>
   ]
 }
 ```
+
+---
+
+### 导出试卷（Markdown / LaTeX / PDF / DOCX）
+
+**POST** `/api/papers/{paper_id}/export`
+
+将试卷导出为本地文件（写入后端的 `.local/media/generated/`）并返回下载 URL。
+
+**请求体：**
+```json
+{
+  "format": "pdf",
+  "includeStem": true,
+  "includeAnswer": true,
+  "includeAnalysis": true
+}
+```
+
+字段说明：
+- `format`: `markdown` | `latex` | `pdf` | `docx`
+- `includeStem/includeAnswer/includeAnalysis`: 控制导出内容是否包含题干/答案/解析
+
+**响应示例（PDF）：**
+```json
+{
+  "success": true,
+  "format": "pdf",
+  "pdf_url": "/api/media/generated/xxx.pdf",
+  "pdf_filename": "试卷.pdf",
+  "tex_url": "/api/media/generated/xxx.tex",
+  "tex_filename": "试卷.tex",
+  "log": "xelatex 编译日志（截断）"
+}
+```
+
+说明：
+- `format=pdf` 时会同时返回 `pdf_url` 和 `tex_url`（便于排查编译问题）
+- 当环境没有 LaTeX 引擎时，可能返回 `latex_engine_not_found`
+
+---
+
+## 一键组卷（AI 生成整张试卷，SSE）
+
+**POST** `/api/papers/generate-full`
+
+根据学科/主题/总分/时长/难度分布，自动规划结构并调用 AI 填充整张试卷，返回 SSE 事件流。
+
+**请求体：**
+```json
+{
+  "taskId": "optional-client-id",
+  "subject": "高中数学",
+  "topic": "导数与函数",
+  "paperName": "导数综合卷（可选）",
+  "totalPoints": 150,
+  "timeLimit": 120,
+  "difficultyDistribution": { "easy": 0.3, "medium": 0.5, "hard": 0.2 },
+  "useStudyArchive": true,
+  "streamReasoning": false
+}
+```
+
+**响应：** `text/event-stream`
+
+事件形态（每条为 `data: {...}\n\n` JSON）：
+- `type=progress`: `{ "type": "progress", "progress": 10.0 }`
+- `type=step`: `{ "type": "step", "step": { "id": "...", "title": "...", "status": "running|completed|failed", ... } }`
+- `type=result`: `{ "type": "result", "result": { "paper_id": 1, "paper_name": "...", "question_count": 20, ... } }`
+- `type=error`: `{ "type": "error", "error": "paper_save_failed", "data": { "detail": "..." } }`
 
 ---
 

@@ -13,6 +13,12 @@ class AgentConfig:
     parallel_tool_calls: bool = True
     # SubAgent concurrency for foreach_knowledge_point blocks (study-materials)
     subagent_concurrency: int = 3
+    # Agent execution mode:
+    # - "plan": Plan-Act-Reflect (existing behavior)
+    # - "react": ReAct loop (LLM decides next tool dynamically)
+    agent_mode: str = "plan"
+    # ReAct safety cap (prevents infinite tool loops).
+    react_max_iterations: int = 20
 
     # Context compression
     sliding_window_size: int = 10
@@ -49,6 +55,14 @@ class AgentConfig:
             raw = (os.getenv(name) or "").strip()
             return raw or default
 
+        def _normalize_mode(raw: str) -> str:
+            v = str(raw or "").strip().lower().replace("-", "").replace("_", "")
+            if v in {"react", "reac"}:
+                return "react"
+            if v in {"plan", "planner", "planactreflect", "par"}:
+                return "plan"
+            return "plan"
+
         return cls(
             max_iterations=_get_int("AGENT_MAX_ITERATIONS", cls.max_iterations),
             parallel_tool_calls=_get_bool("AGENT_PARALLEL_TOOL_CALLS", cls.parallel_tool_calls),
@@ -56,6 +70,8 @@ class AgentConfig:
                 "STUDY_MATERIALS_SUBAGENT_CONCURRENCY",
                 _get_int("AGENT_SUBAGENT_CONCURRENCY", cls.subagent_concurrency),
             ),
+            agent_mode=_normalize_mode(_get_str("AGENT_MODE", cls.agent_mode)),
+            react_max_iterations=_get_int("AGENT_REACT_MAX_ITERATIONS", cls.react_max_iterations),
             sliding_window_size=_get_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
             token_threshold=_get_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
             emergency_token_threshold=_get_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
@@ -72,6 +88,8 @@ _cfg = AgentConfig.from_env()
 AGENT_CONFIG = {
     "max_iterations": _cfg.max_iterations,
     "parallel_tool_calls": _cfg.parallel_tool_calls,
+    "agent_mode": _cfg.agent_mode,
+    "react_max_iterations": _cfg.react_max_iterations,
     "sliding_window_size": _cfg.sliding_window_size,
     "token_threshold": _cfg.token_threshold,
     "checkpoint_dir": _cfg.checkpoint_dir,

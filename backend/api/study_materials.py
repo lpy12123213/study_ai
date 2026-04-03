@@ -145,7 +145,8 @@ async def convert_markdown_to_latex(
             ctx,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("convert_markdown_to_latex_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="convert_markdown_to_latex_failed") from exc
 
 
 @router.post("/convert-markdown-to-latex/stream")

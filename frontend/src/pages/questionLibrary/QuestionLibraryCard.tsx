@@ -11,7 +11,7 @@ import {
   type QuestionLibraryListItem,
 } from '@/api/questionLibrary'
 import { useQuestionBarStore } from '@/stores/useQuestionBarStore'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -108,7 +108,7 @@ export function QuestionLibraryCard(props: Props) {
   const qid = String(item.question_id || '').trim()
   const stem = String(item.stem || '').trim()
   const addItem = useQuestionBarStore((s) => s.addItem)
-  const pushToast = useToastStore((s) => s.pushToast)
+  const pushToast = useNotificationStore((s) => s.pushToast)
 
   const canInlineExpand = useMemo(() => {
     if (item.has_answer || item.has_analysis) return true

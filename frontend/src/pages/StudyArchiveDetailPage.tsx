@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { ShareLinkDialog } from '@/components/shared/ShareLinkDialog'
 import { AnnotationDialog } from '@/components/shared/AnnotationDialog'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as tasksApi from '@/api/tasks'
 import * as learningPlansApi from '@/api/learningPlans'
 import * as metaApi from '@/api/meta'
@@ -29,7 +29,7 @@ export default function StudyArchiveDetailPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const q = (searchParams.get('q') || '').trim()
-  const pushToast = useToastStore((s) => s.pushToast)
+  const pushToast = useNotificationStore((s) => s.pushToast)
   const queryClient = useQueryClient()
   const [shareOpen, setShareOpen] = useState(false)
   const [annotateOpen, setAnnotateOpen] = useState(false)

@@ -14,7 +14,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useNotificationStore } from '@/stores/useNotificationStore'
-import { useToastStore } from '@/stores/useToastStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { cn } from '@/lib/utils'
 
@@ -42,8 +41,7 @@ function saveSeenStatuses(obj: Record<string, string>): void {
 
 export function NotificationCenter() {
   const navigate = useNavigate()
-  const { notifications, push, markAllRead, remove, clear } = useNotificationStore()
-  const { pushToast } = useToastStore()
+  const { notifications, addNotification, addToast, markAllRead, dismiss, clearNotifications } = useNotificationStore()
   const { isAuthenticated, token } = useAuthStore()
   const unreadCount = useMemo(() => notifications.filter((n) => !n.read).length, [notifications])
 
@@ -53,9 +51,9 @@ export function NotificationCenter() {
   }
 
   const { data } = useQuery({
-    queryKey: ['taskNotifications'],
-    queryFn: () => listTasks({ limit: 200 }),
-    refetchInterval: 5000,
+    queryKey: ['runningTasks'],
+    queryFn: () => listTasks({ status: 'running', limit: 50 }),
+    refetchInterval: 10_000,
     enabled: isAuthenticated && Boolean(token),
   })
 
@@ -77,14 +75,14 @@ export function NotificationCenter() {
 
         const terminal = status === 'completed' || status === 'failed' || status === 'canceled' || status === 'cancelled'
         if (terminal) {
-          push({
+          addNotification({
             id: `${id}-${status}-${String((t as any).updated_at || '')}`,
             taskId: id,
             title: String((t as any).title || id),
             status,
             createdAt: String((t as any).updated_at || new Date().toISOString()),
           })
-          pushToast({
+          addToast({
             id: `toast-${id}-${status}-${String((t as any).updated_at || '')}`,
             taskId: id,
             title: String((t as any).title || id),
@@ -95,10 +93,20 @@ export function NotificationCenter() {
     }
 
     if (changed) {
-      seenRef.current = seen
-      saveSeenStatuses(seen)
+      // Prune seen map to prevent unbounded localStorage growth
+      const MAX_SEEN = 500
+      const keys = Object.keys(seen)
+      if (keys.length > MAX_SEEN) {
+        const pruned: Record<string, string> = {}
+        for (const k of keys.slice(-MAX_SEEN)) pruned[k] = seen[k]
+        seenRef.current = pruned
+        saveSeenStatuses(pruned)
+      } else {
+        seenRef.current = seen
+        saveSeenStatuses(seen)
+      }
     }
-  }, [data, push, pushToast])
+  }, [data, addNotification, addToast])
 
   const openTask = (taskId: string) => {
     navigate(`/tasks?id=${encodeURIComponent(taskId)}`)
@@ -125,7 +133,13 @@ export function NotificationCenter() {
         <DropdownMenuLabel className="flex items-center justify-between">
           <span>通知</span>
           {notifications.length > 0 && (
-            <Button type="button" size="sm" variant="ghost" onClick={clear} className="h-7 px-2 text-xs">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={clearNotifications}
+              className="h-7 px-2 text-xs"
+            >
               清空
             </Button>
           )}
@@ -157,7 +171,7 @@ export function NotificationCenter() {
                   onClick={(e) => {
                     e.preventDefault()
                     e.stopPropagation()
-                    remove(n.id)
+                    dismiss(n.id)
                   }}
                   aria-label="移除通知"
                 >

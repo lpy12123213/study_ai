@@ -86,6 +86,15 @@ class QuestionLibraryDraftReview(BaseModel):
     summary: str = ""
     model: str = ""
 
+class QuestionLibraryDiagram(BaseModel):
+    kind: str = ""
+    url: str = ""
+    filename: str = ""
+    media_id: str = ""
+    alt: str = ""
+    caption: str = ""
+    markdown: str = ""
+
 
 class QuestionLibraryDraftQuestion(BaseModel):
     question_id: str = ""
@@ -95,6 +104,7 @@ class QuestionLibraryDraftQuestion(BaseModel):
     keep: bool = True
     review_status: Literal["pending_review", "in_review", "approved", "rejected", "confirmed", "committed"] = "pending_review"
     review: Optional[QuestionLibraryDraftReview] = None
+    diagrams: Optional[List[QuestionLibraryDiagram]] = None
 
 
 class QuestionLibraryPreviewData(BaseModel):

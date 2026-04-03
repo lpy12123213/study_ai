@@ -32,6 +32,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
+import { appendCappedText, mergeAndSanitizeTaskStep, sanitizeTaskStep, sanitizeTaskSteps } from '@/lib/taskPayload'
 import { cn, generateId } from '@/lib/utils'
 import type { ConversationItem, Message, Subject, TaskStep } from '@/types'
 import * as tasksApi from '@/api/tasks'
@@ -705,12 +706,14 @@ function LessonPlansPage() {
     }
 
     const addAssistantStep = (step: TaskStep) => {
-      assistantSteps = [...assistantSteps, step]
+      assistantSteps = sanitizeTaskSteps([...assistantSteps, sanitizeTaskStep(step)])
       syncSteps()
     }
 
     const patchAssistantStep = (stepId: string, patch: Partial<TaskStep>) => {
-      assistantSteps = assistantSteps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
+      assistantSteps = sanitizeTaskSteps(
+        assistantSteps.map((s) => (s.id === stepId ? mergeAndSanitizeTaskStep(s, patch) : s))
+      )
       syncSteps()
     }
 
@@ -749,19 +752,19 @@ function LessonPlansPage() {
           if (!thinkingStepId) {
             thinkingStepId = `thinking-${generateId()}`
             thinkingBuffer = ''
-            const step: TaskStep = {
+            const step: TaskStep = sanitizeTaskStep({
               id: thinkingStepId,
               title: '思考',
               status: 'running',
               startTime: t,
               toolName: 'thinking',
               output: '',
-            }
+            })
             addAssistantStep(step)
             addStep(taskId, step)
           }
 
-          thinkingBuffer = thinkingBuffer ? `${thinkingBuffer}\n${text}` : text
+          thinkingBuffer = appendCappedText(thinkingBuffer, text)
           patchAssistantStep(thinkingStepId, { output: thinkingBuffer })
           updateStep(taskId, thinkingStepId, { output: thinkingBuffer })
 
@@ -785,14 +788,14 @@ function LessonPlansPage() {
           const stepTitle = toText((payload as any)?.title)
           const t = new Date().toISOString()
 
-          const step: TaskStep = {
+          const step: TaskStep = sanitizeTaskStep({
             id: stepId,
             title: stepTitle || `调用工具：${name}`,
             status: 'running',
             startTime: t,
             toolName: name,
             input: (payload as any)?.arguments,
-          }
+          })
 
           if (!assistantSteps.some((s) => s.id === stepId)) {
             addAssistantStep(step)
@@ -811,16 +814,16 @@ function LessonPlansPage() {
                 a.knowledgePoint === currentSubAgentKP
                   ? {
                       ...a,
-                      steps: [
+                      steps: sanitizeTaskSteps([
                         ...a.steps,
-                        {
+                        sanitizeTaskStep({
                           id: stepId,
                           title: stepTitle || `调用 ${name}`,
                           status: 'running' as const,
                           toolName: name,
                           startTime: t,
-                        },
-                      ],
+                        }),
+                      ]),
                     }
                   : a
               )
@@ -881,14 +884,15 @@ function LessonPlansPage() {
                   ? {
                       ...a,
                       status: !success ? ('failed' as const) : a.status,
-                      steps: a.steps.map((s) =>
-                        s.id === stepId
-                          ? {
-                              ...s,
-                              status: success ? ('completed' as const) : ('failed' as const),
-                              endTime: t,
-                            }
-                          : s
+                      steps: sanitizeTaskSteps(
+                        a.steps.map((s) =>
+                          s.id === stepId
+                            ? mergeAndSanitizeTaskStep(s, {
+                                status: success ? ('completed' as const) : ('failed' as const),
+                                endTime: t,
+                              })
+                            : s
+                        )
                       ),
                     }
                   : a
@@ -929,10 +933,15 @@ function LessonPlansPage() {
                       a.status === 'failed' || a.steps.some((s) => s.status === 'failed')
                         ? ('failed' as const)
                         : ('completed' as const),
-                    steps: a.steps.map((s) =>
-                      s.status === 'running'
-                        ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }
-                        : s
+                    steps: sanitizeTaskSteps(
+                      a.steps.map((s) =>
+                        s.status === 'running'
+                          ? mergeAndSanitizeTaskStep(s, {
+                              status: 'completed' as const,
+                              endTime: new Date().toISOString(),
+                            })
+                          : s
+                      )
                     ),
                   }
                 : a

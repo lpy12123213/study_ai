@@ -5,16 +5,17 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from backend.analysis_service import analyze_paper
+from backend.paper_compose.analysis import analyze_paper
 from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
+from backend.core.audit import AuditAction, audit_logger
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_naive
 from backend.database.models import delete_paper, get_paper, get_question_cache, list_papers, save_paper
 from backend.database.repositories.tasks import append_task_event as db_append_task_event
 from backend.database.repositories.tasks import update_task_status as db_update_task_status
@@ -22,6 +23,7 @@ from backend.database.repositories.tasks import upsert_task as db_upsert_task
 from backend.paper_compose.compose_tasks import compose_tasks
 from backend.paper_compose.export import export_paper as export_paper_doc
 from backend.paper_compose.task_manager import PaperComposeTask
+from backend.paper_compose.full_paper_workflow import generate_full_paper_events
 from backend.paper_compose.workflow import compose_paper_events
 
 router = APIRouter(dependencies=[Depends(require_auth)])
@@ -73,6 +75,12 @@ async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -
             raise HTTPException(status_code=400, detail="paper_mixed_sources")
 
         paper_id = await save_paper(user_id=user_id, paper_name=paper.paper_name, questions=q_dicts)
+        audit_logger.log(
+            user_id=user_id,
+            action=AuditAction.PAPER_CREATE,
+            resource=f"/api/papers/{paper_id}",
+            details={"paper_name": str(paper.paper_name or "").strip(), "question_count": len(qids), "source_mode": mode},
+        )
         return {"success": True, "paper_id": paper_id, "message": f"试卷 '{paper.paper_name}' 创建成功"}
     except HTTPException:
         raise
@@ -80,7 +88,8 @@ async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -
         # repository-level validation
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("paper_create_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="paper_create_failed") from exc
 
 
 @router.get("/papers/{paper_id}", response_model=PaperResponse)
@@ -122,6 +131,12 @@ async def remove_paper(paper_id: int, user: dict = Depends(require_auth)) -> dic
     success = await delete_paper(user_id=user_id, paper_id=paper_id)
     if not success:
         raise HTTPException(status_code=404, detail="试卷不存在")
+    audit_logger.log(
+        user_id=user_id,
+        action=AuditAction.PAPER_DELETE,
+        resource=f"/api/papers/{int(paper_id)}",
+        details={},
+    )
     return {"success": True, "message": "试卷删除成功"}
 
 
@@ -203,11 +218,48 @@ async def export_paper(paper_id: int, payload: Optional[dict] = None, user: dict
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("paper_export_failed", extra={"user_id": user_id, "paper_id": int(paper_id)})
+        raise HTTPException(status_code=500, detail="paper_export_failed") from exc
 
     if isinstance(out, dict) and out.get("success") is False:
         return {"success": False, **out}
+    audit_logger.log(
+        user_id=user_id,
+        action=AuditAction.PAPER_EXPORT,
+        resource=f"/api/papers/{int(paper_id)}/export",
+        details={
+            "format": fmt,
+            "include_stem": include_stem,
+            "include_answer": include_answer,
+            "include_analysis": include_analysis,
+        },
+    )
     return {"success": True, **(out if isinstance(out, dict) else {})}
+
+
+@router.post("/papers/generate-full")
+async def generate_full_paper(payload: Optional[dict] = None, user: dict = Depends(require_auth)) -> StreamingResponse:
+    """一键 AI 生成整张试卷（返回 SSE 流）。"""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    body = payload if isinstance(payload, dict) else {}
+    req = dict(body)
+    req.setdefault("taskId", uuid.uuid4().hex[:12])
+
+    stream_reasoning = bool(req.get("stream_reasoning")) if "stream_reasoning" in req else bool(req.get("streamReasoning"))
+
+    async def event_generator():
+        async for event in generate_full_paper_events(req, user_id=user_id, stream_reasoning=stream_reasoning, on_reasoning_event=None):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers=_sse_headers(),
+    )
 
 
 def _sse_headers() -> dict:
@@ -236,7 +288,7 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
             status="running",
             progress=0.0,
             request=dict(task.request or {}),
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
         await db_append_task_event(
             user_id=user_id,
@@ -294,7 +346,7 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
                         status="completed",
                         progress=100.0,
                         result=result,
-                        ended_at=datetime.utcnow(),
+                        ended_at=utcnow_naive(),
                     )
                 except Exception:
                     logger.exception(
@@ -309,7 +361,7 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
                         task_id=task.task_id,
                         status="failed",
                         error={"message": str(evt.get("error") or "compose_failed")},
-                        ended_at=datetime.utcnow(),
+                        ended_at=utcnow_naive(),
                     )
                 except Exception:
                     logger.exception(
@@ -324,7 +376,7 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
                 task_id=task.task_id,
                 status="canceled",
                 error={"message": "Task cancelled"},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception(
@@ -339,7 +391,7 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
                 task_id=task.task_id,
                 status="failed",
                 error={"message": str(exc)},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception(
@@ -354,7 +406,7 @@ async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
                     task_id=task.task_id,
                     status="failed",
                     error={"message": "Task ended unexpectedly"},
-                    ended_at=datetime.utcnow(),
+                    ended_at=utcnow_naive(),
                 )
             except Exception:
                 logger.exception(

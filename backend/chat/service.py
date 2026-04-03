@@ -7,7 +7,7 @@ import httpx
 
 from backend.chat.llm_mixin import ChatLLMMixin
 from backend.chat.tools_mixin import ChatToolsMixin
-from backend.config import API_TIMEOUT, MAIN_MODEL, MAX_TOOL_ITERATIONS
+from backend.core.settings import API_TIMEOUT, MAIN_MODEL, MAX_TOOL_ITERATIONS
 
 
 class ChatService(ChatLLMMixin, ChatToolsMixin):

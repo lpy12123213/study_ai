@@ -165,7 +165,7 @@ async def export_dashboard_csv(
         w.writerow([f"top_subject.{row.get('subject')}", row.get("count")])
 
     content = buf.getvalue()
-    filename = f"dashboard-{datetime.utcnow().strftime('%Y-%m-%d')}.csv"
+    filename = f"dashboard-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.csv"
     return Response(
         content,
         media_type="text/csv; charset=utf-8",

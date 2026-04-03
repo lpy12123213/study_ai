@@ -12,7 +12,7 @@ import {
   type QuestionLibraryListItem,
 } from '@/api/questionLibrary'
 import { useQuestionBarStore } from '@/stores/useQuestionBarStore'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 
 function originLabel(origin: string): string {
   if (origin === 'ai') return 'AI 出题'
@@ -53,7 +53,7 @@ export function QuestionDetailPane(props: Props) {
   const [isMutating, setIsMutating] = useState(false)
   const [mutateError, setMutateError] = useState<string | null>(null)
   const addItem = useQuestionBarStore((s) => s.addItem)
-  const pushToast = useToastStore((s) => s.pushToast)
+  const pushToast = useNotificationStore((s) => s.pushToast)
 
   const qid = String(selectedId || '').trim()
 

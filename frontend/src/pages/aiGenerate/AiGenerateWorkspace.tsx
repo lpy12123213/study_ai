@@ -15,7 +15,7 @@ import { QuestionLibraryCard } from '@/pages/questionLibrary/QuestionLibraryCard
 import { QuestionDetailDialog } from '@/pages/questionLibrary/QuestionDetailDialog'
 import { QuestionBar } from '@/pages/questionLibrary/QuestionBar'
 import { RunPanel } from '@/pages/questionLibrary/RunPanel'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 
 const DIFFICULTY_ANY = '__any__'
 
@@ -52,7 +52,7 @@ export function AiGenerateWorkspace() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const [bulkError, setBulkError] = useState<string | null>(null)
 
-  const pushToast = useToastStore((s) => s.pushToast)
+  const pushToast = useNotificationStore((s) => s.pushToast)
 
   const [draftQuestions, setDraftQuestions] = useState<QuestionLibraryDraftQuestion[]>([])
   const [previewError, setPreviewError] = useState<string | null>(null)

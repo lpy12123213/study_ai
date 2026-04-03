@@ -14,7 +14,8 @@ from typing import Any, Dict
 
 from dotenv import load_dotenv
 
-from backend.core.model_config import load_model_json_config
+from backend.core.secrets import SecretString
+from backend.llm.model_config import load_model_json_config
 
 _dotenv_loaded = False
 
@@ -77,6 +78,16 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    raw = raw.strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     # Model config (local-only json)
@@ -86,15 +97,15 @@ class Settings:
 
     # Chat provider (OpenAI-compatible)
     chat_provider: str
-    chat_api_key: str
+    chat_api_key: SecretString
     chat_base_url: str
 
     # OpenRouter
-    openrouter_api_key: str
+    openrouter_api_key: SecretString
     openrouter_base_url: str
 
     # Moonshot (official OpenAI-compatible)
-    moonshot_api_key: str
+    moonshot_api_key: SecretString
     moonshot_base_url: str
 
     # Models
@@ -117,7 +128,7 @@ class Settings:
 
     # Lesson plan / study-materials provider (OpenAI-compatible)
     lesson_plan_provider: str
-    lesson_plan_api_key: str
+    lesson_plan_api_key: SecretString
     lesson_plan_base_url: str
     lesson_plan_model: str
     lesson_plan_v2_subagent_concurrency: int
@@ -136,6 +147,8 @@ class Settings:
     max_tool_iterations: int
     api_timeout_seconds: int
     sub_ai_timeout_seconds: int
+    llm_circuit_breaker_fail_threshold: int
+    llm_circuit_breaker_open_seconds: int
 
     # Crawler defaults
     default_subject: str
@@ -143,7 +156,7 @@ class Settings:
 
     # Reviewer (MCP tool)
     review_provider: str
-    fireworks_api_key: str
+    fireworks_api_key: SecretString
     fireworks_base_url: str
     review_model: str
     review_model_temperature: float
@@ -154,13 +167,13 @@ class Settings:
     review_x_title: str
 
     # Zhipu BigModel (for MCP web-search tool)
-    zhipu_api_key: str
+    zhipu_api_key: SecretString
     zhipu_base_url: str
     zhipu_model: str
     zhipu_timeout_seconds: int
 
     # Metaso AI search (direct API; used by study-materials web_search_knowledge)
-    metaso_api_key: str
+    metaso_api_key: SecretString
     metaso_base_url: str
     metaso_timeout_seconds: int
 
@@ -175,6 +188,10 @@ class Settings:
 
         model_json = load_model_json_config(repo_root=repo_root)
         llm_provider_pinned = bool(model_json and model_json.pinned)
+        # Allow env override so users can quickly pin provider without editing config/model.json.
+        # When pinned, `backend.llm.providers.resolve_provider(...)` won't auto-switch to Moonshot
+        # even if MOONSHOT_API_KEY is present and the model ID looks like `moonshotai/kimi-*`.
+        llm_provider_pinned = _get_bool("LLM_PROVIDER_PINNED", llm_provider_pinned)
         llm_active_provider = str(model_json.active_provider if model_json else "").strip().lower()
         model_config_path = str(model_json.path) if model_json else ""
 
@@ -208,6 +225,7 @@ class Settings:
         # Metaso API key: prefer METASO_API_KEY; keep legacy alias METASO_API for compatibility.
         metaso_api_key = _get_str("METASO_API_KEY", _get_str("METASO_API", ""))
         metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
+        zhipu_api_key = _get_str("ZHIPU_API_KEY", "")
 
         chat_base_url = ""
         chat_api_key = ""
@@ -327,11 +345,11 @@ class Settings:
             llm_provider_pinned=llm_provider_pinned,
             llm_active_provider=llm_active_provider,
             chat_provider=chat_provider,
-            chat_api_key=chat_api_key,
+            chat_api_key=SecretString(chat_api_key),
             chat_base_url=chat_base_url,
-            openrouter_api_key=openrouter_api_key,
+            openrouter_api_key=SecretString(openrouter_api_key),
             openrouter_base_url=base_url,
-            moonshot_api_key=moonshot_api_key,
+            moonshot_api_key=SecretString(moonshot_api_key),
             moonshot_base_url=moonshot_base_url,
             main_model=main_model,
             # Use a cheaper/faster default for intermediate structured steps (summaries/outlines).
@@ -349,7 +367,7 @@ class Settings:
             tot_prune_threshold=tot_prune_threshold,
             tot_timeout_seconds=tot_timeout_seconds,
             lesson_plan_provider=lesson_plan_provider,
-            lesson_plan_api_key=lesson_plan_api_key,
+            lesson_plan_api_key=SecretString(lesson_plan_api_key),
             lesson_plan_base_url=lesson_plan_base_url,
             lesson_plan_model=lesson_plan_model,
             lesson_plan_v2_subagent_concurrency=lesson_plan_concurrency,
@@ -365,10 +383,12 @@ class Settings:
             max_tool_iterations=_get_int("MAX_TOOL_ITERATIONS", 10),
             api_timeout_seconds=_get_int("API_TIMEOUT", 120),
             sub_ai_timeout_seconds=_get_int("SUB_AI_TIMEOUT", 60),
+            llm_circuit_breaker_fail_threshold=_get_int("LLM_CIRCUIT_BREAKER_FAIL_THRESHOLD", 6),
+            llm_circuit_breaker_open_seconds=_get_int("LLM_CIRCUIT_BREAKER_OPEN_SECONDS", 30),
             default_subject=_get_str("DEFAULT_SUBJECT", "高中数学"),
             difficulty_query_mode=_get_str("DIFFICULTY_QUERY_MODE", "multi").lower(),
             review_provider=_get_str("REVIEW_PROVIDER", "fireworks").lower(),
-            fireworks_api_key=fireworks_api_key,
+            fireworks_api_key=SecretString(fireworks_api_key),
             fireworks_base_url=fireworks_base_url,
             # Fireworks model IDs change over time; default to a currently listed, chat-capable model.
             review_model=_get_str("REVIEW_MODEL", "accounts/fireworks/models/llama-v3p3-70b-instruct"),
@@ -378,11 +398,11 @@ class Settings:
             review_max_stem_chars=_get_int("REVIEW_MAX_STEM_CHARS", 900),
             review_http_referer=_get_str("REVIEW_HTTP_REFERER", "http://localhost:8000"),
             review_x_title=_get_str("REVIEW_X_TITLE", "Exam Paper Assistant - Reviewer"),
-            zhipu_api_key=_get_str("ZHIPU_API_KEY", ""),
+            zhipu_api_key=SecretString(zhipu_api_key),
             zhipu_base_url=zhipu_base_url,
             zhipu_model=_get_str("ZHIPU_MODEL", "glm-4.5"),
             zhipu_timeout_seconds=_get_int("ZHIPU_TIMEOUT", 60),
-            metaso_api_key=metaso_api_key,
+            metaso_api_key=SecretString(metaso_api_key),
             metaso_base_url=metaso_base_url,
             metaso_timeout_seconds=metaso_timeout_seconds,
         )
@@ -416,17 +436,17 @@ settings = Settings.from_env()
 
 # Chat provider (OpenAI-compatible)
 CHAT_PROVIDER = settings.chat_provider
-CHAT_API_KEY = settings.chat_api_key
+CHAT_API_KEY = settings.chat_api_key.get_secret_value()
 CHAT_BASE_URL = settings.chat_base_url
 
 # Whether provider selection is pinned (explicit provider only) or inferred.
 LLM_PROVIDER_PINNED = bool(settings.llm_provider_pinned)
 
 # Back-compat module-level constants (used widely across the codebase).
-OPENROUTER_API_KEY = settings.openrouter_api_key
+OPENROUTER_API_KEY = settings.openrouter_api_key.get_secret_value()
 OPENROUTER_BASE_URL = settings.openrouter_base_url
 
-MOONSHOT_API_KEY = settings.moonshot_api_key
+MOONSHOT_API_KEY = settings.moonshot_api_key.get_secret_value()
 MOONSHOT_BASE_URL = settings.moonshot_base_url
 
 MAIN_MODEL = settings.main_model
@@ -434,7 +454,7 @@ SUB_MODEL = settings.sub_model
 
 # Lesson plan / study-materials provider (OpenAI-compatible)
 LESSON_PLAN_PROVIDER = settings.lesson_plan_provider
-LESSON_PLAN_API_KEY = settings.lesson_plan_api_key
+LESSON_PLAN_API_KEY = settings.lesson_plan_api_key.get_secret_value()
 LESSON_PLAN_BASE_URL = settings.lesson_plan_base_url
 LESSON_PLAN_MODEL = settings.lesson_plan_model
 LESSON_PLAN_V2_SUBAGENT_CONCURRENCY = settings.lesson_plan_v2_subagent_concurrency
@@ -450,13 +470,15 @@ LESSON_PLAN_MAX_TOKENS = settings.lesson_plan_max_tokens
 MAX_TOOL_ITERATIONS = settings.max_tool_iterations
 API_TIMEOUT = settings.api_timeout_seconds
 SUB_AI_TIMEOUT = settings.sub_ai_timeout_seconds
+LLM_CIRCUIT_BREAKER_FAIL_THRESHOLD = settings.llm_circuit_breaker_fail_threshold
+LLM_CIRCUIT_BREAKER_OPEN_SECONDS = settings.llm_circuit_breaker_open_seconds
 
 DEFAULT_SUBJECT = settings.default_subject
 DIFFICULTY_QUERY_MODE = settings.difficulty_query_mode
 
 # Reviewer settings (MCP tool)
 REVIEW_PROVIDER = settings.review_provider
-FIREWORKS_API_KEY = settings.fireworks_api_key
+FIREWORKS_API_KEY = settings.fireworks_api_key.get_secret_value()
 FIREWORKS_BASE_URL = settings.fireworks_base_url
 REVIEW_MODEL = settings.review_model
 REVIEW_MODEL_TEMPERATURE = settings.review_model_temperature
@@ -467,13 +489,13 @@ REVIEW_HTTP_REFERER = settings.review_http_referer
 REVIEW_X_TITLE = settings.review_x_title
 
 # Zhipu BigModel settings (MCP web-search tool)
-ZHIPU_API_KEY = settings.zhipu_api_key
+ZHIPU_API_KEY = settings.zhipu_api_key.get_secret_value()
 ZHIPU_BASE_URL = settings.zhipu_base_url
 ZHIPU_MODEL = settings.zhipu_model
 ZHIPU_TIMEOUT = settings.zhipu_timeout_seconds
 
 # Metaso AI search settings (direct API)
-METASO_API_KEY = settings.metaso_api_key
+METASO_API_KEY = settings.metaso_api_key.get_secret_value()
 METASO_BASE_URL = settings.metaso_base_url
 METASO_TIMEOUT = settings.metaso_timeout_seconds
 

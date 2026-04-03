@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from backend.core.llm_client import is_llm_configured
+from backend.llm.client import is_llm_configured
 from backend.core.settings import LESSON_PLAN_V2_SUBAGENT_CONCURRENCY
 from backend.lesson_plan_v2.common import agent_event
 from backend.lesson_plan_v2.export import (

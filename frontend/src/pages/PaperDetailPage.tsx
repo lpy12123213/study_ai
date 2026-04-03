@@ -24,7 +24,7 @@ import { usePaper, usePaperDownloadLink, usePaperExport } from '@/hooks/usePaper
 import { cn, formatDate } from '@/lib/utils'
 import { ShareLinkDialog } from '@/components/shared/ShareLinkDialog'
 import { AnnotationDialog } from '@/components/shared/AnnotationDialog'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as tasksApi from '@/api/tasks'
 import * as wrongbookApi from '@/api/wrongbook'
 
@@ -46,7 +46,7 @@ export default function PaperDetailPage() {
   } = usePaperDownloadLink()
   const { mutateAsync: exportPaper, isPending: isExporting } = usePaperExport()
   const paper = paperWithAnalysis || paperBase
-  const pushToast = useToastStore((s) => s.pushToast)
+  const pushToast = useNotificationStore((s) => s.pushToast)
   const [shareOpen, setShareOpen] = useState(false)
   const [annotateOpen, setAnnotateOpen] = useState(false)
   const [annotateAnchor, setAnnotateAnchor] = useState<string>('')

@@ -1,0 +1,21 @@
+[run]
+branch = True
+source =
+    backend
+omit =
+    backend/tests/*
+    venv/*
+    .local/*
+    artifacts/*
+    data/*
+    frontend/*
+    mcp_server/*
+    output/*
+    scripts/*
+
+[report]
+skip_empty = True
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

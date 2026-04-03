@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_naive
+from backend.database.repositories.tasks import (
+    append_task_event as db_append_task_event,
+    update_task_status as db_update_task_status,
+)
 
 logger = get_logger(__name__)
 
@@ -250,6 +255,59 @@ class QuestionLibraryTaskManager:
         task.progress = 100.0
         async with task.cond:
             task.cond.notify_all()
+
+    async def shutdown(self, *, reason: str = "server_shutdown") -> None:
+        """Best-effort graceful shutdown: cancel running tasks and persist terminal state."""
+
+        msg = str(reason or "server_shutdown").strip() or "server_shutdown"
+
+        async with self._lock:
+            tasks = list(self._tasks.values())
+
+        for task in tasks:
+            if task.status != "running":
+                continue
+
+            task.status = "failed"
+            task.error = msg
+
+            try:
+                await self._append_event(
+                    task,
+                    {"type": "warning", "data": {"message": "Task canceled due to server shutdown.", "reason": msg}},
+                )
+            except Exception:
+                logger.debug("question_library_shutdown_append_event_failed", extra={"task_id": task.task_id}, exc_info=True)
+
+            try:
+                await db_append_task_event(
+                    user_id=task.user_id,
+                    task_id=task.task_id,
+                    event_type="warning",
+                    payload={"message": "Task canceled due to server shutdown.", "reason": msg},
+                    seq=None,
+                    progress=float(task.progress or 0.0),
+                )
+            except Exception:
+                # Best-effort only: DB might be shutting down too.
+                pass
+
+            try:
+                await db_update_task_status(
+                    user_id=task.user_id,
+                    task_id=task.task_id,
+                    status="failed",
+                    error={"message": msg},
+                    ended_at=utcnow_naive(),
+                )
+            except Exception:
+                pass
+
+            if task.runner and not task.runner.done():
+                task.runner.cancel()
+
+            async with task.cond:
+                task.cond.notify_all()
 
     def _gc_locked(self) -> None:
         now = _now_s()

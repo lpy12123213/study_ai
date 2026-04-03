@@ -107,6 +107,15 @@ export interface QuestionLibraryDraftQuestion {
   answer: string
   analysis: string
   keep?: boolean
+  diagrams?: Array<{
+    kind?: string
+    url: string
+    filename?: string
+    media_id?: string
+    alt?: string
+    caption?: string
+    markdown?: string
+  }>
   review_status?: 'pending_review' | 'in_review' | 'approved' | 'rejected' | 'confirmed' | 'committed'
   review?: {
     verdict: string
@@ -317,7 +326,7 @@ export async function reviewQuestionLibrarySessionQuestion(
   const qid = String(questionId || '').trim()
   if (!sid) throw new Error('missing_session_id')
   if (!qid) throw new Error('missing_question_id')
-  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/review`)
+  const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/review`, undefined, { timeout: 120_000 })
   return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
 }
 

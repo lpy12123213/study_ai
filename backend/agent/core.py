@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.config import AgentConfig
+from backend.agent import auto_research as agent_auto_research
+from backend.agent import run_init as agent_run_init
+from backend.agent import streaming as agent_streaming
 from backend.agent.context import ContextManager
 from backend.agent.executor import Executor
-from backend.agent.memory import MemoryStore
+from backend.agent.memory import MemoryStore, SemanticStore
 from backend.agent.planner import Planner
 from backend.agent.policy import StudyMaterialsPolicy
+from backend.agent.react.loop import ReActLoop
 from backend.agent.reflector import Reflector
+from backend.agent.streaming import _clip_chars, _extract_kp_source_text, _strip_markdown_headings
+from backend.agent.tool_dispatch import ToolDispatcher
 from backend.agent.types import (
     ActionResults,
     AgentState,
@@ -20,11 +25,11 @@ from backend.agent.types import (
     ExecutionPlan,
     PlanStep,
     ReflectionResult,
-    StepResult,
     UserProfile,
     agent_event,
 )
 from backend.core.logging_utils import get_logger
+from backend.llm.client import chat_completion_text, is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -50,66 +55,6 @@ SYSTEM_INSTRUCTIONS = """你是一位经验丰富的教育专家，擅长将复�
 """
 
 
-def _chunk_text(text: str, *, chunk_size: int = 500) -> AsyncIterator[str]:
-    async def _gen() -> AsyncIterator[str]:
-        if not text:
-            return
-        for i in range(0, len(text), chunk_size):
-            # Cooperative scheduling so the event loop can flush SSE.
-            await asyncio.sleep(0)
-            yield text[i : i + chunk_size]
-
-    return _gen()
-
-
-def _clip_for_sse(value: Any, *, depth: int = 0) -> Any:
-    """Best-effort trimming so tool outputs won't overwhelm SSE payloads."""
-
-    if value is None:
-        return None
-
-    if isinstance(value, (bool, int, float)):
-        return value
-
-    if isinstance(value, str):
-        max_len = 1200 if depth == 0 else 800
-        if len(value) <= max_len:
-            return value
-        return value[: max_len - 1].rstrip() + "…"
-
-    if isinstance(value, list):
-        if depth >= 3:
-            return f"[{len(value)} items]"
-        max_items = 10 if depth == 0 else 6
-        clipped = [_clip_for_sse(x, depth=depth + 1) for x in value[:max_items]]
-        if len(value) > max_items:
-            clipped.append(f"…（共 {len(value)} 项）")
-        return clipped
-
-    if isinstance(value, dict):
-        if depth >= 3:
-            return "{...}"
-        out: Dict[str, Any] = {}
-        for k, v in value.items():
-            key = str(k)
-            # Common large fields: keep a smaller preview.
-            if key in {"markdown", "content", "stem", "solution_markdown"} and isinstance(v, str):
-                out[key] = _clip_for_sse(v, depth=depth + 1)
-                continue
-            out[key] = _clip_for_sse(v, depth=depth + 1)
-        return out
-
-    # Fallback: stringify unknown objects (Path, datetime, etc.)
-    try:
-        return str(value)
-    except Exception:
-        return "<unserializable>"
-
-
-class _StopStepExecution(Exception):
-    """Internal control-flow exception to stop step execution early."""
-
-
 class AgentCore:
     """Plan-Act-Reflect agent core with streaming events."""
 
@@ -118,6 +63,7 @@ class AgentCore:
         *,
         config: Optional[AgentConfig] = None,
         memory_store: Optional[MemoryStore] = None,
+        semantic_store: Optional[SemanticStore] = None,
         context_manager: Optional[ContextManager] = None,
         planner: Optional[Planner] = None,
         executor: Optional[Executor] = None,
@@ -125,102 +71,122 @@ class AgentCore:
     ) -> None:
         self.config = config or AgentConfig.from_env()
         self.memory_store = memory_store or MemoryStore()
+        self.semantic_store = semantic_store or SemanticStore()
         self.context_manager = context_manager or ContextManager(config=self.config)
         self.planner = planner or Planner(config=self.config)
         self.executor = executor or Executor(config=self.config)
         self.reflector = reflector or Reflector(config=self.config)
 
         self.state: AgentState = AgentState.IDLE
-        # Latest context snapshot (used by resumable StudyMaterials tasks).
         self.last_context: Optional[CompressedContext] = None
 
-    def _get_split_knowledge_points(self, ctx: CompressedContext) -> List[str]:
-        split_res = ctx.working_memory.get("split_knowledge_points") or {}
-        kps_raw = split_res.get("knowledge_points") if isinstance(split_res, dict) else []
-        kps = (
-            [str(x or "").strip() for x in (kps_raw or []) if isinstance(x, (str, int, float)) and str(x or "").strip()]
-            if isinstance(kps_raw, list)
-            else []
-        )
-        return kps[:15]
-
-    def _expand_foreach_step(self, step: PlanStep, *, kp: str) -> PlanStep:
-        args = dict(getattr(step, "arguments", {}) or {})
-        args["knowledge_points"] = [kp]
-        title = f"{step.title}：{kp}" if kp else step.title
-
-        thought = (getattr(step, "thought", "") or "").strip()
-        if not thought:
-            thought = f"执行 {step.tool}：收集并整理该知识点的学习素材。"
-        if kp:
-            thought = f"{thought}\n当前知识点：{kp}"
-
-        return PlanStep(
-            id=f"{step.id}-{uuid.uuid4().hex[:6]}",
-            title=title,
-            tool=step.tool,
-            arguments=args,
-            depends_on=list(getattr(step, "depends_on", []) or []),
-            parallel_group=str(getattr(step, "parallel_group", "") or ""),
-            thought=thought,
+        self._tool_dispatch = ToolDispatcher(
+            config=self.config,
+            executor=self.executor,
+            context_manager=self.context_manager,
+            set_state=self._set_state,
+            summarize_subagent=lambda ctx, kp: self._summarize_subagent(ctx=ctx, kp=kp),
+            store_subagent_summary=lambda ctx, kp, summary: self._store_subagent_summary(
+                ctx=ctx, kp=kp, summary=summary
+            ),
+            start_export_subagent=lambda ctx, kp: self._start_export_subagent(ctx=ctx, kp=kp),
+            end_export_subagent=lambda ctx, kp, content: self._end_export_subagent(ctx=ctx, kp=kp, content=content),
         )
 
-    def _chunk_by_parallel_group(self, steps: List[PlanStep]) -> List[List[PlanStep]]:
-        """Chunk contiguous steps that share the same non-empty parallel_group.
+    def _set_state(self, state: AgentState) -> None:
+        self.state = state
 
-        The executor runs each chunk sequentially; chunks with len>=2 are executed concurrently.
-        """
+    async def _summarize_subagent(self, *, ctx: CompressedContext, kp: str) -> str:
+        kp = str(kp or "").strip()
+        if not kp:
+            return ""
 
-        groups: List[List[PlanStep]] = []
-        i = 0
-        while i < len(steps):
-            pg = str(getattr(steps[i], "parallel_group", "") or "").strip()
-            if not pg:
-                groups.append([steps[i]])
-                i += 1
-                continue
-            chunk: List[PlanStep] = []
-            while i < len(steps):
-                cur_pg = str(getattr(steps[i], "parallel_group", "") or "").strip()
-                if cur_pg != pg:
-                    break
-                chunk.append(steps[i])
-                i += 1
-            groups.append(chunk)
-        return groups
+        src = _extract_kp_source_text(ctx, kp=kp)
+        if not src:
+            return ""
 
-    async def _execute_parallel_steps(
+        model = str(self.config.summarizer_model or self.config.planner_model or "").strip()
+        if model and is_llm_configured():
+            prompt = (
+                "请为下面的知识点产出一段中文摘要，要求：\n"
+                "- 100~200字\n"
+                "- 只输出摘要正文（不要Markdown，不要分点编号，不要加标题）\n"
+                "- 侧重：核心定义/关键结论/常见误区或解题框架（如适用）\n\n"
+                f"知识点：{kp}\n"
+                f"材料摘录：\n{src}\n"
+            )
+            try:
+                text = await chat_completion_text(
+                    messages=[
+                        {"role": "system", "content": "你是教学摘要器，输出必须是纯文本。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model=model,
+                    temperature=0.2,
+                    max_tokens=280,
+                    retries=2,
+                    req_id_prefix="subagent-sum",
+                )
+                text = str(text or "").strip()
+                if text:
+                    text = _strip_markdown_headings(text).replace("```", "").strip()
+                    return _clip_chars(text, max_chars=220)
+            except Exception:
+                logger.debug("agent_subagent_summary_llm_failed", exc_info=True)
+
+        return _clip_chars(_strip_markdown_headings(src), max_chars=220)
+
+    def _store_subagent_summary(self, *, ctx: CompressedContext, kp: str, summary: str) -> None:
+        kp = str(kp or "").strip()
+        summary = str(summary or "").strip()
+        if not kp or not summary:
+            return
+
+        try:
+            bucket = ctx.working_memory.get("subagent_summaries")
+            if not isinstance(bucket, dict):
+                bucket = {}
+                ctx.working_memory["subagent_summaries"] = bucket
+            bucket[kp] = summary
+        except Exception:
+            logger.debug("agent_subagent_summary_store_failed", exc_info=True)
+
+    def _set_plan_summary(
         self,
         *,
         ctx: CompressedContext,
-        results: ActionResults,
-        steps: List[PlanStep],
-    ) -> AsyncIterator[Dict[str, Any]]:
-        queue: "asyncio.Queue[Optional[Dict[str, Any]]]" = asyncio.Queue()
+        topic: str,
+        profile: UserProfile,
+        plan: Optional[ExecutionPlan],
+        export_only: bool,
+    ) -> None:
+        try:
+            opts = ctx.working_memory.get("study_options")
+            opts = dict(opts) if isinstance(opts, dict) else {}
+        except Exception:
+            opts = {}
 
-        async def _run_one(s: PlanStep) -> None:
-            try:
-                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=s):
-                    await queue.put(evt)
-            except Exception as exc:  # pragma: no cover (best-effort safety)
-                await queue.put(agent_event("error", {"message": f"Parallel step failed ({s.tool}): {exc}"}))
-            finally:
-                await queue.put(None)
+        preset = str(opts.get("preset") or "").strip().lower()
+        if preset not in {"quick", "standard", "deep", "research"}:
+            preset = "standard"
 
-        tasks = [asyncio.create_task(_run_one(s)) for s in steps]
-        finished = 0
-        while finished < len(tasks):
-            item = await queue.get()
-            if item is None:
-                finished += 1
-                continue
-            yield item
+        requirements = _clip_chars(str(opts.get("requirements") or "").strip(), max_chars=900)
+        subject = str(profile.preferences.get("subject") or "").strip()
+        kps = self._get_split_knowledge_points(ctx)
 
-        for t in tasks:
-            try:
-                await t
-            except Exception:
-                logger.debug("agent_parallel_task_join_failed", exc_info=True)
+        rationale = _clip_chars(str(getattr(plan, "rationale", "") or "").strip(), max_chars=900)
+        ctx.working_memory["plan_summary"] = {
+            "topic": str(topic or "").strip(),
+            "subject": subject,
+            "preset": preset,
+            "requirements": requirements,
+            "knowledge_points": kps,
+            "export_only": bool(export_only),
+            "rationale": rationale,
+        }
+
+    def _get_split_knowledge_points(self, ctx: CompressedContext) -> List[str]:
+        return self._tool_dispatch._get_split_knowledge_points(ctx)
 
     async def _execute_step_block(
         self,
@@ -229,249 +195,8 @@ class AgentCore:
         results: ActionResults,
         steps: List[PlanStep],
     ) -> AsyncIterator[Dict[str, Any]]:
-        for chunk in self._chunk_by_parallel_group(steps):
-            if bool(ctx.working_memory.get("_abort_execution")):
-                return
-            if len(chunk) <= 1:
-                async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=chunk[0]):
-                    yield evt
-                continue
-            async for evt in self._execute_parallel_steps(ctx=ctx, results=results, steps=chunk):
-                yield evt
-
-    async def _run_subagent(
-        self,
-        *,
-        ctx: CompressedContext,
-        results: ActionResults,
-        block: List[PlanStep],
-        kp: str,
-        sem: asyncio.Semaphore,
-        queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
-    ) -> None:
-        try:
-            async with sem:
-                await queue.put(
-                    agent_event(
-                        "subagent_start",
-                        {
-                            "knowledge_point": kp,
-                            "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
-                        },
-                    )
-                )
-                await queue.put(
-                    agent_event(
-                        "status",
-                        {
-                            "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
-                        },
-                    )
-                )
-                concrete_block = [self._expand_foreach_step(s, kp=kp) for s in block]
-                async for evt in self._execute_step_block(ctx=ctx, results=results, steps=concrete_block):
-                    await queue.put(evt)
-                await queue.put(
-                    agent_event(
-                        "subagent_end",
-                        {
-                            "knowledge_point": kp,
-                            "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
-                        },
-                    )
-                )
-                await queue.put(
-                    agent_event(
-                        "status",
-                        {
-                            "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
-                        },
-                    )
-                )
-        except Exception as exc:  # pragma: no cover (best-effort safety)
-            await queue.put(agent_event("error", {"message": f"SubAgent 运行失败（{kp}）：{exc}"}))
-        finally:
-            await queue.put(None)
-
-    def _enrich_step_arguments(self, *, ctx: CompressedContext, concrete_step: PlanStep) -> None:
-        """Best-effort inject `knowledge_points` into multi-point tools for better UX."""
-
-        try:
-            step_args = dict(concrete_step.arguments or {})
-            export_kp = str(ctx.working_memory.get("_export_subagent_kp") or "").strip()
-            if (
-                export_kp
-                and concrete_step.tool
-                in {
-                    "export_study_markdown",
-                    "convert_markdown_to_latex",
-                    "refine_latex",
-                    "compile_latex_to_pdf",
-                }
-                and "knowledge_points" not in step_args
-            ):
-                step_args["knowledge_points"] = [export_kp]
-
-            if (
-                concrete_step.tool
-                in {
-                    "web_search_knowledge",
-                    "browse_web_pages",
-                    "wikipedia_search",
-                    "mediawiki_search",
-                    "github_search",
-                    "stackexchange_search",
-                    "search_questions_by_knowledge",
-                    "aggregate_knowledge",
-                    "synthesize_sources",
-                    "detect_knowledge_type",
-                    "generate_outline",
-                    "generate_study_material",
-                    "critique_draft",
-                    "refine_draft",
-                    "generate_diagrams",
-                }
-                and "knowledge_points" not in step_args
-            ):
-                split_res = ctx.working_memory.get("split_knowledge_points")
-                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                    kps = [
-                        str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()
-                    ][:15]
-                    if kps:
-                        step_args["knowledge_points"] = kps
-
-            concrete_step.arguments = step_args
-        except Exception:
-            # Best-effort only; never block execution.
-            return
-
-    def _append_tool_timing(
-        self,
-        *,
-        ctx: CompressedContext,
-        concrete_step: PlanStep,
-        step_result: StepResult,
-        elapsed_ms: int,
-    ) -> None:
-        try:
-            timings = ctx.working_memory.get("_tool_timings")
-            if not isinstance(timings, list):
-                timings = []
-                ctx.working_memory["_tool_timings"] = timings
-            timings.append(
-                {
-                    "step_id": concrete_step.id,
-                    "name": str(concrete_step.tool or "").strip(),
-                    "title": str(concrete_step.title or "").strip(),
-                    "success": bool(step_result.success),
-                    "elapsed_ms": int(elapsed_ms or 0),
-                }
-            )
-        except Exception:
-            # Best-effort only; never block execution.
-            return
-
-    async def _maybe_handle_step_failure(
-        self,
-        *,
-        ctx: CompressedContext,
-        results: ActionResults,
-        concrete_step: PlanStep,
-        step_result: StepResult,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        if step_result.success:
-            return
-
-        study_opts = ctx.working_memory.get("study_options")
-        study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-        strict_llm = bool(study_opts.get("strict_llm"))
-
-        tool_name = str(step_result.tool or concrete_step.tool or "").strip()
-        err = str(step_result.error or "").strip()
-
-        # LaTeX/PDF compilation can often be fixed by one more "refine LaTeX" round.
-        # Do a few visible retry rounds (refine -> compile) before treating it as fatal.
-        if tool_name == "compile_latex_to_pdf":
-            if not err.startswith("latex_engine_not_found"):
-                tex_current = str(ctx.working_memory.get("latex_tex") or "").strip()
-                max_rounds_raw = (
-                    os.getenv("STUDY_MATERIALS_LATEX_COMPILE_ROUNDS")
-                    or os.getenv("STUDY_MATERIALS_LATEX_MAX_ROUNDS")
-                    or "3"
-                )
-                try:
-                    max_rounds = int(max_rounds_raw)
-                except Exception:
-                    max_rounds = 3
-                max_rounds = max(1, min(max_rounds, 6))
-
-                try:
-                    cur_round = int(ctx.working_memory.get("_latex_compile_round") or 1)
-                except Exception:
-                    cur_round = 1
-                cur_round = max(1, cur_round)
-
-                if tex_current and cur_round < max_rounds:
-                    next_round = cur_round + 1
-                    ctx.working_memory["_latex_compile_round"] = next_round
-                    ctx.working_memory["_latex_last_compile_error"] = err
-
-                    yield agent_event(
-                        "status",
-                        {"content": f"PDF 编译失败，准备第 {next_round} 轮修订与重编译…"},
-                    )
-
-                    subject_hint = str(ctx.user_profile.preferences.get("subject") or "").strip()
-                    refine_step = PlanStep(
-                        id=f"refine_latex-retry-{uuid.uuid4().hex[:8]}",
-                        title=f"LaTeX 修订（第{next_round}轮）",
-                        tool="refine_latex",
-                        arguments={
-                            "topic": ctx.current_task,
-                            "subject": subject_hint,
-                            "compile_error": err,
-                        },
-                        thought="根据编译报错信息修订 LaTeX，提升通过率。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=refine_step):
-                        yield evt
-
-                    compile_step = PlanStep(
-                        id=f"compile_latex_to_pdf-retry-{uuid.uuid4().hex[:8]}",
-                        title=f"编译 PDF（第{next_round}轮）",
-                        tool="compile_latex_to_pdf",
-                        arguments={"topic": ctx.current_task},
-                        thought="重新编译修订后的 LaTeX，生成 PDF 下载文件。",
-                    )
-                    async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=compile_step):
-                        yield evt
-
-                    raise _StopStepExecution
-
-        fatal_tools = {"convert_markdown_to_latex", "refine_latex", "compile_latex_to_pdf"}
-        non_fatal_llm_tools = {"generate_diagrams"}
-        is_llm_error = err.startswith("llm_") or "llm_request_failed" in err or "llm_not_configured" in err
-        if tool_name in fatal_tools or (strict_llm and is_llm_error and tool_name not in non_fatal_llm_tools):
-            ctx.working_memory["_abort_execution"] = True
-            ctx.working_memory["_fatal_error"] = {
-                "tool": tool_name,
-                "step_id": concrete_step.id,
-                "error": err or "unknown_error",
-            }
-            yield agent_event(
-                "status",
-                {"content": f"关键步骤失败，已停止后续执行：{tool_name}\n错误：{err or 'unknown_error'}"},
-            )
-
-    def _maybe_capture_markdown_artifact(self, *, step_result: StepResult, results: ActionResults) -> None:
-        if (
-            step_result.success
-            and step_result.tool in {"assemble_markdown", "revise_markdown"}
-            and isinstance(step_result.output, str)
-            and step_result.output.strip()
-        ):
-            results.artifacts["markdown"] = step_result.output.strip()
+        async for evt in self._tool_dispatch.execute_step_block(ctx=ctx, results=results, steps=steps):
+            yield evt
 
     async def _execute_concrete_step(
         self,
@@ -480,98 +205,51 @@ class AgentCore:
         results: ActionResults,
         concrete_step: PlanStep,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Execute one step and stream SSE events (thinking/tool_call/tool_result)."""
+        async for evt in self._tool_dispatch.execute_concrete_step(ctx=ctx, results=results, concrete_step=concrete_step):
+            yield evt
 
-        self.state = AgentState.WAITING_TOOL
-        if bool(ctx.working_memory.get("_abort_execution")):
-            return
+    async def _ensure_planner_knowledge_points(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        user_input: str,
+        profile: UserProfile,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        async for evt in self._tool_dispatch.ensure_planner_knowledge_points(
+            ctx=ctx,
+            results=results,
+            user_input=user_input,
+            profile=profile,
+        ):
+            yield evt
 
-        thought = (getattr(concrete_step, "thought", "") or "").strip()
-        if thought:
-            yield agent_event("status", {"content": thought})
+    async def _execute_foreach_block(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        block: List[PlanStep],
+        fallback_kp: str,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        async for evt in self._tool_dispatch.execute_foreach_block(
+            ctx=ctx, results=results, block=block, fallback_kp=fallback_kp
+        ):
+            yield evt
 
-        self._enrich_step_arguments(ctx=ctx, concrete_step=concrete_step)
-
-        yield agent_event(
-            "tool_call",
-            {
-                "step_id": concrete_step.id,
-                "name": concrete_step.tool,
-                "title": concrete_step.title,
-                "arguments": concrete_step.arguments,
-            },
-        )
-        # Run the tool in the background so we can stream intermediate "thinking"
-        # events produced by the underlying LLM calls (OpenRouter reasoning stream).
-        t0 = time.monotonic()
-        event_queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
-
-        tool_task = asyncio.create_task(
-            self.executor.execute_step(concrete_step, context=ctx, emit_event=event_queue.put)
-        )
-        queue_task: "asyncio.Task[Dict[str, Any]]" = asyncio.create_task(event_queue.get())
-
-        while True:
-            done, _pending = await asyncio.wait(
-                {tool_task, queue_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if queue_task in done:
-                try:
-                    evt = queue_task.result()
-                except Exception:
-                    evt = None
-                if isinstance(evt, dict) and evt.get("event"):
-                    yield evt
-                queue_task = asyncio.create_task(event_queue.get())
-                continue
-
-            if tool_task in done:
-                if not queue_task.done():
-                    queue_task.cancel()
-                break
-
-        # Drain any remaining buffered events (best-effort).
-        try:
-            while True:
-                evt = event_queue.get_nowait()
-                if isinstance(evt, dict) and evt.get("event"):
-                    yield evt
-        except Exception:
-            logger.debug("agent_step_event_drain_failed", exc_info=True)
-
-        step_result = await tool_task
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        self._append_tool_timing(ctx=ctx, concrete_step=concrete_step, step_result=step_result, elapsed_ms=elapsed_ms)
-        yield agent_event(
-            "tool_result",
-            {
-                "step_id": concrete_step.id,
-                "name": concrete_step.tool,
-                "title": concrete_step.title,
-                "success": bool(step_result.success),
-                "elapsed_ms": elapsed_ms,
-                "output": _clip_for_sse(step_result.output),
-                "error": step_result.error,
-            },
-        )
-        results.step_results.append(step_result)
-        self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
-        try:
-            async for evt in self._maybe_handle_step_failure(
-                ctx=ctx,
-                results=results,
-                concrete_step=concrete_step,
-                step_result=step_result,
-            ):
-                yield evt
-        except _StopStepExecution:
-            return
-        except Exception:
-            logger.debug("agent_step_failure_handler_failed", exc_info=True)
-
-        self._maybe_capture_markdown_artifact(step_result=step_result, results=results)
+    async def _execute_plan_steps(
+        self,
+        *,
+        ctx: CompressedContext,
+        results: ActionResults,
+        plan: ExecutionPlan,
+        user_input: str,
+        skip_export: bool,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        async for evt in self._tool_dispatch.execute_plan_steps(
+            ctx=ctx, results=results, plan=plan, user_input=user_input, skip_export=skip_export
+        ):
+            yield evt
 
     async def _initialize_run(
         self,
@@ -585,207 +263,30 @@ class AgentCore:
         max_iterations: Optional[int],
         out: Dict[str, Any],
     ) -> AsyncIterator[Dict[str, Any]]:
-        yield agent_event("status", {"content": "初始化上下文…"})
-        self.state = AgentState.WAITING_TOOL
-
-        profile_step_id = f"get_user_profile-{uuid.uuid4().hex[:8]}"
-        yield agent_event(
-            "tool_call",
-            {
-                "step_id": profile_step_id,
-                "name": "get_user_profile",
-                "title": "读取用户画像",
-                "arguments": {"user_id": user_id},
-            },
-        )
-        try:
-            profile = await self.memory_store.get_user_profile(user_id=user_id)
-            yield agent_event(
-                "tool_result",
-                {
-                    "step_id": profile_step_id,
-                    "name": "get_user_profile",
-                    "title": "读取用户画像",
-                    "success": True,
-                    "output": {
-                        "user_id": profile.user_id,
-                        "ability_level": profile.ability_level,
-                        "ability_score": profile.ability_score,
-                        "preferences": dict(profile.preferences or {}),
-                    },
-                },
-            )
-        except Exception as exc:
-            yield agent_event(
-                "tool_result",
-                {
-                    "step_id": profile_step_id,
-                    "name": "get_user_profile",
-                    "title": "读取用户画像",
-                    "success": False,
-                    "error": str(exc),
-                },
-            )
-            raise
-
-        pref_patch: Dict[str, Any] = {}
-        if isinstance(preferences, dict):
-            for k, v in preferences.items():
-                key = str(k or "").strip()
-                if not key:
-                    continue
-                if v in (None, "", [], {}):
-                    continue
-                pref_patch[key] = v
-        if pref_patch:
-            try:
-                profile = await self.memory_store.update_user_profile(user_id=user_id, patch=pref_patch)
-            except Exception:
-                # Best-effort; never block execution.
-                try:
-                    prefs = dict(profile.preferences or {})
-                    prefs.update(pref_patch)
-                    profile.preferences = prefs
-                except Exception:
-                    logger.debug("agent_profile_preference_fallback_failed", exc_info=True)
-
-        ctx = self.context_manager.create_context(
-            user_profile=profile,
+        async for evt in agent_run_init.initialize_run(
+            user_input=user_input,
+            user_id=user_id,
+            preferences=preferences,
+            options=options,
+            resume_working_memory=resume_working_memory,
+            iteration_offset=iteration_offset,
+            max_iterations=max_iterations,
+            out=out,
+            config=self.config,
+            memory_store=self.memory_store,
+            semantic_store=self.semantic_store,
+            context_manager=self.context_manager,
             system_instructions=SYSTEM_INSTRUCTIONS,
-            current_task=user_input,
-        )
-
-        study_opts = dict(options) if isinstance(options, dict) else {}
-        if "strict_llm" not in study_opts:
-            raw = str(os.getenv("STUDY_MATERIALS_STRICT_LLM") or "1").strip().lower()
-            study_opts["strict_llm"] = raw in {"1", "true", "yes", "y", "on"}
-
-        if isinstance(resume_working_memory, dict) and resume_working_memory:
-            for k, v in resume_working_memory.items():
-                key = str(k or "").strip()
-                if not key:
-                    continue
-                if key in {"study_options", "_abort_execution", "_fatal_error", "_export_subagent_kp"}:
-                    continue
-                ctx.working_memory[key] = v
-            ctx.working_memory.pop("_abort_execution", None)
-            ctx.working_memory.pop("_fatal_error", None)
-            ctx.working_memory.pop("_export_subagent_kp", None)
-
-        ctx.working_memory["study_options"] = study_opts
-        self.last_context = ctx
-        self.context_manager.append_message(ctx, role="user", content=user_input)
-
-        policy = StudyMaterialsPolicy()
-        try:
-            iter_offset = int(iteration_offset or 0)
-        except Exception:
-            iter_offset = 0
-        iter_offset = max(0, iter_offset)
-
-        if max_iterations is not None:
-            try:
-                budget = int(max_iterations)
-            except Exception:
-                budget = 0
-            budget = max(1, budget)
-        else:
-            budget = int(policy.iteration_budget(ctx, default_cap=int(self.config.max_iterations or 1)) or 1)
-            budget = max(1, budget)
-
-        try:
-            opts_for_mode = ctx.working_memory.get("study_options")
-            opts_for_mode = dict(opts_for_mode) if isinstance(opts_for_mode, dict) else {}
-        except Exception:
-            opts_for_mode = {}
-        continue_mode = str(opts_for_mode.get("continue_mode") or "").strip().lower()
-
-        out["profile"] = profile
-        out["ctx"] = ctx
-        out["policy"] = policy
-        out["iter_offset"] = iter_offset
-        out["budget"] = budget
-        out["export_only"] = continue_mode == "fix_export"
-        out["skip_export"] = continue_mode == "skip_export"
-
-    async def _ensure_planner_knowledge_points(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        user_input: str,
-        profile: UserProfile,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        split_res = ctx.working_memory.get("split_knowledge_points")
-        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-            existing = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()]
-            if existing[:1]:
-                return
-
-        try:
-            opts = ctx.working_memory.get("study_options")
-            opts = dict(opts) if isinstance(opts, dict) else {}
-        except Exception:
-            opts = {}
-
-        preset = str(opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or "").strip().lower()
-        if preset not in {"quick", "standard", "deep", "research"}:
-            preset = "standard"
-
-        split_min, split_max = 2, 8
-        if preset == "quick":
-            split_min, split_max = 2, 4
-        elif preset == "deep":
-            split_min, split_max = 4, 12
-        elif preset == "research":
-            split_min, split_max = 3, 8
-
-        try:
-            max_points_override = int(opts.get("max_points") or 0)
-        except Exception:
-            max_points_override = 0
-        if max_points_override > 0:
-            split_max = max(1, min(max_points_override, 15))
-            split_min = min(split_min, split_max)
-
-        subject = str(profile.preferences.get("subject") or "").strip()
-        split_step = PlanStep(
-            id=f"split_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
-            title="拆分知识点",
-            tool="split_knowledge_points",
-            arguments={
-                "topic": user_input,
-                "subject": subject,
-                "min_points": split_min,
-                "max_points": split_max,
-            },
-            thought="先拆分知识点，后续才能逐点深挖并展示 SubAgent 进度。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=split_step):
+            set_state=self._set_state,
+        ):
             yield evt
 
-        split_res = ctx.working_memory.get("split_knowledge_points")
-        kps: List[str] = []
-        if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-            kps = [str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()][:15]
-        if not kps:
-            return
-
-        review_step = PlanStep(
-            id=f"review_knowledge_points-planner-{uuid.uuid4().hex[:8]}",
-            title="审核知识点列表",
-            tool="review_knowledge_points",
-            arguments={
-                "topic": user_input,
-                "subject": subject,
-                "knowledge_points": kps,
-                "min_points": split_min,
-                "max_points": split_max,
-            },
-            thought="对拆分结果做去重、补全与粒度调整，避免过泛/重复，减少后续检索浪费。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-            yield evt
+        try:
+            ctx = out.get("ctx")
+            if isinstance(ctx, CompressedContext):
+                self.last_context = ctx
+        except Exception:
+            logger.debug("agent_last_context_set_failed", exc_info=True)
 
     def _build_export_only_plan(self, *, user_input: str, subject: str, compile_err: str) -> ExecutionPlan:
         return ExecutionPlan(
@@ -823,18 +324,20 @@ class AgentCore:
             ],
         )
 
-    async def _start_export_subagent(self, *, ctx: "CompressedContext", kp: str) -> AsyncIterator[Dict[str, Any]]:
+    async def _start_export_subagent(self, *, ctx: CompressedContext, kp: str) -> AsyncIterator[Dict[str, Any]]:
         try:
             ctx.working_memory["_export_subagent_kp"] = kp
         except Exception:
             logger.debug("agent_export_subagent_state_set_failed", exc_info=True)
-        yield agent_event(
-            "subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"}
-        )
+        yield agent_event("subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
         yield agent_event("status", {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
 
     async def _end_export_subagent(
-        self, *, ctx: "CompressedContext", kp: str, content: str
+        self,
+        *,
+        ctx: CompressedContext,
+        kp: str,
+        content: str,
     ) -> AsyncIterator[Dict[str, Any]]:
         try:
             ctx.working_memory.pop("_export_subagent_kp", None)
@@ -843,750 +346,12 @@ class AgentCore:
         yield agent_event("subagent_end", {"knowledge_point": kp, "content": content})
         yield agent_event("status", {"content": content})
 
-    async def _execute_foreach_block(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        block: List[PlanStep],
-        fallback_kp: str,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        kps = self._get_split_knowledge_points(ctx)
-        if not kps and fallback_kp:
-            kps = [fallback_kp]
-
-        limits = [int(getattr(s, "foreach_limit", 0) or 0) for s in block]
-        positive_limits = [x for x in limits if x > 0]
-        limit = min(positive_limits) if positive_limits else 0
-        if limit > 0:
-            kps = kps[: max(1, limit)]
-
-        if not kps:
-            async for evt in self._execute_step_block(ctx=ctx, results=results, steps=block):
-                yield evt
-            return
-
-        subagent_concurrency = max(1, int(getattr(self.config, "subagent_concurrency", 3) or 3))
-        subagent_concurrency = min(subagent_concurrency, len(kps))
-
-        try:
-            opts = ctx.working_memory.get("study_options")
-            opts = dict(opts) if isinstance(opts, dict) else {}
-            preset = str(opts.get("preset") or "").strip().lower()
-            if preset == "research":
-                subagent_concurrency = min(subagent_concurrency, 2)
-        except Exception:
-            logger.debug("agent_subagent_concurrency_adjust_failed", exc_info=True)
-
-        if subagent_concurrency <= 1 or len(kps) <= 1:
-            for kp in kps:
-                yield agent_event(
-                    "subagent_start",
-                    {"knowledge_point": kp, "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"},
-                )
-                yield agent_event(
-                    "status",
-                    {"content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"},
-                )
-                concrete_block = [self._expand_foreach_step(s, kp=kp) for s in block]
-                async for evt in self._execute_step_block(ctx=ctx, results=results, steps=concrete_block):
-                    yield evt
-                yield agent_event(
-                    "subagent_end",
-                    {
-                        "knowledge_point": kp,
-                        "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
-                    },
-                )
-                yield agent_event(
-                    "status",
-                    {"content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}"},
-                )
-            return
-
-        yield agent_event(
-            "status",
-            {"content": f"SubAgent 并行模式：共 {len(kps)} 个知识点，最大并发 {subagent_concurrency}。"},
-        )
-
-        queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
-        sem = asyncio.Semaphore(subagent_concurrency)
-        tasks = [
-            asyncio.create_task(self._run_subagent(ctx=ctx, results=results, block=block, kp=kp, sem=sem, queue=queue))
-            for kp in kps
-        ]
-        finished = 0
-        while finished < len(tasks):
-            item = await queue.get()
-            if item is None:
-                finished += 1
-                continue
-            yield item
-
-        for t in tasks:
-            try:
-                await t
-            except Exception:
-                logger.debug("agent_parallel_task_join_failed", exc_info=True)
-
-    async def _execute_plan_steps(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        plan: ExecutionPlan,
-        user_input: str,
-        skip_export: bool,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        steps = list(plan.steps or [])
-        export_tools = {
-            "export_study_markdown",
-            "convert_markdown_to_latex",
-            "refine_latex",
-            "compile_latex_to_pdf",
-        }
-        export_kp = "导出：LaTeX/PDF"
-        export_open = False
-        export_closed = False
-
-        i = 0
-        while i < len(steps):
-            if bool(ctx.working_memory.get("_abort_execution")):
-                break
-
-            step = steps[i]
-            if skip_export and step.tool in export_tools:
-                i += 1
-                continue
-
-            if (not export_open) and step.tool in export_tools:
-                export_open = True
-                async for evt in self._start_export_subagent(ctx=ctx, kp=export_kp):
-                    yield evt
-
-            if getattr(step, "foreach_knowledge_point", False):
-                block: List[PlanStep] = []
-                while i < len(steps) and getattr(steps[i], "foreach_knowledge_point", False):
-                    block.append(steps[i])
-                    i += 1
-                async for evt in self._execute_foreach_block(
-                    ctx=ctx, results=results, block=block, fallback_kp=user_input
-                ):
-                    yield evt
-                continue
-
-            i += 1
-            async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step):
-                yield evt
-
-            if export_open and (not export_closed) and step.tool == "compile_latex_to_pdf":
-                export_closed = True
-                async for evt in self._end_export_subagent(
-                    ctx=ctx,
-                    kp=export_kp,
-                    content="SubAgent 完成：导出与编译结束（LaTeX/PDF）。",
-                ):
-                    yield evt
-
-        if export_open and (not export_closed):
-            export_closed = True
-            async for evt in self._end_export_subagent(
-                ctx=ctx,
-                kp=export_kp,
-                content="SubAgent 结束：导出流程提前终止（LaTeX/PDF）。",
-            ):
-                yield evt
-
-    def _auto_research_context(self, *, ctx: "CompressedContext", user_input: str) -> Dict[str, Any]:
-        try:
-            opts = ctx.working_memory.get("study_options")
-            opts = dict(opts) if isinstance(opts, dict) else {}
-        except Exception:
-            opts = {}
-
-        preset = str(opts.get("preset") or "standard").strip().lower()
-        if preset not in {"quick", "standard", "deep", "research"}:
-            preset = "standard"
-        requirements = str(opts.get("requirements") or "").strip()
-
-        enable_extra_tools: bool
-        if isinstance(opts.get("enable_extra_tools"), bool):
-            enable_extra_tools = bool(opts.get("enable_extra_tools"))
-        else:
-            raw = str(os.getenv("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS") or "").strip().lower()
-            enable_extra_tools = raw in {"1", "true", "yes", "y", "on"}
-
-        subject = str(ctx.user_profile.preferences.get("subject") or "").strip()
-        with_questions = bool(opts.get("with_questions")) if isinstance(opts.get("with_questions"), bool) else False
-        with_diagrams = bool(opts.get("with_diagrams")) if isinstance(opts.get("with_diagrams"), bool) else True
-
-        return {
-            "preset": preset,
-            "requirements": requirements,
-            "enable_extra_tools": enable_extra_tools,
-            "subject": subject,
-            "with_questions": with_questions,
-            "with_diagrams": with_diagrams,
-            "topic": user_input,
-        }
-
-    async def _auto_research_retrieve(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        missing: List[str],
-        cfg: Dict[str, Any],
-    ) -> AsyncIterator[Dict[str, Any]]:
-        preset = str(cfg.get("preset") or "standard")
-        subject = str(cfg.get("subject") or "")
-        topic = str(cfg.get("topic") or "")
-
-        web_step = PlanStep(
-            id=f"auto-web-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：联网搜索知识点（研究型）",
-            tool="web_search_knowledge",
-            arguments={
-                "topic": topic,
-                "subject": subject,
-                "knowledge_points": missing,
-                "limit": 12 if preset == "research" else 10,
-                "text_max_length": 6000,
-                "query_hint": "定义 直观理解 关键结论 适用条件 充分必要条件 等价表述 证明 推导 反例 边界情况 易错点",
-                "scope": "webpage",
-                "include_summary": False,
-                "concurrency": 3,
-                "decompose": True,
-                "sub_questions": 4 if preset in {"deep", "research"} else 3,
-                "preset": preset,
-            },
-            thought="为资料不足的知识点追加一轮研究型网搜，补齐条件/反例/推导框架等关键要素。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=web_step):
-            yield evt
-
-        if not bool(cfg.get("enable_extra_tools")):
-            return
-
-        wiki_step = PlanStep(
-            id=f"auto-wiki-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：百科检索（Wikipedia）",
-            tool="wikipedia_search",
-            arguments={
-                "topic": topic,
-                "subject": subject,
-                "knowledge_points": missing,
-                "lang": "zh",
-                "sentences": 4,
-                "max_content_length": 2500,
-                "concurrency": 3,
-            },
-            thought="补充百科级定义/背景，提升术语一致性与可信度。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=wiki_step):
-            yield evt
-
-        se_site = "math.stackexchange" if ("数学" in subject or "math" in subject.lower()) else "stackoverflow"
-        se_step = PlanStep(
-            id=f"auto-se-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：问答检索（StackExchange）",
-            tool="stackexchange_search",
-            arguments={
-                "topic": topic,
-                "subject": subject,
-                "knowledge_points": missing,
-                "limit": 6,
-                "site": se_site,
-                "include_answers": True,
-                "query_hint": "intuition proof pitfall",
-            },
-            thought="补充高质量问答解释与易错点，增强“为什么”和“怎么用”。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=se_step):
-            yield evt
-
-        browse_step = PlanStep(
-            id=f"auto-browse-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：提取网页正文（节选）",
-            tool="browse_web_pages",
-            arguments={
-                "topic": topic,
-                "subject": subject,
-                "knowledge_points": missing,
-                "top_k": 3 if preset == "research" else 2,
-                "max_chars": 14000 if preset == "research" else 12000,
-            },
-            thought="从新增检索结果中抽取可读正文片段，供写作阶段重组表达。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=browse_step):
-            yield evt
-
-    async def _auto_research_regenerate(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        missing: List[str],
-        cfg: Dict[str, Any],
-    ) -> AsyncIterator[Dict[str, Any]]:
-        preset = str(cfg.get("preset") or "standard")
-        subject = str(cfg.get("subject") or "")
-        topic = str(cfg.get("topic") or "")
-        requirements = str(cfg.get("requirements") or "")
-        with_questions = bool(cfg.get("with_questions"))
-        with_diagrams = bool(cfg.get("with_diagrams"))
-
-        agg_step = PlanStep(
-            id=f"auto-agg-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：聚合多源资料（按知识点）",
-            tool="aggregate_knowledge",
-            arguments={"topic": topic, "subject": subject, "knowledge_points": missing},
-            thought="将新增的检索结果聚合回统一素材池。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=agg_step):
-            yield evt
-
-        gen_step = PlanStep(
-            id=f"auto-gen-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：生成概念讲解（按知识点）",
-            tool="generate_study_material",
-            arguments={
-                "topic": topic,
-                "subject": subject,
-                "knowledge_points": missing,
-                "preset": preset,
-                "requirements": requirements,
-                "max_points": len(missing),
-                "max_web_results": 12 if preset == "research" else 10,
-                "max_web_pages": 3 if preset == "research" else 2,
-                "max_page_chars": 3000 if preset == "research" else 2600,
-                "with_questions": with_questions,
-                "with_diagrams": with_diagrams,
-            },
-            thought="基于补充后的资料，重写资料不足的知识点讲解。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=gen_step):
-            yield evt
-
-        assemble_step = PlanStep(
-            id=f"auto-assemble-{uuid.uuid4().hex[:8]}",
-            title="自动补检索：重新组装自学档案 Markdown",
-            tool="assemble_study_archive",
-            arguments={"topic": topic, "subject": subject},
-            thought="将补充后的讲解更新到最终 Markdown。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=assemble_step):
-            yield evt
-
-        review_step = PlanStep(
-            id=f"auto-review2-{uuid.uuid4().hex[:8]}",
-            title="自动复审（补检索后）",
-            tool="review_content",
-            arguments={"topic": topic},
-            thought="补检索后复审，确认来源覆盖已达标。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-            yield evt
-
-    async def _maybe_auto_research(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        plan: Optional[ExecutionPlan],
-        policy: StudyMaterialsPolicy,
-        user_input: str,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        missing = policy.missing_kps_for_auto_research(ctx)
-        if not missing or not plan:
-            return
-
-        policy.mark_auto_research(ctx, missing)
-        cfg = self._auto_research_context(ctx=ctx, user_input=user_input)
-
-        yield agent_event(
-            "status",
-            {
-                "content": "自动补检索：发现部分知识点资料不足，追加一轮研究型检索（不进入下一轮规划）…\n"
-                + "\n".join(f"- {kp}" for kp in missing),
-            },
-        )
-
-        async for evt in self._auto_research_retrieve(ctx=ctx, results=results, missing=missing, cfg=cfg):
-            yield evt
-        async for evt in self._auto_research_regenerate(ctx=ctx, results=results, missing=missing, cfg=cfg):
-            yield evt
-
-    async def _maybe_auto_revise(
-        self,
-        *,
-        ctx: "CompressedContext",
-        results: ActionResults,
-        plan: Optional[ExecutionPlan],
-        policy: StudyMaterialsPolicy,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        if not bool(policy.config.auto_revise) or not plan:
-            return
-
-        planned_tools = {str(getattr(s, "tool", "") or "") for s in (plan.steps or []) if s}
-        if "revise_markdown" in planned_tools:
-            return
-
-        issues = policy.issues_for_auto_revise(ctx, planned_tools=planned_tools)
-        if not issues:
-            return
-
-        policy.mark_auto_revise(ctx)
-        markdown = str(ctx.working_memory.get("markdown") or "").strip()
-        if not markdown:
-            return
-
-        yield agent_event("status", {"content": "自动修订：根据审查意见进行一次快速修订（提升一次通过率）…"})
-
-        revise_step = PlanStep(
-            id=f"auto-revise-{uuid.uuid4().hex[:8]}",
-            title="自动修订 Markdown",
-            tool="revise_markdown",
-            arguments={"issues": issues},
-            thought="根据审查 issues 快速修订 Markdown（一次性修补明显问题）。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=revise_step):
-            yield evt
-
-        review_step = PlanStep(
-            id=f"auto-review-{uuid.uuid4().hex[:8]}",
-            title="自动复审（修订后）",
-            tool="review_content",
-            arguments={"topic": ctx.current_task},
-            thought="修订后再次审查，确认问题已解决。",
-        )
-        async for evt in self._execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
-            yield evt
-
-    async def _compress_context(self, *, ctx: "CompressedContext") -> AsyncIterator[Dict[str, Any]]:
-        self.state = AgentState.COMPRESSING
-        compress_step_id = f"compress_context-{uuid.uuid4().hex[:8]}"
-        yield agent_event(
-            "tool_call",
-            {"step_id": compress_step_id, "name": "compress_context", "title": "压缩上下文", "arguments": {}},
-        )
-
-        t0 = time.monotonic()
-        try:
-            before_tokens = self.context_manager.estimate_tokens(ctx)
-            compress_timeout_s = float(
-                os.getenv("STUDY_MATERIALS_COMPRESS_TIMEOUT_S") or os.getenv("AGENT_COMPRESS_TIMEOUT_S") or "12"
-            )
-            compress_timeout_s = max(2.0, min(compress_timeout_s, 120.0))
-            await asyncio.wait_for(self.context_manager.compress_if_needed(ctx), timeout=compress_timeout_s)
-            after_tokens = self.context_manager.estimate_tokens(ctx)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            yield agent_event(
-                "tool_result",
-                {
-                    "step_id": compress_step_id,
-                    "name": "compress_context",
-                    "title": "压缩上下文",
-                    "success": True,
-                    "elapsed_ms": elapsed_ms,
-                    "output": {"before_tokens": before_tokens, "after_tokens": after_tokens},
-                },
-            )
-        except Exception as exc:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            yield agent_event(
-                "tool_result",
-                {
-                    "step_id": compress_step_id,
-                    "name": "compress_context",
-                    "title": "压缩上下文",
-                    "success": False,
-                    "elapsed_ms": elapsed_ms,
-                    "error": str(exc),
-                },
-            )
-
-    async def _record_session(
-        self,
-        *,
-        user_id: str,
-        user_input: str,
-        reflection: Optional[ReflectionResult],
-    ) -> AsyncIterator[Dict[str, Any]]:
-        update_step_id = f"update_user_profile-{uuid.uuid4().hex[:8]}"
-        yield agent_event(
-            "tool_call",
-            {
-                "step_id": update_step_id,
-                "name": "update_user_profile",
-                "title": "更新用户画像",
-                "arguments": {
-                    "user_id": user_id,
-                    "topic": user_input,
-                    "passed": bool(reflection.passed) if reflection else True,
-                },
-            },
-        )
-
-        t0 = time.monotonic()
-        try:
-            profile_timeout_s = float(
-                os.getenv("STUDY_MATERIALS_PROFILE_TIMEOUT_S") or os.getenv("AGENT_PROFILE_TIMEOUT_S") or "5"
-            )
-            profile_timeout_s = max(1.0, min(profile_timeout_s, 60.0))
-            await asyncio.wait_for(
-                self.memory_store.record_session(
-                    user_id=user_id,
-                    topic=user_input,
-                    passed=bool(reflection.passed) if reflection else True,
-                    issues=(reflection.issues if reflection else []),
-                ),
-                timeout=profile_timeout_s,
-            )
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            yield agent_event(
-                "tool_result",
-                {
-                    "step_id": update_step_id,
-                    "name": "update_user_profile",
-                    "title": "更新用户画像",
-                    "success": True,
-                    "elapsed_ms": elapsed_ms,
-                    "output": {
-                        "user_id": user_id,
-                        "topic": user_input,
-                        "passed": bool(reflection.passed) if reflection else True,
-                        "issues_count": len((reflection.issues if reflection else []) or []),
-                    },
-                },
-            )
-        except Exception as exc:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            yield agent_event(
-                "tool_result",
-                {
-                    "step_id": update_step_id,
-                    "name": "update_user_profile",
-                    "title": "更新用户画像",
-                    "success": False,
-                    "elapsed_ms": elapsed_ms,
-                    "error": str(exc),
-                },
-            )
-
-    def _resolve_markdown_and_archive_path(
-        self,
-        *,
-        ctx: "CompressedContext",
-        user_input: str,
-        results: ActionResults,
-    ) -> Dict[str, str]:
-        markdown = results.artifacts.get("markdown") or ctx.working_memory.get("markdown") or ""
-        if not isinstance(markdown, str):
-            markdown = ""
-
-        archive_path = str(ctx.working_memory.get("archive_path") or "").strip()
-        if not archive_path:
-            saved = ctx.working_memory.get("save_markdown_file")
-            if isinstance(saved, dict):
-                archive_path = str(saved.get("path") or "").strip()
-
-        if not markdown:
-            markdown = f"# 自学材料：{user_input}\n\n（生成结果为空，建议重试或提供更具体的描述）\n"
-
-        return {"markdown": markdown, "archive_path": archive_path}
-
-    def _build_per_kp_report(self, *, ctx: "CompressedContext") -> List[Dict[str, Any]]:
-        try:
-            study_opts = ctx.working_memory.get("study_options")
-            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-            with_diagrams_opt = study_opts.get("with_diagrams")
-            with_diagrams = bool(with_diagrams_opt) if isinstance(with_diagrams_opt, bool) else True
-
-            material_blob = ctx.working_memory.get("generate_study_material")
-            if not isinstance(material_blob, dict):
-                material_blob = (
-                    ctx.working_memory.get("study_material")
-                    if isinstance(ctx.working_memory.get("study_material"), dict)
-                    else {}
-                )
-            sections_blob = material_blob.get("sections") if isinstance(material_blob, dict) else None
-            sections_list = (
-                [s for s in (sections_blob or []) if isinstance(s, dict)] if isinstance(sections_blob, list) else []
-            )
-
-            preferred: List[str] = []
-            split_res = ctx.working_memory.get("split_knowledge_points")
-            if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                preferred = [
-                    str(x or "").strip() for x in (split_res.get("knowledge_points") or []) if str(x or "").strip()
-                ][:20]
-            if not preferred:
-                preferred = [
-                    str(s.get("knowledge_point") or "").strip()
-                    for s in sections_list
-                    if str(s.get("knowledge_point") or "").strip()
-                ][:20]
-
-            sec_by_kp: Dict[str, Dict[str, Any]] = {}
-            for sec in sections_list:
-                kp = str(sec.get("knowledge_point") or "").strip()
-                if kp and kp not in sec_by_kp:
-                    sec_by_kp[kp] = sec
-
-            def _count_list(v: Any) -> int:
-                return len(v) if isinstance(v, list) else 0
-
-            per_kp_report: List[Dict[str, Any]] = []
-            for kp in preferred:
-                sec = sec_by_kp.get(kp) or {}
-                web_results = sec.get("web_results")
-                web_pages = sec.get("web_pages")
-                gh = sec.get("github") if isinstance(sec.get("github"), dict) else {}
-                se = sec.get("stackexchange") if isinstance(sec.get("stackexchange"), dict) else {}
-
-                usage = sec.get("explanation_usage") if isinstance(sec.get("explanation_usage"), dict) else {}
-                try:
-                    total_tokens = int(usage.get("total_tokens") or 0)
-                except Exception:
-                    total_tokens = 0
-                try:
-                    conts = int(sec.get("explanation_continuations") or 0)
-                except Exception:
-                    conts = 0
-                finish_reason = str(sec.get("explanation_finish_reason") or "").strip().lower()
-
-                diagram = sec.get("diagram") if isinstance(sec.get("diagram"), dict) else {}
-                has_diagram = bool(str(diagram.get("url") or diagram.get("markdown") or "").strip())
-
-                missing: List[str] = []
-                if _count_list(web_results) < 2:
-                    missing.append("web_results_low")
-                if _count_list(web_pages) == 0:
-                    missing.append("web_pages_missing")
-                if finish_reason == "length" or conts > 0:
-                    missing.append("llm_truncated")
-                if with_diagrams and not has_diagram:
-                    missing.append("diagram_missing")
-
-                per_kp_report.append(
-                    {
-                        "knowledge_point": kp,
-                        "web_results": _count_list(web_results),
-                        "web_pages": _count_list(web_pages),
-                        "github_results": _count_list(gh.get("results")),
-                        "stackexchange_results": _count_list(se.get("results")),
-                        "tokens_total": total_tokens,
-                        "continuations": conts,
-                        "missing": missing,
-                    }
-                )
-            return per_kp_report
-        except Exception:
-            return []
-
-    def _build_timing_report(
-        self,
-        *,
-        ctx: "CompressedContext",
-        per_kp_report: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        try:
-            timings_blob = ctx.working_memory.get("_tool_timings")
-            timings_list = (
-                [dict(x) for x in (timings_blob or []) if isinstance(x, dict)] if isinstance(timings_blob, list) else []
-            )
-
-            def _safe_int(v: Any) -> int:
-                try:
-                    return int(v)
-                except Exception:
-                    return 0
-
-            ms_values: List[int] = []
-            for x in timings_list:
-                ms = _safe_int(x.get("elapsed_ms"))
-                if ms > 0:
-                    ms_values.append(ms)
-            ms_values.sort()
-
-            def _pct(sorted_values: List[int], p: float) -> int:
-                if not sorted_values:
-                    return 0
-                idx = int((len(sorted_values) - 1) * p)
-                idx = max(0, min(idx, len(sorted_values) - 1))
-                return sorted_values[idx]
-
-            by_tool: Dict[str, List[int]] = {}
-            for it in timings_list:
-                name = str(it.get("name") or "").strip() or "unknown"
-                ms = _safe_int(it.get("elapsed_ms"))
-                if ms <= 0:
-                    continue
-                by_tool.setdefault(name, []).append(ms)
-
-            by_tool_rows: List[Dict[str, Any]] = []
-            for name, ms_list in by_tool.items():
-                ms_list = sorted([m for m in ms_list if isinstance(m, int) and m > 0])
-                if not ms_list:
-                    continue
-                by_tool_rows.append(
-                    {
-                        "name": name,
-                        "count": len(ms_list),
-                        "total_ms": sum(ms_list),
-                        "p50_ms": _pct(ms_list, 0.50),
-                        "p95_ms": _pct(ms_list, 0.95),
-                    }
-                )
-            by_tool_rows.sort(key=lambda x: int(x.get("total_ms") or 0), reverse=True)
-
-            kp_count = 0
-            try:
-                kp_count = len(
-                    {
-                        str(x.get("knowledge_point") or "").strip()
-                        for x in per_kp_report
-                        if isinstance(x, dict) and str(x.get("knowledge_point") or "").strip()
-                    }
-                )
-            except Exception:
-                kp_count = 0
-            if kp_count <= 0:
-                split_res = ctx.working_memory.get("split_knowledge_points")
-                if isinstance(split_res, dict) and isinstance(split_res.get("knowledge_points"), list):
-                    kp_count = len(
-                        [
-                            str(x or "").strip()
-                            for x in (split_res.get("knowledge_points") or [])
-                            if str(x or "").strip()
-                        ]
-                    )
-
-            tokens_total = 0
-            for it in per_kp_report:
-                if not isinstance(it, dict):
-                    continue
-                tokens_total += _safe_int(it.get("tokens_total"))
-
-            total_ms = sum(ms_values)
-            return {
-                "tool_calls": len(ms_values),
-                "total_elapsed_ms": total_ms,
-                "p50_ms": _pct(ms_values, 0.50),
-                "p95_ms": _pct(ms_values, 0.95),
-                "kp_count": int(kp_count or 0),
-                "avg_ms_per_kp": int(total_ms / max(1, int(kp_count or 0))),
-                "tokens_total": tokens_total,
-                "by_tool": by_tool_rows[:20],
-            }
-        except Exception:
-            return {}
+    # Run loop methods are added below.
 
     async def _run_iterations(
         self,
         *,
-        ctx: "CompressedContext",
+        ctx: CompressedContext,
         profile: UserProfile,
         policy: StudyMaterialsPolicy,
         user_input: str,
@@ -1621,7 +386,19 @@ class AgentCore:
                 yield agent_event("status", {"content": "Continue mode: fix_export (rerun export-only steps)."})
                 plan = self._build_export_only_plan(user_input=user_input, subject=subject, compile_err=compile_err)
             else:
-                plan = await self.planner.plan(topic=user_input, user_profile=profile, context=ctx, iteration=iteration)
+                plan = await self.planner.plan(
+                    topic=user_input,
+                    user_profile=profile,
+                    context=ctx,
+                    iteration=iteration,
+                    tool_registry=self.executor.tool_registry,
+                )
+
+            try:
+                self._set_plan_summary(ctx=ctx, topic=user_input, profile=profile, plan=plan, export_only=export_only)
+            except Exception:
+                logger.debug("agent_plan_summary_set_failed", exc_info=True)
+
             if plan.rationale:
                 yield agent_event("status", {"content": plan.rationale})
 
@@ -1637,16 +414,23 @@ class AgentCore:
             ):
                 yield evt
 
-            async for evt in self._maybe_auto_research(
+            async for evt in agent_auto_research.maybe_auto_research(
                 ctx=ctx,
                 results=results,
                 plan=plan,
                 policy=policy,
                 user_input=user_input,
+                execute_concrete_step=self._execute_concrete_step,
             ):
                 yield evt
 
-            async for evt in self._maybe_auto_revise(ctx=ctx, results=results, plan=plan, policy=policy):
+            async for evt in agent_auto_research.maybe_auto_revise(
+                ctx=ctx,
+                results=results,
+                plan=plan,
+                policy=policy,
+                execute_concrete_step=self._execute_concrete_step,
+            ):
                 yield evt
 
             if bool(ctx.working_memory.get("_abort_execution")):
@@ -1689,6 +473,60 @@ class AgentCore:
         out["results"] = results
         out["reflection"] = reflection
 
+    async def _run_react(
+        self,
+        *,
+        ctx: CompressedContext,
+        profile: UserProfile,
+        user_input: str,
+        max_tool_iterations: int,
+        skip_export: bool,
+        out: Dict[str, Any],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """ReAct loop: LLM decides the next tool to call dynamically."""
+
+        subject = str(profile.preferences.get("subject") or "").strip()
+        plan = ExecutionPlan(topic=user_input, steps=[], rationale="ReAct")
+        results = ActionResults()
+        reflection: Optional[ReflectionResult] = None
+
+        loop = ReActLoop(config=self.config, tool_registry=self.executor.tool_registry)
+        async for evt in loop.run(
+            ctx=ctx,
+            results=results,
+            topic=user_input,
+            subject=subject,
+            execute_concrete_step=lambda step: self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step),
+            max_iterations=max_tool_iterations,
+            skip_export=skip_export,
+        ):
+            yield evt
+
+        if bool(ctx.working_memory.get("_abort_execution")):
+            fatal = ctx.working_memory.get("_fatal_error")
+            fatal_msg = ""
+            if isinstance(fatal, dict):
+                fatal_msg = str(fatal.get("error") or "").strip()
+                tool_name = str(fatal.get("tool") or "").strip()
+                if tool_name:
+                    fatal_msg = f"{tool_name}: {fatal_msg}" if fatal_msg else tool_name
+            reflection = ReflectionResult(
+                passed=True,
+                issues=[fatal_msg] if fatal_msg else ["关键步骤失败，已停止后续执行。"],
+                summary="执行中断：已停止后续步骤并返回当前可用结果。",
+            )
+        else:
+            self.state = AgentState.REFLECTING
+            yield agent_event("status", {"content": "Reflect 阶段：自检与审查…"})
+            reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
+            if reflection.summary:
+                yield agent_event("status", {"content": reflection.summary})
+
+        out["iteration"] = 0
+        out["plan"] = plan
+        out["results"] = results
+        out["reflection"] = reflection
+
     async def run(
         self,
         user_input: str,
@@ -1727,46 +565,95 @@ class AgentCore:
                 yield evt
 
             profile: UserProfile = init["profile"]
-            ctx: "CompressedContext" = init["ctx"]
+            ctx: CompressedContext = init["ctx"]
             policy: StudyMaterialsPolicy = init["policy"]
             iter_offset = int(init.get("iter_offset") or 0)
             budget = int(init.get("budget") or 1)
             export_only = bool(init.get("export_only"))
             skip_export = bool(init.get("skip_export"))
 
-            iter_state: Dict[str, Any] = {}
-            async for evt in self._run_iterations(
+            agent_mode = str(getattr(self.config, "agent_mode", "") or "plan").strip().lower()
+            use_react = agent_mode == "react" and (not export_only)
+            if use_react:
+                # ReAct mode requires an LLM to decide the next tool; otherwise fall back to plan mode.
+                normalized_model = str(self.config.planner_model or "").strip()
+                if not (normalized_model and is_llm_configured()):
+                    use_react = False
+
+            if use_react:
+                try:
+                    tool_budget = int(max_iterations) if max_iterations is not None else int(self.config.react_max_iterations)
+                except Exception:
+                    tool_budget = int(self.config.react_max_iterations or 20)
+                tool_budget = max(1, min(tool_budget, 50))
+
+                react_state: Dict[str, Any] = {}
+                async for evt in self._run_react(
+                    ctx=ctx,
+                    profile=profile,
+                    user_input=user_input,
+                    max_tool_iterations=tool_budget,
+                    skip_export=skip_export,
+                    out=react_state,
+                ):
+                    yield evt
+
+                iteration = int(react_state.get("iteration") or 0)
+                plan = react_state.get("plan") if isinstance(react_state.get("plan"), ExecutionPlan) else plan
+                results = react_state.get("results") if isinstance(react_state.get("results"), ActionResults) else results
+                reflection = (
+                    react_state.get("reflection")
+                    if isinstance(react_state.get("reflection"), ReflectionResult)
+                    else reflection
+                )
+            else:
+                iter_state: Dict[str, Any] = {}
+                async for evt in self._run_iterations(
+                    ctx=ctx,
+                    profile=profile,
+                    policy=policy,
+                    user_input=user_input,
+                    iter_offset=iter_offset,
+                    budget=budget,
+                    export_only=export_only,
+                    skip_export=skip_export,
+                    out=iter_state,
+                ):
+                    yield evt
+
+                iteration = int(iter_state.get("iteration") or iter_offset)
+                plan = iter_state.get("plan") if isinstance(iter_state.get("plan"), ExecutionPlan) else plan
+                results = iter_state.get("results") if isinstance(iter_state.get("results"), ActionResults) else results
+                reflection = (
+                    iter_state.get("reflection")
+                    if isinstance(iter_state.get("reflection"), ReflectionResult)
+                    else reflection
+                )
+
+            resolved = agent_streaming.resolve_markdown_and_archive_path(ctx=ctx, user_input=user_input, results=results)
+            archive_path = resolved["archive_path"]
+            markdown = resolved["markdown"]
+
+            try:
+                semantic_timeout_s = float(os.getenv("AGENT_SEMANTIC_UPSERT_TIMEOUT_S") or "3.0")
+                semantic_timeout_s = max(0.2, min(semantic_timeout_s, 30.0))
+                docs = agent_streaming.build_semantic_docs_for_run(ctx=ctx, user_input=user_input, markdown=markdown)
+                await asyncio.wait_for(self.semantic_store.upsert(user_id=user_id, docs=docs), timeout=semantic_timeout_s)
+            except Exception:
+                logger.debug("semantic_store_upsert_failed", exc_info=True)
+
+            async for evt in agent_streaming.compress_context(
                 ctx=ctx,
-                profile=profile,
-                policy=policy,
-                user_input=user_input,
-                iter_offset=iter_offset,
-                budget=budget,
-                export_only=export_only,
-                skip_export=skip_export,
-                out=iter_state,
+                context_manager=self.context_manager,
+                set_state=self._set_state,
             ):
                 yield evt
 
-            iteration = int(iter_state.get("iteration") or iter_offset)
-            plan = iter_state.get("plan") if isinstance(iter_state.get("plan"), ExecutionPlan) else plan
-            results = iter_state.get("results") if isinstance(iter_state.get("results"), ActionResults) else results
-            reflection = (
-                iter_state.get("reflection")
-                if isinstance(iter_state.get("reflection"), ReflectionResult)
-                else reflection
-            )
-
-            resolved = self._resolve_markdown_and_archive_path(ctx=ctx, user_input=user_input, results=results)
-            archive_path = resolved["archive_path"]
-
-            async for evt in self._compress_context(ctx=ctx):
-                yield evt
-
-            async for evt in self._record_session(
+            async for evt in agent_streaming.record_session(
                 user_id=user_id,
                 user_input=user_input,
                 reflection=reflection,
+                memory_store=self.memory_store,
             ):
                 yield evt
 
@@ -1779,8 +666,8 @@ class AgentCore:
             tex_filename = str(ctx.working_memory.get("tex_filename") or "").strip()
             fatal_error = ctx.working_memory.get("_fatal_error")
             fatal_error = dict(fatal_error) if isinstance(fatal_error, dict) else None
-            per_kp_report = self._build_per_kp_report(ctx=ctx)
-            timing_report = self._build_timing_report(ctx=ctx, per_kp_report=per_kp_report)
+            per_kp_report = agent_streaming.build_per_kp_report(ctx=ctx)
+            timing_report = agent_streaming.build_timing_report(ctx=ctx, per_kp_report=per_kp_report)
             yield agent_event(
                 "done",
                 {

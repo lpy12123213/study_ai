@@ -78,25 +78,29 @@ def formula_cache_get(crawler: Any, formula_hash: str) -> Optional[str]:
     key = (formula_hash or "").strip().lower()
     if not key:
         return None
+    # Backwards-compatible: some tests/config mutate `_formula_cache_max_entries`
+    # on the crawler instance. Keep the underlying cache in sync.
+    try:
+        max_entries = int(getattr(crawler, "_formula_cache_max_entries", 0) or 0)
+        if max_entries > 0:
+            crawler._formula_cache.max_entries = max_entries
+    except Exception:
+        pass
     cached = crawler._formula_cache.get(key)
     if cached is None:
         return None
-    try:
-        crawler._formula_cache.move_to_end(key)
-    except Exception:
-        logger.debug("zujuan_formula_cache_touch_failed", extra={"hash": key}, exc_info=True)
-    return cached
+    return str(cached or "")
 
 
 def formula_cache_set(crawler: Any, formula_hash: str, latex: str) -> None:
     key = (formula_hash or "").strip().lower()
     if not key:
         return
-    crawler._formula_cache[key] = latex or ""
     try:
-        crawler._formula_cache.move_to_end(key)
-        while len(crawler._formula_cache) > int(crawler._formula_cache_max_entries or 4096):
-            crawler._formula_cache.popitem(last=False)
+        max_entries = int(getattr(crawler, "_formula_cache_max_entries", 0) or 0)
+        if max_entries > 0:
+            crawler._formula_cache.max_entries = max_entries
+        crawler._formula_cache.set(key, latex or "")
     except Exception:
         return
 
@@ -160,7 +164,7 @@ async def mathml_to_latex_via_pandoc(crawler: Any, mathml_xml: str) -> str:
             return ""
 
     async with crawler._formula_pandoc_sem:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _run)
 
 
@@ -173,6 +177,21 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
     if cached is not None:
         return cached
 
+    # Persistent cache (DB): survives restarts so repeated crawls don't re-run pandoc/svg conversion.
+    try:
+        from backend.database.repositories.formula_cache import get_formula_latex as db_get_formula_latex
+    except Exception:
+        db_get_formula_latex = None  # type: ignore[assignment]
+
+    if db_get_formula_latex is not None:
+        try:
+            persisted = str(await db_get_formula_latex(formula_hash=formula_hash) or "").strip()
+        except Exception:
+            persisted = ""
+        if persisted:
+            formula_cache_set(crawler, formula_hash, persisted)
+            return persisted
+
     inflight = crawler._formula_inflight.get(formula_hash)
     if inflight is not None:
         try:
@@ -180,7 +199,7 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
         except Exception:
             return ""
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fut: asyncio.Future[str] = loop.create_future()
     crawler._formula_inflight[formula_hash] = fut
     try:
@@ -211,6 +230,13 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
 
         latex = _ensure_inline_math_wrapped(latex)
         formula_cache_set(crawler, formula_hash, latex)
+        try:
+            from backend.database.repositories.formula_cache import upsert_formula_latex as db_upsert_formula_latex
+
+            if latex:
+                await db_upsert_formula_latex(formula_hash=formula_hash, latex=latex)
+        except Exception:
+            pass
         if not fut.done():
             fut.set_result(latex)
         return latex
@@ -257,7 +283,7 @@ async def fetch_formula_svg(_crawler: Any, png_url: str) -> str:
     if not svg_url.lower().endswith(".svg"):
         svg_url = re.sub(r"\.(png|gif|jpe?g)(\?.*)?$", ".svg", svg_url, flags=re.IGNORECASE)
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: subprocess.run(["curl", "-s", svg_url], capture_output=True, timeout=10),

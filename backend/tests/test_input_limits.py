@@ -4,10 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import shutil
 
 from fastapi.testclient import TestClient
 
-import backend.auth as auth
+import backend.core.auth as auth
 from backend.app import create_app
 
 
@@ -16,8 +17,13 @@ class TestInputLengthLimits(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._original_users = dict(auth._users)
         cls._original_revoked = dict(auth._revoked_tokens)
-        cls._tmpdir = tempfile.TemporaryDirectory()
-        tmp = Path(cls._tmpdir.name)
+        # Windows sandbox environments sometimes deny deleting system-temp folders (WinError 5).
+        # Keep test tmp under project-local `.local/` and ignore cleanup errors.
+        repo_root = Path(__file__).resolve().parents[2]
+        tmp_root = repo_root / ".local" / "tmp" / "unittest"
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        cls._tmpdir_path = tempfile.mkdtemp(dir=str(tmp_root))
+        tmp = Path(cls._tmpdir_path)
 
         cls._patchers = [
             patch.object(auth, "LOCAL_DIR", tmp),
@@ -46,9 +52,12 @@ class TestInputLengthLimits(unittest.TestCase):
         try:
             for p in reversed(getattr(cls, "_patchers", [])):
                 p.stop()
-            tmpdir = getattr(cls, "_tmpdir", None)
-            if tmpdir is not None:
-                tmpdir.cleanup()
+            tmpdir_path = getattr(cls, "_tmpdir_path", "")
+            if tmpdir_path:
+                try:
+                    shutil.rmtree(tmpdir_path, ignore_errors=True)
+                except Exception:
+                    pass
         finally:
             auth._users.clear()
             auth._users.update(getattr(cls, "_original_users", {}))

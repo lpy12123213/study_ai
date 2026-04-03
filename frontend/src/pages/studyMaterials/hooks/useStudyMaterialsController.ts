@@ -8,6 +8,7 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { useTaskStore } from '@/stores/useTaskStore'
+import { appendCappedText, mergeAndSanitizeTaskStep, sanitizeTaskStep, sanitizeTaskSteps } from '@/lib/taskPayload'
 import { generateId } from '@/lib/utils'
 import { normalizeSseEnvelope } from '@/lib/sse'
 import {
@@ -615,13 +616,16 @@ export function useStudyMaterialsController() {
     const subThinkingBufferByKP: Record<string, string> = {}
 
     const upsertSubAgentStep = (kp: string, step: TaskStep) => {
+      const sanitizedStep = sanitizeTaskStep(step)
       setSubAgentActivities((prev) => {
         const exists = prev.some((a) => a.knowledgePoint === kp)
         const base = exists ? prev : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
         return base.map((a) => {
           if (a.knowledgePoint !== kp) return a
-          const hasStep = a.steps.some((s) => s.id === step.id)
-          const steps = hasStep ? a.steps.map((s) => (s.id === step.id ? { ...s, ...step } : s)) : [...a.steps, step]
+          const hasStep = a.steps.some((s) => s.id === sanitizedStep.id)
+          const steps = sanitizeTaskSteps(hasStep
+            ? a.steps.map((s) => (s.id === sanitizedStep.id ? mergeAndSanitizeTaskStep(s, sanitizedStep) : s))
+            : [...a.steps, sanitizedStep])
           return { ...a, steps }
         })
       })
@@ -635,9 +639,9 @@ export function useStudyMaterialsController() {
           if (!hasStep) {
             return {
               ...a,
-              steps: [
+              steps: sanitizeTaskSteps([
                 ...a.steps,
-                {
+                sanitizeTaskStep({
                   id: stepId,
                   title: patch.title || patch.toolName || '步骤',
                   status: patch.status || 'running',
@@ -647,11 +651,14 @@ export function useStudyMaterialsController() {
                   input: patch.input,
                   output: patch.output,
                   error: patch.error,
-                },
-              ],
+                }),
+              ]),
             }
           }
-          return { ...a, steps: a.steps.map((s) => (s.id === stepId ? { ...s, ...patch } : s)) }
+          return {
+            ...a,
+            steps: sanitizeTaskSteps(a.steps.map((s) => (s.id === stepId ? mergeAndSanitizeTaskStep(s, patch) : s))),
+          }
         })
       )
     }
@@ -668,22 +675,25 @@ export function useStudyMaterialsController() {
     }
 
     const upsertAssistantStep = (step: TaskStep) => {
-      const existingStep = assistantSteps.find((s) => s.id === step.id)
+      const sanitizedStep = sanitizeTaskStep(step)
+      const existingStep = assistantSteps.find((s) => s.id === sanitizedStep.id)
       if (!existingStep) {
-        assistantSteps = [...assistantSteps, step]
+        assistantSteps = sanitizeTaskSteps([...assistantSteps, sanitizedStep])
         syncSteps()
         return
       }
-      assistantSteps = assistantSteps.map((s) => (s.id === step.id ? { ...s, ...step } : s))
+      assistantSteps = sanitizeTaskSteps(
+        assistantSteps.map((s) => (s.id === sanitizedStep.id ? mergeAndSanitizeTaskStep(s, sanitizedStep) : s))
+      )
       syncSteps()
     }
 
     const patchAssistantStep = (stepId: string, patch: Partial<TaskStep>) => {
       const exists = assistantSteps.some((s) => s.id === stepId)
       if (!exists) {
-        assistantSteps = [
+        assistantSteps = sanitizeTaskSteps([
           ...assistantSteps,
-          {
+          sanitizeTaskStep({
             id: stepId,
             title: patch.title || patch.toolName || '步骤',
             status: patch.status || 'running',
@@ -693,12 +703,14 @@ export function useStudyMaterialsController() {
             input: patch.input,
             output: patch.output,
             error: patch.error,
-          },
-        ]
+          }),
+        ])
         syncSteps()
         return
       }
-      assistantSteps = assistantSteps.map((s) => (s.id === stepId ? { ...s, ...patch } : s))
+      assistantSteps = sanitizeTaskSteps(
+        assistantSteps.map((s) => (s.id === stepId ? mergeAndSanitizeTaskStep(s, patch) : s))
+      )
       syncSteps()
     }
 
@@ -800,9 +812,7 @@ export function useStudyMaterialsController() {
               })
             }
 
-            subThinkingBufferByKP[kp] = subThinkingBufferByKP[kp]
-              ? `${subThinkingBufferByKP[kp]}\n${text}`
-              : text
+            subThinkingBufferByKP[kp] = appendCappedText(subThinkingBufferByKP[kp], text)
             patchSubAgentStep(kp, subThinkingStepIdByKP[kp], { output: subThinkingBufferByKP[kp] })
             return
           }
@@ -820,7 +830,7 @@ export function useStudyMaterialsController() {
               output: '',
             })
           }
-          thinkingBuffer = thinkingBuffer ? `${thinkingBuffer}\n${text}` : text
+          thinkingBuffer = appendCappedText(thinkingBuffer, text)
           patchAssistantStep(thinkingStepId, { output: thinkingBuffer })
           return
         }
@@ -832,20 +842,33 @@ export function useStudyMaterialsController() {
           if (thinkingStepId) {
             const tThinking = new Date().toISOString()
             patchAssistantStep(thinkingStepId, { status: 'completed', endTime: tThinking })
+            thinkingStepId = null
+            thinkingBuffer = ''
+          }
+          if (runningSubAgentKP) {
+            const kp = runningSubAgentKP
+            const subThinkingStepId = subThinkingStepIdByKP[kp]
+            if (subThinkingStepId) {
+              const tThinking = new Date().toISOString()
+              patchSubAgentStep(kp, subThinkingStepId, { status: 'completed', endTime: tThinking })
+            }
+            delete subThinkingStepIdByKP[kp]
+            delete subThinkingStartTimeByKP[kp]
+            delete subThinkingBufferByKP[kp]
           }
 
           const stepId = toText(payload?.step_id) || generateId()
           const stepTitle = toText(payload?.title)
           const t = new Date().toISOString()
 
-          const step: TaskStep = {
+          const step: TaskStep = sanitizeTaskStep({
             id: stepId,
             title: stepTitle || `调用工具：${name}`,
             status: 'running',
             startTime: t,
             toolName: name,
             input: payload?.arguments,
-          }
+          })
 
           upsertAssistantStep(step)
           if (localTaskId) {
@@ -861,7 +884,7 @@ export function useStudyMaterialsController() {
                 ? prev
                 : [...prev, { knowledgePoint: kp, status: 'pending' as const, steps: [] }]
               return base.map((a) =>
-                a.knowledgePoint === kp ? { ...a, steps: [...a.steps, step] } : a
+                a.knowledgePoint === kp ? { ...a, steps: sanitizeTaskSteps([...a.steps, step]) } : a
               )
             })
           }
@@ -917,13 +940,12 @@ export function useStudyMaterialsController() {
                 const nextSteps = hasStep
                   ? a.steps.map((s) =>
                       s.id === stepId
-                        ? {
-                            ...s,
+                        ? mergeAndSanitizeTaskStep(s, {
                             status: success ? ('completed' as const) : ('failed' as const),
                             endTime: t,
                             output: out,
                             error: err || undefined,
-                          }
+                          })
                         : s
                     )
                   : updated
@@ -933,7 +955,7 @@ export function useStudyMaterialsController() {
                 return {
                   ...a,
                   status: success ? a.status : ('failed' as const),
-                  steps: nextSteps,
+                  steps: sanitizeTaskSteps(nextSteps),
                 }
               })
             })
@@ -979,6 +1001,9 @@ export function useStudyMaterialsController() {
           const kp = toText(payload?.knowledge_point)
           if (kp) {
             if (runningSubAgentKP === kp) runningSubAgentKP = null
+            delete subThinkingStepIdByKP[kp]
+            delete subThinkingStartTimeByKP[kp]
+            delete subThinkingBufferByKP[kp]
             setSubAgentActivities((prev) =>
               prev.map((a) =>
                 a.knowledgePoint === kp
@@ -987,7 +1012,10 @@ export function useStudyMaterialsController() {
                       status: a.status === 'failed' ? ('failed' as const) : ('completed' as const),
                       steps: a.steps.map((s) =>
                         s.status === 'running'
-                          ? { ...s, status: 'completed' as const, endTime: new Date().toISOString() }
+                          ? mergeAndSanitizeTaskStep(s, {
+                              status: 'completed' as const,
+                              endTime: new Date().toISOString(),
+                            })
                           : s
                       ),
                     }

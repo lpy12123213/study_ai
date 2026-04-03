@@ -6,7 +6,6 @@ pydantic>=2.5.0
 bcrypt>=4.0.0
 sqlalchemy>=2.0.23
 aiosqlite>=0.19.0
-alembic>=1.16.0
 mcp>=1.0.0
 PyJWT>=2.8.0
 
@@ -21,5 +20,16 @@ httpx>=0.25.2
 openai>=1.0.0
 wikipedia
 
+# Agent semantic memory (local vector store)
+chromadb>=0.5.0
+
 numpy>=1.26.4,<3
+sympy>=1.13.1,<2
 matplotlib>=3.9.2,<4
+
+# TUI / CLI
+rich>=13.7.0
+prompt_toolkit>=3.0.43
+
+# Metrics
+prometheus-client>=0.20.0

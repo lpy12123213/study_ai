@@ -29,8 +29,11 @@ def _ensure_index(conn, *, name: str, table: str, columns: str) -> None:
 def sync_migrate_db_schema(conn) -> None:
     """Best-effort SQLite schema migrations for existing installations.
 
-    This is a lightweight safety net for local/dev DBs. For traceable schema
-    evolution, prefer Alembic migrations (see `alembic/`).
+    This is a lightweight safety net for local/dev SQLite DBs.
+
+    The project currently relies on `Base.metadata.create_all` + this best-effort
+    forward migration layer (instead of Alembic) to keep installs usable across
+    versions.
     """
 
     pq_cols = _table_cols(conn, "paper_questions")
@@ -241,22 +244,33 @@ def sync_migrate_db_schema(conn) -> None:
             "END;"
         )
 
-        # Backfill for existing DBs (idempotent via OR REPLACE).
-        conn.exec_driver_sql(
-            "INSERT OR REPLACE INTO messages_fts(rowid,user_id,conversation_id,message_id,title,content) "
-            "SELECT m.id, c.user_id, m.conversation_id, m.id, c.title, m.content "
-            "FROM messages m JOIN conversations c ON c.id=m.conversation_id "
-            "WHERE m.role <> 'tool'"
-        )
-        conn.exec_driver_sql(
-            "INSERT OR REPLACE INTO paper_questions_fts(rowid,user_id,paper_id,question_id,paper_name,knowledge_point,content) "
-            "SELECT pq.id, p.user_id, pq.paper_id, pq.question_id, p.name, pq.knowledge_point, "
-            "COALESCE(pq.knowledge_point,'') || char(10) || COALESCE(pq.stem,'') || char(10) || COALESCE(pq.analysis,'') "
-            "FROM paper_questions pq JOIN papers p ON p.id=pq.paper_id"
-        )
-        conn.exec_driver_sql(
-            "INSERT OR REPLACE INTO study_archives_fts(rowid,user_id,archive_id,subject,topic,requirements,markdown) "
-            "SELECT id, user_id, id, subject, topic, requirements, markdown FROM study_archives"
-        )
+        def _fts_has_any(table: str) -> bool:
+            try:
+                row = conn.exec_driver_sql(f"SELECT 1 FROM {table} LIMIT 1").first()
+                return row is not None
+            except Exception:
+                return False
+
+        # Backfill is expensive on large DBs. Run it only when the FTS tables are empty
+        # (newly created) or missing. Triggers will keep them up-to-date afterwards.
+        if not _fts_has_any("messages_fts"):
+            conn.exec_driver_sql(
+                "INSERT OR REPLACE INTO messages_fts(rowid,user_id,conversation_id,message_id,title,content) "
+                "SELECT m.id, c.user_id, m.conversation_id, m.id, c.title, m.content "
+                "FROM messages m JOIN conversations c ON c.id=m.conversation_id "
+                "WHERE m.role <> 'tool'"
+            )
+        if not _fts_has_any("paper_questions_fts"):
+            conn.exec_driver_sql(
+                "INSERT OR REPLACE INTO paper_questions_fts(rowid,user_id,paper_id,question_id,paper_name,knowledge_point,content) "
+                "SELECT pq.id, p.user_id, pq.paper_id, pq.question_id, p.name, pq.knowledge_point, "
+                "COALESCE(pq.knowledge_point,'') || char(10) || COALESCE(pq.stem,'') || char(10) || COALESCE(pq.analysis,'') "
+                "FROM paper_questions pq JOIN papers p ON p.id=pq.paper_id"
+            )
+        if not _fts_has_any("study_archives_fts"):
+            conn.exec_driver_sql(
+                "INSERT OR REPLACE INTO study_archives_fts(rowid,user_id,archive_id,subject,topic,requirements,markdown) "
+                "SELECT id, user_id, id, subject, topic, requirements, markdown FROM study_archives"
+            )
     except Exception:
         return

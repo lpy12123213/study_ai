@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -20,12 +19,13 @@ from backend.api.lesson_plan_schemas import (
     LessonPlanResponse,
 )
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_iso_z, utcnow_naive
 from backend.database.repositories.tasks import append_task_event as db_append_task_event
 from backend.database.repositories.tasks import get_task as db_get_task
 from backend.database.repositories.tasks import update_task_status as db_update_task_status
 from backend.database.repositories.tasks import upsert_task as db_upsert_task
-from backend.lesson_plan_agent_v2 import generate_lesson_plan_stream
-from backend.lesson_plan_service import (
+from backend.lesson_plan_v2.service import generate_lesson_plan_stream
+from backend.lesson_plan_v2.store import (
     create_lesson_plan,
     delete_lesson_plan,
     export_lesson_plan_markdown,
@@ -105,7 +105,7 @@ async def generate_plan(request: LessonPlanGenerateRequest, user: dict = Depends
             status="running",
             progress=0.0,
             request=request.model_dump(),
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
         await db_append_task_event(
             user_id=user_id,
@@ -116,7 +116,7 @@ async def generate_plan(request: LessonPlanGenerateRequest, user: dict = Depends
                     "id": "task_started",
                     "title": "开始生成教案",
                     "status": "running",
-                    "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "startTime": utcnow_iso_z(),
                     "toolName": "lesson_plan",
                     "input": {"taskId": task_id},
                 }
@@ -170,7 +170,7 @@ async def generate_plan(request: LessonPlanGenerateRequest, user: dict = Depends
                         status="completed",
                         progress=100.0,
                         result=material if isinstance(material, dict) else {"material": material},
-                        ended_at=datetime.utcnow(),
+                        ended_at=utcnow_naive(),
                     )
                 elif kind == "error":
                     msg = str((data or {}).get("message") or "lesson_plan_failed")
@@ -179,7 +179,7 @@ async def generate_plan(request: LessonPlanGenerateRequest, user: dict = Depends
                         task_id=task_id,
                         status="failed",
                         error={"message": msg},
-                        ended_at=datetime.utcnow(),
+                        ended_at=utcnow_naive(),
                     )
             except Exception:
                 logger.exception(

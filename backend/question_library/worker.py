@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from backend.core.llm_client import is_llm_configured
+from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.database.repositories.question_cache import get_question_cache

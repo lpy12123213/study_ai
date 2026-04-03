@@ -71,7 +71,7 @@ async def get_cookies_with_playwright() -> str:
                 browser.close()
                 return "; ".join([f"{c['name']}={c['value']}" for c in cookies])
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, _sync_get_cookies)
     except Exception as exc:
@@ -256,7 +256,7 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
                     "source": "playwright",
                 }
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
             session = await loop.run_in_executor(pool, _sync_get_session)
 

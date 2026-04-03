@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { exportQuestionToBasket } from '@/api/questionLibrary'
 import { useCreatePaper } from '@/hooks/usePapers'
 import { useQuestionBarStore } from '@/stores/useQuestionBarStore'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as tasksApi from '@/api/tasks'
 
 function modeLabel(mode: string | null | undefined): string {
@@ -25,7 +25,7 @@ function defaultPaperName(mode: string | null | undefined): string {
 
 export function QuestionBar() {
   const navigate = useNavigate()
-  const pushToast = useToastStore((s) => s.pushToast)
+  const pushToast = useNotificationStore((s) => s.pushToast)
   const { mutateAsync: createPaper, isPending: isCreatingPaper } = useCreatePaper()
 
   const sourceMode = useQuestionBarStore((s) => s.sourceMode)

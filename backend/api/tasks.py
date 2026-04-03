@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_naive
 from backend.database.models import get_paper as db_get_paper
 from backend.database.repositories.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.tasks import (
@@ -36,8 +37,8 @@ from backend.database.repositories.tasks import (
 from backend.database.repositories.tasks import (
     upsert_task as db_upsert_task,
 )
-from backend.deepthink_service import deepthink_service
-from backend.lesson_plan_agent_v2 import generate_lesson_plan_stream
+from backend.deepthink.service import deepthink_service
+from backend.lesson_plan_v2.service import generate_lesson_plan_stream
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 from backend.paper_compose.compose_tasks import compose_tasks
 from backend.paper_compose.export import export_paper as export_paper_doc
@@ -282,7 +283,7 @@ async def _run_deepthink_task(*, user_id: str, task_id: str, request: Dict[str, 
                     status="completed",
                     progress=100.0,
                     result=payload if isinstance(payload, dict) else {"result": payload},
-                    ended_at=datetime.utcnow(),
+                    ended_at=utcnow_naive(),
                 )
                 return
             if kind == "error":
@@ -292,7 +293,7 @@ async def _run_deepthink_task(*, user_id: str, task_id: str, request: Dict[str, 
                     task_id=tid,
                     status="failed",
                     error={"message": msg},
-                    ended_at=datetime.utcnow(),
+                    ended_at=utcnow_naive(),
                 )
                 return
     except asyncio.CancelledError:
@@ -305,7 +306,7 @@ async def _run_deepthink_task(*, user_id: str, task_id: str, request: Dict[str, 
                 task_id=tid,
                 status="canceled",
                 error={"message": "Task cancelled"},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception("deepthink_task_cancel_write_failed", extra={"task_id": tid, "user_id": uid})
@@ -317,7 +318,7 @@ async def _run_deepthink_task(*, user_id: str, task_id: str, request: Dict[str, 
                 task_id=tid,
                 status="failed",
                 error={"message": str(exc)},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception("deepthink_task_error_write_failed", extra={"task_id": tid, "user_id": uid})
@@ -357,7 +358,7 @@ async def _run_lesson_plan_task(*, user_id: str, task_id: str, request: Dict[str
                     status="completed",
                     progress=100.0,
                     result=material if isinstance(material, dict) else {"material": material},
-                    ended_at=datetime.utcnow(),
+                    ended_at=utcnow_naive(),
                 )
                 return
             if kind == "error":
@@ -367,7 +368,7 @@ async def _run_lesson_plan_task(*, user_id: str, task_id: str, request: Dict[str
                     task_id=tid,
                     status="failed",
                     error={"message": msg},
-                    ended_at=datetime.utcnow(),
+                    ended_at=utcnow_naive(),
                 )
                 return
     except asyncio.CancelledError:
@@ -380,7 +381,7 @@ async def _run_lesson_plan_task(*, user_id: str, task_id: str, request: Dict[str
                 task_id=tid,
                 status="canceled",
                 error={"message": "Task cancelled"},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception("lesson_plan_task_cancel_write_failed", extra={"task_id": tid, "user_id": uid})
@@ -392,7 +393,7 @@ async def _run_lesson_plan_task(*, user_id: str, task_id: str, request: Dict[str
                 task_id=tid,
                 status="failed",
                 error={"message": str(exc)},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception("lesson_plan_task_error_write_failed", extra={"task_id": tid, "user_id": uid})
@@ -407,7 +408,7 @@ async def _emit_db_task_started(*, user_id: str, task_id: str, task_type: str, t
         status="running",
         progress=0.0,
         request=request,
-        started_at=datetime.utcnow(),
+        started_at=utcnow_naive(),
     )
     await db_append_task_event(
         user_id=user_id,
@@ -434,7 +435,7 @@ async def _emit_db_task_terminal(
     result: Optional[dict] = None,
     error: Optional[dict] = None,
 ) -> None:
-    ended_at = datetime.utcnow()
+    ended_at = utcnow_naive()
     await db_update_task_status(
         user_id=user_id,
         task_id=task_id,
@@ -745,7 +746,7 @@ async def cancel_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
                 task_id=task_id,
                 status="canceled",
                 error={"message": "Task cancelled"},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
             await db_append_task_event(
                 user_id=user_id,
@@ -772,7 +773,7 @@ async def cancel_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
         task_id=task_id,
         status="canceled",
         error={"message": "Task cancelled"},
-        ended_at=datetime.utcnow(),
+        ended_at=utcnow_naive(),
     )
     await db_append_task_event(
         user_id=user_id,
@@ -897,7 +898,7 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
             status="running",
             progress=0.0,
             request=dict(req),
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
         await db_append_task_event(
             user_id=user_id,
@@ -930,7 +931,7 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
             status="running",
             progress=0.0,
             request=dict(req),
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
         await db_append_task_event(
             user_id=user_id,

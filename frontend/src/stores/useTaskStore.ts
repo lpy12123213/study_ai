@@ -1,8 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { mergeAndSanitizeTaskStep, sanitizeResumableTask, sanitizeTaskStep, sanitizeTaskSteps } from '@/lib/taskPayload'
 import type { TaskStep, ResumableTask } from '@/types'
 
 const EMPTY_STEPS: TaskStep[] = []
+const MAX_ACTIVE_TASKS = 30
 
 interface TaskState {
   // Active tasks
@@ -41,6 +43,12 @@ export const useTaskStore = create<TaskState>()(
         set((state) => {
           const newTasks = new Map(state.activeTasks)
           newTasks.set(taskId, [])
+          // Prune oldest tasks if exceeding limit
+          if (newTasks.size > MAX_ACTIVE_TASKS) {
+            const keys = Array.from(newTasks.keys())
+            const toRemove = keys.slice(0, newTasks.size - MAX_ACTIVE_TASKS)
+            for (const k of toRemove) newTasks.delete(k)
+          }
           return { activeTasks: newTasks }
         })
       },
@@ -49,7 +57,7 @@ export const useTaskStore = create<TaskState>()(
         set((state) => {
           const newTasks = new Map(state.activeTasks)
           const steps = newTasks.get(taskId) ?? EMPTY_STEPS
-          newTasks.set(taskId, [...steps, step])
+          newTasks.set(taskId, sanitizeTaskSteps([...steps, sanitizeTaskStep(step)]))
           return { activeTasks: newTasks }
         })
       },
@@ -59,21 +67,18 @@ export const useTaskStore = create<TaskState>()(
           const newTasks = new Map(state.activeTasks)
           const steps = newTasks.get(taskId) ?? EMPTY_STEPS
           const updatedSteps = steps.map((s) =>
-            s.id === stepId ? { ...s, ...data } : s
+            s.id === stepId ? mergeAndSanitizeTaskStep(s, data) : s
           )
-          newTasks.set(taskId, updatedSteps)
+          newTasks.set(taskId, sanitizeTaskSteps(updatedSteps))
           return { activeTasks: newTasks }
         })
       },
       
       completeTask: (taskId) => {
         set((state) => {
-          const steps = state.activeTasks.get(taskId) ?? EMPTY_STEPS
-          const updatedSteps = steps.map((s) =>
-            s.status === 'running' ? { ...s, status: 'completed' as const } : s
-          )
           const newTasks = new Map(state.activeTasks)
-          newTasks.set(taskId, updatedSteps)
+          // Remove completed task from active map to free memory
+          newTasks.delete(taskId)
           
           // Remove checkpoint if exists
           const newCheckpoints = new Map(state.checkpoints)
@@ -83,16 +88,11 @@ export const useTaskStore = create<TaskState>()(
         })
       },
       
-      failTask: (taskId, error) => {
+      failTask: (taskId, _error) => {
         set((state) => {
-          const steps = state.activeTasks.get(taskId) ?? EMPTY_STEPS
-          const updatedSteps = steps.map((s) =>
-            s.status === 'running'
-              ? { ...s, status: 'failed' as const, error }
-              : s
-          )
           const newTasks = new Map(state.activeTasks)
-          newTasks.set(taskId, updatedSteps)
+          // Remove failed task from active map to free memory
+          newTasks.delete(taskId)
           return { activeTasks: newTasks }
         })
       },
@@ -100,7 +100,7 @@ export const useTaskStore = create<TaskState>()(
       saveCheckpoint: (taskId, checkpoint) => {
         set((state) => {
           const newCheckpoints = new Map(state.checkpoints)
-          newCheckpoints.set(taskId, checkpoint)
+          newCheckpoints.set(taskId, sanitizeResumableTask(checkpoint))
           return { checkpoints: newCheckpoints }
         })
       },
@@ -128,29 +128,29 @@ export const useTaskStore = create<TaskState>()(
         set((state) => {
           const newTasks = new Map(state.activeTasks)
           const updatedSteps = steps.map((s) =>
-            s.status === 'running' ? { ...s, status: 'paused' as const } : s
+            s.status === 'running' ? mergeAndSanitizeTaskStep(s, { status: 'paused' as const }) : s
           )
-          newTasks.set(taskId, updatedSteps)
+          newTasks.set(taskId, sanitizeTaskSteps(updatedSteps))
           return { activeTasks: newTasks }
         })
         
         // Create checkpoint
-        const checkpoint: ResumableTask = {
+        const checkpoint = sanitizeResumableTask({
           taskId,
           taskType: 'blueprint', // Will be overwritten by caller
           status: 'paused',
           currentStep: completedSteps.length,
           totalSteps: steps.length,
           checkpoint: {
-            completedSteps,
+            completedSteps: sanitizeTaskSteps(completedSteps),
             pendingSteps: pendingSteps.map((s) => ({
-              ...s,
+              ...sanitizeTaskStep(s),
               status: 'pending' as const,
             })),
             context: null,
           },
           canResume: true,
-        }
+        })
         
         get().saveCheckpoint(taskId, checkpoint)
       },
@@ -165,9 +165,10 @@ export const useTaskStore = create<TaskState>()(
     }),
     {
       name: 'task-storage',
+      version: 2,
       partialize: (state) => ({
-        activeTasks: Array.from(state.activeTasks.entries()),
-        checkpoints: Array.from(state.checkpoints.entries()),
+        activeTasks: Array.from(state.activeTasks.entries()).map(([taskId, steps]) => [taskId, sanitizeTaskSteps(steps)]),
+        checkpoints: Array.from(state.checkpoints.entries()).map(([taskId, checkpoint]) => [taskId, sanitizeResumableTask(checkpoint)]),
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as {
@@ -176,8 +177,12 @@ export const useTaskStore = create<TaskState>()(
         }
         return {
           ...current,
-          activeTasks: new Map(persistedState?.activeTasks || []),
-          checkpoints: new Map(persistedState?.checkpoints || []),
+          activeTasks: new Map(
+            (persistedState?.activeTasks || []).map(([taskId, steps]) => [taskId, sanitizeTaskSteps(steps || [])])
+          ),
+          checkpoints: new Map(
+            (persistedState?.checkpoints || []).map(([taskId, checkpoint]) => [taskId, sanitizeResumableTask(checkpoint)])
+          ),
         }
       },
     }

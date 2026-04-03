@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any, Dict, List
 
-from backend.core.llm_client import chat_completion_text
+from backend.llm.client import chat_completion_text
 from backend.database.repositories.question_library import set_hidden, upsert_question_library_items
 
 

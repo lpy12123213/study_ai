@@ -23,11 +23,12 @@ import hashlib
 import json
 import os
 import re
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from backend.core.cache import TTLCache
 from backend.core.logging_utils import get_logger
 
 try:
@@ -36,7 +37,7 @@ except ImportError:
     httpx = None
 
 _SVG_LATEX_CACHE_MAX = 2048
-_SVG_LATEX_CACHE: "OrderedDict[tuple[str, bool], tuple[str, tuple[str, ...]]]" = OrderedDict()
+_SVG_LATEX_CACHE = TTLCache(name="svg_to_latex", max_entries=_SVG_LATEX_CACHE_MAX, default_ttl_s=24 * 60 * 60)
 
 logger = get_logger(__name__)
 
@@ -46,17 +47,13 @@ def _svg_latex_cache_get(svg_url: str, use_advanced: bool) -> Optional[Tuple[str
     cached = _SVG_LATEX_CACHE.get(key)
     if not cached:
         return None
-    _SVG_LATEX_CACHE.move_to_end(key)
     latex, unknown = cached
-    return latex, list(unknown)
+    return str(latex or ""), list(unknown or [])
 
 
 def _svg_latex_cache_set(svg_url: str, use_advanced: bool, latex: str, unknown: List[str]) -> None:
     key = (svg_url, use_advanced)
-    _SVG_LATEX_CACHE[key] = (latex, tuple(unknown))
-    _SVG_LATEX_CACHE.move_to_end(key)
-    while len(_SVG_LATEX_CACHE) > _SVG_LATEX_CACHE_MAX:
-        _SVG_LATEX_CACHE.popitem(last=False)
+    _SVG_LATEX_CACHE.set(key, (str(latex or ""), tuple(unknown or [])))
 
 
 @dataclass

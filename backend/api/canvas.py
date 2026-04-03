@@ -12,8 +12,8 @@ from pydantic import BaseModel, Field
 
 from backend.api.auth import require_auth
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
-from backend.config import DEFAULT_SUBJECT
-from backend.crawler_manager import get_crawler
+from backend.core.settings import DEFAULT_SUBJECT
+from backend.crawler.manager import get_crawler
 from backend.database.models import (
     create_canvas_board,
     create_canvas_board_version,
@@ -23,7 +23,7 @@ from backend.database.models import (
     list_canvas_boards,
     update_canvas_board,
 )
-from backend.subjects import resolve_subject
+from backend.core.subjects import resolve_subject
 
 router = APIRouter(prefix="/canvas", dependencies=[Depends(require_auth)])
 
@@ -318,7 +318,7 @@ async def pick_questions(
         }
 
     # MCP sub-AI selector (picks one from 2-8 candidates each round)
-    from backend.mcp.sub_ai_selector import select_best_question
+    from backend.mcp.core.sub_ai_selector import select_best_question
 
     selected_ids: List[str] = []
     selection: List[Dict[str, Any]] = []

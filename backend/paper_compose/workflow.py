@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from backend.core.logging_utils import get_logger
-from backend.crawler_manager import get_crawler
+from backend.crawler.manager import get_crawler
 from backend.database.models import (
     add_questions_to_paper,
     get_paper,
@@ -21,7 +21,7 @@ from backend.database.models import (
     upsert_question_cache,
 )
 from backend.paper_compose.slot_selection import select_slot_with_relax
-from backend.subjects import resolve_subject
+from backend.core.subjects import resolve_subject
 
 logger = get_logger(__name__)
 
@@ -739,7 +739,7 @@ async def compose_paper_events(
                     selected_fps.add(fp)
 
         try:
-            from backend.core.llm_client import chat_completion_text
+            from backend.llm.client import chat_completion_text
             from backend.core.settings import MAIN_MODEL
 
             if not review_model:

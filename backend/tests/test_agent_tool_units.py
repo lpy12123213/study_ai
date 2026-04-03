@@ -4,9 +4,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from backend.agent.tools.content_review import ContentReviewToolsMixin
-from backend.agent.tools.source_synthesis import SourceSynthesisToolsMixin
-from backend.agent.tools.web_search_knowledge import WebSearchKnowledgeToolsMixin
+from backend.agent.tools.analysis.content_review import ContentReviewToolsMixin
+from backend.agent.tools.analysis.source_synthesis import SourceSynthesisToolsMixin
+from backend.agent.tools.search.web_search_knowledge import WebSearchKnowledgeToolsMixin
 from backend.agent.types import CompressedContext, UserProfile
 
 
@@ -60,7 +60,7 @@ class TestContentReviewMixin(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch("backend.agent.tools.content_review.is_llm_configured", return_value=False):
+        with patch("backend.agent.tools.analysis.content_review.is_llm_configured", return_value=False):
             result = await agent._tool_review_content({}, ctx)
 
         self.assertFalse(result["passed"])
@@ -83,7 +83,7 @@ class TestSourceSynthesisMixin(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        with patch("backend.agent.tools.source_synthesis.is_llm_configured", return_value=False):
+        with patch("backend.agent.tools.analysis.source_synthesis.is_llm_configured", return_value=False):
             result = await agent._tool_synthesize_sources({}, ctx)
 
         item = result["items"][0]
@@ -119,8 +119,8 @@ class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
             "limit": 5,
         }
 
-        with patch("backend.agent.tools.web_search_knowledge.is_llm_configured", return_value=False):
-            with patch("backend.mcp.metaso_search.metaso_ask", metaso_ask):
+        with patch("backend.agent.tools.search.web_search_knowledge.is_llm_configured", return_value=False):
+            with patch("backend.mcp.search.metaso.metaso_ask", metaso_ask):
                 first = await agent._tool_web_search_knowledge(args, ctx)
                 second = await agent._tool_web_search_knowledge(args, ctx)
 

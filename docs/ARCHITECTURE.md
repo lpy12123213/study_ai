@@ -248,8 +248,27 @@ POST /api/papers                 - 创建试卷
 GET  /api/papers/{id}            - 获取试卷详情
 DELETE /api/papers/{id}          - 删除试卷
 GET  /api/papers/{id}/download-link - 获取下载链接
+POST /api/papers/{id}/export     - 导出试卷（md/tex/pdf/docx）
+POST /api/papers/generate-full   - 一键 AI 生成整张试卷（SSE）
 POST /api/search-history         - 记录搜索历史
 ```
+
+### 4.1 AI 出题与一键组卷（新增能力）
+
+本项目近期增强的两条 AI 生产链路：
+
+1. AI 出题（本地题库）
+   - 入口 API：`backend/api/question_library.py`
+   - 生成主链路：`backend/question_library/generation.py`
+   - 关键阶段：seed/expand →（可选）创意发散 brainstorm → 草稿 realize →（可选）配图增强 diagrams → 判题/审查 judging
+   - 产物：先进入 preview/session（pending_review），用户审核后再入库
+
+2. 一键组卷（AI 生成整张试卷）
+   - 入口 API：`POST /api/papers/generate-full`（SSE）
+   - 结构规划：`backend/paper_compose/auto_planner.py`
+   - AI 填充：`backend/paper_compose/ai_fill.py`
+   - 工作流编排：`backend/paper_compose/full_paper_workflow.py`
+   - 导出：`backend/paper_compose/export.py`（支持 md/tex/pdf/docx，并可嵌入 diagrams 配图）
 
 **技术栈：**
 - FastAPI - 现代Web框架

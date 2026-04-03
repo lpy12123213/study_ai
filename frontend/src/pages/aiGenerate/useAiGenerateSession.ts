@@ -71,6 +71,20 @@ function mapDraftQuestion(
           model: String(input.review.model || '').trim(),
         }
       : null,
+    diagrams: Array.isArray(input.diagrams)
+      ? input.diagrams
+          .filter((item) => item && typeof item === 'object' && typeof item.url === 'string')
+          .map((item) => ({
+            kind: typeof item.kind === 'string' ? item.kind : undefined,
+            url: String(item.url || '').trim(),
+            filename: typeof item.filename === 'string' ? item.filename : undefined,
+            mediaId: typeof item.media_id === 'string' ? item.media_id : undefined,
+            alt: typeof item.alt === 'string' ? item.alt : undefined,
+            caption: typeof item.caption === 'string' ? item.caption : undefined,
+            markdown: typeof item.markdown === 'string' ? item.markdown : undefined,
+          }))
+          .filter((item) => item.url)
+      : undefined,
     sections: {
       stem: buildSection('题干', input.stem),
       answer: buildSection('答案', input.answer),
@@ -356,22 +370,21 @@ export function failDraftSectionRegeneration(
 }
 
 export function canConfirmDraft(draft: AiGenerateDraftCard): boolean {
-  return draft.reviewStatus === 'approved' || draft.reviewStatus === 'confirmed' || draft.reviewStatus === 'committed'
+  return draft.status === 'ready' && draft.reviewStatus !== 'rejected' && draft.reviewStatus !== 'committed'
 }
 
 export function toggleDraftConfirmed(session: AiGenerateStudioSession, questionId: string): AiGenerateStudioSession {
   const targetId = String(questionId || '').trim()
   const draft = session.drafts.find((item) => item.questionId === targetId)
   if (!draft || !canConfirmDraft(draft)) return session
-  const has = session.confirmedIds.includes(targetId)
   return {
     ...session,
-    confirmedIds: has ? session.confirmedIds.filter((item) => item !== targetId) : [...session.confirmedIds, targetId],
+    confirmedIds: session.confirmedIds.includes(targetId) ? session.confirmedIds : [...session.confirmedIds, targetId],
     drafts: session.drafts.map((item) =>
       item.questionId === targetId
         ? {
             ...item,
-            reviewStatus: has ? 'approved' : 'confirmed',
+            reviewStatus: 'committed',
           }
         : item
     ),

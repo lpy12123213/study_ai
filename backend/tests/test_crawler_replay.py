@@ -1,14 +1,22 @@
 import inspect
 import os
-import tempfile
 import unittest
+import uuid
+import shutil
 from pathlib import Path
 
 
 class CrawlerRecordReplayTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._env_before = dict(os.environ)
-        self._tmp = tempfile.TemporaryDirectory()
+        # NOTE: Avoid `tempfile.*` here; some sandboxed environments can produce
+        # temp directories that are not writable/readable. Create a normal dir
+        # under repo `.local/` instead.
+        repo_root = Path(__file__).resolve().parents[2]
+        tmp_root = (repo_root / ".local" / "tmp_tests").resolve()
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        self._tmp_dir = (tmp_root / f"crawler_rr_{uuid.uuid4().hex}").resolve()
+        self._tmp_dir.mkdir(parents=True, exist_ok=False)
 
         # Enable replay globally for these tests.
         os.environ["REPLAY"] = "1"
@@ -19,14 +27,17 @@ class CrawlerRecordReplayTests(unittest.IsolatedAsyncioTestCase):
 
         self._crawler_client = crawler_client
         self._orig_root = getattr(crawler_client._record_replay_store, "_root", None)
-        crawler_client._record_replay_store._root = Path(self._tmp.name)
+        crawler_client._record_replay_store._root = Path(self._tmp_dir)
 
     def tearDown(self) -> None:
         try:
             if self._orig_root is not None:
                 self._crawler_client._record_replay_store._root = self._orig_root
         finally:
-            self._tmp.cleanup()
+            try:
+                shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
             os.environ.clear()
             os.environ.update(self._env_before)
 

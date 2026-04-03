@@ -3,7 +3,7 @@ import unittest
 
 class TestMcpStdioTools(unittest.TestCase):
     def test_get_stdio_tools_contains_keyword_search(self) -> None:
-        from backend.mcp.stdio_tools import get_stdio_tools
+        from backend.mcp.tools.stdio_tools import get_stdio_tools
 
         tools = get_stdio_tools()
         self.assertIsInstance(tools, list)

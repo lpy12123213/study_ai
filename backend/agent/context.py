@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, PlanStep, ReflectionResult, StepResult, UserProfile
-from backend.core.llm_client import chat_completion_text
+from backend.llm.client import chat_completion_text
 from backend.core.logging_utils import get_logger
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")

@@ -6,13 +6,13 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.core import AgentCore
 from backend.agent.types import agent_event
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_iso_z, utcnow_naive
 from backend.database.models import get_study_archive_by_fingerprint, upsert_study_archive
 from backend.database.repositories.tasks import (
     append_task_event as db_append_task_event,
@@ -436,6 +436,7 @@ class StudyMaterialsTask:
     # Runner task (created by manager).
     runner: Optional[asyncio.Task] = None
     persisted_at_s: float = 0.0
+    needs_db_reconcile: bool = False
 
 
 class StudyMaterialsTaskManager:
@@ -579,6 +580,7 @@ class StudyMaterialsTaskManager:
                 task.status = "failed"
                 task.error = task.error or "server_restarted"
                 task.updated_at_s = _now_s()
+                task.needs_db_reconcile = True
                 task.last_seq += 1
                 task.events.append(
                     {
@@ -594,6 +596,66 @@ class StudyMaterialsTaskManager:
             return task
         except Exception:
             return None
+
+    async def shutdown(self, *, reason: str = "server_shutdown") -> None:
+        """Best-effort graceful shutdown: cancel running tasks and persist terminal state."""
+
+        msg = str(reason or "server_shutdown").strip() or "server_shutdown"
+
+        async with self._lock:
+            running = [t for t in self._tasks.values() if isinstance(t, StudyMaterialsTask) and t.status == "running"]
+
+        for task in running:
+            # Avoid the runner's CancelledError handler overwriting our requested state:
+            # set a terminal-ish state before cancelling the task.
+            task.status = "canceled"
+            task.error = msg
+            task.updated_at_s = _now_s()
+
+            try:
+                await self._append_event(
+                    task,
+                    agent_event(
+                        "warning",
+                        {
+                            "taskId": task.task_id,
+                            "message": "Task canceled due to server shutdown.",
+                            "reason": msg,
+                        },
+                    ),
+                )
+            except Exception:
+                logger.debug("study_material_task_shutdown_event_failed", extra={"task_id": task.task_id}, exc_info=True)
+
+            try:
+                await db_update_task_status(
+                    user_id=task.user_id,
+                    task_id=task.task_id,
+                    status="canceled",
+                    error={"message": msg},
+                    ended_at=utcnow_naive(),
+                )
+            except Exception:
+                logger.debug(
+                    "study_material_task_shutdown_status_write_failed",
+                    extra={"task_id": task.task_id, "user_id": task.user_id},
+                    exc_info=True,
+                )
+
+            try:
+                self._persist_snapshot(task, force=True)
+            except Exception:
+                logger.debug(
+                    "study_material_task_shutdown_snapshot_failed",
+                    extra={"task_id": task.task_id, "user_id": task.user_id},
+                    exc_info=True,
+                )
+
+            if task.runner and not task.runner.done():
+                task.runner.cancel()
+
+            async with task.cond:
+                task.cond.notify_all()
 
     def _restore_tasks_from_disk(self) -> None:
         try:
@@ -698,7 +760,7 @@ class StudyMaterialsTaskManager:
                     "options": dict(task.options or {}),
                     "parentTaskId": task.parent_task_id,
                 },
-                started_at=datetime.utcnow(),
+                started_at=utcnow_naive(),
             )
         except Exception:
             logger.exception(
@@ -755,7 +817,7 @@ class StudyMaterialsTaskManager:
                         "id": "task_paused",
                         "title": "任务已暂停",
                         "status": "paused",
-                        "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "startTime": utcnow_iso_z(),
                         "toolName": "study_materials",
                     }
                 },
@@ -802,7 +864,7 @@ class StudyMaterialsTaskManager:
                         "id": "task_resumed",
                         "title": "任务继续执行",
                         "status": "running",
-                        "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "startTime": utcnow_iso_z(),
                         "toolName": "study_materials",
                     }
                 },
@@ -846,7 +908,7 @@ class StudyMaterialsTaskManager:
                         "id": "task_canceled",
                         "title": "任务已取消",
                         "status": "failed",
-                        "startTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "startTime": utcnow_iso_z(),
                         "toolName": "study_materials",
                         "error": "Task cancelled",
                     }
@@ -860,7 +922,7 @@ class StudyMaterialsTaskManager:
                 task_id=tid,
                 status="canceled",
                 error={"message": "Task cancelled"},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception("study_material_task_cancel_write_failed", extra={"task_id": tid, "user_id": uid})
@@ -1096,7 +1158,7 @@ class StudyMaterialsTaskManager:
                 task_id=task.task_id,
                 status="failed",
                 error={"message": message},
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception(
@@ -1116,7 +1178,7 @@ class StudyMaterialsTaskManager:
                 task_id=task.task_id,
                 status="completed",
                 progress=100.0,
-                ended_at=datetime.utcnow(),
+                ended_at=utcnow_naive(),
             )
         except Exception:
             logger.exception(

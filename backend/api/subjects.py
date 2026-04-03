@@ -6,10 +6,12 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import require_auth
-from backend.crawler_manager import get_crawler
-from backend.subjects import get_all_subjects, resolve_subject
+from backend.core.logging_utils import get_logger
+from backend.crawler.manager import get_crawler
+from backend.core.subjects import get_all_subjects, resolve_subject
 
 router = APIRouter()
+logger = get_logger(__name__)
 _SUBJECT_FILTERS_CACHE: dict[str, tuple[float, dict]] = {}
 _KNOWLEDGE_TREE_CACHE: dict[str, tuple[float, dict]] = {}
 
@@ -151,7 +153,9 @@ async def get_subject_filters(subject_code: str, user: dict = Depends(require_au
     crawler = await get_crawler(subject=subject, edu_level="", strict=True)
     result = await crawler.get_available_filters()
     if not isinstance(result, dict) or not result.get("success"):
-        raise HTTPException(status_code=500, detail=str((result or {}).get("error") or "filters_failed"))
+        err = str((result or {}).get("error") or "").strip()
+        logger.warning("subject_filters_failed", extra={"subject": subject, "error": err[:200]})
+        raise HTTPException(status_code=500, detail="filters_failed")
 
     grades = result.get("grades") or []
     textbook_versions = result.get("textbook_versions") or []

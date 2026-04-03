@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useRequestLogStore } from '@/stores/useRequestLogStore'
-import { useToastStore } from '@/stores/useToastStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as feedbackApi from '@/api/feedback'
 
 type FeedbackSeed = {
@@ -46,7 +46,7 @@ export function FeedbackDialog(props: {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const requestLogs = useRequestLogStore((s) => s.items)
-  const pushToast = useToastStore((s) => s.pushToast)
+  const addToast = useNotificationStore((s) => s.addToast)
 
   const [title, setTitle] = useState('反馈')
   const [description, setDescription] = useState('')
@@ -109,12 +109,12 @@ export function FeedbackDialog(props: {
       }),
     onSuccess: (fb) => {
       queryClient.invalidateQueries({ queryKey: ['feedback'] })
-      pushToast({ id: `feedback-${fb.id}`, title: '反馈已提交', status: 'completed' })
+      addToast({ id: `feedback-${fb.id}`, title: '反馈已提交', status: 'completed' })
       onOpenChange(false)
       navigate('/feedback')
     },
     onError: () => {
-      pushToast({ id: `feedback-failed-${Date.now()}`, title: '反馈提交失败', status: 'failed' })
+      addToast({ id: `feedback-failed-${Date.now()}`, title: '反馈提交失败', status: 'failed' })
     },
   })
 
@@ -244,4 +244,3 @@ export function FeedbackDialog(props: {
     </Dialog>
   )
 }
-

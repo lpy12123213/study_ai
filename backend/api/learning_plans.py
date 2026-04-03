@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
+from backend.core.time_utils import utcnow_naive
 from backend.database.models import create_learning_plan as db_create_learning_plan
 from backend.database.models import get_learning_plan as db_get_learning_plan
 from backend.database.models import list_learning_plans as db_list_learning_plans
@@ -124,7 +125,7 @@ async def create_plan_from_study_archive(
     title = str(body.get("title") or f"学习计划：{str(archive.get('topic') or '').strip()}" or "学习计划").strip() or "学习计划"
 
     sections = archive.get("sections") if isinstance(archive.get("sections"), list) else []
-    now = datetime.utcnow()
+    now = utcnow_naive()
 
     items: List[dict] = []
     sort = 0
@@ -175,4 +176,3 @@ async def create_plan_from_study_archive(
         raise HTTPException(status_code=500, detail="create_learning_plan_failed")
 
     return {"success": True, "plan": plan}
-

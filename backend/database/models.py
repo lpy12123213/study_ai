@@ -55,7 +55,9 @@ from backend.database.repositories.feedback import (
     list_feedback,
 )
 from backend.database.repositories.generated_files import (
+    delete_generated_file,
     get_generated_file,
+    list_expired_generated_files,
     list_generated_files,
     upsert_generated_file,
 )

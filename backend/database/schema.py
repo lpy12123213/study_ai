@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
+def _utcnow() -> datetime:
+    """Return a naive UTC datetime for legacy SQLite schemas.
+
+    Python 3.12+ deprecates `datetime.utcnow()`. We keep legacy naive storage
+    while using timezone-aware UTC as the source of truth.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
@@ -16,8 +23,8 @@ class Paper(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String(64), nullable=False, index=True, default="")
     paper_name = Column(String(200), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     questions = relationship("PaperQuestion", back_populates="paper", cascade="all, delete-orphan")
 
@@ -64,8 +71,8 @@ class Blueprint(Base):
     subject = Column(String(100), nullable=False, default="")
     topic = Column(String(200), nullable=False, default="")
     slots_json = Column(Text, nullable=False, default="[]")  # JSON: BlueprintSlot[]
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class SearchHistory(Base):
@@ -78,7 +85,7 @@ class SearchHistory(Base):
     search_type = Column(String(50))
     search_query = Column(String(500))
     result_count = Column(Integer)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class Conversation(Base):
@@ -89,8 +96,8 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String(64), nullable=False, index=True, default="")
     title = Column(String(200), default="新对话")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
 
@@ -106,7 +113,7 @@ class Message(Base):
     content = Column(Text)
     tool_calls = Column(Text)  # JSON: 工具调用信息
     tool_call_id = Column(String(100))  # 工具调用ID（用于 tool 角色）
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")
 
@@ -122,8 +129,8 @@ class CanvasBoard(Base):
     subject = Column(String(100), default="")
     revision = Column(Integer, default=1)
     snapshot = Column(Text, default="")  # JSON serialized store snapshot
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     versions = relationship("CanvasBoardVersion", back_populates="board", cascade="all, delete-orphan")
 
@@ -137,7 +144,7 @@ class CanvasBoardVersion(Base):
     board_id = Column(Integer, ForeignKey("canvas_boards.id"), nullable=False)
     revision = Column(Integer, nullable=False)
     snapshot = Column(Text, nullable=False)  # JSON serialized store snapshot
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     board = relationship("CanvasBoard", back_populates="versions")
 
@@ -149,7 +156,7 @@ class UsedQuestion(Base):
 
     question_id = Column(String(50), primary_key=True)
     subject = Column(String(100), default="")
-    used_at = Column(DateTime, default=datetime.utcnow)
+    used_at = Column(DateTime, default=_utcnow)
 
 
 class QuestionCache(Base):
@@ -176,8 +183,19 @@ class QuestionCache(Base):
     source = Column(String(200), default="")
     date = Column(String(50), default="")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class FormulaLatexCache(Base):
+    """Persistent cache for Zujuan formula hash -> LaTeX."""
+
+    __tablename__ = "formula_latex_cache"
+
+    formula_hash = Column(String(32), primary_key=True)
+    latex = Column(Text, default="")
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class QuestionLibraryItem(Base):
@@ -198,8 +216,8 @@ class QuestionLibraryItem(Base):
     ai_dimensions_json = Column(Text, default="")
     ai_summary = Column(Text, default="")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class StudyArchive(Base):
@@ -221,8 +239,8 @@ class StudyArchive(Base):
     markdown = Column(Text, default="")
     sections_json = Column(Text, default="[]")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class UsedQuestionUser(Base):
@@ -233,7 +251,7 @@ class UsedQuestionUser(Base):
     user_id = Column(String(64), primary_key=True)
     question_id = Column(String(50), primary_key=True)
     subject = Column(String(100), default="")
-    used_at = Column(DateTime, default=datetime.utcnow)
+    used_at = Column(DateTime, default=_utcnow)
 
 
 class GeneratedFile(Base):
@@ -247,7 +265,7 @@ class GeneratedFile(Base):
     mime_type = Column(String(100), default="")
     sha256 = Column(String(64), default="", index=True)
     bytes = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
     expires_at = Column(DateTime, nullable=True, index=True)
 
 
@@ -273,8 +291,8 @@ class Task(Base):
     result_json = Column(Text, default="")
     error_json = Column(Text, default="")
 
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
     started_at = Column(DateTime, nullable=True, index=True)
     ended_at = Column(DateTime, nullable=True, index=True)
 
@@ -291,7 +309,7 @@ class TaskEvent(Base):
     seq = Column(Integer, nullable=False)
     event_type = Column(String(50), index=True, default="")
     payload_json = Column(Text, default="")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
     task = relationship("Task", back_populates="events")
 
@@ -312,8 +330,8 @@ class UserItemMeta(Base):
     pinned = Column(Integer, default=0, index=True)
     tags_json = Column(Text, default="[]")
 
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
     __table_args__ = (UniqueConstraint("user_id", "item_type", "item_id", name="ux_user_item_meta"),)
 
@@ -325,8 +343,8 @@ class UserSettings(Base):
 
     user_id = Column(String(64), primary_key=True)
     settings_json = Column(Text, default="{}")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
 
 class ShareLink(Base):
@@ -342,7 +360,7 @@ class ShareLink(Base):
     expires_at = Column(DateTime, nullable=True, index=True)
     password_hash = Column(String(200), default="")
 
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
 
 class LearningPlan(Base):
@@ -354,8 +372,8 @@ class LearningPlan(Base):
     user_id = Column(String(64), nullable=False, index=True, default="")
     title = Column(String(200), default="", index=True)
     archived = Column(Integer, default=0, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
     items = relationship("LearningPlanItem", back_populates="plan", cascade="all, delete-orphan")
 
@@ -374,8 +392,8 @@ class LearningPlanItem(Base):
     completed_at = Column(DateTime, nullable=True)
     sort_order = Column(Integer, default=0, index=True)
     source_ref_json = Column(Text, default="{}")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
     plan = relationship("LearningPlan", back_populates="items")
 
@@ -393,8 +411,8 @@ class Annotation(Base):
     snippet = Column(String(300), default="")
     content = Column(Text, default="")
     tags_json = Column(Text, default="[]")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
 
 class FeedbackReport(Base):
@@ -408,8 +426,8 @@ class FeedbackReport(Base):
     description = Column(Text, default="")
     context_json = Column(Text, default="{}")
     status = Column(String(32), index=True, default="received")  # received|triaged|in_progress|done
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
 
 class UserTemplate(Base):
@@ -422,8 +440,8 @@ class UserTemplate(Base):
     template_type = Column(String(32), index=True, default="")  # study_materials|paper_compose|lesson_plan|...
     name = Column(String(200), default="", index=True)
     body_json = Column(Text, default="{}")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
 
 class WrongQuestion(Base):
@@ -440,7 +458,7 @@ class WrongQuestion(Base):
     note = Column(Text, default="")
     tags_json = Column(Text, default="[]")
     source_ref_json = Column(Text, default="{}")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
     __table_args__ = (UniqueConstraint("user_id", "question_id", name="ux_wrong_questions_user_question"),)
