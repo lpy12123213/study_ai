@@ -79,8 +79,12 @@ def _extract_kp_source_text(ctx: CompressedContext, *, kp: str) -> str:
         if md:
             parts.append(_clip_chars(_strip_markdown_headings(md), max_chars=1400))
     except Exception:
-        # Best-effort only.
-        pass
+        # Best-effort only, but record failures for debugging (working_memory corruption is actionable).
+        logger.warning(
+            "agent_kp_source_text_extract_failed",
+            extra={"kp": kp, "source": "generate_study_material"},
+            exc_info=True,
+        )
 
     try:
         synth = ctx.working_memory.get("synthesize_sources")
@@ -89,7 +93,11 @@ def _extract_kp_source_text(ctx: CompressedContext, *, kp: str) -> str:
         if summary:
             parts.append(_clip_chars(summary, max_chars=900))
     except Exception:
-        pass
+        logger.warning(
+            "agent_kp_source_text_extract_failed",
+            extra={"kp": kp, "source": "synthesize_sources"},
+            exc_info=True,
+        )
 
     try:
         briefs = ctx.working_memory.get("source_briefs")
@@ -103,7 +111,11 @@ def _extract_kp_source_text(ctx: CompressedContext, *, kp: str) -> str:
             }
             parts.append(_clip_chars(json.dumps(compact, ensure_ascii=False), max_chars=900))
     except Exception:
-        pass
+        logger.warning(
+            "agent_kp_source_text_extract_failed",
+            extra={"kp": kp, "source": "source_briefs"},
+            exc_info=True,
+        )
 
     joined = "\n\n".join([p for p in parts if p.strip()]).strip()
     return _clip_chars(joined, max_chars=2200)
@@ -276,7 +288,7 @@ async def compress_context(
     try:
         set_state(AgentState.COMPRESSING)
     except Exception:
-        pass
+        logger.warning("agent_set_state_failed", extra={"next_state": str(AgentState.COMPRESSING)}, exc_info=True)
 
     compress_step_id = f"compress_context-{uuid.uuid4().hex[:8]}"
     yield agent_event(

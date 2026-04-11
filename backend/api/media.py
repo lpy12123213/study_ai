@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
-from backend.database.models import get_generated_file
+from backend.database.repositories.system.generated_files import get_generated_file
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -258,7 +258,7 @@ def _is_safe_generated_filename(name: str) -> bool:
         return False
     if any(c not in "0123456789abcdef" for c in stem.lower()):
         return False
-    return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "md", "tex", "pdf"}
+    return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "md", "tex", "pdf", "zip", "docx"}
 
 
 def _file_response(path: Path, *, filename: Optional[str] = None) -> FileResponse:
@@ -307,7 +307,7 @@ async def get_generated_media(filename: str, user: dict = Depends(require_auth))
         raise HTTPException(status_code=404, detail="not_found")
 
     ext = path.suffix.lower().lstrip(".")
-    if ext in {"md", "tex", "pdf"}:
+    if ext in {"md", "tex", "pdf", "zip", "docx"}:
         # Force "download" behavior for generated documents (avoid opening raw text/PDF in-app).
         return _file_response(path, filename=filename)
     return _file_response(path)

@@ -288,34 +288,64 @@ TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "topic": {"type": "string"},
             "subject": {"type": "string"},
             "knowledge_points": {"type": "array", "items": {"type": "string"}},
-            "max_items": {"type": "integer", "minimum": 0, "maximum": 20},
+            "preset": {"type": "string"},
+            "max_diagrams": {"type": "integer", "minimum": 0, "maximum": 12},
             "strict_llm": {"type": "boolean"},
         }
     ),
     "draw_svg_diagram": _obj(
         {
-            "svg": {"type": "string"},
-            "width": {"type": "integer"},
-            "height": {"type": "integer"},
+            "spec": {"type": "object"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
         }
     ),
     "draw_diagram": _obj(
         {
-            "tikz": {"type": "string"},
-            "strict_llm": {"type": "boolean"},
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
+            "spec": {"type": "object"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
         }
     ),
     "tikz_to_svg": _obj(
         {
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
             "tikz": {"type": "string"},
-            "timeout_s": {"type": "number", "minimum": 1, "maximum": 60},
+            "preamble": {"type": "string"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
+        }
+    ),
+    "asy_to_svg": _obj(
+        {
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
+            "asy": {"type": "string"},
+            "asymptote": {"type": "string"},
+            "code": {"type": "string"},
+            "text": {"type": "string"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
         }
     ),
     "seedream_generate": _obj(
         {
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
             "prompt": {"type": "string"},
             "size": {"type": "string"},
-            "quality": {"type": "string"},
+            "n": {"type": "integer", "minimum": 1, "maximum": 4},
+            "model": {"type": "string"},
+            "response_format": {"type": "string"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
         }
     ),
 
@@ -350,4 +380,3 @@ def get_tool_input_schema(tool_name: str) -> Dict[str, Any]:
     if isinstance(schema, dict) and schema:
         return dict(schema)
     return {"type": "object", "additionalProperties": True}
-

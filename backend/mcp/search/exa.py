@@ -11,8 +11,7 @@ from backend.core.settings import load_project_dotenv
 
 load_project_dotenv(override=False)
 
-# NOTE: `EXA_API` is a legacy alias kept for compatibility.
-EXA_API_KEY = (os.getenv("EXA_API_KEY") or os.getenv("EXA_API") or "").strip()
+EXA_API_KEY = (os.getenv("EXA_API_KEY") or "").strip()
 EXA_BASE_URL = (os.getenv("EXA_BASE_URL") or "https://api.exa.ai").rstrip("/")
 
 

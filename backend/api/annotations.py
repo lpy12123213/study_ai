@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.database.models import create_annotation as db_create_annotation
-from backend.database.models import list_annotations as db_list_annotations
-from backend.database.models import update_annotation as db_update_annotation
+from backend.database.repositories.content.annotations import create_annotation as db_create_annotation
+from backend.database.repositories.content.annotations import list_annotations as db_list_annotations
+from backend.database.repositories.content.annotations import update_annotation as db_update_annotation
 
 router = APIRouter(prefix="/annotations", tags=["annotations"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)

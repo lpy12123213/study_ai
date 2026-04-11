@@ -57,7 +57,7 @@ def seed_root_specs(source_pack: dict, count: int, difficulty: str, question_typ
     for i, tag in enumerate(seed_tags):
         specs.append(
             {
-                "spec_id": f"spec_{i + 1}",
+                "spec_id": f"spec-{i + 1}",
                 "subject": subj,
                 "topic": top,
                 "difficulty": difficulty_variants[i] if i < len(difficulty_variants) else str(difficulty or "").strip(),
@@ -112,7 +112,7 @@ def seed_root_specs_from_brainstorm(
             seed_tag = concept or f"创意种子{i + 1}"
 
         spec: dict = {
-            "spec_id": f"spec_{i + 1}",
+            "spec_id": f"spec-{i + 1}",
             "subject": subj,
             "topic": top,
             "difficulty": difficulty_variants[i] if i < len(difficulty_variants) else str(difficulty or "").strip(),

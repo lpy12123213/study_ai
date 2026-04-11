@@ -57,3 +57,17 @@ def _configure_project_local_tempdir() -> None:
 
 
 _configure_project_local_tempdir()
+
+
+def _configure_required_auth_env() -> None:
+    """Set required auth env vars for test imports.
+
+    `backend.core.auth` requires JWT_SECRET and ADMIN_PASSWORD (or ADMIN_PASSWORD_HASH).
+    Tests should not depend on a developer's local `.env` being present.
+    """
+
+    os.environ.setdefault("JWT_SECRET", "test-jwt-secret-change-me")
+    os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password-change-me")
+
+
+_configure_required_auth_env()

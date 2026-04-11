@@ -7,10 +7,11 @@ from typing import Any, Dict, List, Optional
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured
-from backend.question_library.diagram_utils import render_schematic_to_url, render_svg_to_url, render_tikz_to_url
+from backend.question_library.diagram_utils import render_asy_to_url, render_tikz_to_url
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.question_library.subject_knowledge import infer_subject_family
+from backend.shared.diagrams.static_render import check_asy_tools, check_tikz_tools
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,10 @@ async def assess_diagram_need(
     if not stem:
         return {"need_diagram": False, "kind": "none", "reason": "empty_stem"}
 
+    tikz_ok = len(check_tikz_tools()) == 0
+    asy_ok = len(check_asy_tools()) == 0
+    available_kinds = [k for k, ok in (("tikz", tikz_ok), ("asy", asy_ok)) if ok] + ["none"]
+
     # If LLM isn't available, rely on a conservative heuristic.
     if not is_llm_configured():
         return {"need_diagram": _heuristic_need_diagram(subject=subject, stem=stem), "kind": "auto", "reason": "heuristic"}
@@ -51,9 +56,10 @@ async def assess_diagram_need(
         "subject": str(subject or "").strip(),
         "subject_family": fam,
         "stem": _clip(stem, 1200),
+        "available_kinds": available_kinds,
         "output_schema": {
             "need_diagram": "bool",
-            "kind": "string (svg|schematic|tikz|none)",
+            "kind": "string (tikz|asy|none)",
             "reason": "string",
         },
     }
@@ -62,8 +68,8 @@ async def assess_diagram_need(
         "<role>你是审题教研员，负责判断题目是否需要配图。</role>\n"
         "<rules>\n"
         "  <rule>只有当缺少配图会明显增加歧义或阅读难度，才 need_diagram=true。</rule>\n"
-        "  <rule>优先选择可用的轻量方案：几何/函数示意图用 svg；物理过程/受力/电路用 schematic。</rule>\n"
-        "  <rule>除非必须使用 TikZ 才能表达，否则不要选择 tikz。</rule>\n"
+        "  <rule>配图后端收敛为静态矢量：优先 TikZ/PGF；仅当 TikZ 不适合或不可用时选 Asymptote。</rule>\n"
+        "  <rule>kind 必须从 available_kinds 中选择；need_diagram=false 时 kind=none。</rule>\n"
         "</rules>\n"
         "<output_format>严格输出 JSON object。</output_format>"
     )
@@ -86,7 +92,7 @@ async def assess_diagram_need(
     )
     obj = _extract_json_obj(text)
     kind = str(obj.get("kind") or "").strip().lower()
-    if kind not in {"svg", "schematic", "tikz", "none"}:
+    if kind not in set(available_kinds):
         kind = "auto"
     return {
         "need_diagram": bool(obj.get("need_diagram")),
@@ -110,7 +116,10 @@ async def generate_question_diagram(
         return None
 
     fam = infer_subject_family(subject)
-    prefer = "schematic" if fam == "physics" else "svg"
+    tikz_ok = len(check_tikz_tools()) == 0
+    asy_ok = len(check_asy_tools()) == 0
+    available_kinds = [k for k, ok in (("tikz", tikz_ok), ("asy", asy_ok)) if ok]
+    prefer = "tikz" if tikz_ok else "asy" if asy_ok else "none"
 
     if not is_llm_configured():
         # Without LLM, we can't reliably build a spec; return None.
@@ -120,25 +129,29 @@ async def generate_question_diagram(
         "subject": str(subject or "").strip(),
         "subject_family": fam,
         "preferred_kind": prefer,
+        "available_kinds": available_kinds + ["none"],
         "stem": _clip(stem, 1400),
         "output_schema": {
             "need_diagram": "bool",
-            "kind": "string (svg|schematic|tikz|none)",
+            "kind": "string (tikz|asy|none)",
             "alt": "string",
             "caption": "string",
-            "svg_spec": "object (when kind=svg, backend.core.svg_diagram.render_svg_diagram spec)",
-            "schematic_spec": "object (when kind=schematic, backend.core.plot_tools.render_schematic spec)",
-            "tikz": "string (when kind=tikz)",
+            "tikz": "string (when kind=tikz; must include \\begin{tikzpicture}...\\end{tikzpicture})",
+            "preamble": "string (optional when kind=tikz; appended to TeX preamble)",
+            "asy": "string (when kind=asy; Asymptote code)",
         },
     }
 
     system_content = (
-        "<role>你是配图助教，负责为题目生成最小必要示意图。</role>\n"
+        "<role>你是一个题库配图工程师，负责为题目生成高质量静态矢量配图。</role>\n"
+        "<rules>\n"
+        "  <rule>只允许使用静态矢量后端：TikZ/PGF（首选）与 Asymptote（次选）。禁止选择其他后端。</rule>\n"
+        "  <rule>kind 必须从 available_kinds 中选择；优先 TikZ，只有在 TikZ 不适合或不可用时才选 Asymptote。</rule>\n"
+        "</rules>\n"
         "<constraints>\n"
         "  <rule>图必须服务于题意：标注关键点/方向/量，不要画装饰性内容。</rule>\n"
         "  <rule>若题目不需要图，need_diagram=false 并 kind=none。</rule>\n"
-        "  <rule>优先输出 preferred_kind 对应的 spec；TikZ 仅在必须时使用。</rule>\n"
-        "  <rule>所有坐标/标注必须在 spec 中明确，不要依赖隐含约定。</rule>\n"
+        "  <rule>所有坐标/标注必须在代码中明确，不要依赖隐含约定。</rule>\n"
         "</constraints>\n"
         "<output_format>严格输出 JSON object。</output_format>"
     )
@@ -164,22 +177,32 @@ async def generate_question_diagram(
         return None
 
     kind = str(obj.get("kind") or prefer).strip().lower()
-    if kind not in {"svg", "schematic", "tikz"}:
+    allowed = set(available_kinds + ["none"])
+    if kind not in allowed:
         kind = prefer
+    if kind == "none" or prefer == "none":
+        return None
 
     alt = str(obj.get("alt") or "diagram").strip() or "diagram"
     caption = str(obj.get("caption") or "").strip()
 
     try:
-        if kind == "schematic":
-            spec = obj.get("schematic_spec") if isinstance(obj.get("schematic_spec"), dict) else {}
-            published = await render_schematic_to_url(spec=spec, user_id=user_id, alt=alt)
-        elif kind == "tikz":
+        if kind == "asy":
+            asy = str(obj.get("asy") or obj.get("asymptote") or "").strip()
+            if not asy and "tikz" in available_kinds:
+                kind = "tikz"
+            else:
+                published = await render_asy_to_url(asy=asy, user_id=user_id, alt=alt)
+
+        if kind == "tikz":
             tikz = str(obj.get("tikz") or "").strip()
-            published = await render_tikz_to_url(tikz=tikz, user_id=user_id, alt=alt)
-        else:
-            spec = obj.get("svg_spec") if isinstance(obj.get("svg_spec"), dict) else {}
-            published = await render_svg_to_url(spec=spec, user_id=user_id, alt=alt)
+            if not tikz and "asy" in available_kinds:
+                kind = "asy"
+                asy = str(obj.get("asy") or obj.get("asymptote") or "").strip()
+                published = await render_asy_to_url(asy=asy, user_id=user_id, alt=alt)
+            else:
+                preamble = str(obj.get("preamble") or "").strip()
+                published = await render_tikz_to_url(tikz=tikz, user_id=user_id, alt=alt, preamble=preamble)
     except Exception as exc:
         logger.debug("question_library_diagram_render_failed", exc_info=True, extra={"subject": subject})
         return {"kind": kind, "success": False, "error": str(exc)}
@@ -269,4 +292,3 @@ async def enrich_drafts_with_diagrams(
         else:
             out.append(base)
     return out
-

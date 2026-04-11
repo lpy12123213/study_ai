@@ -261,7 +261,7 @@ async def get_messages(
     session: Optional[AsyncSession] = None,
 ) -> List[dict]:
     uid = _require_user_id(user_id)
-    limit = max(1, min(int(limit or 200), 1000))
+    limit = max(1, min(int(limit or 200), 100))
     tool_content_max_chars = max(0, min(int(tool_content_max_chars or 2000), 200_000))
 
     before_id_value: Optional[int] = None
@@ -285,16 +285,15 @@ async def get_messages(
                 session=session,
             )
 
-    conv_result = await session.execute(
-        select(Conversation.id).where(
+    # Join conversations to enforce user scoping without an extra round-trip.
+    stmt = (
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .where(
             Conversation.id == int(conv_id),
             Conversation.user_id == uid,
         )
     )
-    if conv_result.scalar_one_or_none() is None:
-        return []
-
-    stmt = select(Message).where(Message.conversation_id == int(conv_id))
     if before_id_value and before_id_value > 0:
         stmt = stmt.where(Message.id < int(before_id_value))
     if not include_trace:

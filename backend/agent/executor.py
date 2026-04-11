@@ -16,7 +16,12 @@ from backend.agent.tools.utils.text_utils import _looks_truncated_markdown, _rep
 from backend.agent.types import CompressedContext, PlanStep, StepResult, agent_event
 from backend.llm.client import ChatCompletionResult, chat_completion
 from backend.core.logging_utils import get_logger
-from backend.core.settings import API_TIMEOUT, LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_TEMPERATURE
+from backend.core.settings import (
+    API_TIMEOUT,
+    LESSON_PLAN_MAX_TOKENS,
+    LESSON_PLAN_TEMPERATURE,
+    STUDY_MATERIALS_THINKING_EFFORT_DEFAULT,
+)
 
 _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]]] = ContextVar(
     "agent_emit_event",
@@ -64,7 +69,10 @@ class Executor:
 
         handlers: Dict[str, Callable[[Dict[str, Any], CompressedContext], Awaitable[Any]]] = {}
         for mixin in TOOL_MIXINS:
-            for attr_name, value in (getattr(mixin, "__dict__", {}) or {}).items():
+            # Some tool groups are exposed via composite mixins (for example `LatexToolsMixin`),
+            # so inherited `_tool_*` methods must also be discoverable here.
+            for attr_name in dir(mixin):
+                value = getattr(mixin, attr_name, None)
                 if not attr_name.startswith("_tool_"):
                     continue
                 if not callable(value):
@@ -261,9 +269,9 @@ class Executor:
             if (enabled_raw or "").strip().lower() in {"0", "false", "no", "off"}:
                 return None
 
-            effort_raw = (
-                os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT") or "xhigh"
-            )
+            effort_raw = os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT")
+            if not str(effort_raw or "").strip():
+                effort_raw = STUDY_MATERIALS_THINKING_EFFORT_DEFAULT or "xhigh"
             effort = (effort_raw or "").strip().lower().replace("-", "").replace("_", "")
             if effort in {"max", "maximum", "highest"}:
                 effort = "xhigh"

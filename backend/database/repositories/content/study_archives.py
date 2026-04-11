@@ -9,8 +9,11 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.logging_utils import get_logger
 from backend.database.engine import async_session_maker
 from backend.database.schema import StudyArchive
+
+logger = get_logger(__name__)
 
 
 def build_study_archive_fingerprint(*, subject: str, topic: str, requirements: str = "", user_id: str = "") -> str:
@@ -113,6 +116,7 @@ async def upsert_study_archive(
 
     limit = _study_archive_version_limit()
     if limit > 0:
+        stale_ids: List[int] = []
         try:
             res = await session.execute(
                 select(StudyArchive.id)
@@ -125,7 +129,11 @@ async def upsert_study_archive(
                 await session.execute(delete(StudyArchive).where(StudyArchive.id.in_(stale_ids)))
         except Exception:
             # best-effort retention
-            pass
+            logger.warning(
+                "study_archive_retention_cleanup_failed",
+                extra={"user_id": uid, "base_fingerprint": base_fp, "stale_count": len(stale_ids)},
+                exc_info=True,
+            )
 
     return {"id": row.id, "fingerprint": fp}
 

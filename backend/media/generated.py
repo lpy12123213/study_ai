@@ -9,7 +9,11 @@ from typing import Any, Dict, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
-from backend.database.models import delete_generated_file, list_expired_generated_files, upsert_generated_file
+from backend.database.repositories.system.generated_files import (
+    delete_generated_file,
+    list_expired_generated_files,
+    upsert_generated_file,
+)
 
 logger = get_logger(__name__)
 

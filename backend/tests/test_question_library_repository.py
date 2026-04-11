@@ -5,8 +5,8 @@ from unittest.mock import patch
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.database.repositories import question_cache as cache_repo
-from backend.database.repositories import question_library as lib_repo
+from backend.database.repositories.question import question_cache as cache_repo
+from backend.database.repositories.question import question_library as lib_repo
 from backend.database.schema import Base
 
 

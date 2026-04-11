@@ -3,7 +3,8 @@ from __future__ import annotations
 import ast
 import io
 import math
-from typing import Any, Dict, List, Tuple
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
 
@@ -54,6 +55,367 @@ def _parse_range(value: Any, *, default: Tuple[float, float], min_span: float = 
 
 def _iter_list(value: Any) -> List[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _parse_style(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        return {"_raw": value.strip()}
+    return {}
+
+
+def _style_token(style: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in style:
+            return style.get(key)
+    return None
+
+
+def _style_color(style: Dict[str, Any], *, default: str) -> str:
+    value = _style_token(style, "stroke", "color", "edgecolor")
+    return _as_str(value or default) or default
+
+
+def _style_fill(style: Dict[str, Any], *, default: str) -> str:
+    value = _style_token(style, "fill", "facecolor")
+    fill = _as_str(value or default) or default
+    if fill.lower() in {"none", "transparent"}:
+        return "none"
+    return fill
+
+
+def _style_linewidth(style: Dict[str, Any], *, default: float) -> float:
+    raw = _style_token(style, "stroke-width", "stroke_width", "line_width", "linewidth", "width")
+    if isinstance(raw, str):
+        raw = raw.replace("px", "").strip()
+    return _clamp_float(raw, default=default, min_value=0.2, max_value=20.0)
+
+
+def _style_fontsize(style: Dict[str, Any], *, default: float) -> float:
+    raw = _style_token(style, "font-size", "font_size", "fontsize")
+    if isinstance(raw, str):
+        raw = raw.replace("px", "").strip()
+    return _clamp_float(raw, default=default, min_value=6.0, max_value=72.0)
+
+
+def _style_linestyle(style: Dict[str, Any]) -> str:
+    raw = _as_str(style.get("_raw") or "").lower()
+    if bool(_style_token(style, "dashed")) or "dashed" in raw or "dash" in raw:
+        return "--"
+    return "-"
+
+
+def _float_or_none(value: Any) -> Any:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _xy_pair(value: Any) -> Optional[Tuple[float, float]]:
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        x = _float_or_none(value[0])
+        y = _float_or_none(value[1])
+        if x is not None and y is not None:
+            return (x, y)
+    return None
+
+
+def _path_points(data: Any) -> List[Tuple[float, float]]:
+    raw = _as_str(data)
+    if not raw:
+        return []
+    nums = [float(token) for token in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", raw)]
+    out: List[Tuple[float, float]] = []
+    for idx in range(0, len(nums) - 1, 2):
+        out.append((nums[idx], nums[idx + 1]))
+    return out
+
+
+def _polyline_points(element: Dict[str, Any]) -> List[Tuple[float, float]]:
+    if all(key in element for key in ("x1", "y1", "x2", "y2")):
+        x1 = _float_or_none(element.get("x1"))
+        y1 = _float_or_none(element.get("y1"))
+        x2 = _float_or_none(element.get("x2"))
+        y2 = _float_or_none(element.get("y2"))
+        if None not in {x1, y1, x2, y2}:
+            return [(float(x1), float(y1)), (float(x2), float(y2))]
+
+    for key in ("points", "position"):
+        value = element.get(key)
+        if isinstance(value, (list, tuple)):
+            points = [_xy_pair(item) for item in value]
+            out = [point for point in points if point is not None]
+            if len(out) >= 2:
+                return out
+
+    return _path_points(element.get("data"))
+
+
+def _element_bounds(element: Dict[str, Any]) -> List[Tuple[float, float]]:
+    etype = _as_str(element.get("type") or "").lower()
+    points = _polyline_points(element)
+    if points:
+        return points
+
+    if etype in {"rect", "rectangle", "block"}:
+        x = _float_or_none(element.get("x"))
+        y = _float_or_none(element.get("y"))
+        w = _float_or_none(element.get("width"))
+        h = _float_or_none(element.get("height"))
+        if None not in {x, y, w, h}:
+            return [
+                (float(x), float(y)),
+                (float(x) + float(w), float(y) + float(h)),
+            ]
+        center = _xy_pair(element.get("center") or element.get("pos"))
+        size = element.get("size")
+        if center and isinstance(size, (list, tuple)) and len(size) >= 2:
+            sw = _float_or_none(size[0])
+            sh = _float_or_none(size[1])
+            if None not in {sw, sh}:
+                return [
+                    (center[0] - float(sw) / 2.0, center[1] - float(sh) / 2.0),
+                    (center[0] + float(sw) / 2.0, center[1] + float(sh) / 2.0),
+                ]
+
+    if etype in {"circle", "disk"}:
+        cx = _float_or_none(element.get("cx"))
+        cy = _float_or_none(element.get("cy"))
+        if cx is None or cy is None:
+            center = _xy_pair(element.get("center") or element.get("pos"))
+            if center:
+                cx, cy = center
+        r = _float_or_none(element.get("r"))
+        if None not in {cx, cy, r}:
+            return [
+                (float(cx) - float(r), float(cy) - float(r)),
+                (float(cx) + float(r), float(cy) + float(r)),
+            ]
+
+    center = _xy_pair(element.get("center") or element.get("pos"))
+    if center:
+        return [center]
+
+    x = _float_or_none(element.get("x"))
+    y = _float_or_none(element.get("y"))
+    if None not in {x, y}:
+        return [(float(x), float(y))]
+    return []
+
+
+def _schematic_auto_ranges(spec: Dict[str, Any]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    coords: List[Tuple[float, float]] = []
+
+    objects = [o for o in _iter_list(spec.get("objects")) if isinstance(o, dict)]
+    for obj in objects:
+        coords.extend(_element_bounds(obj))
+
+    for group_key in ("segments", "wires"):
+        for item in _iter_list(spec.get(group_key)):
+            if isinstance(item, (list, tuple)):
+                for point in item:
+                    pair = _xy_pair(point)
+                    if pair:
+                        coords.append(pair)
+
+    for force in [f for f in _iter_list(spec.get("forces")) if isinstance(f, dict)]:
+        start = _xy_pair(force.get("pos"))
+        if start:
+            coords.append(start)
+
+    for ann in [a for a in _iter_list(spec.get("annotations")) if isinstance(a, dict)]:
+        point = _xy_pair([ann.get("x"), ann.get("y")])
+        if point:
+            coords.append(point)
+        arrow_to = _xy_pair(ann.get("arrow_to"))
+        if arrow_to:
+            coords.append(arrow_to)
+
+    for element in [e for e in _iter_list(spec.get("elements")) if isinstance(e, dict)]:
+        coords.extend(_element_bounds(element))
+
+    if not coords:
+        return ((-10.0, 10.0), (-6.0, 6.0))
+
+    xs = [point[0] for point in coords]
+    ys = [point[1] for point in coords]
+    x_min = min(xs)
+    x_max = max(xs)
+    y_min = min(ys)
+    y_max = max(ys)
+    x_span = max(1.0, abs(x_max - x_min))
+    y_span = max(1.0, abs(y_max - y_min))
+    x_pad = max(0.6, x_span * 0.08)
+    y_pad = max(0.6, y_span * 0.12)
+    return ((x_min - x_pad, x_max + x_pad), (y_min - y_pad, y_max + y_pad))
+
+
+def _resolve_orientation(raw: Any, sw: float, sh: float) -> str:
+    token = _as_str(raw).lower()
+    if token in {"vertical", "v", "y", "up", "down"}:
+        return "vertical"
+    if token in {"horizontal", "h", "x", "left", "right"}:
+        return "horizontal"
+    if sh > sw * 1.15:
+        return "vertical"
+    return "horizontal"
+
+
+def _component_layout(
+    *,
+    center: Tuple[float, float],
+    size: Tuple[float, float],
+    orientation: Any = "",
+) -> Dict[str, Any]:
+    cx, cy = float(center[0]), float(center[1])
+    sw = _clamp_float(size[0], default=24.0, min_value=4.0, max_value=300.0)
+    sh = _clamp_float(size[1], default=24.0, min_value=4.0, max_value=300.0)
+    resolved = _resolve_orientation(orientation, sw, sh)
+    main_half = (sh / 2.0) if resolved == "vertical" else (sw / 2.0)
+    cross_half = (sw / 2.0) if resolved == "vertical" else (sh / 2.0)
+    body_half = max(2.0, min(main_half * 0.58, main_half - max(main_half * 0.12, 1.2)))
+    return {
+        "center": (cx, cy),
+        "size": (sw, sh),
+        "orientation": resolved,
+        "main_half": main_half,
+        "cross_half": cross_half,
+        "body_half": body_half,
+        "lead_start": (cx, cy - main_half) if resolved == "vertical" else (cx - main_half, cy),
+        "lead_end": (cx, cy + main_half) if resolved == "vertical" else (cx + main_half, cy),
+    }
+
+
+def _axis_point(layout: Dict[str, Any], along: float, across: float = 0.0) -> Tuple[float, float]:
+    cx, cy = layout["center"]
+    if layout["orientation"] == "vertical":
+        return (float(cx + across), float(cy + along))
+    return (float(cx + along), float(cy + across))
+
+
+def _component_label_layout(
+    *,
+    center: Tuple[float, float],
+    size: Tuple[float, float],
+    orientation: str,
+    x_range: Tuple[float, float],
+    y_range: Tuple[float, float],
+    label_side: Any = "",
+    label_offset: Any = None,
+) -> Tuple[float, float, str, str]:
+    cx, cy = float(center[0]), float(center[1])
+    sw = _clamp_float(size[0], default=24.0, min_value=4.0, max_value=300.0)
+    sh = _clamp_float(size[1], default=24.0, min_value=4.0, max_value=300.0)
+    x_span = max(1.0, abs(float(x_range[1]) - float(x_range[0])))
+    y_span = max(1.0, abs(float(y_range[1]) - float(y_range[0])))
+    span = max(x_span, y_span)
+    side = _as_str(label_side).lower()
+    if side not in {"above", "below", "left", "right"}:
+        if orientation == "vertical":
+            side = "left" if cx >= (float(x_range[0]) + float(x_range[1])) / 2.0 else "right"
+        else:
+            side = "below" if cy >= (float(y_range[0]) + float(y_range[1])) / 2.0 else "above"
+
+    base_offset = _float_or_none(label_offset)
+    if base_offset is None:
+        if side in {"above", "below"}:
+            base_offset = max(sh * 0.9, span * 0.045)
+        else:
+            base_offset = max(sw * 0.75, span * 0.04)
+
+    if side == "above":
+        return (cx, cy + float(base_offset), "center", "bottom")
+    if side == "below":
+        return (cx, cy - float(base_offset), "center", "top")
+    if side == "left":
+        return (cx - float(base_offset), cy, "right", "center")
+    return (cx + float(base_offset), cy, "left", "center")
+
+
+def _magnetic_field_points(element: Dict[str, Any]) -> Tuple[List[Tuple[float, float]], str]:
+    raw_symbol = _as_str(element.get("symbol") or element.get("direction") or "").lower()
+    if raw_symbol in {"", "x", "cross", "into", "into_page", "in", "down"}:
+        marker = "into_page"
+    elif raw_symbol in {"dot", "out", "out_of_page", "out-page", "outofpage", "up"}:
+        marker = "out_of_page"
+    else:
+        marker = raw_symbol or "into_page"
+
+    points = _polyline_points(element)
+    if points:
+        return ([(float(px), float(py)) for px, py in points], marker)
+
+    center = _xy_pair(element.get("center") or element.get("pos"))
+    if center is None:
+        x = _float_or_none(element.get("x"))
+        y = _float_or_none(element.get("y"))
+        w = _float_or_none(element.get("width"))
+        h = _float_or_none(element.get("height"))
+        if None not in {x, y, w, h}:
+            cols = _clamp_int(element.get("cols"), default=4, min_value=1, max_value=16)
+            rows = _clamp_int(element.get("rows"), default=3, min_value=1, max_value=16)
+            pad_x = min(float(w) * 0.15, float(w) / 2.0)
+            pad_y = min(float(h) * 0.25, float(h) / 2.0)
+            if cols == 1:
+                xs = [float(x) + float(w) / 2.0]
+            else:
+                start_x = float(x) + pad_x
+                end_x = float(x) + float(w) - pad_x
+                step_x = (end_x - start_x) / float(cols - 1)
+                xs = [start_x + step_x * idx for idx in range(cols)]
+            if rows == 1:
+                ys = [float(y) + float(h) / 2.0]
+            else:
+                start_y = float(y) + pad_y
+                end_y = float(y) + float(h) - pad_y
+                step_y = (end_y - start_y) / float(rows - 1)
+                ys = [start_y + step_y * idx for idx in range(rows)]
+            return (
+                [(round(px, 6), round(py, 6)) for py in ys for px in xs],
+                marker,
+            )
+
+        x1 = _float_or_none(element.get("x1"))
+        y1 = _float_or_none(element.get("y1"))
+        x2 = _float_or_none(element.get("x2"))
+        y2 = _float_or_none(element.get("y2"))
+        if None not in {x1, y1, x2, y2}:
+            center = ((float(x1) + float(x2)) / 2.0, (float(y1) + float(y2)) / 2.0)
+
+    if center is not None:
+        return ([(float(center[0]), float(center[1]))], marker)
+    return ([], marker)
+
+
+def _marker_spacing(points: List[Tuple[float, float]]) -> float:
+    if len(points) < 2:
+        return 0.0
+    distances: List[float] = []
+    for idx, (x0, y0) in enumerate(points):
+        for jdx in range(idx + 1, len(points)):
+            x1, y1 = points[jdx]
+            dist = math.hypot(x1 - x0, y1 - y0)
+            if dist > 1e-6:
+                distances.append(dist)
+    return min(distances) if distances else 0.0
+
+
+def _magnetic_marker_size(
+    element: Dict[str, Any],
+    points: List[Tuple[float, float]],
+    x_range: Tuple[float, float],
+    y_range: Tuple[float, float],
+) -> float:
+    explicit = _float_or_none(element.get("size"))
+    if explicit is not None and explicit > 0:
+        return float(explicit)
+    spacing = _marker_spacing(points)
+    if spacing > 0:
+        return max(spacing * 0.26, 0.18)
+    span = max(1.0, abs(float(x_range[1]) - float(x_range[0])), abs(float(y_range[1]) - float(y_range[0])))
+    return max(span * 0.03, 0.18)
 
 
 _ALLOWED_FUNCS = {
@@ -443,7 +805,7 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
     matplotlib.use("Agg")
     from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
     from matplotlib.figure import Figure
-    from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
+    from matplotlib.patches import Arc, Circle, FancyArrowPatch, Rectangle
 
     width = _clamp_int(spec.get("width"), default=900, min_value=420, max_value=2000)
     height = _clamp_int(spec.get("height"), default=520, min_value=320, max_value=1400)
@@ -453,15 +815,87 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
     FigureCanvas(fig)
     ax = fig.add_subplot(111)
 
-    x_min, x_max = _parse_range(spec.get("x_range"), default=(-10.0, 10.0))
-    y_min, y_max = _parse_range(spec.get("y_range"), default=(-6.0, 6.0))
+    auto_x_range, auto_y_range = _schematic_auto_ranges(spec)
+    x_min, x_max = _parse_range(spec.get("x_range"), default=auto_x_range)
+    y_min, y_max = _parse_range(spec.get("y_range"), default=auto_y_range)
     ax.set_xlim(float(x_min), float(x_max))
     ax.set_ylim(float(y_min), float(y_max))
     ax.set_aspect("equal", adjustable="box")
     ax.axis("off")
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#ffffff")
+
+    def _plot_path(
+        points: List[Tuple[float, float]],
+        *,
+        color: str,
+        linewidth: float,
+        linestyle: str = "-",
+        zorder: float = 2.0,
+    ) -> None:
+        ax.plot(
+            [point[0] for point in points],
+            [point[1] for point in points],
+            color=color,
+            linewidth=linewidth,
+            linestyle=linestyle,
+            solid_capstyle="round",
+            solid_joinstyle="round",
+            zorder=zorder,
+        )
+
+    def _arrow_label_position(
+        start: Tuple[float, float],
+        end: Tuple[float, float],
+        *,
+        distance: float,
+    ) -> Tuple[float, float]:
+        mx = (float(start[0]) + float(end[0])) / 2.0
+        my = (float(start[1]) + float(end[1])) / 2.0
+        dx = float(end[0]) - float(start[0])
+        dy = float(end[1]) - float(start[1])
+        norm = math.hypot(dx, dy) or 1.0
+        return (mx - dy / norm * distance, my + dx / norm * distance)
+
+    def _draw_magnetic_marker(
+        center: Tuple[float, float],
+        *,
+        marker: str,
+        size: float,
+        color: str,
+        linewidth: float,
+    ) -> None:
+        px, py = float(center[0]), float(center[1])
+        radius = max(float(size) * 0.45, 0.06)
+        if marker == "out_of_page":
+            ax.add_patch(
+                Circle((px, py), radius, edgecolor=color, facecolor="none", linewidth=max(0.8, linewidth * 0.8), zorder=2.5)
+            )
+            ax.add_patch(Circle((px, py), max(radius * 0.24, 0.03), edgecolor="none", facecolor=color, zorder=2.6))
+            return
+        if marker == "into_page":
+            ax.add_patch(
+                Circle((px, py), radius, edgecolor=color, facecolor="none", linewidth=max(0.8, linewidth * 0.8), zorder=2.5)
+            )
+            arm = radius * 0.58
+            _plot_path(
+                [(px - arm, py - arm), (px + arm, py + arm)],
+                color=color,
+                linewidth=max(0.8, linewidth * 0.85),
+                zorder=2.6,
+            )
+            _plot_path(
+                [(px - arm, py + arm), (px + arm, py - arm)],
+                color=color,
+                linewidth=max(0.8, linewidth * 0.85),
+                zorder=2.6,
+            )
+            return
+        ax.text(px, py, marker or "×", fontsize=max(size * 1.8, 10.0), color=color, ha="center", va="center", zorder=2.6)
 
     objects = [o for o in _iter_list(spec.get("objects")) if isinstance(o, dict)]
     centers: Dict[str, Tuple[float, float]] = {}
+    rendered_any = False
     for o in objects:
         oid = _as_str(o.get("id") or "")
         shape = _as_str(o.get("shape") or "block")
@@ -478,7 +912,7 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
 
         if shape in {"circle", "disk"}:
             r = _clamp_float(o.get("r"), default=1.0, min_value=0.1, max_value=50.0)
-            ax.add_patch(Circle((cx, cy), r, edgecolor=color, facecolor=fill, linewidth=2.0))
+            ax.add_patch(Circle((cx, cy), r, edgecolor=color, facecolor=fill, linewidth=2.0, zorder=1.8))
         else:
             size = o.get("size")
             w = 3.0
@@ -486,22 +920,27 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
             if isinstance(size, (list, tuple)) and len(size) >= 2:
                 w = _clamp_float(size[0], default=3.0, min_value=0.2, max_value=200.0)
                 h = _clamp_float(size[1], default=2.0, min_value=0.2, max_value=200.0)
-            ax.add_patch(Rectangle((cx - w / 2.0, cy - h / 2.0), w, h, edgecolor=color, facecolor=fill, linewidth=2.0))
+            ax.add_patch(
+                Rectangle((cx - w / 2.0, cy - h / 2.0), w, h, edgecolor=color, facecolor=fill, linewidth=2.0, zorder=1.8)
+            )
 
         if oid:
             centers[oid] = (cx, cy)
         if label:
-            ax.text(cx, cy, label, ha="center", va="center", fontsize=12)
+            ax.text(cx, cy, label, ha="center", va="center", fontsize=12, zorder=3.0)
+        rendered_any = True
 
     segments = [s for s in _iter_list(spec.get("segments")) if isinstance(s, (list, tuple)) and len(s) >= 2]
     for s in segments:
         a, b = s[0], s[1]
-        ax.plot([float(a[0]), float(b[0])], [float(a[1]), float(b[1])], color="#111827", linewidth=2.0)
+        _plot_path([(float(a[0]), float(a[1])), (float(b[0]), float(b[1]))], color="#111827", linewidth=2.0)
+        rendered_any = True
 
     wires = [w for w in _iter_list(spec.get("wires")) if isinstance(w, (list, tuple)) and len(w) >= 2]
     for w in wires:
         a, b = w[0], w[1]
-        ax.plot([float(a[0]), float(b[0])], [float(a[1]), float(b[1])], color="#111827", linewidth=2.0)
+        _plot_path([(float(a[0]), float(a[1])), (float(b[0]), float(b[1]))], color="#111827", linewidth=2.0)
+        rendered_any = True
 
     forces = [f for f in _iter_list(spec.get("forces")) if isinstance(f, dict)]
     for f in forces:
@@ -532,11 +971,25 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
         nx = float(start[0] + dx * length)
         ny = float(start[1] + dy * length)
         color = _as_str(f.get("color") or "#ef4444")
-        ax.add_patch(FancyArrowPatch(start, (nx, ny), arrowstyle="->", mutation_scale=14, linewidth=2.2, color=color))
+        ax.add_patch(
+            FancyArrowPatch(
+                start,
+                (nx, ny),
+                arrowstyle="->",
+                mutation_scale=14,
+                linewidth=2.2,
+                color=color,
+                shrinkA=0.0,
+                shrinkB=0.0,
+                zorder=2.8,
+            )
+        )
 
         label = _as_str(f.get("label") or "")
         if label:
-            ax.text((start[0] + nx) / 2.0, (start[1] + ny) / 2.0, label, color=color, fontsize=11)
+            lx, ly = _arrow_label_position(start, (nx, ny), distance=max(length * 0.08, 0.25))
+            ax.text(lx, ly, label, color=color, fontsize=11, ha="center", va="center", zorder=3.0)
+        rendered_any = True
 
     annotations = [a for a in _iter_list(spec.get("annotations")) if isinstance(a, dict)]
     for a in annotations:
@@ -555,12 +1008,293 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
                 ty = float(arrow_to[1])
             except Exception:
                 tx, ty = x0, y0
-            ax.annotate(text, xy=(tx, ty), xytext=(x0, y0), arrowprops={"arrowstyle": "->", "lw": 1.3})
+            ax.annotate(text, xy=(tx, ty), xytext=(x0, y0), arrowprops={"arrowstyle": "->", "lw": 1.3}, zorder=3.0)
         else:
-            ax.text(x0, y0, text, fontsize=11)
+            ax.text(x0, y0, text, fontsize=11, zorder=3.0)
+        rendered_any = True
+
+    elements = [e for e in _iter_list(spec.get("elements")) if isinstance(e, dict)]
+    for element in elements:
+        etype = _as_str(element.get("type") or "").lower()
+        style = _parse_style(element.get("style"))
+        for key in (
+            "stroke",
+            "color",
+            "edgecolor",
+            "fill",
+            "facecolor",
+            "stroke-width",
+            "stroke_width",
+            "line_width",
+            "linewidth",
+            "font-size",
+            "font_size",
+            "fontsize",
+            "dashed",
+        ):
+            if key in element and key not in style:
+                style[key] = element.get(key)
+        color = _style_color(style, default="#111827")
+        fill = _style_fill(style, default="#ffffff")
+        default_linewidth = 2.2
+        if etype == "rail":
+            default_linewidth = 3.0
+        elif etype == "conductor":
+            default_linewidth = 3.6
+        elif etype in {"arrow"}:
+            default_linewidth = 2.1
+        linewidth = _style_linewidth(style, default=default_linewidth)
+        linestyle = _style_linestyle(style)
+        text = _as_str(element.get("text") or element.get("content") or element.get("label") or "")
+
+        if etype in {"line", "wire", "rail", "conductor", "path"}:
+            points = _polyline_points(element)
+            if len(points) >= 2:
+                _plot_path(points, color=color, linewidth=linewidth, linestyle=linestyle)
+                rendered_any = True
+        elif etype in {"arrow"}:
+            points = _polyline_points(element)
+            if len(points) >= 2:
+                start = points[0]
+                end = points[-1]
+                length = math.hypot(float(end[0]) - float(start[0]), float(end[1]) - float(start[1]))
+                mutation_scale = _clamp_float(length * 0.12, default=14.0, min_value=10.0, max_value=26.0)
+                ax.add_patch(
+                    FancyArrowPatch(
+                        start,
+                        end,
+                        arrowstyle="->",
+                        mutation_scale=mutation_scale,
+                        linewidth=linewidth,
+                        color=color,
+                        linestyle=linestyle,
+                        shrinkA=0.0,
+                        shrinkB=0.0,
+                        zorder=2.8,
+                    )
+                )
+                if text:
+                    lx, ly = _arrow_label_position(start, end, distance=max(length * 0.08, 0.25))
+                    ax.text(
+                        lx,
+                        ly,
+                        text,
+                        fontsize=_style_fontsize(style, default=11.0),
+                        color=color,
+                        ha="center",
+                        va="center",
+                        zorder=3.0,
+                    )
+                rendered_any = True
+        elif etype in {"rect", "rectangle", "block"}:
+            x = _float_or_none(element.get("x"))
+            y = _float_or_none(element.get("y"))
+            w = _float_or_none(element.get("width"))
+            h = _float_or_none(element.get("height"))
+            if None not in {x, y, w, h}:
+                ax.add_patch(
+                    Rectangle(
+                        (float(x), float(y)),
+                        float(w),
+                        float(h),
+                        edgecolor=color,
+                        facecolor=fill,
+                        linewidth=linewidth,
+                        linestyle=linestyle,
+                        zorder=1.9,
+                    )
+                )
+                rendered_any = True
+        elif etype in {"circle", "disk"}:
+            cx = _float_or_none(element.get("cx"))
+            cy = _float_or_none(element.get("cy"))
+            if cx is None or cy is None:
+                center = _xy_pair(element.get("center") or element.get("pos"))
+                if center:
+                    cx, cy = center
+            r = _float_or_none(element.get("r"))
+            if None not in {cx, cy, r}:
+                ax.add_patch(
+                    Circle((float(cx), float(cy)), float(r), edgecolor=color, facecolor=fill, linewidth=linewidth, zorder=1.9)
+                )
+                rendered_any = True
+        elif etype in {"text", "label"}:
+            x = _float_or_none(element.get("x"))
+            y = _float_or_none(element.get("y"))
+            if None not in {x, y} and text:
+                dx = _float_or_none(element.get("dx")) or 0.0
+                dy = _float_or_none(element.get("dy")) or 0.0
+                anchor = _as_str(element.get("anchor") or element.get("align") or style.get("text-anchor") or "").lower()
+                ha = {"start": "left", "left": "left", "middle": "center", "center": "center", "end": "right", "right": "right"}.get(
+                    anchor,
+                    "center",
+                )
+                va = {"top": "top", "bottom": "bottom", "center": "center", "middle": "center"}.get(anchor, "center")
+                ax.text(
+                    float(x) + float(dx),
+                    float(y) + float(dy),
+                    text,
+                    fontsize=_style_fontsize(style, default=12.0),
+                    color=color,
+                    ha=ha,
+                    va=va,
+                    zorder=3.0,
+                )
+                rendered_any = True
+        elif etype in {"magnetic_field"}:
+            points, marker = _magnetic_field_points(element)
+            marker_size = _magnetic_marker_size(element, points, (x_min, x_max), (y_min, y_max))
+            for px, py in points:
+                _draw_magnetic_marker((px, py), marker=marker, size=marker_size, color=color, linewidth=linewidth)
+                rendered_any = True
+        elif etype in {"symbol", "inductor", "capacitor", "switch", "sensor", "velocity_sensor"}:
+            name = _as_str(element.get("name") or etype).lower()
+            center = _xy_pair(element.get("center") or element.get("pos"))
+            if center is None:
+                x = _float_or_none(element.get("x"))
+                y = _float_or_none(element.get("y"))
+                if None not in {x, y}:
+                    center = (float(x), float(y))
+            if center is None:
+                continue
+
+            size_value = element.get("size")
+            if isinstance(size_value, (list, tuple)) and len(size_value) >= 2:
+                sw = _clamp_float(size_value[0], default=30.0, min_value=4.0, max_value=300.0)
+                sh = _clamp_float(size_value[1], default=24.0, min_value=4.0, max_value=300.0)
+            else:
+                default_size = _clamp_float(size_value, default=24.0, min_value=4.0, max_value=300.0)
+                sw = default_size
+                sh = default_size
+            layout = _component_layout(center=center, size=(sw, sh), orientation=element.get("orientation") or "")
+            cx, cy = layout["center"]
+            main_half = float(layout["main_half"])
+            cross_half = float(layout["cross_half"])
+            body_half = float(layout["body_half"])
+
+            if "inductor" in name:
+                _plot_path([layout["lead_start"], _axis_point(layout, -body_half)], color=color, linewidth=linewidth)
+                _plot_path([_axis_point(layout, body_half), layout["lead_end"]], color=color, linewidth=linewidth)
+                turns = _clamp_int(element.get("turns"), default=4, min_value=3, max_value=8)
+                radius = max(body_half / float(turns), 0.3)
+                for idx in range(turns):
+                    center_point = _axis_point(layout, -body_half + radius * (2 * idx + 1))
+                    ax.add_patch(
+                        Arc(
+                            center_point,
+                            2 * radius,
+                            2 * radius,
+                            angle=90 if layout["orientation"] == "vertical" else 0,
+                            theta1=0,
+                            theta2=180,
+                            color=color,
+                            linewidth=linewidth,
+                            zorder=2.3,
+                        )
+                    )
+                if "variable" in name:
+                    ax.add_patch(
+                        FancyArrowPatch(
+                            _axis_point(layout, -body_half * 0.78, -cross_half * 0.78),
+                            _axis_point(layout, body_half * 0.78, cross_half * 0.78),
+                            arrowstyle="->",
+                            mutation_scale=10,
+                            linewidth=max(1.0, linewidth - 0.4),
+                            color=color,
+                            zorder=2.9,
+                        )
+                    )
+                rendered_any = True
+            elif "capacitor" in name:
+                gap = max(min(main_half * 0.32, body_half * 0.82), 0.35)
+                plate_half = max(cross_half * 0.82, 0.35)
+                _plot_path([layout["lead_start"], _axis_point(layout, -gap)], color=color, linewidth=linewidth)
+                _plot_path([_axis_point(layout, gap), layout["lead_end"]], color=color, linewidth=linewidth)
+                if layout["orientation"] == "vertical":
+                    _plot_path(
+                        [_axis_point(layout, -gap, -plate_half), _axis_point(layout, -gap, plate_half)],
+                        color=color,
+                        linewidth=linewidth,
+                    )
+                    _plot_path(
+                        [_axis_point(layout, gap, -plate_half), _axis_point(layout, gap, plate_half)],
+                        color=color,
+                        linewidth=linewidth,
+                    )
+                else:
+                    _plot_path(
+                        [_axis_point(layout, -gap, -plate_half), _axis_point(layout, -gap, plate_half)],
+                        color=color,
+                        linewidth=linewidth,
+                    )
+                    _plot_path(
+                        [_axis_point(layout, gap, -plate_half), _axis_point(layout, gap, plate_half)],
+                        color=color,
+                        linewidth=linewidth,
+                    )
+                rendered_any = True
+            elif "switch" in name:
+                gap = max(min(body_half * 0.22, main_half * 0.26), 0.35)
+                _plot_path([layout["lead_start"], _axis_point(layout, -gap)], color=color, linewidth=linewidth)
+                _plot_path([_axis_point(layout, gap), layout["lead_end"]], color=color, linewidth=linewidth)
+                state = _as_str(element.get("state") or "").lower()
+                across = 0.0 if state == "closed" else max(cross_half * 0.62, 0.35)
+                _plot_path(
+                    [_axis_point(layout, -gap, 0.0), _axis_point(layout, gap, across)],
+                    color=color,
+                    linewidth=linewidth,
+                )
+                rendered_any = True
+            elif "sensor" in name:
+                radius = max(min(main_half * 0.32, cross_half * 0.88), 0.35)
+                _plot_path([layout["lead_start"], _axis_point(layout, -radius)], color=color, linewidth=linewidth)
+                _plot_path([_axis_point(layout, radius), layout["lead_end"]], color=color, linewidth=linewidth)
+                ax.add_patch(Circle((cx, cy), radius, edgecolor=color, facecolor=fill, linewidth=linewidth, zorder=2.2))
+                sensor_text = "v" if "velocity" in name else "S"
+                ax.text(
+                    cx,
+                    cy,
+                    sensor_text,
+                    fontsize=_style_fontsize(style, default=10.0),
+                    color=color,
+                    ha="center",
+                    va="center",
+                    zorder=3.0,
+                )
+                rendered_any = True
+            else:
+                radius = max(min(main_half * 0.32, cross_half * 0.88), 0.35)
+                ax.add_patch(Circle((cx, cy), radius, edgecolor=color, facecolor=fill, linewidth=linewidth, zorder=2.2))
+                rendered_any = True
+
+            if text:
+                tx, ty, ha, va = _component_label_layout(
+                    center=layout["center"],
+                    size=layout["size"],
+                    orientation=layout["orientation"],
+                    x_range=(x_min, x_max),
+                    y_range=(y_min, y_max),
+                    label_side=element.get("label_side"),
+                    label_offset=element.get("label_offset"),
+                )
+                ax.text(
+                    tx,
+                    ty,
+                    text,
+                    fontsize=_style_fontsize(style, default=11.0),
+                    color=color,
+                    ha=ha,
+                    va=va,
+                    zorder=3.0,
+                )
+                rendered_any = True
 
     title = _as_str(spec.get("title") or "")
     if title:
         ax.text(0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top", fontsize=14)
+        rendered_any = True
+
+    if not rendered_any:
+        raise ValueError("no_renderable_elements")
 
     return _to_png_bytes(fig, dpi=dpi)

@@ -11,7 +11,12 @@ from fastapi.responses import StreamingResponse
 from backend.api.auth import require_auth
 from backend.api.schemas import ChatRequest
 from backend.chat.service import chat_service
-from backend.database.models import add_message, get_conversation, get_messages, update_conversation_title
+from backend.database.repositories.content.conversations import (
+    add_message,
+    get_conversation,
+    get_messages,
+    update_conversation_title,
+)
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 

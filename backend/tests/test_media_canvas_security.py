@@ -1,10 +1,17 @@
 import ipaddress
 import os
+import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+from fastapi.testclient import TestClient
+
+import backend.app as app_module
+from backend.api.auth import require_auth
 from backend.api import media
 from backend.api.canvas import _sanitize_question_html
+from backend.app import create_app
 from backend.core.subjects import get_all_subjects
 
 
@@ -66,3 +73,57 @@ class TestSubjects(unittest.TestCase):
     def test_get_all_subjects_deduplicates_names(self) -> None:
         names = [item["name"] for item in get_all_subjects()]
         self.assertEqual(len(names), len(set(names)))
+
+
+class TestGeneratedDocumentFilenameWhitelist(unittest.TestCase):
+    def test_generated_document_extensions_are_allowed_for_download_and_zip(self) -> None:
+        sha = "a" * 64
+        docx_name = f"{sha}.docx"
+        zip_name = f"{sha}.zip"
+
+        self.assertTrue(media._is_safe_generated_filename(docx_name))
+        self.assertTrue(media._is_safe_generated_filename(zip_name))
+
+        from backend.api.exports import _is_safe_generated_filename as exports_filename_ok
+
+        self.assertTrue(exports_filename_ok(docx_name))
+        self.assertTrue(exports_filename_ok(zip_name))
+
+
+class TestGeneratedMediaDownloadApi(unittest.TestCase):
+    def test_generated_docx_and_zip_are_served_as_download_attachments(self) -> None:
+        app = create_app()
+        app.dependency_overrides[require_auth] = lambda: {"user_id": "u-1", "username": "alice", "role": "user"}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                generated_dir = Path(tmpdir)
+
+                for ext, payload in ((".docx", b"fake docx bytes"), (".zip", b"PK\x03\x04fake zip bytes")):
+                    filename = f"{'a' * 64}{ext}"
+                    (generated_dir / filename).write_bytes(payload)
+                    meta = {
+                        "filename": filename,
+                        "user_id": "u-1",
+                        "file_type": ext.lstrip("."),
+                        "mime_type": "application/octet-stream",
+                        "bytes": len(payload),
+                        "created_at": "",
+                        "expires_at": "",
+                    }
+
+                    with patch.object(app_module, "init_db", new=AsyncMock()):
+                        with patch.object(app_module, "close_crawler", new=AsyncMock()):
+                            with patch.object(app_module, "close_proxy_http_client", new=AsyncMock()):
+                                with patch("backend.api.media.GENERATED_DIR", generated_dir):
+                                    with patch("backend.api.media.get_generated_file", new=AsyncMock(return_value=meta)):
+                                        with TestClient(app) as client:
+                                            res = client.get(f"/api/media/generated/{filename}")
+
+                    self.assertEqual(res.status_code, 200)
+                    self.assertEqual(res.content, payload)
+                    content_disposition = str(res.headers.get("content-disposition") or "")
+                    self.assertIn("attachment;", content_disposition)
+                    self.assertIn(filename, content_disposition)
+        finally:
+            app.dependency_overrides.clear()

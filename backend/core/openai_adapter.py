@@ -23,7 +23,8 @@ from backend.crawler.interface import CrawlerInterface
 from backend.crawler.manager import close_crawler as close_subject_crawlers
 from backend.crawler.manager import get_crawler as get_subject_crawler
 from backend.core.logging_utils import get_logger
-from backend.database.models import get_paper, init_db, list_papers, save_paper
+from backend.database.engine import init_db
+from backend.database.repositories.question.papers import get_paper, list_papers, save_paper
 from backend.core.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 
 logger = get_logger(__name__)

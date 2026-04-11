@@ -173,7 +173,8 @@ export const useConversationStore = create<ConversationState>()(
       name: 'conversation-storage',
       version: 5,
       migrate: (persistedState: unknown) => {
-        const state = (persistedState || {}) as Partial<ConversationState>
+        const persisted = isRecord(persistedState) ? persistedState : {}
+        const state = persisted as Partial<ConversationState>
 
         const conversations = Array.isArray(state.conversations)
           ? state.conversations.filter((c) => c && c.type !== 'chat')
@@ -192,7 +193,7 @@ export const useConversationStore = create<ConversationState>()(
           if (!c || c.type !== 'lesson_plan') return c
           const msgs = messagesByConversation[c.id] || EMPTY_MESSAGES
           const isStudyMaterials =
-            (c as any)?.activeStream?.taskType === 'study_materials' ||
+            c.activeStream?.taskType === 'study_materials' ||
             (typeof c.title === 'string' && c.title.includes('新自学资料')) ||
             msgs.some((m) => typeof m?.content === 'string' && m.content.includes('已生成自学资料'))
           return isStudyMaterials ? ({ ...c, type: 'study_materials' } as ConversationItem) : c
@@ -208,7 +209,7 @@ export const useConversationStore = create<ConversationState>()(
         }
 
         // Newer builds persist per-type selection.
-        const rawByType = (state as any).currentConversationIdByType
+        const rawByType = state.currentConversationIdByType
         if (isRecord(rawByType)) {
           for (const key of Object.keys(DEFAULT_CURRENT_BY_TYPE) as LocalConversationType[]) {
             const val = rawByType[key]
@@ -219,18 +220,28 @@ export const useConversationStore = create<ConversationState>()(
         }
 
         // Back-compat: older builds stored a single `currentConversationId`.
-        const legacyCurrentId = (state as any).currentConversationId
+        const legacyCurrentId = persisted.currentConversationId
         if (typeof legacyCurrentId === 'string' && allowedIds.has(legacyCurrentId)) {
           const t = idToType.get(legacyCurrentId)
           if (t) currentConversationIdByType[t] = legacyCurrentId
         }
+
+        const rawFilter = persisted.filter
+        const filter: ConversationState['filter'] =
+          rawFilter === 'chat' ||
+          rawFilter === 'blueprint' ||
+          rawFilter === 'lesson_plan' ||
+          rawFilter === 'study_materials' ||
+          rawFilter === 'all'
+            ? rawFilter
+            : 'all'
 
         return {
           ...state,
           conversations: migratedConversations,
           currentConversationIdByType,
           messagesByConversation,
-          filter: (state.filter as any) || 'all',
+          filter,
         } as ConversationState
       },
       partialize: (state) => {

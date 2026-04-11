@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
-from backend.database.repositories.item_meta import get_item_meta, list_item_meta, upsert_item_meta
+from backend.database.repositories.system.item_meta import get_item_meta, list_item_meta, upsert_item_meta
 
 router = APIRouter(prefix="/meta", tags=["meta"], dependencies=[Depends(require_auth)])
 

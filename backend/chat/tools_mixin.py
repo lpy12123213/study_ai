@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from backend.chat.tools_spec import TOOLS
 from backend.core.logging_utils import get_logger
-from backend.database.models import list_papers, save_paper, upsert_question_cache
+from backend.database.repositories.question.papers import list_papers, save_paper
+from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.core.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 
 logger = get_logger(__name__)

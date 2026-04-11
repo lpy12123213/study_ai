@@ -105,7 +105,7 @@ async def metaso_search(
         return {
             "success": False,
             "provider": "metaso",
-            "error": "未配置 METASO_API_KEY（或兼容别名 METASO_API）",
+            "error": "未配置 METASO_API_KEY",
             "results": [],
         }
 
@@ -251,7 +251,7 @@ async def metaso_ask(
             "success": False,
             "provider": "metaso",
             "mode": "ask",
-            "error": "未配置 METASO_API_KEY（或兼容别名 METASO_API）",
+            "error": "未配置 METASO_API_KEY",
             "results": [],
         }
 
@@ -397,7 +397,7 @@ async def metaso_reader(*, url: str) -> Dict[str, Any]:
         return {
             "success": False,
             "provider": "metaso",
-            "error": "未配置 METASO_API_KEY（或兼容别名 METASO_API）",
+            "error": "未配置 METASO_API_KEY",
         }
 
     endpoint = f"{_as_str(METASO_BASE_URL).rstrip('/')}/reader"

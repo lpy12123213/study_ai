@@ -326,7 +326,7 @@ def _extract_json_value(text: str) -> Any:
             continue
         try:
             return json.loads(candidate)
-        except Exception:
+        except json.JSONDecodeError:
             pass
         try:
             repaired = _repair_json_backslashes(candidate)
@@ -335,4 +335,3 @@ def _extract_json_value(text: str) -> Any:
         except Exception:
             continue
     return {}
-

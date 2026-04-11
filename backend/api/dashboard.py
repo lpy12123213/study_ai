@@ -104,13 +104,21 @@ async def get_dashboard_stats(
             if subj:
                 subjects[subj] = int(subjects.get(subj, 0)) + 1
         except Exception:
-            pass
+            logger.warning(
+                "dashboard_task_request_json_parse_failed",
+                extra={"task_id": getattr(t, "task_id", None), "id": getattr(t, "id", None), "user_id": user_id},
+                exc_info=True,
+            )
 
         if t.started_at and t.ended_at:
             try:
                 durations.append(max(0.0, (t.ended_at - t.started_at).total_seconds()))
             except Exception:
-                pass
+                logger.warning(
+                    "dashboard_task_duration_calc_failed",
+                    extra={"task_id": getattr(t, "task_id", None), "id": getattr(t, "id", None), "user_id": user_id},
+                    exc_info=True,
+                )
 
     terminal = sum(tasks_by_status.get(s, 0) for s in ("completed", "failed", "canceled"))
     completed = int(tasks_by_status.get("completed", 0))

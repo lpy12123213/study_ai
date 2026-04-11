@@ -47,7 +47,7 @@ async def initialize_run(
     try:
         set_state(AgentState.WAITING_TOOL)
     except Exception:
-        pass
+        logger.warning("agent_set_state_failed", extra={"next_state": str(AgentState.WAITING_TOOL)}, exc_info=True)
 
     profile_step_id = f"get_user_profile-{uuid.uuid4().hex[:8]}"
     yield agent_event(
@@ -72,6 +72,7 @@ async def initialize_run(
             },
         )
     except Exception as exc:
+        logger.warning("agent_profile_fetch_failed; using_default_profile", extra={"user_id": user_id}, exc_info=True)
         yield agent_event(
             "tool_result",
             {
@@ -82,7 +83,8 @@ async def initialize_run(
                 "error": str(exc),
             },
         )
-        raise
+        profile = UserProfile(user_id=str(user_id or "anonymous").strip() or "anonymous")
+        yield agent_event("status", {"content": "读取用户画像失败，已使用默认用户画像继续运行。"})
 
     pref_patch: Dict[str, Any] = {}
     if isinstance(preferences, dict):
@@ -178,4 +180,3 @@ async def initialize_run(
     out["budget"] = budget
     out["export_only"] = continue_mode == "fix_export"
     out["skip_export"] = continue_mode == "skip_export"
-

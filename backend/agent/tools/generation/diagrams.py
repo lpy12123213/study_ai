@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import base64
 import os
-import shutil
-import subprocess
-import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,19 +10,27 @@ import httpx
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
+from backend.shared.project_paths import resolve_repo_root
+from backend.shared.diagrams.static_render import (
+    asy_tools_missing_hint,
+    render_asy_to_svg_bytes,
+    render_tikz_to_svg_bytes,
+    tikz_tools_missing_hint,
+)
 
 logger = get_logger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = resolve_repo_root()
 _GENERATED_DIR = (_REPO_ROOT / ".local" / "media" / "generated").resolve()
 
 
 def _tikz_missing_hint() -> str:
-    return (
-        "TikZ rendering requires both `xelatex` and `dvisvgm` on PATH. "
-        "Install a TeX distribution (MiKTeX/TeX Live) that provides them, or use the Matplotlib fallback "
-        "(draw_diagram/plot tools)."
-    )
+    # Backwards compatible name: used in error payloads.
+    return tikz_tools_missing_hint()
+
+
+def _asy_missing_hint() -> str:
+    return asy_tools_missing_hint()
 
 
 class DiagramToolsMixin:
@@ -187,45 +192,10 @@ class DiagramToolsMixin:
         if not tikz:
             return {"success": False, "error": "tikz 不能为空", "knowledge_point": kp}
 
-        missing_tools: List[str] = []
-        if shutil.which("xelatex") is None:
-            missing_tools.append("xelatex")
-        if shutil.which("dvisvgm") is None:
-            missing_tools.append("dvisvgm")
-        if missing_tools:
-            return {
-                "success": False,
-                "error": "tikz_tools_missing",
-                "missing": missing_tools,
-                "hint": _tikz_missing_hint(),
-                "knowledge_point": kp,
-            }
-
-        if "\\begin{tikzpicture" not in tikz:
-            tikz = "\\begin{tikzpicture}\n" + tikz + "\n\\end{tikzpicture}"
-
         preamble = args.get("preamble")
         if not isinstance(preamble, str):
             preamble = ""
         preamble = preamble.strip()
-
-        tex_lines: List[str] = [
-            r"\\documentclass[tikz]{standalone}",
-            r"\\usepackage{tikz}",
-        ]
-        if preamble:
-            tex_lines.append(preamble)
-        tex_lines.extend([r"\\begin{document}", tikz, r"\\end{document}", ""])
-        tex = "\n".join(tex_lines)
-
-        repo_root = Path(__file__).resolve().parents[3]
-        build_dir = (repo_root / ".local" / "latex_build" / uuid.uuid4().hex[:12]).resolve()
-        build_dir.mkdir(parents=True, exist_ok=True)
-
-        tex_path = build_dir / "main.tex"
-        tex_path.write_text(tex, encoding="utf-8")
-
-        cmd = ["xelatex", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "main.tex"]
         timeout_raw = (
             os.getenv("STUDY_MATERIALS_TIKZ_TIMEOUT_S")
             or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S")
@@ -236,79 +206,17 @@ class DiagramToolsMixin:
             timeout_s = float(timeout_raw)
         except Exception:
             timeout_s = 240.0
-        timeout_s = max(30.0, min(timeout_s, 60.0 * 20.0))
+        timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
 
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(build_dir),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_s,
-            )
-        except FileNotFoundError as exc:
-            return {
-                "success": False,
-                "error": f"latex_engine_not_found: {exc}",
-                "hint": _tikz_missing_hint(),
-                "knowledge_point": kp,
-            }
-        except subprocess.TimeoutExpired:
-            return {"success": False, "error": "latex_compile_timeout", "knowledge_point": kp}
+        repo_root = resolve_repo_root()
+        res = render_tikz_to_svg_bytes(tikz=tikz, preamble=preamble, timeout_s=timeout_s, repo_root=repo_root)
+        if not bool(res.get("success")):
+            out = dict(res)
+            out.setdefault("hint", _tikz_missing_hint())
+            out["knowledge_point"] = kp
+            return out
 
-        if proc.returncode != 0:
-            stderr = (getattr(proc, "stderr", "") or "").strip()
-            stdout = (getattr(proc, "stdout", "") or "").strip()
-            msg = stderr[-2000:] if stderr else stdout[-2000:]
-            return {"success": False, "error": f"latex_compile_failed: {msg}", "knowledge_point": kp}
-
-        pdf_path = build_dir / "main.pdf"
-        if not pdf_path.exists() or not pdf_path.is_file():
-            return {"success": False, "error": "pdf_missing", "knowledge_point": kp}
-
-        svg_path = build_dir / "main.svg"
-        dvisvgm_cmd = [
-            "dvisvgm",
-            "--pdf",
-            "--no-fonts",
-            "--exact-bbox",
-            "-o",
-            str(svg_path.name),
-            str(pdf_path.name),
-        ]
-
-        try:
-            proc2 = subprocess.run(
-                dvisvgm_cmd,
-                cwd=str(build_dir),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_s,
-            )
-        except FileNotFoundError as exc:
-            return {
-                "success": False,
-                "error": f"dvisvgm_not_found: {exc}",
-                "hint": _tikz_missing_hint(),
-                "knowledge_point": kp,
-            }
-        except subprocess.TimeoutExpired:
-            return {"success": False, "error": "dvisvgm_timeout", "knowledge_point": kp}
-
-        if proc2.returncode != 0:
-            stderr = (getattr(proc2, "stderr", "") or "").strip()
-            stdout = (getattr(proc2, "stdout", "") or "").strip()
-            msg = stderr[-2000:] if stderr else stdout[-2000:]
-            return {"success": False, "error": f"dvisvgm_failed: {msg}", "knowledge_point": kp}
-
-        if not svg_path.exists() or not svg_path.is_file():
-            return {"success": False, "error": "svg_missing", "knowledge_point": kp}
-
-        svg_bytes = svg_path.read_bytes()
+        svg_bytes = bytes(res.get("svg_bytes") or b"")
         user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
         published = await publish_generated_bytes(
             svg_bytes,
@@ -325,6 +233,107 @@ class DiagramToolsMixin:
         diagram = {
             "knowledge_point": kp,
             "kind": "tikz_to_svg",
+            "url": url,
+            "markdown": markdown,
+            "filename": filename,
+            "media_id": media_id,
+            "caption": caption,
+        }
+
+        try:
+            blob = ctx.working_memory.get("diagrams")
+            if not isinstance(blob, dict):
+                blob = {}
+            items = blob.get("items")
+            if not isinstance(items, list):
+                items = []
+            kp_item: Optional[Dict[str, Any]] = None
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if str(it.get("knowledge_point") or "").strip() == kp:
+                    kp_item = it
+                    break
+            if kp_item is None:
+                kp_item = {"knowledge_point": kp, "diagrams": []}
+                items.append(kp_item)
+            dlist = kp_item.get("diagrams")
+            if not isinstance(dlist, list):
+                dlist = []
+            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
+                dlist.append(diagram)
+            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
+            blob["items"] = [x for x in items if isinstance(x, dict)]
+            ctx.working_memory["diagrams"] = blob
+        except Exception:
+            logger.debug("diagram_store_working_memory_failed", exc_info=True)
+
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": media_id,
+            "filename": filename,
+            "url": url,
+            "markdown": markdown,
+            "bytes": len(svg_bytes),
+        }
+
+    async def _tool_asy_to_svg(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        alt = str(args.get("alt") or args.get("title") or "diagram").strip() or "diagram"
+        caption = str(args.get("caption") or "").strip()
+
+        kp = str(args.get("knowledge_point") or "").strip()
+        if not kp:
+            kps = args.get("knowledge_points")
+            if isinstance(kps, list) and kps:
+                kp = str(kps[0] or "").strip()
+        if not kp:
+            kp = str(ctx.current_task or "").strip()
+
+        asy = args.get("asy")
+        if not isinstance(asy, str) or not asy.strip():
+            asy = args.get("asymptote")
+        if not isinstance(asy, str) or not asy.strip():
+            asy = args.get("code")
+        if not isinstance(asy, str) or not asy.strip():
+            asy = args.get("text")
+        asy = str(asy or "").strip()
+        if not asy:
+            return {"success": False, "error": "asy 不能为空", "knowledge_point": kp}
+
+        timeout_raw = os.getenv("STUDY_MATERIALS_ASY_TIMEOUT_S") or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or "240"
+        try:
+            timeout_s = float(timeout_raw)
+        except Exception:
+            timeout_s = 240.0
+        timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
+
+        repo_root = resolve_repo_root()
+        res = render_asy_to_svg_bytes(asy=asy, timeout_s=timeout_s, repo_root=repo_root)
+        if not bool(res.get("success")):
+            out = dict(res)
+            out.setdefault("hint", _asy_missing_hint())
+            out["knowledge_point"] = kp
+            return out
+
+        svg_bytes = bytes(res.get("svg_bytes") or b"")
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await publish_generated_bytes(
+            svg_bytes,
+            user_id=user_id,
+            ext=".svg",
+            file_type="image",
+            mime_type="image/svg+xml",
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        media_id = str(published.get("sha256") or "")
+        filename = str(published.get("filename") or "")
+        url = str(published.get("url") or "")
+        markdown = f"![{alt}]({url})"
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "asy_to_svg",
             "url": url,
             "markdown": markdown,
             "filename": filename,

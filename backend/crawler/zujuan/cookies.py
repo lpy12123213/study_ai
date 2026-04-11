@@ -207,7 +207,8 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
 
         def _sync_get_session() -> Dict[str, Any]:
             with sync_playwright() as p:
-                user_data_dir = os.path.join(os.path.dirname(__file__), ".playwright_data")
+                repo_root = Path(__file__).resolve().parents[3]
+                user_data_dir = str((repo_root / ".local" / "playwright" / "zujuan").resolve())
                 os.makedirs(user_data_dir, exist_ok=True)
 
                 browser = p.chromium.launch_persistent_context(

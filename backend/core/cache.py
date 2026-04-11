@@ -5,10 +5,14 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 
+from backend.core.logging_utils import get_logger
+
 __all__ = [
     "TTLCache",
     "cache_registry_stats",
 ]
+
+logger = get_logger(__name__)
 
 
 _registry_lock = threading.Lock()
@@ -86,14 +90,14 @@ class TTLCache:
                 try:
                     del self._data[key]
                 except Exception:
-                    pass
+                    logger.warning("ttl_cache_expired_delete_failed", extra={"cache": self.name}, exc_info=True)
                 return None
 
             self._hits += 1
             try:
                 self._data.move_to_end(key)
             except Exception:
-                pass
+                logger.warning("ttl_cache_lru_touch_failed", extra={"cache": self.name}, exc_info=True)
             return value
 
     def set(self, key: Any, value: Any, *, ttl_s: Optional[float] = None) -> None:  # noqa: ANN401
@@ -107,7 +111,7 @@ class TTLCache:
             try:
                 self._data.move_to_end(key)
             except Exception:
-                pass
+                logger.warning("ttl_cache_lru_touch_failed", extra={"cache": self.name}, exc_info=True)
 
             while len(self._data) > self.max_entries:
                 try:
@@ -146,4 +150,3 @@ class TTLCache:
             "evictions": evictions,
             "expires": expires,
         }
-

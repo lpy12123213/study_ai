@@ -15,8 +15,8 @@ from typing import Any, Callable, Dict, List, Optional
 from backend.api.question_evaluate import evaluate_generated_question_review
 from backend.llm.client import chat_completion, is_llm_configured
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.database.repositories.question_cache import upsert_question_cache
-from backend.database.repositories.question_library import upsert_question_library_items
+from backend.database.repositories.question.question_cache import upsert_question_cache
+from backend.database.repositories.question.question_library import upsert_question_library_items
 from backend.question_library.generation import (
     analyze_reference_questions,
     build_ai_question_id,
@@ -1051,7 +1051,7 @@ def _resolve_params_from_args(args: argparse.Namespace) -> RunParams:
             reference_source = _prompt_choice("参考来源", ["any", "gaokao", "mock", "joint"], default=reference_source)
             reference_year_range = _prompt_choice("参考年份范围", ["all", "3", "5"], default=reference_year_range)
         stream_reasoning = _prompt_bool("是否流式输出 reasoning", default=stream_reasoning)
-        default_mcp = use_mcp_search or bool((os.getenv("EXA_API_KEY") or os.getenv("EXA_API") or os.getenv("ZHIPU_API_KEY") or "").strip())
+        default_mcp = use_mcp_search or bool((os.getenv("EXA_API_KEY") or os.getenv("ZHIPU_API_KEY") or "").strip())
         use_mcp_search = _prompt_bool("是否使用 MCP 搜索补充素材", default=default_mcp)
         if use_mcp_search:
             mcp_search_provider = _prompt_choice("MCP 搜索 provider", ["auto", "exa", "bigmodel"], default=mcp_search_provider or "auto")

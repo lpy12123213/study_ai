@@ -177,6 +177,10 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
             request._body = new_body  # type: ignore[attr-defined]
         except Exception:
             # If this fails, still proceed (best-effort).
-            pass
+            logger.warning(
+                "input_validation_body_override_failed",
+                extra={"method": str(getattr(request, "method", "") or ""), "path": str(getattr(request.url, "path", "") or "")},
+                exc_info=True,
+            )
 
         return await call_next(request)

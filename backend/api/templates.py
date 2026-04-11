@@ -6,11 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.database.models import create_template as db_create_template
-from backend.database.models import delete_template as db_delete_template
-from backend.database.models import get_template as db_get_template
-from backend.database.models import list_templates as db_list_templates
-from backend.database.models import update_template as db_update_template
+from backend.database.repositories.content.templates import create_template as db_create_template
+from backend.database.repositories.content.templates import delete_template as db_delete_template
+from backend.database.repositories.content.templates import get_template as db_get_template
+from backend.database.repositories.content.templates import list_templates as db_list_templates
+from backend.database.repositories.content.templates import update_template as db_update_template
 
 router = APIRouter(prefix="/templates", tags=["templates"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -141,4 +141,3 @@ async def get_user_template(template_id: int, user: dict = Depends(require_auth)
     if not tpl:
         raise HTTPException(status_code=404, detail="template_not_found")
     return {"template": tpl}
-

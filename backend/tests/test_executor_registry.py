@@ -18,5 +18,8 @@ class TestExecutorRegistry(unittest.TestCase):
             "generate_study_material",
             "assemble_study_archive",
             "review_content",
+            "convert_markdown_to_latex",
+            "refine_latex",
+            "compile_latex_to_pdf",
         ):
             self.assertIn(tool, handlers)

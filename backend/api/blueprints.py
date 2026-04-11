@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import require_auth
 from backend.api.blueprint_schemas import BlueprintCreateRequest
-from backend.database.models import delete_blueprint, get_blueprint, list_blueprints, save_blueprint
+from backend.database.repositories.question.blueprints import delete_blueprint, get_blueprint, list_blueprints, save_blueprint
 
 router = APIRouter(prefix="/blueprints", tags=["blueprints"], dependencies=[Depends(require_auth)])
 

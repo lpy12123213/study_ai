@@ -84,8 +84,14 @@ def formula_cache_get(crawler: Any, formula_hash: str) -> Optional[str]:
         max_entries = int(getattr(crawler, "_formula_cache_max_entries", 0) or 0)
         if max_entries > 0:
             crawler._formula_cache.max_entries = max_entries
-    except Exception:
-        pass
+    except (TypeError, ValueError):
+        if not getattr(crawler, "_formula_cache_max_entries_invalid_logged", False):
+            setattr(crawler, "_formula_cache_max_entries_invalid_logged", True)
+            logger.warning(
+                "zujuan_formula_cache_max_entries_invalid",
+                extra={"value": getattr(crawler, "_formula_cache_max_entries", None)},
+                exc_info=True,
+            )
     cached = crawler._formula_cache.get(key)
     if cached is None:
         return None
@@ -179,7 +185,7 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
 
     # Persistent cache (DB): survives restarts so repeated crawls don't re-run pandoc/svg conversion.
     try:
-        from backend.database.repositories.formula_cache import get_formula_latex as db_get_formula_latex
+        from backend.database.repositories.system.formula_cache import get_formula_latex as db_get_formula_latex
     except Exception:
         db_get_formula_latex = None  # type: ignore[assignment]
 
@@ -231,12 +237,18 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
         latex = _ensure_inline_math_wrapped(latex)
         formula_cache_set(crawler, formula_hash, latex)
         try:
-            from backend.database.repositories.formula_cache import upsert_formula_latex as db_upsert_formula_latex
+            from backend.database.repositories.system.formula_cache import upsert_formula_latex as db_upsert_formula_latex
 
             if latex:
                 await db_upsert_formula_latex(formula_hash=formula_hash, latex=latex)
         except Exception:
-            pass
+            if not getattr(crawler, "_formula_db_upsert_failed_logged", False):
+                setattr(crawler, "_formula_db_upsert_failed_logged", True)
+                logger.warning(
+                    "zujuan_formula_latex_db_upsert_failed",
+                    extra={"hash": formula_hash},
+                    exc_info=True,
+                )
         if not fut.done():
             fut.set_result(latex)
         return latex

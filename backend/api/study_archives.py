@@ -5,7 +5,11 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
-from backend.database.repositories.study_archives import get_study_archive, list_study_archives, upsert_study_archive
+from backend.database.repositories.content.study_archives import (
+    get_study_archive,
+    list_study_archives,
+    upsert_study_archive,
+)
 
 router = APIRouter(prefix="/study-archives", tags=["study-archives"], dependencies=[Depends(require_auth)])
 

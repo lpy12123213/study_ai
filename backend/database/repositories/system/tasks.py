@@ -8,9 +8,12 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
 from backend.database.schema import Task, TaskEvent
+
+logger = get_logger(__name__)
 
 
 def _get_int(name: str, default: int) -> int:
@@ -84,7 +87,7 @@ def _json_dumps(value: Any, *, default: str) -> str:
         if len(truncated) <= TASK_JSON_MAX_CHARS:
             return truncated
     except Exception:
-        pass
+        logger.warning("task_json_truncate_failed", exc_info=True)
     return default
 
 
@@ -565,7 +568,11 @@ async def fail_running_tasks_on_startup(
             )
         except Exception:
             # Best-effort: never block startup on event write failures.
-            pass
+            logger.warning(
+                "task_restart_warning_event_write_failed",
+                extra={"user_id": user_id, "task_id": task_id, "task_type": task_type},
+                exc_info=True,
+            )
         changed += 1
 
     await session.flush()

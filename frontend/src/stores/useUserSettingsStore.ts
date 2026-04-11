@@ -5,6 +5,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function getErrorMessage(err: unknown): string | null {
+  if (err instanceof Error && typeof err.message === 'string' && err.message.trim()) return err.message
+  if (isPlainObject(err) && typeof err.message === 'string' && err.message.trim()) return err.message
+  return null
+}
+
 function deepMerge(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...base }
   for (const [k, v] of Object.entries(patch)) {
@@ -44,10 +50,10 @@ export const useUserSettingsStore = create<UserSettingsState>()((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const res = await userSettingsApi.getUserSettings()
-      const settings = isPlainObject((res as any)?.settings) ? ((res as any).settings as Record<string, unknown>) : {}
+      const settings = isPlainObject(res.settings) ? res.settings : {}
       set({ loaded: true, settings })
     } catch (e) {
-      set({ error: (e as any)?.message ? String((e as any).message) : 'load_failed' })
+      set({ error: getErrorMessage(e) ?? 'load_failed' })
     } finally {
       set({ isLoading: false })
     }
@@ -63,10 +69,10 @@ export const useUserSettingsStore = create<UserSettingsState>()((set, get) => ({
     set({ isSaving: true, error: null })
     try {
       const saved = await userSettingsApi.putUserSettings(get().settings)
-      const next = isPlainObject((saved as any)?.settings) ? ((saved as any).settings as Record<string, unknown>) : {}
+      const next = isPlainObject(saved.settings) ? saved.settings : {}
       set({ settings: next, loaded: true })
     } catch (e) {
-      set({ error: (e as any)?.message ? String((e as any).message) : 'save_failed' })
+      set({ error: getErrorMessage(e) ?? 'save_failed' })
       throw e
     } finally {
       set({ isSaving: false })
@@ -80,21 +86,20 @@ export const useUserSettingsStore = create<UserSettingsState>()((set, get) => ({
 
   exportFromServer: async () => {
     const res = await userSettingsApi.exportUserSettings()
-    const settings = isPlainObject((res as any)?.settings) ? ((res as any).settings as Record<string, unknown>) : {}
+    const settings = isPlainObject(res.settings) ? res.settings : {}
     return settings
   },
 
   importToServer: async (settings) => {
     const payload = isPlainObject(settings) ? settings : {}
     const res = await userSettingsApi.importUserSettings(payload)
-    const next = isPlainObject((res as any)?.settings) ? ((res as any).settings as Record<string, unknown>) : {}
+    const next = isPlainObject(res.settings) ? res.settings : {}
     set({ settings: next, loaded: true })
   },
 
   resetToDefaults: async () => {
     const res = await userSettingsApi.putUserSettings({})
-    const next = isPlainObject((res as any)?.settings) ? ((res as any).settings as Record<string, unknown>) : {}
+    const next = isPlainObject(res.settings) ? res.settings : {}
     set({ settings: next, loaded: true })
   },
 }))
-

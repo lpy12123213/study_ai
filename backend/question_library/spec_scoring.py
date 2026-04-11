@@ -1,14 +1,35 @@
 from __future__ import annotations
 
-import random
+import hashlib
 
 from backend.question_library.gen_common import DEFAULT_SEARCH_CONFIG
 from backend.question_library.gen_utils import _difficulty_gap_ratio
 
 
+def _stable_jitter(key: str, *, magnitude: float) -> float:
+    """Deterministic jitter for tie-breaking.
+
+    The question library spec search should be reproducible: selection and scoring
+    should not depend on process-global RNG state (which makes tests flaky and
+    makes production behavior hard to debug).
+    """
+
+    mag = float(magnitude or 0.0)
+    if mag <= 0.0:
+        return 0.0
+    mag = min(mag, 0.02)  # Keep jitter small: it should not dominate signal.
+
+    raw = str(key or "")
+    h = hashlib.md5(raw.encode("utf-8", errors="ignore")).hexdigest()
+    v = int(h[:8], 16)  # 32-bit
+    u = v / 0xFFFFFFFF  # 0..1
+    return (u * 2.0 - 1.0) * mag  # -mag..+mag
+
+
 def score_spec(spec: dict, source_pack: dict, config: dict) -> dict:
     out = dict(spec or {})
     sp = source_pack or {}
+    spec_id = str(out.get("spec_id") or "").strip()
     difficulty = str(out.get("difficulty") or "").strip()
     target_difficulty = str((config or {}).get("target_difficulty") or difficulty).strip()
     skill = str(out.get("skill") or "").strip()
@@ -91,9 +112,11 @@ def score_spec(spec: dict, source_pack: dict, config: dict) -> dict:
         - w_amb * ambiguity_risk
         - w_tpl * template_similarity
     )
-    score += random.uniform(-0.05, 0.05)
+
+    # Optional deterministic tie-breaker. Keep default as 0 to preserve ranking stability.
+    jitter = float((config or {}).get("score_jitter") or 0.0)
+    score += _stable_jitter(f"{spec_id}|{seed_tag}|{skill}|{reasoning}|{trap}|{surface}", magnitude=jitter)
     # Convert to a 0-100-ish scale for easier debugging.
     out["reference_alignment"] = round(reference_alignment, 4)
     out["score"] = float(max(0.0, min(1.0, score)) * 100.0 + reasoning_depth * 8.0)
     return out
-

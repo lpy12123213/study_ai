@@ -26,7 +26,7 @@ from backend.api.study_materials_schemas import (
     StudyMaterialsGenerateRequest,
 )
 from backend.core.logging_utils import get_logger
-from backend.study_materials.tasks_singleton import study_material_tasks as _tasks
+from backend.study_materials.orchestrator_singleton import study_material_tasks as _tasks
 
 router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -54,11 +54,11 @@ def _sse_headers() -> dict:
     }
 
 
-async def _stream_task(task_id: str, *, after_seq: int) -> StreamingResponse:
+async def _stream_task(task_id: str, *, user_id: str, after_seq: int) -> StreamingResponse:
     heartbeat_s = float(os.getenv("STUDY_MATERIALS_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
-        async for event in _tasks.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
+        async for event in _tasks.stream(task_id, user_id=user_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -106,7 +106,7 @@ async def generate_study_materials(
         options["preferLocalArchive"] = bool(request.prefer_local_archive)
 
     task = await _tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
-    return await _stream_task(task.task_id, after_seq=0)
+    return await _stream_task(task.task_id, user_id=user_id, after_seq=0)
 
 
 @router.post("/convert-markdown-to-latex", response_model=StudyMaterialsConvertMarkdownToLatexResponse)
@@ -264,20 +264,46 @@ async def convert_markdown_to_latex_stream(
 async def stream_study_materials_task(
     task_id: str,
     after_seq: int = Query(0, ge=0),
+    user: dict = Depends(require_auth),
 ):
     """Resume a running/completed task and replay SSE events after `after_seq`."""
 
-    task = await _tasks.get_task(task_id)
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await _tasks.get_task(task_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return await _stream_task(task.task_id, after_seq=after_seq)
+    return await _stream_task(task.task_id, user_id=user_id, after_seq=after_seq)
 
 
 @router.get("/tasks/{task_id}")
-async def get_study_materials_task(task_id: str):
-    task = await _tasks.get_task(task_id)
+async def get_study_materials_task(task_id: str, user: dict = Depends(require_auth)):
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await _tasks.get_task(task_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Backward-compatible seq handling:
+    # - New orchestrator view exposes `first_seq` directly.
+    # - Older runtime tasks expose `seq_offset` (first_seq = seq_offset + 1).
+    first_seq = getattr(task, "first_seq", None)
+    if first_seq is None:
+        seq_offset = getattr(task, "seq_offset", 0)
+        try:
+            first_seq = int(seq_offset) + 1
+        except Exception:
+            first_seq = 1
+    else:
+        try:
+            first_seq = int(first_seq)
+        except Exception:
+            first_seq = 1
+
     return {
         "task_id": task.task_id,
         "query": task.query,
@@ -286,7 +312,7 @@ async def get_study_materials_task(task_id: str):
         "error": task.error,
         "created_at_s": task.created_at_s,
         "updated_at_s": task.updated_at_s,
-        "first_seq": task.seq_offset + 1,
+        "first_seq": first_seq,
         "last_seq": task.last_seq,
         "last_success_step": task.last_success_step,
         "last_failed_step": task.last_failed_step,
@@ -322,4 +348,4 @@ async def continue_study_materials_task(
             raise HTTPException(status_code=400, detail="Task not resumable")
         raise HTTPException(status_code=400, detail=msg)
 
-    return await _stream_task(new_task.task_id, after_seq=0)
+    return await _stream_task(new_task.task_id, user_id=user_id, after_seq=0)

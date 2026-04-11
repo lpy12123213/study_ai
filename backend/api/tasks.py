@@ -12,39 +12,43 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
+from backend.api.question_library_schemas import (
+    QuestionLibraryCrawlRequest,
+    QuestionLibraryGenerateRequest,
+    QuestionLibraryScoreRequest,
+)
+from backend.api.schemas import DeepThinkRequest
+from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, StudyMaterialsGenerateRequest
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
-from backend.database.models import get_paper as db_get_paper
-from backend.database.repositories.study_archives import get_study_archive as db_get_study_archive
-from backend.database.repositories.tasks import (
+from backend.database.repositories.system.tasks import (
     append_task_event as db_append_task_event,
 )
-from backend.database.repositories.tasks import (
+from backend.database.repositories.system.tasks import (
     average_duration_seconds as db_average_duration_seconds,
 )
-from backend.database.repositories.tasks import (
+from backend.database.repositories.system.tasks import (
     get_task as db_get_task,
 )
-from backend.database.repositories.tasks import (
+from backend.database.repositories.system.tasks import (
     list_task_events as db_list_task_events,
 )
-from backend.database.repositories.tasks import (
+from backend.database.repositories.system.tasks import (
     list_tasks as db_list_tasks,
 )
-from backend.database.repositories.tasks import (
+from backend.database.repositories.system.tasks import (
     update_task_status as db_update_task_status,
 )
-from backend.database.repositories.tasks import (
-    upsert_task as db_upsert_task,
+from backend.api.lesson_plan_schemas import LessonPlanGenerateRequest
+from backend.shared.tasks import task_runtime
+from backend.tasks import (
+    submit_deepthink_task,
+    submit_export_paper_task,
+    submit_export_study_archive_task,
+    submit_generate_full_paper_task,
+    submit_lesson_plan_task,
+    submit_paper_compose_task,
 )
-from backend.deepthink.service import deepthink_service
-from backend.lesson_plan_v2.service import generate_lesson_plan_stream
-from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
-from backend.paper_compose.compose_tasks import compose_tasks
-from backend.paper_compose.export import export_paper as export_paper_doc
-from backend.paper_compose.task_manager import PaperComposeTask
-from backend.paper_compose.workflow import compose_paper_events
-from backend.study_materials.tasks_singleton import study_material_tasks
 
 router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -60,391 +64,6 @@ def _sse_headers() -> dict:
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-_background_runners: dict[str, asyncio.Task] = {}
-
-
-def _track_background_runner(task_id: str, runner: asyncio.Task) -> None:
-    tid = str(task_id or "").strip()
-    if not tid:
-        return
-    _background_runners[tid] = runner
-
-    def _cleanup(_: asyncio.Task) -> None:
-        _background_runners.pop(tid, None)
-
-    runner.add_done_callback(_cleanup)
-
-
-def _cancel_background_runner(task_id: str) -> None:
-    tid = str(task_id or "").strip()
-    if not tid:
-        return
-    runner = _background_runners.get(tid)
-    if runner and not runner.done():
-        runner.cancel()
-
-
-async def _get_db_task_status(*, user_id: str, task_id: str) -> str:
-    try:
-        task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
-    except Exception:
-        return ""
-    if not task:
-        return ""
-    return str(task.get("status") or "").strip()
-
-
-async def _run_export_paper_task(*, user_id: str, task_id: str, request: dict) -> None:
-    try:
-        paper_id = int(request.get("paper_id") or request.get("paperId") or 0)
-    except Exception:
-        paper_id = 0
-    fmt = str(request.get("format") or request.get("fmt") or "markdown").strip().lower()
-    include_stem = bool(request.get("include_stem") or request.get("includeStem"))
-    include_answer = bool(request.get("include_answer") or request.get("includeAnswer"))
-    include_analysis = bool(request.get("include_analysis") or request.get("includeAnalysis"))
-
-    paper = None
-    if paper_id > 0:
-        try:
-            paper = await db_get_paper(user_id=user_id, paper_id=paper_id)
-        except Exception:
-            paper = None
-
-    if not paper:
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="error",
-            payload={"error": {"code": "paper_not_found", "message": "试卷不存在"}},
-        )
-        await _emit_db_task_terminal(
-            user_id=user_id, task_id=task_id, status="failed", error={"message": "paper_not_found"}
-        )
-        return
-
-    await db_append_task_event(
-        user_id=user_id,
-        task_id=task_id,
-        event_type="progress",
-        payload={"progress": 10.0},
-        progress=10.0,
-    )
-
-    try:
-        out = await export_paper_doc(
-            paper,
-            user_id=user_id,
-            fmt=fmt,
-            include_stem=include_stem,
-            include_answer=include_answer,
-            include_analysis=include_analysis,
-        )
-    except asyncio.CancelledError:
-        await _emit_db_task_terminal(
-            user_id=user_id, task_id=task_id, status="canceled", error={"message": "Task cancelled"}
-        )
-        raise
-    except ValueError as exc:
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="error",
-            payload={"error": {"code": "export_invalid_request", "message": str(exc)}},
-        )
-        await _emit_db_task_terminal(user_id=user_id, task_id=task_id, status="failed", error={"message": str(exc)})
-        return
-    except Exception as exc:  # pragma: no cover
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="error",
-            payload={"error": {"code": "export_failed", "message": str(exc)}},
-        )
-        await _emit_db_task_terminal(user_id=user_id, task_id=task_id, status="failed", error={"message": str(exc)})
-        return
-
-    await db_append_task_event(
-        user_id=user_id,
-        task_id=task_id,
-        event_type="progress",
-        payload={"progress": 95.0},
-        progress=95.0,
-    )
-
-    if isinstance(out, dict) and out.get("success") is False:
-        err_code = str(out.get("error") or "export_failed").strip() or "export_failed"
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="error",
-            payload={"error": {"code": err_code, "message": err_code, "detail": out}},
-        )
-        await _emit_db_task_terminal(
-            user_id=user_id, task_id=task_id, status="failed", error={"message": err_code, "detail": out}
-        )
-        return
-
-    result = dict(out) if isinstance(out, dict) else {"result": out}
-    result["paper_id"] = paper_id
-    await _emit_db_task_terminal(user_id=user_id, task_id=task_id, status="completed", result=result)
-
-
-async def _run_export_study_archive_task(*, user_id: str, task_id: str, request: dict) -> None:
-    try:
-        archive_id = int(request.get("archive_id") or request.get("archiveId") or 0)
-    except Exception:
-        archive_id = 0
-    fmt = str(request.get("format") or request.get("fmt") or "markdown").strip().lower()
-    if fmt not in {"md", "markdown"}:
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="error",
-            payload={"error": {"code": "unsupported_format", "message": "unsupported_format"}},
-        )
-        await _emit_db_task_terminal(
-            user_id=user_id, task_id=task_id, status="failed", error={"message": "unsupported_format"}
-        )
-        return
-
-    archive = None
-    if archive_id > 0:
-        try:
-            archive = await db_get_study_archive(user_id=user_id, archive_id=archive_id)
-        except Exception:
-            archive = None
-    if not archive:
-        await _emit_db_task_terminal(
-            user_id=user_id, task_id=task_id, status="failed", error={"message": "study_archive_not_found"}
-        )
-        return
-
-    markdown = str(archive.get("markdown") or "").strip()
-    if not markdown:
-        markdown = f"# {str(archive.get('topic') or '自学资料').strip()}\n\n（无内容）\n"
-
-    await db_append_task_event(
-        user_id=user_id,
-        task_id=task_id,
-        event_type="progress",
-        payload={"progress": 30.0},
-        progress=30.0,
-    )
-
-    try:
-        out = await publish_generated_text(
-            markdown,
-            user_id=user_id,
-            ext=".md",
-            file_type="md",
-            mime_type="text/markdown; charset=utf-8",
-            ttl_s=default_generated_media_ttl_s(),
-        )
-    except asyncio.CancelledError:
-        await _emit_db_task_terminal(
-            user_id=user_id, task_id=task_id, status="canceled", error={"message": "Task cancelled"}
-        )
-        raise
-    except Exception as exc:  # pragma: no cover
-        await _emit_db_task_terminal(user_id=user_id, task_id=task_id, status="failed", error={"message": str(exc)})
-        return
-
-    result = {"format": "markdown", "archive_id": archive_id, **(out if isinstance(out, dict) else {"result": out})}
-    await _emit_db_task_terminal(user_id=user_id, task_id=task_id, status="completed", result=result)
-
-
-async def _run_deepthink_task(*, user_id: str, task_id: str, request: Dict[str, Any]) -> None:
-    uid = str(user_id or "").strip()
-    tid = str(task_id or "").strip()
-    if not uid or not tid:
-        return
-
-    question = str((request or {}).get("question") or "").strip()
-    subject = str((request or {}).get("subject") or "高中数学").strip() or "高中数学"
-    image_url = (request or {}).get("image_url")
-
-    try:
-        async for event in deepthink_service.solve(question=question, subject=subject, image_url=image_url):
-            status = await _get_db_task_status(user_id=uid, task_id=tid)
-            if status and status != "running":
-                return
-
-            kind = str((event or {}).get("type") or "event").strip() or "event"
-            payload = dict(event or {}) if isinstance(event, dict) else {"event": event}
-            await db_append_task_event(user_id=uid, task_id=tid, event_type=kind, payload=payload)
-
-            if kind == "done":
-                await db_update_task_status(
-                    user_id=uid,
-                    task_id=tid,
-                    status="completed",
-                    progress=100.0,
-                    result=payload if isinstance(payload, dict) else {"result": payload},
-                    ended_at=utcnow_naive(),
-                )
-                return
-            if kind == "error":
-                msg = str(payload.get("message") or payload.get("error") or "deepthink_failed").strip()
-                await db_update_task_status(
-                    user_id=uid,
-                    task_id=tid,
-                    status="failed",
-                    error={"message": msg},
-                    ended_at=utcnow_naive(),
-                )
-                return
-    except asyncio.CancelledError:
-        status = await _get_db_task_status(user_id=uid, task_id=tid)
-        if status in {"paused", "canceled", "cancelled"}:
-            raise
-        try:
-            await db_update_task_status(
-                user_id=uid,
-                task_id=tid,
-                status="canceled",
-                error={"message": "Task cancelled"},
-                ended_at=utcnow_naive(),
-            )
-        except Exception:
-            logger.exception("deepthink_task_cancel_write_failed", extra={"task_id": tid, "user_id": uid})
-        raise
-    except Exception as exc:
-        try:
-            await db_update_task_status(
-                user_id=uid,
-                task_id=tid,
-                status="failed",
-                error={"message": str(exc)},
-                ended_at=utcnow_naive(),
-            )
-        except Exception:
-            logger.exception("deepthink_task_error_write_failed", extra={"task_id": tid, "user_id": uid})
-
-
-async def _run_lesson_plan_task(*, user_id: str, task_id: str, request: Dict[str, Any]) -> None:
-    uid = str(user_id or "").strip()
-    tid = str(task_id or "").strip()
-    if not uid or not tid:
-        return
-
-    try:
-        async for event in generate_lesson_plan_stream(
-            subject=str((request or {}).get("subject") or "").strip(),
-            grade=str((request or {}).get("grade") or "").strip(),
-            topic=str((request or {}).get("topic") or "").strip(),
-            user_id=uid,
-            duration_minutes=(request or {}).get("duration_minutes"),
-            objectives=(request or {}).get("objectives"),
-            teaching_style=(request or {}).get("teaching_style"),
-            student_level=(request or {}).get("student_level"),
-            additional_requirements=(request or {}).get("additional_requirements"),
-        ):
-            status = await _get_db_task_status(user_id=uid, task_id=tid)
-            if status and status != "running":
-                return
-
-            kind = str((event or {}).get("event") or "").strip() or "event"
-            data = (event or {}).get("data") if isinstance((event or {}).get("data"), dict) else {}
-            await db_append_task_event(user_id=uid, task_id=tid, event_type=kind, payload=data)
-
-            if kind == "done":
-                material = data.get("material") if isinstance(data, dict) else {}
-                await db_update_task_status(
-                    user_id=uid,
-                    task_id=tid,
-                    status="completed",
-                    progress=100.0,
-                    result=material if isinstance(material, dict) else {"material": material},
-                    ended_at=utcnow_naive(),
-                )
-                return
-            if kind == "error":
-                msg = str((data or {}).get("message") or "lesson_plan_failed").strip()
-                await db_update_task_status(
-                    user_id=uid,
-                    task_id=tid,
-                    status="failed",
-                    error={"message": msg},
-                    ended_at=utcnow_naive(),
-                )
-                return
-    except asyncio.CancelledError:
-        status = await _get_db_task_status(user_id=uid, task_id=tid)
-        if status in {"paused", "canceled", "cancelled"}:
-            raise
-        try:
-            await db_update_task_status(
-                user_id=uid,
-                task_id=tid,
-                status="canceled",
-                error={"message": "Task cancelled"},
-                ended_at=utcnow_naive(),
-            )
-        except Exception:
-            logger.exception("lesson_plan_task_cancel_write_failed", extra={"task_id": tid, "user_id": uid})
-        raise
-    except Exception as exc:
-        try:
-            await db_update_task_status(
-                user_id=uid,
-                task_id=tid,
-                status="failed",
-                error={"message": str(exc)},
-                ended_at=utcnow_naive(),
-            )
-        except Exception:
-            logger.exception("lesson_plan_task_error_write_failed", extra={"task_id": tid, "user_id": uid})
-
-
-async def _emit_db_task_started(*, user_id: str, task_id: str, task_type: str, title: str, request: dict) -> None:
-    await db_upsert_task(
-        user_id=user_id,
-        task_id=task_id,
-        task_type=task_type,
-        title=title,
-        status="running",
-        progress=0.0,
-        request=request,
-        started_at=utcnow_naive(),
-    )
-    await db_append_task_event(
-        user_id=user_id,
-        task_id=task_id,
-        event_type="step",
-        payload={
-            "step": {
-                "id": "task_started",
-                "title": "任务开始",
-                "status": "running",
-                "startTime": _now_iso(),
-                "toolName": task_type,
-                "input": request,
-            }
-        },
-    )
-
-
-async def _emit_db_task_terminal(
-    *,
-    user_id: str,
-    task_id: str,
-    status: str,
-    result: Optional[dict] = None,
-    error: Optional[dict] = None,
-) -> None:
-    ended_at = utcnow_naive()
-    await db_update_task_status(
-        user_id=user_id,
-        task_id=task_id,
-        status=status,
-        progress=100.0 if status == "completed" else None,
-        result=result,
-        error=error,
-        ended_at=ended_at,
-    )
 
 
 @router.get("", response_model=dict)
@@ -490,6 +109,192 @@ async def list_tasks(
     return {"tasks": items, "count": len(items)}
 
 
+@router.post("/deepthink", response_model=dict)
+async def submit_deepthink(request: DeepThinkRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for DeepThink."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await submit_deepthink_task(user_id=user_id, request=request.model_dump())
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/lesson-plans/generate", response_model=dict)
+async def submit_lesson_plan(request: LessonPlanGenerateRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for lesson-plan generation."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await submit_lesson_plan_task(user_id=user_id, request=request.model_dump())
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/papers/compose", response_model=dict)
+async def submit_paper_compose(payload: dict, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for paper composing."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid_payload")
+
+    task = await submit_paper_compose_task(user_id=user_id, request=payload)
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/papers/generate-full", response_model=dict)
+async def submit_generate_full_paper(payload: Optional[dict] = None, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for one-click full paper generation."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    body = payload if isinstance(payload, dict) else {}
+    task = await submit_generate_full_paper_task(user_id=user_id, request=body)
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/study-materials/generate", response_model=dict)
+async def submit_study_materials(request: StudyMaterialsGenerateRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for study-materials generation."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    def _clip_text(text: str, *, max_chars: int) -> str:
+        if max_chars <= 0:
+            return ""
+        t = text or ""
+        if len(t) <= max_chars:
+            return t
+        return t[: max_chars - 1].rstrip() + "…"
+
+    query = (request.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Empty query")
+
+    subject = (request.subject or "").strip()
+    options = {}
+    if (request.preset or "").strip():
+        options["preset"] = str(request.preset or "").strip()
+    if (request.requirements or "").strip():
+        options["requirements"] = _clip_text(str(request.requirements or "").strip(), max_chars=600)
+    if request.with_questions is not None:
+        options["with_questions"] = bool(request.with_questions)
+    if request.with_diagrams is not None:
+        options["with_diagrams"] = bool(request.with_diagrams)
+    if request.enable_extra_tools is not None:
+        options["enable_extra_tools"] = bool(request.enable_extra_tools)
+    if request.max_points is not None:
+        try:
+            n = int(request.max_points)
+        except Exception:
+            n = 0
+        if n > 0:
+            options["max_points"] = max(1, min(n, 15))
+    if request.prefer_local_archive is not None:
+        options["preferLocalArchive"] = bool(request.prefer_local_archive)
+
+    from backend.study_materials.orchestrator_singleton import study_material_tasks
+
+    task = await study_material_tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/study-materials/{task_id}/continue", response_model=dict)
+async def continue_study_materials_task(
+    task_id: str,
+    request: StudyMaterialsContinueRequest,
+    user: dict = Depends(require_auth),
+) -> dict:
+    """Create a follow-up study-materials task (one bounded continuation iteration)."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    mode = str(request.mode or "").strip() or "improve"
+
+    from backend.study_materials.orchestrator_singleton import study_material_tasks
+
+    try:
+        new_task = await study_material_tasks.continue_task(task_id=task_id, user_id=user_id, mode=mode)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "task_not_found":
+            raise HTTPException(status_code=404, detail="Task not found")
+        if msg == "task_running":
+            raise HTTPException(status_code=409, detail="Task still running")
+        if msg == "task_not_resumable":
+            raise HTTPException(status_code=400, detail="Task not resumable")
+        raise HTTPException(status_code=400, detail=msg)
+
+    return {"success": True, "taskId": new_task.task_id}
+
+
+@router.post("/question-library/crawl", response_model=dict)
+async def submit_question_library_crawl(request: QuestionLibraryCrawlRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for question-library crawling."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    from backend.question_library import runner as ql_runner
+    from backend.question_library.runner import RunnerError
+
+    try:
+        task = await ql_runner.create_crawl_task(user_id=user_id, request=request.model_dump())
+    except RunnerError as exc:
+        raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/question-library/generate", response_model=dict)
+async def submit_question_library_generate(
+    request: QuestionLibraryGenerateRequest, user: dict = Depends(require_auth)
+) -> dict:
+    """Canonical long-task submit endpoint for question-library generation."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    from backend.question_library import runner as ql_runner
+    from backend.question_library.runner import RunnerError
+
+    try:
+        task = await ql_runner.create_generate_task(user_id=user_id, request=request.model_dump())
+    except RunnerError as exc:
+        raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/question-library/score", response_model=dict)
+async def submit_question_library_score(request: QuestionLibraryScoreRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for question-library scoring."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    from backend.question_library import runner as ql_runner
+    from backend.question_library.runner import RunnerError
+
+    try:
+        task = await ql_runner.create_score_task(user_id=user_id, request=request.model_dump())
+    except RunnerError as exc:
+        raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
+    return {"success": True, "taskId": task.task_id}
+
+
 @router.get("/{task_id}", response_model=dict)
 async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
@@ -498,8 +303,8 @@ async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> d
 
     db_task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
     if not db_task:
-        # Back-compat: in-memory compose task payload (legacy shape).
-        payload = await compose_tasks.status_payload(task_id=task_id, user_id=user_id)
+        # Back-compat: in-memory runtime status payload.
+        payload = await task_runtime.status_payload(task_id=task_id, user_id=user_id)
         if payload:
             return payload
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -533,23 +338,7 @@ async def pause_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
-    ok = await compose_tasks.pause_task(task_id=task_id, user_id=user_id)
-    if ok:
-        try:
-            await db_update_task_status(user_id=user_id, task_id=task_id, status="paused")
-            await db_append_task_event(
-                user_id=user_id,
-                task_id=task_id,
-                event_type="step",
-                payload={
-                    "step": {"id": "task_paused", "title": "任务已暂停", "status": "paused", "startTime": _now_iso()}
-                },
-            )
-        except Exception:
-            logger.exception("task_pause_db_sync_failed", extra={"task_id": task_id, "user_id": user_id})
-        return {"success": True}
-
-    ok = await study_material_tasks.pause_task(task_id=task_id, user_id=user_id)
+    ok = await task_runtime.pause_task(task_id=task_id, user_id=user_id)
     if ok:
         return {"success": True}
 
@@ -565,7 +354,6 @@ async def pause_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
         event_type="step",
         payload={"step": {"id": "task_paused", "title": "任务已暂停", "status": "paused", "startTime": _now_iso()}},
     )
-    _cancel_background_runner(task_id)
     return {"success": True}
 
 
@@ -574,115 +362,7 @@ async def resume_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
-
-    async def runner_factory(task: PaperComposeTask):
-        await _emit_db_task_started(
-            user_id=user_id,
-            task_id=task.task_id,
-            task_type="paper_compose",
-            title=str((task.request or {}).get("paperName") or (task.request or {}).get("paper_name") or "组卷任务"),
-            request=dict(task.request or {}),
-        )
-        try:
-            async for evt in compose_paper_events(task.request, user_id=user_id):
-                if task.status != "running":
-                    break
-                await compose_tasks.append_event(task, evt)
-                try:
-                    payload = {k: evt.get(k) for k in ("step", "progress", "result", "error", "message") if k in evt}
-                    progress = None
-                    if "progress" in payload:
-                        try:
-                            progress = float(payload.get("progress") or 0.0)
-                        except Exception:
-                            progress = None
-                    await db_append_task_event(
-                        user_id=user_id,
-                        task_id=task.task_id,
-                        event_type=str(evt.get("type") or "event"),
-                        payload=payload,
-                        seq=None,
-                        progress=progress,
-                    )
-                except Exception:
-                    logger.exception(
-                        "task_compose_event_write_failed",
-                        extra={"task_id": task.task_id, "user_id": user_id, "event": evt},
-                    )
-                kind = str(evt.get("type") or "")
-                if kind == "result":
-                    await compose_tasks.complete_task(task)
-                    try:
-                        result = (
-                            evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
-                        )
-                        await _emit_db_task_terminal(
-                            user_id=user_id, task_id=task.task_id, status="completed", result=result
-                        )
-                    except Exception:
-                        logger.exception(
-                            "task_compose_complete_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                        )
-                    return
-                if kind == "error":
-                    await compose_tasks.fail_task(task, str(evt.get("error") or "compose_failed"))
-                    try:
-                        await _emit_db_task_terminal(
-                            user_id=user_id,
-                            task_id=task.task_id,
-                            status="failed",
-                            error={
-                                "message": str(evt.get("error") or "compose_failed"),
-                                "code": str(evt.get("error") or "compose_failed"),
-                            },
-                        )
-                    except Exception:
-                        logger.exception(
-                            "task_compose_fail_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                        )
-                    return
-        except asyncio.CancelledError:
-            await compose_tasks.fail_task(task, "Task cancelled")
-            try:
-                await _emit_db_task_terminal(
-                    user_id=user_id,
-                    task_id=task.task_id,
-                    status="canceled",
-                    error={"message": "Task cancelled"},
-                )
-            except Exception:
-                logger.exception(
-                    "task_compose_cancel_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                )
-            raise
-        except Exception as exc:  # pragma: no cover
-            await compose_tasks.fail_task(task, str(exc))
-            try:
-                await _emit_db_task_terminal(
-                    user_id=user_id, task_id=task.task_id, status="failed", error={"message": str(exc)}
-                )
-            except Exception:
-                logger.exception("task_compose_error_write_failed", extra={"task_id": task.task_id, "user_id": user_id})
-        finally:
-            if task.status == "running":
-                await compose_tasks.fail_task(task, "Task ended unexpectedly")
-                try:
-                    await _emit_db_task_terminal(
-                        user_id=user_id,
-                        task_id=task.task_id,
-                        status="failed",
-                        error={"message": "Task ended unexpectedly"},
-                    )
-                except Exception:
-                    logger.exception(
-                        "task_compose_final_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                    )
-
-    ok = await compose_tasks.resume_task(task_id=task_id, user_id=user_id, runner_factory=runner_factory)
-    if ok:
-        return {"success": True}
-
-    ok = await study_material_tasks.resume_task(task_id=task_id, user_id=user_id)
+    ok = await task_runtime.resume_task(task_id=task_id, user_id=user_id)
     if ok:
         return {"success": True}
 
@@ -691,43 +371,10 @@ async def resume_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
         raise HTTPException(status_code=404, detail="task_not_found")
 
     status = str(db_task.get("status") or "").strip()
-    task_type = str(db_task.get("task_type") or "").strip()
     if status == "running":
         return {"success": True}
     if status != "paused":
         raise HTTPException(status_code=400, detail="task_not_resumable")
-
-    req = db_task.get("request") if isinstance(db_task.get("request"), dict) else {}
-
-    if task_type == "deepthink":
-        await db_update_task_status(user_id=user_id, task_id=task_id, status="running", progress=0.0, error={})
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="step",
-            payload={
-                "step": {"id": "task_resumed", "title": "任务继续执行", "status": "running", "startTime": _now_iso()}
-            },
-        )
-        _cancel_background_runner(task_id)
-        runner = asyncio.create_task(_run_deepthink_task(user_id=user_id, task_id=task_id, request=dict(req)))
-        _track_background_runner(task_id, runner)
-        return {"success": True}
-
-    if task_type == "lesson_plan":
-        await db_update_task_status(user_id=user_id, task_id=task_id, status="running", progress=0.0, error={})
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task_id,
-            event_type="step",
-            payload={
-                "step": {"id": "task_resumed", "title": "任务继续执行", "status": "running", "startTime": _now_iso()}
-            },
-        )
-        _cancel_background_runner(task_id)
-        runner = asyncio.create_task(_run_lesson_plan_task(user_id=user_id, task_id=task_id, request=dict(req)))
-        _track_background_runner(task_id, runner)
-        return {"success": True}
 
     raise HTTPException(status_code=400, detail="task_not_resumable")
 
@@ -738,29 +385,7 @@ async def cancel_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    ok = await compose_tasks.cancel_task(task_id=task_id, user_id=user_id)
-    if ok:
-        try:
-            await db_update_task_status(
-                user_id=user_id,
-                task_id=task_id,
-                status="canceled",
-                error={"message": "Task cancelled"},
-                ended_at=utcnow_naive(),
-            )
-            await db_append_task_event(
-                user_id=user_id,
-                task_id=task_id,
-                event_type="step",
-                payload={
-                    "step": {"id": "task_canceled", "title": "任务已取消", "status": "failed", "startTime": _now_iso()}
-                },
-            )
-        except Exception:
-            logger.exception("task_cancel_db_sync_failed", extra={"task_id": task_id, "user_id": user_id})
-        return {"success": True}
-
-    ok = await study_material_tasks.cancel_task(task_id=task_id, user_id=user_id)
+    ok = await task_runtime.cancel_task(task_id=task_id, user_id=user_id)
     if ok:
         return {"success": True}
 
@@ -781,7 +406,6 @@ async def cancel_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
         event_type="step",
         payload={"step": {"id": "task_canceled", "title": "任务已取消", "status": "failed", "startTime": _now_iso()}},
     )
-    _cancel_background_runner(task_id)
     return {"success": True}
 
 
@@ -802,190 +426,39 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
         new_task_id = f"compose-{uuid.uuid4().hex[:12]}"
         new_req = dict(req)
         new_req["taskId"] = new_task_id
-
-        async def runner_factory(task: PaperComposeTask):
-            await _emit_db_task_started(
-                user_id=user_id,
-                task_id=task.task_id,
-                task_type="paper_compose",
-                title=str(
-                    (task.request or {}).get("paperName") or (task.request or {}).get("paper_name") or "组卷任务"
-                ),
-                request=dict(task.request or {}),
-            )
-            try:
-                async for evt in compose_paper_events(task.request, user_id=user_id):
-                    if task.status != "running":
-                        break
-                    await compose_tasks.append_event(task, evt)
-                    payload = {k: evt.get(k) for k in ("step", "progress", "result", "error", "message") if k in evt}
-                    progress = None
-                    if "progress" in payload:
-                        try:
-                            progress = float(payload.get("progress") or 0.0)
-                        except Exception:
-                            progress = None
-                    await db_append_task_event(
-                        user_id=user_id,
-                        task_id=task.task_id,
-                        event_type=str(evt.get("type") or "event"),
-                        payload=payload,
-                        seq=None,
-                        progress=progress,
-                    )
-                    kind = str(evt.get("type") or "")
-                    if kind == "result":
-                        await compose_tasks.complete_task(task)
-                        result = (
-                            evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
-                        )
-                        await _emit_db_task_terminal(
-                            user_id=user_id, task_id=task.task_id, status="completed", result=result
-                        )
-                        return
-                    if kind == "error":
-                        await compose_tasks.fail_task(task, str(evt.get("error") or "compose_failed"))
-                        await _emit_db_task_terminal(
-                            user_id=user_id,
-                            task_id=task.task_id,
-                            status="failed",
-                            error={"message": str(evt.get("error") or "compose_failed")},
-                        )
-                        return
-            except asyncio.CancelledError:
-                await compose_tasks.fail_task(task, "Task cancelled")
-                await _emit_db_task_terminal(
-                    user_id=user_id, task_id=task.task_id, status="canceled", error={"message": "Task cancelled"}
-                )
-                raise
-            except Exception as exc:  # pragma: no cover
-                await compose_tasks.fail_task(task, str(exc))
-                await _emit_db_task_terminal(
-                    user_id=user_id, task_id=task.task_id, status="failed", error={"message": str(exc)}
-                )
-            finally:
-                if task.status == "running":
-                    await compose_tasks.fail_task(task, "Task ended unexpectedly")
-                    await _emit_db_task_terminal(
-                        user_id=user_id,
-                        task_id=task.task_id,
-                        status="failed",
-                        error={"message": "Task ended unexpectedly"},
-                    )
-
-        await compose_tasks.create_task(
-            task_id=new_task_id, user_id=user_id, request=new_req, runner_factory=runner_factory
-        )
-        return {"success": True, "taskId": new_task_id}
+        task = await submit_paper_compose_task(user_id=user_id, request=new_req, parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
 
     if task_type == "study_materials":
         query = str(req.get("query") or "").strip()
         subject = str(req.get("subject") or "").strip()
         options = req.get("options") if isinstance(req.get("options"), dict) else {}
+        from backend.study_materials.orchestrator_singleton import study_material_tasks
+
         task = await study_material_tasks.create_task(
-            query=query, user_id=user_id, subject=subject, options=dict(options)
+            query=query,
+            user_id=user_id,
+            subject=subject,
+            options=dict(options),
+            parent_task_id=task_id,
         )
         return {"success": True, "taskId": task.task_id}
 
     if task_type == "deepthink":
-        new_task_id = f"deepthink-{uuid.uuid4().hex[:12]}"
-        title = f"深度解题：{str(req.get('subject') or '高中数学').strip() or '高中数学'}"
-        await db_upsert_task(
-            user_id=user_id,
-            task_id=new_task_id,
-            task_type="deepthink",
-            title=title[:200],
-            status="running",
-            progress=0.0,
-            request=dict(req),
-            started_at=utcnow_naive(),
-        )
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=new_task_id,
-            event_type="step",
-            payload={
-                "step": {
-                    "id": "task_started",
-                    "title": "开始深度解题",
-                    "status": "running",
-                    "startTime": _now_iso(),
-                    "toolName": "deepthink",
-                }
-            },
-        )
-        runner = asyncio.create_task(_run_deepthink_task(user_id=user_id, task_id=new_task_id, request=dict(req)))
-        _track_background_runner(new_task_id, runner)
-        return {"success": True, "taskId": new_task_id}
+        task = await submit_deepthink_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
 
     if task_type == "lesson_plan":
-        new_task_id = f"lesson-plan-{uuid.uuid4().hex[:12]}"
-        title = (
-            f"教案：{str(req.get('subject') or '').strip()} {str(req.get('grade') or '').strip()}《{str(req.get('topic') or '').strip()}》"
-        ).strip()
-        await db_upsert_task(
-            user_id=user_id,
-            task_id=new_task_id,
-            task_type="lesson_plan",
-            title=title[:200] or "教案生成",
-            status="running",
-            progress=0.0,
-            request=dict(req),
-            started_at=utcnow_naive(),
-        )
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=new_task_id,
-            event_type="step",
-            payload={
-                "step": {
-                    "id": "task_started",
-                    "title": "开始生成教案",
-                    "status": "running",
-                    "startTime": _now_iso(),
-                    "toolName": "lesson_plan",
-                }
-            },
-        )
-        runner = asyncio.create_task(_run_lesson_plan_task(user_id=user_id, task_id=new_task_id, request=dict(req)))
-        _track_background_runner(new_task_id, runner)
-        return {"success": True, "taskId": new_task_id}
+        task = await submit_lesson_plan_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
 
     if task_type == "export_paper":
-        try:
-            paper_id = int(req.get("paper_id") or req.get("paperId") or 0)
-        except Exception:
-            paper_id = 0
-        new_task_id = f"export-paper-{uuid.uuid4().hex[:12]}"
-        paper = await db_get_paper(user_id=user_id, paper_id=paper_id) if paper_id > 0 else None
-        title = f"导出试卷：{str((paper or {}).get('paper_name') or (paper or {}).get('name') or paper_id)}"
-        await _emit_db_task_started(
-            user_id=user_id, task_id=new_task_id, task_type="export_paper", title=title[:200], request=dict(req)
-        )
-        runner = asyncio.create_task(_run_export_paper_task(user_id=user_id, task_id=new_task_id, request=dict(req)))
-        _track_background_runner(new_task_id, runner)
-        return {"success": True, "taskId": new_task_id}
+        task = await submit_export_paper_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
 
     if task_type == "export_study_archive":
-        try:
-            archive_id = int(req.get("archive_id") or req.get("archiveId") or 0)
-        except Exception:
-            archive_id = 0
-        new_task_id = f"export-archive-{uuid.uuid4().hex[:12]}"
-        archive = await db_get_study_archive(user_id=user_id, archive_id=archive_id) if archive_id > 0 else None
-        title = f"导出资料：{str((archive or {}).get('topic') or archive_id)}"
-        await _emit_db_task_started(
-            user_id=user_id,
-            task_id=new_task_id,
-            task_type="export_study_archive",
-            title=title[:200],
-            request=dict(req),
-        )
-        runner = asyncio.create_task(
-            _run_export_study_archive_task(user_id=user_id, task_id=new_task_id, request=dict(req))
-        )
-        _track_background_runner(new_task_id, runner)
-        return {"success": True, "taskId": new_task_id}
+        task = await submit_export_study_archive_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
 
     raise HTTPException(status_code=400, detail="task_not_retryable")
 
@@ -1010,15 +483,8 @@ async def export_paper_task(paper_id: int, payload: Optional[dict] = None, user:
         else bool(body.get("include_analysis")),
     }
 
-    task_id = f"export-paper-{uuid.uuid4().hex[:12]}"
-    paper = await db_get_paper(user_id=user_id, paper_id=int(paper_id))
-    title = f"导出试卷：{str((paper or {}).get('paper_name') or (paper or {}).get('name') or paper_id)}"
-    await _emit_db_task_started(
-        user_id=user_id, task_id=task_id, task_type="export_paper", title=title[:200], request=req
-    )
-    runner = asyncio.create_task(_run_export_paper_task(user_id=user_id, task_id=task_id, request=req))
-    _track_background_runner(task_id, runner)
-    return {"success": True, "taskId": task_id}
+    task = await submit_export_paper_task(user_id=user_id, request=req)
+    return {"success": True, "taskId": task.task_id}
 
 
 @router.post("/export/study-archives/{archive_id}", response_model=dict)
@@ -1033,15 +499,8 @@ async def export_study_archive_task(
     fmt = str(body.get("format") or body.get("fmt") or "markdown").strip().lower()
     req = {"archive_id": int(archive_id), "format": fmt}
 
-    task_id = f"export-archive-{uuid.uuid4().hex[:12]}"
-    archive = await db_get_study_archive(user_id=user_id, archive_id=int(archive_id))
-    title = f"导出资料：{str((archive or {}).get('topic') or archive_id)}"
-    await _emit_db_task_started(
-        user_id=user_id, task_id=task_id, task_type="export_study_archive", title=title[:200], request=req
-    )
-    runner = asyncio.create_task(_run_export_study_archive_task(user_id=user_id, task_id=task_id, request=req))
-    _track_background_runner(task_id, runner)
-    return {"success": True, "taskId": task_id}
+    task = await submit_export_study_archive_task(user_id=user_id, request=req)
+    return {"success": True, "taskId": task.task_id}
 
 
 @router.get("/{task_id}/stream")
@@ -1056,9 +515,9 @@ async def stream_task(
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     async def event_generator():
-        compose_task = await compose_tasks.get_task(task_id)
-        if compose_task and str(compose_task.user_id or "") == user_id:
-            async for event in compose_tasks.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
+        runtime_task = await task_runtime.get_task(task_id)
+        if runtime_task and str(runtime_task.user_id or "") == user_id:
+            async for event in task_runtime.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
 

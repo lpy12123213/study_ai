@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { useAuthStore } from '@/stores/useAuthStore'
 import * as authApi from '@/api/auth'
+import { isApiError } from '@/api/client'
 import { BrandMark } from '@/components/shared/BrandMark'
 
 export default function LoginPage() {
@@ -39,8 +40,20 @@ export default function LoginPage() {
       setAuth(response.user, response.token)
       const next = (location.state as any)?.from || '/chat'
       navigate(next, { replace: true })
-    } catch {
-      setError('登录失败，请检查用户名和密码')
+    } catch (err: unknown) {
+      if (isApiError(err)) {
+        if (err.status === 401) {
+          setError('用户名或密码错误')
+        } else if (err.status >= 500) {
+          setError('服务器异常，请稍后重试')
+        } else if (err.status === 0) {
+          setError('网络错误，请检查网络连接')
+        } else {
+          setError(err.message || '登录失败，请稍后重试')
+        }
+      } else {
+        setError('登录失败，请检查网络连接')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -112,7 +125,7 @@ export default function LoginPage() {
               </Button>
             </form>
             <p className="mt-4 text-xs text-muted-foreground/70">
-              提示：本地默认管理员账号可在 <code>.env</code> 中配置（例如 <code>admin</code> / <code>admin123</code>）。
+              提示：管理员账号与密码在 <code>.env</code> 中配置（生产环境务必使用强口令）。
             </p>
           </CardContent>
         </Card>

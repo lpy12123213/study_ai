@@ -10,9 +10,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.database.models import get_question_cache
+from backend.core.logging_utils import get_logger
+from backend.database.repositories.question.question_cache import get_question_cache
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
 from backend.paper_compose.exam_templates import format_answer_key_section, format_exam_header, get_exam_preamble
+
+logger = get_logger(__name__)
 
 try:
     from docx import Document  # type: ignore[import-not-found]
@@ -590,7 +593,7 @@ def render_paper_latex(
 
 
 def _find_latex_engine() -> Optional[str]:
-    configured = str(os.getenv("PAPER_EXPORT_LATEX_ENGINE") or os.getenv("LATEX_ENGINE") or "").strip()
+    configured = str(os.getenv("PAPER_EXPORT_LATEX_ENGINE") or "").strip()
     if configured:
         return shutil.which(configured) or configured
     return shutil.which("xelatex") or shutil.which("pdflatex")
@@ -659,7 +662,11 @@ def compile_latex_to_pdf(*, tex: str, timeout_s: Optional[float] = None) -> Tupl
                     shutil.copyfile(str(src), str(dst))
                     copied += 1
                 except Exception:
-                    pass
+                    logger.warning(
+                        "paper_export_asset_copy_failed",
+                        extra={"src": str(src), "dst": str(dst)},
+                        exc_info=True,
+                    )
                 break
         return copied
 

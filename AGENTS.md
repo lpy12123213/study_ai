@@ -4,6 +4,17 @@
 
 Repo root is the app root. `backend/` contains the FastAPI service (`backend/app.py`), domain routers in `backend/api/`, workflow logic in `backend/agent/`, `backend/study_materials/`, and `backend/paper_compose/`, database code in `backend/database/`, crawlers in `backend/crawler/`, and MCP tooling in `backend/mcp/`. `frontend/` is a Vite + React app with source under `frontend/src/` and `@/` path aliases. Docs live in `docs/`; helper scripts live in `scripts/`. Keep generated or local-only data in ignored paths such as `.local/`, `data/`, `artifacts/`, and `venv/`.
 
+### Canonical Boundaries (Target)
+
+New code should move toward the canonical domain boundaries described in `docs/ARCHITECTURE.md`:
+
+- Backend target top-level domains: `system`, `auth`, `workspace`, `generation`, `tasks`, `integrations`, `shared`
+- Frontend target structure: feature-slice under `frontend/src/features/<domain>/...` with only `shared/` kept global
+
+Naming rules:
+- Do not introduce long-lived `*_v2`, `legacy`, `compat`, `shim` directories as “main paths”. Compatibility layers are allowed only as thin forwarders during migration and must be deleted after cutover.
+- `/api/tasks` is the canonical long-task API; new long-running workflows must integrate with the shared TaskRuntime.
+
 ## Build, Test, and Development Commands
 
 Preferred entrypoints are `start.bat dev|all|backend|frontend|mcp|setup|doctor` on Windows and `./start.sh dev|all|backend|frontend|mcp|setup|doctor` on Linux/macOS. Manual backend start: `python -m uvicorn backend.app:app --reload --port 8000`. Manual frontend start: `cd frontend && npm install && npm run dev`. Frontend quality checks: `cd frontend && npm run lint` and `npm run build`. Start the MCP server with `python -m backend.mcp.stdio_server`.

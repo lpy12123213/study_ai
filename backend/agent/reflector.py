@@ -5,7 +5,10 @@ from typing import Optional
 
 from backend.agent.config import AgentConfig
 from backend.agent.types import ActionResults, CompressedContext, ExecutionPlan, ReflectionResult
+from backend.core.logging_utils import get_logger
 from backend.llm.client import chat_completion_text
+
+logger = get_logger(__name__)
 
 
 class Reflector:
@@ -116,12 +119,23 @@ class Reflector:
                 retries=3,
                 req_id_prefix="reflect",
             )
-        except Exception:
-            content = ""
+        except Exception as exc:
+            logger.warning("reflector_llm_failed", extra={"error": str(exc)}, exc_info=True)
+            return ReflectionResult(
+                passed=False,
+                issues=[f"审查模型调用失败：{str(exc) or 'unknown_error'}"],
+                suggestions=[],
+                summary="审查失败（审查模型调用异常）",
+            )
 
         content = str(content or "")
         if not content.strip():
-            return ReflectionResult(passed=True, summary="审查通过（审查模型未返回内容，跳过）")
+            return ReflectionResult(
+                passed=False,
+                issues=["审查模型未返回任何内容"],
+                suggestions=[],
+                summary="审查失败（审查模型未返回内容）",
+            )
 
         raw = content.strip()
         start = raw.find("{")
@@ -131,8 +145,15 @@ class Reflector:
         try:
             obj = json.loads(raw)
         except Exception:
-            obj = {}
-        passed = bool(obj.get("passed")) if "passed" in obj else True
+            logger.warning("reflector_llm_invalid_json", extra={"raw_preview": raw[:200]}, exc_info=True)
+            return ReflectionResult(
+                passed=False,
+                issues=["审查模型返回内容无法解析为 JSON"],
+                suggestions=[],
+                summary="审查失败（审查模型输出无效）",
+            )
+
+        passed = bool(obj.get("passed")) if "passed" in obj else False
         issues = list(obj.get("issues") or [])
         suggestions = list(obj.get("suggestions") or [])
         summary = "审查通过 ✅" if passed else f"审查未通过（发现 {len(issues) or 1} 个问题）"

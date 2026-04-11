@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.api.schemas import ConversationCreate, ConversationForkRequest, ConversationUpdate
-from backend.database.models import (
+from backend.database.repositories.content.conversations import (
     create_conversation,
     delete_conversation,
     fork_conversation,
@@ -54,7 +54,7 @@ async def remove_conversation(conv_id: int, user: dict = Depends(require_auth)) 
 async def get_conversation_messages(
     conv_id: int,
     user: dict = Depends(require_auth),
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=100),
     before_id: int = Query(0, ge=0),
     include_trace: bool = Query(False),
     include_tool_content: bool = Query(False),

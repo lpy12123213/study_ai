@@ -95,7 +95,7 @@
    - 超时：`STUDY_MATERIALS_STEP_TIMEOUT_S`（默认 240 秒）。
 5. **公式渲染（前端）**：自学资料页面已启用 Markdown + LaTeX 渲染（`remark-math` + `rehype-katex`），并引入 KaTeX 样式，公式展示更一致。
 6. **网搜切换为 Metaso（报告型摘要）**：`web_search_knowledge` 优先使用 Metaso API，并可返回 `summary` 作为报告型梳理文本（更少“百科 UI 噪音”）。
-   - 配置：`METASO_API_KEY`（兼容别名 `METASO_API`）、`METASO_BASE_URL`、`METASO_TIMEOUT`（见 `.env.example`）
+   - 配置：`METASO_API_KEY`、`METASO_BASE_URL`、`METASO_TIMEOUT`（见 `.env.example`）
 7. **示意图（SVG）**：`generate_study_material` 会尝试为每个知识点生成一张简洁示意图（SVG），并通过 `/api/media/generated/...` 提供给前端渲染。
 
 **建议验收**：

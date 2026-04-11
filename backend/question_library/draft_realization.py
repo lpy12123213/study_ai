@@ -4,12 +4,16 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.llm.client import is_llm_configured
 from backend.question_library.gen_common import DEFAULT_SEARCH_CONFIG, _difficulty_instruction, _resolve_realize_temperature
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj, _extract_json_value
 from backend.question_library.gen_utils import ReasoningEventHandler
 from backend.question_library.subject_knowledge import get_subject_bank, infer_subject_family
+
+logger = get_logger(__name__)
+_realize_max_tokens_invalid_logged = False
 
 
 def _resolve_realize_max_tokens() -> int:
@@ -18,7 +22,14 @@ def _resolve_realize_max_tokens() -> int:
         try:
             return max(1, int(raw))
         except Exception:
-            pass
+            global _realize_max_tokens_invalid_logged
+            if not _realize_max_tokens_invalid_logged:
+                _realize_max_tokens_invalid_logged = True
+                logger.warning(
+                    "question_library_realize_max_tokens_invalid",
+                    extra={"value": raw},
+                    exc_info=True,
+                )
     try:
         base = int(LESSON_PLAN_MAX_TOKENS or 0)
     except Exception:

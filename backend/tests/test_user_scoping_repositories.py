@@ -5,9 +5,9 @@ from unittest.mock import patch
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.database.repositories import canvas as canvas_repo
-from backend.database.repositories import conversations as conversations_repo
-from backend.database.repositories import papers as papers_repo
+from backend.database.repositories.content import conversations as conversations_repo
+from backend.database.repositories.question import papers as papers_repo
+from backend.database.repositories.system import canvas as canvas_repo
 from backend.database.schema import Base
 
 

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.crawler.manager import get_crawler
-from backend.database.models import get_question_cache, list_question_library_items
+from backend.database.repositories.question.question_cache import get_question_cache
+from backend.database.repositories.question.question_library import list_question_library_items
 from backend.question_library.gen_common import _clip_unique
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -501,4 +502,3 @@ async def collect_reference_questions(
         "count": 0,
         "trace": {"cache_key": cache_key, "queries": queries, "crawler_errors": crawler_errors},
     }
-

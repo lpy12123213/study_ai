@@ -324,6 +324,15 @@ Authorization: Bearer <access_token>
 
 ---
 
+## 配图与生成媒体（TikZ/Asymptote）
+
+题库配图与教学示意图属于 best-effort 能力：主流程不会因为配图不可用而失败。
+
+- 默认后端：TikZ/PGF（编译为 `SVG`）
+- 受控回退：当 TikZ 不适用或不可用时，回退到 Asymptote（编译为 `SVG`）
+- 生成文件落盘到后端 `.local/media/generated/`，并通过 `/api/media/generated/{filename}` 提供访问
+- 运行环境缺少工具链时，可能出现（或被跳过）：`tikz_tools_missing` / `asy_tools_missing`
+
 ## 一键组卷（AI 生成整张试卷，SSE）
 
 **POST** `/api/papers/generate-full`

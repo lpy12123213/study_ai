@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosInstance } from 'axios'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useRequestLogStore } from '@/stores/useRequestLogStore'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import { ApiError, type ApiErrorAction } from '@/api/types'
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -314,9 +315,34 @@ apiClient.interceptors.response.use(
   async (error: unknown) => {
     const ax = error as AxiosError
     if (ax.response?.status === 401) {
-      // Unauthorized - clear auth state
-      useAuthStore.getState().logout()
-      window.location.href = '/login'
+      const token = useAuthStore.getState().token
+      const url = typeof (ax.config as any)?.url === 'string' ? String((ax.config as any).url) : ''
+      const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/register')
+
+      // Only treat 401 as "token expired" when we actually had a token and this isn't a login/register request.
+      // Otherwise login page can't show proper credential errors.
+      if (token && !isAuthRequest) {
+        try {
+          useNotificationStore.getState().pushToast({
+            id: 'auth-expired',
+            title: '登录已过期，请重新登录',
+            status: 'failed',
+          })
+        } catch {
+          // ignore
+        }
+
+        useAuthStore.getState().logout()
+        try {
+          window.dispatchEvent(
+            new CustomEvent('app:navigate', {
+              detail: { to: '/login', replace: true, state: { from: window.location.pathname } },
+            })
+          )
+        } catch {
+          window.location.href = '/login'
+        }
+      }
     }
     if (ax && typeof ax === 'object' && (ax as any).isAxiosError) {
       const apiError = axiosErrorToApiError(ax)

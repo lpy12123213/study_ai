@@ -1,5 +1,6 @@
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import katex from 'katex'
+import { AuthImage } from '@/components/shared/AuthImage'
 import { cn } from '@/lib/utils'
 
 function isProbablyVerticalText(value: string): boolean {
@@ -223,24 +224,41 @@ function repairBrokenTableBlocks(input: string): string {
   return rebuilt.join('\n\n')
 }
 
+function KatexRender(props: { latex: string; displayMode: boolean }) {
+  const { latex, displayMode } = props
+  const containerRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const src = String(latex || '').trim()
+    if (!src) {
+      el.textContent = ''
+      return
+    }
+
+    try {
+      // Avoid `dangerouslySetInnerHTML`: render via KaTeX DOM APIs and keep trust disabled.
+      el.textContent = ''
+      katex.render(src, el, {
+        displayMode,
+        throwOnError: false,
+        strict: 'ignore',
+        trust: false,
+      })
+    } catch {
+      el.textContent = displayMode ? `\\[${src}\\]` : `\\(${src}\\)`
+    }
+  }, [latex, displayMode])
+
+  return <span ref={containerRef} className={displayMode ? 'block my-2 overflow-x-auto' : 'inline'} />
+}
+
 function renderKatex(latex: string, displayMode: boolean): ReactNode {
   const src = String(latex || '').trim()
   if (!src) return null
-  try {
-    const html = katex.renderToString(src, {
-      displayMode,
-      throwOnError: false,
-      strict: 'ignore',
-    })
-    return (
-      <span
-        className={displayMode ? 'block my-2 overflow-x-auto' : 'inline'}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    )
-  } catch {
-    return displayMode ? `\\[${src}\\]` : `\\(${src}\\)`
-  }
+  return <KatexRender latex={src} displayMode={displayMode} />
 }
 
 export function QuestionContent(props: { content: string; className?: string }) {
@@ -277,10 +295,9 @@ export function QuestionContent(props: { content: string; className?: string }) 
           out.push(
             <div key={`img:${index}`} className="my-2">
               <a href={url} target="_blank" rel="noreferrer" className="inline-block">
-                <img
+                <AuthImage
                   src={url}
                   alt="题目图片"
-                  loading="lazy"
                   className="max-w-full max-h-[360px] object-contain rounded-md border bg-white"
                 />
               </a>

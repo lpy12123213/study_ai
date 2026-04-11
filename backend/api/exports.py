@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.database.models import get_generated_file as db_get_generated_file
-from backend.database.models import list_generated_files as db_list_generated_files
+from backend.database.repositories.system.generated_files import get_generated_file as db_get_generated_file
+from backend.database.repositories.system.generated_files import list_generated_files as db_list_generated_files
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 
 logger = get_logger(__name__)
@@ -35,7 +35,7 @@ def _is_safe_generated_filename(name: str) -> bool:
         return False
     if any(c not in "0123456789abcdef" for c in stem.lower()):
         return False
-    return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "md", "tex", "pdf", "zip"}
+    return ext.lower() in {"svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "md", "tex", "pdf", "zip", "docx"}
 
 
 def _is_expired(expires_at: str) -> bool:

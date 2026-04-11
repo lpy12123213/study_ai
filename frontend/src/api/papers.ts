@@ -1,4 +1,5 @@
-import { apiClient, fetchSSE } from './client'
+import { apiClient } from './client'
+import { streamTask, type TaskStreamEvent } from '@/api/tasks'
 import type { Paper, PaperAnalysis, PaperSummary, Question } from '@/types'
 
 export interface GetPapersParams {
@@ -81,21 +82,58 @@ export function generateFullPaperStream(
   onComplete?: () => void,
   options?: { signal?: AbortSignal }
 ): void {
-  fetchSSE(
-    '/papers/generate-full',
-    {
-      ...request,
-      totalPoints: request.totalPoints ?? (request as any).total_points,
-      timeLimit: request.timeLimit ?? (request as any).time_limit,
-      difficultyDistribution: request.difficultyDistribution ?? (request as any).difficulty_distribution,
-      streamReasoning: request.streamReasoning ?? (request as any).stream_reasoning,
-      useStudyArchive: request.useStudyArchive ?? (request as any).use_study_archive,
-    },
-    (data) => onEvent(data as GenerateFullPaperStreamEvent),
-    onError,
-    onComplete,
-    { signal: options?.signal }
-  )
+  const payload = {
+    ...request,
+    totalPoints: request.totalPoints ?? (request as any).total_points,
+    timeLimit: request.timeLimit ?? (request as any).time_limit,
+    difficultyDistribution: request.difficultyDistribution ?? (request as any).difficulty_distribution,
+    streamReasoning: request.streamReasoning ?? (request as any).stream_reasoning,
+    useStudyArchive: request.useStudyArchive ?? (request as any).use_study_archive,
+  }
+
+  apiClient
+    .post('/tasks/papers/generate-full', payload, { signal: options?.signal })
+    .then((res) => {
+      const taskId = String((res.data as any)?.taskId || request.taskId || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+
+      streamTask(
+        taskId,
+        0,
+        (evt: TaskStreamEvent) => {
+          if (evt.type === 'ping') return
+          const data = evt.data && typeof evt.data === 'object' ? (evt.data as Record<string, unknown>) : {}
+          const out: GenerateFullPaperStreamEvent = { taskId: evt.taskId, type: String(evt.type || '') }
+
+          if (evt.type === 'progress') {
+            out.progress = typeof (data as any).progress === 'number' ? (data as any).progress : Number((data as any).progress)
+          } else if (evt.type === 'step') {
+            out.step = (data as any).step
+          } else if (evt.type === 'result') {
+            out.result = (data as any).result
+          } else if (evt.type === 'error') {
+            out.error =
+              typeof (data as any).error === 'string'
+                ? (data as any).error
+                : typeof (data as any).message === 'string'
+                  ? (data as any).message
+                  : 'generate_full_failed'
+            out.message = out.error
+          } else {
+            out.data = data
+          }
+
+          onEvent(out)
+        },
+        onError,
+        onComplete,
+        { signal: options?.signal }
+      )
+    })
+    .catch((err: any) => {
+      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
 }
 
 function toPaperAnalysis(input: any): PaperAnalysis | undefined {

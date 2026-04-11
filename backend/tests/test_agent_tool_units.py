@@ -6,11 +6,17 @@ from unittest.mock import AsyncMock, patch
 
 from backend.agent.tools.analysis.content_review import ContentReviewToolsMixin
 from backend.agent.tools.analysis.source_synthesis import SourceSynthesisToolsMixin
+from backend.agent.tools.knowledge.study_material_generation import StudyMaterialGenerationToolsMixin
 from backend.agent.tools.search.web_search_knowledge import WebSearchKnowledgeToolsMixin
 from backend.agent.types import CompressedContext, UserProfile
 
 
-class _DummyAgent(ContentReviewToolsMixin, SourceSynthesisToolsMixin, WebSearchKnowledgeToolsMixin):
+class _DummyAgent(
+    ContentReviewToolsMixin,
+    SourceSynthesisToolsMixin,
+    StudyMaterialGenerationToolsMixin,
+    WebSearchKnowledgeToolsMixin,
+):
     def __init__(self) -> None:
         self.config = SimpleNamespace(
             reflector_model="reflector-test",
@@ -22,6 +28,9 @@ class _DummyAgent(ContentReviewToolsMixin, SourceSynthesisToolsMixin, WebSearchK
         return bool(args.get("strict_llm"))
 
     async def _call_llm_text(self, **_kwargs):  # pragma: no cover - fallback tests should not hit LLM
+        raise AssertionError("LLM should not be called in fallback unit tests")
+
+    async def _call_llm_markdown_with_continuation(self, **_kwargs):  # pragma: no cover - fallback tests should not hit LLM
         raise AssertionError("LLM should not be called in fallback unit tests")
 
     def _extract_json_obj(self, _text: str) -> dict:
@@ -119,7 +128,7 @@ class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
             "limit": 5,
         }
 
-        with patch("backend.agent.tools.search.web_search_knowledge.is_llm_configured", return_value=False):
+        with patch("backend.agent.tools.search.web_search_knowledge_impl.is_llm_configured", return_value=False):
             with patch("backend.mcp.search.metaso.metaso_ask", metaso_ask):
                 first = await agent._tool_web_search_knowledge(args, ctx)
                 second = await agent._tool_web_search_knowledge(args, ctx)
@@ -131,6 +140,45 @@ class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(first_item["results"]), 1)
         self.assertTrue(second_item["cache_hit"])
         self.assertEqual(metaso_ask.await_count, 1)
+
+
+class TestStudyMaterialGenerationMixin(unittest.IsolatedAsyncioTestCase):
+    async def test_generate_study_material_falls_back_to_synthesized_items(self) -> None:
+        agent = _DummyAgent()
+        ctx = _make_ctx()
+        ctx.working_memory.update(
+            {
+                "study_options": {"preset": "quick"},
+                "synthesize_sources": {
+                    "topic": "导数",
+                    "subject": "高中数学",
+                    "items": [{"knowledge_point": "导数"}],
+                },
+                "source_briefs": {
+                    "导数": {
+                        "definition": ["导数用于刻画函数在某一点的瞬时变化率。"],
+                        "core_ideas": ["导数与切线斜率、变化快慢有关。"],
+                        "key_properties": [],
+                        "conditions_and_boundaries": [],
+                        "common_misconceptions": [],
+                        "applications": ["可用于判断函数单调性。"],
+                        "derivation_or_proof_sketch": [],
+                        "notation_and_terms": [],
+                    }
+                },
+                "source_facts": {"导数": []},
+            }
+        )
+
+        with patch("backend.agent.tools.knowledge.study_material_generation.is_llm_configured", return_value=False):
+            result = await agent._tool_generate_study_material({}, ctx)
+
+        self.assertEqual(result["topic"], "导数")
+        self.assertEqual(len(result["sections"]), 1)
+        section = result["sections"][0]
+        self.assertEqual(section["knowledge_point"], "导数")
+        self.assertTrue(section["explanation_markdown"].strip())
+        self.assertIn("####", section["explanation_markdown"])
 
 
 if __name__ == "__main__":

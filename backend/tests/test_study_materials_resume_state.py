@@ -3,7 +3,7 @@ import unittest
 
 class TestStudyMaterialsResumeState(unittest.TestCase):
     def test_infer_stage_from_tool(self) -> None:
-        from backend.study_materials import task_manager as tm
+        from backend.study_materials import orchestrator as tm
 
         self.assertEqual(tm._infer_stage_from_tool("web_search_knowledge"), "search")
         self.assertEqual(tm._infer_stage_from_tool("browse_web_pages"), "search")
@@ -17,7 +17,7 @@ class TestStudyMaterialsResumeState(unittest.TestCase):
         self.assertEqual(tm._infer_stage_from_tool("unknown_tool"), "")
 
     def test_derive_resume_state_from_step_results(self) -> None:
-        from backend.study_materials import task_manager as tm
+        from backend.study_materials import orchestrator as tm
 
         wm = {
             "step_results": [
@@ -33,7 +33,7 @@ class TestStudyMaterialsResumeState(unittest.TestCase):
         self.assertEqual(state.get("last_failed_stage"), "aggregate")
 
     def test_prune_working_memory_for_continue(self) -> None:
-        from backend.study_materials import task_manager as tm
+        from backend.study_materials import orchestrator as tm
 
         wm = {
             "split_knowledge_points": {"knowledge_points": ["A"]},
@@ -50,4 +50,3 @@ class TestStudyMaterialsResumeState(unittest.TestCase):
         self.assertNotIn("web_search_knowledge", pruned)
         self.assertNotIn("aggregate_knowledge", pruned)
         self.assertNotIn("generate_study_material", pruned)
-

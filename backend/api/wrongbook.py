@@ -6,10 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.database.models import delete_wrong_question as db_delete_wrong_question
-from backend.database.models import list_wrong_questions as db_list_wrong_questions
-from backend.database.models import save_paper as db_save_paper
-from backend.database.models import upsert_wrong_question as db_upsert_wrong_question
+from backend.database.repositories.content.wrongbook import delete_wrong_question as db_delete_wrong_question
+from backend.database.repositories.content.wrongbook import list_wrong_questions as db_list_wrong_questions
+from backend.database.repositories.content.wrongbook import upsert_wrong_question as db_upsert_wrong_question
+from backend.database.repositories.question.papers import save_paper as db_save_paper
 
 router = APIRouter(prefix="/wrongbook", tags=["wrongbook"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -122,4 +122,3 @@ async def generate_practice_paper(payload: Dict[str, Any], user: dict = Depends(
         raise HTTPException(status_code=500, detail="practice_paper_create_failed")
 
     return {"success": True, "paper_id": paper_id}
-

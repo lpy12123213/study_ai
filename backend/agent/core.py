@@ -205,7 +205,11 @@ class AgentCore:
         results: ActionResults,
         concrete_step: PlanStep,
     ) -> AsyncIterator[Dict[str, Any]]:
-        async for evt in self._tool_dispatch.execute_concrete_step(ctx=ctx, results=results, concrete_step=concrete_step):
+        async for evt in self._tool_dispatch.execute_concrete_step(
+            ctx=ctx,
+            results=results,
+            concrete_step=concrete_step,
+        ):
             yield evt
 
     async def _ensure_planner_knowledge_points(
@@ -371,6 +375,7 @@ class AgentCore:
             self.state = AgentState.PLANNING
             yield agent_event("status", {"content": f"Plan 阶段：规划（第 {iteration + 1} 轮）…"})
 
+            degraded_reason = ""
             if iteration == 0 and (not export_only):
                 async for evt in self._ensure_planner_knowledge_points(
                     ctx=ctx,
@@ -386,13 +391,15 @@ class AgentCore:
                 yield agent_event("status", {"content": "Continue mode: fix_export (rerun export-only steps)."})
                 plan = self._build_export_only_plan(user_input=user_input, subject=subject, compile_err=compile_err)
             else:
-                plan = await self.planner.plan(
+                plan, degraded_reason = await self.planner.plan(
                     topic=user_input,
                     user_profile=profile,
                     context=ctx,
                     iteration=iteration,
                     tool_registry=self.executor.tool_registry,
                 )
+                if degraded_reason in {"timeout", "error"}:
+                    yield agent_event("degraded_plan", {"reason": degraded_reason})
 
             try:
                 self._set_plan_summary(ctx=ctx, topic=user_input, profile=profile, plan=plan, export_only=export_only)
@@ -466,7 +473,7 @@ class AgentCore:
                     + ("\n".join(f"- {x}" for x in (reflection.issues or [])[:6]) if reflection.issues else ""),
                 },
             )
-            self.context_manager.on_reflection(ctx, reflection)
+            await self.context_manager.on_reflection(ctx, reflection)
 
         out["iteration"] = iteration
         out["plan"] = plan
@@ -490,13 +497,31 @@ class AgentCore:
         results = ActionResults()
         reflection: Optional[ReflectionResult] = None
 
+        # Ensure knowledge points are available for batch_mode="per_knowledge_point".
+        async for evt in self._ensure_planner_knowledge_points(
+            ctx=ctx,
+            results=results,
+            user_input=user_input,
+            profile=profile,
+        ):
+            yield evt
+
         loop = ReActLoop(config=self.config, tool_registry=self.executor.tool_registry)
         async for evt in loop.run(
             ctx=ctx,
             results=results,
             topic=user_input,
             subject=subject,
-            execute_concrete_step=lambda step: self._execute_concrete_step(ctx=ctx, results=results, concrete_step=step),
+            execute_concrete_step=lambda step: self._execute_concrete_step(
+                ctx=ctx,
+                results=results,
+                concrete_step=step,
+            ),
+            execute_step_block=lambda steps: self._execute_step_block(
+                ctx=ctx,
+                results=results,
+                steps=steps,
+            ),
             max_iterations=max_tool_iterations,
             skip_export=skip_export,
         ):
@@ -516,11 +541,21 @@ class AgentCore:
                 summary="执行中断：已停止后续步骤并返回当前可用结果。",
             )
         else:
-            self.state = AgentState.REFLECTING
-            yield agent_event("status", {"content": "Reflect 阶段：自检与审查…"})
-            reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
-            if reflection.summary:
+            review = ctx.working_memory.get("review_content")
+            if isinstance(review, dict) and review.get("passed") is True:
+                reflection = ReflectionResult(
+                    passed=True,
+                    issues=[],
+                    suggestions=[],
+                    summary="review_content 已通过：跳过后置 reflector.reflect()（节省一次 LLM 调用）。",
+                )
                 yield agent_event("status", {"content": reflection.summary})
+            else:
+                self.state = AgentState.REFLECTING
+                yield agent_event("status", {"content": "Reflect 阶段：自检与审查…"})
+                reflection = await self.reflector.reflect(topic=user_input, plan=plan, results=results, context=ctx)
+                if reflection.summary:
+                    yield agent_event("status", {"content": reflection.summary})
 
         out["iteration"] = 0
         out["plan"] = plan
@@ -582,7 +617,9 @@ class AgentCore:
 
             if use_react:
                 try:
-                    tool_budget = int(max_iterations) if max_iterations is not None else int(self.config.react_max_iterations)
+                    tool_budget = (
+                        int(max_iterations) if max_iterations is not None else int(self.config.react_max_iterations)
+                    )
                 except Exception:
                     tool_budget = int(self.config.react_max_iterations or 20)
                 tool_budget = max(1, min(tool_budget, 50))
@@ -600,7 +637,11 @@ class AgentCore:
 
                 iteration = int(react_state.get("iteration") or 0)
                 plan = react_state.get("plan") if isinstance(react_state.get("plan"), ExecutionPlan) else plan
-                results = react_state.get("results") if isinstance(react_state.get("results"), ActionResults) else results
+                results = (
+                    react_state.get("results")
+                    if isinstance(react_state.get("results"), ActionResults)
+                    else results
+                )
                 reflection = (
                     react_state.get("reflection")
                     if isinstance(react_state.get("reflection"), ReflectionResult)
@@ -630,7 +671,11 @@ class AgentCore:
                     else reflection
                 )
 
-            resolved = agent_streaming.resolve_markdown_and_archive_path(ctx=ctx, user_input=user_input, results=results)
+            resolved = agent_streaming.resolve_markdown_and_archive_path(
+                ctx=ctx,
+                user_input=user_input,
+                results=results,
+            )
             archive_path = resolved["archive_path"]
             markdown = resolved["markdown"]
 
@@ -638,7 +683,10 @@ class AgentCore:
                 semantic_timeout_s = float(os.getenv("AGENT_SEMANTIC_UPSERT_TIMEOUT_S") or "3.0")
                 semantic_timeout_s = max(0.2, min(semantic_timeout_s, 30.0))
                 docs = agent_streaming.build_semantic_docs_for_run(ctx=ctx, user_input=user_input, markdown=markdown)
-                await asyncio.wait_for(self.semantic_store.upsert(user_id=user_id, docs=docs), timeout=semantic_timeout_s)
+                await asyncio.wait_for(
+                    self.semantic_store.upsert(user_id=user_id, docs=docs),
+                    timeout=semantic_timeout_s,
+                )
             except Exception:
                 logger.debug("semantic_store_upsert_failed", exc_info=True)
 

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.logging_utils import get_logger
-from backend.database.legacy_migrations import sync_migrate_db_schema
+from backend.database.migrations import sync_migrate_db_schema
 from backend.database.paths import resolve_db_path
 from backend.database.schema import Base
 
@@ -128,5 +128,5 @@ def pool_metrics() -> dict:
     try:
         out["status"] = pool.status()  # type: ignore[no-untyped-call]
     except Exception:
-        pass
+        logger.warning("db_pool_status_probe_failed", exc_info=True)
     return out

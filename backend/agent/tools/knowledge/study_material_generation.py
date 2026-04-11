@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Tuple
 from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.llm.client import is_llm_configured
-from backend.core.settings import MAIN_MODEL
+from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
 
 
 def _clip_text(text: str, limit: int) -> str:
@@ -407,13 +407,23 @@ class StudyMaterialGenerationToolsMixin:
         aggregated = ctx.working_memory.get("aggregate_knowledge") or ctx.working_memory.get("aggregated") or {}
         if not isinstance(aggregated, dict):
             aggregated = {}
+        synthesized = ctx.working_memory.get("synthesize_sources") or {}
+        if not isinstance(synthesized, dict):
+            synthesized = {}
 
-        topic = str(args.get("topic") or aggregated.get("topic") or ctx.current_task).strip()
+        topic = str(args.get("topic") or aggregated.get("topic") or synthesized.get("topic") or ctx.current_task).strip()
         subject = str(
-            args.get("subject") or aggregated.get("subject") or ctx.user_profile.preferences.get("subject") or ""
+            args.get("subject")
+            or aggregated.get("subject")
+            or synthesized.get("subject")
+            or ctx.user_profile.preferences.get("subject")
+            or ""
         ).strip()
         items_in = aggregated.get("items") if isinstance(aggregated.get("items"), list) else []
         items_in = [x for x in items_in if isinstance(x, dict)]
+        if not items_in:
+            items_in = synthesized.get("items") if isinstance(synthesized.get("items"), list) else []
+            items_in = [x for x in items_in if isinstance(x, dict)]
 
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
@@ -447,7 +457,7 @@ class StudyMaterialGenerationToolsMixin:
             raise RuntimeError("llm_not_configured")
 
         writer_model = str(
-            os.getenv("STUDY_MATERIALS_WRITER_MODEL")
+            STUDY_MATERIALS_WRITER_MODEL
             or getattr(getattr(self, "config", None), "planner_model", "")
             or getattr(getattr(self, "config", None), "summarizer_model", "")
         ).strip()
@@ -473,6 +483,10 @@ class StudyMaterialGenerationToolsMixin:
         source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
         source_facts = ctx.working_memory.get("source_facts")
         source_facts = dict(source_facts) if isinstance(source_facts, dict) else {}
+        if not items_in:
+            items_from_briefs = [{"knowledge_point": kp} for kp in source_briefs.keys() if str(kp or "").strip()]
+            items_from_facts = [{"knowledge_point": kp} for kp in source_facts.keys() if str(kp or "").strip()]
+            items_in = items_from_briefs or items_from_facts
         outlines = ctx.working_memory.get("outlines")
         outlines = dict(outlines) if isinstance(outlines, dict) else {}
         knowledge_types = ctx.working_memory.get("knowledge_types")

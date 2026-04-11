@@ -14,10 +14,10 @@ from backend.core.cache import cache_registry_stats
 from backend.core.metrics import generate_metrics, metrics_enabled
 from backend.core.settings import settings
 from backend.database.engine import engine, pool_metrics
-from backend.database.models import add_search_history as db_add_search_history
-from backend.database.models import get_user_settings as db_get_user_settings
-from backend.database.models import upsert_user_settings as db_upsert_user_settings
-from backend.database.repositories.search import search_fulltext as db_search_fulltext
+from backend.database.repositories.system.search_history import add_search_history as db_add_search_history
+from backend.database.repositories.system.user_settings import get_user_settings as db_get_user_settings
+from backend.database.repositories.system.user_settings import upsert_user_settings as db_upsert_user_settings
+from backend.database.repositories.system.search import search_fulltext as db_search_fulltext
 
 router = APIRouter()
 

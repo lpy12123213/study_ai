@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from backend.llm.client import chat_completion_text
-from backend.database.repositories.question_library import set_hidden, upsert_question_library_items
+from backend.database.repositories.question.question_library import set_hidden, upsert_question_library_items
 
 
 def _to_json_str(value: Any) -> str:

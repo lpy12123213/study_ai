@@ -250,7 +250,15 @@ async def get_subject_knowledge_tree(
             grade_name = _lookup_name(grades if isinstance(grades, list) else [], grade_id)
             textbook_name = _lookup_name(textbook_versions if isinstance(textbook_versions, list) else [], textbook_version_id)
     except Exception:
-        pass
+        logger.warning(
+            "subjects_knowledge_tree_fetch_failed; using_fallback",
+            extra={
+                "subject": subject,
+                "grade_id": str(grade_id or "").strip(),
+                "textbook_version_id": str(textbook_version_id or "").strip(),
+            },
+            exc_info=True,
+        )
 
     nodes = crawler_nodes if crawler_nodes else _fallback_tree(subject, grade_name, textbook_name)
 

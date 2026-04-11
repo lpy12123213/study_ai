@@ -191,7 +191,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             result = await server.crawler.get_question_info(question_id=arguments["question_id"])
 
         elif name == "create_paper":
-            from backend.database.models import save_paper
+            from backend.database.repositories.question.papers import save_paper
 
             paper_id = await save_paper(
                 user_id="1",
@@ -338,7 +338,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
 
             paper_meta = None
             if paper_id is not None:
-                from backend.database.models import get_paper
+                from backend.database.repositories.question.papers import get_paper
 
                 paper = await get_paper(user_id="1", paper_id=int(paper_id))
                 if not paper:

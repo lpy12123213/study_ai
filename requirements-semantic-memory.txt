@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Optional ChromaDB-backed semantic memory.
+chromadb>=0.5.0,<1

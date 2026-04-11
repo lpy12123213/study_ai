@@ -14,7 +14,7 @@ from backend.api.auth import require_auth
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.crawler.manager import get_crawler
-from backend.database.models import (
+from backend.database.repositories.system.canvas import (
     create_canvas_board,
     create_canvas_board_version,
     get_canvas_board,

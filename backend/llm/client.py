@@ -21,6 +21,9 @@ from backend.core.logging_utils import get_logger
 from backend.core.record_replay import RecordReplayStore, record_enabled, replay_enabled
 from backend.core.settings import (
     API_TIMEOUT,
+    CHAT_API_KEY,
+    CHAT_BASE_URL,
+    CHAT_PROVIDER,
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_BASE_URL,
     LESSON_PLAN_PROVIDER,
@@ -29,8 +32,11 @@ from backend.core.settings import (
     LLM_PROVIDER_PINNED,
     MOONSHOT_API_KEY,
     MOONSHOT_BASE_URL,
+    REVIEW_HTTP_REFERER,
+    REVIEW_X_TITLE,
 )
 from backend.llm.providers import resolve_provider
+from backend.shared.project_paths import resolve_repo_local_dir
 
 # Per-request LLM key overrides (e.g. provided by the frontend settings page).
 # IMPORTANT: these values must never be persisted (tasks snapshots/events), only kept in-memory.
@@ -46,6 +52,7 @@ _circuit_state: Dict[str, Dict[str, Any]] = {}
 # Optional: more accurate token counting (install `tiktoken` to enable).
 _tiktoken_lock = threading.Lock()
 _tiktoken_encoder = None
+_tiktoken_encode_failed_logged = False
 
 
 def _get_tiktoken_encoder():
@@ -137,7 +144,33 @@ def get_moonshot_api_key_override() -> str:
     return str(_moonshot_api_key_override_var.get() or "").strip()
 
 
-def is_llm_configured() -> bool:
+def is_llm_configured(*, scope: str = "lesson_plan") -> bool:
+    """Whether the OpenAI-compatible LLM client is configured (best-effort).
+
+    Scope is intentionally lightweight:
+    - lesson_plan (default): match historical behavior (used by most agent paths)
+    - chat: use CHAT_* config (used by the chat loop + sub-AI selector)
+    - any: accept either config
+    """
+
+    scope_in = str(scope or "").strip().lower()
+    if scope_in in {"chat", "main"}:
+        return bool(
+            get_llm_api_key_override()
+            or get_moonshot_api_key_override()
+            or str(CHAT_API_KEY or "").strip()
+            or str(MOONSHOT_API_KEY or "").strip()
+        )
+
+    if scope_in in {"any", "all", "*"}:
+        return bool(
+            get_llm_api_key_override()
+            or get_moonshot_api_key_override()
+            or str(CHAT_API_KEY or "").strip()
+            or str(LESSON_PLAN_API_KEY or "").strip()
+            or str(MOONSHOT_API_KEY or "").strip()
+        )
+
     return bool(
         get_llm_api_key_override()
         or get_moonshot_api_key_override()
@@ -249,7 +282,10 @@ def _estimate_text_tokens(text: str) -> int:
             try:
                 return int(len(enc.encode(t)))
             except Exception:
-                pass
+                global _tiktoken_encode_failed_logged
+                if not _tiktoken_encode_failed_logged:
+                    _tiktoken_encode_failed_logged = True
+                    logger.warning("tiktoken_encode_failed_fallback", exc_info=True)
     cjk = 0
     for ch in t:
         o = ord(ch)
@@ -370,9 +406,7 @@ def _parse_context_len_error(msg: str) -> Tuple[int, int, int]:
 
 _OPENROUTER_MODEL_LIMITS_CACHE: Dict[Tuple[str, str], Tuple[float, int, int]] = {}
 _OPENROUTER_MODEL_LIMITS_CACHE_LOCK = threading.Lock()
-_OPENROUTER_CACHE_FILE: Path = (
-    Path(__file__).resolve().parents[3] / ".local" / "cache" / "openrouter_model_limits.json"
-)
+_OPENROUTER_CACHE_FILE: Path = (resolve_repo_local_dir() / "cache" / "openrouter_model_limits.json").resolve()
 
 
 def _load_openrouter_model_limits_cache_from_disk() -> None:
@@ -591,12 +625,14 @@ async def chat_completion(
     tool_choice: Optional[Any] = None,
     stream: bool = False,
     on_reasoning_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+    on_content_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     reasoning_emit_chars: int = 240,
     reasoning_emit_interval_s: float = 0.25,
     raise_on_fail: bool = False,
     retries: int = 3,
     timeout_s: Optional[float] = None,
     req_id_prefix: str = "llm",
+    scope: str = "lesson_plan",
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -610,12 +646,22 @@ async def chat_completion(
     - Returns accumulated content + finish_reason + usage.
     """
 
-    provider_in = str(provider or LESSON_PLAN_PROVIDER or "").strip().lower() or "openrouter"
-    base_url_in = str(base_url or LESSON_PLAN_BASE_URL or "").strip().rstrip("/")
+    scope_in = str(scope or "").strip().lower()
+    if scope_in in {"chat", "main"}:
+        default_provider = CHAT_PROVIDER
+        default_base_url = CHAT_BASE_URL
+        default_api_key = CHAT_API_KEY
+    else:
+        default_provider = LESSON_PLAN_PROVIDER
+        default_base_url = LESSON_PLAN_BASE_URL
+        default_api_key = LESSON_PLAN_API_KEY
+
+    provider_in = str(provider or default_provider or "").strip().lower() or "openrouter"
+    base_url_in = str(base_url or default_base_url or "").strip().rstrip("/")
 
     api_key_in = str(api_key or "").strip() or str(_llm_api_key_override_var.get() or "").strip()
     if not api_key_in:
-        api_key_in = str(LESSON_PLAN_API_KEY or "").strip()
+        api_key_in = str(default_api_key or "").strip()
 
     moonshot_key_in = str(moonshot_key or "").strip() or str(_moonshot_api_key_override_var.get() or "").strip()
     if not moonshot_key_in:
@@ -692,6 +738,11 @@ async def chat_completion(
         return ChatCompletionResult()
 
     headers = {"Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
+    if resolved_provider == "openrouter":
+        if str(REVIEW_HTTP_REFERER or "").strip():
+            headers["HTTP-Referer"] = str(REVIEW_HTTP_REFERER or "").strip()
+        if str(REVIEW_X_TITLE or "").strip():
+            headers["X-Title"] = str(REVIEW_X_TITLE or "").strip()
 
     requested_max_tokens = int(max_tokens)
     # max_tokens <= 0 means "unlimited" – omit the field from the payload so
@@ -739,12 +790,12 @@ async def chat_completion(
     if stream and resolved_provider in {"openrouter", "moonshot"}:
         payload["stream"] = True
 
-    if reasoning and is_openrouter:
+    if isinstance(reasoning, dict) and reasoning:
         # OpenRouter's "reasoning" feature can cause some models (notably DeepSeek)
         # to emit the entire completion as reasoning with an empty `message.content`.
         # When we are not streaming, this client only reads `message.content`, so keep
         # reasoning disabled to avoid returning an empty string to downstream JSON parsers.
-        if (not stream) and str(resolved_model or "").strip().lower().startswith("deepseek/"):
+        if is_openrouter and (not stream) and str(resolved_model or "").strip().lower().startswith("deepseek/"):
             pass
         else:
             payload["reasoning"] = dict(reasoning)
@@ -880,6 +931,15 @@ async def chat_completion(
                             if isinstance(c_chunk, str) and c_chunk:
                                 content_parts.append(c_chunk)
                                 llm_console.log_delta(req_id=req_id, channel="content", text=c_chunk)
+                                if on_content_delta is not None:
+                                    try:
+                                        await on_content_delta(c_chunk)
+                                    except Exception:
+                                        logger.debug(
+                                            "llm_on_content_delta_failed",
+                                            extra={"provider": resolved_provider, "model": resolved_model},
+                                            exc_info=True,
+                                        )
 
                             fr_chunk = choice0.get("finish_reason")
                             if isinstance(fr_chunk, str) and fr_chunk:
@@ -1108,12 +1168,14 @@ async def chat_completion_text(
     reasoning: Optional[Dict[str, Any]] = None,
     stream: bool = False,
     on_reasoning_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+    on_content_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     reasoning_emit_chars: int = 240,
     reasoning_emit_interval_s: float = 0.25,
     raise_on_fail: bool = False,
     retries: int = 3,
     timeout_s: Optional[float] = None,
     req_id_prefix: str = "llm",
+    scope: str = "lesson_plan",
 ) -> str:
     res = await chat_completion(
         messages=messages,
@@ -1124,11 +1186,13 @@ async def chat_completion_text(
         reasoning=reasoning,
         stream=stream,
         on_reasoning_delta=on_reasoning_delta,
+        on_content_delta=on_content_delta,
         reasoning_emit_chars=reasoning_emit_chars,
         reasoning_emit_interval_s=reasoning_emit_interval_s,
         raise_on_fail=raise_on_fail,
         retries=retries,
         timeout_s=timeout_s,
         req_id_prefix=req_id_prefix,
+        scope=scope,
     )
     return str(res.content or "")

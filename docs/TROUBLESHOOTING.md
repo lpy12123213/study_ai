@@ -16,6 +16,9 @@ If that fails, rerun setup:
 - Windows: `start.bat setup`
 - Linux / macOS: `./start.sh setup`
 
+If `pip` fails while building `chroma-hnswlib`, keep `requirements.txt` as the base install and skip the optional
+`requirements-semantic-memory.txt` extra unless you specifically need ChromaDB-backed semantic memory.
+
 ## Frontend will not start
 
 Reinstall frontend packages:
@@ -82,6 +85,27 @@ If you still see slowdowns, reduce those values further.
 ## Doctor fails on Ruff
 
 The doctor command intentionally runs Ruff on maintained backend paths, not every historical backend module. If Ruff fails, fix the reported maintained-path issue first before widening the scope.
+
+## Diagrams (TikZ/Asymptote) do not render
+
+Static vector diagram backends require external executables:
+
+- TikZ/PGF: `xelatex` + `dvisvgm`
+- Asymptote: `asy`
+
+Common error codes / messages you might see in tool results:
+
+- `tikz_tools_missing`
+- `asy_tools_missing`
+- `latex_engine_not_found`
+- `dvisvgm_not_found`
+- `asy_not_found`
+
+What to check:
+
+- Ensure the executables above are on `PATH`.
+- On Windows with MiKTeX: finish the MiKTeX first-run setup (MiKTeX Console) and ensure package installation is allowed.
+- If the toolchain is unavailable, diagram generation is best-effort and may be skipped without aborting the main pipeline.
 
 ## Large request rejected
 

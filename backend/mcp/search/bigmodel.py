@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-import time
-import uuid
 from typing import Any, Dict, Optional
 
-import httpx
-
-from backend.llm import console as llm_console
+from backend.llm.client import chat_completion
 from backend.core.settings import (
     ZHIPU_API_KEY,
     ZHIPU_BASE_URL,
@@ -40,122 +36,71 @@ async def bigmodel_web_search(
             "results": [],
         }
 
-    req_id = f"zhipu-search-{uuid.uuid4().hex[:8]}"
-    start_ts = llm_console.log_start(
-        req_id=req_id,
-        provider="zhipu",
-        model=str(ZHIPU_MODEL or ""),
-        stream=False,
-        temperature=None,
-        max_tokens=None,
-        base_url=str(ZHIPU_BASE_URL or ""),
-    )
-    finish_reason = ""
-    usage: Dict[str, Any] = {}
-    content_chars = 0
-    err = ""
-
-    headers = {
-        "Authorization": f"Bearer {ZHIPU_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
     # Use the chat completions endpoint with web search tool
-    payload = {
-        "model": ZHIPU_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": f"Search the web for: {query}. Provide the top {max_results} results with titles, URLs, and brief descriptions.",
-            }
-        ],
-        "tools": [
-            {
-                "type": "web_search",
-                "web_search": {
-                    "enable": True,
-                    "search_query": query,
-                },
-            }
-        ],
-        "tool_choice": "auto",
-    }
+    tools = [
+        {
+            "type": "web_search",
+            "web_search": {
+                "enable": True,
+                "search_query": query,
+            },
+        }
+    ]
 
     try:
-        async with httpx.AsyncClient(timeout=ZHIPU_TIMEOUT) as client:
-            response = await client.post(
-                f"{ZHIPU_BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            try:
-                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
-                finish_reason = str(choice0.get("finish_reason") or "")
-            except Exception:
-                finish_reason = ""
-            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                usage = dict(data.get("usage") or {})
+        res = await chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Search the web for: {query}. Provide the top {max_results} results with titles, URLs, and brief descriptions. Search type: {search_type}.",
+                }
+            ],
+            model=str(ZHIPU_MODEL or "").strip(),
+            temperature=0.2,
+            max_tokens=1600,
+            tools=tools,
+            tool_choice="auto",
+            stream=False,
+            raise_on_fail=False,
+            retries=2,
+            timeout_s=float(ZHIPU_TIMEOUT),
+            req_id_prefix="zhipu-search",
+            provider="zhipu",
+            base_url=str(ZHIPU_BASE_URL or "").strip(),
+            api_key=str(ZHIPU_API_KEY or "").strip(),
+        )
 
-            # Extract the response content
-            choices = data.get("choices", [])
-            if not choices:
-                err = "empty_choices"
-                return {"error": "No response from API", "results": []}
+        web_results = []
+        for tool_call in res.tool_calls or []:
+            if not isinstance(tool_call, dict):
+                continue
+            if tool_call.get("type") != "web_search":
+                continue
+            search_results = tool_call.get("web_search", {}).get("results", [])
+            for result in search_results or []:
+                if not isinstance(result, dict):
+                    continue
+                web_results.append(
+                    {
+                        "title": result.get("title", ""),
+                        "url": result.get("link", ""),
+                        "snippet": result.get("content", ""),
+                    }
+                )
 
-            message = choices[0].get("message", {})
-            content = message.get("content", "")
-            if isinstance(content, str) and content:
-                content_chars = len(content)
-                llm_console.log_delta(req_id=req_id, channel="content", text=content)
+        content = str(res.content or "").strip()
+        if not web_results and not content:
+            return {"error": "No response from API", "results": []}
 
-            # Extract web search results from tool calls if present
-            tool_calls = message.get("tool_calls", [])
-            web_results = []
-
-            for tool_call in tool_calls:
-                if tool_call.get("type") == "web_search":
-                    search_results = tool_call.get("web_search", {}).get("results", [])
-                    for result in search_results:
-                        web_results.append(
-                            {
-                                "title": result.get("title", ""),
-                                "url": result.get("link", ""),
-                                "snippet": result.get("content", ""),
-                            }
-                        )
-
-            return {
-                "results": web_results[:max_results],
-                "summary": content,
-            }
-    except httpx.HTTPStatusError as e:
-        err = f"http_status_{e.response.status_code}" if e.response is not None else "http_status_error"
         return {
-            "error": f"Zhipu API error: {e.response.status_code}",
-            "results": [],
+            "results": web_results[:max_results],
+            "summary": content,
         }
     except Exception as e:
-        err = str(e)
         return {
             "error": f"Web search failed: {str(e)}",
             "results": [],
         }
-    finally:
-        elapsed_s = 0.0
-        try:
-            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-        except Exception:
-            elapsed_s = 0.0
-        llm_console.log_end(
-            req_id=req_id,
-            elapsed_s=elapsed_s,
-            finish_reason=finish_reason,
-            usage=usage,
-            content_chars=content_chars,
-            error=err,
-        )
 
 
 async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
@@ -171,80 +116,32 @@ async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
     if not ZHIPU_API_KEY:
         return {"error": "Zhipu API key not configured"}
 
-    req_id = f"zhipu-sum-{uuid.uuid4().hex[:8]}"
-    start_ts = llm_console.log_start(
-        req_id=req_id,
-        provider="zhipu",
-        model=str(ZHIPU_MODEL or ""),
-        stream=False,
-        temperature=None,
-        max_tokens=None,
-        base_url=str(ZHIPU_BASE_URL or ""),
-    )
-    finish_reason = ""
-    usage: Dict[str, Any] = {}
-    content_chars = 0
-    err = ""
-
-    headers = {
-        "Authorization": f"Bearer {ZHIPU_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": ZHIPU_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": f"Please read and summarize the content from this URL: {url}. Provide a concise summary of the main points.",
-            }
-        ],
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=ZHIPU_TIMEOUT) as client:
-            response = await client.post(
-                f"{ZHIPU_BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            try:
-                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
-                finish_reason = str(choice0.get("finish_reason") or "")
-            except Exception:
-                finish_reason = ""
-            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                usage = dict(data.get("usage") or {})
-
-            choices = data.get("choices", [])
-            if not choices:
-                err = "empty_choices"
-                return {"error": "No response from API"}
-
-            content = choices[0].get("message", {}).get("content", "")
-            if isinstance(content, str) and content:
-                content_chars = len(content)
-                llm_console.log_delta(req_id=req_id, channel="content", text=content)
-            return {"summary": content}
-    except Exception as e:
-        err = str(e)
-        return {"error": f"Summarization failed: {str(e)}"}
-    finally:
-        elapsed_s = 0.0
-        try:
-            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-        except Exception:
-            elapsed_s = 0.0
-        llm_console.log_end(
-            req_id=req_id,
-            elapsed_s=elapsed_s,
-            finish_reason=finish_reason,
-            usage=usage,
-            content_chars=content_chars,
-            error=err,
+        res = await chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Please read and summarize the content from this URL: {url}. Provide a concise summary of the main points.",
+                }
+            ],
+            model=str(ZHIPU_MODEL or "").strip(),
+            temperature=0.2,
+            max_tokens=1600,
+            stream=False,
+            raise_on_fail=False,
+            retries=2,
+            timeout_s=float(ZHIPU_TIMEOUT),
+            req_id_prefix="zhipu-sum",
+            provider="zhipu",
+            base_url=str(ZHIPU_BASE_URL or "").strip(),
+            api_key=str(ZHIPU_API_KEY or "").strip(),
         )
+        content = str(res.content or "").strip()
+        if not content:
+            return {"error": "No response from API"}
+        return {"summary": content}
+    except Exception as e:
+        return {"error": f"Summarization failed: {str(e)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -348,120 +245,43 @@ async def web_search_with_bigmodel_mcp(
 }}
 """
 
-    request_body = {
-        "model": model_name,
-        "stream": False,
-        "do_sample": False,
-        "temperature": 0.2,
-        "top_p": 0.95,
-        "response_format": {"type": "text"},
-        "messages": [{"role": "user", "content": prompt}],
-        "tools": [
-            {
-                "type": "mcp",
-                "mcp": {
-                    "transport_type": "sse",
-                    "server_label": "web-search",
-                    "server_url": BIGMODEL_WEB_SEARCH_SSE_URL,
-                    "headers": {"Authorization": f"Bearer {api_key}"},
-                },
-            }
-        ],
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    url = f"{base_url}/chat/completions"
-
-    req_id = f"zhipu-mcp-{uuid.uuid4().hex[:8]}"
-    start_ts = llm_console.log_start(
-        req_id=req_id,
-        provider="zhipu",
-        model=str(model_name or ""),
-        stream=False,
-        temperature=float(request_body.get("temperature") or 0.0),
-        max_tokens=None,
-        base_url=base_url,
-    )
-    finish_reason = ""
-    usage: Dict[str, Any] = {}
-    content_chars = 0
-    err = ""
-
-    payload: Dict[str, Any] = {}
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json=request_body)
-            response.raise_for_status()
-            raw = response.json()
-            payload = raw if isinstance(raw, dict) else {}
-    except httpx.HTTPStatusError as exc:
-        err = f"http_status_{exc.response.status_code}" if exc.response is not None else "http_status_error"
-        detail = ""
-        try:
-            detail = exc.response.text
-        except Exception:
-            detail = str(exc)
-        elapsed_s = 0.0
-        try:
-            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-        except Exception:
-            elapsed_s = 0.0
-        llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s, error=err)
-        return {
-            "success": False,
-            "error": f"BigModel API 请求失败: {exc.response.status_code}",
-            "detail": detail[:2000],
-            "provider": "zhipu-bigmodel-mcp-web-search",
+    tools = [
+        {
+            "type": "mcp",
+            "mcp": {
+                "transport_type": "sse",
+                "server_label": "web-search",
+                "server_url": BIGMODEL_WEB_SEARCH_SSE_URL,
+                "headers": {"Authorization": f"Bearer {api_key}"},
+            },
         }
+    ]
+
+    try:
+        res = await chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            model=model_name,
+            temperature=0.2,
+            max_tokens=1600,
+            response_format={"type": "text"},
+            tools=tools,
+            stream=False,
+            raise_on_fail=False,
+            retries=2,
+            timeout_s=float(timeout_seconds),
+            req_id_prefix="zhipu-mcp",
+            provider="zhipu",
+            base_url=base_url,
+            api_key=api_key,
+        )
     except Exception as exc:
-        err = str(exc)
-        elapsed_s = 0.0
-        try:
-            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-        except Exception:
-            elapsed_s = 0.0
-        llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s, error=err)
         return {
             "success": False,
             "error": f"BigModel API 调用异常: {exc}",
             "provider": "zhipu-bigmodel-mcp-web-search",
         }
 
-    content = ""
-    try:
-        content = payload["choices"][0]["message"]["content"] or ""
-    except Exception:
-        content = json.dumps(payload, ensure_ascii=False)
-
-    if isinstance(content, str) and content:
-        content_chars = len(content)
-        llm_console.log_delta(req_id=req_id, channel="content", text=content)
-
-    try:
-        choice0 = payload.get("choices", [{}])[0] if isinstance(payload, dict) else {}
-        finish_reason = str(choice0.get("finish_reason") or "")
-    except Exception:
-        finish_reason = ""
-    if isinstance(payload, dict) and isinstance(payload.get("usage"), dict):
-        usage = dict(payload.get("usage") or {})
-
-    elapsed_s = 0.0
-    try:
-        elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-    except Exception:
-        elapsed_s = 0.0
-    llm_console.log_end(
-        req_id=req_id,
-        elapsed_s=elapsed_s,
-        finish_reason=finish_reason,
-        usage=usage,
-        content_chars=content_chars,
-        error=err,
-    )
+    content = str(res.content or "").strip() or json.dumps({"tool_calls": res.tool_calls}, ensure_ascii=False)
 
     parsed = _extract_json(content)
     results: Any = []

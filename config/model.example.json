@@ -24,7 +24,7 @@
     "main_temperature": 0.7,
     "main_max_tokens": 2000,
     "sub_temperature": 0.3,
-    "sub_max_tokens": 1000
+    "sub_max_tokens": 1000,
+    "thinking_effort": "high"
   }
 }
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from enum import Enum
@@ -114,6 +115,7 @@ class CompressedContext:
     compressed_history: List[Dict[str, Any]] = field(default_factory=list)
     recent_messages: List[Dict[str, Any]] = field(default_factory=list)
     working_memory: Dict[str, Any] = field(default_factory=dict)
+    working_memory_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
 
     def to_json(self) -> str:
         return json.dumps(

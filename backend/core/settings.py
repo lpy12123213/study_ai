@@ -88,6 +88,18 @@ def _get_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
+def _normalize_reasoning_effort(value: str, *, default: str = "xhigh") -> str:
+    v = str(value or "").strip().lower().replace("-", "").replace("_", "")
+    if not v:
+        v = default
+    if v in {"max", "maximum", "highest"}:
+        v = "xhigh"
+    allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
+    if v not in allowed:
+        v = default
+    return v
+
+
 @dataclass(frozen=True)
 class Settings:
     # Model config (local-only json)
@@ -131,13 +143,18 @@ class Settings:
     lesson_plan_api_key: SecretString
     lesson_plan_base_url: str
     lesson_plan_model: str
-    lesson_plan_v2_subagent_concurrency: int
+    lesson_plan_subagent_concurrency: int
 
     # Model params
     main_model_temperature: float
     main_model_max_tokens: int
     sub_model_temperature: float
     sub_model_max_tokens: int
+
+    # Study-materials reasoning defaults (Chat Completions `reasoning.effort`)
+    study_materials_thinking_effort: str
+    study_materials_thinking_model: str
+    study_materials_writer_model: str
 
     # Optional overrides for lesson-plan style generation (fallback to MAIN_MODEL_* if unset)
     lesson_plan_temperature: float
@@ -197,7 +214,7 @@ class Settings:
 
         openrouter_api_key = _get_str("OPENROUTER_API_KEY", "")
         base_url = _get_str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
-        moonshot_api_key = _get_str("MOONSHOT_API_KEY", _get_str("MOONSHOT_API", ""))
+        moonshot_api_key = _get_str("MOONSHOT_API_KEY", "")
         moonshot_base_url = _get_str("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/")
         fireworks_api_key = _get_str("FIREWORKS_API_KEY", "")
         fireworks_base_url = _get_str("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1").rstrip("/")
@@ -222,8 +239,7 @@ class Settings:
                 if cfg["fireworks"].base_url:
                     fireworks_base_url = cfg["fireworks"].base_url
 
-        # Metaso API key: prefer METASO_API_KEY; keep legacy alias METASO_API for compatibility.
-        metaso_api_key = _get_str("METASO_API_KEY", _get_str("METASO_API", ""))
+        metaso_api_key = _get_str("METASO_API_KEY", "")
         metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
         zhipu_api_key = _get_str("ZHIPU_API_KEY", "")
 
@@ -299,7 +315,7 @@ class Settings:
             picked = _pick_provider_scoped(model_json.models.get("lesson_plan"), provider_for_models)
             if picked:
                 lesson_plan_model = picked
-        lesson_plan_concurrency = _get_int("LESSON_PLAN_V2_SUBAGENT_CONCURRENCY", 3)
+        lesson_plan_concurrency = _get_int("LESSON_PLAN_SUBAGENT_CONCURRENCY", 3)
 
         main_model = _get_str("MAIN_MODEL", "openai/gpt-5-mini")
         sub_model = _get_str("SUB_MODEL", "openai/gpt-4o-mini")
@@ -310,6 +326,20 @@ class Settings:
             picked_sub = _pick_provider_scoped(model_json.models.get("sub"), provider_for_models)
             if picked_sub:
                 sub_model = picked_sub
+        study_materials_thinking_model_default = str(sub_model or lesson_plan_model or main_model).strip()
+        study_materials_writer_model_default = str(main_model or lesson_plan_model or sub_model).strip()
+        if llm_provider_pinned and model_json:
+            study_materials_thinking_model = study_materials_thinking_model_default
+            study_materials_writer_model = study_materials_writer_model_default
+        else:
+            study_materials_thinking_model = _get_str(
+                "STUDY_MATERIALS_THINKING_MODEL",
+                study_materials_thinking_model_default,
+            )
+            study_materials_writer_model = _get_str(
+                "STUDY_MATERIALS_WRITER_MODEL",
+                study_materials_writer_model_default,
+            )
         deepthink_generator_model = _get_str("DEEPTHINK_GENERATOR_MODEL", main_model)
         deepthink_evaluator_model = _get_str("DEEPTHINK_EVALUATOR_MODEL", "")
 
@@ -329,6 +359,11 @@ class Settings:
         main_model_max_tokens = _get_int("MAIN_MODEL_MAX_TOKENS", 2000)
         sub_model_temperature = _get_float("SUB_MODEL_TEMPERATURE", 0.3)
         sub_model_max_tokens = _get_int("SUB_MODEL_MAX_TOKENS", 1000)
+
+        thinking_effort_env = str(
+            os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT") or ""
+        ).strip()
+        thinking_effort = thinking_effort_env or "xhigh"
         if model_json:
             p = model_json.params or {}
             if isinstance(p.get("main_temperature"), (int, float)):
@@ -339,6 +374,13 @@ class Settings:
                 sub_model_temperature = float(p.get("sub_temperature"))  # type: ignore[arg-type]
             if isinstance(p.get("sub_max_tokens"), (int, float)):
                 sub_model_max_tokens = int(p.get("sub_max_tokens"))  # type: ignore[arg-type]
+            # Apply model.json defaults only when env vars are not set.
+            if not thinking_effort_env:
+                p_effort = p.get("thinking_effort")
+                if not isinstance(p_effort, str) or not p_effort.strip():
+                    p_effort = p.get("reasoning_effort")
+                if isinstance(p_effort, str) and p_effort.strip():
+                    thinking_effort = p_effort
 
         return cls(
             model_config_path=model_config_path,
@@ -370,11 +412,14 @@ class Settings:
             lesson_plan_api_key=SecretString(lesson_plan_api_key),
             lesson_plan_base_url=lesson_plan_base_url,
             lesson_plan_model=lesson_plan_model,
-            lesson_plan_v2_subagent_concurrency=lesson_plan_concurrency,
+            lesson_plan_subagent_concurrency=lesson_plan_concurrency,
             main_model_temperature=main_model_temperature,
             main_model_max_tokens=main_model_max_tokens,
             sub_model_temperature=sub_model_temperature,
             sub_model_max_tokens=sub_model_max_tokens,
+            study_materials_thinking_effort=_normalize_reasoning_effort(thinking_effort, default="xhigh"),
+            study_materials_thinking_model=study_materials_thinking_model,
+            study_materials_writer_model=study_materials_writer_model,
             lesson_plan_temperature=_get_float("LESSON_PLAN_TEMPERATURE", _get_float("MAIN_MODEL_TEMPERATURE", 0.7)),
             lesson_plan_max_tokens=_get_int(
                 "LESSON_PLAN_MAX_TOKENS",
@@ -417,6 +462,8 @@ class Settings:
             "sub_model": self.sub_model,
             "lesson_plan_provider": self.lesson_plan_provider,
             "lesson_plan_model": self.lesson_plan_model,
+            "study_materials_thinking_model": self.study_materials_thinking_model,
+            "study_materials_writer_model": self.study_materials_writer_model,
             "main_temperature": self.main_model_temperature,
             "sub_temperature": self.sub_model_temperature,
             "max_iterations": self.max_tool_iterations,
@@ -457,7 +504,7 @@ LESSON_PLAN_PROVIDER = settings.lesson_plan_provider
 LESSON_PLAN_API_KEY = settings.lesson_plan_api_key.get_secret_value()
 LESSON_PLAN_BASE_URL = settings.lesson_plan_base_url
 LESSON_PLAN_MODEL = settings.lesson_plan_model
-LESSON_PLAN_V2_SUBAGENT_CONCURRENCY = settings.lesson_plan_v2_subagent_concurrency
+LESSON_PLAN_SUBAGENT_CONCURRENCY = settings.lesson_plan_subagent_concurrency
 
 MAIN_MODEL_TEMPERATURE = settings.main_model_temperature
 MAIN_MODEL_MAX_TOKENS = settings.main_model_max_tokens
@@ -466,6 +513,10 @@ SUB_MODEL_MAX_TOKENS = settings.sub_model_max_tokens
 
 LESSON_PLAN_TEMPERATURE = settings.lesson_plan_temperature
 LESSON_PLAN_MAX_TOKENS = settings.lesson_plan_max_tokens
+
+STUDY_MATERIALS_THINKING_EFFORT_DEFAULT = settings.study_materials_thinking_effort
+STUDY_MATERIALS_THINKING_MODEL = settings.study_materials_thinking_model
+STUDY_MATERIALS_WRITER_MODEL = settings.study_materials_writer_model
 
 MAX_TOOL_ITERATIONS = settings.max_tool_iterations
 API_TIMEOUT = settings.api_timeout_seconds

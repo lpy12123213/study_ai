@@ -7,12 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.database.models import create_share_link as db_create_share_link
-from backend.database.models import get_paper as db_get_paper
-from backend.database.models import get_share_link as db_get_share_link
-from backend.database.models import get_template as db_get_template
-from backend.database.models import validate_share_link as db_validate_share_link
-from backend.database.repositories.study_archives import get_study_archive as db_get_study_archive
+from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
+from backend.database.repositories.content.templates import get_template as db_get_template
+from backend.database.repositories.question.papers import get_paper as db_get_paper
+from backend.database.repositories.system.share_links import create_share_link as db_create_share_link
+from backend.database.repositories.system.share_links import get_share_link as db_get_share_link
+from backend.database.repositories.system.share_links import validate_share_link as db_validate_share_link
 
 logger = get_logger(__name__)
 

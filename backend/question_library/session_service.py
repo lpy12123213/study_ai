@@ -9,8 +9,9 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.question_evaluate import evaluate_generated_question_review
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.database.models import upsert_question_cache, upsert_question_library_items
-from backend.database.repositories.tasks import list_task_events as db_list_task_events
+from backend.database.repositories.question.question_cache import upsert_question_cache
+from backend.database.repositories.question.question_library import upsert_question_library_items
+from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
 from backend.question_library.generation import regenerate_question_section
 from backend.question_library.preview_store import (
     delete_preview,

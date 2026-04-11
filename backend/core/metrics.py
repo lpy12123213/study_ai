@@ -143,6 +143,13 @@ def instrument_app(app: FastAPI) -> None:
         logger.exception("prom_metrics_init_failed")
         return
 
+    def _warn_metrics_update_once(op: str) -> None:
+        # Avoid warning spam if the metrics backend is misconfigured.
+        if getattr(app.state, "_prom_metrics_update_failed", False):
+            return
+        app.state._prom_metrics_update_failed = True
+        logger.warning("prom_metrics_update_failed", extra={"op": op}, exc_info=True)
+
     @app.middleware("http")
     async def prometheus_middleware(request: Request, call_next):  # noqa: ANN001
         path = str(request.url.path or "")
@@ -164,15 +171,15 @@ def instrument_app(app: FastAPI) -> None:
             try:
                 in_progress.labels(method=method).dec()
             except Exception:
-                pass
+                _warn_metrics_update_once("in_progress.dec")
             try:
                 requests_total.labels(method=method, path=label_path, status_code=str(status_code)).inc()
             except Exception:
-                pass
+                _warn_metrics_update_once("requests_total.inc")
             try:
                 request_duration.labels(method=method, path=label_path).observe(elapsed)
             except Exception:
-                pass
+                _warn_metrics_update_once("request_duration.observe")
 
     @app.get("/metrics", include_in_schema=False)
     async def _metrics() -> Response:  # pragma: no cover (thin wrapper)

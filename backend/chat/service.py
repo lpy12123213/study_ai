@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-import httpx
-
 from backend.chat.llm_mixin import ChatLLMMixin
 from backend.chat.tools_mixin import ChatToolsMixin
-from backend.core.settings import API_TIMEOUT, MAIN_MODEL, MAX_TOOL_ITERATIONS
+from backend.core.settings import MAIN_MODEL, MAX_TOOL_ITERATIONS
 
 
 class ChatService(ChatLLMMixin, ChatToolsMixin):
@@ -74,150 +72,139 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
         main_model = (model or MAIN_MODEL).strip() or MAIN_MODEL
         sub_model_effective = (sub_model or "").strip() or None
 
-        endpoint = self._resolve_chat_endpoint(main_model)
-        if not endpoint.get("api_key"):
-            provider = endpoint.get("provider")
-            yield {"type": "error", "content": f"未配置 {provider} API Key（当前模型: {main_model}）"}
-            return
-
         messages = self._build_messages(history, user_message, subject=subject)
         iteration = 0
         all_tool_results: List[Dict[str, Any]] = []
         tools_override = self._determine_tools_for_request(history, user_message)
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(float(API_TIMEOUT or 30), connect=30.0)) as client:
-            while iteration < int(MAX_TOOL_ITERATIONS or 10):
-                iteration += 1
+        while iteration < int(MAX_TOOL_ITERATIONS or 10):
+            iteration += 1
 
-                if iteration > 1:
-                    yield {"type": "iteration", "round": iteration, "message": f"AI 正在进行第 {iteration} 轮操作..."}
+            if iteration > 1:
+                yield {"type": "iteration", "round": iteration, "message": f"AI 正在进行第 {iteration} 轮操作..."}
 
-                result = await self._call_api(
-                    client,
-                    messages,
-                    model=main_model,
-                    include_tools=True,
-                    tools_override=tools_override,
-                )
+            result = await self._call_api(
+                messages,
+                model=main_model,
+                include_tools=True,
+                tools_override=tools_override,
+            )
 
-                if not result.get("success"):
-                    yield {"type": "error", "content": result.get("error") or "api_error"}
-                    return
+            if not result.get("success"):
+                yield {"type": "error", "content": result.get("error") or "api_error"}
+                return
 
-                data = result.get("data") or {}
-                choice = (data.get("choices") or [{}])[0] if isinstance(data.get("choices"), list) else {}
-                message = choice.get("message", {}) if isinstance(choice, dict) else {}
+            llm_content = str(result.get("content") or "")
+            tool_calls = result.get("tool_calls")
 
-                tool_calls = message.get("tool_calls")
-                if isinstance(tool_calls, list) and tool_calls:
-                    if len(tool_calls) > 3:
-                        tool_calls = tool_calls[:3]
+            if isinstance(tool_calls, list) and tool_calls:
+                if len(tool_calls) > 3:
+                    tool_calls = tool_calls[:3]
 
-                    assistant_content = str(message.get("content") or "")
-                    if not assistant_content.strip():
-                        tool_names: List[str] = []
-                        for tc in tool_calls:
-                            fn = tc.get("function") if isinstance(tc, dict) else {}
-                            name = str((fn or {}).get("name") or "").strip()
-                            if name:
-                                tool_names.append(name)
-                        assistant_content = (
-                            f"（第 {iteration} 轮：调用工具 {', '.join(tool_names)}）"
-                            if tool_names
-                            else f"（第 {iteration} 轮：调用工具）"
-                        )
+                display_content = llm_content
+                if not display_content.strip():
+                    tool_names: List[str] = []
+                    for tc in tool_calls:
+                        fn = tc.get("function") if isinstance(tc, dict) else {}
+                        name = str((fn or {}).get("name") or "").strip()
+                        if name:
+                            tool_names.append(name)
+                    display_content = (
+                        f"（第 {iteration} 轮：调用工具 {', '.join(tool_names)}）"
+                        if tool_names
+                        else f"（第 {iteration} 轮：调用工具）"
+                    )
+
+                yield {
+                    "type": "assistant",
+                    "content": display_content,
+                    "tool_calls": tool_calls,
+                    "iteration": iteration,
+                }
+
+                tool_results: List[Dict[str, Any]] = []
+                for tool_call in tool_calls:
+                    fn = tool_call.get("function") if isinstance(tool_call, dict) else {}
+                    tool_name = str((fn or {}).get("name") or "").strip()
+                    tool_id = str(tool_call.get("id") or "").strip()
+                    raw_args = (fn or {}).get("arguments") if isinstance(fn, dict) else {}
+                    if isinstance(raw_args, str):
+                        try:
+                            tool_args = json.loads(raw_args)
+                        except Exception:
+                            tool_args = {}
+                    else:
+                        tool_args = raw_args if isinstance(raw_args, dict) else {}
+                    tool_args = self._coerce_tool_args(tool_name, tool_args)
 
                     yield {
-                        "type": "assistant",
-                        "content": assistant_content,
-                        "tool_calls": tool_calls,
+                        "type": "tool_start",
+                        "tool_call_id": tool_id,
+                        "tool_name": tool_name,
+                        "arguments": tool_args,
                         "iteration": iteration,
                     }
 
-                    tool_results: List[Dict[str, Any]] = []
-                    for tool_call in tool_calls:
-                        fn = tool_call.get("function") if isinstance(tool_call, dict) else {}
-                        tool_name = str((fn or {}).get("name") or "").strip()
-                        tool_id = str(tool_call.get("id") or "").strip()
-                        raw_args = (fn or {}).get("arguments") if isinstance(fn, dict) else {}
-                        if isinstance(raw_args, str):
-                            try:
-                                tool_args = json.loads(raw_args)
-                            except Exception:
-                                tool_args = {}
-                        else:
-                            tool_args = raw_args if isinstance(raw_args, dict) else {}
-                        tool_args = self._coerce_tool_args(tool_name, tool_args)
+                    tool_result = await self.execute_tool(
+                        tool_name,
+                        tool_args,
+                        sub_model=sub_model_effective,
+                        user_id=uid,
+                    )
+                    yield {
+                        "type": "tool_result",
+                        "tool_call_id": tool_id,
+                        "tool_name": tool_name,
+                        "result": tool_result,
+                        "iteration": iteration,
+                    }
 
-                        yield {
-                            "type": "tool_start",
-                            "tool_call_id": tool_id,
-                            "tool_name": tool_name,
-                            "arguments": tool_args,
-                            "iteration": iteration,
-                        }
+                    tool_result_msg = {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "content": json.dumps(tool_result, ensure_ascii=False),
+                    }
+                    tool_results.append(tool_result_msg)
+                    all_tool_results.append(tool_result_msg)
 
-                        tool_result = await self.execute_tool(
-                            tool_name,
-                            tool_args,
-                            sub_model=sub_model_effective,
-                            user_id=uid,
-                        )
-                        yield {
-                            "type": "tool_result",
-                            "tool_call_id": tool_id,
-                            "tool_name": tool_name,
-                            "result": tool_result,
-                            "iteration": iteration,
-                        }
+                # Preserve tool-calling state for the next turn.
+                messages.append({"role": "assistant", "content": llm_content, "tool_calls": tool_calls})
+                messages.extend(tool_results)
+                continue
 
-                        tool_result_msg = {
-                            "tool_call_id": tool_id,
-                            "role": "tool",
-                            "content": json.dumps(tool_result, ensure_ascii=False),
-                        }
-                        tool_results.append(tool_result_msg)
-                        all_tool_results.append(tool_result_msg)
-
-                    messages.append(message)
-                    messages.extend(tool_results)
-                    continue
-
-                # No tool calls: model finished.
-                if all_tool_results:
-                    yield {"type": "stream_start", "iteration": iteration}
-
-                    final_content = ""
-                    async for chunk in self._call_api_streaming(client, messages, model=main_model):
-                        if chunk.get("type") == "text_delta":
-                            final_content += str(chunk.get("content") or "")
-                            yield chunk
-                        elif chunk.get("type") == "error":
-                            yield chunk
-                            return
-
-                    if not final_content:
-                        final_content = self._generate_fallback_response(all_tool_results)
-                        yield {"type": "text_delta", "content": final_content}
-
-                    yield {"type": "assistant_final", "content": final_content, "total_iterations": iteration}
-                    return
-
-                final_content = str(message.get("content") or "")
+            # No tool calls: model finished.
+            if all_tool_results:
                 yield {"type": "stream_start", "iteration": iteration}
-                if final_content:
-                    # Avoid artificial latency; let the client render immediately.
+
+                final_content = ""
+                async for chunk in self._call_api_streaming(messages, model=main_model):
+                    if chunk.get("type") == "text_delta":
+                        final_content += str(chunk.get("content") or "")
+                        yield chunk
+                    elif chunk.get("type") == "error":
+                        yield chunk
+                        return
+
+                if not final_content:
+                    final_content = self._generate_fallback_response(all_tool_results)
                     yield {"type": "text_delta", "content": final_content}
+
                 yield {"type": "assistant_final", "content": final_content, "total_iterations": iteration}
                 return
 
-            yield {
-                "type": "assistant_final",
-                "content": f"已完成 {MAX_TOOL_ITERATIONS} 轮操作。"
-                + self._generate_fallback_response(all_tool_results),
-                "total_iterations": iteration,
-                "max_reached": True,
-            }
+            yield {"type": "stream_start", "iteration": iteration}
+            if llm_content:
+                # Avoid artificial latency; let the client render immediately.
+                yield {"type": "text_delta", "content": llm_content}
+            yield {"type": "assistant_final", "content": llm_content, "total_iterations": iteration}
+            return
+
+        yield {
+            "type": "assistant_final",
+            "content": f"已完成 {MAX_TOOL_ITERATIONS} 轮操作。" + self._generate_fallback_response(all_tool_results),
+            "total_iterations": iteration,
+            "max_reached": True,
+        }
 
 
 chat_service = ChatService()

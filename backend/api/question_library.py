@@ -23,21 +23,22 @@ from backend.api.question_library_schemas import (
 )
 from backend.crawler.manager import get_crawler
 from backend.core.audit import AuditAction, audit_logger
-from backend.database.models import (
+from backend.database.repositories.question.question_cache import get_question_cache
+from backend.database.repositories.question.question_library import (
     bulk_delete_question_library_items,
-    get_question_cache,
     get_question_library_item,
     list_question_library_items,
     set_hidden,
     set_starred,
 )
-from backend.database.repositories.tasks import get_task as db_get_task
-from backend.database.repositories.tasks import list_task_events as db_list_task_events
+from backend.database.repositories.system.tasks import get_task as db_get_task
+from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
 from backend.question_library.preview_store import load_preview
 from backend.question_library.runner import RunnerError
 from backend.question_library.session_utils import serialize_session_preview
 from backend.question_library import runner as ql_runner
 from backend.question_library import session_service
+from backend.shared.tasks import task_runtime
 
 router = APIRouter(prefix="/question-library", tags=["question-library"], dependencies=[Depends(require_auth)])
 
@@ -61,7 +62,7 @@ async def _stream_task(task_id: str, *, after_seq: int) -> StreamingResponse:
     heartbeat_s = float(os.getenv("QUESTION_LIBRARY_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
-        async for event in ql_runner.task_manager.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
+        async for event in task_runtime.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -238,9 +239,18 @@ async def export_item_to_basket(question_id: str, user: dict = Depends(require_a
 @router.get("/tasks/{task_id}", response_model=dict)
 async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> dict:
     user_id = _require_user_id(user)
-    payload = await ql_runner.task_manager.status_payload(task_id=task_id, user_id=user_id)
+    payload = await task_runtime.status_payload(task_id=task_id, user_id=user_id)
     if payload:
-        return payload
+        return {
+            "taskId": str(payload.get("taskId") or task_id).strip() or task_id,
+            "kind": str(payload.get("type") or "").strip(),
+            "status": str(payload.get("status") or "").strip(),
+            "progress": float(payload.get("progress") or 0.0),
+            "steps": payload.get("steps") if isinstance(payload.get("steps"), list) else [],
+            "error": payload.get("error"),
+            "first_seq": int(payload.get("first_seq") or 1),
+            "last_seq": int(payload.get("last_seq") or 0),
+        }
 
     task = await db_get_task(user_id=user_id, task_id=task_id, include_events=True, events_limit=500)
     if not task:
@@ -286,7 +296,7 @@ async def stream_task(
     task_id: str, after_seq: int = Query(0, ge=0), user: dict = Depends(require_auth)
 ) -> StreamingResponse:
     user_id = _require_user_id(user)
-    task = await ql_runner.task_manager.get_task(task_id)
+    task = await task_runtime.get_task(task_id)
     if task and task.user_id == user_id:
         return await _stream_task(task.task_id, after_seq=after_seq)
 

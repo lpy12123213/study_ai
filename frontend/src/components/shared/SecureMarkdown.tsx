@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { type MouseEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { downloadObjectUrl, resolveApiResourceUrl } from '@/api/client'
+import { AuthImage, isGeneratedMediaResource } from '@/components/shared/AuthImage'
 
 function isAbsoluteUrl(href: string): boolean {
   return /^https?:\/\//i.test(href)
@@ -23,64 +24,12 @@ function isApiResource(href: string): boolean {
   return false
 }
 
-function isGeneratedMedia(href: string): boolean {
-  const value = String(href || '').trim()
-  if (value.startsWith('/api/media/generated/') || value.startsWith('api/media/generated/')) return true
-  if (isAbsoluteUrl(value)) {
-    try {
-      const u = new URL(value)
-      return String(u.pathname || '').startsWith('/api/media/generated/')
-    } catch {
-      return false
-    }
-  }
-  return false
-}
-
 function linkClassName(href: string): string {
   const url = String(href || '')
-  const isDownload = isGeneratedMedia(url) && /\.(md|pdf|tex|zip|png|jpg|jpeg|webp)$/i.test(url)
+  const isDownload = isGeneratedMediaResource(url) && /\.(md|pdf|tex|zip|png|jpg|jpeg|webp)$/i.test(url)
   return isDownload
     ? 'inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground no-underline hover:bg-primary/90'
     : 'text-primary underline underline-offset-4 hover:opacity-90'
-}
-
-function AuthImage(props: { src?: string; alt?: string; className?: string }) {
-  const rawSrc = String(props.src || '').trim()
-  const resolved = useMemo(() => (rawSrc ? resolveApiResourceUrl(rawSrc) : ''), [rawSrc])
-  const [objectUrl, setObjectUrl] = useState<string>('')
-
-  useEffect(() => {
-    if (!rawSrc || !isGeneratedMedia(rawSrc)) {
-      setObjectUrl('')
-      return
-    }
-    let active = true
-    let revoke = () => {}
-
-    downloadObjectUrl(rawSrc)
-      .then((r) => {
-        revoke = r.revoke
-        if (!active) {
-          revoke()
-          return
-        }
-        setObjectUrl(r.objectUrl)
-      })
-      .catch(() => {
-        if (!active) return
-        setObjectUrl('')
-      })
-
-    return () => {
-      active = false
-      revoke()
-    }
-  }, [rawSrc])
-
-  return (
-    <img src={objectUrl || resolved} alt={props.alt || ''} className={props.className} loading="lazy" />
-  )
 }
 
 export function SecureMarkdown(props: { markdown: string }) {
@@ -96,7 +45,7 @@ export function SecureMarkdown(props: { markdown: string }) {
 
           const onClick = async (e: MouseEvent<HTMLAnchorElement>) => {
             if (!rawHref) return
-            if (!isGeneratedMedia(rawHref)) return
+            if (!isGeneratedMediaResource(rawHref)) return
             e.preventDefault()
             const { objectUrl, revoke } = await downloadObjectUrl(rawHref)
             const win = window.open(objectUrl, '_blank', 'noopener,noreferrer')

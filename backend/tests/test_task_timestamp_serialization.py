@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime
 
 from backend.database.schema import Task, TaskEvent
-from backend.database.repositories.tasks import _event_to_dict, _task_to_dict
+from backend.database.repositories.system.tasks import _event_to_dict, _task_to_dict
 
 
 class TaskTimestampSerializationTests(unittest.TestCase):
@@ -43,4 +43,3 @@ class TaskTimestampSerializationTests(unittest.TestCase):
 
         out = _event_to_dict(evt)
         self.assertTrue(str(out.get("created_at") or "").endswith("Z"))
-

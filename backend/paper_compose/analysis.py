@@ -1,28 +1,12 @@
+import asyncio
 import os
-import time
-import uuid
 from typing import Any, Dict, List
 
-import httpx
-
-from backend.llm import console as llm_console
+from backend.llm.client import chat_completion, is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import settings
 
 logger = get_logger(__name__)
-
-
-def _chat_headers(*, provider: str, api_key: str) -> Dict[str, str]:
-    headers: Dict[str, str] = {
-        "Authorization": f"Bearer {str(api_key or '').strip()}",
-        "Content-Type": "application/json",
-    }
-    if str(provider or "").strip().lower() == "openrouter":
-        if (settings.review_http_referer or "").strip():
-            headers["HTTP-Referer"] = settings.review_http_referer
-        if (settings.review_x_title or "").strip():
-            headers["X-Title"] = settings.review_x_title
-    return headers
 
 
 def calculate_difficulty_score(questions: List[Dict[str, Any]]) -> float:
@@ -82,13 +66,10 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
     type_info = "、".join([f"{k}{v}道" for k, v in type_stats.items() if v > 0])
     diff_info = "、".join([f"{k}{v}道" for k, v in diff_stats.items() if v > 0])
 
-    provider = str(settings.chat_provider or "").strip().lower()
-    base_url = str(settings.chat_base_url or "").strip().rstrip("/")
-    api_key = settings.chat_api_key.get_secret_value().strip()
     model = str(os.getenv("PAPER_ANALYSIS_MODEL") or settings.main_model or "").strip() or "openai/gpt-4o-mini"
 
     # 如果没有 API key，使用模板生成
-    if not api_key or not base_url:
+    if not is_llm_configured(scope="chat"):
         return _fallback_comment(paper_name, q_count, diff_str, type_info)
 
     prompt = f"""你是一位专业的教育评估专家。请根据以下试卷信息，生成一段简洁专业的试卷分析评语（100-150字）：
@@ -102,78 +83,36 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
 
 请从试卷结构、难度分布、适用对象、答题建议等方面进行简要分析。语言要专业但易懂。"""
 
-    req_id = f"paper-comment-{uuid.uuid4().hex[:8]}"
-    start_ts = llm_console.log_start(
-        req_id=req_id,
-        provider=provider or "openai_compat",
-        model=model,
-        stream=False,
-        temperature=0.7,
-        max_tokens=300,
-        base_url=base_url,
-    )
-    finish_reason = ""
-    usage: Dict[str, Any] = {}
-    content_chars = 0
-    err = ""
+    async def _call_llm() -> str:
+        res = await chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0.7,
+            max_tokens=300,
+            stream=False,
+            raise_on_fail=False,
+            retries=2,
+            timeout_s=30.0,
+            req_id_prefix="paper-comment",
+            scope="chat",
+        )
+        return str(res.content or "").strip()
 
     try:
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(
-                f"{base_url}/chat/completions",
-                headers=_chat_headers(provider=provider, api_key=api_key),
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 300,
-                    "temperature": 0.7,
-                },
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                try:
-                    choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
-                    finish_reason = str(choice0.get("finish_reason") or "")
-                except Exception:
-                    finish_reason = ""
-                if isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                    usage = dict(data.get("usage") or {})
-                content = ""
-                try:
-                    content = str(data["choices"][0]["message"]["content"] or "").strip()
-                except Exception:
-                    content = ""
-                if content:
-                    content_chars = len(content)
-                    llm_console.log_delta(req_id=req_id, channel="content", text=content)
-                return content or _fallback_comment(paper_name, q_count, diff_str, type_info)
-            else:
-                err = f"http_status_{response.status_code}"
-                logger.warning(
-                    "OpenRouter API error",
-                    extra={"status_code": int(response.status_code), "body_preview": str(response.text or "")[:800]},
-                )
-                return _fallback_comment(paper_name, q_count, diff_str, type_info)
-
-    except Exception as e:
-        err = str(e)
-        logger.exception("AI comment generation failed", extra={"error": str(e)})
-        return _fallback_comment(paper_name, q_count, diff_str, type_info)
-    finally:
-        elapsed_s = 0.0
+        # `analyze_paper(...)` is invoked via `run_in_executor(...)`, so this
+        # normally runs in a non-async thread and `asyncio.run(...)` is safe.
         try:
-            elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-        except Exception:
-            elapsed_s = 0.0
-        llm_console.log_end(
-            req_id=req_id,
-            elapsed_s=elapsed_s,
-            finish_reason=finish_reason,
-            usage=usage,
-            content_chars=content_chars,
-            error=err,
-        )
+            asyncio.get_running_loop()
+            # If called from an async context by accident, fall back to the template
+            # to avoid `asyncio.run` crashes.
+            return _fallback_comment(paper_name, q_count, diff_str, type_info)
+        except RuntimeError:
+            content = asyncio.run(_call_llm())
+
+        return content or _fallback_comment(paper_name, q_count, diff_str, type_info)
+    except Exception as exc:
+        logger.exception("AI comment generation failed", extra={"error": str(exc)})
+        return _fallback_comment(paper_name, q_count, diff_str, type_info)
 
 
 def _fallback_comment(paper_name: str, q_count: int, diff_str: str, type_info: str) -> str:

@@ -11,13 +11,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from backend.core.logging_utils import get_logger
 from backend.crawler.manager import get_crawler
-from backend.database.models import (
-    add_questions_to_paper,
-    get_paper,
+from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
+from backend.database.repositories.question.question_cache import (
     get_question_cache,
     list_used_question_ids,
     mark_used_questions,
-    save_paper,
     upsert_question_cache,
 )
 from backend.paper_compose.slot_selection import select_slot_with_relax

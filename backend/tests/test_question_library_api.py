@@ -137,9 +137,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 "backend.question_library.runner.build_source_pack", new=AsyncMock(return_value=llm_source_pack)
             ), patch(
                 "backend.question_library.runner.generate_questions", new=AsyncMock(return_value=drafts)
-            ), patch("backend.question_library.runner.db_upsert_task", new=AsyncMock()), patch(
-                "backend.question_library.runner.db_append_task_event", new=AsyncMock()
-            ), patch("backend.question_library.runner.db_update_task_status", new=AsyncMock()), patch(
+            ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
+                "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
+            ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
                 "backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
             ):
                 client = TestClient(app)
@@ -249,9 +249,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
             ), patch(
                 "backend.question_library.runner.generate_questions",
                 new=AsyncMock(side_effect=fake_generate_questions),
-            ), patch("backend.question_library.runner.db_upsert_task", new=AsyncMock()), patch(
-                "backend.question_library.runner.db_append_task_event", new=AsyncMock()
-            ), patch("backend.question_library.runner.db_update_task_status", new=AsyncMock()), patch(
+            ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
+                "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
+            ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
                 "backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
             ):
                 client = TestClient(app)
@@ -320,9 +320,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 "backend.question_library.runner.generate_questions",
                 new=AsyncMock(side_effect=fake_generate_questions),
             ), patch("backend.question_library.runner.asyncio.sleep", new=AsyncMock()), patch(
-                "backend.question_library.runner.db_upsert_task", new=AsyncMock()
-            ), patch("backend.question_library.runner.db_append_task_event", new=AsyncMock()), patch(
-                "backend.question_library.runner.db_update_task_status", new=AsyncMock()
+                "backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()
+            ), patch("backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()), patch(
+                "backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()
             ), patch("backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])):
                 client = TestClient(app)
                 with client.stream(
@@ -560,9 +560,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 ),
             ), patch(
                 "backend.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
-            ), patch("backend.question_library.runner.db_upsert_task", new=AsyncMock()), patch(
-                "backend.question_library.runner.db_append_task_event", new=AsyncMock()
-            ), patch("backend.question_library.runner.db_update_task_status", new=AsyncMock()), patch(
+            ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
+                "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
+            ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
                 "backend.question_library.session_service.db_list_task_events",
                 new=AsyncMock(return_value=[{"taskId": "ql-gen-reason-1", "seq": 3, "type": "reasoning_delta", "data": {"content": "先构造一个更有区分度的导数大题。"}}]),
             ):
@@ -638,9 +638,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
         ), patch(
             "backend.question_library.runner.generate_questions",
             new=AsyncMock(side_effect=RuntimeError(llm_error)),
-        ), patch("backend.question_library.runner.db_upsert_task", new=AsyncMock()), patch(
-            "backend.question_library.runner.db_append_task_event", new=AsyncMock()
-        ), patch("backend.question_library.runner.db_update_task_status", new=AsyncMock()):
+        ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
+            "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
+        ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()):
             client = TestClient(app)
             with client.stream(
                 "POST",
@@ -701,9 +701,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 ),
             ), patch(
                 "backend.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
-            ), patch("backend.question_library.runner.db_upsert_task", new=AsyncMock()), patch(
-                "backend.question_library.runner.db_append_task_event", new=AsyncMock()
-            ), patch("backend.question_library.runner.db_update_task_status", new=AsyncMock()), patch(
+            ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
+                "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
+            ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
                 "backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
             ):
                 client = TestClient(app)

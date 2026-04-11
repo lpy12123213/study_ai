@@ -1,8 +1,26 @@
-import { render } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { QuestionContent } from '@/components/shared/QuestionContent'
 
+const clientMocks = vi.hoisted(() => ({
+  downloadObjectUrl: vi.fn(),
+  resolveApiResourceUrl: vi.fn((url: string) => `https://example.test${url.startsWith('/') ? url : `/${url}`}`),
+}))
+
+vi.mock('@/api/client', () => ({
+  downloadObjectUrl: clientMocks.downloadObjectUrl,
+  resolveApiResourceUrl: clientMocks.resolveApiResourceUrl,
+}))
+
 describe('QuestionContent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    clientMocks.downloadObjectUrl.mockResolvedValue({
+      objectUrl: 'blob:question-content-image',
+      revoke: vi.fn(),
+    })
+  })
+
   it('renders $...$ and $$...$$ formulas via KaTeX', () => {
     const { container } = render(
       <QuestionContent content={'行内 $x^2+1$，块 $$\\frac{1}{2}$$。'} />
@@ -84,5 +102,14 @@ p_n`
     expect(container.textContent || '').toContain('甲乙二人的最近60次出拳如下表')
     expect(container.textContent || '').toContain('出拳情况')
     expect(container.textContent || '').toContain('用频率估计概率')
+  })
+
+  it('loads generated media image tokens through authenticated blob URLs', async () => {
+    const imageUrl = `/api/media/generated/${'c'.repeat(64)}.png`
+    render(<QuestionContent content={`如图所示：[图片:${imageUrl}]`} />)
+
+    const image = await screen.findByAltText('题目图片')
+    await waitFor(() => expect(image).toHaveAttribute('src', 'blob:question-content-image'))
+    expect(clientMocks.downloadObjectUrl).toHaveBeenCalledWith(imageUrl)
   })
 })

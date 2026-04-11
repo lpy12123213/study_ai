@@ -85,8 +85,13 @@ Install backend dependencies and Playwright:
 ```bash
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
+# Optional: install ChromaDB-backed semantic memory on compatible runtimes.
+python -m pip install -r requirements-semantic-memory.txt
 python -m playwright install chromium
 ```
+
+Base setup works without ChromaDB. `SemanticStore` falls back to a local JSONL store when the optional semantic-memory
+requirements are not installed.
 
 Start the backend:
 

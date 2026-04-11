@@ -1,4 +1,4 @@
-import { apiClient, fetchSSE, fetchSSERequest } from './client'
+import { apiClient, fetchSSERequest } from './client'
 import type { Blueprint, BlueprintSlot, Paper, TaskStep } from '@/types'
 
 export interface ComposeRequest {
@@ -84,15 +84,17 @@ export function composePaperStream(
   onError?: (error: Error) => void,
   onComplete?: () => void
 ): void {
-  fetchSSE(
-    '/papers/compose',
-    request,
-    (data) => {
-      onEvent(data as ComposeStreamEvent)
-    },
-    onError,
-    onComplete
-  )
+  apiClient
+    .post('/tasks/papers/compose', request)
+    .then((res) => {
+      const taskId = String((res.data as any)?.taskId || request.taskId || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+      streamComposeTask(taskId, 0, onEvent, onError, onComplete)
+    })
+    .catch((err: any) => {
+      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
 }
 
 export function streamComposeTask(

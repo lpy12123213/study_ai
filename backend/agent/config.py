@@ -16,9 +16,12 @@ class AgentConfig:
     # Agent execution mode:
     # - "plan": Plan-Act-Reflect (existing behavior)
     # - "react": ReAct loop (LLM decides next tool dynamically)
-    agent_mode: str = "plan"
+    agent_mode: str = "react"
     # ReAct safety cap (prevents infinite tool loops).
     react_max_iterations: int = 20
+    # ReAct budgets (safety caps).
+    react_llm_call_budget: int = 25
+    react_retry_budget_per_tool: int = 2
 
     # Context compression
     sliding_window_size: int = 10
@@ -72,6 +75,11 @@ class AgentConfig:
             ),
             agent_mode=_normalize_mode(_get_str("AGENT_MODE", cls.agent_mode)),
             react_max_iterations=_get_int("AGENT_REACT_MAX_ITERATIONS", cls.react_max_iterations),
+            react_llm_call_budget=_get_int("AGENT_REACT_LLM_CALL_BUDGET", cls.react_llm_call_budget),
+            react_retry_budget_per_tool=_get_int(
+                "AGENT_REACT_RETRY_BUDGET_PER_TOOL",
+                cls.react_retry_budget_per_tool,
+            ),
             sliding_window_size=_get_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
             token_threshold=_get_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
             emergency_token_threshold=_get_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
@@ -90,6 +98,8 @@ AGENT_CONFIG = {
     "parallel_tool_calls": _cfg.parallel_tool_calls,
     "agent_mode": _cfg.agent_mode,
     "react_max_iterations": _cfg.react_max_iterations,
+    "react_llm_call_budget": _cfg.react_llm_call_budget,
+    "react_retry_budget_per_tool": _cfg.react_retry_budget_per_tool,
     "sliding_window_size": _cfg.sliding_window_size,
     "token_threshold": _cfg.token_threshold,
     "checkpoint_dir": _cfg.checkpoint_dir,

@@ -1,6 +1,6 @@
 import unittest
 
-from backend.agent.tools import text_utils
+from backend.agent.tools.utils import text_utils
 
 
 class TextUtilsTests(unittest.TestCase):

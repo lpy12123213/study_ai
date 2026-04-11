@@ -362,7 +362,7 @@ class ToolDispatcher:
             },
         )
         results.step_results.append(step_result)
-        self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
+        await self.context_manager.on_step_result(ctx, step=concrete_step, result=step_result)
 
         try:
             async for evt in maybe_handle_step_failure(

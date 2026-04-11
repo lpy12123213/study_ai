@@ -85,8 +85,7 @@ desktop.ini
 # Cache
 .cache/
 *.cache
-backend\crawler\.playwright_data
-backend\crawler\zujuan\.playwright_data
+backend/crawler/zujuan/.playwright_data/
 
 # Testing
 .pytest_cache/
@@ -110,7 +109,5 @@ mcp_logs/
 .cursor/
 
 # vibe coding
-nextstep.csv
 nextstep.md
 todo.csv
-nextstep.csv

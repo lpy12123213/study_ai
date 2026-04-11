@@ -8,6 +8,14 @@ This document reflects the current repository structure as of March 6, 2026.
 - Node.js LTS
 - npm
 - Playwright Chromium dependencies
+- Recommended for PDF export + static vector diagrams (TikZ/Asymptote):
+  - `xelatex`
+  - `dvisvgm`
+  - `asy`
+
+Notes:
+- Windows: install MiKTeX (or TeX Live) and ensure the executables above are on `PATH`.
+- Linux: install a TeX distribution that includes XeLaTeX + dvisvgm, plus Asymptote.
 
 ## Recommended path
 
@@ -48,8 +56,13 @@ Install backend packages:
 ```bash
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
+# Optional: install ChromaDB-backed semantic memory on compatible runtimes.
+python -m pip install -r requirements-semantic-memory.txt
 python -m playwright install chromium
 ```
+
+Base setup does not require ChromaDB. If the optional semantic-memory requirements are skipped, the backend uses the
+built-in JSONL fallback store instead.
 
 ## Frontend API base URL
 
@@ -78,7 +91,7 @@ cd ..
 python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
 ```
 
-The FastAPI app initializes the SQLite schema on startup. You do not need to run old `backend/database/models.py` bootstrap commands.
+The FastAPI app initializes the SQLite schema on startup (see `backend/database/migrations.py`). No manual bootstrap commands are required.
 
 ### 4. MCP server start
 

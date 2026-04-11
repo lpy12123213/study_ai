@@ -88,7 +88,6 @@ AI 出题与本地题库的运行期缓存、后台打分与任务池参数主�
 
 - `PAPER_EXPORT_LATEX_ENGINE`：LaTeX 引擎（默认自动探测 `xelatex`/`pdflatex`）
 - `PAPER_EXPORT_LATEX_TIMEOUT_S`：LaTeX 编译超时（秒，默认 `30`）
-- `LATEX_ENGINE`：兼容别名（优先级低于 `PAPER_EXPORT_LATEX_ENGINE`）
 - `PAPER_EXPORT_DOCX_ENGINE`：DOCX 导出引擎（建议 `pandoc`；留空则自动探测）
 - `PAPER_EXPORT_PANDOC_TIMEOUT_S`：pandoc 导出超时（秒，默认 `60`）
 

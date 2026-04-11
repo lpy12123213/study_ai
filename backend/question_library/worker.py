@@ -6,8 +6,8 @@ import os
 from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.database.repositories.question_cache import get_question_cache
-from backend.database.repositories.question_library import list_unscored_question_ids
+from backend.database.repositories.question.question_cache import get_question_cache
+from backend.database.repositories.question.question_library import list_unscored_question_ids
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
 
 logger = get_logger(__name__)

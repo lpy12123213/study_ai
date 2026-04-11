@@ -108,7 +108,15 @@ async def generate_questions(
                 on_reasoning_event=on_reasoning_event,
             )
         except Exception:
-            pass
+            logger.warning(
+                "question_library_source_pack_build_failed",
+                extra={
+                    "user_id": str(user_id or "").strip(),
+                    "subject": str(source_pack.get("subject") or "").strip(),
+                    "topic": str(source_pack.get("topic") or "").strip(),
+                },
+                exc_info=True,
+            )
 
     beam_width = max(1, int(cfg.get("beam_width") or DEFAULT_SEARCH_CONFIG["beam_width"]))
     search_beam_width = max(beam_width, int(max(1, count or 1) * 2))
@@ -325,7 +333,11 @@ async def generate_questions(
         )
     except Exception:
         # Never fail the whole pipeline just because diagrams are unavailable.
-        pass
+        logger.warning(
+            "question_library_diagram_generation_failed",
+            extra={"user_id": str(user_id or "").strip()},
+            exc_info=True,
+        )
 
     # Stage: solver + ambiguity + judge + optional repair.
     accepted: List[dict] = []

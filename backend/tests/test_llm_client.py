@@ -235,6 +235,73 @@ class ChatCompletionReasoningCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("reasoning", captured_payloads[0])
         self.assertNotIn("reasoning", captured_payloads[1])
 
+    async def test_non_openrouter_retries_without_reasoning_on_400(self) -> None:
+        captured_payloads: list[dict] = []
+        req = httpx.Request("POST", "https://example.test/chat/completions")
+        responses = [
+            httpx.Response(
+                400,
+                json={"error": {"message": "unknown field: reasoning"}},
+                request=req,
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+                request=req,
+            ),
+        ]
+
+        class _State:
+            idx = 0
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN001,ARG002
+                pass
+
+            async def __aenter__(self):  # noqa: ANN201
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001,ANN201
+                return False
+
+            async def post(self, url, headers=None, json=None):  # noqa: ANN001,ANN201
+                _ = url, headers
+                captured_payloads.append(dict(json or {}))
+                resp = responses[_State.idx]
+                _State.idx += 1
+                return resp
+
+        with patch.object(llm_client.httpx, "AsyncClient", FakeAsyncClient):
+            res = await llm_client.chat_completion(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-5",
+                temperature=0.2,
+                max_tokens=50,
+                response_format=None,
+                reasoning={"effort": "low", "exclude": True},
+                stream=False,
+                raise_on_fail=True,
+                retries=2,
+                req_id_prefix="test",
+                provider="ikuncode",
+                base_url="https://example.test",
+                api_key="test-key",
+                moonshot_key="",
+                moonshot_base_url="",
+            )
+
+        self.assertEqual(res.content, "ok")
+        self.assertEqual(len(captured_payloads), 2)
+        self.assertIn("reasoning", captured_payloads[0])
+        self.assertNotIn("reasoning", captured_payloads[1])
+
     async def test_tool_calls_are_preserved_when_content_is_empty(self) -> None:
         captured_payloads: list[dict] = []
         req = httpx.Request("POST", "https://example.test/chat/completions")

@@ -1,16 +1,18 @@
-"""MCP client utilities for connecting to various AI services."""
+"""MCP client utilities for connecting to OpenAI-compatible services.
+
+This module intentionally delegates HTTP + provider resolution to `backend.llm.client`
+so the codebase has a single implementation of:
+- base_url / api_key selection
+- OpenRouter headers (HTTP-Referer / X-Title)
+- retry / circuit-breaker behavior
+- record/replay fixtures
+"""
 
 from __future__ import annotations
 
-import json
-import time
-import uuid
+import asyncio
 from typing import Any, AsyncIterator, Dict, Optional
 
-import httpx
-
-from backend.llm import console as llm_console
-from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     CHAT_API_KEY,
     CHAT_BASE_URL,
@@ -21,12 +23,26 @@ from backend.core.settings import (
     ZHIPU_API_KEY,
     ZHIPU_BASE_URL,
 )
+from backend.llm.client import chat_completion
 
-logger = get_logger(__name__)
+
+def _guess_provider(base_url: str) -> str:
+    url = str(base_url or "").strip().lower()
+    if "openrouter" in url:
+        return "openrouter"
+    if "fireworks" in url:
+        return "fireworks"
+    if "bigmodel" in url or "zhipu" in url:
+        return "zhipu"
+    return "openai_compat"
 
 
 class OpenAICompatibleClient:
-    """Client for OpenAI-compatible APIs."""
+    """Very small wrapper around `backend.llm.client.chat_completion`.
+
+    Kept mainly for backwards compatibility with older MCP code paths. Prefer
+    calling `backend.llm.client.chat_completion` directly for new code.
+    """
 
     def __init__(
         self,
@@ -34,15 +50,12 @@ class OpenAICompatibleClient:
         base_url: str,
         timeout: float = 120.0,
     ):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.api_key = str(api_key or "").strip()
+        self.base_url = str(base_url or "").strip().rstrip("/")
+        self.timeout = float(timeout or 120.0)
 
-    def _get_headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+    def _provider(self) -> str:
+        return _guess_provider(self.base_url)
 
     async def chat_completion(
         self,
@@ -53,74 +66,37 @@ class OpenAICompatibleClient:
         tools: Optional[list] = None,
         stream: bool = False,
     ) -> Dict[str, Any]:
-        """Send a chat completion request."""
-        req_id = f"mcp-client-{uuid.uuid4().hex[:8]}"
-        start_ts = llm_console.log_start(
-            req_id=req_id,
-            provider="openai_compat",
-            model=str(model or ""),
-            stream=bool(stream),
+        """Return an OpenAI-like response dict (best-effort)."""
+
+        res = await chat_completion(
+            messages=list(messages or []),
+            model=str(model or "").strip(),
             temperature=float(temperature),
-            max_tokens=int(max_tokens),
-            base_url=str(self.base_url or ""),
+            max_tokens=int(max_tokens or 0),
+            tools=list(tools or []) if tools else None,
+            stream=bool(stream),
+            raise_on_fail=False,
+            retries=3,
+            timeout_s=float(self.timeout),
+            req_id_prefix="mcp-client",
+            provider=self._provider(),
+            base_url=self.base_url,
+            api_key=self.api_key,
         )
-        finish_reason = ""
-        usage: Dict[str, Any] = {}
-        content_chars = 0
-        err = ""
 
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
+        message: Dict[str, Any] = {"content": str(res.content or "")}
+        if res.tool_calls:
+            message["tool_calls"] = list(res.tool_calls)
+
+        return {
+            "choices": [
+                {
+                    "message": message,
+                    "finish_reason": str(res.finish_reason or ""),
+                }
+            ],
+            "usage": dict(res.usage or {}),
         }
-
-        if tools:
-            payload["tools"] = tools
-
-        if stream:
-            payload["stream"] = True
-
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self._get_headers(),
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-                try:
-                    choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
-                    finish_reason = str(choice0.get("finish_reason") or "")
-                    msg = choice0.get("message", {}) if isinstance(choice0.get("message"), dict) else {}
-                    content_text = str(msg.get("content") or "")
-                    if content_text:
-                        content_chars = len(content_text)
-                        llm_console.log_delta(req_id=req_id, channel="content", text=content_text)
-                except Exception:
-                    finish_reason = ""
-                if isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                    usage = dict(data.get("usage") or {})
-                return data
-        except Exception as exc:
-            err = str(exc)
-            raise
-        finally:
-            elapsed_s = 0.0
-            try:
-                elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-            except Exception:
-                elapsed_s = 0.0
-            llm_console.log_end(
-                req_id=req_id,
-                elapsed_s=elapsed_s,
-                finish_reason=finish_reason,
-                usage=usage,
-                content_chars=content_chars,
-                error=err,
-            )
 
     async def chat_completion_stream(
         self,
@@ -130,115 +106,62 @@ class OpenAICompatibleClient:
         max_tokens: int = 2000,
         tools: Optional[list] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Stream a chat completion request."""
-        req_id = f"mcp-stream-{uuid.uuid4().hex[:8]}"
-        start_ts = llm_console.log_start(
-            req_id=req_id,
-            provider="openai_compat",
-            model=str(model or ""),
-            stream=True,
-            temperature=float(temperature),
-            max_tokens=int(max_tokens),
-            base_url=str(self.base_url or ""),
-        )
-        finish_reason = ""
-        usage: Dict[str, Any] = {}
-        content_chars = 0
-        err = ""
+        """Stream an OpenAI-like delta payload (best-effort).
 
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-        }
+        This adapts `backend.llm.client.chat_completion(stream=True)` callbacks into a
+        generator that yields `{"choices":[{"delta":{"content":"..."}}]}` chunks.
+        """
 
-        if tools:
-            payload["tools"] = tools
+        q: asyncio.Queue[Dict[str, Any] | None] = asyncio.Queue()
 
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/chat/completions",
-                    headers=self._get_headers(),
-                    json=payload,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
+        async def on_content_delta(text: str) -> None:
+            if not text:
+                return
+            await q.put({"choices": [{"delta": {"content": text}}]})
 
-                        try:
-                            choice0 = (chunk.get("choices") or [{}])[0] if isinstance(chunk, dict) else {}
-                            delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
-                            content = delta.get("content")
-                            if isinstance(content, str) and content:
-                                content_chars += len(content)
-                                llm_console.log_delta(req_id=req_id, channel="content", text=content)
-                            fr = choice0.get("finish_reason")
-                            if isinstance(fr, str) and fr:
-                                finish_reason = fr
-                            if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
-                                usage = dict(chunk.get("usage") or {})
-                        except Exception:
-                            logger.debug("mcp_llm_stream_parse_failed", extra={"req_id": req_id}, exc_info=True)
-
-                        yield chunk
-        except Exception as exc:
-            err = str(exc)
-            raise
-        finally:
-            elapsed_s = 0.0
+        async def runner() -> None:
             try:
-                elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-            except Exception:
-                elapsed_s = 0.0
-            llm_console.log_end(
-                req_id=req_id,
-                elapsed_s=elapsed_s,
-                finish_reason=finish_reason,
-                usage=usage,
-                content_chars=content_chars,
-                error=err,
-            )
+                res = await chat_completion(
+                    messages=list(messages or []),
+                    model=str(model or "").strip(),
+                    temperature=float(temperature),
+                    max_tokens=int(max_tokens or 0),
+                    tools=list(tools or []) if tools else None,
+                    stream=True,
+                    on_content_delta=on_content_delta,
+                    raise_on_fail=False,
+                    retries=3,
+                    timeout_s=float(self.timeout),
+                    req_id_prefix="mcp-stream",
+                    provider=self._provider(),
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                )
+                await q.put({"choices": [{"delta": {}, "finish_reason": str(res.finish_reason or "")}], "usage": dict(res.usage or {})})
+            finally:
+                await q.put(None)
+
+        asyncio.create_task(runner())
+
+        while True:
+            item = await q.get()
+            if item is None:
+                break
+            yield item
 
 
 def get_openrouter_client() -> OpenAICompatibleClient:
-    """Get an OpenRouter client."""
-    return OpenAICompatibleClient(
-        api_key=OPENROUTER_API_KEY,
-        base_url=OPENROUTER_BASE_URL,
-    )
+    return OpenAICompatibleClient(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
 
 def get_fireworks_client() -> OpenAICompatibleClient:
-    """Get a Fireworks client."""
-    return OpenAICompatibleClient(
-        api_key=FIREWORKS_API_KEY,
-        base_url=FIREWORKS_BASE_URL,
-    )
+    return OpenAICompatibleClient(api_key=FIREWORKS_API_KEY, base_url=FIREWORKS_BASE_URL)
 
 
 def get_zhipu_client() -> OpenAICompatibleClient:
-    """Get a Zhipu (BigModel) client."""
-    return OpenAICompatibleClient(
-        api_key=ZHIPU_API_KEY,
-        base_url=ZHIPU_BASE_URL,
-    )
+    return OpenAICompatibleClient(api_key=ZHIPU_API_KEY, base_url=ZHIPU_BASE_URL)
 
 
 def get_default_client() -> OpenAICompatibleClient:
-    """Get the default chat client based on configuration."""
-    return OpenAICompatibleClient(
-        api_key=CHAT_API_KEY,
-        base_url=CHAT_BASE_URL,
-    )
+    return OpenAICompatibleClient(api_key=CHAT_API_KEY, base_url=CHAT_BASE_URL)
+

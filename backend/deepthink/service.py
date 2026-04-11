@@ -1,14 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
-import uuid
-from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Tuple
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Sequence
 
-import httpx
-
-from backend.llm import console as llm_console
 from backend.core.settings import settings
 from backend.deepthink.prompts import (
     EVALUATOR_SYSTEM_PROMPT_TEMPLATE,
@@ -16,53 +13,7 @@ from backend.deepthink.prompts import (
     SYNTHESIZER_SYSTEM_PROMPT_TEMPLATE,
 )
 from backend.deepthink.tot_engine import ThoughtNode, ToTEngine
-
-
-def _infer_provider_for_model(model: str) -> str:
-    m = (model or "").strip()
-    if not m:
-        return settings.chat_provider
-    if m.startswith("accounts/"):
-        return "fireworks"
-    if "/" in m:
-        return "openrouter"
-    return settings.chat_provider
-
-
-def _resolve_chat_endpoint(model: str) -> Tuple[str, str, str]:
-    if getattr(settings, "llm_provider_pinned", False):
-        provider = str(settings.chat_provider or "").strip().lower() or "openai_compat"
-        return (
-            provider,
-            (settings.chat_base_url or "").rstrip("/"),
-            settings.chat_api_key.get_secret_value().strip(),
-        )
-
-    provider = _infer_provider_for_model(model)
-    if provider == "fireworks":
-        return (
-            "fireworks",
-            (settings.fireworks_base_url or "").rstrip("/"),
-            settings.fireworks_api_key.get_secret_value().strip(),
-        )
-    return (
-        "openrouter",
-        (settings.openrouter_base_url or "").rstrip("/"),
-        settings.openrouter_api_key.get_secret_value().strip(),
-    )
-
-
-def _chat_headers(provider: str, api_key: str) -> Dict[str, str]:
-    headers: Dict[str, str] = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    if provider == "openrouter":
-        if (settings.review_http_referer or "").strip():
-            headers["HTTP-Referer"] = settings.review_http_referer
-        if (settings.review_x_title or "").strip():
-            headers["X-Title"] = settings.review_x_title
-    return headers
+from backend.llm.client import chat_completion, is_llm_configured
 
 
 def _strip_code_fences(text: str) -> str:
@@ -129,104 +80,35 @@ def _build_user_content(text: str, image_url: Optional[str]) -> Any:
 
 
 class DeepThinkService:
-    async def _call_chat(
+    async def _call_chat_text(
         self,
-        client: httpx.AsyncClient,
         *,
         model: str,
         messages: List[Dict[str, Any]],
         max_tokens: int,
         temperature: float,
         reasoning: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        provider, base_url, api_key = _resolve_chat_endpoint(model)
-        if not api_key:
-            return {"success": False, "error": f"未配置 {provider} API Key（当前模型: {model}）"}
-
-        req_id = f"deepthink-{uuid.uuid4().hex[:8]}"
-        start_ts = llm_console.log_start(
-            req_id=req_id,
-            provider=provider,
-            model=model,
-            stream=False,
+        stream: bool = False,
+        on_content_delta: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> str:
+        res = await chat_completion(
+            messages=messages,  # allow multimodal content
+            model=str(model or "").strip(),
             temperature=float(temperature),
             max_tokens=int(max_tokens),
-            base_url=base_url,
+            reasoning=reasoning,
+            stream=bool(stream),
+            on_content_delta=on_content_delta,
+            raise_on_fail=False,
+            retries=3,
+            timeout_s=float(settings.api_timeout_seconds or 120),
+            req_id_prefix="deepthink",
+            scope="chat",
         )
-        finish_reason = ""
-        usage: Dict[str, Any] = {}
-        content_chars = 0
-        err = ""
-
-        payload: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": int(max_tokens),
-            "temperature": float(temperature),
-        }
-        if provider == "openrouter" and reasoning:
-            payload["reasoning"] = reasoning
-
-        try:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers=_chat_headers(provider, api_key),
-                json=payload,
-            )
-            if resp.status_code != 200:
-                detail = ""
-                try:
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        err = data.get("error")
-                        if isinstance(err, dict) and isinstance(err.get("message"), str):
-                            detail = err["message"]
-                        elif isinstance(data.get("message"), str):
-                            detail = data["message"]
-                except Exception:
-                    detail = (resp.text or "").strip()
-                suffix = f" - {detail[:240]}" if detail else ""
-                err = f"http_status_{resp.status_code}"
-                return {"success": False, "error": f"API错误: {resp.status_code}{suffix} (provider={provider})"}
-
-            data = resp.json()
-            try:
-                choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
-                finish_reason = str(choice0.get("finish_reason") or "")
-                msg = choice0.get("message", {}) if isinstance(choice0.get("message"), dict) else {}
-                content_text = str(msg.get("content") or "")
-            except Exception:
-                content_text = ""
-                finish_reason = ""
-
-            if isinstance(data, dict) and isinstance(data.get("usage"), dict):
-                usage = dict(data.get("usage") or {})
-            if content_text:
-                content_chars = len(content_text)
-                llm_console.log_delta(req_id=req_id, channel="content", text=content_text)
-
-            return {"success": True, "data": data, "provider": provider}
-        except Exception as exc:
-            err = str(exc)
-            return {"success": False, "error": f"请求错误: {str(exc)}"}
-        finally:
-            elapsed_s = 0.0
-            try:
-                elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-            except Exception:
-                elapsed_s = 0.0
-            llm_console.log_end(
-                req_id=req_id,
-                elapsed_s=elapsed_s,
-                finish_reason=finish_reason,
-                usage=usage,
-                content_chars=content_chars,
-                error=err,
-            )
+        return str(res.content or "")
 
     async def _propose(
         self,
-        client: httpx.AsyncClient,
         *,
         question: str,
         subject: str,
@@ -241,21 +123,16 @@ class DeepThinkService:
             {"role": "user", "content": _build_user_content(user_text, image_url)},
         ]
 
-        model = settings.deepthink_generator_model
-        res = await self._call_chat(
-            client,
+        model = str(settings.deepthink_generator_model or settings.main_model or "").strip() or "openai/gpt-4o-mini"
+        content = await self._call_chat_text(
             model=model,
             messages=messages,
             max_tokens=settings.deepthink_generator_max_tokens,
             temperature=settings.deepthink_generator_temperature,
             reasoning={"effort": settings.deepthink_reasoning_effort, "exclude": True},
         )
-        if not res.get("success"):
+        if not content:
             return []
-
-        data = res.get("data") or {}
-        msg = (data.get("choices") or [{}])[0].get("message") or {}
-        content = msg.get("content") or ""
         parsed = _extract_first_json_array(content)
 
         out: List[Dict[str, Any]] = []
@@ -267,7 +144,6 @@ class DeepThinkService:
 
     async def _evaluate(
         self,
-        client: httpx.AsyncClient,
         *,
         question: str,
         subject: str,
@@ -290,26 +166,20 @@ class DeepThinkService:
         ]
 
         model = settings.deepthink_evaluator_model.strip() or settings.main_model
-        res = await self._call_chat(
-            client,
+        content = await self._call_chat_text(
             model=model,
             messages=messages,
             max_tokens=settings.deepthink_evaluator_max_tokens,
             temperature=settings.deepthink_evaluator_temperature,
             reasoning=None,  # be conservative across providers
         )
-        if not res.get("success"):
-            return {"score": 0.0, "reasoning": res.get("error") or "评估失败", "issues": ["评估失败"]}
-
-        data = res.get("data") or {}
-        msg = (data.get("choices") or [{}])[0].get("message") or {}
-        content = msg.get("content") or ""
+        if not content:
+            return {"score": 0.0, "reasoning": "评估失败", "issues": ["评估失败"]}
         parsed = _extract_first_json_object(content) or {}
         return parsed if isinstance(parsed, dict) else {"score": 0.0, "reasoning": "评估输出解析失败", "issues": []}
 
     async def _stream_final_answer(
         self,
-        client: httpx.AsyncClient,
         *,
         question: str,
         subject: str,
@@ -334,106 +204,48 @@ class DeepThinkService:
             {"role": "user", "content": _build_user_content(user_text, image_url)},
         ]
 
-        model = settings.deepthink_generator_model
-        provider, base_url, api_key = _resolve_chat_endpoint(model)
-        if not api_key:
-            yield {"type": "error", "message": f"未配置 {provider} API Key（DeepThink Generator）"}
+        model = str(settings.deepthink_generator_model or settings.main_model or "").strip() or "openai/gpt-4o-mini"
+        if not is_llm_configured(scope="chat"):
+            yield {"type": "error", "message": "llm_not_configured"}
             return
 
-        payload: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": int(settings.deepthink_generator_max_tokens),
-            "temperature": 0.2,
-            "stream": True,
-        }
-        if provider == "openrouter":
-            payload["reasoning"] = {"effort": settings.deepthink_reasoning_effort, "exclude": True}
+        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        error: List[str] = []
 
-        req_id = f"deepthink-stream-{uuid.uuid4().hex[:8]}"
-        start_ts = llm_console.log_start(
-            req_id=req_id,
-            provider=provider,
-            model=model,
-            stream=True,
-            temperature=float(payload.get("temperature") or 0.0),
-            max_tokens=int(payload.get("max_tokens") or 0),
-            base_url=base_url,
-        )
-        finish_reason = ""
-        usage: Dict[str, Any] = {}
-        content_chars = 0
-        err = ""
+        async def on_delta(chunk: str) -> None:
+            if chunk:
+                await queue.put(chunk)
 
-        try:
-            async with client.stream(
-                "POST",
-                f"{base_url}/chat/completions",
-                headers=_chat_headers(provider, api_key),
-                json=payload,
-            ) as response:
-                if response.status_code != 200:
-                    detail = ""
-                    try:
-                        raw = await response.aread()
-                        text = raw.decode("utf-8", errors="ignore")
-                        try:
-                            data = json.loads(text)
-                            if isinstance(data, dict):
-                                err = data.get("error")
-                                if isinstance(err, dict) and isinstance(err.get("message"), str):
-                                    detail = err["message"]
-                                elif isinstance(data.get("message"), str):
-                                    detail = data["message"]
-                        except Exception:
-                            detail = text
-                    except Exception:
-                        detail = ""
-                    suffix = f" - {detail[:240]}" if detail else ""
-                    yield {"type": "error", "message": f"API错误: {response.status_code}{suffix} (provider={provider})"}
-                    err = f"http_status_{response.status_code}"
-                    return
-
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        choice0 = (chunk.get("choices") or [{}])[0] if isinstance(chunk, dict) else {}
-                        delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
-                        content = delta.get("content") or ""
-                        if content:
-                            llm_console.log_delta(req_id=req_id, channel="content", text=str(content))
-                            content_chars += len(str(content))
-                            yield {"type": "answer_delta", "content": content}
-
-                        fr = choice0.get("finish_reason")
-                        if isinstance(fr, str) and fr:
-                            finish_reason = fr
-                        if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
-                            usage = dict(chunk.get("usage") or {})
-                    except Exception:
-                        continue
-        except Exception as exc:
-            err = str(exc)
-            yield {"type": "error", "message": f"流式请求错误: {str(exc)}"}
-        finally:
-            elapsed_s = 0.0
+        async def run_stream() -> None:
             try:
-                elapsed_s = max(0.0, time.time() - float(start_ts)) if start_ts else 0.0
-            except Exception:
-                elapsed_s = 0.0
-            llm_console.log_end(
-                req_id=req_id,
-                elapsed_s=elapsed_s,
-                finish_reason=finish_reason,
-                usage=usage,
-                content_chars=content_chars,
-                error=err,
-            )
+                await chat_completion(
+                    messages=messages,
+                    model=model,
+                    temperature=0.2,
+                    max_tokens=int(settings.deepthink_generator_max_tokens),
+                    reasoning={"effort": settings.deepthink_reasoning_effort, "exclude": True},
+                    stream=True,
+                    on_content_delta=on_delta,
+                    raise_on_fail=False,
+                    retries=3,
+                    timeout_s=float(settings.api_timeout_seconds or 120),
+                    req_id_prefix="deepthink-answer",
+                    scope="chat",
+                )
+            except Exception as exc:
+                error.append(str(exc))
+            finally:
+                await queue.put(None)
+
+        stream_task = asyncio.create_task(run_stream())
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            yield {"type": "answer_delta", "content": chunk}
+        await stream_task
+        if error:
+            yield {"type": "error", "message": f"流式请求错误: {error[-1]}"}
 
     async def solve(
         self,
@@ -450,16 +262,13 @@ class DeepThinkService:
         subj = (subject or "").strip() or "高中数学"
         img = (image_url or "").strip() or None
 
-        gen_provider, _, gen_key = _resolve_chat_endpoint(settings.deepthink_generator_model)
-        if not gen_key:
-            yield {"type": "error", "message": f"未配置 {gen_provider} API Key（DeepThink Generator）"}
+        if not is_llm_configured(scope="chat"):
+            yield {"type": "error", "message": "llm_not_configured"}
             return
 
-        eval_model = settings.deepthink_evaluator_model.strip() or settings.main_model
-        eval_provider, _, eval_key = _resolve_chat_endpoint(eval_model)
-        if not eval_key:
-            yield {"type": "error", "message": f"未配置 {eval_provider} API Key（DeepThink Evaluator）"}
-            return
+        gen_model = str(settings.deepthink_generator_model or settings.main_model or "").strip() or "openai/gpt-4o-mini"
+        eval_model_in = str(settings.deepthink_evaluator_model or "").strip() or str(settings.main_model or "").strip()
+        eval_model = eval_model_in or gen_model
 
         yield {
             "type": "search_start",
@@ -471,7 +280,7 @@ class DeepThinkService:
                 "max_depth": settings.tot_max_depth,
                 "prune_threshold": settings.tot_prune_threshold,
                 "timeout": settings.tot_timeout_seconds,
-                "generator_model": settings.deepthink_generator_model,
+                "generator_model": gen_model,
                 "evaluator_model": eval_model,
             },
         }
@@ -479,51 +288,46 @@ class DeepThinkService:
         started = time.monotonic()
         best_path_event: Optional[Dict[str, Any]] = None
 
-        timeout = httpx.Timeout(settings.api_timeout_seconds, connect=30.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            engine = ToTEngine(
-                question=q,
-                subject=subj,
-                branch_factor=settings.tot_branch_factor,
-                beam_width=settings.tot_beam_width,
-                max_depth=settings.tot_max_depth,
-                prune_threshold=settings.tot_prune_threshold,
-                timeout_seconds=settings.tot_timeout_seconds,
-                propose_fn=lambda question, subject, path, n: self._propose(
-                    client,
-                    question=question,
-                    subject=subject,
-                    image_url=img,
-                    path=path,
-                    n=n,
-                ),
-                evaluate_fn=lambda question, subject, path, proposal: self._evaluate(
-                    client,
-                    question=question,
-                    subject=subject,
-                    image_url=img,
-                    path=path,
-                    proposal=proposal,
-                ),
-            )
-
-            async for event in engine.search():
-                if event.get("type") == "best_path":
-                    best_path_event = event
-                yield event
-
-            best_path = (best_path_event or {}).get("path") if isinstance(best_path_event, dict) else None
-            best_path_list = best_path if isinstance(best_path, list) else []
-
-            yield {"type": "answer_start"}
-            async for chunk in self._stream_final_answer(
-                client,
-                question=q,
-                subject=subj,
+        engine = ToTEngine(
+            question=q,
+            subject=subj,
+            branch_factor=settings.tot_branch_factor,
+            beam_width=settings.tot_beam_width,
+            max_depth=settings.tot_max_depth,
+            prune_threshold=settings.tot_prune_threshold,
+            timeout_seconds=settings.tot_timeout_seconds,
+            propose_fn=lambda question, subject, path, n: self._propose(
+                question=question,
+                subject=subject,
                 image_url=img,
-                best_path=best_path_list,
-            ):
-                yield chunk
+                path=path,
+                n=n,
+            ),
+            evaluate_fn=lambda question, subject, path, proposal: self._evaluate(
+                question=question,
+                subject=subject,
+                image_url=img,
+                path=path,
+                proposal=proposal,
+            ),
+        )
+
+        async for event in engine.search():
+            if event.get("type") == "best_path":
+                best_path_event = event
+            yield event
+
+        best_path = (best_path_event or {}).get("path") if isinstance(best_path_event, dict) else None
+        best_path_list = best_path if isinstance(best_path, list) else []
+
+        yield {"type": "answer_start"}
+        async for chunk in self._stream_final_answer(
+            question=q,
+            subject=subj,
+            image_url=img,
+            best_path=best_path_list,
+        ):
+            yield chunk
 
         elapsed = round(time.monotonic() - started, 3)
         yield {

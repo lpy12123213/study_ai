@@ -7,7 +7,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import resolve_subject
-from backend.database.models import get_latest_study_archive, upsert_question_cache, save_paper
+from backend.database.repositories.content.study_archives import get_latest_study_archive
+from backend.database.repositories.question.question_cache import upsert_question_cache
+from backend.database.repositories.question.papers import save_paper
 from backend.paper_compose.ai_fill import fill_slot_with_ai
 from backend.paper_compose.auto_planner import plan_exam_structure
 from backend.question_library.gen_utils import ReasoningEventHandler
@@ -343,4 +345,3 @@ async def generate_full_paper_events(
             "slots": slots,
         },
     }
-

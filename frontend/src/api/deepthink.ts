@@ -1,4 +1,5 @@
-import { fetchSSE } from './client'
+import { apiClient } from '@/api/client'
+import { streamTask, type TaskStreamEvent } from '@/api/tasks'
 
 export interface DeepThinkSolveRequest {
   question: string
@@ -72,19 +73,47 @@ export function solveDeepThinkStream(
     signal?: AbortSignal
   },
 ): void {
-  fetchSSE(
-    '/deepthink',
-    {
-      question: request.question,
-      subject: request.subject,
-      image_url: request.imageUrl,
-    },
-    (data) => {
-      onEvent(data as DeepThinkEvent)
-    },
-    onError,
-    onComplete,
-    { signal: options?.signal },
-  )
+  const body = {
+    question: request.question,
+    subject: request.subject,
+    image_url: request.imageUrl,
+  }
+
+  apiClient
+    .post('/tasks/deepthink', body, { signal: options?.signal })
+    .then((res) => {
+      const taskId = String((res.data as any)?.taskId || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+
+      streamTask(
+        taskId,
+        0,
+        (evt: TaskStreamEvent) => {
+          // DeepThink domain events are emitted as {type, ...fields} in backend;
+          // the unified TaskRuntime wraps domain fields under `data`.
+          if (evt.type === 'ping' || evt.type === 'step') return
+
+          const data = evt.data && typeof evt.data === 'object' ? (evt.data as Record<string, unknown>) : {}
+          if (evt.type === 'error') {
+            const message =
+              typeof (data as any)?.message === 'string'
+                ? String((data as any).message)
+                : typeof (data as any)?.error === 'string'
+                  ? String((data as any).error)
+                  : 'deepthink_failed'
+            onEvent({ taskId: evt.taskId, type: 'error', message } as DeepThinkEvent)
+            return
+          }
+          onEvent({ taskId: evt.taskId, type: evt.type as any, ...(data as any) } as DeepThinkEvent)
+        },
+        onError,
+        onComplete,
+        { signal: options?.signal },
+      )
+    })
+    .catch((err: any) => {
+      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
 }
 

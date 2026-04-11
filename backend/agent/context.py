@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -182,45 +183,48 @@ class ContextManager:
     def append_message(self, ctx: CompressedContext, *, role: str, content: str) -> None:
         ctx.recent_messages.append({"role": role, "content": content})
 
-    def on_step_result(self, ctx: CompressedContext, *, step: PlanStep, result: StepResult) -> None:
-        ctx.working_memory.setdefault("step_results", []).append(
-            {"step_id": result.step_id, "tool": result.tool, "success": result.success, "error": result.error}
-        )
-        # Persist the latest tool outputs for downstream steps.
-        if result.success:
-            if result.tool in {
-                "web_search_knowledge",
-                "browse_web_pages",
-                "wikipedia_search",
-                "mediawiki_search",
-                "github_search",
-                "stackexchange_search",
-                "search_questions_by_knowledge",
-                "aggregate_knowledge",
-                "synthesize_sources",
-                "detect_knowledge_type",
-                "generate_outline",
-                # Study-materials generation runs per knowledge point; merge to avoid parallel subagents clobbering.
-                "generate_study_material",
-                "critique_draft",
-                "refine_draft",
-                "generate_diagrams",
-            }:
-                prev = ctx.working_memory.get(result.tool)
-                merged = self._merge_items_by_knowledge_point(prev, result.output)
-                ctx.working_memory[result.tool] = merged
-                if result.tool == "generate_study_material":
-                    # Back-compat alias used by some callers.
-                    ctx.working_memory["study_material"] = merged
-            else:
-                ctx.working_memory[result.tool] = result.output
+    async def on_step_result(self, ctx: CompressedContext, *, step: PlanStep, result: StepResult) -> None:
+        _ = step
+        async with ctx.working_memory_lock:
+            ctx.working_memory.setdefault("step_results", []).append(
+                {"step_id": result.step_id, "tool": result.tool, "success": result.success, "error": result.error}
+            )
+            # Persist the latest tool outputs for downstream steps.
+            if result.success:
+                if result.tool in {
+                    "web_search_knowledge",
+                    "browse_web_pages",
+                    "wikipedia_search",
+                    "mediawiki_search",
+                    "github_search",
+                    "stackexchange_search",
+                    "search_questions_by_knowledge",
+                    "aggregate_knowledge",
+                    "synthesize_sources",
+                    "detect_knowledge_type",
+                    "generate_outline",
+                    # Study-materials generation runs per knowledge point; merge to avoid parallel subagents clobbering.
+                    "generate_study_material",
+                    "critique_draft",
+                    "refine_draft",
+                    "generate_diagrams",
+                }:
+                    prev = ctx.working_memory.get(result.tool)
+                    merged = self._merge_items_by_knowledge_point(prev, result.output)
+                    ctx.working_memory[result.tool] = merged
+                    if result.tool == "generate_study_material":
+                        # Back-compat alias used by some callers.
+                        ctx.working_memory["study_material"] = merged
+                else:
+                    ctx.working_memory[result.tool] = result.output
 
-    def on_reflection(self, ctx: CompressedContext, reflection: ReflectionResult) -> None:
-        ctx.working_memory["last_reflection"] = {
-            "passed": reflection.passed,
-            "issues": reflection.issues,
-            "suggestions": reflection.suggestions,
-        }
+    async def on_reflection(self, ctx: CompressedContext, reflection: ReflectionResult) -> None:
+        async with ctx.working_memory_lock:
+            ctx.working_memory["last_reflection"] = {
+                "passed": reflection.passed,
+                "issues": reflection.issues,
+                "suggestions": reflection.suggestions,
+            }
 
     async def compress_if_needed(self, ctx: CompressedContext) -> None:
         # Always enforce sliding window first (Level 1 -> Level 2).
@@ -296,7 +300,11 @@ class ContextManager:
         payload = json.loads(ctx.to_json())
         payload["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         payload["token_estimate"] = self.estimate_tokens(ctx)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        await asyncio.to_thread(
+            path.write_text,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         # Create/refresh checkpoint summary from all compressed blocks + recent window.
         blocks: List[Dict[str, Any]] = []

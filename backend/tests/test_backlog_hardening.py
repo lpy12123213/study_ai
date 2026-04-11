@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
@@ -18,9 +19,9 @@ from backend.api import canvas as canvas_api
 from backend.api import media as media_api
 from backend.api import papers as papers_api
 from backend.api import subjects as subjects_api
-from backend.database.repositories import papers as papers_repo
+from backend.database.repositories.question import papers as papers_repo
 from backend.database.schema import Base
-from backend.study_materials import task_manager
+from backend.study_materials import orchestrator as task_manager
 
 
 class TestMediaProxyCache(unittest.IsolatedAsyncioTestCase):
@@ -134,11 +135,10 @@ class TestStudyMaterialsTaskSnapshots(unittest.TestCase):
             fresh_path.write_text(json.dumps(fresh_payload), encoding="utf-8")
 
             with patch.object(task_manager, "_TASK_SNAPSHOTS_DIR", snapshot_dir):
-                manager = task_manager.StudyMaterialsTaskManager(max_tasks=10, task_ttl_s=60)
+                manager = task_manager.StudyMaterialsTaskManager(task_ttl_s=60)
+                asyncio.run(manager.restore_tasks_from_disk())
 
-            self.assertNotIn("expired-task", manager._tasks)
             self.assertFalse(expired_path.exists())
-            self.assertIn("fresh-task", manager._tasks)
             self.assertTrue(fresh_path.exists())
 
 

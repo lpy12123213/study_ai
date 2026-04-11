@@ -17,7 +17,7 @@ import re
 import sys
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -47,7 +47,7 @@ from backend.llm.client import (
 )
 from backend.core.logging_utils import configure_logging, get_logger, get_request_id, set_client_ip, set_request_id
 from backend.crawler.manager import close_crawler
-from backend.database.models import init_db
+from backend.database.engine import init_db
 from backend.media.generated import cleanup_expired_generated_files
 from backend.question_library.worker import run_question_library_scoring_worker
 from backend.core.metrics import instrument_app
@@ -103,7 +103,7 @@ def _client_ip(request: Request) -> str:
         if forwarded:
             try:
                 first = forwarded.split(",", 1)[0]
-                m = re.search(r"(?i)(?:^|;|\\s)for=(\"[^\"]+\"|[^;\\s]+)", first)
+                m = re.search(r'(?i)(?:^|;|\s)for=("[^"]+"|[^;\s]+)', first)
                 if m:
                     v = str(m.group(1) or "").strip().strip('"')
                     if v.startswith("[") and "]" in v:
@@ -138,14 +138,15 @@ def _parse_trusted_proxies(raw: str) -> list[ipaddress._BaseNetwork]:
     value = str(raw or "").strip()
     if not value:
         return []
-    parts = re.split(r"[,\n;\\s]+", value)
+    parts = re.split(r"[,\n;\s]+", value)
     nets: list[ipaddress._BaseNetwork] = []
     for p in parts:
         p = str(p or "").strip()
         if not p:
             continue
         if p == "*":
-            return [ipaddress.ip_network("0.0.0.0/0"), ipaddress.ip_network("::/0")]
+            # Wildcard trust makes proxy headers trivially spoofable; ignore and warn.
+            continue
         try:
             if "/" in p:
                 nets.append(ipaddress.ip_network(p, strict=False))
@@ -166,6 +167,24 @@ def _parse_trusted_proxies(raw: str) -> list[ipaddress._BaseNetwork]:
 def _trusted_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
     raw = str(os.getenv("TRUSTED_PROXIES") or "").strip()
     return tuple(_parse_trusted_proxies(raw))
+
+
+def _warn_proxy_settings_on_startup() -> None:
+    """Emit security warnings for risky proxy-header settings."""
+
+    raw = str(os.getenv("TRUSTED_PROXIES") or "").strip()
+    if raw:
+        parts = [p for p in re.split(r"[,\n;\s]+", raw) if p]
+        if "*" in parts:
+            logger.warning(
+                "trusted_proxies_wildcard_forbidden",
+                extra={"trusted_proxies": raw},
+            )
+
+    if _env_truthy("TRUST_PROXY_HEADERS", default=False) and not _trusted_proxy_networks():
+        # This is a common misconfig: enabling proxy headers without defining trusted proxy IPs
+        # effectively disables all proxy-header parsing (fail-closed), which surprises users.
+        logger.warning("trust_proxy_headers_enabled_but_no_trusted_proxies")
 
 
 def _is_trusted_proxy(request: Request) -> bool:
@@ -221,11 +240,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Fail orphaned DB tasks that were left as `running` by a previous process.
     # This avoids hanging SSE/polling clients after a server restart.
     try:
-        from backend.database.repositories.tasks import fail_running_tasks_on_startup
+        from backend.shared.tasks import task_runtime
 
-        await fail_running_tasks_on_startup(reason="server_restarted")
+        await task_runtime.restart_recovery(reason="server_restarted")
     except Exception:
-        logger.debug("fail_running_tasks_on_startup_failed", exc_info=True)
+        logger.debug("task_runtime_restart_recovery_failed", exc_info=True)
 
     # Question-library sessions/previews are stored as local JSON snapshots. If the
     # process restarts mid-run, some sessions may remain at status=running and the
@@ -238,6 +257,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             logger.info("question_library_sessions_interrupted_on_startup", extra={"count": int(changed or 0)})
     except Exception:
         logger.debug("question_library_sessions_interrupted_on_startup_failed", exc_info=True)
+
+    # Restore study-materials tasks snapshots early (under lock) so refresh/replay works.
+    try:
+        from backend.study_materials.orchestrator_singleton import study_material_tasks
+
+        await study_material_tasks.restore_tasks_from_disk()
+    except Exception:
+        logger.debug("study_material_tasks_restore_failed", exc_info=True)
 
     stop = asyncio.Event()
     worker_task: Optional[asyncio.Task] = None
@@ -254,18 +281,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         stop.set()
         # Best-effort: cancel long-running tasks so DB isn't stuck at `running`.
         try:
-            from backend.study_materials.tasks_singleton import study_material_tasks
+            from backend.shared.tasks import task_runtime
+
+            await task_runtime.shutdown(reason="server_shutdown")
+        except Exception:
+            logger.debug("task_runtime_shutdown_failed", exc_info=True)
+        try:
+            from backend.study_materials.orchestrator_singleton import study_material_tasks
 
             await study_material_tasks.shutdown(reason="server_shutdown")
         except Exception:
             logger.debug("study_materials_shutdown_failed", exc_info=True)
-
-        try:
-            from backend.question_library import runner as ql_runner
-
-            await ql_runner.task_manager.shutdown(reason="server_shutdown")
-        except Exception:
-            logger.debug("question_library_shutdown_failed", exc_info=True)
 
         if worker_task is not None:
             try:
@@ -289,6 +315,104 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await close_proxy_http_client()
 
 
+class _SlidingWindowRateLimiter:
+    """Bounded sliding-window rate limiter (per key).
+
+    - Stores per-key hit timestamps in a deque.
+    - Uses an LRU eviction policy to keep memory bounded (protects against many unique IPs).
+    """
+
+    def __init__(self, *, max_requests: int, window_s: float, max_keys: int) -> None:
+        self.max_requests = max(0, int(max_requests or 0))
+        self.window_s = max(0.001, float(window_s or 0.0))
+        self.max_keys = max(1, int(max_keys or 1))
+
+        self._lock = asyncio.Lock()
+        self._hits: "OrderedDict[str, deque[float]]" = OrderedDict()
+
+    def _prune_bucket(self, bucket: deque[float], *, now: float) -> None:
+        while bucket and (now - bucket[0]) > self.window_s:
+            bucket.popleft()
+
+    def _evict_if_needed(self) -> None:
+        while len(self._hits) > self.max_keys:
+            self._hits.popitem(last=False)
+
+    async def is_limited(self, key: str) -> bool:
+        """Check whether `key` is currently rate-limited without consuming a slot."""
+
+        if self.max_requests <= 0:
+            return False
+
+        k = str(key or "").strip()
+        if not k:
+            return False
+
+        now = time.monotonic()
+        async with self._lock:
+            bucket = self._hits.get(k)
+            if not bucket:
+                self._hits.pop(k, None)
+                return False
+
+            self._prune_bucket(bucket, now=now)
+            if not bucket:
+                self._hits.pop(k, None)
+                return False
+
+            self._hits.move_to_end(k)
+            return len(bucket) >= self.max_requests
+
+    async def allow(self, key: str) -> bool:
+        """Consume a slot for `key` if allowed; returns True when request should proceed."""
+
+        if self.max_requests <= 0:
+            return True
+
+        k = str(key or "").strip()
+        if not k:
+            return True
+
+        now = time.monotonic()
+        async with self._lock:
+            bucket = self._hits.get(k)
+            if bucket is None:
+                bucket = deque()
+                self._hits[k] = bucket
+
+            self._prune_bucket(bucket, now=now)
+            if len(bucket) >= self.max_requests:
+                self._hits.move_to_end(k)
+                return False
+
+            bucket.append(now)
+            self._hits.move_to_end(k)
+            self._evict_if_needed()
+            return True
+
+    async def record(self, key: str) -> None:
+        """Record a hit for `key` (best-effort) without checking allowance."""
+
+        if self.max_requests <= 0:
+            return
+
+        k = str(key or "").strip()
+        if not k:
+            return
+
+        now = time.monotonic()
+        async with self._lock:
+            bucket = self._hits.get(k)
+            if bucket is None:
+                bucket = deque()
+                self._hits[k] = bucket
+
+            self._prune_bucket(bucket, now=now)
+            bucket.append(now)
+            self._hits.move_to_end(k)
+            self._evict_if_needed()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="智能组卷辅助系统",
@@ -299,6 +423,9 @@ def create_app() -> FastAPI:
 
     # Prometheus /metrics + request instrumentation (configurable).
     instrument_app(app)
+
+    # Security warnings for proxy-header trust settings (startup-time).
+    _warn_proxy_settings_on_startup()
 
     # Optional OpenTelemetry tracing (disabled by default; enable with OTEL_ENABLE=1).
     try:
@@ -316,8 +443,14 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Request-ID",
+            "X-LLM-API-Key",
+            "X-Moonshot-API-Key",
+        ],
     )
     app.add_middleware(InputValidationMiddleware)
 
@@ -404,11 +537,27 @@ def create_app() -> FastAPI:
 
     rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
     rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")
+    rate_limit_keys_max = int(os.getenv("API_RATE_LIMIT_MAX_KEYS") or "20000")
     rate_limit_max = max(0, min(rate_limit_max, 50_000))
     rate_limit_window_s = max(1.0, min(rate_limit_window_s, 3600.0))
+    rate_limit_keys_max = max(100, min(rate_limit_keys_max, 200_000))
 
-    _rate_lock = asyncio.Lock()
-    _rate_hits: dict[str, deque[float]] = defaultdict(deque)
+    api_rate_limiter = _SlidingWindowRateLimiter(
+        max_requests=rate_limit_max,
+        window_s=rate_limit_window_s,
+        max_keys=rate_limit_keys_max,
+    )
+
+    auth_fail_limit_max = int(os.getenv("AUTH_RATE_LIMIT_MAX_FAILS") or "5")
+    auth_fail_limit_window_s = float(os.getenv("AUTH_RATE_LIMIT_WINDOW_S") or "900")
+    auth_fail_limit_max = max(0, min(auth_fail_limit_max, 10_000))
+    auth_fail_limit_window_s = max(1.0, min(auth_fail_limit_window_s, 24 * 3600.0))
+
+    auth_fail_limiter = _SlidingWindowRateLimiter(
+        max_requests=auth_fail_limit_max,
+        window_s=auth_fail_limit_window_s,
+        max_keys=min(rate_limit_keys_max, 50_000),
+    )
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -428,14 +577,29 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
-        if rate_limit_max <= 0:
-            return await call_next(request)
         if request.method == "OPTIONS":
             return await call_next(request)
 
         path = request.url.path or ""
         if not path.startswith("/api/"):
             return await call_next(request)
+
+        # Extra strict per-IP rate limiting for auth endpoints (brute-force protection).
+        # Count only failure responses (e.g. 401).
+        auth_path = path in {"/api/auth/login", "/api/auth/register"}
+        host = _client_ip(request)
+        auth_key = f"auth_fail:ip:{host}"
+        if auth_path and await auth_fail_limiter.is_limited(auth_key):
+            rid = _ensure_request_id(request)
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "rate_limited",
+                    "error": {"code": "rate_limited", "message": "rate_limited", "request_id": rid},
+                },
+            )
+            response.headers.setdefault("X-Request-ID", rid)
+            return response
 
         key = ""
         auth = str(request.headers.get("Authorization") or "")
@@ -446,35 +610,24 @@ def create_app() -> FastAPI:
                 key = f"token:{digest}"
 
         if not key:
-            host = _client_ip(request)
             key = f"ip:{host}"
 
-        now = time.monotonic()
-        async with _rate_lock:
-            bucket = _rate_hits[key]
-            while bucket and (now - bucket[0]) > rate_limit_window_s:
-                bucket.popleft()
-            if len(bucket) >= rate_limit_max:
-                rid = _ensure_request_id(request)
-                response = JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": "rate_limited",
-                        "error": {"code": "rate_limited", "message": "rate_limited", "request_id": rid},
-                    },
-                )
-                response.headers.setdefault("X-Request-ID", rid)
-                return response
-            bucket.append(now)
+        if not await api_rate_limiter.allow(key):
+            rid = _ensure_request_id(request)
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "rate_limited",
+                    "error": {"code": "rate_limited", "message": "rate_limited", "request_id": rid},
+                },
+            )
+            response.headers.setdefault("X-Request-ID", rid)
+            return response
 
-            # Best-effort pruning to avoid unbounded memory in long-running processes.
-            if len(_rate_hits) > 10_000:
-                for k in list(_rate_hits.keys())[:2000]:
-                    b = _rate_hits.get(k)
-                    if not b:
-                        _rate_hits.pop(k, None)
-
-        return await call_next(request)
+        response = await call_next(request)
+        if auth_path and response.status_code in {400, 401, 403}:
+            await auth_fail_limiter.record(auth_key)
+        return response
 
     @app.middleware("http")
     async def llm_api_key_override_middleware(request: Request, call_next):

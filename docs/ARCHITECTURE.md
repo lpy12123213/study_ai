@@ -1,5 +1,61 @@
 # 系统架构说明
 
+## 治理基线（唯一口径）
+
+本仓库的“臃肿来源”和重构进度以可重复生成的报告为准，避免靠口头描述判断复杂度来源。
+
+生成治理基线报告（建议输出到 `artifacts/` 方便比对）：
+
+```powershell
+python scripts/tech_debt_report.py --format md --out artifacts/tech_debt_report.md
+```
+
+报告会覆盖（best-effort）：
+- Task runtime 实现数量与位置（是否出现多套任务基础设施）
+- Legacy / shim / compat 入口（是否存在多条“官方路径”）
+- `.env.example` 环境变量键数量、后端 Python 引用的键数量
+- 后端 API 路由注册数量（`include_router`）
+- 前端页面数与路由数（`frontend/src/pages` 与 `App.tsx`）
+- 超大文件（LOC >= 800）清单（大文件治理优先级参考）
+- `nextstep.csv` 任务列表与完成度（若你维护 `是否完成` 列则可自动汇总）
+
+这份报告是后续任务验收与回归的基准输入。
+
+## 目标结构与命名规范（Canonical）
+
+本项目历史上按“新增顺序”扩张，形成了多套平行实现（尤其是任务运行时与接口）。治理目标是把新增功能的落点与边界固定下来，使“主路径唯一”。
+
+### 后端一级域（目标形态）
+
+后端目标建议收敛为以下一级域（不要求一次性迁完，但新增代码必须按此落位）：
+
+- `backend/system/`: 系统与运维能力（health/metrics/config/version）
+- `backend/auth/`: 认证与权限（JWT/用户隔离）
+- `backend/workspace/`: 用户工作区与内容组织（会话/画布/归档/标签等）
+- `backend/generation/`: 生成类业务域（deepthink/lesson_plan/question_library/paper_compose 等“产出内容”的编排）
+- `backend/tasks/`: 任务中心与事件模型（`/api/tasks`、TaskRuntime、任务存储）
+- `backend/integrations/`: 外部集成与 IO 边界（crawler/mcp/第三方 provider 适配）
+- `backend/shared/`: 跨域共享的基础设施与小工具（纯粹、无业务语义）
+
+禁止新增的长期主路径（发现即视为治理回归）：
+- `*_v2`、`legacy`、`compat`、`shim` 作为长期“主目录/主模块”
+
+允许但必须受控的兼容策略：
+- 兼容层仅允许“薄转发”（import re-export / route forward），必须写明迁移期与删除策略；迁移完成后删除。
+
+### 前端一级域（目标形态）
+
+前端目标形态为 feature-slice（按产品域/业务域组织），避免 `pages/hooks/stores/api` 全局平铺：
+
+- `frontend/src/features/<domain>/page|components|hooks|store|api|types`
+- `frontend/src/shared/ui|lib|api`: 跨域复用
+
+### 任务接口统一（约束）
+
+`/api/tasks` 是长任务的 canonical 接口：
+- 所有新长任务必须通过统一任务中心提交与流式回放
+- 领域专属的 `stream/status/resume` 端点进入迁移期：只保留薄封装，最终删除
+
 ## 总体架构
 
 ```
@@ -64,47 +120,24 @@
 - FastAPI 应用入口：`backend/app.py`
 - API 路由汇总（所有 `/api/*`）：`backend/api/router.py`
 
-主要路由模块（按 `backend/api/router.py` 注册顺序）：
-- 系统与健康检查：`backend/api/system.py`
-- 兼容模型/老接口：`backend/api/models.py`（legacy/shim）
-- 爬虫工具封装：`backend/api/crawler_tools.py`
-- 学习画布：`backend/api/canvas.py`
-- 媒体代理与下载：`backend/api/media.py`
-- 试卷与题目：`backend/api/papers.py`
-- 学科与筛选项：`backend/api/subjects.py`
-- 对话（会话/消息）：`backend/api/conversations.py`
-- Chat 对话：`backend/api/chat.py`
-- 认证（JWT）：`backend/api/auth.py`
-- DeepThink：`backend/api/deepthink.py`
-- 教案：`backend/api/lesson_plan.py`
-- 自学资料（SSE 任务）：`backend/api/study_materials.py`
-- 题目质量评估：`backend/api/question_evaluate.py`
-- 组卷蓝图：`backend/api/blueprints.py`
-- 本地题库：`backend/api/question_library.py`
-- 任务中心（统一任务与事件）：`backend/api/tasks.py`
-- 收藏/置顶/标签（通用 meta）：`backend/api/item_meta.py`
-- 自学资料归档：`backend/api/study_archives.py`
-- 分享链接（含公开只读访问）：`backend/api/share_links.py`
-- 模板库：`backend/api/templates.py`
-- 批注/标注：`backend/api/annotations.py`
-- 反馈与问题上报：`backend/api/feedback.py`
-- 错题本：`backend/api/wrongbook.py`
-- 学习计划：`backend/api/learning_plans.py`
-- 导出中心：`backend/api/exports.py`
-- 个人学习数据面板：`backend/api/dashboard.py`
+API router 按领域聚合（按 `backend/api/router.py` include 顺序）：
+- 系统：`backend/api/domains/system.py`（`system.py` + `dashboard.py`）
+- 集成/IO：`backend/api/domains/integrations.py`（`crawler_tools.py` + `subjects.py`）
+- 工作区：`backend/api/domains/workspace.py`（canvas/media/papers/conversations/chat/share/templates/annotations/...）
+- 认证：`backend/api/domains/auth.py`（`auth.py`）
+- 生成：`backend/api/domains/generation.py`（deepthink/lesson_plan/study_materials/question_library/...）
+- 任务/导出：`backend/api/domains/tasks.py`（`tasks.py` + `exports.py`）
 
-新增域模块时：在此列表按顺序补充一行，格式为 `- <功能>：\`backend/api/<file>.py\``。
+说明：
+- `/api/tasks` 是长任务的 canonical 接口；新长任务必须接入统一 TaskRuntime（见 `backend/shared/tasks/`）。
+- 旧的 legacy/shim 入口（例如早期的 `backend/api/models.py`）已移除；主路径以代码实际 import 为准。
 
 数据库与存储：
 - SQLAlchemy 模型：`backend/database/schema.py`
 - Engine / session / init：`backend/database/engine.py`
+- Schema init / migrations：`backend/database/migrations.py`
 - CRUD 仓库层：`backend/database/repositories/`
-- 兼容入口：`backend/database/models.py`（只做导出旧路径，推荐新路径）
-
-## Legacy / Shim 说明
-
-- `backend/database/models.py`：历史上把 schema+engine+CRUD 混在一个文件；现在已拆分到 `backend/database/*`，该文件仅保留旧 import 路径兼容。
-- `docs/ARCHITECTURE.md`：以“索引 + 入口定位”为准；旧段落中若出现历史文件名（例如早期爬虫入口）以代码实际路径为准。
+提示：历史上存在过 `backend/database/models.py` 这类“兼容入口”，现已移除；若你在旧文档/旧分支里看到相关引用，按当前代码树为准。
 
 ## 模块详解
 
@@ -189,8 +222,8 @@
 **关键文件：**
 - `backend/database/schema.py` - SQLAlchemy 数据模型定义
 - `backend/database/engine.py` - engine/session/init_db
+- `backend/database/migrations.py` - schema init / migrations helpers
 - `backend/database/repositories/` - 领域 CRUD（async session 注入友好）
-- `backend/database/models.py` - 兼容层（保留旧 import 路径）
 
 **数据模型：**
 
@@ -261,6 +294,7 @@ POST /api/search-history         - 记录搜索历史
    - 入口 API：`backend/api/question_library.py`
    - 生成主链路：`backend/question_library/generation.py`
    - 关键阶段：seed/expand →（可选）创意发散 brainstorm → 草稿 realize →（可选）配图增强 diagrams → 判题/审查 judging
+   - 配图后端：TikZ/PGF（首选）→ Asymptote（回退）；发布为 `SVG` 并通过 `/api/media/generated/*.svg` 提供
    - 产物：先进入 preview/session（pending_review），用户审核后再入库
 
 2. 一键组卷（AI 生成整张试卷）

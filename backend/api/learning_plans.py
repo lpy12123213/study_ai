@@ -8,11 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
-from backend.database.models import create_learning_plan as db_create_learning_plan
-from backend.database.models import get_learning_plan as db_get_learning_plan
-from backend.database.models import list_learning_plans as db_list_learning_plans
-from backend.database.models import set_learning_plan_item_completed as db_set_learning_plan_item_completed
-from backend.database.repositories.study_archives import get_study_archive as db_get_study_archive
+from backend.database.repositories.system.learning_plans import create_learning_plan as db_create_learning_plan
+from backend.database.repositories.system.learning_plans import get_learning_plan as db_get_learning_plan
+from backend.database.repositories.system.learning_plans import list_learning_plans as db_list_learning_plans
+from backend.database.repositories.system.learning_plans import (
+    set_learning_plan_item_completed as db_set_learning_plan_item_completed,
+)
+from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 
 router = APIRouter(prefix="/learning-plans", tags=["learning-plans"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)

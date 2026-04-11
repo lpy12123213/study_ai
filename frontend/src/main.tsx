@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MotionConfig } from 'framer-motion'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { UserSettingsBootstrap } from '@/components/shared/UserSettingsBootstrap'
+import { ToastHost } from '@/components/shared/ToastHost'
+import { NavigationEventHost } from '@/components/shared/NavigationEventHost'
 import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore'
 import App from './App'
 import './index.css'
@@ -25,6 +27,8 @@ function RootApp() {
     <MotionConfig reducedMotion={reduceMotion ? 'always' : 'user'}>
       <UserSettingsBootstrap />
       <BrowserRouter>
+        <NavigationEventHost />
+        <ToastHost />
         <App />
       </BrowserRouter>
     </MotionConfig>

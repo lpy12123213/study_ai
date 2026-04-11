@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.database.models import create_feedback as db_create_feedback
-from backend.database.models import list_feedback as db_list_feedback
+from backend.database.repositories.system.feedback import create_feedback as db_create_feedback
+from backend.database.repositories.system.feedback import list_feedback as db_list_feedback
 
 router = APIRouter(prefix="/feedback", tags=["feedback"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)

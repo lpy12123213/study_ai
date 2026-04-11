@@ -16,15 +16,12 @@ from backend.api.schemas import PaperCreate, PaperResponse
 from backend.core.audit import AuditAction, audit_logger
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
-from backend.database.models import delete_paper, get_paper, get_question_cache, list_papers, save_paper
-from backend.database.repositories.tasks import append_task_event as db_append_task_event
-from backend.database.repositories.tasks import update_task_status as db_update_task_status
-from backend.database.repositories.tasks import upsert_task as db_upsert_task
-from backend.paper_compose.compose_tasks import compose_tasks
+from backend.database.repositories.question.papers import delete_paper, get_paper, list_papers, save_paper
+from backend.database.repositories.question.question_cache import get_question_cache
 from backend.paper_compose.export import export_paper as export_paper_doc
-from backend.paper_compose.task_manager import PaperComposeTask
-from backend.paper_compose.full_paper_workflow import generate_full_paper_events
 from backend.paper_compose.workflow import compose_paper_events
+from backend.shared.tasks import RuntimeTask, task_runtime
+from backend.tasks import submit_generate_full_paper_task
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -246,13 +243,12 @@ async def generate_full_paper(payload: Optional[dict] = None, user: dict = Depen
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     body = payload if isinstance(payload, dict) else {}
-    req = dict(body)
-    req.setdefault("taskId", uuid.uuid4().hex[:12])
+    task = await submit_generate_full_paper_task(user_id=user_id, request=dict(body))
 
-    stream_reasoning = bool(req.get("stream_reasoning")) if "stream_reasoning" in req else bool(req.get("streamReasoning"))
+    heartbeat_s = float(os.getenv("PAPER_COMPOSE_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
-        async for event in generate_full_paper_events(req, user_id=user_id, stream_reasoning=stream_reasoning, on_reasoning_event=None):
+        async for event in task_runtime.stream(task.task_id, after_seq=0, heartbeat_s=heartbeat_s):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -270,148 +266,38 @@ def _sse_headers() -> dict:
     }
 
 
-async def _run_compose_task(task: PaperComposeTask, *, user_id: str) -> None:
-    """
-    Run the compose workflow and append events into the task manager.
-    """
-
-    title = (
-        str((task.request or {}).get("paperName") or (task.request or {}).get("paper_name") or "组卷任务").strip()
-        or "组卷任务"
-    )
-    try:
-        await db_upsert_task(
-            user_id=user_id,
-            task_id=task.task_id,
-            task_type="paper_compose",
-            title=title,
-            status="running",
-            progress=0.0,
-            request=dict(task.request or {}),
-            started_at=utcnow_naive(),
-        )
-        await db_append_task_event(
-            user_id=user_id,
-            task_id=task.task_id,
-            event_type="step",
-            payload={
-                "step": {
-                    "id": "task_started",
-                    "title": "开始组卷任务",
-                    "status": "running",
-                    "startTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "toolName": "paper_compose",
-                    "input": {"taskId": task.task_id},
-                }
-            },
-        )
-    except Exception:
-        logger.exception("paper_compose_task_upsert_failed", extra={"task_id": task.task_id, "user_id": user_id})
+async def _run_compose_task(task: RuntimeTask, *, user_id: str) -> None:
+    """Run the compose workflow and emit events into the shared task runtime."""
 
     try:
         async for evt in compose_paper_events(task.request, user_id=user_id):
             if task.status != "running":
                 break
-            await compose_tasks.append_event(task, evt)
-
-            try:
-                payload = {k: evt.get(k) for k in ("step", "progress", "result", "error", "message") if k in evt}
-                progress = None
-                if "progress" in payload:
-                    try:
-                        progress = float(payload.get("progress") or 0.0)
-                    except Exception:
-                        progress = None
-                await db_append_task_event(
-                    user_id=user_id,
-                    task_id=task.task_id,
-                    event_type=str(evt.get("type") or "event"),
-                    payload=payload,
-                    progress=progress,
-                )
-            except Exception:
-                logger.exception(
-                    "paper_compose_task_event_write_failed",
-                    extra={"task_id": task.task_id, "user_id": user_id, "event": evt},
-                )
+            await task_runtime.append_event(task, evt)
 
             kind = str(evt.get("type") or "")
             if kind == "result":
-                await compose_tasks.complete_task(task)
-                try:
-                    result = evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
-                    await db_update_task_status(
-                        user_id=user_id,
-                        task_id=task.task_id,
-                        status="completed",
-                        progress=100.0,
-                        result=result,
-                        ended_at=utcnow_naive(),
-                    )
-                except Exception:
-                    logger.exception(
-                        "paper_compose_task_complete_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                    )
+                result = evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
+                await task_runtime.complete_task(task, result=result)
                 return
             if kind == "error":
-                await compose_tasks.fail_task(task, str(evt.get("error") or "compose_failed"))
-                try:
-                    await db_update_task_status(
-                        user_id=user_id,
-                        task_id=task.task_id,
-                        status="failed",
-                        error={"message": str(evt.get("error") or "compose_failed")},
-                        ended_at=utcnow_naive(),
-                    )
-                except Exception:
-                    logger.exception(
-                        "paper_compose_task_fail_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                    )
+                msg = str(evt.get("error") or "compose_failed").strip() or "compose_failed"
+                await task_runtime.fail_task(task, msg, error={"message": msg}, emit_event=False)
                 return
     except asyncio.CancelledError:
-        await compose_tasks.fail_task(task, "Task cancelled")
-        try:
-            await db_update_task_status(
-                user_id=user_id,
-                task_id=task.task_id,
-                status="canceled",
-                error={"message": "Task cancelled"},
-                ended_at=utcnow_naive(),
-            )
-        except Exception:
-            logger.exception(
-                "paper_compose_task_cancel_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-            )
+        # External controllers (e.g. shutdown) may set a terminal status before
+        # cancelling the runner. Respect that state to avoid overwriting DB.
+        if task.status != "running":
+            async with task.cond:
+                task.cond.notify_all()
+            raise
+        await task_runtime.fail_task(task, "Task cancelled")
         raise
     except Exception as exc:  # pragma: no cover
-        await compose_tasks.fail_task(task, str(exc))
-        try:
-            await db_update_task_status(
-                user_id=user_id,
-                task_id=task.task_id,
-                status="failed",
-                error={"message": str(exc)},
-                ended_at=utcnow_naive(),
-            )
-        except Exception:
-            logger.exception(
-                "paper_compose_task_error_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-            )
+        await task_runtime.fail_task(task, str(exc), error={"message": str(exc)})
     finally:
         if task.status == "running":
-            await compose_tasks.fail_task(task, "Task ended unexpectedly")
-            try:
-                await db_update_task_status(
-                    user_id=user_id,
-                    task_id=task.task_id,
-                    status="failed",
-                    error={"message": "Task ended unexpectedly"},
-                    ended_at=utcnow_naive(),
-                )
-            except Exception:
-                logger.exception(
-                    "paper_compose_task_final_write_failed", extra={"task_id": task.task_id, "user_id": user_id}
-                )
+            await task_runtime.fail_task(task, "Task ended unexpectedly", error={"message": "Task ended unexpectedly"})
 
 
 @router.post("/papers/compose")
@@ -436,13 +322,16 @@ async def compose_paper(payload: dict, user: dict = Depends(require_auth)) -> St
         task_id = f"compose-{uuid.uuid4().hex[:12]}"
         payload["taskId"] = task_id
 
-    async def runner_factory(task: PaperComposeTask):
+    async def runner_factory(task: RuntimeTask):
         await _run_compose_task(task, user_id=user_id)
 
     try:
-        await compose_tasks.create_task(
+        title = str(payload.get("paperName") or payload.get("paper_name") or "组卷任务").strip() or "组卷任务"
+        await task_runtime.create_task(
             task_id=task_id,
             user_id=user_id,
+            task_type="paper_compose",
+            title=title,
             request=payload,
             runner_factory=runner_factory,
         )
@@ -452,7 +341,7 @@ async def compose_paper(payload: dict, user: dict = Depends(require_auth)) -> St
     heartbeat_s = float(os.getenv("PAPER_COMPOSE_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
-        async for event in compose_tasks.stream(task_id, after_seq=0, heartbeat_s=heartbeat_s):
+        async for event in task_runtime.stream(task_id, after_seq=0, heartbeat_s=heartbeat_s):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

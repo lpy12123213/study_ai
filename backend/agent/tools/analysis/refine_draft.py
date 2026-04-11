@@ -8,7 +8,7 @@ from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
-from backend.core.settings import MAIN_MODEL
+from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
 
 logger = get_logger(__name__)
 
@@ -84,7 +84,7 @@ class RefineDraftToolsMixin:
 
         model = str(
             os.getenv("STUDY_MATERIALS_REFINER_MODEL")
-            or os.getenv("STUDY_MATERIALS_WRITER_MODEL")
+            or STUDY_MATERIALS_WRITER_MODEL
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()
         if not model:

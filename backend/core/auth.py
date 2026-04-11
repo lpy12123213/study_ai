@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -29,34 +28,18 @@ load_project_dotenv(override=False)
 # File lives in `backend/core/`; repo root is 3 levels up.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 LOCAL_DIR = PROJECT_ROOT / ".local"
-JWT_SECRET_PATH = LOCAL_DIR / "jwt_secret.txt"
 USERS_PATH = LOCAL_DIR / "users.json"
 REVOKED_TOKENS_PATH = LOCAL_DIR / "jwt_revoked.json"
 _users_lock = threading.RLock()
 logger = get_logger(__name__)
 
 
-def _load_or_create_jwt_secret() -> str:
+def _load_jwt_secret_from_env() -> str:
     env_secret = (os.getenv("JWT_SECRET") or "").strip()
     if env_secret:
         return env_secret
 
-    try:
-        if JWT_SECRET_PATH.exists():
-            saved = JWT_SECRET_PATH.read_text(encoding="utf-8").strip()
-            if saved:
-                return saved
-    except Exception:
-        logger.debug("jwt_secret_read_failed", exc_info=True)
-        saved = ""
-
-    secret = secrets.token_hex(32)
-    try:
-        LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-        JWT_SECRET_PATH.write_text(secret, encoding="utf-8")
-    except Exception:
-        logger.exception("jwt_secret_write_failed")
-    return secret
+    raise ValueError("JWT_SECRET is required (set it in environment or .env).")
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -102,7 +85,9 @@ def _load_admin_user() -> Dict[str, Any]:
 
     password_hash = (os.getenv("ADMIN_PASSWORD_HASH") or "").strip()
     if not password_hash:
-        password = os.getenv("ADMIN_PASSWORD", "admin123")
+        password = (os.getenv("ADMIN_PASSWORD") or "").strip()
+        if not password:
+            raise ValueError("ADMIN_PASSWORD is required (or set ADMIN_PASSWORD_HASH).")
         password_hash = hash_password(password)
 
     return {
@@ -181,7 +166,7 @@ def _bootstrap_users() -> Dict[str, Dict[str, Any]]:
 
 
 # JWT settings
-JWT_SECRET = _load_or_create_jwt_secret()
+JWT_SECRET = _load_jwt_secret_from_env()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = _get_int_env("JWT_EXPIRE_HOURS", 24)
 
@@ -395,4 +380,3 @@ def change_user_password(username: str, old_password: str, new_password: str) ->
             user["token_version"] = 2
         _save_users_to_disk(_users)
         return True
-

@@ -1,4 +1,5 @@
 import { apiClient, fetchSSE, fetchSSERequest } from '@/api/client'
+import { streamTask } from '@/api/tasks'
 import { normalizeSseEnvelope, type SseEnvelope } from '@/lib/sse'
 
 export type QuestionOrigin = 'crawled' | 'ai' | string
@@ -423,13 +424,23 @@ export function crawlQuestions(
   onError?: (error: Error) => void,
   onComplete?: () => void
 ): void {
-  fetchSSE(
-    '/question-library/crawl',
-    payload,
-    (data) => onEvent(normalizeQuestionLibraryTaskEvent(data)),
-    onError,
-    onComplete
-  )
+  apiClient
+    .post('/tasks/question-library/crawl', payload)
+    .then((res) => {
+      const taskId = String((res.data as any)?.taskId || (payload as any)?.task_id || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+      streamTask(
+        taskId,
+        0,
+        (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
+        onError,
+        onComplete
+      )
+    })
+    .catch((err: any) => {
+      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
 }
 
 export function generateQuestions(
@@ -438,13 +449,23 @@ export function generateQuestions(
   onError?: (error: Error) => void,
   onComplete?: () => void
 ): void {
-  fetchSSE(
-    '/question-library/generate',
-    payload,
-    (data) => onEvent(normalizeQuestionLibraryTaskEvent(data)),
-    onError,
-    onComplete
-  )
+  apiClient
+    .post('/tasks/question-library/generate', payload)
+    .then((res) => {
+      const taskId = String((res.data as any)?.taskId || (payload as any)?.task_id || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+      streamTask(
+        taskId,
+        0,
+        (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
+        onError,
+        onComplete
+      )
+    })
+    .catch((err: any) => {
+      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
 }
 
 export async function scoreQuestionLibraryBatch(payload: ScoreQuestionLibraryBatchPayload): Promise<any> {

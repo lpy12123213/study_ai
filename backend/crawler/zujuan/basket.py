@@ -292,7 +292,8 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
 
         def _sync_login():
             with sync_playwright() as playwright:
-                user_data_dir = os.path.join(os.path.dirname(__file__), ".playwright_data")
+                repo_root = Path(__file__).resolve().parents[3]
+                user_data_dir = str((repo_root / ".local" / "playwright" / "zujuan").resolve())
                 os.makedirs(user_data_dir, exist_ok=True)
                 browser = playwright.chromium.launch_persistent_context(user_data_dir, headless=False)
                 page = browser.pages[0] if browser.pages else browser.new_page()
@@ -345,8 +346,14 @@ async def login_via_subprocess(crawler: Any) -> Dict[str, Any]:
 
         project_root = str(Path(__file__).resolve().parents[2])
         scripts_dir = os.path.join(project_root, "scripts")
-        bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
-        py_path = os.path.join(scripts_dir, "save_login.py")
+
+        # Canonical location (scripts/ops/crawler). Keep a legacy fallback for older clones.
+        canonical_dir = os.path.join(scripts_dir, "ops", "crawler")
+        legacy_bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
+        legacy_py_path = os.path.join(scripts_dir, "save_login.py")
+
+        bat_path = os.path.join(canonical_dir, "登录组卷网.bat") if os.path.exists(canonical_dir) else legacy_bat_path
+        py_path = os.path.join(canonical_dir, "save_login.py") if os.path.exists(canonical_dir) else legacy_py_path
 
         if not (os.path.exists(bat_path) or os.path.exists(py_path)):
             return {"success": False, "error": f"登录脚本不存在: {bat_path} / {py_path}"}

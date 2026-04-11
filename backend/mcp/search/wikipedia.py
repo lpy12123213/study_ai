@@ -18,7 +18,10 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import API_TIMEOUT
+
+logger = get_logger(__name__)
 
 
 async def _to_thread(func, /, *args, **kwargs):
@@ -278,7 +281,7 @@ async def wikipedia_search(
             wikipedia.set_lang((lang or "zh").strip() or "zh")
         except Exception:
             # Best-effort: keep default language.
-            pass
+            logger.warning("wikipedia_set_lang_failed", extra={"lang": lang}, exc_info=True)
 
         hits: List[str] = []
         try:

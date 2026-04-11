@@ -11,19 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.crawler.manager import get_crawler
-from backend.database.models import (
+from backend.database.repositories.content.study_archives import (
     get_latest_study_archive,
     get_latest_study_archive_for_subject,
-    get_question_cache,
-    list_question_library_items,
-    upsert_question_cache,
-    upsert_question_library_items,
 )
-from backend.database.repositories.tasks import (
-    append_task_event as db_append_task_event,
-    update_task_status as db_update_task_status,
-    upsert_task as db_upsert_task,
-)
+from backend.database.repositories.question.question_cache import get_question_cache, upsert_question_cache
+from backend.database.repositories.question.question_library import list_question_library_items, upsert_question_library_items
 from backend.llm.client import is_llm_configured
 from backend.question_library.generation import (
     analyze_reference_questions,
@@ -48,8 +41,8 @@ from backend.question_library.session_utils import (
     normalize_draft_questions,
     normalize_review_status,
 )
-from backend.question_library.task_manager import QuestionLibraryTask, QuestionLibraryTaskManager
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
+from backend.shared.tasks import RuntimeTask, task_runtime
 
 logger = get_logger(__name__)
 
@@ -57,12 +50,6 @@ logger = get_logger(__name__)
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
-
-task_manager = QuestionLibraryTaskManager(
-    max_tasks=int(os.getenv("QUESTION_LIBRARY_MAX_TASKS") or "50"),
-    task_ttl_s=int(os.getenv("QUESTION_LIBRARY_TASK_TTL_S") or str(60 * 60)),
-    max_events_per_task=int(os.getenv("QUESTION_LIBRARY_TASK_MAX_EVENTS") or "8000"),
-)
 
 
 def _ensure_session(
@@ -194,7 +181,7 @@ def _now_iso_z() -> str:
 
 
 async def _emit_event(
-    task: QuestionLibraryTask,
+    task: RuntimeTask,
     *,
     event_type: str,
     data: Dict[str, Any],
@@ -202,20 +189,8 @@ async def _emit_event(
     persist_task_id: str = "",
     progress: Optional[float] = None,
 ) -> None:
-    await task_manager.append_event(task, {"type": str(event_type or "").strip() or "event", "data": dict(data or {})})
-
-    # Persist to DB so sessions can replay task events after refresh.
-    if user_id and persist_task_id:
-        try:
-            await db_append_task_event(
-                user_id=str(user_id or "").strip(),
-                task_id=str(persist_task_id or "").strip(),
-                event_type=str(event_type or "").strip() or "event",
-                payload=dict(data or {}),
-                progress=progress,
-            )
-        except Exception:
-            pass
+    _ = user_id, persist_task_id, progress
+    await task_runtime.append_event(task, {"type": str(event_type or "").strip() or "event", "data": dict(data or {})})
 
 
 def _merge_reasoning_block(session: dict, *, task_id: str, payload: dict) -> dict:
@@ -329,7 +304,7 @@ def _materialize_drafts(
     return out, draft_key_to_id
 
 
-async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> QuestionLibraryTask:
+async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
     req = dict(request or {})
     subject = str(req.get("subject") or "").strip()
     edu_level = str(req.get("edu_level") or "").strip()
@@ -352,9 +327,9 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Questio
 
     task_id = str(req.get("task_id") or "").strip() or f"ql_crawl_{uuid.uuid4().hex[:12]}"
 
-    async def runner_factory(task: QuestionLibraryTask) -> None:
+    async def runner_factory(task: RuntimeTask) -> None:
         try:
-            await task_manager.append_event(
+            await task_runtime.append_event(
                 task,
                 {
                     "type": "step",
@@ -438,7 +413,7 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                 inserted += 1
                 qids.append(qid)
 
-                await task_manager.append_event(
+                await task_runtime.append_event(
                     task,
                     {
                         "type": "item_saved",
@@ -455,9 +430,9 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                 )
 
                 pct = int((i / max(1, total)) * 100)
-                await task_manager.append_event(task, {"type": "progress", "data": {"progress": pct}})
+                await task_runtime.append_event(task, {"type": "progress", "data": {"progress": pct}})
 
-            await task_manager.append_event(
+            await task_runtime.append_event(
                 task,
                 {
                     "type": "done",
@@ -470,20 +445,27 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                     },
                 },
             )
-            await task_manager.complete_task(task)
+            await task_runtime.complete_task(task)
         except asyncio.CancelledError:
-            await task_manager.fail_task(task, "Task cancelled")
+            await task_runtime.fail_task(task, "Task cancelled")
             raise
         except Exception as exc:  # pragma: no cover
-            await task_manager.fail_task(task, str(exc))
+            await task_runtime.fail_task(task, str(exc))
         finally:
             if task.status == "running":
-                await task_manager.fail_task(task, "Task ended unexpectedly")
+                await task_runtime.fail_task(task, "Task ended unexpectedly")
 
-    return await task_manager.create_task(task_id=task_id, user_id=user_id, kind="crawl", request=req, runner_factory=runner_factory)
+    return await task_runtime.create_task(
+        task_id=task_id,
+        user_id=user_id,
+        task_type="question_library_crawl",
+        title=f"题库抓取：{subject or query or 'crawl'}",
+        request=req,
+        runner_factory=runner_factory,
+    )
 
 
-async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> QuestionLibraryTask:
+async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
     req = dict(request or {})
     if not is_llm_configured():
         raise RunnerError("llm_not_configured", status_code=500)
@@ -499,9 +481,9 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Questio
     threshold = _clamp_int(os.getenv("QUESTION_LIBRARY_HIDE_THRESHOLD") or 70, default=70, min_v=0, max_v=100)
     model = str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
 
-    async def runner_factory(task: QuestionLibraryTask) -> None:
+    async def runner_factory(task: RuntimeTask) -> None:
         try:
-            await task_manager.append_event(task, {"type": "progress", "data": {"progress": 5, "stage": "Load"}})
+            await task_runtime.append_event(task, {"type": "progress", "data": {"progress": 5, "stage": "Load"}})
 
             batch = await list_question_library_items(
                 user_id=user_id,
@@ -531,18 +513,18 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                     break
 
             if not qids:
-                await task_manager.append_event(
+                await task_runtime.append_event(
                     task,
                     {"type": "done", "data": {"success": True, "scored": 0, "hidden": 0, "subject": subject, "count": 0}},
                 )
-                await task_manager.complete_task(task)
+                await task_runtime.complete_task(task)
                 return
 
             cache = await get_question_cache(question_ids=qids)
             scored = 0
             hidden_n = 0
             total = len(qids)
-            await task_manager.append_event(task, {"type": "progress", "data": {"progress": 10, "stage": "Score"}})
+            await task_runtime.append_event(task, {"type": "progress", "data": {"progress": 10, "stage": "Score"}})
 
             for idx, qid in enumerate(qids, start=1):
                 if task.status != "running":
@@ -571,7 +553,7 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                 if overall < threshold:
                     hidden_n += 1
 
-                await task_manager.append_event(
+                await task_runtime.append_event(
                     task,
                     {
                         "type": "item_saved",
@@ -591,9 +573,11 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                 )
 
                 pct = 10 + int((idx / max(1, total)) * 88)
-                await task_manager.append_event(task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Score"}})
+                await task_runtime.append_event(
+                    task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Score"}}
+                )
 
-            await task_manager.append_event(
+            await task_runtime.append_event(
                 task,
                 {
                     "type": "done",
@@ -607,20 +591,27 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Questio
                     },
                 },
             )
-            await task_manager.complete_task(task)
+            await task_runtime.complete_task(task)
         except asyncio.CancelledError:
-            await task_manager.fail_task(task, "Task cancelled")
+            await task_runtime.fail_task(task, "Task cancelled")
             raise
         except Exception as exc:  # pragma: no cover
-            await task_manager.fail_task(task, str(exc))
+            await task_runtime.fail_task(task, str(exc))
         finally:
             if task.status == "running":
-                await task_manager.fail_task(task, "Task ended unexpectedly")
+                await task_runtime.fail_task(task, "Task ended unexpectedly")
 
-    return await task_manager.create_task(task_id=task_id, user_id=user_id, kind="score", request=req, runner_factory=runner_factory)
+    return await task_runtime.create_task(
+        task_id=task_id,
+        user_id=user_id,
+        task_type="question_library_score",
+        title=f"题库评分：{subject or 'score'}",
+        request=req,
+        runner_factory=runner_factory,
+    )
 
 
-async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> QuestionLibraryTask:
+async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
     req = dict(request or {})
     if not is_llm_configured():
         raise RunnerError("llm_not_configured", status_code=500)
@@ -697,18 +688,7 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Ques
     current_session["status"] = "running"
     save_session(current_session)
 
-    await db_upsert_task(
-        user_id=user_id,
-        task_id=task_id,
-        task_type="question_library_generate",
-        title=f"AI 出题：{subject} {topic_key}".strip(),
-        status="running",
-        progress=0.0,
-        request=dict(req),
-        started_at=_utcnow(),
-    )
-
-    async def runner_factory(task: QuestionLibraryTask) -> None:
+    async def runner_factory(task: RuntimeTask) -> None:
         stage_labels = {
             "source_pack": "素材整理",
             "reference_crawl": "参考题爬取",
@@ -956,18 +936,9 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Ques
                 user_id=user_id,
                 persist_task_id=task_id,
             )
-            await task_manager.complete_task(task)
-            try:
-                await db_update_task_status(
-                    user_id=user_id,
-                    task_id=task_id,
-                    status="completed",
-                    progress=100.0,
-                    result={"success": True, "session_id": session_id, "preview_id": preview_id},
-                    ended_at=_utcnow(),
-                )
-            except Exception:
-                pass
+            await task_runtime.complete_task(
+                task, result={"success": True, "session_id": session_id, "preview_id": preview_id}
+            )
         except asyncio.CancelledError:
             # External controllers (e.g. app shutdown) may set a terminal status
             # before cancelling the runner. Respect that state and avoid
@@ -977,17 +948,7 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Ques
                     task.cond.notify_all()
                 raise
 
-            await task_manager.fail_task(task, "Task cancelled")
-            try:
-                await db_update_task_status(
-                    user_id=user_id,
-                    task_id=task_id,
-                    status="failed",
-                    error={"message": "Task cancelled"},
-                    ended_at=_utcnow(),
-                )
-            except Exception:
-                pass
+            await task_runtime.fail_task(task, "Task cancelled")
             raise
         except Exception as exc:  # pragma: no cover
             try:
@@ -998,30 +959,21 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Ques
                 else:
                     _save_snapshot(session_status="failed", preview_status="pending_review")
             except Exception:
-                pass
-            await task_manager.fail_task(task, str(exc))
-            try:
-                await db_update_task_status(
-                    user_id=user_id,
-                    task_id=task_id,
-                    status="failed",
-                    error={"message": str(exc)},
-                    ended_at=_utcnow(),
+                logger.warning(
+                    "question_library_snapshot_save_failed",
+                    extra={"user_id": user_id, "task_id": task_id},
+                    exc_info=True,
                 )
-            except Exception:
-                pass
+            await task_runtime.fail_task(task, str(exc))
         finally:
             if task.status == "running":
-                await task_manager.fail_task(task, "Task ended unexpectedly")
-                try:
-                    await db_update_task_status(
-                        user_id=user_id,
-                        task_id=task_id,
-                        status="failed",
-                        error={"message": "Task ended unexpectedly"},
-                        ended_at=_utcnow(),
-                    )
-                except Exception:
-                    pass
+                await task_runtime.fail_task(task, "Task ended unexpectedly")
 
-    return await task_manager.create_task(task_id=task_id, user_id=user_id, kind="generate", request=req, runner_factory=runner_factory)
+    return await task_runtime.create_task(
+        task_id=task_id,
+        user_id=user_id,
+        task_type="question_library_generate",
+        title=f"AI 出题：{subject} {topic_key}".strip(),
+        request=req,
+        runner_factory=runner_factory,
+    )
