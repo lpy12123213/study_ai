@@ -28,7 +28,7 @@ sympy>=1.13.1,<2
 matplotlib>=3.9.2,<4
 
 # TUI / CLI
-rich>=13.7.0,<14
+rich>=13.7.0,<16
 prompt_toolkit>=3.0.43,<4
 
 # Metrics
