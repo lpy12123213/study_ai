@@ -127,7 +127,7 @@ async def brainstorm_creative_seeds(
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
-        temperature=0.45,
+        temperature=0.55,
         max_tokens=0,
         req_id_prefix="ql_brainstorm",
         retries=2,

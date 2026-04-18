@@ -386,6 +386,78 @@ class ChatCompletionReasoningCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(captured_payloads), 1)
         self.assertIn("tools", captured_payloads[0])
 
+    async def test_ikuncode_supports_streaming_content(self) -> None:
+        stream_payloads: list[dict] = []
+        req = httpx.Request("POST", "https://example.test/chat/completions")
+
+        class FakeStreamResponse:
+            status_code = 200
+            headers = {}
+
+            async def __aenter__(self):  # noqa: ANN201
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001,ANN201
+                return False
+
+            async def aiter_lines(self):  # noqa: ANN201
+                yield 'data: {"choices":[{"delta":{"content":"hello "}}]}'
+                yield 'data: {"choices":[{"delta":{"content":"world"},"finish_reason":"stop"}],"usage":{"total_tokens":2}}'
+                yield "data: [DONE]"
+
+            async def aread(self) -> bytes:
+                return b""
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN001,ARG002
+                pass
+
+            async def __aenter__(self):  # noqa: ANN201
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001,ANN201
+                return False
+
+            def stream(self, method, url, headers=None, json=None):  # noqa: ANN001,ANN201
+                _ = method, url, headers
+                stream_payloads.append(dict(json or {}))
+                return FakeStreamResponse()
+
+            async def post(self, url, headers=None, json=None):  # noqa: ANN001,ANN201
+                _ = url, headers, json
+                raise AssertionError("streaming path should be used for ikuncode")
+
+        with patch.object(llm_client.httpx, "AsyncClient", FakeAsyncClient):
+            chunks: list[str] = []
+
+            async def on_content_delta(text: str) -> None:
+                chunks.append(text)
+
+            res = await llm_client.chat_completion(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-5.2",
+                temperature=0.2,
+                max_tokens=50,
+                stream=True,
+                on_content_delta=on_content_delta,
+                raise_on_fail=True,
+                retries=1,
+                req_id_prefix="test",
+                provider="ikuncode",
+                base_url="https://example.test",
+                api_key="test-key",
+                moonshot_key="",
+                moonshot_base_url="",
+            )
+
+        self.assertEqual(res.content, "hello world")
+        self.assertEqual(chunks, ["hello ", "world"])
+        self.assertEqual(len(stream_payloads), 1)
+        self.assertTrue(stream_payloads[0]["stream"])
+
 
 if __name__ == "__main__":
     unittest.main()

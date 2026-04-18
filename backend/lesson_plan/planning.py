@@ -35,7 +35,7 @@ async def split_knowledge_points(topic: str, subject: str, *, min_points: int = 
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=model,
-            temperature=0.2,
+            temperature=0.6,
             max_tokens=2400,
             raise_on_fail=True,
         )
@@ -79,7 +79,7 @@ async def research_knowledge_point(kp: str, subject: str, topic: str) -> Dict[st
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=model,
-            temperature=0.3,
+            temperature=0.7,
             max_tokens=2600,
             raise_on_fail=True,
         )
@@ -130,7 +130,7 @@ async def review_knowledge_points(
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=model,
-            temperature=0.2,
+            temperature=0.6,
             max_tokens=2400,
             raise_on_fail=True,
         )

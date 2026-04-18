@@ -67,7 +67,7 @@ AI 出题与本地题库的运行期缓存、后台打分与任务池参数主�
 - `QUESTION_LIBRARY_TASK_MAX_EVENTS`：单任务最多保留事件数（默认 `8000`）
 - `QUESTION_LIBRARY_REALIZE_MAX_TOKENS`：草稿生成（realize）最大 tokens；不设置时会跟随 `LESSON_PLAN_MAX_TOKENS` 并保证最小预算
 - `QUESTION_LIBRARY_JUDGE_MODEL`：审题模型（留空用默认 lesson_plan 模型）
-- `QUESTION_LIBRARY_MCP_SEARCH_MODEL`：CLI 出题前的“素材检索”阶段使用的模型（默认 `openai/gpt-5-mini`）。该阶段依赖 tools + 引用 URL，建议选择支持 tool-calling 的模型。
+- `QUESTION_LIBRARY_MCP_SEARCH_MODEL`：CLI 出题前的“素材检索”阶段使用的模型。默认值通常为 `openai/gpt-5-mini`；当当前 provider 为 `ikuncode` 且主出题模型是 `gpt-*` 时，会自动复用该 GPT 模型（例如 `gpt-5.2`），避免错误携带 OpenRouter 风格的模型前缀。该阶段依赖 tools + 引用 URL，建议选择支持 tool-calling 的模型。
 
 出题素材联网搜索（可选）：
 

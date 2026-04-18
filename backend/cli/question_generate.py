@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from backend.api.question_evaluate import evaluate_generated_question_review
 from backend.llm.client import chat_completion, is_llm_configured
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, settings
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.question_library import upsert_question_library_items
 from backend.question_library.generation import (
@@ -48,6 +48,45 @@ def _repo_root() -> Path:
 
 def _output_dir() -> Path:
     return (_repo_root() / "output").resolve()
+
+
+def _looks_like_gpt_model(model: str) -> bool:
+    raw = str(model or "").strip().lower()
+    if not raw:
+        return False
+    if "/" in raw:
+        raw = raw.split("/", 1)[-1]
+    return raw.startswith("gpt-")
+
+
+def _normalize_cli_model_for_provider(*, provider: str, model: str) -> str:
+    provider_in = str(provider or "").strip().lower()
+    model_in = str(model or "").strip()
+    if provider_in == "ikuncode" and model_in.lower().startswith("openai/"):
+        candidate = model_in.split("/", 1)[-1].strip()
+        if _looks_like_gpt_model(candidate):
+            return candidate
+    return model_in
+
+
+def _resolve_cli_mcp_search_model() -> str:
+    explicit = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip()
+    if explicit:
+        return explicit
+
+    provider = str(
+        getattr(settings, "lesson_plan_provider", "") or getattr(settings, "chat_provider", "")
+    ).strip().lower()
+    candidate_model = str(
+        getattr(settings, "lesson_plan_model", "") or getattr(settings, "main_model", "") or LESSON_PLAN_MODEL
+    )
+    provider_model = _normalize_cli_model_for_provider(
+        provider=provider,
+        model=candidate_model,
+    )
+    if provider == "ikuncode" and _looks_like_gpt_model(provider_model):
+        return provider_model
+    return "openai/gpt-5-mini"
 
 
 def _as_int(v: Any, default: int) -> int:
@@ -758,7 +797,7 @@ async def _ai_search_materials_via_mcp(
     # This stage relies on tool-calling + citations. Prefer a tool-capable model by default,
     # and allow override via env var. Do NOT silently inherit a cheap/non-tool-capable
     # lesson_plan model here, otherwise we may get hallucinated "sources".
-    effective_model = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip() or "openai/gpt-5-mini"
+    effective_model = _resolve_cli_mcp_search_model()
 
     def _log(msg: str) -> None:
         if callable(ui_log_tool):
@@ -2155,7 +2194,7 @@ def _list_sessions_cmd(*, user_id: str, limit: int) -> None:
 def _print_params_summary(console, params: RunParams) -> None:  # noqa: ANN001
     from backend.core.settings import settings
 
-    mcp_search_model = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip() or "openai/gpt-5-mini"
+    mcp_search_model = _resolve_cli_mcp_search_model()
 
     if not _rich_available():
         console.rule("参数确认")

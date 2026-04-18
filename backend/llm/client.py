@@ -787,7 +787,7 @@ async def chat_completion(
         payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
 
     is_openrouter = resolved_provider == "openrouter"
-    if stream and resolved_provider in {"openrouter", "moonshot"}:
+    if stream and resolved_provider in {"openrouter", "moonshot", "ikuncode"}:
         payload["stream"] = True
 
     if isinstance(reasoning, dict) and reasoning:
