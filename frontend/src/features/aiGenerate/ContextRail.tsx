@@ -157,34 +157,13 @@ export function ContextRail(props: ContextRailProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4 p-4 lg:p-6">
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-          <div className="rounded-[22px] border border-border/70 bg-background/80 p-4">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Rows3 className="h-4 w-4" />
-              当前学科
-            </div>
-            <div className="mt-2 text-base font-semibold">{subject || '未选择学科'}</div>
-          </div>
-          <div className="rounded-[22px] border border-border/70 bg-background/80 p-4">
-            <div className="text-sm font-medium">会话模式</div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Badge variant="outline" className="rounded-full">
-                {mode === 'infinite' ? '无限模式' : '标准模式'}
-              </Badge>
-              {sessionStatus ? (
-                <Badge variant="outline" className="rounded-full">
-                  {sessionStatus}
-                </Badge>
-              ) : null}
-            </div>
-          </div>
-          <div className="rounded-[22px] border border-border/70 bg-background/80 p-4">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Library className="h-4 w-4" />
-              AI 题库
-            </div>
-            <div className="mt-2 text-2xl font-semibold">{libraryTotal}</div>
-          </div>
+        <div className="flex flex-wrap items-center gap-2 rounded-[22px] border border-border/70 bg-background/80 px-4 py-3 text-sm">
+          <span className="flex items-center gap-1.5 font-medium"><Rows3 className="h-3.5 w-3.5" />{subject || '未选择学科'}</span>
+          <span className="text-border">·</span>
+          <Badge variant="outline" className="rounded-full">{mode === 'infinite' ? '无限模式' : '标准模式'}</Badge>
+          {sessionStatus && <Badge variant="outline" className="rounded-full">{sessionStatus}</Badge>}
+          <span className="text-border">·</span>
+          <span className="flex items-center gap-1.5 text-muted-foreground"><Library className="h-3.5 w-3.5" />AI 题库 <span className="font-semibold text-foreground">{libraryTotal}</span></span>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-2">

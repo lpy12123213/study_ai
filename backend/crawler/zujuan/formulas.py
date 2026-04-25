@@ -50,7 +50,7 @@ def build_curl_cmd(crawler: Any, url: str, timeout: int = 30, use_login_cookie: 
     ]
 
     cookie_to_use = crawler.cookies
-    if use_login_cookie:
+    if use_login_cookie and not cookie_to_use:
         env_session = load_env_login()
         if env_session.get("is_logged_in") and env_session.get("cookies"):
             cookie_to_use = env_session["cookies"]

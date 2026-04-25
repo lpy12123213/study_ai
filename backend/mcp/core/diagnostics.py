@@ -12,6 +12,10 @@ from backend.crawler.interface import CrawlerInterface
 from backend.core.subjects import SUBJECTS
 
 
+def resolve_repo_env_file() -> Path:
+    return Path(__file__).resolve().parents[3] / ".env"
+
+
 async def diagnose_export(
     *,
     current_subject: str,
@@ -29,7 +33,7 @@ async def diagnose_export(
     }
 
     # 1) Check .env login vars
-    env_file = str(Path(__file__).resolve().parents[2] / ".env")
+    env_file = str(resolve_repo_env_file())
     env_check: Dict[str, Any] = {"name": "ENV文件检查", "status": "unknown", "details": {}}
 
     cookies = ""

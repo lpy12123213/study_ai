@@ -23,16 +23,11 @@ import sys
 import time
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
 sys.path.append(str(PROJECT_ROOT))
-DEFAULT_USER_DATA_DIR = PROJECT_ROOT / ".local" / "playwright" / "zujuan_user_data"
-LEGACY_USER_DATA_DIR = PROJECT_ROOT / ".playwright_zujuan_user_data"
-USER_DATA_DIR = DEFAULT_USER_DATA_DIR
-if LEGACY_USER_DATA_DIR.exists() and not DEFAULT_USER_DATA_DIR.exists():
-    USER_DATA_DIR = LEGACY_USER_DATA_DIR
+
+from backend.crawler.zujuan.cookies import get_playwright_login_user_data_dir
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument(
@@ -48,7 +43,11 @@ parser.add_argument(
 parser.add_argument(
     "--user-data-dir",
     default=os.getenv("ZUJUAN_USER_DATA_DIR", "").strip(),
-    help="Playwright 持久化用户数据目录（默认使用项目下 .local/playwright/zujuan_user_data；兼容旧目录 .playwright_zujuan_user_data）",
+    help=(
+        "Playwright 持久化用户数据目录"
+        "（默认使用项目下 .local/playwright/zujuan_user_data；兼容旧目录 "
+        ".local/playwright/zujuan 和 .playwright_zujuan_user_data）"
+    ),
 )
 parser.add_argument(
     "--dry-run",
@@ -119,6 +118,13 @@ if args.dry_run:
     raise SystemExit(0)
 
 
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print("[FAIL] 未安装 playwright，请先运行：python -m pip install playwright && python -m playwright install chromium")
+    raise SystemExit(2)
+
+
 def extract_cookie_values(cookies: list[dict]) -> tuple[str | None, str | None, str]:
     user_id: str | None = None
     csrf_token: str | None = None
@@ -174,7 +180,7 @@ cookie_str: str = ""
 
 with sync_playwright() as p:
     print("启动浏览器...")
-    user_data_dir = Path(args.user_data_dir).expanduser() if args.user_data_dir else USER_DATA_DIR
+    user_data_dir = get_playwright_login_user_data_dir(explicit_dir=args.user_data_dir)
     print(f"持久化用户数据目录：{user_data_dir}")
 
     def _cleanup_singleton_files() -> list[str]:

@@ -50,6 +50,27 @@ def build_cookie_string(cookies: Dict[str, str]) -> str:
     return "; ".join([f"{k}={v}" for k, v in cookies.items() if k and v])
 
 
+def get_playwright_login_user_data_dir(*, explicit_dir: str = "") -> Path:
+    explicit = str(explicit_dir or os.getenv("ZUJUAN_USER_DATA_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    default_dir = _PROJECT_ROOT / ".local" / "playwright" / "zujuan_user_data"
+    legacy_dirs = (
+        _PROJECT_ROOT / ".local" / "playwright" / "zujuan",
+        _PROJECT_ROOT / ".playwright_zujuan_user_data",
+    )
+
+    if default_dir.exists():
+        return default_dir
+
+    for legacy_dir in legacy_dirs:
+        if legacy_dir.exists():
+            return legacy_dir
+
+    return default_dir
+
+
 async def get_cookies_with_playwright() -> str:
     """Use Playwright to fetch a basic (anti-bot) cookie jar without logging in."""
 
@@ -207,8 +228,7 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
 
         def _sync_get_session() -> Dict[str, Any]:
             with sync_playwright() as p:
-                repo_root = Path(__file__).resolve().parents[3]
-                user_data_dir = str((repo_root / ".local" / "playwright" / "zujuan").resolve())
+                user_data_dir = str(get_playwright_login_user_data_dir().resolve())
                 os.makedirs(user_data_dir, exist_ok=True)
 
                 browser = p.chromium.launch_persistent_context(

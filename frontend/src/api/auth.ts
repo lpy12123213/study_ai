@@ -25,7 +25,6 @@ export interface RegisterRequest {
   email?: string
 }
 
-// Login
 export async function login(data: LoginRequest): Promise<LoginResponse> {
   const response = await apiClient.post<BackendLoginResponse>('/auth/login', data)
   const payload = response.data
@@ -39,10 +38,7 @@ export async function login(data: LoginRequest): Promise<LoginResponse> {
   }
 }
 
-// Register
 export async function register(data: RegisterRequest): Promise<LoginResponse> {
-  // Note: backend `/auth/register` is admin-only. Keep the API for completeness but
-  // fall back to login for user experience when possible.
   await apiClient.post('/auth/register', {
     username: data.username,
     password: data.password,
@@ -51,13 +47,10 @@ export async function register(data: RegisterRequest): Promise<LoginResponse> {
   return login({ username: data.username, password: data.password })
 }
 
-// Logout
 export async function logout(): Promise<void> {
-  // JWT is stateless; client-side logout clears local storage.
   return
 }
 
-// Get current user
 export async function getCurrentUser(): Promise<User> {
   const response = await apiClient.get<{
     user_id: string
@@ -71,8 +64,13 @@ export async function getCurrentUser(): Promise<User> {
   }
 }
 
-// Update user profile
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  await apiClient.post('/auth/change-password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  })
+}
+
 export async function updateProfile(_data: Partial<User>): Promise<User> {
-  // Not implemented by backend yet.
   throw new Error('updateProfile_not_supported')
 }

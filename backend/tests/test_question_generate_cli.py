@@ -59,3 +59,19 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out["success"])
         self.assertGreaterEqual(len(captured_models), 1)
         self.assertTrue(all(model == "gpt-5.2" for model in captured_models))
+
+
+class CliMcpSearchModelResolveTests(unittest.TestCase):
+    def test_resolve_cli_mcp_search_model_prefers_configured_model_for_non_ikuncode(self) -> None:
+        with (
+            patch.dict(os.environ, {"QUESTION_LIBRARY_MCP_SEARCH_MODEL": ""}, clear=False),
+            patch.object(question_generate, "settings", create=True),
+        ):
+            question_generate.settings.chat_provider = "openrouter"
+            question_generate.settings.lesson_plan_provider = "openrouter"
+            question_generate.settings.main_model = "anthropic/claude-3.7-sonnet"
+            question_generate.settings.lesson_plan_model = "anthropic/claude-3.7-sonnet"
+
+            model = question_generate._resolve_cli_mcp_search_model()
+
+        self.assertEqual(model, "anthropic/claude-3.7-sonnet")

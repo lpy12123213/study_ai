@@ -15,10 +15,145 @@ from backend.crawler.zujuan.cookies import (
     build_cookie_string,
     fetch_csrf_token_from_page,
     get_login_session_with_playwright,
+    get_playwright_login_user_data_dir,
     parse_cookie_string,
 )
 
 logger = get_logger(__name__)
+
+
+def _repo_relative_path(path: Path, *, project_root: Path) -> str:
+    try:
+        return str(path.relative_to(project_root)).replace("\\", "/")
+    except Exception:
+        return str(path)
+
+
+def resolve_login_script_paths(project_root: Path) -> Dict[str, Path]:
+    scripts_dir = project_root / "scripts"
+    canonical_dir = scripts_dir / "ops" / "crawler"
+    wrapper_bat = scripts_dir / "登录组卷网.bat"
+    canonical_bat = canonical_dir / "登录组卷网.bat"
+    canonical_py = canonical_dir / "save_login.py"
+    legacy_py = scripts_dir / "save_login.py"
+    return {
+        "wrapper_bat": wrapper_bat,
+        "canonical_bat": canonical_bat,
+        "canonical_py": canonical_py,
+        "legacy_py": legacy_py,
+    }
+
+
+def build_login_subprocess_command(
+    *,
+    project_root: Path,
+    subject: str,
+    python_executable: str,
+    platform_name: str,
+) -> List[str]:
+    paths = resolve_login_script_paths(project_root)
+    bat_path = paths["wrapper_bat"] if paths["wrapper_bat"].exists() else paths["canonical_bat"]
+    py_path = paths["canonical_py"] if paths["canonical_py"].exists() else paths["legacy_py"]
+
+    if platform_name == "win32" and bat_path.exists():
+        return [str(bat_path), subject]
+
+    if py_path.exists():
+        return [python_executable, str(py_path), "--subject", subject]
+
+    raise FileNotFoundError(f"登录脚本不存在: {bat_path} / {py_path}")
+
+
+async def _resolve_question_type_ids(crawler: Any) -> Dict[str, int]:
+    type_map: Dict[str, int] = {}
+
+    get_filters = getattr(crawler, "get_available_filters", None)
+    if callable(get_filters):
+        try:
+            filters = await get_filters()
+        except Exception:
+            filters = {}
+        for item in (filters or {}).get("question_types", []) or []:
+            name_clean = str((item or {}).get("name") or "").strip()
+            try:
+                qid_int = int((item or {}).get("id") or 0)
+            except Exception:
+                continue
+            if name_clean and qid_int > 0:
+                type_map[name_clean] = qid_int
+
+    raw_map = getattr(crawler, "ques_type_map", None)
+    if isinstance(raw_map, dict):
+        for name, qid in raw_map.items():
+            name_clean = str(name or "").strip()
+            try:
+                qid_int = int(qid or 0)
+            except Exception:
+                continue
+            if name_clean and qid_int > 0 and name_clean not in type_map:
+                type_map[name_clean] = qid_int
+
+    return type_map
+
+
+def _resolve_export_question_type_id(type_name: str, type_map: Dict[str, int]) -> int:
+    name = str(type_name or "").strip() or "解答题"
+    candidates = [name]
+
+    if "-" in name:
+        base_name = name.split("-", 1)[0].strip()
+        if base_name:
+            candidates.append(base_name)
+
+    aliases = {
+        "单选题": ["选择题"],
+        "选择题": ["单选题"],
+        "多选题": ["选择题"],
+        "简答题": ["解答题"],
+        "综合题": ["解答题"],
+        "问答题": ["解答题"],
+        "实验题": ["解答题"],
+    }
+    extra_candidates: List[str] = []
+    for candidate in list(candidates):
+        extra_candidates.extend(aliases.get(candidate, []))
+    candidates.extend(extra_candidates)
+
+    for candidate in candidates:
+        qid = int(type_map.get(candidate) or 0)
+        if qid > 0:
+            return qid
+
+    legacy_type_id_map = {
+        "单选题": 2701,
+        "选择题": 2701,
+        "多选题": 2702,
+        "填空题": 2703,
+        "解答题": 2704,
+        "判断题": 2705,
+    }
+    return int(legacy_type_id_map.get(name, 2704))
+
+
+def _is_select_question_type(type_name: str, ques_type_id: int, type_map: Dict[str, int]) -> bool:
+    name = str(type_name or "").strip()
+    candidates = {name}
+
+    if "-" in name:
+        base_name = name.split("-", 1)[0].strip()
+        if base_name:
+            candidates.add(base_name)
+
+    if candidates.intersection({"单选题", "多选题", "选择题"}):
+        return True
+
+    select_ids = {2701, 2702}
+    for candidate in ("单选题", "多选题", "选择题"):
+        resolved_id = int(type_map.get(candidate) or 0)
+        if resolved_id > 0:
+            select_ids.add(resolved_id)
+
+    return int(ques_type_id or 0) in select_ids
 
 
 async def export_to_basket(
@@ -58,6 +193,7 @@ async def export_to_basket(
     basket_items = []
     current_time = int(time.time() * 1000)
     details_map = {}
+    type_id_map = await _resolve_question_type_ids(crawler)
     if question_details:
         for detail in question_details:
             if detail.get("question_id"):
@@ -66,15 +202,7 @@ async def export_to_basket(
     for idx, qid in enumerate(question_ids):
         detail = details_map.get(str(qid), {})
         type_name = detail.get("type", "解答题")
-        type_id_map = {
-            "单选题": 2701,
-            "选择题": 2701,
-            "多选题": 2702,
-            "填空题": 2703,
-            "解答题": 2704,
-            "判断题": 2705,
-        }
-        ques_type_id = type_id_map.get(type_name, 2704)
+        ques_type_id = _resolve_export_question_type_id(type_name, type_id_map)
 
         diff_name = detail.get("difficulty", "中等")
         diff_map = {"简单": 2, "中等": 3, "困难": 5, "较难": 4, "容易": 1}
@@ -91,7 +219,7 @@ async def export_to_basket(
                 "status": "CHECK",
                 "from": detail.get("source", "AI组卷"),
                 "ext": {
-                    "isSelectType": ques_type_id in [2701, 2702],
+                    "isSelectType": _is_select_question_type(type_name, ques_type_id, type_id_map),
                     "title": detail.get("source", ""),
                     "categoryName": detail.get("knowledge_points", ""),
                     "categoryId": 0,
@@ -166,7 +294,7 @@ async def export_to_basket(
                         "Cookie 已过期，请重新登录：",
                         "1. 双击运行 scripts/登录组卷网.bat",
                         "2. 在弹出的浏览器中登录组卷网",
-                        "3. 登录成功后按回车保存",
+                        "3. 登录成功后等待脚本自动保存",
                         "4. 重新尝试导出",
                     ],
                 }
@@ -182,7 +310,7 @@ async def export_to_basket(
                             "Cookie 已过期，请重新登录：",
                             "1. 双击运行 scripts/登录组卷网.bat",
                             "2. 在弹出的浏览器中登录组卷网",
-                            "3. 登录成功后按回车保存",
+                            "3. 登录成功后等待脚本自动保存",
                             "4. 重新尝试导出",
                         ],
                     }
@@ -206,7 +334,7 @@ async def export_to_basket(
                             "Cookie 已过期，请重新登录：",
                             "1. 双击运行 scripts/登录组卷网.bat",
                             "2. 在弹出的浏览器中登录组卷网",
-                            "3. 登录成功后按回车保存",
+                            "3. 登录成功后等待脚本自动保存",
                             "4. 重新尝试导出",
                         ],
                     }
@@ -292,8 +420,7 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
 
         def _sync_login():
             with sync_playwright() as playwright:
-                repo_root = Path(__file__).resolve().parents[3]
-                user_data_dir = str((repo_root / ".local" / "playwright" / "zujuan").resolve())
+                user_data_dir = str(get_playwright_login_user_data_dir().resolve())
                 os.makedirs(user_data_dir, exist_ok=True)
                 browser = playwright.chromium.launch_persistent_context(user_data_dir, headless=False)
                 page = browser.pages[0] if browser.pages else browser.new_page()
@@ -344,34 +471,36 @@ async def login_via_subprocess(crawler: Any) -> Dict[str, Any]:
             if not regex.match(r"^[\u4e00-\u9fff\w]+$", crawler.subject or ""):
                 return {"success": False, "error": f"学科名称包含非法字符: {crawler.subject}"}
 
-        project_root = str(Path(__file__).resolve().parents[2])
-        scripts_dir = os.path.join(project_root, "scripts")
-
-        # Canonical location (scripts/ops/crawler). Keep a legacy fallback for older clones.
-        canonical_dir = os.path.join(scripts_dir, "ops", "crawler")
-        legacy_bat_path = os.path.join(scripts_dir, "登录组卷网.bat")
-        legacy_py_path = os.path.join(scripts_dir, "save_login.py")
-
-        bat_path = os.path.join(canonical_dir, "登录组卷网.bat") if os.path.exists(canonical_dir) else legacy_bat_path
-        py_path = os.path.join(canonical_dir, "save_login.py") if os.path.exists(canonical_dir) else legacy_py_path
-
-        if not (os.path.exists(bat_path) or os.path.exists(py_path)):
-            return {"success": False, "error": f"登录脚本不存在: {bat_path} / {py_path}"}
+        project_root = Path(__file__).resolve().parents[3]
+        paths = resolve_login_script_paths(project_root)
+        command = build_login_subprocess_command(
+            project_root=project_root,
+            subject=str(crawler.subject or "").strip(),
+            python_executable=sys.executable,
+            platform_name=sys.platform,
+        )
+        login_script_path = paths["wrapper_bat"] if paths["wrapper_bat"].exists() else paths["canonical_bat"]
+        if not login_script_path.exists():
+            login_script_path = paths["canonical_py"] if paths["canonical_py"].exists() else paths["legacy_py"]
 
         if sys.platform == "win32":
-            if os.path.exists(bat_path):
-                subprocess.Popen([bat_path, crawler.subject], creationflags=subprocess.CREATE_NEW_CONSOLE)
-            else:
-                subprocess.Popen(
-                    [sys.executable, py_path, "--subject", crawler.subject], creationflags=subprocess.CREATE_NEW_CONSOLE
-                )
+            subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE)
         else:
-            subprocess.Popen([sys.executable, py_path, "--subject", crawler.subject])
+            subprocess.Popen(command)
+
+        login_script = _repo_relative_path(login_script_path, project_root=project_root)
+        login_command = (
+            f'"{login_script}" "{crawler.subject}"'
+            if login_script_path.suffix.lower() == ".bat"
+            else f'"{sys.executable}" "{login_script}" --subject "{crawler.subject}"'
+        )
 
         return {
             "success": True,
             "message": f"已启动登录窗口，请在弹出的浏览器中登录并切换到 “{crawler.subject}”",
             "note": "登录完成后请重新尝试导出",
+            "login_script": login_script,
+            "login_command": login_command,
         }
     except Exception as exc:
         return {"success": False, "error": f"启动登录窗口失败: {exc}"}

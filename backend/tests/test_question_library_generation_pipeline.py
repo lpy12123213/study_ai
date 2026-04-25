@@ -76,6 +76,49 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[tool_result] python_scientific_compute", joined)
         self.assertIn("12.0", joined)
 
+    async def test_chat_json_with_reasoning_uses_configured_effort_for_chat_and_fallback(self) -> None:
+        from backend.question_library import gen_llm
+
+        seen_chat_reasoning: list[dict] = []
+        seen_text_reasoning: list[dict] = []
+
+        async def fake_chat_completion(**kwargs):  # type: ignore[no-untyped-def]
+            seen_chat_reasoning.append(dict(kwargs.get("reasoning") or {}))
+            raise RuntimeError("tool_mode_disabled")
+
+        async def fake_chat_completion_text(**kwargs):  # type: ignore[no-untyped-def]
+            seen_text_reasoning.append(dict(kwargs.get("reasoning") or {}))
+            return '{"ok": true}'
+
+        with patch(
+            "backend.question_library.gen_llm.STUDY_MATERIALS_THINKING_EFFORT_DEFAULT",
+            "xhigh",
+            create=True,
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion",
+            new=AsyncMock(side_effect=fake_chat_completion),
+        ), patch(
+            "backend.question_library.gen_llm.chat_completion_text",
+            new=AsyncMock(side_effect=fake_chat_completion_text),
+        ):
+            text = await gen_llm._chat_json_with_reasoning(
+                messages=[{"role": "user", "content": "return JSON"}],
+                model="openai/test-mini",
+                temperature=0.2,
+                max_tokens=300,
+                req_id_prefix="qlg",
+                retries=1,
+                raise_on_fail=False,
+                stage_id="draft_realization",
+                stage_label="draft",
+                stream_reasoning=False,
+                on_reasoning_event=None,
+            )
+
+        self.assertEqual(text, '{"ok": true}')
+        self.assertEqual(seen_chat_reasoning, [{"effort": "xhigh", "exclude": True}])
+        self.assertEqual(seen_text_reasoning, [{"effort": "xhigh", "exclude": True}])
+
     def test_build_generation_messages_changes_system_prompt_by_difficulty(self) -> None:
         from backend.question_library.generation import build_generation_messages
 
