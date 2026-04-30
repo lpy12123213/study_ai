@@ -17,19 +17,19 @@ EDU_LEVELS = {
 # 学科配置：包含 bankId 和默认知识点分类ID
 SUBJECTS: Dict[str, Dict[str, Any]] = {
     # 初中
-    "初中语文": {"bank_id": 1, "edu_id": 2, "category_id": "1", "short_name": "语文"},
-    "初中数学": {"bank_id": 2, "edu_id": 2, "category_id": "4677", "short_name": "数学"},
-    "初中英语": {"bank_id": 3, "edu_id": 2, "category_id": "6043", "short_name": "英语"},
-    "初中物理": {"bank_id": 4, "edu_id": 2, "category_id": "18194", "short_name": "物理"},
-    "初中化学": {"bank_id": 5, "edu_id": 2, "category_id": "19366", "short_name": "化学"},
-    "初中生物": {"bank_id": 6, "edu_id": 2, "category_id": "19922", "short_name": "生物"},
+    "初中语文": {"bank_id": 1, "edu_id": 2, "category_id": "1", "short_name": "语文", "course_id_py": "czyw"},
+    "初中数学": {"bank_id": 2, "edu_id": 2, "category_id": "4677", "short_name": "数学", "course_id_py": "czsx"},
+    "初中英语": {"bank_id": 3, "edu_id": 2, "category_id": "6043", "short_name": "英语", "course_id_py": "czyy"},
+    "初中物理": {"bank_id": 4, "edu_id": 2, "category_id": "18194", "short_name": "物理", "course_id_py": "czwl"},
+    "初中化学": {"bank_id": 5, "edu_id": 2, "category_id": "19366", "short_name": "化学", "course_id_py": "czhx"},
+    "初中生物": {"bank_id": 6, "edu_id": 2, "category_id": "19922", "short_name": "生物", "course_id_py": "czsw"},
     # 高中
-    "高中语文": {"bank_id": 10, "edu_id": 3, "category_id": "23177", "short_name": "语文"},
-    "高中数学": {"bank_id": 11, "edu_id": 3, "category_id": "27925", "short_name": "数学"},
-    "高中英语": {"bank_id": 12, "edu_id": 3, "category_id": "29978", "short_name": "英语"},
-    "高中物理": {"bank_id": 13, "edu_id": 3, "category_id": "41934", "short_name": "物理"},
-    "高中化学": {"bank_id": 14, "edu_id": 3, "category_id": "43452", "short_name": "化学"},
-    "高中生物": {"bank_id": 15, "edu_id": 3, "category_id": "44886", "short_name": "生物"},
+    "高中语文": {"bank_id": 10, "edu_id": 3, "category_id": "23177", "short_name": "语文", "course_id_py": "gzyw"},
+    "高中数学": {"bank_id": 11, "edu_id": 3, "category_id": "27925", "short_name": "数学", "course_id_py": "gzsx"},
+    "高中英语": {"bank_id": 12, "edu_id": 3, "category_id": "29978", "short_name": "英语", "course_id_py": "gzyy"},
+    "高中物理": {"bank_id": 13, "edu_id": 3, "category_id": "41934", "short_name": "物理", "course_id_py": "gzwl"},
+    "高中化学": {"bank_id": 14, "edu_id": 3, "category_id": "43452", "short_name": "化学", "course_id_py": "gzhx"},
+    "高中生物": {"bank_id": 15, "edu_id": 3, "category_id": "44886", "short_name": "生物", "course_id_py": "gzsw"},
 }
 
 # 常用学科列表（用于前端显示）

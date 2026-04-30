@@ -4,8 +4,9 @@ import asyncio
 import json
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
@@ -255,6 +256,145 @@ def _first_existing_diagram(ctx: CompressedContext, kp: str) -> Dict[str, Any]:
     return {}
 
 
+@dataclass
+class _WriterAgentResult:
+    markdown: str
+    review: Dict[str, Any] = field(default_factory=dict)
+    actions: List[Dict[str, Any]] = field(default_factory=list)
+    revisions: int = 0
+    finish_reason: str = "stop"
+    usage: Dict[str, Any] = field(default_factory=dict)
+    continuations: int = 0
+    source: str = "writer_agent"
+
+
+class _KnowledgePointWriterAgent:
+    """Small bounded writer loop for one knowledge point.
+
+    The outer study-materials agent decides *when* to write; this inner agent decides
+    whether the draft is good enough or needs one or more targeted revisions.
+    """
+
+    def __init__(
+        self,
+        *,
+        knowledge_point: str,
+        plan: Dict[str, Any],
+        write_draft: Callable[[], Awaitable[Dict[str, Any]]],
+        review_draft: Callable[[str], Awaitable[Dict[str, Any]]],
+        revise_draft: Callable[[str, Dict[str, Any]], Awaitable[str]],
+        max_revision_rounds: int = 1,
+        emit_status: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> None:
+        self.knowledge_point = str(knowledge_point or "").strip()
+        self.plan = dict(plan or {})
+        self.write_draft = write_draft
+        self.review_draft = review_draft
+        self.revise_draft = revise_draft
+        self.max_revision_rounds = max(0, min(int(max_revision_rounds or 0), 5))
+        self.emit_status = emit_status
+
+    async def _emit(self, content: str) -> None:
+        text = str(content or "").strip()
+        if not text or self.emit_status is None:
+            return
+        try:
+            await self.emit_status(text)
+        except Exception:
+            return
+
+    @staticmethod
+    def _normalize_review(review: Any) -> Dict[str, Any]:
+        obj = dict(review or {}) if isinstance(review, dict) else {}
+        issues_raw = obj.get("issues")
+        suggestions_raw = obj.get("suggestions")
+        issues = (
+            [str(x or "").strip() for x in issues_raw if str(x or "").strip()]
+            if isinstance(issues_raw, list)
+            else []
+        )
+        suggestions = (
+            [str(x or "").strip() for x in suggestions_raw if str(x or "").strip()]
+            if isinstance(suggestions_raw, list)
+            else []
+        )
+        passed = bool(obj.get("passed")) if "passed" in obj else not issues
+        out = dict(obj)
+        out["passed"] = passed
+        out["issues"] = issues[:12]
+        out["suggestions"] = suggestions[:12]
+        return out
+
+    async def run(self) -> _WriterAgentResult:
+        actions: List[Dict[str, Any]] = [
+            {
+                "action": "plan",
+                "knowledge_point": self.knowledge_point,
+                "sections": len(self.plan.get("sections") or []) if isinstance(self.plan.get("sections"), list) else 0,
+            }
+        ]
+        await self._emit(f"WriterAgent 启动：{self.knowledge_point}")
+
+        draft = await self.write_draft()
+        draft = dict(draft or {}) if isinstance(draft, dict) else {}
+        markdown = str(draft.get("markdown") or "").strip()
+        finish_reason = str(draft.get("finish_reason") or "stop").strip() or "stop"
+        usage = draft.get("usage") if isinstance(draft.get("usage"), dict) else {}
+        try:
+            continuations = int(draft.get("continuations") or 0)
+        except Exception:
+            continuations = 0
+        source = str(draft.get("source") or "writer_agent").strip() or "writer_agent"
+        actions.append({"action": "draft", "chars": len(markdown), "finish_reason": finish_reason})
+
+        review = self._normalize_review(await self.review_draft(markdown))
+        actions.append(
+            {
+                "action": "review",
+                "passed": bool(review.get("passed")),
+                "issues": list(review.get("issues") or [])[:6],
+            }
+        )
+
+        revisions = 0
+        while markdown and not bool(review.get("passed")) and revisions < self.max_revision_rounds:
+            await self._emit(f"WriterAgent 修订：{self.knowledge_point}")
+            revised = str(await self.revise_draft(markdown, review) or "").strip()
+            if not revised:
+                break
+            markdown = revised
+            revisions += 1
+            actions.append(
+                {
+                    "action": "revise",
+                    "round": revisions,
+                    "issues": list(review.get("issues") or [])[:6],
+                    "chars": len(markdown),
+                }
+            )
+
+            review = self._normalize_review(await self.review_draft(markdown))
+            actions.append(
+                {
+                    "action": "review",
+                    "passed": bool(review.get("passed")),
+                    "issues": list(review.get("issues") or [])[:6],
+                }
+            )
+
+        await self._emit(f"WriterAgent 完成：{self.knowledge_point}")
+        return _WriterAgentResult(
+            markdown=markdown,
+            review=review,
+            actions=actions,
+            revisions=revisions,
+            finish_reason=finish_reason,
+            usage=dict(usage),
+            continuations=continuations,
+            source=source,
+        )
+
+
 class StudyMaterialGenerationToolsMixin:
     async def _tool_generate_outline(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """Generate an adaptive outline per knowledge point.
@@ -411,7 +551,9 @@ class StudyMaterialGenerationToolsMixin:
         if not isinstance(synthesized, dict):
             synthesized = {}
 
-        topic = str(args.get("topic") or aggregated.get("topic") or synthesized.get("topic") or ctx.current_task).strip()
+        topic = str(
+            args.get("topic") or aggregated.get("topic") or synthesized.get("topic") or ctx.current_task
+        ).strip()
         subject = str(
             args.get("subject")
             or aggregated.get("subject")
@@ -452,6 +594,17 @@ class StudyMaterialGenerationToolsMixin:
         except Exception:
             section_concurrency = 3
         section_concurrency = max(1, min(section_concurrency, 6))
+
+        revision_rounds_raw = (
+            args.get("writer_revision_rounds")
+            or os.getenv("STUDY_MATERIALS_WRITER_AGENT_REVISION_ROUNDS")
+            or "1"
+        )
+        try:
+            writer_revision_rounds = int(revision_rounds_raw)
+        except Exception:
+            writer_revision_rounds = 1
+        writer_revision_rounds = max(0, min(writer_revision_rounds, 3))
 
         if strict_llm and not is_llm_configured():
             raise RuntimeError("llm_not_configured")
@@ -666,7 +819,11 @@ class StudyMaterialGenerationToolsMixin:
                         messages=[
                             {
                                 "role": "system",
-                                "content": "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，严禁直接搬运或拼贴来源文本。请参考已讲解内容概览避免跨知识点重复，并在必要时建立前后关联。输出必须是 Markdown。",
+                                "content": (
+                                    "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，"
+                                    "严禁直接搬运或拼贴来源文本。请参考已讲解内容概览避免跨知识点重复，"
+                                    "并在必要时建立前后关联。输出必须是 Markdown。"
+                                ),
                             },
                             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                         ],
@@ -696,39 +853,174 @@ class StudyMaterialGenerationToolsMixin:
                     conts = 0
                 return (md, finish_reason, usage, conts)
 
-            tasks = [_write_section(sec) for sec in outline_sections]
-            section_results = await asyncio.gather(*tasks)
+            def _ensure_revision_shape(markdown: str) -> str:
+                md = _sanitize_explanation_markdown(str(markdown or "").strip(), knowledge_point=kp)
+                if not md:
+                    return ""
+                if re.search(r"^\s{0,3}####\s+", md, flags=re.M):
+                    return md
+                if len(outline_sections) == 1:
+                    title = str(outline_sections[0].get("title") or "").strip().strip("# ").strip() or "本节"
+                    return f"#### {title}\n\n{md}".strip()
+                return md
 
-            md_parts: List[str] = []
-            finish_reasons: List[str] = []
-            usage_sum: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            cont_sum = 0
-            any_llm = False
-            for md, fr, usage, conts in section_results:
-                if md:
-                    md_parts.append(md)
-                if fr:
-                    finish_reasons.append(fr)
-                if isinstance(usage, dict):
-                    for k in ["prompt_tokens", "completion_tokens", "total_tokens"]:
-                        raw_val = usage.get(k)
-                        try:
-                            n = int(raw_val or 0)
-                        except Exception:
-                            n = 0
-                        usage_sum[k] += n
-                cont_sum += int(conts or 0)
-                if fr:
-                    any_llm = True
+            async def _write_draft() -> Dict[str, Any]:
+                section_results = await asyncio.gather(*[_write_section(sec) for sec in outline_sections])
 
-            explanation_md = "\n\n".join([x.strip() for x in md_parts if x.strip()]).strip()
-            explanation_md = _sanitize_explanation_markdown(explanation_md, knowledge_point=kp)
+                md_parts: List[str] = []
+                finish_reasons: List[str] = []
+                usage_sum: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                cont_sum = 0
+                any_llm = False
+                for md, fr, usage, conts in section_results:
+                    if md:
+                        md_parts.append(md)
+                    if fr:
+                        finish_reasons.append(fr)
+                    if isinstance(usage, dict):
+                        for k in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+                            raw_val = usage.get(k)
+                            try:
+                                n = int(raw_val or 0)
+                            except Exception:
+                                n = 0
+                            usage_sum[k] += n
+                    cont_sum += int(conts or 0)
+                    if str(fr or "").strip().lower() not in {"", "fallback"}:
+                        any_llm = True
 
-            explanation_source = "llm_sectioned" if any_llm else "fallback"
-            explanation_finish_reason = (
-                "length" if any((x or "").strip().lower() == "length" for x in finish_reasons) else "stop"
+                draft_md = "\n\n".join([x.strip() for x in md_parts if x.strip()]).strip()
+                draft_md = _sanitize_explanation_markdown(draft_md, knowledge_point=kp)
+                finish_reason = (
+                    "length" if any((x or "").strip().lower() == "length" for x in finish_reasons) else "stop"
+                )
+                return {
+                    "markdown": draft_md,
+                    "finish_reason": finish_reason,
+                    "usage": {k: v for k, v in usage_sum.items() if v},
+                    "continuations": cont_sum,
+                    "source": "writer_agent" if any_llm else "fallback",
+                }
+
+            async def _review_draft(markdown: str) -> Dict[str, Any]:
+                md = str(markdown or "").strip()
+                if not md:
+                    return {
+                        "passed": False,
+                        "issues": [f"知识点《{kp}》未生成可用正文"],
+                        "suggestions": ["重新生成该知识点正文"],
+                        "source": "heuristic",
+                    }
+                if not is_llm_configured():
+                    return {"passed": True, "issues": [], "suggestions": [], "source": "heuristic"}
+
+                review_payload = {
+                    "topic": topic,
+                    "subject": subject,
+                    "knowledge_point": kp,
+                    "preset": preset,
+                    "requirements": requirements,
+                    "knowledge_type": knowledge_type,
+                    "outline_sections": outline_sections,
+                    "source_brief": brief,
+                    "source_facts": facts,
+                    "markdown": md,
+                    "instructions": [
+                        "你是该知识点写作阶段的 Reviewer Agent。",
+                        "只审查这个知识点的正文，不审查整篇资料。",
+                        "重点检查：是否满足 outline_sections 的 verify 意图；定义/条件/边界/误区/应用是否与知识类型匹配；是否与 source_facts 矛盾；是否存在空泛重复。",
+                        "passed=true 表示可以进入组装；passed=false 表示必须给出具体可执行 issues。",
+                        '严格输出 JSON：{"passed": bool, "issues": [string], "suggestions": [string]}。',
+                    ],
+                }
+                raw = await self._call_llm_text(
+                    messages=[
+                        {"role": "system", "content": "你是严谨的知识点写作 Reviewer Agent，只输出 JSON。"},
+                        {"role": "user", "content": json.dumps(review_payload, ensure_ascii=False)},
+                    ],
+                    model=writer_model,
+                    temperature=0.1,
+                    max_tokens=900,
+                    response_format={"type": "json_object"},
+                    raise_on_fail=strict_llm,
+                )
+                obj = self._extract_json_obj(str(raw or ""))
+                if strict_llm and not obj:
+                    raise RuntimeError(f"writer_review_failed: invalid_json knowledge_point={kp}")
+                if not obj:
+                    return {"passed": True, "issues": [], "suggestions": [], "source": "invalid_json_fallback"}
+                return {
+                    "passed": bool(obj.get("passed")) if "passed" in obj else True,
+                    "issues": [str(x or "").strip() for x in obj.get("issues", []) if str(x or "").strip()]
+                    if isinstance(obj.get("issues"), list)
+                    else [],
+                    "suggestions": [
+                        str(x or "").strip() for x in obj.get("suggestions", []) if str(x or "").strip()
+                    ]
+                    if isinstance(obj.get("suggestions"), list)
+                    else [],
+                    "source": "llm",
+                }
+
+            async def _revise_draft(markdown: str, review: Dict[str, Any]) -> str:
+                if not is_llm_configured():
+                    return markdown
+                revise_payload = {
+                    "topic": topic,
+                    "subject": subject,
+                    "knowledge_point": kp,
+                    "preset": preset,
+                    "requirements": requirements,
+                    "outline_sections": outline_sections,
+                    "source_brief": brief,
+                    "source_facts": facts,
+                    "review": {
+                        "issues": list(review.get("issues") or [])[:12],
+                        "suggestions": list(review.get("suggestions") or [])[:12],
+                    },
+                    "markdown": markdown,
+                    "instructions": [
+                        "你是该知识点写作阶段的 Revision Agent。",
+                        "请只修订这个知识点正文，直接输出修订后的完整 Markdown。",
+                        "保留并修正原有 #### 小节结构；如需要，可补充短段落或列表。",
+                        "只针对 review.issues 做修改，不要引入新的参考资料区、URL 或整篇文档标题。",
+                        "修订后必须比原文更具体，尤其补齐条件、边界、误区或应用等被指出的问题。",
+                    ],
+                }
+                revised = await self._call_llm_text(
+                    messages=[
+                        {"role": "system", "content": "你是严谨的 Markdown Revision Agent，只输出修订后的 Markdown。"},
+                        {"role": "user", "content": json.dumps(revise_payload, ensure_ascii=False)},
+                    ],
+                    model=writer_model,
+                    temperature=0.2,
+                    max_tokens=max(1800, min(section_max_tokens * max(1, len(outline_sections)) + 800, 8000)),
+                    raise_on_fail=strict_llm,
+                )
+                revised_md = _ensure_revision_shape(str(revised or ""))
+                return revised_md or markdown
+
+            async def _emit_writer_status(content: str) -> None:
+                emit = getattr(self, "_emit_status", None)
+                if callable(emit):
+                    await emit(content)
+
+            writer_agent = _KnowledgePointWriterAgent(
+                knowledge_point=kp,
+                plan={"sections": outline_sections, "knowledge_type": knowledge_type},
+                write_draft=_write_draft,
+                review_draft=_review_draft,
+                revise_draft=_revise_draft,
+                max_revision_rounds=writer_revision_rounds,
+                emit_status=_emit_writer_status,
             )
-            explanation_usage: Dict[str, Any] = {k: v for k, v in usage_sum.items() if v}
+            writer_result = await writer_agent.run()
+
+            explanation_md = _ensure_revision_shape(writer_result.markdown)
+            explanation_source = writer_result.source
+            explanation_finish_reason = writer_result.finish_reason
+            explanation_usage: Dict[str, Any] = dict(writer_result.usage or {})
+            cont_sum = int(writer_result.continuations or 0)
 
             diagram = _first_existing_diagram(ctx, kp)
 
@@ -740,6 +1032,12 @@ class StudyMaterialGenerationToolsMixin:
                     "explanation_finish_reason": explanation_finish_reason,
                     "explanation_usage": explanation_usage,
                     "explanation_continuations": cont_sum,
+                    "writer_agent": {
+                        "mode": "knowledge_point",
+                        "revisions": int(writer_result.revisions or 0),
+                        "review": writer_result.review,
+                        "actions": writer_result.actions,
+                    },
                     "wikipedia": wiki,
                     "mediawiki": mw,
                     "web_provider": web_provider,

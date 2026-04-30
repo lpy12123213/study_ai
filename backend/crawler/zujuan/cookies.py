@@ -25,6 +25,7 @@ DEFAULT_USER_AGENT = (
 CSRF_TOKEN_PATTERN = re.compile(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', re.IGNORECASE)
 
 _ANTIBOT_COOKIE_KEYS = {"aliyungf_tc", "acw_tc", "acw_sc__v2"}
+_ALICFW_COOKIE_KEYS = {"alicfw", "alicfw_gfver"}
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _ANTIBOT_CACHE_FILE = str(_PROJECT_ROOT / ".local" / "cache" / "zujuan_antibot_cookies.json")
 _ANTIBOT_CACHE_FILE_LEGACY = str(_PROJECT_ROOT / ".cache" / "zujuan_antibot_cookies.json")
@@ -291,4 +292,8 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
 
 
 def missing_antibot_keys(cookies: str) -> set[str]:
-    return _ANTIBOT_COOKIE_KEYS - set(parse_cookie_string(cookies or "").keys())
+    keys = set(parse_cookie_string(cookies or "").keys())
+    missing = {"aliyungf_tc", "acw_tc"} - keys
+    if "acw_sc__v2" not in keys and not _ALICFW_COOKIE_KEYS.issubset(keys):
+        missing.add("acw_sc__v2")
+    return missing

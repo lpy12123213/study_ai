@@ -34,7 +34,7 @@ DEFAULT_SEARCH_CONFIG = {
     "answer_mismatch_penalty": 12,
     "ambiguity_penalty_score": 8,
     "judge_require_pass_flag": False,
-    "realize_min_max_tokens": 5000,
+    "realize_min_max_tokens": 50000,
     "drafts_per_spec": 3,
     # New: brainstorm stage (can be disabled by config override).
     "enable_brainstorm": True,
