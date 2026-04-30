@@ -232,10 +232,16 @@ class StudyArchiveToolsMixin:
             explanation = str(sec.get("explanation_markdown") or "").strip()
             lines.append(explanation or "（讲解为空：可能是模型调用失败或资料不足，建议重试或提供更具体的范围。）")
             explanation_source = str(sec.get("explanation_source") or "").strip()
+            explanation_source_l = explanation_source.lower()
+            source_is_model_output = (
+                explanation_source == "llm"
+                or explanation_source_l.startswith("llm")
+                or explanation_source_l.startswith("writer_agent")
+                or explanation_source_l.startswith("metaso")
+            )
             if (
                 explanation_source
-                and explanation_source != "llm"
-                and not explanation_source.lower().startswith("metaso")
+                and not source_is_model_output
             ):
                 lines.append("")
                 lines.append(

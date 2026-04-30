@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -221,6 +222,119 @@ def _resp_error(resp: Optional[httpx.Response]) -> str:
     if msg:
         msg = msg.replace("\n", " ").strip()
     return msg[:260]
+
+
+def _parse_sse_chat_response(raw_text: str) -> Optional[Dict[str, Any]]:
+    raw = str(raw_text or "")
+    if "data:" not in raw:
+        return None
+
+    content_parts: List[str] = []
+    finish_reason = ""
+    usage: Dict[str, Any] = {}
+    tool_calls: List[Dict[str, Any]] = []
+    saw_chunk = False
+
+    for line in raw.splitlines():
+        chunk = str(line or "").strip()
+        if not chunk or chunk.startswith(":") or not chunk.startswith("data:"):
+            continue
+        data = chunk[5:].strip()
+        if not data:
+            continue
+        if data == "[DONE]":
+            saw_chunk = True
+            break
+        try:
+            obj = json.loads(data)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        saw_chunk = True
+        choices = obj.get("choices")
+        if not isinstance(choices, list) or not choices:
+            if isinstance(obj.get("usage"), dict):
+                usage = dict(obj.get("usage") or {})
+            continue
+        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+        delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
+        message = choice0.get("message") if isinstance(choice0.get("message"), dict) else {}
+
+        c_chunk = delta.get("content")
+        if isinstance(c_chunk, str) and c_chunk:
+            content_parts.append(c_chunk)
+        elif isinstance(message.get("content"), str) and message.get("content"):
+            content_parts.append(str(message.get("content") or ""))
+
+        tc_raw = delta.get("tool_calls")
+        if not isinstance(tc_raw, list):
+            tc_raw = message.get("tool_calls")
+        if isinstance(tc_raw, list) and tc_raw:
+            tool_calls = list(tc_raw)
+
+        fr_chunk = choice0.get("finish_reason")
+        if isinstance(fr_chunk, str) and fr_chunk:
+            finish_reason = fr_chunk
+
+        if isinstance(obj.get("usage"), dict):
+            usage = dict(obj.get("usage") or {})
+
+    if not saw_chunk:
+        return None
+
+    message: Dict[str, Any] = {"role": "assistant", "content": "".join(content_parts)}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return {
+        "choices": [{"message": message, "finish_reason": finish_reason}],
+        "usage": usage,
+    }
+
+
+def _decode_chat_response_payload(resp: httpx.Response) -> Tuple[Optional[Dict[str, Any]], str]:
+    try:
+        data = resp.json()
+        return (dict(data), "") if isinstance(data, dict) else ({}, "")
+    except Exception as exc:
+        parse_error = str(exc or "").strip() or "invalid_json_response"
+
+    try:
+        raw_text = str(resp.text or "")
+    except Exception:
+        raw_text = ""
+
+    sse_data = _parse_sse_chat_response(raw_text)
+    if isinstance(sse_data, dict):
+        return sse_data, ""
+
+    if not raw_text.strip():
+        return None, "empty_response_body"
+
+    raw_lower = raw_text.lstrip().lower()
+    if raw_lower.startswith("<!doctype html") or raw_lower.startswith("<html"):
+        return None, "html_response_body"
+
+    try:
+        data = json.loads(raw_text)
+        return (dict(data), "") if isinstance(data, dict) else ({}, "")
+    except Exception as exc:
+        parse_error = str(exc or "").strip() or parse_error
+    return None, parse_error
+
+
+def _maybe_append_v1_base_url(base_url: str) -> str:
+    raw = str(base_url or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except Exception:
+        return ""
+    path = str(parts.path or "").rstrip("/")
+    if path:
+        return ""
+    return urlunsplit((parts.scheme, parts.netloc, "/v1", parts.query, parts.fragment)).rstrip("/")
 
 
 def _model_context_length(model: str) -> int:
@@ -787,7 +901,7 @@ async def chat_completion(
         payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
 
     is_openrouter = resolved_provider == "openrouter"
-    if stream and resolved_provider in {"openrouter", "moonshot"}:
+    if stream and resolved_provider in {"openrouter", "moonshot", "ikuncode"}:
         payload["stream"] = True
 
     if isinstance(reasoning, dict) and reasoning:
@@ -809,7 +923,8 @@ async def chat_completion(
     reasoning_emit_interval_s = float(reasoning_emit_interval_s or 0.0)
     reasoning_emit_interval_s = max(0.05, min(reasoning_emit_interval_s, 2.0))
 
-    url = f"{resolved_base_url}/chat/completions"
+    request_base_url = str(resolved_base_url or "").strip().rstrip("/")
+    retried_with_v1_base_url = False
 
     async def _maybe_emit_reasoning(buf: str) -> None:
         if not buf:
@@ -824,6 +939,7 @@ async def chat_completion(
 
     for attempt in range(max_retries):
         req_id = f"{req_id_base}-{attempt + 1}"
+        url = f"{request_base_url}/chat/completions"
         start_ts = llm_console.log_start(
             req_id=req_id,
             provider=resolved_provider,
@@ -831,7 +947,7 @@ async def chat_completion(
             stream=bool(payload.get("stream")),
             temperature=float(payload.get("temperature") or 0.0),
             max_tokens=int(payload.get("max_tokens") or 0),
-            base_url=resolved_base_url,
+            base_url=request_base_url,
         )
         try:
             async with httpx.AsyncClient(timeout=request_timeout_s, follow_redirects=True) as client:
@@ -893,6 +1009,33 @@ async def chat_completion(
                                 continue
                             choice0 = choices[0] if isinstance(choices[0], dict) else {}
                             delta = choice0.get("delta") if isinstance(choice0.get("delta"), dict) else {}
+                            message = choice0.get("message") if isinstance(choice0.get("message"), dict) else {}
+
+                            def _coerce_reasoning_text(value: Any) -> str:
+                                if isinstance(value, str):
+                                    return value
+                                if isinstance(value, dict):
+                                    for key in ("text", "content", "reasoning_content", "summary"):
+                                        v = value.get(key)
+                                        if isinstance(v, str) and v:
+                                            return str(v)
+                                    parts = value.get("parts")
+                                    if isinstance(parts, list) and parts:
+                                        out_parts: List[str] = []
+                                        for it in parts:
+                                            t = _coerce_reasoning_text(it)
+                                            if t:
+                                                out_parts.append(t)
+                                        return "".join(out_parts)
+                                    return ""
+                                if isinstance(value, list):
+                                    out_parts: List[str] = []
+                                    for it in value:
+                                        t = _coerce_reasoning_text(it)
+                                        if t:
+                                            out_parts.append(t)
+                                    return "".join(out_parts)
+                                return ""
 
                             r_chunk = ""
                             details = delta.get("reasoning_details")
@@ -910,10 +1053,25 @@ async def chat_completion(
                                     r_chunk = "".join(text_parts)
                                 elif summary_parts:
                                     r_chunk = "".join(summary_parts)
-                            elif isinstance(delta.get("reasoning_content"), str):
-                                r_chunk = str(delta.get("reasoning_content") or "")
-                            elif isinstance(delta.get("reasoning"), str):
-                                r_chunk = str(delta.get("reasoning") or "")
+                            else:
+                                r_chunk = _coerce_reasoning_text(details)
+
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(delta.get("reasoning_content"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(delta.get("reasoning"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(message.get("reasoning_details"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(message.get("reasoning_content"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(message.get("reasoning"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(choice0.get("reasoning_details"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(choice0.get("reasoning_content"))
+                            if not r_chunk:
+                                r_chunk = _coerce_reasoning_text(choice0.get("reasoning"))
 
                             if r_chunk:
                                 reasoning_buf += r_chunk
@@ -990,7 +1148,54 @@ async def chat_completion(
                 continue
 
             resp.raise_for_status()
-            data = resp.json()
+            data, decode_error = _decode_chat_response_payload(resp)
+            if data is None:
+                last_error = decode_error or "invalid_json_response"
+                v1_base_url = _maybe_append_v1_base_url(request_base_url)
+                should_retry_with_v1 = (
+                    bool(v1_base_url)
+                    and (not retried_with_v1_base_url)
+                    and v1_base_url != request_base_url
+                    and last_error in {"empty_response_body", "html_response_body", "Expecting value: line 1 column 1 (char 0)"}
+                )
+                if should_retry_with_v1:
+                    logger.warning(
+                        "llm_retry_with_v1_base_url",
+                        extra={
+                            "req_id": req_id,
+                            "model": resolved_model,
+                            "provider": resolved_provider,
+                            "base_url": request_base_url,
+                            "retry_base_url": v1_base_url,
+                            "error": last_error,
+                        },
+                    )
+                    request_base_url = str(v1_base_url or "").strip().rstrip("/")
+                    retried_with_v1_base_url = True
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                    await asyncio.sleep(0.2)
+                    continue
+                dropped_optional_fields = False
+                if "response_format" in payload and not dropped_response_format:
+                    payload.pop("response_format", None)
+                    dropped_response_format = True
+                    dropped_optional_fields = True
+                if "reasoning" in payload and not dropped_reasoning:
+                    payload.pop("reasoning", None)
+                    dropped_reasoning = True
+                    dropped_optional_fields = True
+                if dropped_optional_fields and attempt < (max_retries - 1):
+                    llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                    await asyncio.sleep(0.2)
+                    continue
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
+                if attempt < (max_retries - 1):
+                    await asyncio.sleep(min(3.0, 0.4 + random.random() * 0.8))
+                    continue
+                if raise_on_fail:
+                    raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error}")
+                _circuit_record_failure(circuit_key)
+                return ChatCompletionResult()
             try:
                 choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
                 message0 = choice0.get("message", {}) if isinstance(choice0, dict) else {}
@@ -1021,7 +1226,7 @@ async def chat_completion(
                             "req_id": req_id,
                             "model": resolved_model,
                             "provider": resolved_provider,
-                            "base_url": resolved_base_url,
+                            "base_url": request_base_url,
                         },
                     )
                     llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=last_error)
@@ -1059,13 +1264,35 @@ async def chat_completion(
                     raise RuntimeError(f"llm_invalid_response model={resolved_model}")
                 _circuit_record_failure(circuit_key)
                 return ChatCompletionResult()
-
         except asyncio.CancelledError:
             raise
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code if exc.response is not None else 0
             api_msg = _resp_error(exc.response)
             last_error = f"http_status_{status}"
+            v1_base_url = _maybe_append_v1_base_url(request_base_url)
+            if (
+                status in {404, 405}
+                and bool(v1_base_url)
+                and (not retried_with_v1_base_url)
+                and v1_base_url != request_base_url
+            ):
+                logger.warning(
+                    "llm_retry_with_v1_base_url_on_http_status",
+                    extra={
+                        "req_id": req_id,
+                        "model": resolved_model,
+                        "provider": resolved_provider,
+                        "base_url": request_base_url,
+                        "retry_base_url": v1_base_url,
+                        "status": status,
+                    },
+                )
+                request_base_url = str(v1_base_url or "").strip().rstrip("/")
+                retried_with_v1_base_url = True
+                llm_console.log_end(req_id=req_id, elapsed_s=_elapsed_s(start_ts), error=api_msg or last_error)
+                await asyncio.sleep(0.2)
+                continue
 
             if status in {400, 422}:
                 limit, in_t, _out_t = _parse_context_len_error(api_msg)

@@ -208,23 +208,19 @@ async def analyze_reference_questions(
     obj = _extract_json_obj(text)
     patterns = _clip_unique(
         [str(item or "").strip() for item in (obj.get("question_patterns") or []) if str(item or "").strip()]
-        + list(fallback.get("question_patterns") or []),
-        6,
+        + list(fallback.get("question_patterns") or []),  6,
     )
     difficulty_markers = _clip_unique(
         [str(item or "").strip() for item in (obj.get("difficulty_markers") or []) if str(item or "").strip()]
-        + list(fallback.get("difficulty_markers") or []),
-        6,
+        + list(fallback.get("difficulty_markers") or []), 6,
     )
     innovative_angles = _clip_unique(
         [str(item or "").strip() for item in (obj.get("innovative_angles") or []) if str(item or "").strip()]
-        + list(fallback.get("innovative_angles") or []),
-        6,
+        + list(fallback.get("innovative_angles") or []),  6,
     )
     format_conventions = _clip_unique(
         [str(item or "").strip() for item in (obj.get("format_conventions") or []) if str(item or "").strip()]
-        + list(fallback.get("format_conventions") or []),
-        6,
+        + list(fallback.get("format_conventions") or []), 6,
     )
     examples: List[dict] = []
     for item in (obj.get("representative_examples") or []):

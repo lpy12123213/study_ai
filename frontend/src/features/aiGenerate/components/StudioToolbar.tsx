@@ -10,11 +10,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { humanizeAiGenerateTaskError } from '@/features/aiGenerate/humanizeTaskError'
 import type { AiGenerateStudioSession } from '@/features/aiGenerate/types'
 import { statusLabel } from '@/features/aiGenerate/studioUtils'
 import { useTaskStore } from '@/stores/useTaskStore'
 import type { TaskStep } from '@/types'
+
 
 const EMPTY_TASK_STEPS: TaskStep[] = []
 
@@ -191,32 +193,24 @@ export function StudioToolbar(props: StudioToolbarProps) {
               </div>
             ) : null}
 
-            <div className="grid gap-4 2xl:grid-cols-[minmax(280px,0.95fr)_minmax(360px,1.25fr)]">
-              <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">任务时间线</div>
-                    <div className="mt-1 text-sm text-muted-foreground">{stage || statusLabel(effectiveTaskStatus || sessionStatus || '')}</div>
-                  </div>
-                  <Badge variant="outline" className="rounded-full">
-                    进度 {Math.round(progress)}%
-                  </Badge>
+            <Tabs defaultValue="timeline">
+              <TabsList className="rounded-full">
+                <TabsTrigger value="timeline" className="rounded-full">任务时间线</TabsTrigger>
+                <TabsTrigger value="reason" className="rounded-full">
+                  Reason Console
+                  {reasonEntries.length > 0 && <Badge variant="outline" className="ml-1.5 rounded-full">{reasonEntries.length}</Badge>}
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="timeline" className="mt-3 rounded-[24px] border border-border/70 bg-background/80 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">{stage || statusLabel(effectiveTaskStatus || sessionStatus || '')}</div>
+                  <Badge variant="outline" className="rounded-full">进度 {Math.round(progress)}%</Badge>
                 </div>
                 <ScrollArea className="h-[240px] pr-3">
                   <TaskTimeline steps={workflowSteps} />
                 </ScrollArea>
-              </div>
-
-              <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">Reason Console</div>
-                    <div className="mt-1 text-sm text-muted-foreground">明确区分原始 reasoning 与 trace 降级态。</div>
-                  </div>
-                  <Badge variant="outline" className="rounded-full">
-                    {reasonEntries.length} 条
-                  </Badge>
-                </div>
+              </TabsContent>
+              <TabsContent value="reason" className="mt-3 rounded-[24px] border border-border/70 bg-background/80 p-4">
                 <ScrollArea className="h-[240px] pr-3">
                   {reasonEntries.length === 0 ? (
                     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">当前还没有 reasoning 片段。</div>
@@ -225,12 +219,8 @@ export function StudioToolbar(props: StudioToolbarProps) {
                       {reasonEntries.map((entry) => (
                         <div key={entry.id} className="rounded-[18px] border border-border/70 bg-background/70 p-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline" className="rounded-full">
-                              {entry.label}
-                            </Badge>
-                            <Badge variant="outline" className="rounded-full">
-                              {entry.stageLabel}
-                            </Badge>
+                            <Badge variant="outline" className="rounded-full">{entry.label}</Badge>
+                            <Badge variant="outline" className="rounded-full">{entry.stageLabel}</Badge>
                           </div>
                           <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-foreground/90">{entry.content}</div>
                         </div>
@@ -238,8 +228,8 @@ export function StudioToolbar(props: StudioToolbarProps) {
                     </div>
                   )}
                 </ScrollArea>
-              </div>
-            </div>
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </CollapsibleContent>
       </Collapsible>

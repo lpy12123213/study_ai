@@ -191,11 +191,15 @@ class ZujuanCrawler:
             self.bank_id = config["bank_id"]
             self.category_id = config["category_id"]
             self.edu_id = config["edu_id"]
+            self.course_id = _safe_int(config.get("course_id"), 0)
+            self.course_id_py = str(config.get("course_id_py") or "").strip()
         except Exception:
             # 默认高中数学
             self.bank_id = 11
             self.category_id = "100693"
             self.edu_id = 3
+            self.course_id = 0
+            self.course_id_py = "gzsx"
 
     def set_subject(self, subject: str):
         """切换学科"""
@@ -237,23 +241,40 @@ class ZujuanCrawler:
         return resolved_subject, normalized_difficulty
 
     async def initialize(self):
-        """初始化 HTTP 客户端，自动获取cookie。"""
+        """初始化 HTTP 客户端。
+
+        Search/list endpoints work in visitor mode. Avoid loading login cookies or
+        bootstrapping anti-bot cookies unless explicitly requested, because using a
+        stale account cookie can make otherwise-public requests look risky.
+        """
         # 已初始化则复用（MCP 模式下避免每次工具调用都做一次网络/浏览器初始化）
         if self.client is not None:
             return
 
-        # 1) 先加载 .env Cookie（通常包含登录态）
-        env_session = load_env_login()
-        env_cookies = (env_session.get("cookies") or "").strip()
-        is_logged_in = bool(env_session.get("is_logged_in"))
+        def env_truthy(name: str, *, default: bool = False) -> bool:
+            raw = str(os.getenv(name) or "").strip().lower()
+            if not raw:
+                return default
+            return raw in {"1", "true", "yes", "y", "on"}
 
-        if env_cookies:
+        use_env_cookies = env_truthy("ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH", default=False)
+        use_cached_antibot = env_truthy("ZUJUAN_USE_CACHED_ANTIBOT_COOKIES", default=False)
+        auto_bootstrap = env_truthy("ZUJUAN_AUTO_BOOTSTRAP_COOKIES", default=False) or env_truthy(
+            "ZUJIAN_AUTO_BOOTSTRAP_COOKIES", default=False
+        )
+
+        env_session = load_env_login() if use_env_cookies else {"cookies": "", "is_logged_in": False}
+        env_cookies = (env_session.get("cookies") or "").strip()
+        is_logged_in = bool(env_session.get("is_logged_in")) if use_env_cookies else False
+
+        if use_env_cookies and env_cookies and not self.cookies:
             self.cookies = env_cookies
 
         env_cookie_dict = parse_cookie_string(self.cookies)
 
-        # 2) 优先合并缓存的反爬 Cookie（避免每次启动都跑一次 Playwright）
-        cached_antibot = load_antibot_cookie_cache()
+        # Optional: merge cached visitor anti-bot cookies. Disabled by default because
+        # question/list can be requested without cookies and stale cookies can trigger WAF.
+        cached_antibot = load_antibot_cookie_cache() if use_cached_antibot else ""
         if cached_antibot:
             cached_dict = parse_cookie_string(cached_antibot)
             cached_dict.update(env_cookie_dict)  # 以 .env Cookie 为准覆盖
@@ -274,7 +295,7 @@ class ZujuanCrawler:
                 return False
 
         missing_antibot = missing_antibot_keys(self.cookies)
-        if missing_antibot or (self.cookies and not await cookie_can_access_api(self.cookies)):
+        if auto_bootstrap and (missing_antibot or (self.cookies and not await cookie_can_access_api(self.cookies))):
             # 缺失/过期：用 Playwright 获取最新的反爬 Cookie，再与 .env Cookie 合并
             logger.info("refreshing zujuan antibot cookies via playwright")
             base_cookie_str = await get_cookies_with_playwright()
@@ -285,8 +306,8 @@ class ZujuanCrawler:
                 self.cookies = build_cookie_string(base_cookie_dict)
                 env_cookie_dict = base_cookie_dict
 
-        # 兜底：如果仍没有 cookie，再用 Playwright 获取
-        if not self.cookies:
+        # Optional fallback for environments that explicitly choose browser bootstrap.
+        if auto_bootstrap and not self.cookies:
             logger.info("bootstrapping zujuan cookies via playwright")
             self.cookies = await get_cookies_with_playwright()
             if self.cookies:
@@ -299,17 +320,22 @@ class ZujuanCrawler:
                 logger.info("zujuan cookie mode: logged_in")
             elif env_cookies:
                 logger.info("zujuan cookie mode: dotenv")
+            elif not self.cookies:
+                logger.info("zujuan cookie mode: visitor_no_cookie")
             else:
                 logger.info("zujuan cookie mode: antibot" if not missing_antibot else "zujuan cookie mode: incomplete")
 
         async def _rate_limit(_request: httpx.Request) -> None:
             await self._http_rate_limiter.acquire(1.0)
 
+        headers = {
+            "User-Agent": self.user_agent,
+        }
+        if self.cookies:
+            headers["Cookie"] = self.cookies
+
         client_kwargs = dict(
-            headers={
-                "User-Agent": self.user_agent,
-                "Cookie": self.cookies or "",
-            },
+            headers=headers,
             timeout=30.0,
             event_hooks={"request": [_rate_limit]},
         )
@@ -478,8 +504,12 @@ class ZujuanCrawler:
 
         # QuesBankList[].courseId / courseIdPy are useful for building referer
         # and required parameters for question/list.
-        self.course_id = _safe_int(bank.get("courseId") or bank.get("courseID"), 0)
-        self.course_id_py = str(bank.get("courseIdPy") or bank.get("courseIDPy") or "").strip()
+        course_id = _safe_int(bank.get("courseId") or bank.get("courseID"), 0)
+        if course_id:
+            self.course_id = course_id
+        course_id_py = str(bank.get("courseIdPy") or bank.get("courseIDPy") or "").strip()
+        if course_id_py:
+            self.course_id_py = course_id_py
 
         for q in bank.get("QuesTypeList", []) or []:
             name = (q.get("Name") or "").strip()
@@ -1038,6 +1068,7 @@ class ZujuanCrawler:
         bank_id: int,
         category_id: str,
         course_id: int = 0,
+        course_id_py: str = "",
         cur_page: int = 1,
         difficulty: str = "",
         question_type: str = "",

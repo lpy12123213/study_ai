@@ -186,6 +186,7 @@ async def fetch_question_list(
     bank_id: int,
     category_id: str,
     course_id: int = 0,
+    course_id_py: str = "",
     cur_page: int = 1,
     difficulty: str = "",
     question_type: str = "",
@@ -231,8 +232,10 @@ async def fetch_question_list(
     await self._ensure_bank_meta_loaded()
     resolved_course_id = _safe_int(course_id, 0) or _safe_int(getattr(self, "course_id", 0), 0)
 
+    resolved_course_id_py = str(course_id_py or getattr(self, "course_id_py", "") or "").strip()
+
     cache_key = (
-        f"qlist:{page_name}:{bank_id}:{resolved_course_id}:{category_id}:{cur_page}:{difficulty}:"
+        f"qlist:{page_name}:{bank_id}:{resolved_course_id}:{resolved_course_id_py}:{category_id}:{cur_page}:{difficulty}:"
         f"{ques_type_code}:{year}:{province_id}:{paper_type_id}:{term}:{order_by}:"
         f"{learn_grade_id}:{int(parse_content)}"
     )
@@ -240,13 +243,12 @@ async def fetch_question_list(
     if isinstance(cached, tuple) and len(cached) == 2:
         return cached  # type: ignore[return-value]
 
-    course_id_py = str(getattr(self, "course_id_py", "") or "").strip()
     referer_page = (page_name or "").strip() or "zsd"
     if referer_page in {"zh", "zhangjie"}:
         referer_page = "zj"
     referer_url = (
-        f"{self.base_url}/{course_id_py}/{referer_page}{category_id}/"
-        if course_id_py and str(category_id).strip()
+        f"{self.base_url}/{resolved_course_id_py}/{referer_page}{category_id}/"
+        if resolved_course_id_py and str(category_id).strip()
         else f"{self.base_url.rstrip('/')}/"
     )
 
@@ -282,7 +284,9 @@ async def fetch_question_list(
             data_fields.append(("quesDiffs", str(_safe_int(dc, 0))))
 
     headers = {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": self.base_url,
         "X-Requested-With": "XMLHttpRequest",
         "Referer": referer_url,
         "User-Agent": self.user_agent,
@@ -388,4 +392,3 @@ async def fetch_question_list(
     result = (all_questions, debug_info)
     self._cache_set(cache_key, result, ttl=8 * 60 if parse_content else 10 * 60)
     return result
-

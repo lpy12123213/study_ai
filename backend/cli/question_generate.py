@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from backend.api.question_evaluate import evaluate_generated_question_review
 from backend.llm.client import chat_completion, is_llm_configured
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, settings
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.question_library import upsert_question_library_items
 from backend.question_library.generation import (
@@ -48,6 +48,45 @@ def _repo_root() -> Path:
 
 def _output_dir() -> Path:
     return (_repo_root() / "output").resolve()
+
+
+def _looks_like_gpt_model(model: str) -> bool:
+    raw = str(model or "").strip().lower()
+    if not raw:
+        return False
+    if "/" in raw:
+        raw = raw.split("/", 1)[-1]
+    return raw.startswith("gpt-")
+
+
+def _normalize_cli_model_for_provider(*, provider: str, model: str) -> str:
+    provider_in = str(provider or "").strip().lower()
+    model_in = str(model or "").strip()
+    if provider_in == "ikuncode" and model_in.lower().startswith("openai/"):
+        candidate = model_in.split("/", 1)[-1].strip()
+        if _looks_like_gpt_model(candidate):
+            return candidate
+    return model_in
+
+
+def _resolve_cli_mcp_search_model() -> str:
+    explicit = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip()
+    if explicit:
+        return explicit
+
+    provider = str(
+        getattr(settings, "lesson_plan_provider", "") or getattr(settings, "chat_provider", "")
+    ).strip().lower()
+    candidate_model = str(
+        getattr(settings, "lesson_plan_model", "") or getattr(settings, "main_model", "") or LESSON_PLAN_MODEL
+    )
+    provider_model = _normalize_cli_model_for_provider(
+        provider=provider,
+        model=candidate_model,
+    )
+    if provider_model:
+        return provider_model
+    return str(getattr(settings, "main_model", "") or getattr(settings, "lesson_plan_model", "") or LESSON_PLAN_MODEL).strip()
 
 
 def _as_int(v: Any, default: int) -> int:
@@ -358,10 +397,24 @@ def _prompt_choice(label: str, options: List[str], *, default: str) -> str:
     if normalized_default not in choices:
         normalized_default = choices[0]
 
-    raw = _prompt_text(f"{label} 可选: {', '.join(choices)}", default=normalized_default)
+    options_str = " ".join(f"{i + 1}.{c}" for i, c in enumerate(choices))
+    raw = _prompt_text(f"{label} [{options_str}]", default=normalized_default)
     raw_norm = str(raw or "").strip()
+
     if raw_norm in choices:
         return raw_norm
+
+    try:
+        idx = int(raw_norm)
+        if 1 <= idx <= len(choices):
+            return choices[idx - 1]
+    except ValueError:
+        pass
+
+    for c in choices:
+        if c.lower() == raw_norm.lower():
+            return c
+
     return normalized_default
 
 
@@ -373,6 +426,120 @@ def _prompt_bool(label: str, *, default: bool) -> bool:
     if raw in {"n", "no", "0", "false", "f"}:
         return False
     return bool(default)
+
+
+def _prompt_int(label: str, *, min_val: int, max_val: int, default: int) -> int:
+    default = max(min_val, min(int(default or min_val), max_val))
+    while True:
+        raw = _prompt_text(f"{label} ({min_val}-{max_val})", default=str(default))
+        raw = str(raw).strip()
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            print(f"  ! 请输入 {min_val}-{max_val} 之间的整数")
+            continue
+        if value < min_val or value > max_val:
+            print(f"  ! 必须在 {min_val}-{max_val} 之间")
+            continue
+        return value
+
+
+def _print_welcome_banner(console) -> None:  # noqa: ANN001
+    if not _rich_available():
+        console.rule("AI 题目生成 · CLI")
+        return
+
+    from rich.panel import Panel
+    from rich.text import Text
+    from backend.core.settings import settings as _settings
+
+    body = Text()
+    body.append("AI 题目生成 · 交互模式\n", style="bold cyan")
+    body.append(
+        f"chat:        {str(_settings.chat_provider or '').strip()}/{str(_settings.main_model or '').strip()}\n"
+    )
+    if str(getattr(_settings, "lesson_plan_model", "") or "").strip():
+        body.append(f"lesson_plan: {str(_settings.lesson_plan_model or '').strip()}\n")
+    body.append(f"mcp_search:  {_resolve_cli_mcp_search_model()}\n")
+
+    has_exa = bool((os.getenv("EXA_API_KEY") or "").strip())
+    has_zhipu = bool((os.getenv("ZHIPU_API_KEY") or "").strip())
+    body.append("MCP keys:    ", style="dim")
+    body.append(f"exa={'✓' if has_exa else '×'}  ", style="green" if has_exa else "red")
+    body.append(f"zhipu={'✓' if has_zhipu else '×'}", style="green" if has_zhipu else "red")
+
+    console.print(Panel(body, border_style="cyan", padding=(0, 2)))
+
+
+def _pick_recent_session(console, *, user_id: str) -> str:  # noqa: ANN001
+    try:
+        sessions = list_saved_sessions(user_id, include_archived=True, limit=5)
+    except Exception:
+        sessions = []
+
+    if not sessions:
+        return ""
+
+    if _rich_available():
+        from rich.table import Table
+
+        table = Table(title=f"最近会话 (user={user_id})", show_lines=False)
+        table.add_column("#", justify="right", style="bold cyan", no_wrap=True)
+        table.add_column("session_id", no_wrap=True)
+        table.add_column("status", no_wrap=True)
+        table.add_column("subject", no_wrap=True)
+        table.add_column("topic")
+        table.add_column("题数", justify="right", no_wrap=True)
+        table.add_column("updated_at", no_wrap=True)
+        for i, s in enumerate(sessions, start=1):
+            drafts = _normalize_draft_questions(s.get("draft_questions"))
+            table.add_row(
+                str(i),
+                str(s.get("session_id") or ""),
+                str(s.get("status") or ""),
+                str(s.get("subject") or ""),
+                str(s.get("topic") or ""),
+                str(len(drafts)),
+                _fmt_epoch(float(s.get("updated_at_s") or s.get("created_at_s") or 0.0)),
+            )
+        console.print(table)
+    else:
+        for i, s in enumerate(sessions, start=1):
+            print(f"  {i}. {s.get('session_id')} {s.get('status')} {s.get('subject')}/{s.get('topic')}")
+
+    raw = _prompt_text("加载会话 (输入 #序号 或 session_id, 回车跳过)", default="")
+    raw = str(raw or "").strip()
+    if not raw:
+        return ""
+
+    try:
+        idx = int(raw)
+        if 1 <= idx <= len(sessions):
+            return str(sessions[idx - 1].get("session_id") or "").strip()
+    except ValueError:
+        pass
+
+    for s in sessions:
+        if str(s.get("session_id") or "").strip() == raw:
+            return raw
+
+    if _rich_available():
+        console.print(f"[yellow]未找到会话: {raw}，将创建新会话[/yellow]")
+    else:
+        print(f"未找到会话: {raw}，将创建新会话")
+    return ""
+
+
+def _section_header(console, title: str) -> None:  # noqa: ANN001
+    if _rich_available():
+        from rich.text import Text
+
+        line = Text()
+        line.append("\n▶ ", style="bold cyan")
+        line.append(title, style="bold")
+        console.print(line)
+    else:
+        print(f"\n--- {title} ---")
 
 
 def _append_tail(existing: str, addition: str, *, max_lines: int = 120, max_chars: int = 12000) -> str:
@@ -758,7 +925,7 @@ async def _ai_search_materials_via_mcp(
     # This stage relies on tool-calling + citations. Prefer a tool-capable model by default,
     # and allow override via env var. Do NOT silently inherit a cheap/non-tool-capable
     # lesson_plan model here, otherwise we may get hallucinated "sources".
-    effective_model = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip() or "openai/gpt-5-mini"
+    effective_model = _resolve_cli_mcp_search_model()
 
     def _log(msg: str) -> None:
         if callable(ui_log_tool):
@@ -1040,31 +1207,82 @@ def _resolve_params_from_args(args: argparse.Namespace) -> RunParams:
     preview_id = str((existing or {}).get("preview_id") or "").strip() or new_preview_id()
 
     if getattr(args, "interactive", False) or not subject or not topic:
+        console = _console()
+        _print_welcome_banner(console)
+
+        if not session_id:
+            loaded_sid = _pick_recent_session(console, user_id=user_id)
+            if loaded_sid:
+                loaded_existing = load_session(loaded_sid)
+                if isinstance(loaded_existing, dict) and str(loaded_existing.get("user_id") or "").strip() == user_id:
+                    session_id = loaded_sid
+                    existing = loaded_existing
+                    if _rich_available():
+                        console.print(f"[green]✓ 已加载会话:[/green] {loaded_sid}")
+                    else:
+                        print(f"已加载会话: {loaded_sid}")
+                    subject = subject or str(existing.get("subject") or "").strip()
+                    topic = topic or str(existing.get("topic") or "").strip()
+                    difficulty = difficulty or str(existing.get("difficulty") or "").strip()
+                    question_type = question_type or str(existing.get("question_type") or "").strip()
+                    mode = str(existing.get("mode") or mode or "standard").strip() or "standard"
+                    count = _as_int(existing.get("count"), count) or count
+                    use_reference_questions = bool(existing.get("use_reference_questions", use_reference_questions))
+                    reference_source = str(existing.get("reference_source") or reference_source or "any").strip() or "any"
+                    reference_year_range = str(existing.get("reference_year_range") or reference_year_range or "all").strip() or "all"
+                    stream_reasoning = bool(existing.get("stream_reasoning", stream_reasoning))
+                    use_mcp_search = bool(existing.get("use_mcp_search", use_mcp_search))
+                    mcp_search_provider = str(existing.get("mcp_search_provider") or mcp_search_provider or "auto").strip() or "auto"
+                    mcp_search_mode = str(existing.get("mcp_search_mode") or mcp_search_mode or "trending").strip() or "trending"
+                    mcp_search_recency_days = _as_int(existing.get("mcp_search_recency_days"), mcp_search_recency_days) or 180
+                    mcp_search_limit = _as_int(existing.get("mcp_search_limit"), mcp_search_limit) or 5
+                    mcp_search_query = str(existing.get("mcp_search_query") or mcp_search_query or "").strip()
+                    preview_id = str(existing.get("preview_id") or "").strip() or preview_id
+                else:
+                    if _rich_available():
+                        console.print(f"[yellow]会话加载失败或不属于当前用户: {loaded_sid}，将创建新会话[/yellow]")
+                    else:
+                        print(f"会话加载失败或不属于当前用户: {loaded_sid}，将创建新会话")
+
+        _section_header(console, "基本信息")
         subject = _prompt_text("学科", default=subject or "高中数学").strip()
         topic = _prompt_text("知识点/主题", default=topic or "").strip()
         difficulty = _prompt_choice("难度", ["简单", "中等", "困难"], default=difficulty or "中等")
-        question_type = _prompt_text("题型(可留空)", default=question_type or _infer_question_type_from_topic(topic)).strip()
-        count = max(1, min(_as_int(_prompt_text("题量(1-10)", default=str(count)), count), 10))
-        mode = _prompt_choice("模式", ["standard", "infinite"], default=mode)
-        use_reference_questions = _prompt_bool("是否参考真题", default=use_reference_questions)
+        question_type = _prompt_text(
+            "题型 (留空自动推断)",
+            default=question_type or _infer_question_type_from_topic(topic),
+        ).strip()
+        count = _prompt_int("题量", min_val=1, max_val=10, default=count or 5)
+        mode = _prompt_choice("模式", ["standard", "infinite"], default=mode or "standard")
+
+        _section_header(console, "参考真题")
+        use_reference_questions = _prompt_bool("使用真题作参考", default=use_reference_questions)
         if use_reference_questions:
-            reference_source = _prompt_choice("参考来源", ["any", "gaokao", "mock", "joint"], default=reference_source)
-            reference_year_range = _prompt_choice("参考年份范围", ["all", "3", "5"], default=reference_year_range)
-        stream_reasoning = _prompt_bool("是否流式输出 reasoning", default=stream_reasoning)
-        default_mcp = use_mcp_search or bool((os.getenv("EXA_API_KEY") or os.getenv("ZHIPU_API_KEY") or "").strip())
-        use_mcp_search = _prompt_bool("是否使用 MCP 搜索补充素材", default=default_mcp)
-        if use_mcp_search:
-            mcp_search_provider = _prompt_choice("MCP 搜索 provider", ["auto", "exa", "bigmodel"], default=mcp_search_provider or "auto")
-            mcp_search_mode = _prompt_choice("MCP 搜索模式", ["trending", "patterns"], default=mcp_search_mode or "trending")
-            mcp_search_recency_days = max(
-                1,
-                min(
-                    _as_int(_prompt_text("MCP 搜索 recency days(1-3650)", default=str(mcp_search_recency_days)), mcp_search_recency_days),
-                    3650,
-                ),
+            reference_source = _prompt_choice(
+                "参考来源", ["any", "gaokao", "mock", "joint"], default=reference_source or "any"
             )
-            mcp_search_limit = max(1, min(_as_int(_prompt_text("MCP 搜索返回条数(1-10)", default=str(mcp_search_limit)), mcp_search_limit), 10))
-            mcp_search_query = _prompt_text("MCP 搜索 query(可留空自动)", default=mcp_search_query).strip()
+            reference_year_range = _prompt_choice(
+                "年份范围", ["all", "3", "5"], default=reference_year_range or "all"
+            )
+
+        _section_header(console, "高级设置")
+        stream_reasoning = _prompt_bool("流式输出 reasoning", default=stream_reasoning)
+        default_mcp = use_mcp_search or bool((os.getenv("EXA_API_KEY") or os.getenv("ZHIPU_API_KEY") or "").strip())
+        use_mcp_search = _prompt_bool("MCP 搜索补充素材", default=default_mcp)
+        if use_mcp_search:
+            mcp_search_provider = _prompt_choice(
+                "MCP provider", ["auto", "exa", "bigmodel"], default=mcp_search_provider or "auto"
+            )
+            mcp_search_mode = _prompt_choice(
+                "MCP 模式", ["trending", "patterns"], default=mcp_search_mode or "trending"
+            )
+            mcp_search_recency_days = _prompt_int(
+                "MCP recency days", min_val=1, max_val=3650, default=mcp_search_recency_days or 180
+            )
+            mcp_search_limit = _prompt_int(
+                "MCP 返回条数", min_val=1, max_val=10, default=mcp_search_limit or 5
+            )
+            mcp_search_query = _prompt_text("MCP 搜索 query (留空自动)", default=mcp_search_query).strip()
 
     if not question_type:
         inferred = _infer_question_type_from_topic(topic)
@@ -2155,7 +2373,7 @@ def _list_sessions_cmd(*, user_id: str, limit: int) -> None:
 def _print_params_summary(console, params: RunParams) -> None:  # noqa: ANN001
     from backend.core.settings import settings
 
-    mcp_search_model = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip() or "openai/gpt-5-mini"
+    mcp_search_model = _resolve_cli_mcp_search_model()
 
     if not _rich_available():
         console.rule("参数确认")

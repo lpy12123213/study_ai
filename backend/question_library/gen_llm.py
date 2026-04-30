@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any, Dict, List
 
+from backend.core.settings import STUDY_MATERIALS_THINKING_EFFORT_DEFAULT
 from backend.llm.client import chat_completion, chat_completion_text
 from backend.mcp.tools.python_scientific_compute import openai_tool_spec as scientific_compute_tool_spec
 from backend.mcp.tools.python_scientific_compute import python_scientific_compute
@@ -66,6 +67,7 @@ async def _chat_json_with_reasoning(
     on_reasoning_event: ReasoningEventHandler,
 ) -> str:
     emitted_chars = 0
+    reasoning_effort = str(STUDY_MATERIALS_THINKING_EFFORT_DEFAULT or "").strip() or "medium"
     working_messages: List[Dict[str, Any]] = [dict(message) for message in messages]
 
     async def _on_reasoning_delta(chunk: str) -> None:
@@ -102,7 +104,7 @@ async def _chat_json_with_reasoning(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format={"type": "json_object"},
-                reasoning={"effort": "medium", "exclude": not bool(stream_reasoning)},
+                reasoning={"effort": reasoning_effort, "exclude": not bool(stream_reasoning)},
                 tools=[scientific_compute_tool_spec()],
                 tool_choice="auto",
                 stream=bool(stream_reasoning),
@@ -193,7 +195,7 @@ async def _chat_json_with_reasoning(
             temperature=temperature,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
-            reasoning={"effort": "medium", "exclude": not bool(stream_reasoning)},
+            reasoning={"effort": reasoning_effort, "exclude": not bool(stream_reasoning)},
             stream=bool(stream_reasoning),
             on_reasoning_delta=_on_reasoning_delta if stream_reasoning else None,
             raise_on_fail=raise_on_fail,

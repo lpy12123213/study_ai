@@ -201,34 +201,25 @@ export function MissionComposer(props: MissionComposerProps) {
   return (
     <section className="overflow-hidden rounded-[30px] border border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(245,240,229,0.92))] shadow-[0_24px_70px_rgba(30,33,45,0.08)] dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.96),rgba(16,18,28,0.94))] dark:shadow-[0_28px_90px_rgba(0,0,0,0.58)]">
       <div className="flex flex-col gap-5 p-5 lg:p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/80 px-3 py-1 text-xs font-medium text-muted-foreground">
-              <Sparkles className="h-3.5 w-3.5" />
-              Dialogue Composer
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-semibold tracking-tight">像对话一样继续给出题要求</h2>
-              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                在这里补充新的知识点、难度和出题偏好。无限模式下会沿用同一会话持续追加，直到你点击停止。
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            出题任务
+            {selectedKnowledgeCount > 0 && (
+              <Badge variant="outline" className="rounded-full">已选 {selectedKnowledgeCount} 个知识点</Badge>
+            )}
             <Badge variant="outline" className="rounded-full">
               {mode === 'infinite' ? '无限模式' : '标准模式'}
             </Badge>
-            <Badge variant="outline" className="rounded-full">
-              已选知识点 {selectedKnowledgeCount}
-            </Badge>
-            {canStop ? (
-              <Button type="button" variant="outline" className="rounded-full" onClick={onStop}>
+          </div>
+          <div className="flex items-center gap-2">
+            {canStop && (
+              <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={onStop}>
                 <PauseCircle className="h-4 w-4" />
-                停止追加
+                停止
               </Button>
-            ) : null}
-            <Button type="button" size="lg" className="rounded-full" disabled={isGenerating} onClick={onGenerate}>
+            )}
+            <Button type="button" className="rounded-full" disabled={isGenerating} onClick={onGenerate}>
               <SendHorizontal className="h-4 w-4" />
               {actionLabel}
             </Button>

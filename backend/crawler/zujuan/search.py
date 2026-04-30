@@ -246,6 +246,7 @@ async def search_by_keyword(
             bank_id=bank_id_for_request,
             category_id=target["category_id"],
             course_id=course_id_for_request,
+            course_id_py=str(target.get("course_id_py") or ""),
             cur_page=page_idx,
             difficulty=difficulty,
             question_type=question_type,

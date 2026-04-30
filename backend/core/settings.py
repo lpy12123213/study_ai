@@ -423,7 +423,7 @@ class Settings:
             lesson_plan_temperature=_get_float("LESSON_PLAN_TEMPERATURE", _get_float("MAIN_MODEL_TEMPERATURE", 0.7)),
             lesson_plan_max_tokens=_get_int(
                 "LESSON_PLAN_MAX_TOKENS",
-                max(_get_int("MAIN_MODEL_MAX_TOKENS", 2000), 5000),
+                max(_get_int("MAIN_MODEL_MAX_TOKENS", 2000), 50000),
             ),
             max_tool_iterations=_get_int("MAX_TOOL_ITERATIONS", 10),
             api_timeout_seconds=_get_int("API_TIMEOUT", 120),

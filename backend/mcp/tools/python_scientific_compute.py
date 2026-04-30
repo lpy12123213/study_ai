@@ -86,6 +86,7 @@ _ALLOWED_NODE_TYPES: Tuple[type, ...] = (
     ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Call, ast.Attribute,
     ast.List, ast.Tuple, ast.Set, ast.Dict, ast.Subscript, ast.Slice, ast.Index,
     ast.If, ast.For, ast.While, ast.Break, ast.Continue, ast.Pass, ast.IfExp,
+    ast.FunctionDef, ast.Return, ast.arguments, ast.arg,
     ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.comprehension, ast.keyword,
     ast.And, ast.Or, ast.Not, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
     ast.Is, ast.IsNot, ast.In, ast.NotIn,
@@ -179,6 +180,21 @@ def _validate_tree(tree: ast.AST) -> None:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             raise ValueError("不允许 import；请直接使用预置模块名")
 
+        if isinstance(node, ast.FunctionDef):
+            if str(node.name or "").startswith("__"):
+                raise ValueError("不允许使用双下划线函数名")
+            if list(node.decorator_list or []):
+                raise ValueError("不允许使用装饰器")
+            if getattr(node, "returns", None) is not None:
+                raise ValueError("不允许使用函数返回类型标注")
+            args = node.args if isinstance(node.args, ast.arguments) else None
+            if args is not None:
+                if args.vararg is not None or args.kwarg is not None:
+                    raise ValueError("不允许使用 *args 或 **kwargs")
+                for arg in list(args.args or []) + list(args.kwonlyargs or []) + list(args.posonlyargs or []):
+                    if getattr(arg, "annotation", None) is not None:
+                        raise ValueError("不允许使用函数参数类型标注")
+
         if isinstance(node, ast.Name):
             ident = str(node.id or "")
             if ident.startswith("__"):
@@ -217,17 +233,16 @@ def _compile_code(code: str) -> Tuple[Any, Any]:
 
 
 def _run_code(code: str) -> Dict[str, Any]:
-    env, warnings = _build_env()
-    local_vars: Dict[str, Any] = {}
+    scope, warnings = _build_env()
     exec_code, eval_code = _compile_code(code)
     stdout_buf = io.StringIO()
 
     with redirect_stdout(stdout_buf):
-        exec(exec_code, env, local_vars)
-        if "result" in local_vars:
-            result_value = local_vars.get("result")
+        exec(exec_code, scope, scope)
+        if "result" in scope:
+            result_value = scope.get("result")
         elif eval_code is not None:
-            result_value = eval(eval_code, env, local_vars)
+            result_value = eval(eval_code, scope, scope)
         else:
             result_value = None
 
@@ -239,7 +254,7 @@ def _run_code(code: str) -> Dict[str, Any]:
         "stdout": stdout[:4000],
         "warnings": warnings,
         "available_names": sorted(
-            [name for name in env.keys() if name not in {"__builtins__"}] + [name for name in local_vars.keys() if name != "result"]
+            [name for name in scope.keys() if name not in {"__builtins__", "result"}]
         ),
     }
     return out

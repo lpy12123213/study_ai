@@ -1,7 +1,0 @@
-序号,任务,描述,新建/修改,文件路径,状态
-1,创建 QuestionGenerationToolsMixin,封装 6 个出题 agent tools（qgen_build_source_pack / qgen_spec_search / qgen_realize_drafts / qgen_judge_and_repair / qgen_select_final / qgen_enrich_diagrams），内部调用现有 pipeline 函数，通过 working_memory 传递数据,新建,backend/agent/tools/generation/question_generation.py,待开始
-2,注册 Tool Schemas,在 TOOL_INPUT_SCHEMAS 中添加 6 个 qgen_* tool 的 JSON Schema 定义,修改,backend/agent/tools/schemas.py,待开始
-3,创建出题专用 ReAct Prompt,编写系统提示（出题领域知识、默认流程、决策启发式、working memory key 说明、finish 条件）,新建,backend/agent/react/qgen_prompts.py,待开始
-4,创建 QuestionGenerationAgent,构建独立 Executor（只含 qgen tools + search tools）、初始化 CompressedContext、运行 ReActLoop、提取 qgen_finals 结果,新建,backend/question_library/agent.py,待开始
-5,集成到 Runner,在 runner_factory() 中加入 QUESTION_LIBRARY_AGENT_MODE=react 分支，映射 agent events → 现有 SSE events,修改,backend/question_library/runner.py,待开始
-6,CLI 支持,添加 --agent flag，启用时走 QuestionGenerationAgent 路径，TUI 事件映射,修改,backend/cli/question_generate.py,待开始

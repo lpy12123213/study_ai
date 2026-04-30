@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { act } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiGenerateStudioPage } from '@/features/aiGenerate/AiGenerateStudioPage'
 
@@ -88,6 +87,57 @@ vi.mock('@/components/task/TaskTimeline', () => ({
   ),
 }))
 
+function createSessionSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    session_id: 'session-001',
+    preview_id: 'preview-001',
+    status: 'pending_review',
+    mode: 'infinite',
+    subject: '高中数学',
+    topic: '函数单调性',
+    count: 1,
+    task_ids: ['task-001'],
+    latest_task_id: 'task-001',
+    updated_at_s: 1710000000,
+    created_at_s: 1710000000,
+    reasoning_blocks_count: 0,
+    confirmed_question_ids: [],
+    stop_requested: true,
+    ...overrides,
+  }
+}
+
+function createSessionDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    session_id: 'session-001',
+    preview_id: 'preview-001',
+    status: 'pending_review',
+    mode: 'infinite',
+    subject: '高中数学',
+    topic: '函数单调性',
+    count: 1,
+    task_ids: ['task-001'],
+    latest_task_id: 'task-001',
+    updated_at_s: 1710000000,
+    created_at_s: 1710000000,
+    reasoning_blocks_count: 0,
+    confirmed_question_ids: [],
+    stop_requested: true,
+    difficulty: '中等',
+    question_type: '解答题',
+    use_study_archive: true,
+    grade_id: '1',
+    textbook_version_id: 'tj-rjb-a',
+    knowledge_point_ids: ['kp-1'],
+    knowledge_points: ['函数单调性'],
+    stream_reasoning: true,
+    draft_questions: [],
+    reasoning_blocks: [],
+    task_events: [],
+    ...overrides,
+  }
+}
+
 function renderPage(initialEntry = '/ai-generate?session=session-001') {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -114,54 +164,20 @@ describe('AiGenerateStudioPage', () => {
     vi.useRealTimers()
   })
 
-  it('renders session history, restored reasoning labels, and direct review-to-library actions', async () => {
+  it('renders a simplified workspace and shows generated questions in a floating window', async () => {
     apiMocks.listQuestionLibrarySessions.mockResolvedValue({
       success: true,
       sessions: [
-        {
-          session_id: 'session-001',
-          preview_id: 'preview-001',
-          status: 'pending_review',
-          mode: 'infinite',
-          subject: '高中数学',
-          topic: '函数单调性',
-          count: 1,
-          task_ids: ['task-001'],
-          latest_task_id: 'task-001',
-          updated_at_s: 1710000000,
-          created_at_s: 1710000000,
+        createSessionSummary({
           reasoning_blocks_count: 2,
-          confirmed_question_ids: [],
-          stop_requested: true,
-        },
+        }),
       ],
     })
 
     apiMocks.getQuestionLibrarySession.mockResolvedValue({
       success: true,
-      session: {
-        session_id: 'session-001',
-        preview_id: 'preview-001',
-        status: 'pending_review',
-        mode: 'infinite',
-        subject: '高中数学',
-        topic: '函数单调性',
-        count: 1,
-        task_ids: ['task-001'],
-        latest_task_id: 'task-001',
-        updated_at_s: 1710000000,
-        created_at_s: 1710000000,
+      session: createSessionDetail({
         reasoning_blocks_count: 2,
-        confirmed_question_ids: [],
-        stop_requested: true,
-        difficulty: '中等',
-        question_type: '解答题',
-        use_study_archive: true,
-        grade_id: '1',
-        textbook_version_id: 'tj-rjb-a',
-        knowledge_point_ids: ['kp-1'],
-        knowledge_points: ['函数单调性'],
-        stream_reasoning: true,
         draft_questions: [
           {
             question_id: 'q-001',
@@ -198,18 +214,59 @@ describe('AiGenerateStudioPage', () => {
             created_at: '2026-03-20T10:00:01Z',
           },
         ],
-      },
+      }),
     })
 
     renderPage()
 
-    expect(await screen.findByText('会话历史')).toBeInTheDocument()
-    expect(await screen.findByText('函数单调性')).toBeInTheDocument()
+    expect(await screen.findByText('AI 出题')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '会话历史' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '知识点配置' })).toBeInTheDocument()
+
+    const floatingWindow = await screen.findByRole('complementary', { name: '题目悬浮窗' })
+    expect(floatingWindow).toBeInTheDocument()
+    expect(within(floatingWindow).getByText('已知函数 f(x)，判断其单调区间。')).toBeInTheDocument()
     expect(await screen.findByText('原始 Reason')).toBeInTheDocument()
     expect(await screen.findByText('事件 Trace')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: '停止追加' })).toBeInTheDocument()
     expect(await screen.findByRole('link', { name: '进入审查' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '审核通过并入库' })).toBeEnabled()
+  })
+
+  it('can collapse the floating question window and reopen it from the floating trigger', async () => {
+    apiMocks.listQuestionLibrarySessions.mockResolvedValue({
+      success: true,
+      sessions: [createSessionSummary()],
+    })
+
+    apiMocks.getQuestionLibrarySession.mockResolvedValue({
+      success: true,
+      session: createSessionDetail({
+        draft_questions: [
+          {
+            question_id: 'q-001',
+            stem: '已知函数 f(x)，判断其单调区间。',
+            answer: '在区间 (0,+∞) 单调递增。',
+            analysis: '先求导。',
+            keep: true,
+            review_status: 'pending_review',
+            review: null,
+          },
+        ],
+      }),
+    })
+
+    renderPage()
+
+    expect(await screen.findByRole('complementary', { name: '题目悬浮窗' })).toBeInTheDocument()
+    screen.getByRole('button', { name: '收起题目悬浮窗' }).click()
+
+    expect(screen.queryByRole('complementary', { name: '题目悬浮窗' })).not.toBeInTheDocument()
+    expect(screen.queryByText('已知函数 f(x)，判断其单调区间。')).not.toBeInTheDocument()
+
+    const openButtons = screen.getAllByRole('button', { name: '打开题目悬浮窗' })
+    openButtons[openButtons.length - 1].click()
+    expect(await screen.findByText('已知函数 f(x)，判断其单调区间。')).toBeInTheDocument()
   })
 
   it('polls running sessions and restores drafts after refresh', async () => {
@@ -218,81 +275,56 @@ describe('AiGenerateStudioPage', () => {
       apiMocks.listQuestionLibrarySessions.mockResolvedValue({
         success: true,
         sessions: [
-          {
+          createSessionSummary({
             session_id: 'session-running-1',
             preview_id: 'preview-running-1',
             status: 'running',
             mode: 'standard',
-            subject: '高中数学',
             topic: '导数',
             count: 1,
             task_ids: ['task-running-1'],
             latest_task_id: 'task-running-1',
             updated_at_s: 1710000100,
-            created_at_s: 1710000000,
             reasoning_blocks_count: 0,
-            confirmed_question_ids: [],
             stop_requested: false,
-          },
+          }),
         ],
       })
 
       apiMocks.getQuestionLibrarySession
         .mockResolvedValueOnce({
           success: true,
-          session: {
+          session: createSessionDetail({
             session_id: 'session-running-1',
             preview_id: 'preview-running-1',
             status: 'running',
             mode: 'standard',
-            subject: '高中数学',
             topic: '导数',
             count: 1,
             task_ids: ['task-running-1'],
             latest_task_id: 'task-running-1',
             updated_at_s: 1710000100,
-            created_at_s: 1710000000,
-            reasoning_blocks_count: 0,
-            confirmed_question_ids: [],
             stop_requested: false,
-            difficulty: '中等',
-            question_type: '解答题',
             use_study_archive: false,
-            grade_id: '1',
-            textbook_version_id: 'tj-rjb-a',
-            knowledge_point_ids: [],
-            knowledge_points: [],
-            stream_reasoning: true,
             draft_questions: [],
             reasoning_blocks: [],
             task_events: [],
-          },
+          }),
         })
         .mockResolvedValueOnce({
           success: true,
-          session: {
+          session: createSessionDetail({
             session_id: 'session-running-1',
             preview_id: 'preview-running-1',
             status: 'running',
             mode: 'standard',
-            subject: '高中数学',
             topic: '导数',
             count: 1,
             task_ids: ['task-running-1'],
             latest_task_id: 'task-running-1',
             updated_at_s: 1710000200,
-            created_at_s: 1710000000,
-            reasoning_blocks_count: 0,
-            confirmed_question_ids: [],
             stop_requested: false,
-            difficulty: '中等',
-            question_type: '解答题',
             use_study_archive: false,
-            grade_id: '1',
-            textbook_version_id: 'tj-rjb-a',
-            knowledge_point_ids: [],
-            knowledge_points: [],
-            stream_reasoning: true,
             draft_questions: [
               {
                 question_id: 'q-running-1',
@@ -306,8 +338,8 @@ describe('AiGenerateStudioPage', () => {
             ],
             reasoning_blocks: [],
             task_events: [],
-          },
-      })
+          }),
+        })
 
       renderPage('/ai-generate?session=session-running-1')
 
@@ -334,54 +366,37 @@ describe('AiGenerateStudioPage', () => {
       apiMocks.listQuestionLibrarySessions.mockResolvedValue({
         success: true,
         sessions: [
-          {
+          createSessionSummary({
             session_id: 'session-race-1',
             preview_id: 'preview-race-1',
             status: 'stopped',
-            mode: 'infinite',
-            subject: '高中数学',
             topic: '导数',
-            count: 1,
             task_ids: ['task-race-0'],
             latest_task_id: 'task-race-0',
             updated_at_s: 1710000500,
-            created_at_s: 1710000000,
             reasoning_blocks_count: 0,
-            confirmed_question_ids: [],
-            stop_requested: true,
-          },
+          }),
         ],
       })
 
       apiMocks.getQuestionLibrarySession.mockResolvedValue({
         success: true,
-        session: {
+        session: createSessionDetail({
           session_id: 'session-race-1',
           preview_id: 'preview-race-1',
           status: 'stopped',
-          mode: 'infinite',
-          subject: '高中数学',
           topic: '导数',
-          count: 1,
           task_ids: ['task-race-0'],
           latest_task_id: 'task-race-0',
           updated_at_s: 1710000500,
-          created_at_s: 1710000000,
           reasoning_blocks_count: 0,
-          confirmed_question_ids: [],
-          stop_requested: true,
-          difficulty: '中等',
-          question_type: '解答题',
           use_study_archive: false,
-          grade_id: '1',
-          textbook_version_id: 'tj-rjb-a',
           knowledge_point_ids: [],
           knowledge_points: [],
-          stream_reasoning: true,
           draft_questions: [],
           reasoning_blocks: [],
           task_events: [],
-        },
+        }),
       })
 
       renderPage('/ai-generate?session=session-race-1')
@@ -410,54 +425,41 @@ describe('AiGenerateStudioPage', () => {
     apiMocks.listQuestionLibrarySessions.mockResolvedValue({
       success: true,
       sessions: [
-        {
+        createSessionSummary({
           session_id: 'session-partial-1',
           preview_id: 'preview-partial-1',
           status: 'partial_failure',
           mode: 'standard',
-          subject: '高中数学',
           topic: '导数',
-          count: 1,
           task_ids: ['task-partial-1'],
           latest_task_id: 'task-partial-1',
           updated_at_s: 1710000300,
-          created_at_s: 1710000000,
           reasoning_blocks_count: 0,
-          confirmed_question_ids: [],
           stop_requested: false,
-        },
+        }),
       ],
     })
 
     apiMocks.getQuestionLibrarySession.mockResolvedValue({
       success: true,
-      session: {
+      session: createSessionDetail({
         session_id: 'session-partial-1',
         preview_id: 'preview-partial-1',
         status: 'partial_failure',
         mode: 'standard',
-        subject: '高中数学',
         topic: '导数',
-        count: 1,
         task_ids: ['task-partial-1'],
         latest_task_id: 'task-partial-1',
         updated_at_s: 1710000300,
-        created_at_s: 1710000000,
         reasoning_blocks_count: 0,
-        confirmed_question_ids: [],
         stop_requested: false,
-        difficulty: '中等',
-        question_type: '解答题',
         use_study_archive: false,
-        grade_id: '1',
-        textbook_version_id: 'tj-rjb-a',
         knowledge_point_ids: [],
         knowledge_points: [],
-        stream_reasoning: true,
         draft_questions: [],
         reasoning_blocks: [],
         task_events: [],
-      },
+      }),
     })
 
     renderPage('/ai-generate?session=session-partial-1')

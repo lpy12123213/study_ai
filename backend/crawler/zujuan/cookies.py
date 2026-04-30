@@ -25,6 +25,7 @@ DEFAULT_USER_AGENT = (
 CSRF_TOKEN_PATTERN = re.compile(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', re.IGNORECASE)
 
 _ANTIBOT_COOKIE_KEYS = {"aliyungf_tc", "acw_tc", "acw_sc__v2"}
+_ALICFW_COOKIE_KEYS = {"alicfw", "alicfw_gfver"}
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _ANTIBOT_CACHE_FILE = str(_PROJECT_ROOT / ".local" / "cache" / "zujuan_antibot_cookies.json")
 _ANTIBOT_CACHE_FILE_LEGACY = str(_PROJECT_ROOT / ".cache" / "zujuan_antibot_cookies.json")
@@ -48,6 +49,27 @@ def parse_cookie_string(cookie_str: str) -> Dict[str, str]:
 
 def build_cookie_string(cookies: Dict[str, str]) -> str:
     return "; ".join([f"{k}={v}" for k, v in cookies.items() if k and v])
+
+
+def get_playwright_login_user_data_dir(*, explicit_dir: str = "") -> Path:
+    explicit = str(explicit_dir or os.getenv("ZUJUAN_USER_DATA_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    default_dir = _PROJECT_ROOT / ".local" / "playwright" / "zujuan_user_data"
+    legacy_dirs = (
+        _PROJECT_ROOT / ".local" / "playwright" / "zujuan",
+        _PROJECT_ROOT / ".playwright_zujuan_user_data",
+    )
+
+    if default_dir.exists():
+        return default_dir
+
+    for legacy_dir in legacy_dirs:
+        if legacy_dir.exists():
+            return legacy_dir
+
+    return default_dir
 
 
 async def get_cookies_with_playwright() -> str:
@@ -207,8 +229,7 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
 
         def _sync_get_session() -> Dict[str, Any]:
             with sync_playwright() as p:
-                repo_root = Path(__file__).resolve().parents[3]
-                user_data_dir = str((repo_root / ".local" / "playwright" / "zujuan").resolve())
+                user_data_dir = str(get_playwright_login_user_data_dir().resolve())
                 os.makedirs(user_data_dir, exist_ok=True)
 
                 browser = p.chromium.launch_persistent_context(
@@ -271,4 +292,8 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
 
 
 def missing_antibot_keys(cookies: str) -> set[str]:
-    return _ANTIBOT_COOKIE_KEYS - set(parse_cookie_string(cookies or "").keys())
+    keys = set(parse_cookie_string(cookies or "").keys())
+    missing = {"aliyungf_tc", "acw_tc"} - keys
+    if "acw_sc__v2" not in keys and not _ALICFW_COOKIE_KEYS.issubset(keys):
+        missing.add("acw_sc__v2")
+    return missing

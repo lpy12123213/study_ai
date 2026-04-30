@@ -283,11 +283,15 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 # 启动独立进程显示登录窗口
                 login_result = await server.crawler.login_via_subprocess()
                 result["login_window"] = login_result
+                login_script = str(login_result.get("login_script") or "scripts/登录组卷网.bat")
+                login_command = str(login_result.get("login_command") or f'"{login_script}" "{server.current_subject}"')
+                result["login_script"] = login_script
+                result["login_command"] = login_command
                 result["login_instructions"] = [
                     "首次使用需要登录组卷网：",
-                    f'1. 双击运行 scripts/登录组卷网.bat "{server.current_subject}"',
+                    f"1. 运行 {login_command}",
                     "2. 在弹出的浏览器中登录",
-                    "3. 登录成功后按回车保存",
+                    "3. 登录成功后等待脚本自动保存",
                     "4. 重新调用此工具导出题目",
                 ]
 
