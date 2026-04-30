@@ -10,6 +10,7 @@ const BlueprintPage = lazy(() => import('@/pages/BlueprintPage'))
 const LessonPlansPage = lazy(() => import('@/pages/LessonPlansPage'))
 const LessonPlanDetailPage = lazy(() => import('@/pages/LessonPlanDetailPage'))
 const StudyMaterialsPage = lazy(() => import('@/pages/StudyMaterialsPage'))
+const KnowledgeVideoPage = lazy(() => import('@/pages/KnowledgeVideoPage'))
 const PapersPage = lazy(() => import('@/pages/PapersPage'))
 const PaperDetailPage = lazy(() => import('@/pages/PaperDetailPage'))
 const CanvasPage = lazy(() => import('@/pages/CanvasPage'))
@@ -56,6 +57,7 @@ function App() {
             <Route path="lesson-plans" element={<LessonPlansPage />} />
             <Route path="lesson-plans/:lessonPlanId" element={<LessonPlanDetailPage />} />
             <Route path="study-materials" element={<StudyMaterialsPage />} />
+            <Route path="knowledge-videos" element={<KnowledgeVideoPage />} />
             <Route path="deepthink" element={<DeepThinkPage />} />
             <Route path="question-evaluate" element={<QuestionEvaluatePage />} />
             <Route path="question-library" element={<QuestionLibraryPage />} />

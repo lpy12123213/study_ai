@@ -11,6 +11,7 @@ from backend.tasks.runners import (
     run_export_paper_task,
     run_export_study_archive_task,
     run_generate_full_paper_task,
+    run_knowledge_video_task,
     run_lesson_plan_task,
     run_paper_compose_task,
 )
@@ -185,4 +186,28 @@ async def submit_export_study_archive_task(
         request=dict(request or {}),
         parent_task_id=str(parent_task_id or "").strip() or None,
         runner_factory=runner_factory,
+    )
+
+
+async def submit_knowledge_video_task(
+    *, user_id: str, request: Dict[str, Any], parent_task_id: Optional[str] = None
+) -> RuntimeTask:
+    req = dict(request or {})
+    tid = str(req.get("taskId") or req.get("task_id") or "").strip() or _new_task_id("knowledge-video")
+    req["taskId"] = tid
+    topic = str(req.get("topic") or req.get("query") or "").strip()
+    title = _clip_title(f"知识视频：{topic}") or "知识视频生成"
+
+    async def runner_factory(task: RuntimeTask) -> None:
+        await run_knowledge_video_task(task, user_id=user_id)
+
+    return await task_runtime.create_task(
+        task_id=tid,
+        user_id=user_id,
+        task_type="knowledge_video",
+        title=title,
+        request=req,
+        parent_task_id=str(parent_task_id or "").strip() or None,
+        runner_factory=runner_factory,
+        starter_event={"type": "step", "step": {"id": "task_started", "title": "开始生成知识视频", "status": "running"}},
     )

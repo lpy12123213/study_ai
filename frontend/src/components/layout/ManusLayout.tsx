@@ -20,13 +20,14 @@ export function ManusLayout() {
     location.pathname.startsWith('/blueprint') ||
     location.pathname.startsWith('/lesson-plans') ||
     location.pathname.startsWith('/study-materials') ||
+    location.pathname.startsWith('/knowledge-videos') ||
     location.pathname.startsWith('/question-evaluate') ||
     location.pathname.startsWith('/deepthink') ||
     location.pathname.startsWith('/tasks') ||
     isStudioPage
 
   const pageManagesOwnScroll =
-    location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/lesson-plans') || location.pathname.startsWith('/tasks') || isStudioPage
+    location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/knowledge-videos') || location.pathname.startsWith('/lesson-plans') || location.pathname.startsWith('/tasks') || isStudioPage
 
   if (isFullScreenPage) {
     return (

@@ -21,6 +21,7 @@ import {
   Search,
   Tag,
   BookX,
+  Film,
   Settings,
 } from 'lucide-react'
 
@@ -61,6 +62,7 @@ export function CommandPalette() {
       { id: 'nav-feedback', title: '反馈', subtitle: '/feedback', icon: Bug, run: go('/feedback') },
       { id: 'nav-dashboard', title: '仪表盘', subtitle: '/dashboard', icon: BarChart3, run: go('/dashboard') },
       { id: 'nav-study-materials', title: '自学资料', subtitle: '/study-materials', icon: BookOpen, run: go('/study-materials') },
+      { id: 'nav-knowledge-videos', title: '知识视频', subtitle: '/knowledge-videos', icon: Film, run: go('/knowledge-videos') },
       { id: 'nav-blueprint', title: '蓝图组卷', subtitle: '/blueprint', icon: LayoutTemplate, run: go('/blueprint') },
       { id: 'nav-papers', title: '试卷管理', subtitle: '/papers', icon: Files, run: go('/papers') },
       { id: 'nav-settings', title: '设置', subtitle: '/settings', icon: Settings, run: go('/settings') },

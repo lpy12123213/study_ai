@@ -6,7 +6,9 @@ import { useStudyMaterialsStreamRunner } from '@/features/studyMaterials/hooks/u
 import type { ConversationItem, Message } from '@/types'
 import type { SubAgentActivity } from '@/features/studyMaterials/types'
 
-const fetchSSERequestMock = vi.fn()
+const { fetchSSERequestMock } = vi.hoisted(() => ({
+  fetchSSERequestMock: vi.fn(),
+}))
 
 vi.mock('@/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/client')>()
@@ -23,8 +25,7 @@ function resetConversationStore() {
       currentConversationIdByType: { blueprint: null, lesson_plan: null, study_materials: null },
       filter: 'all',
       messagesByConversation: {},
-    } as any,
-    true
+    } as any
   )
 }
 
@@ -132,6 +133,144 @@ describe('useStudyMaterialsStreamRunner', () => {
     expect(setIsGeneratingLocal).toHaveBeenCalledWith(true)
     expect(setIsGeneratingLocal).toHaveBeenCalledWith(false)
     expect(setError).toHaveBeenCalledWith(null)
+  })
+
+  it('populates SubAgent activities from canonical task stream events', () => {
+    const now = new Date().toISOString()
+    const conversationId = 'conv-1'
+    const assistantMessageId = 'msg-a1'
+
+    const conversation: ConversationItem = {
+      id: conversationId,
+      title: '新自学资料',
+      type: 'study_materials',
+      createdAt: now,
+      updatedAt: now,
+      status: 'active',
+      resumable: false,
+    }
+
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      createdAt: now,
+    }
+
+    useConversationStore.getState().addConversation(conversation)
+    useConversationStore.getState().setCurrentConversation(conversationId, 'study_materials')
+    useConversationStore.getState().setMessages(conversationId, [assistantMessage])
+
+    let subActivities: SubAgentActivity[] = []
+    const setIsGeneratingLocal = vi.fn()
+    const setError = vi.fn()
+    const setActiveSubAgentTab = vi.fn()
+    const setSubAgentActivities = vi.fn((updater: any) => {
+      subActivities = typeof updater === 'function' ? updater(subActivities) : updater
+    })
+
+    const { result } = renderHook(() =>
+      useStudyMaterialsStreamRunner({
+        setIsGeneratingLocal,
+        setError,
+        setSubAgentActivities,
+        setActiveSubAgentTab,
+      })
+    )
+
+    act(() => {
+      result.current.runStudyMaterialsStream({
+        conversationId,
+        assistantMessageId,
+        request: { url: '/tasks/server-task-1/stream?after_seq=0', method: 'GET' },
+        initialTaskId: 'server-task-1',
+      })
+    })
+
+    expect(fetchSSERequestMock).toHaveBeenCalledTimes(1)
+    const onMessage = fetchSSERequestMock.mock.calls[0]?.[2] as (data: unknown) => void
+
+    act(() => {
+      onMessage({
+        taskId: 'server-task-1',
+        type: 'tool_call',
+        data: {
+          step_id: 'split-1',
+          name: 'split_knowledge_points',
+          title: '拆分知识点',
+          arguments: { topic: '组合排列' },
+        },
+        seq: 1,
+      })
+      onMessage({
+        taskId: 'server-task-1',
+        type: 'tool_result',
+        data: {
+          step_id: 'split-1',
+          name: 'split_knowledge_points',
+          title: '拆分知识点',
+          success: true,
+          output: { knowledge_points: ['分类计数原理', '排列组合模型'] },
+        },
+        seq: 2,
+      })
+    })
+
+    expect(subActivities.map((a) => ({ knowledgePoint: a.knowledgePoint, status: a.status, steps: a.steps }))).toEqual([
+      { knowledgePoint: '分类计数原理', status: 'pending', steps: [] },
+      { knowledgePoint: '排列组合模型', status: 'pending', steps: [] },
+    ])
+
+    act(() => {
+      onMessage({
+        taskId: 'server-task-1',
+        type: 'subagent_start',
+        data: { knowledge_point: '分类计数原理' },
+        seq: 3,
+      })
+      onMessage({
+        taskId: 'server-task-1',
+        type: 'tool_call',
+        data: {
+          step_id: 'search-1',
+          name: 'web_search_knowledge',
+          title: '联网搜索资料',
+          arguments: { knowledge_points: ['分类计数原理'], query: '分类计数原理' },
+        },
+        seq: 4,
+      })
+      onMessage({
+        taskId: 'server-task-1',
+        type: 'tool_result',
+        data: {
+          step_id: 'search-1',
+          name: 'web_search_knowledge',
+          title: '联网搜索资料',
+          success: true,
+          output: { results: [{ title: 'source' }] },
+        },
+        seq: 5,
+      })
+      onMessage({
+        taskId: 'server-task-1',
+        type: 'subagent_end',
+        data: { knowledge_point: '分类计数原理' },
+        seq: 6,
+      })
+    })
+
+    const active = subActivities.find((a) => a.knowledgePoint === '分类计数原理')
+    expect(setActiveSubAgentTab).toHaveBeenCalledWith('分类计数原理')
+    expect(active?.status).toBe('completed')
+    expect(active?.steps).toHaveLength(1)
+    expect(active?.steps[0]).toMatchObject({
+      id: 'search-1',
+      title: '联网搜索资料',
+      status: 'completed',
+      toolName: 'web_search_knowledge',
+      input: { knowledge_points: ['分类计数原理'], query: '分类计数原理' },
+      output: { results: [{ title: 'source' }] },
+    })
   })
 })
 

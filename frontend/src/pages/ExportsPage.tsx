@@ -15,7 +15,7 @@ type ExportStatusFilter = 'all' | 'running' | 'failed' | 'completed'
 
 function isExportTaskType(taskType: string): boolean {
   const t = String(taskType || '').trim()
-  return t.startsWith('export_')
+  return t.startsWith('export_') || t === 'knowledge_video'
 }
 
 async function downloadByUrl(url: string): Promise<void> {
@@ -83,6 +83,9 @@ export default function ExportsPage() {
     const result = (task.result || {}) as any
     const urls: string[] = []
     if (typeof result?.url === 'string' && result.url) urls.push(result.url)
+    if (typeof result?.video_url === 'string' && result.video_url) urls.push(result.video_url)
+    if (typeof result?.subtitle_url === 'string' && result.subtitle_url) urls.push(result.subtitle_url)
+    if (typeof result?.script_url === 'string' && result.script_url) urls.push(result.script_url)
     if (typeof result?.pdf_url === 'string' && result.pdf_url) urls.push(result.pdf_url)
     if (typeof result?.tex_url === 'string' && result.tex_url) urls.push(result.tex_url)
     if (typeof result?.pdfUrl === 'string' && result.pdfUrl) urls.push(result.pdfUrl)

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookOpen, Loader2, Search, Share2, Download, ListTodo, MessageSquarePlus, Star, Pin, Tag } from 'lucide-react'
+import { ArrowLeft, BookOpen, Loader2, Search, Share2, Download, ListTodo, MessageSquarePlus, Star, Pin, Tag, Film } from 'lucide-react'
 import { getStudyArchive } from '@/api/studyArchives'
 import { SecureMarkdown } from '@/components/shared/SecureMarkdown'
 import { Button } from '@/components/ui/button'
@@ -204,6 +204,22 @@ export default function StudyArchiveDetailPage() {
           <Button type="button" variant="outline" size="sm" onClick={createPlan}>
             <ListTodo className="h-4 w-4 mr-2" />
             学习计划
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const params = new URLSearchParams()
+              params.set('source_archive_id', String(archiveId || ''))
+              params.set('topic', toText((data as any)?.topic) || title)
+              const subj = toText((data as any)?.subject)
+              if (subj) params.set('subject', subj)
+              navigate(`/knowledge-videos?${params.toString()}`)
+            }}
+          >
+            <Film className="h-4 w-4 mr-2" />
+            知识视频
           </Button>
           <Button type="button" variant="outline" size="sm" onClick={exportMarkdown}>
             <Download className="h-4 w-4 mr-2" />

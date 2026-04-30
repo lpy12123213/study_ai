@@ -19,6 +19,7 @@ from backend.api.question_library_schemas import (
 )
 from backend.api.schemas import DeepThinkRequest
 from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, StudyMaterialsGenerateRequest
+from backend.api.knowledge_video_schemas import KnowledgeVideoGenerateRequest
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.system.tasks import (
@@ -46,6 +47,7 @@ from backend.tasks import (
     submit_export_paper_task,
     submit_export_study_archive_task,
     submit_generate_full_paper_task,
+    submit_knowledge_video_task,
     submit_lesson_plan_task,
     submit_paper_compose_task,
 )
@@ -157,6 +159,18 @@ async def submit_generate_full_paper(payload: Optional[dict] = None, user: dict 
 
     body = payload if isinstance(payload, dict) else {}
     task = await submit_generate_full_paper_task(user_id=user_id, request=body)
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/knowledge-videos/generate", response_model=dict)
+async def submit_knowledge_video(request: KnowledgeVideoGenerateRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for AI-generated Manim knowledge videos."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await submit_knowledge_video_task(user_id=user_id, request=request.model_dump())
     return {"success": True, "taskId": task.task_id}
 
 
@@ -458,6 +472,10 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
 
     if task_type == "export_study_archive":
         task = await submit_export_study_archive_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
+
+    if task_type == "knowledge_video":
+        task = await submit_knowledge_video_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
         return {"success": True, "taskId": task.task_id}
 
     raise HTTPException(status_code=400, detail="task_not_retryable")

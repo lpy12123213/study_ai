@@ -6,6 +6,7 @@ from typing import Any, Dict
 from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.question.papers import get_paper as db_get_paper
 from backend.deepthink.service import deepthink_service
+from backend.generation.knowledge_video.service import run_knowledge_video_task as run_knowledge_video_generation_task
 from backend.lesson_plan.service import generate_lesson_plan_stream
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 from backend.paper_compose.export import export_paper as export_paper_doc
@@ -329,3 +330,9 @@ async def run_lesson_plan_task(task: RuntimeTask, *, user_id: str) -> None:
     finally:
         if task.status == "running":
             await task_runtime.fail_task(task, "Task ended unexpectedly", error={"message": "Task ended unexpectedly"})
+
+
+async def run_knowledge_video_task(task: RuntimeTask, *, user_id: str) -> None:
+    """Run AI-generated Manim knowledge-video rendering under the shared task runtime."""
+
+    await run_knowledge_video_generation_task(task, user_id=user_id)

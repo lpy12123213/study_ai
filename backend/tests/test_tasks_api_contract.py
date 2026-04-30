@@ -58,6 +58,14 @@ class TestTasksApiContract(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(resp.json(), {"success": True, "taskId": "task-1"})
 
+        with patch("backend.api.tasks.submit_knowledge_video_task", new=AsyncMock(return_value=dummy_task)):
+            resp = client.post(
+                "/api/tasks/knowledge-videos/generate",
+                json={"topic": "导数的几何意义", "subject": "高中数学", "duration_seconds": 20},
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json(), {"success": True, "taskId": "task-1"})
+
         with (
             patch(
                 "backend.study_materials.orchestrator_singleton.study_material_tasks.create_task",

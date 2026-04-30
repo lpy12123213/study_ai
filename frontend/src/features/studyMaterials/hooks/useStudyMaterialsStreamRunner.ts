@@ -11,6 +11,8 @@ import type { SubAgentActivity } from '@/features/studyMaterials/types'
 
 export type StudyMaterialsStreamRequest = { url: string; method: 'GET' | 'POST'; body?: unknown }
 
+type StreamRecord = Record<string, unknown>
+
 export type RunStudyMaterialsStreamOptions = {
   conversationId: string
   assistantMessageId: string
@@ -19,6 +21,18 @@ export type RunStudyMaterialsStreamOptions = {
   initialTaskId?: string
   initialSeq?: number
   streamKey?: string
+}
+
+function toRecord(value: unknown): StreamRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value as StreamRecord
+}
+
+function toTaskStepStatus(value: unknown, fallback: TaskStep['status']): TaskStep['status'] {
+  const raw = toText(value).trim()
+  return raw === 'pending' || raw === 'running' || raw === 'completed' || raw === 'failed' || raw === 'paused'
+    ? raw
+    : fallback
 }
 
 export function useStudyMaterialsStreamRunner(opts: {
@@ -72,6 +86,8 @@ export function useStudyMaterialsStreamRunner(opts: {
       let thinkingBuffer = ''
 
       let runningSubAgentKP: string | null = null
+      const activeSubAgentKPs = new Set<string>()
+      const subAgentStepKPById: Record<string, string> = {}
       const subThinkingStepIdByKP: Record<string, string> = {}
       const subThinkingStartTimeByKP: Record<string, string> = {}
       const subThinkingBufferByKP: Record<string, string> = {}
@@ -136,6 +152,32 @@ export function useStudyMaterialsStreamRunner(opts: {
             return { ...a, status }
           })
         )
+      }
+
+      const initializeSubAgentActivities = (kps: string[]) => {
+        if (kps.length === 0) return
+        setSubAgentActivities((prev) => {
+          const byKP = new Map(prev.map((a) => [a.knowledgePoint, a]))
+          return kps.map((kp) => byKP.get(kp) || { knowledgePoint: kp, status: 'pending' as const, steps: [] })
+        })
+        setActiveSubAgentTab((prev) => prev || kps[0])
+      }
+
+      const getPayloadInput = (payload: StreamRecord) => payload.input ?? payload.arguments
+
+      const getPayloadKnowledgePoint = (payload: StreamRecord, stepId?: string): string | null => {
+        if (stepId && subAgentStepKPById[stepId]) return subAgentStepKPById[stepId]
+        const input = getPayloadInput(payload)
+        const kps = normalizeKnowledgePoints(toRecord(input).knowledge_points)
+        if (kps.length === 1) return kps[0]
+        const kp = toText(payload.knowledge_point || payload.knowledgePoint).trim()
+        if (kp) return kp
+        return null
+      }
+
+      const getSoleActiveSubAgent = (): string | null => {
+        if (activeSubAgentKPs.size !== 1) return null
+        return Array.from(activeSubAgentKPs)[0] || null
       }
 
       const flushAssistant = () => {
@@ -267,23 +309,41 @@ export function useStudyMaterialsStreamRunner(opts: {
 
       const startSubAgent = (kp: string) => {
         runningSubAgentKP = kp
+        activeSubAgentKPs.add(kp)
         setActiveSubAgentTab(kp)
         setSubAgentActivities((prev) => {
           const exists = prev.some((a) => a.knowledgePoint === kp)
-          if (exists) return prev
+          if (exists) {
+            return prev.map((a) => (a.knowledgePoint === kp ? { ...a, status: 'running' as const } : a))
+          }
           return [...prev, { knowledgePoint: kp, status: 'running' as const, steps: [] }]
         })
       }
 
       const endSubAgent = (kp: string) => {
+        activeSubAgentKPs.delete(kp)
         if (runningSubAgentKP === kp) runningSubAgentKP = null
         completeSubAgentThinking(kp)
-        updateSubAgentStatus(kp)
+        setSubAgentActivities((prev) =>
+          prev.map((a) => {
+            if (a.knowledgePoint !== kp) return a
+            const steps = sanitizeTaskSteps(
+              a.steps.map((s) =>
+                s.status === 'running'
+                  ? mergeAndSanitizeTaskStep(s, { status: 'completed' as const, endTime: new Date().toISOString() })
+                  : s
+              )
+            )
+            const hasFailed = steps.some((s) => s.status === 'failed')
+            return { ...a, status: hasFailed ? 'failed' : 'completed', steps }
+          })
+        )
       }
 
-      const handleStreamEvent = (env: any) => {
-        const kind = toText(env?.type).trim()
-        const payload = env?.data as any
+      const handleStreamEvent = (env: unknown) => {
+        const envelope = toRecord(env)
+        const kind = toText(envelope.type).trim()
+        const payload = toRecord(envelope.data)
 
         if (kind === 'ping') {
           // Keep the conversation marked as resumable while running.
@@ -318,85 +378,122 @@ export function useStudyMaterialsStreamRunner(opts: {
           return
         }
 
-        if (kind === 'tool_start') {
-          const toolName = toText(payload?.tool)
+        if (kind === 'tool_start' || kind === 'tool_call') {
+          const toolName = toText(payload?.tool) || toText(payload?.name)
           const title = toText(payload?.title) || toolName || '工具调用'
           const stepId = toText(payload?.step_id) || generateId()
+          const input = getPayloadInput(payload)
           const step: TaskStep = {
             id: stepId,
             title,
             status: 'running',
             startTime: toText(payload?.start_time) || new Date().toISOString(),
             toolName: toolName || undefined,
-            input: payload?.input,
+            input,
           }
           upsertStep(step)
 
-          const kps = normalizeKnowledgePoints((payload as any)?.arguments?.knowledge_points)
-          if (kps.length === 1) {
-            const kp = kps[0]
+          const kp = getPayloadKnowledgePoint(payload, stepId)
+          if (kp) {
             startSubAgent(kp)
-            startSubAgentThinking(kp, toolName)
+            subAgentStepKPById[stepId] = kp
+            if (kind === 'tool_call') {
+              upsertSubAgentStep(kp, step)
+            } else {
+              startSubAgentThinking(kp, toolName)
+            }
           } else {
             createThinkingStepIfNeeded(toolName)
           }
           return
         }
 
-        if (kind === 'tool_delta') {
+        if (kind === 'tool_delta' || kind === 'thinking') {
           const text = toText(payload?.content)
           if (text) {
-            if (runningSubAgentKP) {
-              appendSubAgentThinking(runningSubAgentKP, text)
+            const kp = getPayloadKnowledgePoint(payload) || getSoleActiveSubAgent()
+            if (kp) {
+              startSubAgentThinking(kp, 'thinking')
+              appendSubAgentThinking(kp, text)
             } else {
+              createThinkingStepIfNeeded('thinking')
               appendThinking(text)
             }
           }
           return
         }
 
-        if (kind === 'tool_end') {
+        if (kind === 'tool_end' || kind === 'tool_result') {
           const stepId = toText(payload?.step_id)
-          const status = toText(payload?.status) || 'completed'
+          const status = toTaskStepStatus(
+            toText(payload.status) || (payload.success === false ? 'failed' : 'completed'),
+            'completed'
+          )
           const endTime = toText(payload?.end_time) || new Date().toISOString()
-          const output = payload?.output
+          const output = payload?.output ?? payload?.result
+          const error = toText(payload?.error || payload?.message) || undefined
+          const toolName = toText(payload?.tool) || toText(payload?.name)
 
           if (stepId) {
-            patchStep(stepId, { status: status as any, endTime, output })
+            patchStep(stepId, { status, endTime, output, error })
           }
 
-          const kps = normalizeKnowledgePoints((output as any)?.knowledge_points)
-          if (kps.length === 1) {
+          const kp = getPayloadKnowledgePoint(payload, stepId || undefined)
+          if (kp && stepId) {
+            patchSubAgentStep(kp, stepId, {
+              status,
+              endTime,
+              output,
+              error,
+              toolName: toolName || undefined,
+            })
+            completeSubAgentThinking(kp)
+            if (status === 'failed') {
+              updateSubAgentStatus(kp)
+            } else if (!activeSubAgentKPs.has(kp)) {
+              updateSubAgentStatus(kp)
+            }
+          }
+
+          const kps = normalizeKnowledgePoints(toRecord(output).knowledge_points)
+          if ((toolName === 'split_knowledge_points' || toolName === 'review_knowledge_points') && kps.length > 0) {
+            initializeSubAgentActivities(kps)
+          } else if (kind === 'tool_end' && kps.length === 1) {
             endSubAgent(kps[0])
-          } else {
+          } else if (!kp) {
             completeThinkingStep()
           }
           return
         }
 
+        if (kind === 'subagent_start') {
+          const kp = toText(payload?.knowledge_point || payload?.knowledgePoint)
+          if (kp) startSubAgent(kp)
+          return
+        }
+
+        if (kind === 'subagent_end') {
+          const kp = toText(payload?.knowledge_point || payload?.knowledgePoint)
+          if (kp) endSubAgent(kp)
+          return
+        }
+
         if (kind === 'step') {
-          const step = payload?.step
-          if (step && typeof step === 'object') {
-            const stepId = toText(step?.id) || generateId()
-            const statusRaw = toText(step?.status).trim()
-            const status: TaskStep['status'] =
-              statusRaw === 'pending' ||
-              statusRaw === 'running' ||
-              statusRaw === 'completed' ||
-              statusRaw === 'failed' ||
-              statusRaw === 'paused'
-                ? statusRaw
-                : 'running'
+          const rawStep = payload.step
+          if (rawStep && typeof rawStep === 'object' && !Array.isArray(rawStep)) {
+            const step = toRecord(rawStep)
+            const stepId = toText(step.id) || generateId()
+            const status = toTaskStepStatus(step.status, 'running')
             upsertStep({
               id: stepId,
-              title: toText(step?.title) || '步骤',
+              title: toText(step.title) || '步骤',
               status,
-              startTime: toText(step?.startTime) || undefined,
-              endTime: toText(step?.endTime) || undefined,
-              toolName: toText(step?.toolName) || undefined,
-              input: step?.input,
-              output: step?.output,
-              error: step?.error,
+              startTime: toText(step.startTime) || undefined,
+              endTime: toText(step.endTime) || undefined,
+              toolName: toText(step.toolName) || undefined,
+              input: step.input,
+              output: step.output,
+              error: toText(step.error) || undefined,
             })
           }
           return
@@ -474,7 +571,7 @@ export function useStudyMaterialsStreamRunner(opts: {
                     retriable: err.retriable,
                     actions: err.actions,
                   })
-                : formatStudyMaterialsError((err as any)?.message || '生成失败')
+                : formatStudyMaterialsError(err instanceof Error ? err.message : toText(toRecord(err).message) || '生成失败')
 
           const msg = isApiError(normalizedError) ? normalizedError.message : String(normalizedError || '生成失败')
           setError(normalizedError)

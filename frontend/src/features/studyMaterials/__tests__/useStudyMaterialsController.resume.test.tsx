@@ -6,9 +6,17 @@ import { useConversationStore } from '@/stores/useConversationStore'
 import { useStudyMaterialsController } from '@/features/studyMaterials/hooks/useStudyMaterialsController'
 import type { ConversationItem } from '@/types'
 
-const runStudyMaterialsStreamMock = vi.fn()
-const abortActiveStreamMock = vi.fn()
-const streamKeyRef = { current: null as string | null }
+const {
+  runStudyMaterialsStreamMock,
+  abortActiveStreamMock,
+  getStudyMaterialsTaskMock,
+  streamKeyRef,
+} = vi.hoisted(() => ({
+  runStudyMaterialsStreamMock: vi.fn(),
+  abortActiveStreamMock: vi.fn(),
+  getStudyMaterialsTaskMock: vi.fn(),
+  streamKeyRef: { current: null as string | null },
+}))
 
 vi.mock('@/features/studyMaterials/hooks/useStudyMaterialsStreamRunner', () => {
   return {
@@ -20,7 +28,6 @@ vi.mock('@/features/studyMaterials/hooks/useStudyMaterialsStreamRunner', () => {
   }
 })
 
-const getStudyMaterialsTaskMock = vi.fn()
 vi.mock('@/api/studyMaterials', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/studyMaterials')>()
   return {
@@ -36,8 +43,7 @@ function resetConversationStore() {
       currentConversationIdByType: { blueprint: null, lesson_plan: null, study_materials: null },
       filter: 'all',
       messagesByConversation: {},
-    } as any,
-    true
+    } as any
   )
 }
 

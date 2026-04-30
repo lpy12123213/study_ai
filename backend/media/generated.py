@@ -20,7 +20,24 @@ logger = get_logger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GENERATED_DIR = (_REPO_ROOT / ".local" / "media" / "generated").resolve()
 
-_ALLOWED_EXTS = {".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".md", ".tex", ".pdf", ".zip", ".docx"}
+_ALLOWED_EXTS = {
+    ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".md",
+    ".tex",
+    ".pdf",
+    ".zip",
+    ".docx",
+    ".mp4",
+    ".srt",
+    ".json",
+    ".py",
+}
 
 
 def _env_int(name: str, default: int) -> int:
