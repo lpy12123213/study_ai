@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Pause, Play, RefreshCcw, Loader2, ListChecks, XCircle, Ban, RotateCcw } from 'lucide-react'
-import { listTasks, pauseTask, resumeTask, cancelTask, retryTask, streamTask, type TaskStreamEvent, type UnifiedTask } from '@/api/tasks'
+import { getTask, listTasks, pauseTask, resumeTask, cancelTask, retryTask, streamTask, type TaskStreamEvent, type UnifiedTask } from '@/api/tasks'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { taskEventToStep, upsertTaskStep } from '@/components/task/taskEventAdapter'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,20 @@ export default function TaskCenterPage() {
 
   const tasks = data?.tasks || []
 
+  const {
+    data: selectedTaskSnapshot,
+    isLoading: selectedTaskLoading,
+    refetch: refetchSelectedTask,
+  } = useQuery({
+    queryKey: ['task', selectedTaskId, 'events'],
+    queryFn: () => getTask(selectedTaskId, { includeEvents: true, eventsLimit: 1000 }),
+    enabled: Boolean(selectedTaskId),
+    refetchInterval: (q) => {
+      const status = String((q.state.data as any)?.status || '')
+      return status === 'running' ? 5000 : false
+    },
+  })
+
   const typeOptions = useMemo(() => {
     const set = new Set<string>()
     tasks.forEach((t) => {
@@ -84,8 +98,11 @@ export default function TaskCenterPage() {
 
   const selectedTask: UnifiedTask | undefined = useMemo(() => {
     if (!selectedTaskId) return undefined
-    return filteredTasks.find((t) => String((t as any).id) === selectedTaskId) || tasks.find((t) => String((t as any).id) === selectedTaskId)
-  }, [selectedTaskId, filteredTasks, tasks])
+    return selectedTaskSnapshot || filteredTasks.find((t) => String((t as any).id) === selectedTaskId) || tasks.find((t) => String((t as any).id) === selectedTaskId)
+  }, [selectedTaskId, selectedTaskSnapshot, filteredTasks, tasks])
+  const selectedSnapshotLastSeq = Number((selectedTaskSnapshot as any)?.last_seq || 0)
+  const selectedSnapshotStatus = String((selectedTaskSnapshot as any)?.status || '')
+  const selectedTaskStatus = String(selectedTask?.status || '')
 
   const [steps, setSteps] = useState<TaskStep[]>([])
   const [streamError, setStreamError] = useState<string | null>(null)
@@ -101,13 +118,40 @@ export default function TaskCenterPage() {
     abortRef.current = null
 
     if (!selectedTaskId) return
+  }, [selectedTaskId])
+
+  useEffect(() => {
+    if (!selectedTaskId || !selectedTaskSnapshot) return
+
+    const events = Array.isArray((selectedTaskSnapshot as any).events)
+      ? ((selectedTaskSnapshot as any).events as TaskStreamEvent[])
+      : []
+    let nextSteps: TaskStep[] = []
+    for (const evt of events) {
+      const step = taskEventToStep(evt)
+      if (step) nextSteps = upsertTaskStep(nextSteps, step)
+    }
+    setSteps(nextSteps)
+    setStreamError(null)
+    lastSeqRef.current = Math.max(0, Number((selectedTaskSnapshot as any).last_seq || 0))
+  }, [selectedTaskId, selectedTaskSnapshot])
+
+  useEffect(() => {
+    if (!selectedTaskId || selectedTaskLoading) return
+
+    const status = String(selectedSnapshotStatus || selectedTaskStatus).toLowerCase()
+    if (status && status !== 'running') return
+
+    if (abortRef.current) abortRef.current.abort()
 
     const controller = new AbortController()
     abortRef.current = controller
+    const afterSeq = Math.max(0, Number(selectedSnapshotLastSeq || lastSeqRef.current || 0))
+    lastSeqRef.current = afterSeq
 
     streamTask(
       selectedTaskId,
-      0,
+      afterSeq,
       (evt) => {
         lastSeqRef.current = Math.max(lastSeqRef.current, Number(evt.seq || 0))
         const step = taskEventToStep(evt as TaskStreamEvent)
@@ -120,7 +164,7 @@ export default function TaskCenterPage() {
     )
 
     return () => controller.abort()
-  }, [selectedTaskId])
+  }, [selectedSnapshotLastSeq, selectedSnapshotStatus, selectedTaskId, selectedTaskLoading, selectedTaskStatus])
 
   const setUrlParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams)
@@ -137,18 +181,21 @@ export default function TaskCenterPage() {
     if (!selectedTaskId) return
     await pauseTask(selectedTaskId)
     refetch()
+    refetchSelectedTask()
   }
 
   const handleResume = async () => {
     if (!selectedTaskId) return
     await resumeTask(selectedTaskId)
     refetch()
+    refetchSelectedTask()
   }
 
   const handleCancel = async () => {
     if (!selectedTaskId) return
     await cancelTask(selectedTaskId)
     refetch()
+    refetchSelectedTask()
   }
 
   const handleRetry = async () => {
@@ -158,6 +205,7 @@ export default function TaskCenterPage() {
       setUrlParam('id', res.taskId)
     }
     refetch()
+    refetchSelectedTask()
   }
 
   const status = selectedTask ? formatStatus(String(selectedTask.status || '')) : null

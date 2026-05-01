@@ -123,8 +123,8 @@ class SelfCritiqueToolsMixin:
                     "knowledge_point": kp,
                     "score": 0.0,
                     "dimensions": {"accuracy": 0, "clarity": 0, "completeness": 0, "originality": 0, "depth_match": 0},
-                    "issues": ["讲解为空或生成失败。"],
-                    "revision_instructions": ["请重新生成核心讲解，覆盖定义/直观/关键性质/误区/应用框架。"],
+                    "issues": ["The explanation is empty or generation failed."],
+                    "revision_instructions": ["Regenerate the core explanation covering definition, intuition, key properties, misconceptions, and application framework."],
                     "should_refine": True,
                     "threshold": threshold,
                     "source": "heuristic",
@@ -160,18 +160,18 @@ class SelfCritiqueToolsMixin:
                 "verify_checks": verify_checks,
                 "draft_markdown": draft,
                 "requirements": [
-                    "请对 draft_markdown 做多维度审查并给出可执行修订指令。",
+                    "Review draft_markdown across multiple dimensions and provide executable revision instructions.",
                     "维度：准确性accuracy、清晰度clarity、完整性completeness、原创性originality、深度匹配depth_match（与 ability_score/知识类型匹配）。",
-                    "issues 请给出 3~10 条，越具体越好（指出是哪一小节/哪类表述）。",
-                    "revision_instructions 请给出 3~12 条“可直接交给写作模型执行”的指令，避免空话。",
-                    "只输出严格 JSON：score(0~10), dimensions({...}), issues(string[]), revision_instructions(string[])。",
-                    "不要输出 URL，不要输出参考资料段落，不要输出证据标记。",
+                    "issues must contain 3-10 items and be as specific as possible, identifying the section or expression type.",
+                    "revision_instructions must contain 3-12 instructions directly executable by a writing model. Avoid vague advice.",
+                    "Output strict JSON only: score(0~10), dimensions({...}), issues(string[]), revision_instructions(string[]).",
+                    "Do not output URLs, reference sections, or evidence markers.",
                 ],
             }
 
             raw = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "你是严格的教学稿件审查员，只输出 JSON。"},
+                    {"role": "system", "content": "You are a strict educational manuscript reviewer. Output JSON only."},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

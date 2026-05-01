@@ -123,15 +123,15 @@ class KnowledgeTypeDetectionToolsMixin:
                 "knowledge_point": kp,
                 "source_brief": brief,
                 "requirements": [
-                    "请判断该知识点最贴近的类型：definition/theorem/algorithm/concept/history/experiment。",
-                    "输出写作重点 focus（3~8条短句）以及推荐的结构 recommended_sections（6~12个小节标题短语）。",
-                    "只输出严格 JSON：knowledge_type, confidence(0~1), focus(string[]), recommended_sections(string[])。",
+                    "Classify the closest knowledge type: definition/theorem/algorithm/concept/history/experiment.",
+                    "Output writing focus points as focus (3-8 short sentences) and recommended_sections (6-12 section-title phrases).",
+                    "Output strict JSON only: knowledge_type, confidence(0~1), focus(string[]), recommended_sections(string[]).",
                 ],
             }
 
             raw = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "你是知识类型分类助手，只输出 JSON。"},
+                    {"role": "system", "content": "You are a knowledge-type classification assistant. Output JSON only."},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

@@ -5,10 +5,15 @@ import os
 from typing import Any
 
 from backend.core.settings import LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.question_library.subject_knowledge import get_subject_bank, infer_subject_family
+
+
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
 
 def _resolve_judge_model() -> str:
@@ -38,14 +43,14 @@ async def solve_draft(
     payload = {
         "subject": subject,
         "stem": str(stem or "").strip(),
-        "task": "请你先完整地独立解题，写出详细推导过程和最终答案。解题完成后，再与下方的【参考答案】进行对比，判断参考答案是否正确。",
+        "task": "First solve the problem completely and independently, including detailed derivation and the final answer. After solving, compare your result with the reference answer below and judge whether the reference answer is correct.",
         "proposed_answer": proposed_answer,
         "output_schema": {
-            "solving_steps": "string (你的完整解题过程，包含关键推导步骤)",
-            "final_answer": "string (你独立求解得到的最终答案，LaTeX)",
-            "match": "bool (你的答案与参考答案的结论是否一致)",
-            "issues": "string[] (参考答案中的错误/不一致之处，没有则为空数组)",
-            "summary": "string (简要总结)",
+            "solving_steps": "string (your complete solving process, including key derivation steps)",
+            "final_answer": "string (the final answer you independently derived, in LaTeX)",
+            "match": "bool (whether your answer is conclusion-equivalent to the reference answer)",
+            "issues": "string[] (errors or inconsistencies in the reference answer; empty array if none)",
+            "summary": "string (brief summary)",
         },
     }
 
@@ -54,23 +59,25 @@ async def solve_draft(
             {
                 "role": "system",
                 "content": (
-                    f"<role>{str(bank.system_role or '').strip() or '你是严谨的解题专家'}（独立解题，不受参考答案影响）。</role>\n"
+                    _prompt("question.solve.independent.v1")
+                    + "\n\n"
+                    f"<role>{str(bank.system_role or '').strip() or 'You are a rigorous problem-solving expert'}. Solve independently and do not be influenced by the reference answer.</role>\n"
                     "<task>\n"
-                    "  <phase id='1'>完全忽略参考答案，独立完整解题，写出关键推导步骤和最终答案。</phase>\n"
-                    "  <phase id='2'>将你的答案与参考答案对比，判断结论是否等价。</phase>\n"
+                    "  <phase id='1'>Completely ignore the reference answer. Solve independently and write key derivation steps and the final answer.</phase>\n"
+                    "  <phase id='2'>Compare your answer with the reference answer and judge whether the conclusions are equivalent.</phase>\n"
                     "</task>\n"
                     f"<subject_family>{family}</subject_family>\n"
                     "<subject_rules>\n"
-                    "  <physics>物理题：先过程建模/受力分析，再列式求解；注意方向与单位量纲。</physics>\n"
-                    "  <chemistry>化学题：方程式配平与守恒优先；状态条件完整。</chemistry>\n"
-                    "  <chinese>语文题：答案需紧扣文本证据与设问要求，表述规范。</chinese>\n"
-                    "  <english>英语题：先定位依据，再给出规范答案；语法与语篇一致。</english>\n"
+                    "  <physics>Physics: model the process/analyze forces before setting equations; check directions, units, and dimensions.</physics>\n"
+                    "  <chemistry>Chemistry: prioritize balanced equations and conservation; keep states and conditions complete.</chemistry>\n"
+                    "  <chinese>Chinese: answers must closely follow textual evidence and question requirements with standard wording.</chinese>\n"
+                    "  <english>English: locate evidence first, then provide a standard answer; grammar and discourse must be consistent.</english>\n"
                     "</subject_rules>\n"
                     "<match_criteria>\n"
-                    "  结论等价（如 x=2 与 \\(x=2\\) 视为相同形式）则 match=true。\n"
-                    "  若不一致，先检查自己的解法是否有误，再做最终判断。\n"
+                    "  If conclusions are equivalent, such as x=2 and \\(x=2\\), set match=true.\n"
+                    "  If inconsistent, first check whether your own solution is wrong before making the final judgment.\n"
                     "</match_criteria>\n"
-                    "<output_format>严格输出 JSON object，不输出 Markdown 或额外解释。</output_format>"
+                    "<output_format>Output a strict JSON object only. Do not output Markdown or extra explanation.</output_format>"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -121,14 +128,16 @@ async def check_ambiguity(
             {
                 "role": "system",
                 "content": (
-                    "<role>你是专业审题专家，专门识别导致答案不唯一的歧义问题。</role>\n"
+                    _prompt("question.judge.ambiguity.v1")
+                    + "\n\n"
+                    "<role>You are a professional question-review expert specializing in ambiguity that may cause non-unique answers.</role>\n"
                     "<ambiguity_criteria>\n"
-                    "  <rule>仅当题干条件允许多种合理解读且导致不同结论时，判定 ambiguous=true。</rule>\n"
-                    "  <not_ambiguous>分类讨论本身不是歧义</not_ambiguous>\n"
-                    "  <not_ambiguous>参数范围讨论不是歧义</not_ambiguous>\n"
-                    "  <is_ambiguous>无法从题干确定唯一答案路径时才标记 ambiguous=true</is_ambiguous>\n"
+                    "  <rule>Set ambiguous=true only when the stem allows multiple reasonable interpretations that lead to different conclusions.</rule>\n"
+                    "  <not_ambiguous>Case analysis itself is not ambiguity.</not_ambiguous>\n"
+                    "  <not_ambiguous>Parameter-range discussion is not ambiguity.</not_ambiguous>\n"
+                    "  <is_ambiguous>Mark ambiguous=true only when the stem cannot determine a unique answer path.</is_ambiguous>\n"
                     "</ambiguity_criteria>\n"
-                    "<output_format>严格输出 JSON object。</output_format>"
+                    "<output_format>Output a strict JSON object only.</output_format>"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -168,7 +177,7 @@ async def judge_draft(
     family = infer_subject_family(subject)
     bank = get_subject_bank(subject)
     requirements = (
-        f"目标难度：{difficulty or '中等偏难'}。必须有新意与区分度，且符合 spec 的推理结构："
+        f"Target difficulty: {difficulty or 'medium-hard'}. The question must be novel, discriminative, and follow the reasoning structure in spec: "
         f"{str((spec or {}).get('reasoning') or '').strip()}。"
     )
 
@@ -231,18 +240,20 @@ async def judge_draft(
             {
                 "role": "system",
                 "content": (
-                    f"<role>{str(bank.system_role or '').strip() or '你是资深高中教研员'}，按高考评审标准鉴别试题质量，评分客观准确。</role>\n"
+                    _prompt("question.judge.quality.v1")
+                    + "\n\n"
+                    f"<role>{str(bank.system_role or '').strip() or 'You are a senior high-school curriculum researcher'}. Evaluate question quality by college-entrance-exam review standards and score objectively.</role>\n"
                     "<scoring_dimensions>\n"
-                    "  <dim name='思维含量'>是否需要多步推理或策略选择，非机械套公式</dim>\n"
-                    "  <dim name='区分度'>能否区分不同层次学生，非教材例题换皮</dim>\n"
-                    "  <dim name='知识覆盖'>核心概念运用深度，考查角度是否有价值</dim>\n"
-                    "  <dim name='表述规范'>题干清晰，LaTeX正确，条件充分无歧义</dim>\n"
-                    "  <dim name='创新性'>非教材直接例题，有新约束条件或概念组合</dim>\n"
-                    "  <dim name='答案解析自洽'>推导每步正确，结论与答案字段完全一致</dim>\n"
+                    "  <dim name='reasoning_depth'>Requires multi-step reasoning or strategic choices, not mechanical formula substitution.</dim>\n"
+                    "  <dim name='discrimination'>Distinguishes students at different levels and is not a disguised textbook example.</dim>\n"
+                    "  <dim name='knowledge_coverage'>Uses core concepts deeply and has a valuable assessment angle.</dim>\n"
+                    "  <dim name='wording_standard'>The stem is clear, LaTeX is correct, and conditions are sufficient and unambiguous.</dim>\n"
+                    "  <dim name='novelty'>Not a direct textbook example; includes new constraints or concept combinations.</dim>\n"
+                    "  <dim name='answer_analysis_consistency'>Every derivation step is correct and the conclusion exactly matches the answer field.</dim>\n"
                     f"{extra_dim_tags}"
                     "</scoring_dimensions>\n"
-                    "<pass_criteria>overall_score≥70 且 答案解析自洽≥7 且 思维含量≥6</pass_criteria>\n"
-                    "<output_format>严格输出 JSON object，不要输出Markdown或解释。</output_format>"
+                    "<pass_criteria>overall_score >= 70, answer_analysis_consistency >= 7, and reasoning_depth >= 6.</pass_criteria>\n"
+                    "<output_format>Output a strict JSON object only. Do not output Markdown or explanations.</output_format>"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -301,11 +312,13 @@ async def refine_draft(
             {
                 "role": "system",
                 "content": (
-                    "<role>你是教研员修题助手，负责根据 issues 最小化修改题目。</role>\n"
-                    "<edit_principle>优先只改有问题的部分，保持难度、知识点和题型不变。</edit_principle>\n"
-                    "<latex_rules>行内公式：\\(...\\)　独立公式：\\[...\\]　严禁 $...$</latex_rules>\n"
-                    "<verification>修改后验算答案正确性，确保 stem/answer/analysis 三者完全自洽。</verification>\n"
-                    "<output_format>严格输出 JSON object。</output_format>"
+                    _prompt("question.repair.minimal.v1")
+                    + "\n\n"
+                    "<role>You are a curriculum question-repair assistant responsible for minimally modifying a question according to issues.</role>\n"
+                    "<edit_principle>Prefer changing only problematic parts while preserving difficulty, knowledge point, and question type.</edit_principle>\n"
+                    "<latex_rules>Inline formulas: \\(...\\). Display formulas: \\[...\\]. Do not use $...$.</latex_rules>\n"
+                    "<verification>After modification, verify answer correctness and ensure stem/answer/analysis are fully self-consistent.</verification>\n"
+                    "<output_format>Output a strict JSON object only.</output_format>"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

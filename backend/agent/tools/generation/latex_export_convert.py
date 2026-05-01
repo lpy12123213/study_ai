@@ -101,14 +101,14 @@ class LatexConvertMixin:
             "subject": subject,
             "template": template,
             "requirements": [
-                "请把下面 Markdown 转为 LaTeX，使用 ElegantBook 模板。",
-                "只输出 LaTeX 源码，不要 Markdown 代码块，不要额外解释。",
-                "请只输出用于替换 <BODY> 的正文 LaTeX（不要输出 documentclass/preamble/\\begin{document}/\\end{document}/\\maketitle，也不要输出 % --- BEGIN_BODY --- 或 % --- END_BODY ---）。",
-                "正文用 LaTeX 结构：标题层级 #/##/###/#### 映射为 \\section/\\subsection/\\subsubsection/\\paragraph。",
+                "Convert the Markdown below to LaTeX using the ElegantBook template.",
+                "Output only LaTeX source. Do not output Markdown code fences or extra explanation.",
+                "Output only the body LaTeX used to replace <BODY>. Do not output documentclass, preamble, \\begin{document}, \\end{document}, \\maketitle, % --- BEGIN_BODY ---, or % --- END_BODY ---.",
+                "Use LaTeX structure for the body: Markdown headings #/##/###/#### map to \\section/\\subsection/\\subsubsection/\\paragraph.",
                 "保留数学公式 $...$ 与 $$...$$，确保括号与环境闭合。",
                 "列表用 itemize/enumerate；代码块用 verbatim；表格必要时可简化。",
-                "图片：只处理 PNG/JPG/JPEG/WebP/GIF/BMP。将 `![](/api/media/generated/xxx.png)` 转为 `\\\\includegraphics[width=0.9\\\\linewidth]{xxx.png}`；遇到 SVG 图片不要插图，改为一句话：`（图略：SVG 见 Markdown 版）`。",
-                "不要输出“参考文献/外部链接/URL 列表”。",
+                "Images: handle only PNG/JPG/JPEG/WebP/GIF/BMP. Convert `![](/api/media/generated/xxx.png)` to `\\\\includegraphics[width=0.9\\\\linewidth]{xxx.png}`. For SVG images, do not insert graphics; replace with one sentence: `(Figure omitted: see SVG in the Markdown version)`.",
+                "Do not output references, external links, or URL lists.",
             ],
             "markdown": markdown,
         }
@@ -142,7 +142,7 @@ class LatexConvertMixin:
             p["markdown"] = md
             res = await self._call_llm_response(
                 messages=[
-                    {"role": "system", "content": "你是严谨的 LaTeX 排版助手，输出必须是可编译的 LaTeX。"},
+                    {"role": "system", "content": "You are a rigorous LaTeX typesetting assistant. Output compilable LaTeX only."},
                     {"role": "user", "content": json.dumps(p, ensure_ascii=False)},
                 ],
                 model=model,
@@ -188,21 +188,21 @@ class LatexConvertMixin:
                     "markdown": md,
                     "existing_latex_tail": tail,
                     "instructions": [
-                        "上一轮输出疑似被截断。请严格从 existing_latex_tail 的末尾继续补全剩余正文。",
-                        "仅输出需要追加到 <BODY> 的 LaTeX 正文，不要重复前文，不要输出 documentclass/preamble/\\begin{document}/\\end{document}/\\maketitle/BEGIN_BODY/END_BODY。",
-                        "若 existing_latex_tail 的最后一行/公式/环境未结束，请先补齐闭合再继续。",
-                        "不要输出参考文献/外部链接/URL 列表。",
+                        "The previous output appears truncated. Continue the remaining body strictly from the end of existing_latex_tail.",
+                        "Output only the LaTeX body that must be appended to <BODY>. Do not repeat previous content and do not output documentclass, preamble, \\begin{document}, \\end{document}, \\maketitle, BEGIN_BODY, or END_BODY.",
+                        "If the last line, formula, or environment in existing_latex_tail is unfinished, close it first and then continue.",
+                        "Do not output references, external links, or URL lists.",
                     ],
                 }
                 cont_res = await self._call_llm_response(
                     messages=[
                         {
                             "role": "system",
-                            "content": "你是严谨的 LaTeX 续写助手，只输出需要追加的正文 LaTeX，不要重复前文。",
+                            "content": "You are a rigorous LaTeX continuation assistant. Output only body LaTeX to append and do not repeat previous content.",
                         },
                         {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
                         {"role": "assistant", "content": tail},
-                        {"role": "user", "content": "继续。只输出需要追加的正文 LaTeX，不要重复 existing_latex_tail。"},
+                        {"role": "user", "content": "Continue. Output only the body LaTeX that must be appended, and do not repeat existing_latex_tail."},
                     ],
                     model=model,
                     temperature=0.2,

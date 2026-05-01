@@ -50,10 +50,10 @@ async def score_stem_with_llm(*, subject: str, stem: str, model: str, requiremen
     text = await chat_completion_text(
         messages=[
             {"role": "system", "content": (
-                "<role>你是资深高中教研员，按高考标准鉴别试题质量，评分客观准确。</role>\n"
+                "<role>You are a senior high-school curriculum researcher. Evaluate question quality by college-entrance-exam standards and score objectively.</role>\n"
                 "<scoring_principle>只看题目实际质量，不受题目长短影响。</scoring_principle>\n"
-                "<extra_requirement>若 requirements 字段有内容，按其中要求重点评价。</extra_requirement>\n"
-                "<output_format>严格输出 JSON object。</output_format>"
+                "<extra_requirement>If the requirements field is non-empty, prioritize evaluation according to those requirements.</extra_requirement>\n"
+                "<output_format>Output a strict JSON object only.</output_format>"
             )},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],

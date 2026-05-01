@@ -661,8 +661,8 @@ def _mcp_web_search_tool_spec() -> Dict[str, Any]:
                     "limit": {"type": "integer", "description": "返回条数(1-10)", "default": 5},
                     "provider": {
                         "type": "string",
-                        "enum": ["auto", "exa", "bigmodel"],
-                        "description": "搜索提供方：auto(优先 exa) | exa | bigmodel",
+                        "enum": ["auto", "tavily", "exa", "bigmodel"],
+                        "description": "搜索提供方：auto(优先 tavily) | tavily | exa | bigmodel",
                         "default": "auto",
                     },
                     "mode": {
@@ -673,7 +673,7 @@ def _mcp_web_search_tool_spec() -> Dict[str, Any]:
                     },
                     "recency_days": {
                         "type": "integer",
-                        "description": "trending 模式下按发布日期近 N 天筛选（仅 exa 生效）",
+                        "description": "trending 模式下按发布日期近 N 天筛选（tavily/exa 生效）",
                         "default": 180,
                     },
                 },
@@ -697,7 +697,7 @@ async def _exec_mcp_web_search_tool(
     mode: str,
     recency_days: int,
 ) -> Dict[str, Any]:
-    """Execute our MCP web search tool (Exa preferred, BigModel fallback)."""
+    """Execute our MCP web search tool (Tavily preferred, Exa/BigModel fallback)."""
 
     query = str(query or "").strip()
     if not query:
@@ -705,7 +705,7 @@ async def _exec_mcp_web_search_tool(
 
     limit = max(1, min(int(limit or 5), 10))
     provider_in = str(provider or "auto").strip().lower() or "auto"
-    if provider_in not in {"auto", "exa", "bigmodel"}:
+    if provider_in not in {"auto", "tavily", "exa", "bigmodel"}:
         provider_in = "auto"
 
     mode_in = str(mode or "trending").strip()
@@ -715,12 +715,74 @@ async def _exec_mcp_web_search_tool(
 
     if provider_in == "auto":
         try:
+            from backend.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
+
+            has_tavily = bool(str(_TAVILY_API_KEY or "").strip())
+        except Exception:
+            has_tavily = False
+        try:
             from backend.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
 
             has_exa = bool(str(_EXA_API_KEY or "").strip())
         except Exception:
             has_exa = False
-        provider_in = "exa" if has_exa else "bigmodel"
+        provider_in = "tavily" if has_tavily else "exa" if has_exa else "bigmodel"
+
+    if provider_in == "tavily":
+        try:
+            from backend.mcp.search.tavily import tavily_search
+        except Exception as exc:
+            return {
+                "success": False,
+                "provider": "tavily",
+                "query": query,
+                "error": f"import_tavily_failed: {exc}",
+                "results": [],
+            }
+
+        res = await tavily_search(
+            query=query,
+            max_results=limit,
+            search_depth="basic",
+            include_answer=False,
+            include_raw_content=False,
+            topic="news" if mode_in == "trending" else "general",
+            days=days if mode_in == "trending" else None,
+        )
+        if not isinstance(res, dict) or not res.get("success"):
+            return {
+                "success": False,
+                "provider": str((res or {}).get("provider") or "tavily"),
+                "query": query,
+                "error": str((res or {}).get("error") or "tavily_search_failed"),
+                "results": [],
+            }
+
+        results_in = res.get("results") if isinstance(res.get("results"), list) else []
+        results_out: List[Dict[str, Any]] = []
+        for item in results_in[:limit]:
+            if not isinstance(item, dict):
+                continue
+            snippet = str(item.get("snippet") or item.get("text") or "").strip()
+            if len(snippet) > 800:
+                snippet = snippet[:800].rstrip() + "…"
+            results_out.append(
+                {
+                    "title": str(item.get("title") or "").strip(),
+                    "url": str(item.get("url") or "").strip(),
+                    "snippet": snippet,
+                    "published_date": str(item.get("published_date") or "").strip(),
+                }
+            )
+
+        return {
+            "success": True,
+            "provider": str(res.get("provider") or "tavily"),
+            "query": query,
+            "mode": mode_in,
+            "recency_days": days,
+            "results": results_out,
+        }
 
     if provider_in == "exa":
         try:
@@ -1017,7 +1079,7 @@ async def _ai_search_materials_via_mcp(
 
                     # Respect CLI/user choice over the model's suggestion (prevents accidental provider flips).
                     forced_provider = str(provider or "").strip().lower()
-                    if forced_provider in {"exa", "bigmodel"}:
+                    if forced_provider in {"tavily", "exa", "bigmodel"}:
                         tool_provider = forced_provider
                     else:
                         tool_provider = str(args.get("provider") or "auto").strip()
@@ -1136,7 +1198,7 @@ class RunParams:
     reference_year_range: str  # all|3|5
     stream_reasoning: bool
     use_mcp_search: bool
-    mcp_search_provider: str  # auto|exa|bigmodel
+    mcp_search_provider: str  # auto|tavily|exa|bigmodel
     mcp_search_mode: str  # trending|patterns
     mcp_search_recency_days: int
     mcp_search_limit: int
@@ -1189,7 +1251,7 @@ def _resolve_params_from_args(args: argparse.Namespace) -> RunParams:
         or (existing or {}).get("mcp_search_provider")
         or "auto"
     ).strip()
-    if mcp_search_provider not in {"auto", "exa", "bigmodel"}:
+    if mcp_search_provider not in {"auto", "tavily", "exa", "bigmodel"}:
         mcp_search_provider = "auto"
     mcp_search_mode = str(getattr(args, "mcp_search_mode", "") or (existing or {}).get("mcp_search_mode") or "trending").strip()
     if mcp_search_mode not in {"trending", "patterns"}:
@@ -1267,11 +1329,13 @@ def _resolve_params_from_args(args: argparse.Namespace) -> RunParams:
 
         _section_header(console, "高级设置")
         stream_reasoning = _prompt_bool("流式输出 reasoning", default=stream_reasoning)
-        default_mcp = use_mcp_search or bool((os.getenv("EXA_API_KEY") or os.getenv("ZHIPU_API_KEY") or "").strip())
+        default_mcp = use_mcp_search or bool(
+            (os.getenv("TAVILY_API_KEY") or os.getenv("EXA_API_KEY") or os.getenv("ZHIPU_API_KEY") or "").strip()
+        )
         use_mcp_search = _prompt_bool("MCP 搜索补充素材", default=default_mcp)
         if use_mcp_search:
             mcp_search_provider = _prompt_choice(
-                "MCP provider", ["auto", "exa", "bigmodel"], default=mcp_search_provider or "auto"
+                "MCP provider", ["auto", "tavily", "exa", "bigmodel"], default=mcp_search_provider or "auto"
             )
             mcp_search_mode = _prompt_choice(
                 "MCP 模式", ["trending", "patterns"], default=mcp_search_mode or "trending"
@@ -1334,8 +1398,8 @@ def _build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--mcp-search-provider",
             default="auto",
-            choices=["auto", "exa", "bigmodel"],
-            help="MCP 搜索提供方: auto(优先 exa) | exa | bigmodel",
+            choices=["auto", "tavily", "exa", "bigmodel"],
+            help="MCP 搜索提供方: auto(优先 tavily) | tavily | exa | bigmodel",
         )
         p.add_argument(
             "--mcp-search-mode",

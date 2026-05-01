@@ -24,18 +24,18 @@ class ChatLLMMixin:
     def _context_message_max_chars(self) -> int:
         raw = (os.getenv("CHAT_CONTEXT_MESSAGE_MAX_CHARS") or "").strip()
         try:
-            value = int(raw) if raw else 4000
+            value = int(raw) if raw else 50_000
         except Exception:
-            value = 4000
-        return max(200, min(value, 50_000))
+            value = 50_000
+        return max(200, min(value, 200_000))
 
     def _context_total_max_chars(self) -> int:
         raw = (os.getenv("CHAT_CONTEXT_MAX_CHARS") or "").strip()
         try:
-            value = int(raw) if raw else 20_000
+            value = int(raw) if raw else 200_000
         except Exception:
-            value = 20_000
-        return max(2_000, min(value, 200_000))
+            value = 200_000
+        return max(2_000, min(value, 1_000_000))
 
     def _clip_context_text(self, text: str, *, max_chars: int) -> str:
         value = str(text or "")
@@ -124,7 +124,10 @@ class ChatLLMMixin:
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Earlier context trimmed to fit the chat budget. Omitted messages: {trimmed_messages}.",
+                    "content": (
+                        "Earlier conversation messages were omitted only because the configured chat context "
+                        f"budget was exceeded. Omitted messages: {trimmed_messages}."
+                    ),
                 }
             )
             logger.info(

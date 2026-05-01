@@ -73,11 +73,15 @@ export function useDeepThink() {
     })
   }, [flushAnswer])
 
-  const cancel = useCallback((reason = 'cancelled') => {
+  const disconnectStream = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
     }
+  }, [])
+
+  const cancel = useCallback((reason = 'cancelled') => {
+    disconnectStream()
     if (taskIdRef.current) {
       cancelTask(taskIdRef.current).catch(() => {
         // ignore: page still shows partial progress
@@ -90,7 +94,7 @@ export function useDeepThink() {
         // no-op: keep UX quiet for normal cancels
       }
     }
-  }, [status])
+  }, [disconnectStream, status])
 
   const reset = useCallback(() => {
     cancel('reset')
@@ -281,7 +285,7 @@ export function useDeepThink() {
 
   useEffect(() => {
     return () => {
-      cancel('unmounted')
+      disconnectStream()
       if (nodesFlushRafRef.current != null) {
         cancelAnimationFrame(nodesFlushRafRef.current)
         nodesFlushRafRef.current = null
@@ -291,7 +295,7 @@ export function useDeepThink() {
         answerFlushRafRef.current = null
       }
     }
-  }, [cancel])
+  }, [disconnectStream])
 
   return {
     status,

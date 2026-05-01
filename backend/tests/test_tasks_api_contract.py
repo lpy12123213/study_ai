@@ -110,6 +110,83 @@ class TestTasksApiContract(unittest.TestCase):
         # Auth will block; we only assert that it is not a missing route.
         self.assertNotEqual(resp.status_code, 404)
 
+    def test_get_task_status_can_include_persisted_events(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        get_task = AsyncMock(
+            return_value={
+                "id": "task-1",
+                "user_id": "u-1",
+                "task_type": "study_materials",
+                "title": "导数资料",
+                "status": "running",
+                "progress": 40,
+                "last_seq": 2,
+                "events": [
+                    {"taskId": "task-1", "seq": 1, "type": "step", "data": {"step": {"id": "s1"}}},
+                    {"taskId": "task-1", "seq": 2, "type": "progress", "data": {"progress": 40}},
+                ],
+            }
+        )
+
+        with patch("backend.api.tasks.db_get_task", new=get_task):
+            resp = client.get("/api/tasks/task-1?include_events=true&events_limit=25")
+
+        self.assertEqual(resp.status_code, 200)
+        get_task.assert_awaited_once()
+        kwargs = get_task.await_args.kwargs
+        self.assertIs(kwargs["include_events"], True)
+        self.assertEqual(kwargs["events_limit"], 25)
+        self.assertEqual(resp.json()["events"][0]["seq"], 1)
+
+        app.dependency_overrides.clear()
+
+    def test_stream_replays_persisted_events_even_when_runtime_task_exists(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        runtime_task = SimpleNamespace(user_id="u-1")
+
+        async def runtime_stream(*_args, **_kwargs):
+            yield {"taskId": "task-1", "seq": 999, "type": "error", "data": {"error": "runtime_only"}}
+
+        get_task = AsyncMock(
+            return_value={
+                "id": "task-1",
+                "user_id": "u-1",
+                "task_type": "study_materials",
+                "title": "导数资料",
+                "status": "completed",
+                "progress": 100,
+                "last_seq": 1,
+            }
+        )
+        list_events = AsyncMock(
+            return_value=[
+                {"taskId": "task-1", "seq": 1, "type": "progress", "data": {"progress": 100, "source": "db"}}
+            ]
+        )
+
+        with (
+            patch("backend.api.tasks.task_runtime.get_task", new=AsyncMock(return_value=runtime_task)),
+            patch("backend.api.tasks.task_runtime.stream", new=runtime_stream),
+            patch("backend.api.tasks.db_get_task", new=get_task),
+            patch("backend.api.tasks.db_list_task_events", new=list_events),
+        ):
+            resp = client.get("/api/tasks/task-1/stream?after_seq=0")
+
+        self.assertEqual(resp.status_code, 200)
+        text = resp.text
+        self.assertIn('"seq": 1', text)
+        self.assertIn('"source": "db"', text)
+        self.assertNotIn("runtime_only", text)
+        list_events.assert_awaited()
+
+        app.dependency_overrides.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

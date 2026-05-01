@@ -1152,55 +1152,55 @@ class Planner:
 
         tool_desc = "\n".join([f"- {k}: {v}" for k, v in allowed_tools.items()])
         notes: List[str] = [
-            "必须输出 JSON 对象，不要 Markdown，不要额外解释文字。",
-            "知识点已在 Plan 阶段前置拆分并审核，计划不需要包含 split_knowledge_points/review_knowledge_points。",
-            "建议对 web_search_knowledge / aggregate_knowledge / generate_study_material 使用 foreach_knowledge_point=true，便于前端显示逐知识点进度。",
-            "当你使用 foreach_knowledge_point=true 时，请尽量把这些步骤连续排列（执行器会按知识点 DFS 深挖：一个知识点做完完整研究链再换下一个）。",
-            "并行建议：可用 parallel_group 标记「互不依赖的连续步骤」并行执行；例如：aggregate_knowledge 后并行 synthesize_sources ∥ detect_knowledge_type；写作后并行 critique_draft ∥ generate_diagrams。",
-            "每一步请给出 thought（1-2 句，解释做这一步的目的；避免冗长推理）。",
-            "steps 数量允许更长：每个知识点可 6~20 个工具调用；总 steps 可到 200（必要时）。",
-            "计划允许可变长度 steps：你可以根据 reflection_issues/来源覆盖情况决定追加检索、跳过不必要步骤，或只对不足的知识点做修订（系统可能会在解析阶段补齐必要的收尾步骤）。",
+            "Output a JSON object only. Do not output Markdown or extra explanatory text.",
+            "Knowledge points have already been split and reviewed before the Plan stage; the plan does not need split_knowledge_points or review_knowledge_points.",
+            "Prefer foreach_knowledge_point=true for web_search_knowledge, aggregate_knowledge, and generate_study_material so the frontend can show per-knowledge-point progress.",
+            "When using foreach_knowledge_point=true, keep these steps consecutive when practical. The executor performs DFS by knowledge point: complete one full research chain before moving to the next.",
+            "Parallelism guidance: use parallel_group to mark consecutive independent steps for parallel execution, for example synthesize_sources parallel with detect_knowledge_type after aggregate_knowledge, or critique_draft parallel with generate_diagrams after writing.",
+            "Each step must include thought in 1-2 sentences explaining the purpose of the step. Avoid verbose reasoning.",
+            "A longer step list is allowed: each knowledge point may require 6-20 tool calls, and total steps may reach 200 when necessary.",
+            "Variable-length plans are allowed: based on reflection_issues/source coverage, you may add retrieval, skip unnecessary steps, or revise only insufficient knowledge points. The system may add required finalization steps during parsing.",
         ]
         if bool(flags.get("enable_diagrams")):
             notes.extend(
                 [
-                    "你可以自主决定是否画图，并自行调度绘图工具多次（总计建议 3~12 次，按需要可更多/更少）。",
-                    "推荐：优先调用 generate_diagrams（高层工具，会自动规划并调用 tikz_to_svg/asy_to_svg/seedream_generate）。",
-                    "绘图工具支持 foreach_knowledge_point=true（推荐用于逐知识点配图）。每次绘图应传入 knowledge_point 或使用 foreach_knowledge_point 让执行器自动注入 knowledge_points=[kp]。",
+                    "You may independently decide whether diagrams are needed and schedule diagram tools multiple times. Recommended total: 3-12 calls, adjusted as needed.",
+                    "Recommendation: prefer generate_diagrams, the high-level tool that plans and calls tikz_to_svg, asy_to_svg, or seedream_generate automatically.",
+                    "Diagram tools support foreach_knowledge_point=true, recommended for per-knowledge-point diagrams. Each diagram call should pass knowledge_point or use foreach_knowledge_point so the executor injects knowledge_points=[kp].",
                     'tikz_to_svg 参数示例：{"knowledge_point":"...","alt":"...","caption":"...","tikz":"\\\\begin{tikzpicture}...\\\\end{tikzpicture}","preamble":"\\\\usetikzlibrary{arrows.meta,calc}"}',
                     'asy_to_svg 参数示例：{"knowledge_point":"...","alt":"...","caption":"...","asy":"size(120); draw((0,0)--(1,0)--(1,1)--cycle);"}',
                     'seedream_generate 参数示例：{"knowledge_point":"...","alt":"...","caption":"...","prompt":"一张用于教学的简洁插图：...","size":"1024x1024","n":1}',
-                    "说明：绘图工具会把图片结果累积保存，assemble_study_archive 会自动插入到对应知识点。",
+                    "Note: diagram tools accumulate saved image results; assemble_study_archive automatically inserts them into the corresponding knowledge point.",
                 ]
             )
         preset = str(flags.get("preset") or "standard")
         if preset == "quick":
-            notes.append("当前 preset=quick：优先保证速度与结构清晰，尽量减少额外检索工具与轮次。")
+            notes.append("Current preset=quick: prioritize speed and clear structure; minimize extra retrieval tools and rounds.")
         elif preset == "deep":
-            notes.append("当前 preset=deep：允许更多检索与更深入讲解；来源不足时可追加检索轮次。")
+            notes.append("Current preset=deep: allow more retrieval and deeper explanations; add retrieval rounds when sources are insufficient.")
             notes.append(
-                "建议：对每个知识点至少做 2 轮 web_search_knowledge（第一轮概念/直观，第二轮条件/反例/推导）。"
+                "Recommendation: run at least 2 web_search_knowledge rounds for each knowledge point: first for concepts/intuition, second for conditions/counterexamples/derivation."
             )
         elif preset == "research":
-            notes.append("当前 preset=research：研究型输出（多轮检索 + 更严格的条件/反例/推导覆盖），可能更慢。")
+            notes.append("Current preset=research: research-oriented output with multi-round retrieval and stricter coverage of conditions, counterexamples, and derivation; may be slower.")
             notes.append(
-                "建议：对每个知识点做 2~3 轮 web_search_knowledge（概念/直观 → 条件/反例/推导 → 应用/典型问题），不足再追加。"
+                "Recommendation: run 2-3 web_search_knowledge rounds for each knowledge point: concepts/intuition -> conditions/counterexamples/derivation -> applications/typical questions; add more if insufficient."
             )
 
         requirements = str(flags.get("requirements") or "").strip()
         if requirements:
-            notes.append(f"额外要求（写作风格/约束）：{requirements[:220]}")
+            notes.append(f"Extra requirements for writing style or constraints: {requirements[:220]}")
 
         if "browse_web_pages" in allowed_tools:
             notes.extend(
                 [
-                    "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（默认 result-first；query_hint 覆盖：定义/性质/证明/应用/误区），必要时再追加轮次或调用 browse_web_pages 提取网页正文摘录。",
-                    "可选来源：对关键知识点可补充 stackexchange_search（问答解释/易错）、github_search（笔记/教程仓库）、mediawiki_search（Wikibooks/ProofWiki 等）。",
+                    "DeepResearch guidance: prefer 1-2 web_search_knowledge rounds first, default result-first, with query_hint covering definitions/properties/proofs/applications/misconceptions. Add rounds or call browse_web_pages for page excerpts only when needed.",
+                    "Optional sources: for key knowledge points, add stackexchange_search for Q&A explanations/misconceptions, github_search for notes/tutorial repositories, and mediawiki_search for Wikibooks/ProofWiki, etc.",
                 ]
             )
         else:
             notes.append(
-                "DeepResearch建议：优先做 1~2 轮 web_search_knowledge（默认 result-first；query_hint 覆盖：定义/性质/证明/应用/误区）；来源不足时再追加轮次。"
+                "DeepResearch guidance: prefer 1-2 web_search_knowledge rounds first, default result-first, with query_hint covering definitions/properties/proofs/applications/misconceptions. Add rounds only when sources are insufficient."
             )
         prompt = {
             "task": topic,
@@ -1216,13 +1216,14 @@ class Planner:
         }
 
         system = (
-            "你是自学资料生成系统的 Planner。你要输出一个可执行的计划 JSON。\n"
-            "输出 schema:\n"
+            "You are the planner for a self-study material generation system. Output an executable plan JSON.\n"
+            "Match the language of the user's latest request for user-facing title/thought fields unless explicitly instructed otherwise. Keep tool names and JSON field names unchanged.\n"
+            "Output schema:\n"
             '{\n  "rationale": "string",\n  "steps": [\n'
             '    {"id": "optional", "title": "string", "tool": "string", "arguments": {}, '
             '"parallel_group": "string", "thought": "string", "foreach_knowledge_point": false, "foreach_limit": 0}\n'
             "  ]\n}\n"
-            "严格要求：只输出 JSON。"
+            "Strict requirement: output JSON only."
         )
 
         degraded_reason = ""

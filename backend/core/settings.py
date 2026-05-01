@@ -194,6 +194,11 @@ class Settings:
     metaso_base_url: str
     metaso_timeout_seconds: int
 
+    # Tavily AI search (direct API; default search provider)
+    tavily_api_key: SecretString
+    tavily_base_url: str
+    tavily_timeout_seconds: int
+
     @classmethod
     def from_env(cls) -> "Settings":
         # Load from repo-root `.env` (if present) without overriding explicit env vars.
@@ -220,6 +225,7 @@ class Settings:
         fireworks_base_url = _get_str("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1").rstrip("/")
         zhipu_base_url = _get_str("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
         metaso_base_url = _get_str("METASO_BASE_URL", "https://metaso.cn/api/v1").rstrip("/")
+        tavily_base_url = _get_str("TAVILY_BASE_URL", "https://api.tavily.com").rstrip("/")
 
         if model_json:
             cfg = model_json.providers or {}
@@ -241,6 +247,8 @@ class Settings:
 
         metaso_api_key = _get_str("METASO_API_KEY", "")
         metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
+        tavily_api_key = _get_str("TAVILY_API_KEY", "")
+        tavily_timeout_seconds = _get_int("TAVILY_TIMEOUT", 60)
         zhipu_api_key = _get_str("ZHIPU_API_KEY", "")
 
         chat_base_url = ""
@@ -450,6 +458,9 @@ class Settings:
             metaso_api_key=SecretString(metaso_api_key),
             metaso_base_url=metaso_base_url,
             metaso_timeout_seconds=metaso_timeout_seconds,
+            tavily_api_key=SecretString(tavily_api_key),
+            tavily_base_url=tavily_base_url,
+            tavily_timeout_seconds=tavily_timeout_seconds,
         )
 
     def summary(self) -> Dict[str, Any]:
@@ -476,6 +487,7 @@ class Settings:
             "fireworks_configured": bool(self.fireworks_api_key),
             "zhipu_configured": bool(self.zhipu_api_key),
             "metaso_configured": bool(self.metaso_api_key),
+            "tavily_configured": bool(self.tavily_api_key),
         }
 
 
@@ -549,6 +561,11 @@ ZHIPU_TIMEOUT = settings.zhipu_timeout_seconds
 METASO_API_KEY = settings.metaso_api_key.get_secret_value()
 METASO_BASE_URL = settings.metaso_base_url
 METASO_TIMEOUT = settings.metaso_timeout_seconds
+
+# Tavily AI search settings (direct API; default search provider)
+TAVILY_API_KEY = settings.tavily_api_key.get_secret_value()
+TAVILY_BASE_URL = settings.tavily_base_url
+TAVILY_TIMEOUT = settings.tavily_timeout_seconds
 
 
 def get_config_summary() -> Dict[str, Any]:

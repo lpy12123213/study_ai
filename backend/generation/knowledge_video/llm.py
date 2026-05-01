@@ -63,7 +63,7 @@ async def generate_manim_package(
     repair = ""
     if previous_code or render_error:
         repair = (
-            "\n这是一次修复请求。请保留同一个 scene_name，返回完整可运行代码，不要只返回 diff。\n"
+            "\nThis is a repair request. Keep the same scene_name and return complete runnable code, not just a diff.\n"
             f"上次错误日志：\n{_clip(render_error, max_chars=3000)}\n"
             f"上次代码：\n{_clip(previous_code, max_chars=12000)}\n"
         )
@@ -73,9 +73,9 @@ async def generate_manim_package(
         {
             "role": "system",
             "content": (
-                "你是 Manim Community 代码生成器。只返回 JSON 对象，不要 Markdown。"
-                "JSON 字段必须包含 code、scene_name、subtitles、metadata。"
-                "code 必须是完整 Python 源码，直接使用 Manim 生成一个单 Scene 知识讲解动画。"
+                "You are a Manim Community code generator. Return only a JSON object, not Markdown."
+                "JSON fields must include code, scene_name, subtitles, metadata."
+                "code must be complete Python source that directly uses Manim to generate a single-scene knowledge explanation animation."
                 "代码会在无网络、非 root、资源受限的 Docker 沙盒中运行；可自由使用 Manim 和 Python 表达教学内容。"
                 "默认 scene_name 使用 KnowledgeVideoScene。字幕 subtitles 为数组，每项包含 start/end/text 秒级时间。"
             ),

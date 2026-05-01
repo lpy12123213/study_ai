@@ -110,6 +110,38 @@ class TestSourceSynthesisMixin(unittest.IsolatedAsyncioTestCase):
 
 
 class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
+    async def test_web_search_knowledge_defaults_to_tavily(self) -> None:
+        agent = _DummyAgent()
+        ctx = _make_ctx()
+
+        tavily_search = AsyncMock(
+            return_value={
+                "success": True,
+                "provider": "tavily",
+                "query": "高中数学 导数",
+                "results": [
+                    {"title": "导数定义", "url": "https://example.com/tavily", "snippet": "导数表示瞬时变化率。"}
+                ],
+            }
+        )
+
+        args = {
+            "knowledge_points": ["导数"],
+            "decompose": False,
+            "include_summary": True,
+            "limit": 5,
+        }
+
+        with patch("backend.agent.tools.search.web_search_knowledge_impl.is_llm_configured", return_value=False):
+            with patch("backend.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
+                with patch("backend.mcp.search.tavily.tavily_search", tavily_search):
+                    result = await agent._tool_web_search_knowledge(args, ctx)
+
+        item = result["items"][0]
+        self.assertEqual(item["provider"], "tavily-search")
+        self.assertEqual(item["results"][0]["url"], "https://example.com/tavily")
+        tavily_search.assert_awaited_once()
+
     async def test_web_search_knowledge_reuses_working_memory_cache(self) -> None:
         agent = _DummyAgent()
         ctx = _make_ctx()

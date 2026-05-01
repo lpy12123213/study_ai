@@ -143,17 +143,17 @@ class RefineDraftToolsMixin:
                 "revision_instructions": instructions_list[:16],
                 "draft_markdown": draft,
                 "requirements": [
-                    "请根据 revision_instructions 对 draft_markdown 做定向修订（不要整篇重写）。",
+                    "Apply targeted revisions to draft_markdown according to revision_instructions. Do not rewrite the entire document.",
                     "保持整体结构与小节标题（#### ...）尽量稳定；只在必要处增删小段落/要点。",
                     "修复：遗漏前提/条件、逻辑断裂、表述不清、概念混淆、过于空泛等问题。",
-                    "严禁输出 URL/参考资料段落/证据标记；数学公式用 $...$ / $$...$$。",
-                    "只输出修订后的 Markdown（不要解释，不要 JSON）。",
+                    "Do not output URLs, reference sections, or evidence markers. Use $...$ / $$...$$ for mathematical formulas.",
+                    "Output only the revised Markdown. Do not explain and do not output JSON.",
                 ],
             }
 
             revised = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "你是严谨的 Markdown 编辑，只输出修订后的 Markdown。"},
+                    {"role": "system", "content": "You are a rigorous Markdown editor. Output only the revised Markdown."},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

@@ -1,56 +1,24 @@
-# 本地题库批量删除（按用户维度）设计
+# 题库批量删除设计记录
 
-## 目标
+状态：历史记录，能力已并入题库资源接口。
 
-在“本地题库 / AI 出题”列表中支持**批量选择并删除题目**，用于快速清理不需要的题库条目。
+## 当前接口
 
-## 删除语义（确认：直接删）
-
-- 删除对象：`question_library`（题库条目表，按 `user_id + question_id` 隔离）
-- 不删除：`question_cache`（题目内容缓存表）
-
-原因：
-- `question_cache` 可能被其它页面/流程复用（再次入库、详情预览、后续评分等），直接删缓存有误删风险。
-- “删除题目”在此场景指从当前用户题库中移除（UI 列表不可见），符合用户期望且可控。
-
-## 后端设计
-
-新增接口：
-
-- `POST /api/question-library/items/bulk-delete`
-
-请求：
-
-```json
-{ "question_ids": ["31391674", "ai_20260307_ab12cd34"] }
+```http
+POST /api/question-library/items/bulk-delete
 ```
 
-响应：
+接口用于按题目 ID 批量删除当前用户题库条目。具体请求和返回以 `backend/api/question_library.py` 为准。
 
-```json
-{ "success": true, "deleted": 2 }
-```
+## 设计约束
 
-约束：
-- 空列表返回 400（`question_ids_required`）
-- 最大条数限制（例如 500）避免误操作造成长事务
-- 删除仅作用于当前用户（JWT `user_id`）
+- 只影响当前用户的题库条目。
+- 不应误删其他用户数据。
+- 是否清理共享题目缓存由后端仓库层决定，不能由前端绕过。
+- 前端应在批量操作前给出明确确认。
 
-## 前端设计
+## 当前落点
 
-两处页面一致支持：
-- `/question-library`（本地题库）
-- `/ai-generate`（AI 出题）
-
-交互：
-- 顶部增加“批量删除”开关进入批量模式
-- 批量模式下每条卡片出现“选择/已选”控件，卡片选中态高亮
-- 顶部显示：`全选本页 / 清空 / 删除(n)`（删除前 `confirm` 二次确认）
-- 删除成功后：清空选择、刷新列表；若当前详情为被删题目则关闭/清空选中
-
-## 测试与验证
-
-- 后端：repository unittest 覆盖 “按用户批量删除 + 不影响其它用户”
-- 后端：API 路由存在性（避免 404/405）
-- 前端：`npm run build`
-
+- 后端：`backend/api/question_library.py`
+- 仓库层：`backend/database/repositories/`
+- 前端：`frontend/src/features/questionLibrary/`

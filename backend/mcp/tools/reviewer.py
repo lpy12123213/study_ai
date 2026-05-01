@@ -17,26 +17,14 @@ from backend.core.settings import (
     REVIEW_PROVIDER,
     REVIEW_TIMEOUT,
 )
+from backend.generation.agentic.prompts import create_default_prompt_registry
 
-REVIEW_SYSTEM_PROMPT = """You are an expert educational content reviewer.
-Your task is to evaluate exam questions for quality, accuracy, and pedagogical value.
 
-When reviewing a question, consider:
-1. Clarity: Is the question clearly worded and unambiguous?
-2. Accuracy: Is the content factually correct?
-3. Difficulty: Is the difficulty level appropriate for the target audience?
-4. Educational value: Does it test meaningful learning objectives?
-5. Answer quality: Is the provided answer correct and complete?
-6. Analysis quality: Is the explanation helpful for learning?
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
-Provide your review in a structured format with:
-- Overall score (1-10)
-- Clarity score (1-10)
-- Accuracy score (1-10)
-- Strengths (list)
-- Weaknesses (list)
-- Suggestions for improvement (list)
-- Verdict: APPROVE, NEEDS_REVISION, or REJECT"""
+
+REVIEW_SYSTEM_PROMPT = _prompt("mcp.question_reviewer.v1")
 
 
 async def review_question(
@@ -263,82 +251,86 @@ async def review_questions_with_openrouter(
 """
 
     strictness_desc = {
-        1: "宽松（只指出明显错误）",
-        2: "较宽松（指出错误和较大问题）",
-        3: "适中（指出错误、问题和改进建议）",
-        4: "较严格（细致审查，提出优化意见）",
-        5: "非常严格（从考试命题专家角度全面审查）",
-    }.get(int(strictness or 3), "适中")
+        1: "lenient: point out only obvious errors",
+        2: "moderately lenient: point out errors and major problems",
+        3: "balanced: point out errors, problems, and improvement suggestions",
+        4: "strict: review carefully and propose optimizations",
+        5: "very strict: review comprehensively from an exam-question expert perspective",
+    }.get(int(strictness or 3), "balanced")
 
     focus_text = ""
     if (focus or "").strip():
         focus_text = f"""
-## 🎯 用户特别要求（优先关注）
+## User special requirements (priority)
 **{focus.strip()}**
-请在审查时重点关注上述用户要求，并在报告开头首先回应这一诉求。
+Focus on the user requirements above during the review and respond to them first at the beginning of the report.
 """
 
-    paper_info = f"试卷名称: {paper_name}\n" if (paper_name or "").strip() else ""
-    subject_info = f"学科: {subject}\n" if (subject or "").strip() else ""
+    paper_info = f"Paper name: {paper_name}\n" if (paper_name or "").strip() else ""
+    subject_info = f"Subject: {subject}\n" if (subject or "").strip() else ""
 
-    prompt = f"""你是一位经验丰富的教育专家和试卷审查员。请对以下试卷/题目进行专业审查。
+    prompt = f"""You are an experienced education expert and paper/question reviewer. Professionally review the following paper/questions.
+Match the language of the user's request or the paper content for the final review unless another language is explicitly requested.
 
-## ⚠️ 重要提示：数据局限性
-题干中的**图片和数学公式**可能存在以下问题，请在审查时**忽略这些技术性问题**：
-- 图片显示为 `[图片]` 占位符，无法查看具体内容
-- 数学公式可能显示为 LaTeX 代码（如 `$x^2$`）或 SVG 标签（如 `[公式:<svg...>]`）
-- 部分复杂公式可能转换不完整或有乱码
+## Important note: data limitations
+Images and mathematical formulas in the question text may have technical display issues. Ignore these technical issues during review:
+- Images may appear as `[image]` placeholders and cannot be inspected.
+- Mathematical formulas may appear as LaTeX code such as `$x^2$` or SVG tags such as `[formula:<svg...>]`.
+- Some complex formulas may be incomplete or garbled after conversion.
 
-**请专注于以下可审查的内容：**
-- 文字表述的清晰度和准确性
-- 题目结构和逻辑
-- 难度分布和知识点覆盖
-- 题型搭配的合理性
-- 可识别的明显错误
+Focus on the following reviewable content:
+- Clarity and accuracy of wording.
+- Question structure and logic.
+- Difficulty distribution and knowledge-point coverage.
+- Rationality of question-type mix.
+- Clearly identifiable errors.
 
-## 试卷信息
-{paper_info}{subject_info}题目数量: {len(questions)}
-审查严格度: {int(strictness or 3)}/5 ({strictness_desc})
+## Paper information
+{paper_info}{subject_info}Question count: {len(questions)}
+Review strictness: {int(strictness or 3)}/5 ({strictness_desc})
 {focus_text}
-## 题目列表
+## Question list
 {questions_text}
 
-## 审查要求
-请从以下方面进行审查：
+## Review requirements
+Review the following aspects:
 
-1. **题干规范性**
-   - 文字表述是否清晰、准确
-   - 是否存在歧义或逻辑错误
-   - 语句是否通顺完整
+1. Stem standards
+   - Whether wording is clear and accurate.
+   - Whether ambiguity or logical errors exist.
+   - Whether sentences are fluent and complete.
 
-2. **难度分布**
-   - 难度是否合理分布
-   - 是否符合该学科要求
-   - 难度系数是否与实际难度匹配
+2. Difficulty distribution
+   - Whether difficulty is reasonably distributed.
+   - Whether it fits the subject requirements.
+   - Whether difficulty coefficients match actual difficulty.
 
-3. **知识点覆盖**
-   - 知识点分布是否均衡
-   - 是否有重复考查的知识点
-   - 是否有重要知识点遗漏
+3. Knowledge-point coverage
+   - Whether knowledge points are balanced.
+   - Whether any knowledge points are tested repeatedly.
+   - Whether important knowledge points are missing.
 
-4. **潜在问题**
-   - 是否有疑似错题（基于可读的文字部分判断）
-   - 是否有重复或高度相似的题目
-   - 是否有超纲内容
+4. Potential issues
+   - Whether any question appears wrong based on readable text.
+   - Whether any questions are duplicated or highly similar.
+   - Whether any content is out of scope.
 
-5. **综合评价**
-   - 整体质量评分（1-10分）
-   - 主要优点
-   - 主要问题
-   - 改进建议
+5. Overall evaluation
+   - Overall quality score, 1-10.
+   - Main strengths.
+   - Main problems.
+   - Improvement suggestions.
 
-## 输出格式
-请以清晰、结构化的方式输出审查意见，直接用中文回复，不需要JSON格式。
+## Output format
+Output clear, structured review comments directly. Do not output JSON.
 """
 
     try:
         res = await chat_completion(
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": _prompt("mcp.paper_reviewer.v1")},
+                {"role": "user", "content": prompt},
+            ],
             model=str(api_config.get("model") or "").strip(),
             temperature=float(REVIEW_MODEL_TEMPERATURE),
             max_tokens=int(REVIEW_MODEL_MAX_TOKENS or 0),

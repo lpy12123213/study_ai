@@ -60,6 +60,33 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(captured_models), 1)
         self.assertTrue(all(model == "gpt-5.2" for model in captured_models))
 
+    async def test_exec_mcp_web_search_tool_auto_uses_tavily_when_configured(self) -> None:
+        tavily_search = AsyncMock(
+            return_value={
+                "success": True,
+                "provider": "tavily",
+                "query": "导数 新闻",
+                "results": [
+                    {"title": "Tavily result", "url": "https://example.com/t", "snippet": "snippet"},
+                ],
+            }
+        )
+
+        with patch("backend.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
+            with patch("backend.mcp.search.tavily.tavily_search", tavily_search):
+                result = await question_generate._exec_mcp_web_search_tool(
+                    query="导数 新闻",
+                    limit=3,
+                    provider="auto",
+                    mode="trending",
+                    recency_days=30,
+                )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["provider"], "tavily")
+        self.assertEqual(result["results"][0]["url"], "https://example.com/t")
+        tavily_search.assert_awaited_once()
+
 
 class CliMcpSearchModelResolveTests(unittest.TestCase):
     def test_resolve_cli_mcp_search_model_prefers_configured_model_for_non_ikuncode(self) -> None:

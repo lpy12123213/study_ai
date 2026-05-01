@@ -200,11 +200,11 @@ class SourceSynthesisToolsMixin:
                 "knowledge_point": kp,
                 "sources": sources,
                 "requirements": [
-                    "请将 sources 综合为可供写作消费的「源简报」，目标是：去噪、抓重点、降低后续写作 prompt 长度。",
-                    "严禁照抄 sources 原文；必须用自己的话改写与归纳。",
-                    "请输出严格 JSON（不要 Markdown，不要额外解释）。",
-                    "brief 字段请按维度组织：definition, core_ideas, key_properties, conditions_and_boundaries, common_misconceptions, applications, derivation_or_proof_sketch, notation_and_terms。",
-                    "facts 字段为关键事实列表：{fact, confidence(0~1), source_ids[]}，source_ids 从 sources[].id 里选。",
+                    "Synthesize sources into a writer-ready source brief. Goals: denoise, capture key points, and reduce downstream writing prompt length.",
+                    "Do not copy source text verbatim. Rewrite and summarize in your own words.",
+                    "Output strict JSON only. Do not output Markdown or extra explanation.",
+                    "Organize the brief field by dimensions: definition, core_ideas, key_properties, conditions_and_boundaries, common_misconceptions, applications, derivation_or_proof_sketch, notation_and_terms.",
+                    "The facts field is a list of key facts: {fact, confidence(0~1), source_ids[]}. Choose source_ids from sources[].id.",
                 ],
                 "schema": {
                     "knowledge_point": "string",
@@ -225,7 +225,7 @@ class SourceSynthesisToolsMixin:
 
             raw = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "你是严谨的资料综合助手，只输出 JSON。"},
+                    {"role": "system", "content": "You are a rigorous source synthesis assistant. Output JSON only."},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

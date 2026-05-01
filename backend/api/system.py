@@ -54,6 +54,7 @@ def _llm_config_check() -> dict:
         "fireworks": bool(summary.get("fireworks_configured")),
         "zhipu": bool(summary.get("zhipu_configured")),
         "metaso": bool(summary.get("metaso_configured")),
+        "tavily": bool(summary.get("tavily_configured")),
     }
     any_configured = any(bool(v) for v in providers.values())
     return {"ok": True, "configured": any_configured, "providers": providers, "status": "ok" if any_configured else "warn"}

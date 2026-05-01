@@ -844,8 +844,8 @@ def get_stdio_tools() -> List[Tool]:
             name="web_search",
             description=(
                 "【联网搜索】互联网搜索并返回结构化结果。\n"
-                "- provider=auto 时优先 Exa（更适合“时兴/热点素材”检索，支持按发布日期筛选），无 Exa key 时回退 BigModel。\n"
-                "- 需要配置 EXA_API_KEY 或 ZHIPU_API_KEY。"
+                "- provider=auto 时优先 Tavily，无 Tavily key 时回退 Exa，再回退 BigModel。\n"
+                "- 需要配置 TAVILY_API_KEY、EXA_API_KEY 或 ZHIPU_API_KEY。"
             ),
             inputSchema={
                 "type": "object",
@@ -858,8 +858,8 @@ def get_stdio_tools() -> List[Tool]:
                     },
                     "provider": {
                         "type": "string",
-                        "enum": ["auto", "exa", "bigmodel"],
-                        "description": "搜索提供方：auto(优先 exa) | exa | bigmodel",
+                        "enum": ["auto", "tavily", "exa", "bigmodel"],
+                        "description": "搜索提供方：auto(优先 tavily) | tavily | exa | bigmodel",
                         "default": "auto",
                     },
                     "mode": {
@@ -870,7 +870,7 @@ def get_stdio_tools() -> List[Tool]:
                     },
                     "recency_days": {
                         "type": "integer",
-                        "description": "trending 模式下按发布日期近 N 天筛选（仅 exa 生效）",
+                        "description": "trending 模式下按发布日期近 N 天筛选（tavily/exa 生效）",
                         "default": 180,
                     },
                     "model": {

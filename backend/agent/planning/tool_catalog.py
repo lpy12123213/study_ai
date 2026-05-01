@@ -6,42 +6,42 @@ from backend.agent.mcp.registry import MCPToolRegistry
 
 
 _CORE_TOOLS: Dict[str, str] = {
-    "split_knowledge_points": "把主题拆成多个可检索子知识点（输出 knowledge_points 列表）",
-    "review_knowledge_points": "审核并微调知识点列表（去重/补全/粒度调整）",
-    "web_search_knowledge": "联网搜索知识点（Exa 优先；deep/research 可启用 deepresearch 多轮；Metaso/智谱兜底；返回 results 列表 + 可选 summary）",
-    "aggregate_knowledge": "聚合：拆分 + 网搜 + 题库（可选：百科/网页正文/问答/GitHub）",
-    "synthesize_sources": "源简报：对聚合素材去噪/提炼关键事实/结构化为 writer 友好的 source_brief（写入 source_briefs）",
-    "detect_knowledge_type": "知识类型检测：definition/theorem/algorithm/...（写入 knowledge_types）",
-    "generate_outline": "生成自适应写作大纲：基于 knowledge_type + source_brief（写入 outlines）",
-    "generate_study_material": "生成概念讲解（基于 source_brief + outline；section 级并行写作）",
-    "critique_draft": "自我批判：对草稿多维度打分并给出定向修订指令（写入 critiques）",
-    "refine_draft": "精炼修订：根据 critique 指令对草稿做定向修改（高分可自动跳过）",
-    "generate_diagrams": "生成配图：为知识点规划并渲染教学示意图（TikZ/Asymptote；必要时 Seedream），结果写入 diagrams",
-    "assemble_study_archive": "组装最终 Markdown（自学档案）",
-    "revise_markdown": "按审查问题修订 Markdown（可选）",
-    "save_markdown_file": "保存 Markdown 到文件",
-    "export_study_markdown": "将最终 Markdown 发布为可下载文件（返回 md_url）",
-    "convert_markdown_to_latex": "用 LLM 把 Markdown 转成 ElegantBook LaTeX（返回 tex_url）",
-    "refine_latex": "对 LaTeX 做二次修订（结构/公式/图片/编译友好性）",
-    "compile_latex_to_pdf": "编译 LaTeX 为 PDF（返回 pdf_url）",
-    "review_content": "内容审查（结构/完整性/可靠性）",
+    "split_knowledge_points": "Split the topic into searchable sub-knowledge points; outputs knowledge_points.",
+    "review_knowledge_points": "Review and minimally adjust knowledge points for deduplication, coverage, and granularity.",
+    "web_search_knowledge": "Search the web for a knowledge point; Exa first, optional deepresearch passes for deep/research, Metaso/Zhipu fallback. Returns results and optional summary.",
+    "aggregate_knowledge": "Aggregate split points, web search, and optional question-bank/wiki/page/Q&A/GitHub sources.",
+    "synthesize_sources": "Denoise aggregated material into writer-ready source_brief entries; writes source_briefs.",
+    "detect_knowledge_type": "Detect knowledge type such as definition/theorem/algorithm; writes knowledge_types.",
+    "generate_outline": "Generate an adaptive outline from knowledge_type and source_brief; writes outlines.",
+    "generate_study_material": "Generate concept explanations from source_brief and outline; supports section-level parallel writing.",
+    "critique_draft": "Critique drafts across dimensions and produce targeted revision instructions; writes critiques.",
+    "refine_draft": "Apply targeted minimal revisions from critiques; high-scoring drafts may be skipped.",
+    "generate_diagrams": "Plan and render instructional diagrams with TikZ/Asymptote and Seedream when needed; writes diagrams.",
+    "assemble_study_archive": "Assemble the final self-study Markdown archive.",
+    "revise_markdown": "Revise Markdown according to review issues when needed.",
+    "save_markdown_file": "Save Markdown to a file.",
+    "export_study_markdown": "Publish final Markdown as a downloadable file and return md_url.",
+    "convert_markdown_to_latex": "Convert Markdown to ElegantBook LaTeX with an LLM and return tex_url.",
+    "refine_latex": "Minimally refine LaTeX for structure, formulas, images, and compilation friendliness.",
+    "compile_latex_to_pdf": "Compile LaTeX into PDF and return pdf_url.",
+    "review_content": "Review content structure, completeness, and reliability.",
 }
 
 _DRAW_TOOLS: Dict[str, str] = {
-    "tikz_to_svg": "使用 LaTeX TikZ 编译生成 SVG 矢量图",
-    "asy_to_svg": "使用 Asymptote 编译生成 SVG 矢量图（静态技术图备选）",
-    "seedream_generate": "使用火山云 Seedream 4.5（ARK images/generations）根据自然语言生成图片",
+    "tikz_to_svg": "Compile LaTeX TikZ into an SVG vector diagram.",
+    "asy_to_svg": "Compile Asymptote into an SVG vector diagram; fallback for static technical diagrams.",
+    "seedream_generate": "Generate images from natural language with Volcano Cloud Seedream 4.5 ARK images/generations.",
 }
 
 _QUESTION_TOOLS: Dict[str, str] = {
-    "search_questions_by_knowledge": "题库按知识点搜题（例题+练习题）（默认关闭；可用 STUDY_MATERIALS_ENABLE_QUESTIONS=1 开启）",
+    "search_questions_by_knowledge": "Search the question bank by knowledge point for examples and exercises; disabled by default, enable with STUDY_MATERIALS_ENABLE_QUESTIONS=1.",
 }
 
 _EXTRA_TOOLS: Dict[str, str] = {
-    "wikipedia_search": "Wikipedia 百科检索（中文）",
-    "mediawiki_search": "MediaWiki 百科检索（可用于 Wikipedia/Wikibooks/ProofWiki 等）",
-    "stackexchange_search": "StackExchange 问答检索（高质量解释与典型问题）",
-    "github_search": "GitHub 仓库检索（笔记/教程/代码示例等）",
+    "wikipedia_search": "Search Wikipedia; use the best language for the topic/user request.",
+    "mediawiki_search": "Search MediaWiki sources such as Wikipedia, Wikibooks, or ProofWiki.",
+    "stackexchange_search": "Search StackExchange for high-quality explanations and typical questions.",
+    "github_search": "Search GitHub repositories for notes, tutorials, and code examples.",
     "browse_web_pages": "Browse and extract page text (best-effort)",
 }
 

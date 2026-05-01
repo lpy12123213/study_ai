@@ -1,108 +1,237 @@
-# 配置说明（Configuration）
+# 配置说明
 
-本项目主要通过两类配置控制运行行为：
+Study AI 主要通过 `.env`、系统环境变量和本地 `config/model.json` 配置。本文只记录当前代码读取和建议维护的配置项。
 
-- 环境变量（`.env` / 系统环境变量）
-- 模型与供应商配置（`config/model.json`）
+不要提交真实密钥、Cookie、本地数据库或抓取内容。
 
-建议从 `.env.example` 开始，复制并按需修改：
+## 配置加载
+
+后端会从仓库根目录加载 `.env`，并保留系统环境变量的优先级。核心代码在 `backend/core/settings.py`。
+
+加载顺序：
+
+1. 系统环境变量。
+2. 仓库根目录 `.env`，不覆盖已存在的系统环境变量。
+3. `config/model.json` 或 `MODEL_CONFIG_PATH` 指向的模型配置。
+4. 代码默认值。
+
+安全等级：
+
+- Secret：API key、JWT secret、Cookie、管理员密码。
+- Operational：超时、并发、任务池、导出工具链。
+- Product：默认学科、生成预设、前端 API base URL。
+
+Secret 配置不得出现在日志、文档示例真实值、测试快照或提交记录中。
+
+推荐流程：
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-然后用 `start.bat setup` / `start.bat dev` 启动。
+Linux / macOS：
 
-## 1. LLM（模型与渠道）
+```bash
+cp .env.example .env
+```
 
-后端读取配置的优先级大致为：
+## 模型供应商
 
-1. 读取 repo 根目录 `.env`（不会覆盖同名的系统环境变量）
-2. 读取 `config/model.json`（若存在，会覆盖对应 provider 的 `api_key/base_url`）
-3. 若启用 pinned 模式，则强制使用 `config/model.json` 里的 `active_provider`
-4. 否则走环境变量的 `CHAT_PROVIDER`（默认 `openrouter`）
-
-常用环境变量（见 `.env.example`）：
+通用对话供应商：
 
 - `CHAT_PROVIDER`: `openrouter` / `fireworks` / `moonshot`
 - `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`
 - `FIREWORKS_API_KEY`, `FIREWORKS_BASE_URL`
 - `MOONSHOT_API_KEY`, `MOONSHOT_BASE_URL`
-- `MAIN_MODEL`, `SUB_MODEL`（以及 temperature/max_tokens）
-- `LLM_PROVIDER_PINNED=1`：锁定 provider，避免自动切换
+- `MAIN_MODEL`
+- `SUB_MODEL`
+- `MAIN_MODEL_TEMPERATURE`
+- `MAIN_MODEL_MAX_TOKENS`
+- `SUB_MODEL_TEMPERATURE`
+- `SUB_MODEL_MAX_TOKENS`
 
-Token 计数说明：
-- 后端会做 best-effort 的 token 估算；如果安装了 `tiktoken`，会使用更准确的计数逻辑。
+本地模型配置文件：
 
-`config/model.json` 说明（示例结构，字段可能随版本扩展）：
+- 默认路径：`config/model.json`
+- 可用 `MODEL_CONFIG_PATH` 指向其他路径
+- `LLM_PROVIDER_PINNED=1` 可锁定 active provider，避免根据模型名自动切换
+
+示例结构：
 
 ```json
 {
   "active_provider": "openrouter",
   "pinned": false,
   "providers": {
-    "openrouter": { "base_url": "...", "api_key": "..." },
-    "fireworks": { "base_url": "...", "api_key": "..." },
-    "moonshot": { "base_url": "...", "api_key": "..." }
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key": "sk-or-..."
+    }
   },
   "models": {
-    "main": "openai/gpt-4.1-mini",
-    "sub": "openai/gpt-4.1-mini",
-    "lesson_plan": "openai/gpt-4.1-mini",
-    "review": "openai/gpt-4.1-mini"
+    "main": "openai/gpt-5-mini",
+    "sub": "openai/gpt-5-mini",
+    "lesson_plan": "openai/gpt-5-mini"
+  },
+  "params": {
+    "main_temperature": 0.7,
+    "sub_temperature": 0.3,
+    "thinking_effort": "xhigh"
   }
 }
 ```
 
-提示：
-- `active_provider=openrouter` 且 `models.main=moonshotai/kimi-*` 这类情况也正常：OpenRouter 会路由到对应模型。
-- 如果你在 OpenRouter 控制台看不到调用记录，优先检查运行时 `CHAT_PROVIDER` 是否为 `openrouter`，以及是否被 pinned 到其他 provider。
+模型配置规则：
 
-## 2. AI 出题（Question Library）
+- `pinned=true` 时，以 `active_provider` 为准，不做自动 provider 推断。
+- 模型名必须符合所选 provider 的格式。
+- `main` 用于复杂推理和编排，`sub` 用于轻量提取、选择和判断。
+- lesson plan、study materials 和 question library 可按需设置独立模型。
 
-AI 出题与本地题库的运行期缓存、后台打分与任务池参数主要由以下环境变量控制：
+## 登录与权限
 
-- `QUESTION_LIBRARY_MAX_TASKS`：内存任务池容量（默认 `50`）
-- `QUESTION_LIBRARY_TASK_TTL_S`：任务保留时间（秒，默认 `3600`）
-- `QUESTION_LIBRARY_TASK_MAX_EVENTS`：单任务最多保留事件数（默认 `8000`）
-- `QUESTION_LIBRARY_REALIZE_MAX_TOKENS`：草稿生成（realize）最大 tokens；不设置时会跟随 `LESSON_PLAN_MAX_TOKENS` 并保证最小预算
-- `QUESTION_LIBRARY_JUDGE_MODEL`：审题模型（留空用默认 lesson_plan 模型）
-- `QUESTION_LIBRARY_MCP_SEARCH_MODEL`：CLI 出题前的“素材检索”阶段使用的模型。默认值通常为 `openai/gpt-5-mini`；当当前 provider 为 `ikuncode` 且主出题模型是 `gpt-*` 时，会自动复用该 GPT 模型（例如 `gpt-5.2`），避免错误携带 OpenRouter 风格的模型前缀。该阶段依赖 tools + 引用 URL，建议选择支持 tool-calling 的模型。
+- `JWT_SECRET`：JWT 签名密钥，生产环境必须改成随机长字符串。
+- `JWT_EXPIRE_HOURS`：token 过期小时数。
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+- `ADMIN_ROLE`
 
-出题素材联网搜索（可选）：
+开发环境可使用 `.env.example` 中的占位值；共享或公网环境必须更换。
 
-- `EXA_API_KEY`：推荐，Exa 搜索（更适合“时兴/热点素材”检索，支持按发布日期筛选）
-- `ZHIPU_API_KEY`：可选，智谱 BigModel MCP（无 Exa key 时会尝试作为 fallback；未配置会出现 401）
+## 搜索与外部检索
 
-题库后台自动打分（可选）：
+自学资料、AI 出题、MCP 联网搜索可能使用：
 
-- `QUESTION_LIBRARY_AUTO_SCORE=1`：开启后台批量打分
-- `QUESTION_LIBRARY_SCORE_INTERVAL_S`：打分间隔（秒，默认 `20`）
-- `QUESTION_LIBRARY_SCORE_BATCH`：单次打分数量（默认 `20`）
-- `QUESTION_LIBRARY_HIDE_THRESHOLD`：低于阈值自动隐藏（默认 `70`）
-- `QUESTION_LIBRARY_SCORE_MODEL`：打分模型（默认回落到 lesson_plan 模型）
+- `TAVILY_API_KEY`, `TAVILY_BASE_URL`, `TAVILY_TIMEOUT`
+- `EXA_API_KEY`, `EXA_BASE_URL`
+- `METASO_API_KEY`, `METASO_BASE_URL`, `METASO_TIMEOUT`
+- `ZHIPU_API_KEY`, `ZHIPU_BASE_URL`, `ZHIPU_MODEL`, `ZHIPU_TIMEOUT`
+- `ZHIHU_COOKIES`
 
-## 3. 试卷导出（Markdown/LaTeX/PDF/DOCX）
+`ZHIHU_COOKIES` 只能保存在本地环境，不能提交。
 
-试卷导出由 `backend/paper_compose/export.py` 驱动，关键环境变量：
+## 自学资料
 
-- `PAPER_EXPORT_LATEX_ENGINE`：LaTeX 引擎（默认自动探测 `xelatex`/`pdflatex`）
-- `PAPER_EXPORT_LATEX_TIMEOUT_S`：LaTeX 编译超时（秒，默认 `30`）
-- `PAPER_EXPORT_DOCX_ENGINE`：DOCX 导出引擎（建议 `pandoc`；留空则自动探测）
-- `PAPER_EXPORT_PANDOC_TIMEOUT_S`：pandoc 导出超时（秒，默认 `60`）
+常用配置：
 
-## 4. 画布版本（Canvas History）
+- `STUDY_MATERIALS_PRESET`: `quick` / `standard` / `deep` / `research`
+- `STUDY_MATERIALS_SUBAGENT_CONCURRENCY`
+- `STUDY_MATERIALS_SEARCH_MODE`: `tavily` / `exa` / `deepresearch` / `metaso`
+- `STUDY_MATERIALS_WEB_DECOMPOSE`
+- `STUDY_MATERIALS_WEB_SUBQUERIES`
+- `STUDY_MATERIALS_THINKING_MODEL`
+- `STUDY_MATERIALS_WRITER_MODEL`
+- `STUDY_MATERIALS_THINKING_EFFORT`
+- `STUDY_MATERIALS_STEP_TIMEOUT_S`
+- `STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S`
+- `STUDY_MATERIALS_SSE_HEARTBEAT_S`
 
-为了防止版本历史无限增长，可设置：
+任务池：
 
-- `CANVAS_VERSION_MAX_KEEP`：每个画布保留的历史版本数量（默认 `30`，上限 `500`）
+- `STUDY_MATERIALS_TASK_TTL_S`
+- `STUDY_MATERIALS_MAX_TASKS`
+- `STUDY_MATERIALS_TASK_MAX_EVENTS`
 
-## 5. OpenTelemetry（可选）
+## 教案
 
-后端支持可选的 OpenTelemetry tracing（默认不启用）。启用后 JSON 日志会包含 `trace_id` 字段。
+- `LESSON_PLAN_PROVIDER`
+- `LESSON_PLAN_MODEL`
+- `LESSON_PLAN_TEMPERATURE`
+- `LESSON_PLAN_MAX_TOKENS`
+- `LESSON_PLAN_SUBAGENT_CONCURRENCY`
+- `LESSON_PLAN_WRITER_MODEL`
 
-- `OTEL_ENABLE=1`：开启 tracing
-- `OTEL_SERVICE_NAME=study_ai`：服务名
-- `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces`：OTLP/HTTP exporter endpoint
+未单独设置时，教案会回落到主模型配置。
 
-说明：需要安装对应依赖（`opentelemetry-*`）。未安装时后端会自动跳过，不影响运行。
+## AI 出题与题库
+
+- `QUESTION_LIBRARY_MAX_TASKS`
+- `QUESTION_LIBRARY_TASK_TTL_S`
+- `QUESTION_LIBRARY_TASK_MAX_EVENTS`
+- `QUESTION_LIBRARY_REALIZE_MAX_TOKENS`
+- `QUESTION_LIBRARY_JUDGE_MODEL`
+- `QUESTION_LIBRARY_MCP_SEARCH_MODEL`
+- `QUESTION_LIBRARY_AUTO_SCORE`
+- `QUESTION_LIBRARY_SCORE_INTERVAL_S`
+- `QUESTION_LIBRARY_SCORE_BATCH`
+- `QUESTION_LIBRARY_HIDE_THRESHOLD`
+- `QUESTION_LIBRARY_SCORE_MODEL`
+
+题库生成的长任务应通过 `/api/tasks/question-library/*` 使用。
+
+## DeepThink
+
+- `DEEPTHINK_GENERATOR_MODEL`
+- `DEEPTHINK_GENERATOR_TEMPERATURE`
+- `DEEPTHINK_GENERATOR_MAX_TOKENS`
+- `DEEPTHINK_EVALUATOR_MODEL`
+- `DEEPTHINK_EVALUATOR_TEMPERATURE`
+- `DEEPTHINK_EVALUATOR_MAX_TOKENS`
+- `DEEPTHINK_REASONING_EFFORT`
+- `TOT_BRANCH_FACTOR`
+- `TOT_BEAM_WIDTH`
+- `TOT_MAX_DEPTH`
+- `TOT_PRUNE_THRESHOLD`
+- `TOT_TIMEOUT`
+
+## 试卷导出
+
+- `PAPER_EXPORT_LATEX_ENGINE`
+- `PAPER_EXPORT_LATEX_TIMEOUT_S`
+- `AGENT_LATEX_COMPILE_TIMEOUT_S`
+- `PAPER_EXPORT_DOCX_ENGINE`
+- `PAPER_EXPORT_PANDOC_TIMEOUT_S`
+
+PDF 需要本机可执行的 LaTeX 引擎，DOCX 推荐安装 Pandoc。
+
+内容持久化：
+
+- `PAPER_STORE_CONTENT=1`
+- `PAPER_STORE_STEM=1`
+- `PAPER_STORE_ANSWER=1`
+- `PAPER_STORE_ANALYSIS=1`
+
+默认不要开启不必要的题干、答案、解析持久化。
+
+## 前端
+
+- `VITE_API_BASE_URL`：默认 `/api`
+
+同源部署保持默认值。前后端分开部署时设置为后端完整 API 地址并重新构建。
+
+## 媒体、画布与可观测性
+
+媒体代理：
+
+- `MEDIA_PROXY_ALLOWED_DOMAINS`
+- `MEDIA_PROXY_CACHE_TTL_SECONDS`
+- `MEDIA_PROXY_CACHE_MAX_BYTES`
+- `MEDIA_PROXY_CACHE_MAX_FILES`
+
+画布历史：
+
+- `CANVAS_VERSION_MAX_KEEP`
+
+OpenTelemetry：
+
+- `OTEL_ENABLE`
+- `OTEL_SERVICE_NAME`
+- `OTEL_EXPORTER_OTLP_ENDPOINT`
+
+## 排查配置
+
+启动后访问：
+
+- `GET /api/config`
+- `GET /api/health`
+- `GET /api/health/ready`
+
+配置摘要会脱敏，不会返回密钥明文。
+
+## 变更规则
+
+- 新增配置项时同步 `.env.example`。
+- 后端读取配置优先集中到 `backend/core/settings.py`。
+- 用户可见或部署相关配置同步更新本文。
+- 密钥类型配置在日志和 `/api/config` 中必须脱敏。
+- 配置项删除或语义变更必须检查测试、文档和前端设置页。

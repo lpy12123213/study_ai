@@ -492,21 +492,21 @@ class StudyMaterialGenerationToolsMixin:
                 "source_brief": brief,
                 "source_facts": facts,
                 "constraints": [
-                    "请为该知识点设计一份『讲解结构提纲』，用于后续分段写作。",
+                    "Design an explanation outline for this knowledge point for later section-by-section writing.",
                     f"sections 数量建议：{sec_min}~{sec_max} 个（不必凑满，但要覆盖核心内容）。",
-                    '输出严格 JSON：{"sections":[{"title":"...","hints":["..."],"verify":["..."]}, ...]}。',
-                    "title 用中文短语，避免机械复用固定模板标题；要体现本知识点特点。",
+                    'Output strict JSON: {"sections":[{"title":"...","hints":["..."],"verify":["..."]}, ...]}.',
+                    "title must be a concise phrase in the user's/topic language. Avoid mechanically reusing fixed template titles; reflect the specific knowledge point.",
                     "hints 每节 1~4 条，短提示即可。",
                     "verify 为该节写完后的『验证标准』，每节 2~5 条，越可操作越好。",
-                    "尽量覆盖：定义/表述、直观理解、关键结论或性质/条件、常见误区、应用/解题框架或总结。允许合并/拆分；不适用可省略，但请在 verify 中体现覆盖意图或说明省略/替代。",
-                    "如提供了 source_facts：请在 verify 中加入 1~2 条『与关键事实一致/不矛盾』的校验点；低置信度事实需提示为推断。",
-                    "不要输出例题/练习题；不要输出 URL；不要输出 Markdown。",
+                    "Try to cover definitions/statements, intuition, key conclusions or properties/conditions, common misconceptions, applications/solution framework, or summary. Merging/splitting is allowed; omit inapplicable items only when verify reflects the coverage intent or explains the omission/substitute.",
+                    "If source_facts are provided, include 1-2 verify checks that the section is consistent with key facts. Low-confidence facts must be framed as inferences.",
+                    "Do not output examples/exercises, URLs, or Markdown.",
                 ],
             }
 
             raw = await self._call_llm_text(
                 messages=[
-                    {"role": "system", "content": "你是严谨的教学结构设计助手，只输出 JSON。"},
+                    {"role": "system", "content": "You are a rigorous instructional-structure design assistant. Output JSON only."},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,
@@ -802,15 +802,15 @@ class StudyMaterialGenerationToolsMixin:
                     "source_facts": facts,
                     "section": {"title": title, "hints": hints_list[:6], "verify": verify_list[:8]},
                     "instructions": [
-                        "请只撰写这一个小节的正文内容。",
-                        "不要输出任何标题行（不要输出 `####`）；标题会由系统统一添加。",
+                        "Write only the body content for this one section.",
+                        "Do not output any heading line or `####`; the system will add the title.",
                         "你可以自由组织段落/列表，不需要固定模板；优先清晰、可执行、便于自学。",
-                        "不要输出 #/##/### 标题；不要输出参考资料/外部链接；不要输出任何 URL；不要输出证据标记（如 [[1]]）。",
-                        "所有表述必须为原创综合与改写，严禁照抄 source_brief 或其他来源原文。",
-                        "若 source_facts 中存在低置信度事实（confidence<0.6），对应表述必须使用「推断/可能/建议」等措辞避免强断言。",
-                        "若信息不足，请明确标注「推断」或「建议」。",
-                        "如果 completed_overview 非空：请把它当成『已讲解内容概览』，避免重复讲解已覆盖的定义/性质；如需复习，只用一句话提示并用“如前文所述/回顾”建立衔接。",
-                        "如果 semantic_memory 非空：它是『历史生成内容片段』，可用于沿用术语/符号/叙述节奏，避免跨任务重复；必要时用一句话说明与历史内容的联系或差异。",
+                        "Do not output #/##/### headings. Do not output references, external links, URLs, or evidence markers such as [[1]].",
+                        "All wording must be original synthesis and rewriting. Do not copy or paste source_brief or other source text.",
+                        "If source_facts contain low-confidence facts (confidence < 0.6), frame the corresponding statements as inference/possible/suggested in the user's language instead of strong assertions.",
+                        "If information is insufficient, explicitly mark it as inference or suggestion in the user's language.",
+                        "If completed_overview is non-empty, treat it as an overview of already explained content. Avoid repeating covered definitions/properties; if review is needed, use one sentence to connect with the prior explanation.",
+                        "If semantic_memory is non-empty, it contains historical generated-content fragments. Use it to maintain terminology, symbols, or narrative rhythm and avoid cross-task repetition; when necessary, state the connection or difference in one sentence.",
                     ],
                 }
 
@@ -820,9 +820,9 @@ class StudyMaterialGenerationToolsMixin:
                             {
                                 "role": "system",
                                 "content": (
-                                    "你是严谨的自学资料编写老师。所有讲解必须为原创改写与综合，"
-                                    "严禁直接搬运或拼贴来源文本。请参考已讲解内容概览避免跨知识点重复，"
-                                    "并在必要时建立前后关联。输出必须是 Markdown。"
+                                    "You are a rigorous self-study material writer. All explanations must be original rewriting and synthesis. "
+                                    "Do not directly copy or paste source text. Use the completed-content overview to avoid repetition across knowledge points, "
+                                    "and establish connections when needed. Output Markdown only."
                                 ),
                             },
                             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -926,16 +926,16 @@ class StudyMaterialGenerationToolsMixin:
                     "source_facts": facts,
                     "markdown": md,
                     "instructions": [
-                        "你是该知识点写作阶段的 Reviewer Agent。",
-                        "只审查这个知识点的正文，不审查整篇资料。",
+                        "You are the reviewer agent for this knowledge-point writing stage.",
+                        "Review only this knowledge point body, not the whole document.",
                         "重点检查：是否满足 outline_sections 的 verify 意图；定义/条件/边界/误区/应用是否与知识类型匹配；是否与 source_facts 矛盾；是否存在空泛重复。",
-                        "passed=true 表示可以进入组装；passed=false 表示必须给出具体可执行 issues。",
-                        '严格输出 JSON：{"passed": bool, "issues": [string], "suggestions": [string]}。',
+                        "passed=true means the section can enter assembly. passed=false means you must provide specific executable issues.",
+                        'Output strict JSON: {"passed": bool, "issues": [string], "suggestions": [string]}.',
                     ],
                 }
                 raw = await self._call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的知识点写作 Reviewer Agent，只输出 JSON。"},
+                        {"role": "system", "content": "You are a rigorous knowledge-point writing reviewer agent. Output JSON only."},
                         {"role": "user", "content": json.dumps(review_payload, ensure_ascii=False)},
                     ],
                     model=writer_model,
@@ -980,16 +980,16 @@ class StudyMaterialGenerationToolsMixin:
                     },
                     "markdown": markdown,
                     "instructions": [
-                        "你是该知识点写作阶段的 Revision Agent。",
-                        "请只修订这个知识点正文，直接输出修订后的完整 Markdown。",
+                        "You are the revision agent for this knowledge-point writing stage.",
+                        "Revise only this knowledge point body and directly output the complete revised Markdown.",
                         "保留并修正原有 #### 小节结构；如需要，可补充短段落或列表。",
-                        "只针对 review.issues 做修改，不要引入新的参考资料区、URL 或整篇文档标题。",
-                        "修订后必须比原文更具体，尤其补齐条件、边界、误区或应用等被指出的问题。",
+                        "Modify only according to review.issues. Do not introduce a new references section, URLs, or whole-document title.",
+                        "The revision must be more specific than the original, especially by filling in flagged conditions, boundaries, misconceptions, or applications.",
                     ],
                 }
                 revised = await self._call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的 Markdown Revision Agent，只输出修订后的 Markdown。"},
+                        {"role": "system", "content": "You are a rigorous Markdown revision agent. Output only the revised Markdown."},
                         {"role": "user", "content": json.dumps(revise_payload, ensure_ascii=False)},
                     ],
                     model=writer_model,

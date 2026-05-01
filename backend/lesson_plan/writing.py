@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from backend.core.settings import LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.lesson_plan.common import extract_json_obj, lesson_plan_infinite_max_tokens
 from backend.lesson_plan.llm import call_llm_text
-from backend.lesson_plan.prompts import SYSTEM_PROMPT
+from backend.lesson_plan.prompts import get_system_prompt
 
 
 async def generate_lesson_plan_json(
@@ -26,7 +26,7 @@ async def generate_lesson_plan_json(
     model = str(os.getenv("LESSON_PLAN_WRITER_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
 
     prompt_parts = [
-        f"请为以下课程编写一份 {int(duration_minutes)} 分钟的教案（结构化 JSON）：",
+        f"Write a {int(duration_minutes)}-minute lesson plan for the following course as structured JSON:",
         f"- 学科：{subject}",
         f"- 年级：{grade}",
         f"- 课题：{topic}",
@@ -45,21 +45,21 @@ async def generate_lesson_plan_json(
 
     if research_context:
         prompt_parts.append("")
-        prompt_parts.append("以下是各知识点的教研资料（仅供参考，请用自己的话重新组织）：")
+        prompt_parts.append("Below are curriculum-research notes for each knowledge point. Use them only as reference and reorganize in your own words:")
         prompt_parts.append(json.dumps(research_context, ensure_ascii=False, indent=2))
 
     prompt_parts.append("")
-    prompt_parts.append("输出要求：只输出严格 JSON，不要 Markdown 代码块，不要多余解释文字。")
-    prompt_parts.append("JSON 必须包含：title, objectives, sections, summary。")
+    prompt_parts.append("Output requirements: output strict JSON only. Do not output Markdown code fences or extra explanation.")
+    prompt_parts.append("JSON must contain: title, objectives, sections, summary.")
     prompt_parts.append(
-        "sections 每项必须包含：title, duration_minutes(number), content, activities(string[]), resources(string[])。"
+        "Each sections item must contain: title, duration_minutes(number), content, activities(string[]), resources(string[])."
     )
 
     last_err = ""
     for _ in range(3):
         text = await call_llm_text(
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": get_system_prompt()},
                 {"role": "user", "content": "\n".join(prompt_parts)},
             ],
             model=model,

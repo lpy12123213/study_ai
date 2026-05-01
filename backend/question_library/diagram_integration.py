@@ -65,13 +65,13 @@ async def assess_diagram_need(
     }
 
     system_content = (
-        "<role>你是审题教研员，负责判断题目是否需要配图。</role>\n"
+        "<role>You are a curriculum question reviewer responsible for deciding whether a question needs a diagram.</role>\n"
         "<rules>\n"
-        "  <rule>只有当缺少配图会明显增加歧义或阅读难度，才 need_diagram=true。</rule>\n"
-        "  <rule>配图后端收敛为静态矢量：优先 TikZ/PGF；仅当 TikZ 不适合或不可用时选 Asymptote。</rule>\n"
-        "  <rule>kind 必须从 available_kinds 中选择；need_diagram=false 时 kind=none。</rule>\n"
+        "  <rule>Set need_diagram=true only when missing a diagram would clearly increase ambiguity or reading difficulty.</rule>\n"
+        "  <rule>The diagram backend is static vector output: prefer TikZ/PGF; choose Asymptote only when TikZ is unsuitable or unavailable.</rule>\n"
+        "  <rule>kind must be selected from available_kinds; when need_diagram=false, kind=none.</rule>\n"
         "</rules>\n"
-        "<output_format>严格输出 JSON object。</output_format>"
+        "<output_format>Output a strict JSON object only.</output_format>"
     )
 
     text = await _chat_json_with_reasoning(
@@ -143,17 +143,17 @@ async def generate_question_diagram(
     }
 
     system_content = (
-        "<role>你是一个题库配图工程师，负责为题目生成高质量静态矢量配图。</role>\n"
+        "<role>You are a question-bank diagram engineer responsible for generating high-quality static vector diagrams for questions.</role>\n"
         "<rules>\n"
         "  <rule>只允许使用静态矢量后端：TikZ/PGF（首选）与 Asymptote（次选）。禁止选择其他后端。</rule>\n"
-        "  <rule>kind 必须从 available_kinds 中选择；优先 TikZ，只有在 TikZ 不适合或不可用时才选 Asymptote。</rule>\n"
+        "  <rule>kind must be selected from available_kinds. Prefer TikZ; choose Asymptote only when TikZ is unsuitable or unavailable.</rule>\n"
         "</rules>\n"
         "<constraints>\n"
-        "  <rule>图必须服务于题意：标注关键点/方向/量，不要画装饰性内容。</rule>\n"
+        "  <rule>The diagram must serve the question meaning: label key points, directions, and quantities. Do not draw decorative content.</rule>\n"
         "  <rule>若题目不需要图，need_diagram=false 并 kind=none。</rule>\n"
-        "  <rule>所有坐标/标注必须在代码中明确，不要依赖隐含约定。</rule>\n"
+        "  <rule>All coordinates and labels must be explicit in the code. Do not rely on implicit conventions.</rule>\n"
         "</constraints>\n"
-        "<output_format>严格输出 JSON object。</output_format>"
+        "<output_format>Output a strict JSON object only.</output_format>"
     )
 
     text = await _chat_json_with_reasoning(

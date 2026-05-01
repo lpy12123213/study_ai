@@ -323,13 +323,13 @@ class ContextManager:
         if not messages:
             return ""
 
-        prompt = f"""请将下面的对话/记录压缩为一段简洁摘要（约{target_chars}字左右），保留：\n- 用户主要目标与约束\n- 关键决策（Plan/Act/Reflect）\n- 重要工具调用结果/错误\n\n输出：纯文本摘要（不要Markdown）。\n\n记录：\n{json.dumps(messages, ensure_ascii=False)}\n"""
+        prompt = f"""Compress the conversation/log below into one concise summary of about {target_chars} characters. Preserve:\n- The user's main goals and constraints.\n- Key decisions from Plan/Act/Reflect.\n- Important tool-call results or errors.\n\nOutput a plain-text summary only, not Markdown. Match the dominant conversation language.\n\nLog:\n{json.dumps(messages, ensure_ascii=False)}\n"""
         normalized_model = str(self.config.summarizer_model or "").strip()
         if normalized_model:
             try:
                 text = await chat_completion_text(
                     messages=[
-                        {"role": "system", "content": "你是上下文压缩器，输出必须是纯文本摘要。"},
+                        {"role": "system", "content": "You are a context compressor. Output a plain-text summary only."},
                         {"role": "user", "content": prompt},
                     ],
                     model=normalized_model,

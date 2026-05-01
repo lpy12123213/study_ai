@@ -7,67 +7,73 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_questions",
-            "description": "搜索题目。根据关键词、难度、题型等条件搜索组卷网上的题目。返回题目ID列表和基本信息。",
+            "description": (
+                "Search question-bank items by keyword and filters. Return question IDs and metadata only; use "
+                "small limits for planning probes unless executing a confirmed paper plan."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "keyword": {"type": "string", "description": "搜索关键词，如'函数'、'导数'、'三角函数'等"},
+                    "keyword": {"type": "string", "description": "Search keyword, for example 函数, 导数, 三角函数."},
                     "edu_level": {
                         "type": "string",
                         "enum": ["小学", "初中", "高中", ""],
-                        "description": "学段筛选，可选：小学/初中/高中（指定后将严格校验）",
+                        "description": "Education-level filter. Allowed Chinese values: 小学, 初中, 高中. Strictly validated when set.",
                         "default": "",
                     },
                     "difficulty": {
                         "type": "string",
                         "enum": ["简单", "中等", "困难", ""],
-                        "description": "难度等级筛选，可选。重要：难度系数越小越难（困难 < 中等 < 简单）。",
+                        "description": (
+                            "Difficulty-level filter. Allowed Chinese values: 简单, 中等, 困难. Important: a lower "
+                            "difficulty coefficient means a harder question."
+                        ),
                     },
-                    "question_type": {"type": "string", "description": "题型，如'选择题'、'填空题'、'解答题'等，可选"},
+                    "question_type": {"type": "string", "description": "Question type, for example 选择题, 填空题, 解答题. Optional."},
                     "learn_grade": {
                         "type": "string",
-                        "description": "年级筛选（可选，如：高一/高二/高三/七年级等；建议先通过 get_available_filters 获取可用项）",
+                        "description": "Grade filter, for example 高一, 高二, 高三, 七年级. Prefer get_available_filters before setting it.",
                         "default": "",
                     },
-                    "learn_grade_id": {"type": "integer", "description": "年级ID（高级；优先级高于 learn_grade）"},
+                    "learn_grade_id": {"type": "integer", "description": "Grade ID. Advanced; takes priority over learn_grade."},
                     "textbook_version": {
                         "type": "string",
-                        "description": "教材版本（可选；建议先通过 get_available_filters 获取可用项）",
+                        "description": "Textbook version. Optional; prefer get_available_filters before setting it.",
                     },
                     "province": {
                         "type": "string",
-                        "description": "省份（可选；建议先通过 get_available_filters 获取可用项）",
+                        "description": "Province filter. Optional; prefer get_available_filters before setting it.",
                     },
-                    "province_id": {"type": "integer", "description": "省份ID（高级；优先级高于 province）"},
+                    "province_id": {"type": "integer", "description": "Province ID. Advanced; takes priority over province."},
                     "paper_type_id": {
                         "type": "integer",
-                        "description": "试卷类型ID（可选；建议先通过 get_available_filters 获取可用项）",
+                        "description": "Paper-type ID. Optional; prefer get_available_filters before setting it.",
                     },
-                    "year": {"type": "integer", "description": "年份（可选；如 2023）"},
-                    "term": {"type": "integer", "description": "学期/月份（可选；0 表示不限）"},
-                    "order_by": {"type": "integer", "description": "排序方式（可选；默认 2）"},
-                    "source_contains": {"type": "string", "description": "来源包含关键字（可选）"},
-                    "stem_contains": {"type": "string", "description": "题干包含关键字（可选）"},
-                    "knowledge_contains": {"type": "string", "description": "知识点包含关键字（可选）"},
+                    "year": {"type": "integer", "description": "Year filter, for example 2023. Optional."},
+                    "term": {"type": "integer", "description": "Term/month filter. Optional; 0 means no restriction."},
+                    "order_by": {"type": "integer", "description": "Sort mode. Optional; default is 2."},
+                    "source_contains": {"type": "string", "description": "Require source metadata to contain this keyword. Optional."},
+                    "stem_contains": {"type": "string", "description": "Require the stem to contain this keyword. Optional."},
+                    "knowledge_contains": {"type": "string", "description": "Require knowledge-point metadata to contain this keyword. Optional."},
                     "elective_mode": {
                         "type": "string",
                         "enum": ["include", "exclude", ""],
-                        "description": "选修内容处理：include/exclude",
+                        "description": "Elective-content handling: include or exclude.",
                         "default": "",
                     },
                     "elective_keywords": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "选修关键词列表（可选）",
+                        "description": "Optional elective keyword list.",
                     },
-                    "exclude_elective": {"type": "boolean", "description": "是否排除选修内容（可选）"},
-                    "dedup_by_stem": {"type": "boolean", "description": "是否按题干去重（可选）"},
-                    "min_quality_score": {"type": "integer", "description": "最低题干质量分（0-100，可选）"},
-                    "difficulty_value_min": {"type": "number", "description": "难度系数下限（越小越难，可选）"},
-                    "difficulty_value_max": {"type": "number", "description": "难度系数上限（越小越难，可选）"},
-                    "limit": {"type": "integer", "description": "返回题目数量（默认10，建议5-15）"},
-                    "max_pages": {"type": "integer", "description": "最多翻页数（默认2）"},
-                    "strict_subject": {"type": "boolean", "description": "是否严格校验学科（默认 true）"},
+                    "exclude_elective": {"type": "boolean", "description": "Whether to exclude elective content. Optional."},
+                    "dedup_by_stem": {"type": "boolean", "description": "Whether to deduplicate by stem. Optional."},
+                    "min_quality_score": {"type": "integer", "description": "Minimum stem quality score, 0-100. Optional."},
+                    "difficulty_value_min": {"type": "number", "description": "Minimum difficulty coefficient. Lower means harder. Optional."},
+                    "difficulty_value_max": {"type": "number", "description": "Maximum difficulty coefficient. Lower means harder. Optional."},
+                    "limit": {"type": "integer", "description": "Number of items to return. Default 10; recommended 5-15."},
+                    "max_pages": {"type": "integer", "description": "Maximum pages to scan. Default 2."},
+                    "strict_subject": {"type": "boolean", "description": "Whether to strictly validate the subject. Default true."},
                 },
                 "required": ["keyword"],
             },
@@ -77,11 +83,11 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_available_filters",
-            "description": "获取当前学科可用筛选项（年级/教材/题型等），避免写死 ID。",
+            "description": "Fetch available filters for the current subject, such as grade, textbook, and question type. Use this to avoid hard-coded IDs.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "subject": {"type": "string", "description": "学科名称（可选，默认当前学科）"},
+                    "subject": {"type": "string", "description": "Subject name. Optional; defaults to the current subject."},
                     "edu_level": {"type": "string", "enum": ["小学", "初中", "高中", ""], "default": ""},
                 },
             },
@@ -91,11 +97,11 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "compose_paper_blueprint",
-            "description": "根据“蓝图槽位”批量搜索并组装题目ID列表（优先使用）。",
+            "description": "Batch search and assemble question IDs from blueprint slots. Prefer this after the user confirms the paper plan.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "subject": {"type": "string", "description": "学科（可选）"},
+                    "subject": {"type": "string", "description": "Subject. Optional."},
                     "edu_level": {"type": "string", "enum": ["小学", "初中", "高中", ""], "default": ""},
                     "learn_grade": {"type": "string"},
                     "learn_grade_id": {"type": "integer"},
@@ -116,7 +122,7 @@ TOOLS: List[Dict[str, Any]] = [
                     "strict_subject": {"type": "boolean"},
                     "blueprint": {
                         "type": "array",
-                        "description": "槽位列表，每个槽位描述要的题型/数量/难度/关键词等",
+                        "description": "Blueprint slots. Each slot describes desired question type, count, difficulty, keyword, and filters.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -143,7 +149,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "batch_get_question_details",
-            "description": "批量获取题目详情（最多10个）。用于内部判断/二次筛选（不要把题目原文直接发给用户）。",
+            "description": "Batch fetch question details, max 10. Use only for internal judgment or second-pass filtering; do not send full original question text to the user.",
             "parameters": {
                 "type": "object",
                 "properties": {"question_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 10}},
@@ -155,12 +161,12 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "select_best_question",
-            "description": "【子AI选题】从候选题目中选择最符合要求的一道（2-5个候选）。",
+            "description": "Sub-AI selection: choose the best-fitting question from 2-5 candidate IDs.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "question_ids": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 5},
-                    "requirement": {"type": "string", "description": "选题要求描述"},
+                    "requirement": {"type": "string", "description": "Selection requirement description."},
                 },
                 "required": ["question_ids", "requirement"],
             },
@@ -170,7 +176,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "create_paper",
-            "description": "创建试卷（只提交题目ID列表）。",
+            "description": "Create a paper by submitting question IDs only. Call this only after user confirmation.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -185,7 +191,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_papers",
-            "description": "查看已保存试卷。",
+            "description": "List saved papers.",
             "parameters": {
                 "type": "object",
                 "properties": {"limit": {"type": "integer"}},
@@ -196,7 +202,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_question_detail",
-            "description": "获取单题详情（仅调试用）。",
+            "description": "Fetch a single question detail. Debug-only; do not use for normal user-facing disclosure.",
             "parameters": {
                 "type": "object",
                 "properties": {"question_id": {"type": "string"}},

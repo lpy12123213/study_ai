@@ -6,10 +6,10 @@ import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.tools.utils.text_utils import _clip_text, _postprocess_web_search_result
-from backend.mcp.search.exa import EXA_API_KEY, exa_search
 
 CallLLMText = Callable[..., Awaitable[str]]
 ExtractJsonObj = Callable[[str], Dict[str, Any]]
+SearchFunc = Callable[[str, int], Awaitable[Dict[str, Any]]]
 
 
 def _dedup_strings(items: List[str], *, keep: int) -> List[str]:
@@ -128,11 +128,11 @@ async def _generate_serp_queries(
         "previous_queries": prev_q[:25],
         "previous_learnings": learn[:12],
         "requirements": [
-            f"生成 <= {n} 条互不重复的 web 搜索 query，不要重复 previous_queries。",
-            "尽量用中文，必要时可包含简短英文关键词/符号。",
+            f"Generate <= {n} non-duplicate web search queries. Do not repeat previous_queries.",
+            "Match the user's/topic language when practical; short English keywords or symbols are allowed when helpful.",
             "覆盖角度：定义/直观理解/关键结论与条件/常见误区/证明骨架/应用与典型题。",
-            "每条 query <= 80 字；不要输出 JSON 以外的解释。",
-            "返回 JSON：queries:[{query,research_goal}]，research_goal 用一句话说明该 query 的研究目标。",
+            "Each query must be <= 80 characters. Do not output anything outside JSON.",
+            "Return JSON: queries:[{query,research_goal}]. research_goal is one sentence explaining the query goal.",
         ],
         "output_schema": {"queries": [{"query": "string", "research_goal": "string"}]},
     }
@@ -140,7 +140,7 @@ async def _generate_serp_queries(
     async with llm_sem:
         text = await call_llm_text(
             messages=[
-                {"role": "system", "content": "你是严谨的检索策略师，只输出 JSON。"},
+                {"role": "system", "content": "You are a rigorous search strategist. Output JSON only."},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=llm_model,
@@ -240,8 +240,8 @@ async def _extract_learnings(
             f"同时给出 <= {n_fup} 个 follow_up_questions 作为下一步深挖方向。"
             if n_fup > 0
             else "follow_up_questions 返回空数组。",
-            "不要编造；不确定的信息不要输出。",
-            "只输出 JSON：{learnings:string[], follow_up_questions:string[]}。",
+            "Do not fabricate. Omit uncertain information.",
+            "Output only JSON: {learnings:string[], follow_up_questions:string[]}.",
         ],
         "docs": docs,
     }
@@ -249,7 +249,7 @@ async def _extract_learnings(
     async with llm_sem:
         text = await call_llm_text(
             messages=[
-                {"role": "system", "content": "你是严谨的研究助理，只输出 JSON。"},
+                {"role": "system", "content": "You are a rigorous research assistant. Output JSON only."},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             model=llm_model,
@@ -276,7 +276,7 @@ async def _extract_learnings(
     return (learnings[:n_learn], followups[:n_fup] if n_fup > 0 else [])
 
 
-async def deep_research_exa(
+async def deep_research(
     *,
     call_llm_text: CallLLMText,
     extract_json_obj: ExtractJsonObj,
@@ -285,6 +285,8 @@ async def deep_research_exa(
     knowledge_point: str,
     subject: str,
     seed_query: str,
+    search_func: SearchFunc,
+    search_provider_name: str = "deepresearch",
     query_hint: str = "",
     preset: str = "",
     include_summary: bool = True,
@@ -300,17 +302,17 @@ async def deep_research_exa(
     prev_queries: Optional[List[str]] = None,
     prev_summary: str = "",
 ) -> Dict[str, Any]:
-    """Deep multi-round web search using Exa + LLM (inspired by open-deep-research).
+    """Deep multi-round web search using a pluggable search function + LLM (inspired by open-deep-research).
 
     Returns a dict with: results, queries, summary (optional), learnings, directions, errors.
     """
 
-    if not EXA_API_KEY:
-        return {"success": False, "provider": "exa-deepresearch", "error": "Exa API key not configured", "results": []}
+    if not search_func:
+        return {"success": False, "provider": search_provider_name, "error": "No search function provided", "results": []}
 
     seed_query = re.sub(r"\s+", " ", str(seed_query or "")).strip()
     if not seed_query:
-        return {"success": False, "provider": "exa-deepresearch", "error": "empty query", "results": []}
+        return {"success": False, "provider": search_provider_name, "error": "empty query", "results": []}
 
     preset = str(preset or "").strip().lower()
     default_breadth, default_depth, default_max_q = deepresearch_defaults(preset)
@@ -358,14 +360,7 @@ async def deep_research_exa(
 
     async def run_search(q: str) -> Dict[str, Any]:
         async with search_sem:
-            return await exa_search(
-                query=q,
-                num_results=per_q,
-                use_autoprompt=True,
-                type="neural",
-                include_text=True,
-                text_max_length=min(text_max_length, 2600),
-            )
+            return await search_func(q, per_q)
 
     async def recurse(seed: str, *, breadth_now: int, depth_now: int, learnings_now: List[str]) -> Dict[str, Any]:
         if depth_now <= 0:
@@ -524,7 +519,7 @@ async def deep_research_exa(
 
     return {
         "success": True,
-        "provider": "exa-deepresearch",
+        "provider": search_provider_name,
         "knowledge_point": knowledge_point,
         "query": seed_query,
         "queries": all_queries[:40],
@@ -538,3 +533,26 @@ async def deep_research_exa(
         "breadth": breadth_n,
         "max_queries": max_q,
     }
+
+
+async def deep_research_exa(**kwargs: Any) -> Dict[str, Any]:
+    """Backward-compatible wrapper using Exa as the search function."""
+    from backend.mcp.search.exa import EXA_API_KEY, exa_search
+
+    text_max_length = int(kwargs.get("text_max_length") or 2600)
+
+    async def _exa_search_func(query: str, num_results: int) -> Dict[str, Any]:
+        return await exa_search(
+            query=query,
+            num_results=min(num_results, 10),
+            use_autoprompt=True,
+            type="neural",
+            include_text=True,
+            text_max_length=min(text_max_length, 2600),
+        )
+
+    if "search_func" not in kwargs:
+        kwargs["search_func"] = _exa_search_func if EXA_API_KEY else None
+    if "search_provider_name" not in kwargs:
+        kwargs["search_provider_name"] = "exa-deepresearch"
+    return await deep_research(**kwargs)

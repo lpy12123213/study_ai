@@ -81,7 +81,7 @@ def _fallback_reference_analysis(topic: str, reference_questions: List[dict]) ->
     innovative_angles = _clip_unique(
         innovative_angles
         + [
-            "可从真实试卷中提炼设问顺序、条件组合和答案组织方式。",
+            "Extract reusable question order, condition combinations, and answer organization from real papers.",
             "允许在真题常考方向上做新的条件组合与场景迁移。",
         ],
         6,
@@ -175,7 +175,7 @@ async def analyze_reference_questions(
             {
                 "role": "system",
                 "content": (
-                    "<role>你是高考研究专家，负责从真题/模考题中提炼可复用的出题规律。</role>\n"
+                    "<role>You are a college-entrance-exam research expert responsible for extracting reusable question-writing patterns from real and mock exam questions.</role>\n"
                     "<analysis_focus>\n"
                     "  <aspect>设问顺序与递进逻辑</aspect>\n"
                     "  <aspect>条件与结论的组合方式</aspect>\n"
@@ -189,7 +189,7 @@ async def analyze_reference_questions(
                     "  <field name='format_conventions'>答案/解析格式规范，如【先给结论再写推导】</field>\n"
                     "  <field name='representative_examples'>最具代表性的2-3道题，含选题理由</field>\n"
                     "</field_guidelines>\n"
-                    "<output_format>严格输出 JSON object，不输出解释或Markdown。</output_format>"
+                    "<output_format>Output a strict JSON object only. Do not output explanations or Markdown.</output_format>"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -290,4 +290,3 @@ def enrich_source_pack_with_reference(source_pack: dict, reference_analysis: dic
     base["reference_question_count"] = len([item for item in (reference_questions or []) if isinstance(item, dict)])
     base["reference_summary"] = "；".join((base.get("reference_patterns") or [])[:3])
     return base
-

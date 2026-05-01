@@ -119,10 +119,10 @@ class QuestionBankToolsMixin:
                 "note": "未配置模型，知识检索返回为空。",
             }
 
-        prompt = f"""请为“{subject}”的知识点“{topic}”生成可用于自学资料的事实性要点。\n\n要求：\n- 输出严格 JSON（不要 Markdown、不要代码块）\n- 字段：definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[])\n- 难度参考：{difficulty}\n"""
+        prompt = f"""Generate factual notes for the knowledge point "{topic}" in "{subject}" that can be used in self-study materials.\n\nRequirements:\n- Output strict JSON only. Do not output Markdown or code fences.\n- Fields: definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[]).\n- Match the language of the subject/topic unless explicitly required otherwise.\n- Difficulty reference: {difficulty}\n"""
         text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"},
+                {"role": "system", "content": "You are a rigorous subject teacher. Output JSON only."},
                 {"role": "user", "content": prompt},
             ],
             model=self.config.summarizer_model,

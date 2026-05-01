@@ -12,6 +12,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
 
     def test_build_generation_messages_require_latex_math(self) -> None:
         from backend.question_library.generation import build_generation_messages
+        from backend.generation.agentic.prompts import create_default_prompt_registry
 
         messages = build_generation_messages(
             subject="高中数学",
@@ -23,6 +24,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         )
 
         self.assertEqual(messages[0]["role"], "system")
+        self.assertIn(create_default_prompt_registry().render("question.draft.realize.v1").content, messages[0]["content"])
         self.assertIn("LaTeX", messages[0]["content"])
         self.assertIn("\\(", messages[0]["content"])
         self.assertIn("\\[", messages[0]["content"])
@@ -31,6 +33,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
 
     def test_build_regenerate_section_messages_require_latex_math(self) -> None:
         from backend.question_library.generation import build_regenerate_section_messages
+        from backend.generation.agentic.prompts import create_default_prompt_registry
 
         messages = build_regenerate_section_messages(
             subject="高中数学",
@@ -45,6 +48,10 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         )
 
         self.assertEqual(messages[0]["role"], "system")
+        self.assertIn(
+            create_default_prompt_registry().render("question.section.regenerate.v1").content,
+            messages[0]["content"],
+        )
         self.assertIn("LaTeX", messages[0]["content"])
         self.assertIn("\\(", messages[0]["content"])
         self.assertIn("\\[", messages[0]["content"])

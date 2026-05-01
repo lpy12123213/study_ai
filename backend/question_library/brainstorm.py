@@ -4,10 +4,15 @@ import json
 from typing import Any, Dict, List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.question_library.subject_knowledge import get_subject_bank, infer_subject_family
+
+
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
 
 def _normalize_seed(item: Any) -> Optional[dict]:
@@ -99,26 +104,28 @@ async def brainstorm_creative_seeds(
     }
 
     # Keep system prompt compact: this stage is short and shouldn't bloat tokens.
-    role = str(bank.system_role or "").strip() or "你是资深高中教研员。"
+    role = str(bank.system_role or "").strip() or "You are a senior high-school curriculum researcher."
     system_content = (
+        _prompt("question.brainstorm.v1")
+        + "\n\n"
         f"<role>{role}</role>\n"
-        "<task>你要做的是\u201c出题创意构思\u201d——为后续正式出题提供高质量创意种子，不是直接出题。</task>\n"
+        "<task>Your job is question-idea brainstorming: provide high-quality idea seeds for later formal question generation, not final questions.</task>\n"
         "<requirements>\n"
-        "  <count>输出 6-10 个创意种子（严格 JSON）。</count>\n"
-        "  <seed_quality>每个种子必须可落地成一道可解的题：要能对应到明确的条件与结论，而不是空泛主题。\n"
-        "    concept 要具体到知识点交叉/条件组合层面，angle 要明确推理切入点。</seed_quality>\n"
-        "  <novelty>严禁\u201c教材例题换数字\u201d式创意；每个种子至少体现以下一项原创性：\n"
-        "    跨知识点交叉 / 非常规约束条件 / 真实情境建模 / 逆向设问 / 开放性探究 / 参数变化驱动。\n"
-        "    同一批种子内创意方向尽量分散，避免同质化。</novelty>\n"
-        "  <scenario_design>若引入应用情境，情境必须服务于学科建模（非纯粹装饰），\n"
-        "    数据要合理、可验证，能转化为明确的数学/学科条件。</scenario_design>\n"
-        "  <thinking_depth>优先产出需要多步推导、参数讨论或构造性思维的创意，\n"
-        "    避免\u201c一步到位\u201d的纯记忆/纯套公式型创意。</thinking_depth>\n"
-        "  <discrimination>考虑区分度：好的创意应让中等生与优秀生呈现不同解题路径或完成度。</discrimination>\n"
-        "  <reference_use>如果给了参考规律/例题，只学习其\u201c出题结构与设问风格\u201d，严禁复刻原题数值与结论。\n"
-        "    可以借鉴参考题的条件组合方式，但必须在此基础上做创新变形。</reference_use>\n"
+        "  <count>Output 6-10 idea seeds as strict JSON.</count>\n"
+        "  <seed_quality>Each seed must be implementable as a solvable question with clear conditions and conclusions, not a vague topic.\n"
+        "    concept must specify knowledge-point intersections or condition combinations; angle must specify the reasoning entry point.</seed_quality>\n"
+        "  <novelty>Do not create textbook-example-with-different-numbers ideas. Each seed must include at least one original design point:\n"
+        "    cross-knowledge intersection / unusual constraints / real-scenario modeling / reverse questioning / open exploration / parameter-variation driven reasoning.\n"
+        "    Keep idea directions diverse within the same batch to avoid homogeneity.</novelty>\n"
+        "  <scenario_design>If an application scenario is introduced, it must support subject modeling rather than serve as decoration.\n"
+        "    Data must be reasonable, verifiable, and convertible into clear mathematical/subject conditions.</scenario_design>\n"
+        "  <thinking_depth>Prefer ideas requiring multi-step derivation, parameter discussion, or constructive thinking.\n"
+        "    Avoid one-step memory-only or formula-substitution ideas.</thinking_depth>\n"
+        "  <discrimination>Consider discrimination: a good idea should create different solution paths or completion levels for average and strong students.</discrimination>\n"
+        "  <reference_use>If reference patterns/examples are provided, learn only their question structure and wording style. Do not copy original values or conclusions.\n"
+        "    You may borrow the way conditions are combined, but must apply an innovative transformation.</reference_use>\n"
         "</requirements>\n"
-        "<output_format>严格输出 JSON object，不要 Markdown，不要解释。</output_format>"
+        "<output_format>Output a strict JSON object only. Do not output Markdown or explanations.</output_format>"
     )
 
     text = await _chat_json_with_reasoning(
@@ -165,4 +172,3 @@ async def brainstorm_creative_seeds(
             break
 
     return out[:seed_count]
-

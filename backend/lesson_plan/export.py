@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.lesson_plan.common import GENERATED_DIR, lesson_plan_infinite_max_tokens
 from backend.lesson_plan.llm import call_llm_text
 from backend.media.generated import default_generated_media_ttl_s
@@ -16,6 +17,10 @@ from backend.media.generated import publish_generated_bytes as _publish_bytes
 from backend.media.generated import publish_generated_text as _publish_text
 
 logger = get_logger(__name__)
+
+
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
 
 async def publish_generated_bytes(
@@ -107,17 +112,17 @@ async def convert_markdown_to_latex(*, markdown: str, title: str, subject: str) 
         "subject": subject,
         "title": title,
         "requirements": [
-            "请将下面的 Markdown 教案转换为 LaTeX（中文，适配 elegantbook 文档类）。",
-            "只输出 LaTeX 正文（不包含 \\documentclass 等前导，不包含 \\begin{document}/\\end{document}）。",
+            "Convert the Markdown lesson plan below to LaTeX for the elegantbook document class. Match the lesson-plan language.",
+            "Output only the LaTeX body. Do not include \\documentclass, preamble, \\begin{document}, or \\end{document}.",
             "尽量保留标题层级（# -> \\section, ## -> \\subsection, ### -> \\subsubsection）。",
-            "表格尽量用 longtable 或 tabular；列表用 itemize/enum。不要输出 Markdown 代码块。",
+            "Prefer longtable or tabular for tables and itemize/enumerate for lists. Do not output Markdown code fences.",
         ],
         "markdown": markdown,
     }
 
     body = await call_llm_text(
         messages=[
-            {"role": "system", "content": "你是严谨的排版助手。"},
+            {"role": "system", "content": _prompt("lesson_plan.latex_convert.v1")},
             {"role": "user", "content": str(prompt)},
         ],
         model=model,
@@ -150,16 +155,16 @@ async def refine_latex(*, latex: str, topic: str, subject: str, compile_error: s
         "topic": topic,
         "compile_error": compile_error,
         "requirements": [
-            "下面是一份 LaTeX 文档（elegantbook）。如果存在编译错误，请修复；否则做小幅排版改进。",
-            "只输出修复后的完整 LaTeX（包含 \\documentclass ... \\end{document}）。",
-            "不要输出解释文字，不要输出 Markdown。",
+            "Below is an elegantbook LaTeX document. If compilation errors exist, fix them; otherwise make small typesetting improvements.",
+            "Output only the complete fixed LaTeX, including \\documentclass ... \\end{document}.",
+            "Do not output explanations or Markdown.",
         ],
         "latex": latex,
     }
 
     out = await call_llm_text(
         messages=[
-            {"role": "system", "content": "你是LaTeX修复助手。"},
+            {"role": "system", "content": _prompt("lesson_plan.latex_repair.v1")},
             {"role": "user", "content": str(prompt)},
         ],
         model=model,

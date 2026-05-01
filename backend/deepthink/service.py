@@ -8,9 +8,9 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 
 from backend.core.settings import settings
 from backend.deepthink.prompts import (
-    EVALUATOR_SYSTEM_PROMPT_TEMPLATE,
-    GENERATOR_SYSTEM_PROMPT_TEMPLATE,
-    SYNTHESIZER_SYSTEM_PROMPT_TEMPLATE,
+    get_evaluator_system_prompt,
+    get_generator_system_prompt,
+    get_synthesizer_system_prompt,
 )
 from backend.deepthink.tot_engine import ThoughtNode, ToTEngine
 from backend.llm.client import chat_completion, is_llm_configured
@@ -116,7 +116,7 @@ class DeepThinkService:
         path: Sequence[ThoughtNode],
         n: int,
     ) -> List[Dict[str, Any]]:
-        system_prompt = GENERATOR_SYSTEM_PROMPT_TEMPLATE.format(subject=subject)
+        system_prompt = get_generator_system_prompt(subject)
         user_text = f"题目：{question}\n\n已有推理路径：\n{_format_path(path)}\n\n请生成 {n} 个不同的解题下一步。"
         messages = [
             {"role": "system", "content": system_prompt},
@@ -151,7 +151,7 @@ class DeepThinkService:
         path: Sequence[ThoughtNode],
         proposal: Dict[str, Any],
     ) -> Dict[str, Any]:
-        system_prompt = EVALUATOR_SYSTEM_PROMPT_TEMPLATE.format(subject=subject)
+        system_prompt = get_evaluator_system_prompt(subject)
         thought = str(proposal.get("thought") or "").strip()
         reasoning = str(proposal.get("reasoning") or "").strip()
         user_text = (
@@ -186,7 +186,7 @@ class DeepThinkService:
         image_url: Optional[str],
         best_path: List[Dict[str, Any]],
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        system_prompt = SYNTHESIZER_SYSTEM_PROMPT_TEMPLATE.format(subject=subject)
+        system_prompt = get_synthesizer_system_prompt(subject)
 
         steps_lines: List[str] = []
         step_idx = 0

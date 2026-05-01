@@ -459,18 +459,18 @@ class Executor:
             payload = dict(ctx_obj)
             payload["existing_markdown_tail"] = tail
             payload["instructions"] = (
-                "上一轮输出疑似被截断。请严格从 existing_markdown_tail 的末尾继续补全。\n"
-                "仅输出需要追加的 Markdown，不要重复前文。\n"
-                "若最后一行是未完成的句子/公式/列表，请先把该行补完再继续。\n"
-                "小节标题从 #### 开始，禁止输出 #/##/###。\n"
-                "不输出参考资料/外部链接，不输出任何 URL；不输出 [[1]] 等证据标记。\n"
+                "The previous output appears truncated. Continue strictly from the end of existing_markdown_tail.\n"
+                "Output only the Markdown that must be appended. Do not repeat previous content.\n"
+                "If the last line is an unfinished sentence, formula, or list, complete it first and then continue.\n"
+                "Section headings must start from ####. Do not output #, ##, or ### headings.\n"
+                "Do not output references, external links, URLs, or evidence markers such as [[1]].\n"
                 "数学公式：行内 $...$，独立行 $$...$$。\n"
             )
             cont_res = await self._call_llm_response(
                 messages=[
                     {
                         "role": "system",
-                        "content": "你是严谨的 Markdown 续写助手，只输出需要追加的内容，不要重复前文。",
+                        "content": "You are a rigorous Markdown continuation assistant. Output only content to append and do not repeat previous content.",
                     },
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],

@@ -86,12 +86,12 @@ class LatexRefineMixin:
             "topic": topic,
             "subject": subject,
             "requirements": [
-                "下面是一份 LaTeX（ElegantBook）。请在不改变整体结构的前提下修订，使其更容易编译且排版更干净。",
-                "只输出完整 LaTeX 源码（从 \\documentclass 到 \\end{document}），不要 Markdown 代码块，不要解释。",
-                "修复常见问题：未转义的特殊字符（%, _, &, #）、未闭合的环境/括号、错误的图片扩展名（SVG 请改为文字占位而非 includegraphics）。",
+                "Below is an ElegantBook LaTeX document. Revise it without changing the overall structure so it compiles more reliably and has cleaner typesetting.",
+                "Output only complete LaTeX source from \\documentclass to \\end{document}. Do not output Markdown code fences or explanations.",
+                "Fix common issues: unescaped special characters (%, _, &, #), unclosed environments/brackets, and invalid image extensions. For SVG, use a text placeholder instead of includegraphics.",
                 "数学公式保持原意，确保括号闭合。",
-                "不要输出参考文献/URL 列表。",
-                "如提供 compile_error，请优先修复该错误（缺包/缺文件/语法错误/未闭合环境等）。",
+                "Do not output references or URL lists.",
+                "If compile_error is provided, prioritize fixing that error, such as missing package/file, syntax error, or unclosed environment.",
             ],
             "latex": tex,
             "compile_error": compile_error,
@@ -107,7 +107,7 @@ class LatexRefineMixin:
         )
         res = await self._call_llm_response(
             messages=[
-                {"role": "system", "content": "你是严谨的 LaTeX 修订助手，输出必须可编译。"},
+                {"role": "system", "content": "You are a rigorous LaTeX revision assistant. Output must be compilable."},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=model,
@@ -154,18 +154,18 @@ class LatexRefineMixin:
                 "compile_error": compile_error,
                 "existing_latex_tail": tail,
                 "instructions": [
-                    "上一轮输出疑似被截断。请严格从 existing_latex_tail 的末尾继续补全剩余 LaTeX。",
-                    "仅输出需要追加的 LaTeX，不要重复前文。",
-                    "若 existing_latex_tail 的最后一行/公式/环境未结束，请先补齐闭合再继续。",
-                    "最终必须包含完整可编译的 LaTeX（含 \\end{document}）。",
+                    "The previous output appears truncated. Continue the remaining LaTeX strictly from the end of existing_latex_tail.",
+                    "Output only LaTeX that must be appended. Do not repeat previous content.",
+                    "If the last line, formula, or environment in existing_latex_tail is unfinished, close it first and then continue.",
+                    "The final result must contain complete compilable LaTeX, including \\end{document}.",
                 ],
             }
             cont_res = await self._call_llm_response(
                 messages=[
-                    {"role": "system", "content": "你是严谨的 LaTeX 续写助手，只输出需要追加的内容，不要重复前文。"},
+                    {"role": "system", "content": "You are a rigorous LaTeX continuation assistant. Output only content to append and do not repeat previous content."},
                     {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
                     {"role": "assistant", "content": tail},
-                    {"role": "user", "content": "继续。只输出需要追加的 LaTeX，不要重复 existing_latex_tail。"},
+                    {"role": "user", "content": "Continue. Output only LaTeX that must be appended, and do not repeat existing_latex_tail."},
                 ],
                 model=model,
                 temperature=0.2,
@@ -210,4 +210,3 @@ class LatexRefineMixin:
             logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": size, "model": model}
-

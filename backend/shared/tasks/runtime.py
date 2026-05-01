@@ -611,7 +611,14 @@ class TaskRuntime:
                 except asyncio.TimeoutError:
                     continue
 
-    async def status_payload(self, *, task_id: str, user_id: str) -> Optional[dict]:
+    async def status_payload(
+        self,
+        *,
+        task_id: str,
+        user_id: str,
+        include_events: bool = False,
+        events_limit: int = 500,
+    ) -> Optional[dict]:
         tid = str(task_id or "").strip()
         uid = str(user_id or "").strip() or "anonymous"
         task = await self.get_task(tid)
@@ -620,7 +627,7 @@ class TaskRuntime:
 
         steps = list(task.steps_by_id.values())
         steps.sort(key=lambda s: str(s.get("startTime") or ""))
-        return {
+        payload = {
             "taskId": tid,
             "type": task.task_type,
             "status": task.status,
@@ -630,3 +637,7 @@ class TaskRuntime:
             "first_seq": task.seq_offset + 1,
             "last_seq": task.last_seq,
         }
+        if include_events:
+            limit = max(1, min(int(events_limit or 500), 5000))
+            payload["events"] = list(task.events[-limit:])
+        return payload

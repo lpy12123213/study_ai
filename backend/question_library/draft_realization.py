@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
 from backend.question_library.gen_common import DEFAULT_SEARCH_CONFIG, _difficulty_instruction, _resolve_realize_temperature
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj, _extract_json_value
@@ -14,6 +15,10 @@ from backend.question_library.subject_knowledge import get_subject_bank, infer_s
 
 logger = get_logger(__name__)
 _realize_max_tokens_invalid_logged = False
+
+
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
 
 def _resolve_realize_max_tokens() -> int:
@@ -137,15 +142,15 @@ async def realize_drafts(
                 {
                     "role": "system",
                     "content": (
-                        "<retry_reason>上一次 JSON 可能截断或格式有误。</retry_reason>\n"
+                        "<retry_reason>The previous JSON may have been truncated or malformed.</retry_reason>\n"
                         "<constraints>\n"
-                        "  <rule>只输出 1 道题</rule>\n"
-                        "  <rule>解析 ≤ 8 句短句</rule>\n"
-                        "  <rule>禁止陷阱/易错/点评等元文本</rule>\n"
-                        "  <rule>禁止重复题干内容</rule>\n"
-                        "  <rule>若题目条件导致无解或矛盾，直接换一道合理可解的题目</rule>\n"
+                        "  <rule>Output exactly one question.</rule>\n"
+                        "  <rule>Keep analysis to <= 8 short sentences.</rule>\n"
+                        "  <rule>Do not output meta-text such as trap hints, common mistakes, or comments.</rule>\n"
+                        "  <rule>Do not repeat stem content.</rule>\n"
+                        "  <rule>If the conditions make the question unsolvable or contradictory, replace it with a reasonable solvable question.</rule>\n"
                         "</constraints>\n"
-                        "<output_format>仅输出 JSON object，确保完整闭合。</output_format>"
+                        "<output_format>Output only a JSON object and ensure it is fully closed.</output_format>"
                     ),
                 },
                 *messages,
@@ -198,48 +203,48 @@ def build_generation_messages(
         if family == "physics":
             return [
                 "<physics_requirements>",
-                "  <process_model>必须体现物理过程建模：明确对象/系统、受力或能量路径，并写出关键物理量关系式。</process_model>",
-                "  <sign_and_units>符号方向与单位量纲必须自洽，必要时做量纲检验。</sign_and_units>",
-                "  <diagram_if_needed>若题意需要示意图，需在题干中明确图像信息（坐标/方向/标注）。</diagram_if_needed>",
+                "  <process_model>Reflect physical-process modeling: identify the object/system, force or energy path, and key physical-quantity relationships.</process_model>",
+                "  <sign_and_units>Sign directions and units/dimensions must be self-consistent; perform dimensional checks when needed.</sign_and_units>",
+                "  <diagram_if_needed>If the question requires a diagram, explicitly state the image information in the stem, such as coordinates, directions, and labels.</diagram_if_needed>",
                 "</physics_requirements>",
             ]
         if family == "chemistry":
             return [
                 "<chemistry_requirements>",
-                "  <equation>化学方程式/离子方程式必须配平，状态条件完整且正确。</equation>",
-                "  <conservation>优先使用守恒（元素/电荷/电子）建立关系，结论可复核。</conservation>",
-                "  <principle>化学原理正确，不以记忆性结论替代推理。</principle>",
+                "  <equation>Chemical/ionic equations must be balanced, with complete and correct states and conditions.</equation>",
+                "  <conservation>Prefer conservation of elements, charge, or electrons to build relationships; conclusions must be checkable.</conservation>",
+                "  <principle>Chemical principles must be correct; do not replace reasoning with memorized conclusions.</principle>",
                 "</chemistry_requirements>",
             ]
         if family == "biology":
             return [
                 "<biology_requirements>",
-                "  <concept_boundary>关键概念边界清晰，避免概念混淆。</concept_boundary>",
-                "  <evidence_chain>推理必须有证据链：材料信息 -> 推断 -> 结论。</evidence_chain>",
-                "  <experiment>若为实验题，必须体现对照与变量控制。</experiment>",
+                "  <concept_boundary>Key concept boundaries must be clear to avoid concept confusion.</concept_boundary>",
+                "  <evidence_chain>Reasoning must include an evidence chain: material information -> inference -> conclusion.</evidence_chain>",
+                "  <experiment>For experiment questions, include control groups and variable control.</experiment>",
                 "</biology_requirements>",
             ]
         if family == "chinese":
             return [
                 "<chinese_requirements>",
-                "  <text_evidence>答案必须基于文本证据，不写空泛套话。</text_evidence>",
-                "  <structure>分点作答，先结论后依据，表述规范准确。</structure>",
+                "  <text_evidence>Answers must be based on textual evidence, not generic boilerplate.</text_evidence>",
+                "  <structure>Use point-by-point answers: conclusion first, then evidence, with standard and accurate wording.</structure>",
                 "</chinese_requirements>",
             ]
         if family == "english":
             return [
                 "<english_requirements>",
-                "  <discourse>强调语篇理解与定位证据；避免凭感觉。</discourse>",
-                "  <grammar>语法点必须正确且可解释（时态/语态/从句/非谓语）。</grammar>",
-                "  <answer_style>答案简洁、规范，解析指出关键依据与推断链条。</answer_style>",
+                "  <discourse>Emphasize discourse comprehension and located evidence; avoid intuition-only answers.</discourse>",
+                "  <grammar>Grammar points must be correct and explainable, such as tense, voice, clauses, or non-finite verbs.</grammar>",
+                "  <answer_style>Answers should be concise and standard; analysis should identify key evidence and inference chains.</answer_style>",
                 "</english_requirements>",
             ]
         # math / generic
         return [
             "<core_requirements>",
-            "  <thinking_depth>至少满足以下一项——多步推导链条(≥3步)、参数范围讨论(≥2种情况)、构造辅助对象、数形结合转化、反证/归谬论证</thinking_depth>",
-            "  <discrimination>禁止直接套用单一公式，禁止教材例题换数字，必须有新约束条件或≥2个知识点交叉</discrimination>",
-            "  <answer_determinacy>条件充分无矛盾，推导路径可复现，结论唯一明确</answer_determinacy>",
+            "  <thinking_depth>Meet at least one of: multi-step derivation chain (>=3 steps), parameter-range discussion (>=2 cases), construction of an auxiliary object, graph-algebra transformation, contradiction/reductio argument.</thinking_depth>",
+            "  <discrimination>Do not directly apply a single formula or merely change numbers from a textbook example. Include new constraints or a combination of at least two knowledge points.</discrimination>",
+            "  <answer_determinacy>Conditions must be sufficient and non-contradictory; the derivation path must be reproducible and the conclusion unique and clear.</answer_determinacy>",
             "</core_requirements>",
         ]
 
@@ -304,23 +309,23 @@ def build_generation_messages(
             "must_have": [
                 *_subject_must_have_lines(),
                 "<format_standards>",
-                "  <latex_compliance>行内\\(...\\)、独立\\[...\\]，严禁$...$/$$$...$$$；"
-                "分数用\\frac{}{}，根号用\\sqrt{}，上下标必须加花括号；"
-                "三角函数用\\sin/\\cos/\\tan，对数用\\ln/\\lg/\\log_{}；"
-                "向量用\\vec{}或\\overrightarrow{}，希腊字母用LaTeX命令禁用Unicode；"
-                "表格/矩阵/分段函数用array/matrix/cases环境</latex_compliance>",
-                "  <analysis_completeness>关键步骤必须展示推导过程，每步有定理/公式依据，"
-                "不允许'显然''易知'等跳步表述，逻辑链条连贯</analysis_completeness>",
-                "  <stem_conciseness>条件表述无冗余无歧义，信息密度高，阅读负担小</stem_conciseness>",
+                "  <latex_compliance>Use inline \\(...\\) and display \\[...\\]. Do not use $...$ or $$$...$$$. "
+                "Use \\frac{}{} for fractions and \\sqrt{} for radicals. Superscripts/subscripts must use braces. "
+                "Use \\sin/\\cos/\\tan for trigonometric functions and \\ln/\\lg/\\log_{} for logarithms. "
+                "Use \\vec{} or \\overrightarrow{} for vectors. Use LaTeX commands for Greek letters and avoid Unicode Greek letters. "
+                "Use array/matrix/cases environments for tables, matrices, and piecewise functions.</latex_compliance>",
+                "  <analysis_completeness>Key steps must show derivation, with theorem/formula support for each step. "
+                "Avoid skipped-step wording such as 'obvious'; keep the logic chain coherent.</analysis_completeness>",
+                "  <stem_conciseness>Condition wording must be non-redundant, unambiguous, information-dense, and easy to read.</stem_conciseness>",
                 "</format_standards>",
                 "<quality_control>",
-                "  <difficulty_calibration>严格匹配指定难度等级，计算量与思维量平衡</difficulty_calibration>",
-                "  <knowledge_boundary>紧扣指定知识点范围，不超纲不偏题</knowledge_boundary>",
-                "  <computation_control>数值运算步骤适中(≤8步基本运算)，避免繁琐无意义计算</computation_control>",
-                "  <context_authenticity>若含应用背景，数据需符合常识，逻辑自洽</context_authenticity>",
-                "  <answer_complete>answer字段必须给出完整最终结果，禁止'略'/'见解析'；"
-                "analysis结论必须与answer逐符号一致</answer_complete>",
-                "  <tool_verify>涉及数值计算/方程求解/不等式验证时，必须调用python_scientific_compute工具验算</tool_verify>",
+                "  <difficulty_calibration>Strictly match the requested difficulty level and balance computation load with reasoning load.</difficulty_calibration>",
+                "  <knowledge_boundary>Stay within the specified knowledge-point scope; do not go out of scope or off topic.</knowledge_boundary>",
+                "  <computation_control>Keep numerical computation moderate, at most 8 basic-operation steps; avoid tedious meaningless calculation.</computation_control>",
+                "  <context_authenticity>If an application context is included, data must be common-sense plausible and logically self-consistent.</context_authenticity>",
+                "  <answer_complete>The answer field must provide the complete final result. Do not use 'omitted' or 'see analysis'. "
+                "The analysis conclusion must match answer symbol-by-symbol.</answer_complete>",
+                "  <tool_verify>When numerical calculation, equation solving, or inequality verification is involved, call python_scientific_compute to verify.</tool_verify>",
                 "</quality_control>",
             ],
         },
@@ -337,110 +342,113 @@ def build_generation_messages(
     }
 
     system_content = (
-        f"<role>{str(bank.system_role or '').strip() or '你是资深高中教研员，兼具出题、解题与审题三重视角。'}</role>\n"
-        "<output_format>严格输出 JSON object，禁止 Markdown 代码块或任何解释文字。</output_format>\n"
+        _prompt("question.draft.realize.v1")
+        + "\n\n"
+        f"<role>{str(bank.system_role or '').strip() or 'You are a senior high-school curriculum researcher with question-writing, solving, and reviewing perspectives.'}</role>\n"
+        "<language_policy>Match the user's requested language or the subject material language for question content unless explicitly instructed otherwise. Keep JSON field names and required enum values unchanged.</language_policy>\n"
+        "<output_format>Output a strict JSON object only. Do not output Markdown code fences or any explanatory text.</output_format>\n"
         "\n"
-        "<!-- ═══════ 公式格式强制规范 ═══════ -->\n"
+        "<!-- Formula-format mandatory rules -->\n"
         "<latex_rules>\n"
         "  <delimiter>\n"
-        "    行内公式：\\(...\\)　独立公式：\\[...\\]\n"
-        "    严禁 $...$、$$...$$、\\begin{equation}、\\begin{align} 等一切其他定界符\n"
+        "    Inline formulas: \\(...\\). Display formulas: \\[...\\].\n"
+        "    Do not use $...$, $$...$$, \\begin{equation}, \\begin{align}, or any other delimiters.\n"
         "  </delimiter>\n"
         "  <standard_notation>\n"
-        "    分数：\\frac{a}{b}　　根号：\\sqrt{n}、\\sqrt[3]{x}\n"
-        "    上下标：x^{2}、a_{n}（单字符也必须加花括号）\n"
-        "    向量：\\vec{a}、\\overrightarrow{AB}\n"
-        "    极限：\\lim_{n \\to \\infty}　求和：\\sum_{i=1}^{n}　积分：\\int_{a}^{b}\n"
-        "    希腊字母：\\alpha、\\beta、\\theta、\\lambda、\\pi 等，禁止 Unicode 希腊字符\n"
-        "    集合：\\in、\\subset、\\subseteq、\\cup、\\cap、\\emptyset、\\mathbb{R}\n"
-        "    逻辑：\\Rightarrow、\\Leftrightarrow、\\forall、\\exists、\\neg\n"
-        "    组合数/排列数：\\binom{n}{k} 或 C_{n}^{k}、A_{n}^{k}\n"
-        "    绝对值/范数：|x| 或 \\lvert x \\rvert\n"
-        "    三角函数：\\sin、\\cos、\\tan、\\cot（反斜杠开头，禁止直接写 sin x）\n"
-        "    对数：\\ln、\\lg、\\log_{a}\n"
+        "    Fractions: \\frac{a}{b}. Radicals: \\sqrt{n}, \\sqrt[3]{x}.\n"
+        "    Superscripts/subscripts: x^{2}, a_{n}; even single characters must use braces.\n"
+        "    Vectors: \\vec{a}, \\overrightarrow{AB}.\n"
+        "    Limits: \\lim_{n \\to \\infty}. Sums: \\sum_{i=1}^{n}. Integrals: \\int_{a}^{b}.\n"
+        "    Greek letters: \\alpha, \\beta, \\theta, \\lambda, \\pi, etc. Do not use Unicode Greek letters.\n"
+        "    Sets: \\in, \\subset, \\subseteq, \\cup, \\cap, \\emptyset, \\mathbb{R}.\n"
+        "    Logic: \\Rightarrow, \\Leftrightarrow, \\forall, \\exists, \\neg.\n"
+        "    Combinations/permutations: \\binom{n}{k} or C_{n}^{k}, A_{n}^{k}.\n"
+        "    Absolute value/norm: |x| or \\lvert x \\rvert.\n"
+        "    Trigonometric functions: \\sin, \\cos, \\tan, \\cot. Use a leading backslash; do not write bare sin x.\n"
+        "    Logarithms: \\ln, \\lg, \\log_{a}.\n"
         "  </standard_notation>\n"
         "  <structure>\n"
-        "    表格/矩阵/分布列/分类讨论：必须用 LaTeX array/matrix/cases 环境，禁止纯文本竖排\n"
-        "    分段函数/条件：必须用 cases 环境\n"
-        "    多行推导不要拆成多个独立公式块，应在单个 aligned 或 array 中完成\n"
+        "    Tables/matrices/distribution tables/case analysis must use LaTeX array/matrix/cases environments. Do not use plain-text vertical layouts.\n"
+        "    Piecewise functions/conditions must use a cases environment.\n"
+        "    Multi-line derivations should not be split into multiple display blocks; use a single aligned or array environment.\n"
         "  </structure>\n"
         "  <integrity>\n"
-        "    所有花括号、圆括号、方括号必须完整配对闭合\n"
-        "    嵌套公式层次清晰，避免歧义\n"
-        "    禁止图片公式、MathML、SVG\n"
-        "    题干/答案/解析三个字段统一遵守上述全部规范\n"
+        "    All braces, parentheses, and brackets must be fully paired and closed.\n"
+        "    Nested formula structure must be clear and unambiguous.\n"
+        "    Do not use image formulas, MathML, or SVG.\n"
+        "    The stem, answer, and analysis fields must all follow the rules above.\n"
         "  </integrity>\n"
         "</latex_rules>\n"
         "\n"
-        "<!-- ═══════ 难度控制 ═══════ -->\n"
+        "<!-- Difficulty control -->\n"
         f"<difficulty>{_difficulty_instruction(difficulty)}</difficulty>\n"
         "\n"
-        "<!-- ═══════ 出题创意与区分度 ═══════ -->\n"
+        "<!-- Question creativity and discrimination -->\n"
         "<creativity_standards>\n"
-        "  <anti_template>严禁\u201c教材例题换数字\u201d式出题；每道题必须至少包含一个原创设计点：\n"
-        "    新约束条件 / 跨知识点交叉 / 非常规设问角度 / 真实情境迁移 / 开放性探究。</anti_template>\n"
-        "  <scenario_design>若引入应用情境，情境必须服务于数学/学科建模，而非纯粹背景装饰；\n"
-        "    数据符合常识、逻辑自洽、可在题内完成验证。</scenario_design>\n"
-        "  <thinking_depth>每道题需要可复现的推理链条（避免纯记忆/纯套公式），\n"
-        "    至少满足一项：多步推导(≥3步) / 参数讨论(≥2情况) / 构造辅助对象 / 数形结合 / 反证归谬。</thinking_depth>\n"
-        "  <discrimination>具备区分度：中等生与优秀生在该题上应呈现不同的解题路径或完成度。</discrimination>\n"
-        "  <length_limit>最多2小问；解析只写关键推导步骤，禁止输出陷阱提示、易错点评等元文本。</length_limit>\n"
+        "  <anti_template>Do not create textbook-example-with-different-numbers questions. Each question must include at least one original design point:\n"
+        "    new constraints / cross-knowledge intersection / unusual question angle / real-scenario transfer / open exploration.</anti_template>\n"
+        "  <scenario_design>If an application scenario is introduced, it must serve math/subject modeling rather than decorative background.\n"
+        "    Data must be common-sense plausible, logically self-consistent, and verifiable within the question.</scenario_design>\n"
+        "  <thinking_depth>Each question needs a reproducible reasoning chain, avoiding pure memory or formula substitution.\n"
+        "    Meet at least one of: multi-step derivation (>=3 steps) / parameter discussion (>=2 cases) / auxiliary-object construction / graph-algebra integration / contradiction or reductio.</thinking_depth>\n"
+        "  <discrimination>The question must be discriminative: average and strong students should show different solution paths or completion levels.</discrimination>\n"
+        "  <length_limit>Use at most 2 sub-questions. The analysis should include only key derivation steps; do not output meta-text such as trap hints or common-mistake comments.</length_limit>\n"
         "</creativity_standards>\n"
         "<brainstorm_guidance>\n"
-        "  若 spec 中包含 brainstorm_concept / brainstorm_angle / brainstorm_scenario：\n"
-        "    必须在题干约束或设问顺序中体现该创意上下文；\n"
-        "    创意落地为可解的条件与结论，严禁堆砌背景故事。\n"
-        "  若 brainstorm_novelty_note 有内容：将其作为\u201c题目独特性\u201d的硬约束，不是建议。\n"
+        "  If spec contains brainstorm_concept, brainstorm_angle, or brainstorm_scenario:\n"
+        "    The creative context must appear in stem constraints or the order of sub-questions.\n"
+        "    Turn the idea into solvable conditions and conclusions. Do not pile up background story.\n"
+        "  If brainstorm_novelty_note is present, treat it as a hard requirement for question uniqueness, not a suggestion.\n"
         "</brainstorm_guidance>\n"
         "\n"
-        "<!-- ═══════ 科学计算工具（MCP）使用指导 ═══════ -->\n"
+        "<!-- Scientific computation tool (MCP) usage guidance -->\n"
         "<tool_usage_policy>\n"
-        "  你拥有 python_scientific_compute 工具（Python 沙盒：math/cmath/numpy/sympy 等）。\n"
-        "  <when_to_call>以下任一情况必须调用工具验算，不可仅靠心算：\n"
-        "    1. 涉及具体数值计算（方程求解、极值、定积分、排列组合数、概率值等）\n"
-        "    2. 需要验证不等式/恒等式是否成立\n"
-        "    3. 需要求解含参方程、判别式、临界值\n"
-        "    4. 题目涉及数列求和、递推关系验证\n"
-        "    5. 需要确认答案的数值正确性\n"
-        "    6. 任何你对计算结果不够确信的场景\n"
+        "  You have access to python_scientific_compute, a Python sandbox with math/cmath/numpy/sympy and related tools.\n"
+        "  <when_to_call>Call the tool to verify in any of the following cases; do not rely only on mental arithmetic:\n"
+        "    1. Specific numerical computation, such as equation solving, extrema, definite integrals, combinatorics counts, or probabilities.\n"
+        "    2. Verifying whether an inequality or identity holds.\n"
+        "    3. Solving parameterized equations, discriminants, or critical values.\n"
+        "    4. Sequence summation or recurrence verification.\n"
+        "    5. Confirming answer numerical correctness.\n"
+        "    6. Any situation where you are not fully confident in the calculation result.\n"
         "  </when_to_call>\n"
-        "  <how_to_call>先生成题目草稿，然后调用工具验算关键步骤；\n"
-        "    若工具结果与手算不一致，以工具结果为准并修正题目/答案。\n"
-        "    一次生成过程中允许多次调用工具。</how_to_call>\n"
-        "  <benefit>使用工具验算可极大提升答案正确率，请积极主动使用。</benefit>\n"
+        "  <how_to_call>First generate a question draft, then call the tool to verify key steps.\n"
+        "    If the tool result conflicts with manual calculation, trust the tool and fix the question/answer.\n"
+        "    Multiple tool calls are allowed during one generation.</how_to_call>\n"
+        "  <benefit>Tool verification significantly improves answer accuracy. Use it proactively.</benefit>\n"
         "</tool_usage_policy>\n"
         "\n"
-        "<!-- ═══════ 试题与答案严格性 ═══════ -->\n"
+        "<!-- Question and answer strictness -->\n"
         "<answer_strictness>\n"
-        "  <completeness>answer 字段必须给出完整最终结果，不允许\u201c略\u201d、\u201c见解析\u201d、省略号等。\n"
-        "    选择题给出选项字母；填空题给出精确值/表达式；解答题给出最终结论。</completeness>\n"
-        "  <determinacy>题干条件必须充分且无矛盾，保证解唯一确定（除非题型要求开放探究）。\n"
-        "    不允许出现\u201c答案不唯一\u201d\u201c条件不足\u201d的情况。</determinacy>\n"
-        "  <consistency>analysis 中的推导结论必须与 answer 字段完全一致，逐字/逐符号对齐。</consistency>\n"
-        "  <precision>数值结果保留题目要求的精度；无特殊要求时，保留到最简分数或根式。\n"
-        "    禁止出现近似值替代精确值的情况（除非题目明确要求近似）。</precision>\n"
+        "  <completeness>The answer field must provide the complete final result. Do not use omissions such as 'omitted', 'see analysis', or ellipses.\n"
+        "    Multiple-choice questions must give the option letter; fill-in questions must give the exact value/expression; solution questions must give the final conclusion.</completeness>\n"
+        "  <determinacy>The stem conditions must be sufficient and non-contradictory, ensuring a unique solution unless the question type requires open exploration.\n"
+        "    Do not create cases where the answer is non-unique or conditions are insufficient.</determinacy>\n"
+        "  <consistency>The derivation conclusion in analysis must exactly match the answer field word-by-word and symbol-by-symbol.</consistency>\n"
+        "  <precision>Numerical results must follow the required precision. If unspecified, keep the simplest fraction or radical form.\n"
+        "    Do not replace exact values with approximations unless the question explicitly asks for approximation.</precision>\n"
         "</answer_strictness>\n"
         "<analysis_strictness>\n"
-        "  <rigor>每一步推导必须有依据（定理/公式/已知条件），不允许\u201c显然\u201d\u201c易知\u201d等跳步表述。</rigor>\n"
-        "  <key_steps>关键变换（换元、放缩、构造、分类）必须写明理由和合法性。</key_steps>\n"
-        "  <no_meta>禁止输出\"本题考查了...\"\"易错点是...\"\"解题技巧是...\"等元评论文本。</no_meta>\n"
+        "  <rigor>Every derivation step must have support from a theorem, formula, or given condition. Avoid skipped-step wording such as 'obvious'.</rigor>\n"
+        "  <key_steps>For key transformations such as substitution, bounding, construction, or classification, state the reason and legality.</key_steps>\n"
+        "  <no_meta>Do not output meta-comments such as 'this question tests...', 'the common mistake is...', or 'the solving technique is...'.</no_meta>\n"
         "</analysis_strictness>\n"
         "\n"
-        "<!-- ═══════ 自检流程（生成后必须执行） ═══════ -->\n"
+        "<!-- Self-check process required after generation -->\n"
         "<verification_process>\n"
-        "  <step id='1'>从头独立解题，逐步验证每一步推导的正确性（建议调用 python_scientific_compute 验算）</step>\n"
-        "  <step id='2'>检查题干条件：无矛盾、无冗余、信息充分、解唯一</step>\n"
-        "  <step id='3'>逐字核对 answer 字段与 analysis 末尾结论完全一致</step>\n"
-        "  <step id='4'>检查所有公式是否符合 latex_rules 规范（定界符、花括号、标准写法）</step>\n"
-        "  <step id='5'>检查 JSON 结构完整闭合，字符串内无未转义的特殊字符</step>\n"
-        "  <on_error>验算发现错误则修正后输出；题目无解/矛盾/过繁则直接换题，不要强行修补。</on_error>\n"
+        "  <step id='1'>Solve independently from scratch and verify each derivation step. Prefer calling python_scientific_compute for verification.</step>\n"
+        "  <step id='2'>Check stem conditions: no contradictions, no redundancy, sufficient information, and unique solution.</step>\n"
+        "  <step id='3'>Check word-by-word that the answer field exactly matches the final conclusion of analysis.</step>\n"
+        "  <step id='4'>Check all formulas against latex_rules, including delimiters, braces, and standard notation.</step>\n"
+        "  <step id='5'>Check that the JSON structure is fully closed and strings contain no unescaped special characters.</step>\n"
+        "  <on_error>If verification finds an error, fix it before output. If the question is unsolvable, contradictory, or too complex, replace it instead of forcing a repair.</on_error>\n"
         "</verification_process>\n"
         "\n"
         "<reference_learning>\n"
-        "  若 reference_examples/reference_patterns 有内容：学习其设问结构、解析格式与难度分布。\n"
-        "  严禁照抄原题原数值原结论；只借鉴\u201c出题方式\u201d，不复制\u201c题目内容\u201d。\n"
+        "  If reference_examples/reference_patterns are present, learn their question structure, analysis format, and difficulty distribution.\n"
+        "  Do not copy the original question, values, or conclusions. Borrow only the question-writing method, not the question content.\n"
         "</reference_learning>\n"
-        "<json_integrity>确保 JSON 完整闭合可解析，不输出任何截断内容。</json_integrity>"
+        "<json_integrity>Ensure the JSON is complete, closed, and parseable. Do not output truncated content.</json_integrity>"
     )
 
     return [
@@ -484,31 +492,33 @@ def build_regenerate_section_messages(
     }
 
     system_content = (
-        "<role>你是资深高中教研员，负责局部重写试题的指定部分（题干/答案/解析之一）。</role>\n"
-        "<edit_principle>只重写 section_key 指定的字段，保持其他字段的知识点、难度与结论不变。</edit_principle>\n"
+        _prompt("question.section.regenerate.v1")
+        + "\n\n"
+        "<role>You are a senior high-school curriculum researcher responsible for locally rewriting one specified question section: stem, answer, or analysis.</role>\n"
+        "<edit_principle>Rewrite only the field specified by section_key. Keep the other fields' knowledge points, difficulty, and conclusion unchanged.</edit_principle>\n"
         "\n"
-        "<latex_rules><!-- LaTeX 公式格式强制规范 -->\n"
-        "  <delimiter>行内公式：\\(...\\)　独立公式：\\[...\\]　严禁 $...$、$$...$$、\\begin{equation}、\\begin{align} 等</delimiter>\n"
+        "<latex_rules><!-- LaTeX formula-format mandatory rules -->\n"
+        "  <delimiter>Inline formulas: \\(...\\). Display formulas: \\[...\\]. Do not use $...$, $$...$$, \\begin{equation}, \\begin{align}, or similar delimiters.</delimiter>\n"
         "  <standard_notation>\n"
-        "    分数：\\frac{a}{b}　根号：\\sqrt{n}、\\sqrt[3]{x}　上下标：x^{2}、a_{n}（单字符也必须加花括号）\n"
-        "    向量：\\vec{a}、\\overrightarrow{AB}　极限：\\lim_{n \\to \\infty}　求和：\\sum_{i=1}^{n}　积分：\\int_{a}^{b}\n"
-        "    希腊字母：\\alpha、\\beta、\\theta、\\lambda、\\pi 等，禁止 Unicode 希腊字符\n"
-        "    集合：\\in、\\subset、\\subseteq、\\cup、\\cap、\\emptyset、\\mathbb{R}\n"
-        "    逻辑：\\Rightarrow、\\Leftrightarrow、\\forall、\\exists、\\neg\n"
-        "    三角函数：\\sin、\\cos、\\tan、\\cot（反斜杠开头）　对数：\\ln、\\lg、\\log_{a}\n"
-        "    组合数/排列数：\\binom{n}{k} 或 C_{n}^{k}、A_{n}^{k}\n"
+        "    Fractions: \\frac{a}{b}. Radicals: \\sqrt{n}, \\sqrt[3]{x}. Superscripts/subscripts: x^{2}, a_{n}; even single characters must use braces.\n"
+        "    Vectors: \\vec{a}, \\overrightarrow{AB}. Limits: \\lim_{n \\to \\infty}. Sums: \\sum_{i=1}^{n}. Integrals: \\int_{a}^{b}.\n"
+        "    Greek letters: \\alpha, \\beta, \\theta, \\lambda, \\pi, etc. Do not use Unicode Greek letters.\n"
+        "    Sets: \\in, \\subset, \\subseteq, \\cup, \\cap, \\emptyset, \\mathbb{R}.\n"
+        "    Logic: \\Rightarrow, \\Leftrightarrow, \\forall, \\exists, \\neg.\n"
+        "    Trigonometric functions: \\sin, \\cos, \\tan, \\cot. Logarithms: \\ln, \\lg, \\log_{a}.\n"
+        "    Combinations/permutations: \\binom{n}{k} or C_{n}^{k}, A_{n}^{k}.\n"
         "  </standard_notation>\n"
-        "  <structure>表格/矩阵/分段函数/分类讨论：必须用 array/matrix/cases 环境，禁止纯文本竖排；多行推导用 aligned 环境</structure>\n"
-        "  <integrity>所有花括号、圆括号、方括号必须完整配对闭合；禁止图片公式、MathML、SVG</integrity>\n"
+        "  <structure>Tables/matrices/piecewise functions/case analysis must use array/matrix/cases environments. Do not use plain-text vertical layout; use aligned for multi-line derivations.</structure>\n"
+        "  <integrity>All braces, parentheses, and brackets must be paired and closed. Do not use image formulas, MathML, or SVG.</integrity>\n"
         "</latex_rules>\n"
         "\n"
         "<answer_strictness>\n"
-        "  answer 字段必须给出完整最终结果，禁止『略』『见解析』等；analysis 结论必须与 answer 逐符号一致。\n"
-        "  每步推导须有定理/公式依据，不允许『显然』『易知』等跳步表述。\n"
+        "  The answer field must provide the complete final result. Do not use omissions such as 'omitted' or 'see analysis'. The analysis conclusion must match answer symbol-by-symbol.\n"
+        "  Each derivation step must have theorem/formula support. Do not use skipped-step wording such as 'obvious'.\n"
         "</answer_strictness>\n"
-        "<tool_usage>若重写涉及数值计算/方程求解，请调用 python_scientific_compute 工具验算后再输出。</tool_usage>\n"
-        "<verification>重写后验算答案正确性，确保推导无误、结论与其余部分完全一致。</verification>\n"
-        "<output_format>严格输出 JSON object，不输出 Markdown 或解释。</output_format>"
+        "<tool_usage>If the rewrite involves numerical calculation or equation solving, call python_scientific_compute to verify before output.</tool_usage>\n"
+        "<verification>After rewriting, verify answer correctness and ensure derivation is correct and conclusion is fully consistent with the other fields.</verification>\n"
+        "<output_format>Output a strict JSON object only. Do not output Markdown or explanations.</output_format>"
     )
 
     return [

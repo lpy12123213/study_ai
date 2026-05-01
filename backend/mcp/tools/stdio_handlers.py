@@ -18,6 +18,7 @@ from backend.core.settings import (
     MOONSHOT_API_KEY,
     SUB_MODEL,
 )
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.crawler.interface import CrawlerInterface
 from backend.crawler.manager import get_crawler
 from backend.mcp.search.bigmodel import web_search_with_bigmodel_mcp
@@ -35,6 +36,10 @@ from backend.core.subjects import (
     normalize_difficulty,
     resolve_subject,
 )
+
+
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
 
 async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[TextContent]:
@@ -542,10 +547,10 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     "note": "未配置 LESSON_PLAN_API_KEY，返回为空。",
                 }
             else:
-                prompt = f"""请为“{subject_input or server.current_subject}”的知识点“{topic}”生成事实性要点。\n\n要求：\n- 输出严格 JSON（不要 Markdown、不要代码块）\n- 字段：definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[])\n- 难度参考：{difficulty}\n"""
+                prompt = f"""Generate factual notes for the knowledge point "{topic}" in "{subject_input or server.current_subject}".\n\nRequirements:\n- Output strict JSON only. Do not output Markdown or code fences.\n- Fields: definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[]).\n- Match the language of the subject/topic unless the caller explicitly requires another language.\n- Difficulty reference: {difficulty}\n"""
                 text = await call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"},
+                        {"role": "system", "content": _prompt("mcp.knowledge_facts.v1")},
                         {"role": "user", "content": prompt},
                     ],
                     model=SUB_MODEL,
@@ -658,7 +663,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 }
                 text = await call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的教学设计专家，输出必须是JSON。"},
+                        {"role": "system", "content": _prompt("lesson_plan.activity_planner.v1")},
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     ],
                     model=LESSON_PLAN_MODEL,
@@ -693,11 +698,11 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     "subject": subject_input or server.current_subject,
                     "knowledge": knowledge,
                     "analysis": analysis,
-                    "instructions": "请生成 Markdown 章节：知识点讲解。包含：定义、关键点、常见误区、方法小结。不要输出练习题。",
+                    "instructions": "Generate a Markdown section for knowledge-point explanation. Include definition, key points, common misconceptions, and method summary. Do not output exercises. Match the user's/topic language.",
                 }
                 text = await call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的自学资料编写老师，输出必须是Markdown。"},
+                        {"role": "system", "content": _prompt("mcp.study_section.v1")},
                         {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                     ],
                     model=LESSON_PLAN_MODEL,
@@ -713,10 +718,10 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                 result = {"success": True, "markdown": "（未配置模型，无法生成解答。）", "source": "fallback"}
             else:
-                prompt = f"""请为下面题目写出详细分步解答（Markdown）。\n\n要求：\n- 每一步说明在做什么\n- 如果题干信息不足，请说明需要补充什么\n\n学科：{subject_input or server.current_subject}\n知识点：{topic or "（未指定）"}\n\n题目：\n{stem}\n"""
+                prompt = f"""Write a detailed step-by-step solution for the problem below in Markdown.\n\nRequirements:\n- Explain what each step is doing.\n- If the problem statement lacks information, state what needs to be added.\n- Match the language of the problem statement unless the caller explicitly requires another language.\n\nSubject: {subject_input or server.current_subject}\nKnowledge point: {topic or "(unspecified)"}\n\nProblem:\n{stem}\n"""
                 text = await call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的解题老师，输出必须是Markdown。"},
+                        {"role": "system", "content": _prompt("mcp.solve_stepwise.v1")},
                         {"role": "user", "content": prompt},
                     ],
                     model=LESSON_PLAN_MODEL,
@@ -733,10 +738,10 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
                 result = {"success": True, "passed": True, "issues": [], "suggestions": [], "source": "fallback"}
             else:
-                prompt = f"""请审查下面这份自学资料 Markdown，找出：\n1) 逻辑跳跃/不清晰处\n2) 可能的错误或表述不严谨\n3) 建议改进点（最多5条）\n\n要求：输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n\n主题：{topic}\n\nMarkdown:\n{markdown}\n"""
+                prompt = f"""Review the self-study Markdown below and identify:\n1) Logical jumps or unclear parts.\n2) Possible errors or imprecise wording.\n3) Improvement suggestions, up to 5.\n\nRequirements: output strict JSON only, not Markdown. Fields: passed(bool), issues(string[]), suggestions(string[]). Match issue/suggestion language to the material language.\n\nTopic: {topic}\n\nMarkdown:\n{markdown}\n"""
                 text = await call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是严谨的审稿人，输出必须是JSON。"},
+                        {"role": "system", "content": _prompt("mcp.review_study_material.v1")},
                         {"role": "user", "content": prompt},
                     ],
                     model=LESSON_PLAN_MODEL,
@@ -781,10 +786,10 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                 summary = " | ".join(parts)[:target_chars]
                 result = {"success": True, "summary": summary, "source": "fallback"}
             else:
-                prompt = f"""请将下面的对话/记录压缩为一段简洁摘要（约{target_chars}字左右），保留：\n- 用户主要目标与约束\n- 关键决策\n- 重要工具结果/错误\n\n输出：纯文本摘要（不要Markdown）。\n\n记录：\n{json.dumps(messages, ensure_ascii=False)}\n"""
+                prompt = f"""Compress the conversation/log below into one concise summary of about {target_chars} characters. Preserve:\n- The user's main goals and constraints.\n- Key decisions.\n- Important tool results or errors.\n\nOutput a plain-text summary only, not Markdown. Match the dominant conversation language.\n\nLog:\n{json.dumps(messages, ensure_ascii=False)}\n"""
                 text = await call_llm_text(
                     messages=[
-                        {"role": "system", "content": "你是上下文压缩器，输出必须是纯文本摘要。"},
+                        {"role": "system", "content": _prompt("mcp.context_summarize.v1")},
                         {"role": "user", "content": prompt},
                     ],
                     model=SUB_MODEL,
@@ -797,7 +802,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             query = (arguments.get("query") or "").strip()
             limit = max(1, min(int(arguments.get("limit", 5) or 5), 10))
             provider_in = str(arguments.get("provider") or "auto").strip().lower() or "auto"
-            if provider_in not in {"auto", "exa", "bigmodel"}:
+            if provider_in not in {"auto", "tavily", "exa", "bigmodel"}:
                 provider_in = "auto"
             mode_in = str(arguments.get("mode") or "trending").strip()
             if mode_in not in {"trending", "patterns"}:
@@ -805,14 +810,78 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             recency_days = max(1, min(int(arguments.get("recency_days", 180) or 180), 3650))
 
             if provider_in == "auto":
+                has_tavily = False
+                has_exa = False
+                try:
+                    from backend.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
+
+                    has_tavily = bool(str(_TAVILY_API_KEY or "").strip())
+                except Exception:
+                    has_tavily = False
                 try:
                     from backend.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
 
-                    provider_in = "exa" if bool(str(_EXA_API_KEY or "").strip()) else "bigmodel"
+                    has_exa = bool(str(_EXA_API_KEY or "").strip())
                 except Exception:
-                    provider_in = "bigmodel"
+                    has_exa = False
+                provider_in = "tavily" if has_tavily else "exa" if has_exa else "bigmodel"
 
-            if provider_in == "exa":
+            if provider_in == "tavily":
+                try:
+                    from backend.mcp.search.tavily import tavily_search
+
+                    res = await tavily_search(
+                        query=query,
+                        max_results=limit,
+                        search_depth="basic",
+                        include_answer=False,
+                        include_raw_content=False,
+                        topic="news" if mode_in == "trending" else "general",
+                        days=recency_days if mode_in == "trending" else None,
+                    )
+                except Exception as exc:
+                    result = {
+                        "success": False,
+                        "provider": "tavily",
+                        "query": query,
+                        "error": f"tavily_search_failed: {exc}",
+                        "results": [],
+                    }
+                else:
+                    if not isinstance(res, dict) or not res.get("success"):
+                        result = {
+                            "success": False,
+                            "provider": str((res or {}).get("provider") or "tavily"),
+                            "query": query,
+                            "error": str((res or {}).get("error") or "tavily_search_failed"),
+                            "results": [],
+                        }
+                    else:
+                        results_in = res.get("results") if isinstance(res.get("results"), list) else []
+                        results_out: List[Dict[str, Any]] = []
+                        for item in results_in[:limit]:
+                            if not isinstance(item, dict):
+                                continue
+                            snippet = str(item.get("snippet") or item.get("text") or "").strip()
+                            if len(snippet) > 900:
+                                snippet = snippet[:900].rstrip() + "…"
+                            results_out.append(
+                                {
+                                    "title": str(item.get("title") or "").strip(),
+                                    "url": str(item.get("url") or "").strip(),
+                                    "snippet": snippet,
+                                    "published_date": str(item.get("published_date") or "").strip(),
+                                }
+                            )
+                        result = {
+                            "success": True,
+                            "provider": "tavily",
+                            "query": query,
+                            "mode": mode_in,
+                            "recency_days": recency_days,
+                            "results": results_out,
+                        }
+            elif provider_in == "exa":
                 try:
                     from datetime import datetime, timedelta
 

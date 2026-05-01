@@ -310,15 +310,30 @@ async def submit_question_library_score(request: QuestionLibraryScoreRequest, us
 
 
 @router.get("/{task_id}", response_model=dict)
-async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> dict:
+async def get_task_status(
+    task_id: str,
+    include_events: bool = Query(False),
+    events_limit: int = Query(500, ge=1, le=5000),
+    user: dict = Depends(require_auth),
+) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    db_task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
+    db_task = await db_get_task(
+        user_id=user_id,
+        task_id=task_id,
+        include_events=include_events,
+        events_limit=events_limit,
+    )
     if not db_task:
         # Back-compat: in-memory runtime status payload.
-        payload = await task_runtime.status_payload(task_id=task_id, user_id=user_id)
+        payload = await task_runtime.status_payload(
+            task_id=task_id,
+            user_id=user_id,
+            include_events=include_events,
+            events_limit=events_limit,
+        )
         if payload:
             return payload
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -533,18 +548,19 @@ async def stream_task(
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     async def event_generator():
-        runtime_task = await task_runtime.get_task(task_id)
-        if runtime_task and str(runtime_task.user_id or "") == user_id:
-            async for event in task_runtime.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            return
-
-        # DB-backed replay/poll stream (best-effort).
+        # Durable replay/poll stream. The tasks table is the source of truth so a
+        # refreshed browser can replay progress even while the in-memory runner is
+        # still alive and its bounded event buffer has moved on.
         last_sent = max(0, int(after_seq or 0))
         last_ping_at = 0.0
         while True:
             task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
             if not task:
+                runtime_task = await task_runtime.get_task(task_id)
+                if runtime_task and str(runtime_task.user_id or "") == user_id:
+                    async for event in task_runtime.stream(task_id, after_seq=last_sent, heartbeat_s=heartbeat_s):
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    return
                 yield f"data: {json.dumps({'taskId': task_id, 'seq': last_sent, 'type': 'error', 'data': {'error': 'task_not_found'}}, ensure_ascii=False)}\n\n"
                 return
 
@@ -555,6 +571,9 @@ async def stream_task(
                     continue
                 last_sent = seq
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+            if len(events) >= 500:
+                continue
 
             if str(task.get("status") or "") != "running":
                 return

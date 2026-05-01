@@ -219,18 +219,18 @@ class ContentReviewToolsMixin:
         prompt = {
             "topic": topic,
             "requirements": [
-                "请对以下 Markdown 自学材料进行严格的内容质量审查。",
-                "审查重点：",
+                "Strictly review the content quality of the following self-study Markdown material.",
+                "Review focus:",
                 "1. 结构完整性：是否包含动机引入、核心定义、关键性质、适用条件、边界情况、常见误区、应用场景等必要模块。",
                 "2. 逻辑自洽性：论述是否前后一致，推理链条是否完整，是否存在跳跃或矛盾。",
                 "3. 事实准确性：如提供 facts_by_kp，检查内容是否与高置信度(>=0.7)事实矛盾；涉及低置信度事实时，表述应使用'可能/推测/有待验证'等限定词。",
                 "4. 深度适配性：讲解深度是否匹配目标受众，是否避免了过度简化或不必要的复杂化。",
                 "5. 维度覆盖：如提供 dimensions，逐一检查各维度是否得到充分覆盖，指出明显缺失的维度。",
-                "输出要求：",
+                "Output requirements:",
                 "- issues: 列出 3~8 条最关键的问题，每条问题需具体指出位置和性质。",
                 "- suggestions: 针对每条 issue 给出可执行的修改建议。",
                 "- passed: 若无严重问题（事实错误、逻辑矛盾、关键遗漏）则为 true，否则为 false。",
-                "严格输出 JSON 格式：{\"passed\": bool, \"issues\": [string], \"suggestions\": [string]}",
+                "Output strict JSON: {\"passed\": bool, \"issues\": [string], \"suggestions\": [string]}",
             ],
             "markdown": markdown,
             "dimensions": dimensions,
@@ -238,7 +238,7 @@ class ContentReviewToolsMixin:
         }
         text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "你是严谨的内容审查员，只输出 JSON。"},
+                {"role": "system", "content": "You are a rigorous content reviewer. Output JSON only."},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=self.config.reflector_model,
@@ -270,21 +270,21 @@ class ContentReviewToolsMixin:
         prompt = {
             "issues": issues,
             "instructions": (
-                "你是专业的学术内容编辑。请根据以下审查问题(issues)对 Markdown 自学材料进行精确修订：",
+                "You are a professional academic content editor. Precisely revise the Markdown self-study material according to the review issues below:",
                 "修订原则：",
                 "1. 针对性修改：仅修正 issues 中明确指出的问题，不做无关改动。",
                 "2. 事实准确：修正任何事实性错误，确保表述与权威来源一致。",
                 "3. 逻辑完整：补齐缺失的前提条件、适用范围、边界情况说明。",
                 "4. 结构清晰：保持原有章节层次，必要时可微调段落顺序以增强连贯性。",
                 "5. 表述严谨：对不确定内容使用'可能/通常/在某些情况下'等限定词。",
-                "6. 格式规范：保持 Markdown 语法正确，代码块、公式、列表格式完整。",
-                "直接输出修订后的完整 Markdown 文档，不要输出 JSON，不要添加解释或说明。"
+                "6. Formatting: keep Markdown syntax correct and preserve complete code-block, formula, and list formatting.",
+                "Output the complete revised Markdown document directly. Do not output JSON or add explanations."
             ),
             "markdown": markdown,
         }
         text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "你是严谨的 Markdown 编辑，只输出最终 Markdown。"},
+                {"role": "system", "content": "You are a rigorous Markdown editor. Output only the final Markdown."},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=self.config.planner_model,

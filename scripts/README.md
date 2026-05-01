@@ -1,25 +1,35 @@
 # Scripts
 
-This directory contains small, task-oriented helper scripts. They are grouped by intent so it's easy to find the right tool quickly.
+`scripts/` 存放项目辅助脚本。脚本必须保持职责单一、默认安全、可从仓库根目录重复运行。主业务入口不应放在本目录。
 
-## Canonical Entrypoint
+## 标准入口
 
-Use the repo root launchers:
+优先使用仓库根目录的启动器：
 
 - Windows: `start.bat dev|all|backend|frontend|mcp|setup|doctor`
-- macOS/Linux: `./start.sh dev|all|backend|frontend|mcp|setup|doctor`
+- Linux / macOS: `./start.sh dev|all|backend|frontend|mcp|setup|doctor`
 
-These wrappers all call `scripts/start.py` (the canonical implementation).
+这些入口最终调用 `scripts/start.py`，它负责创建虚拟环境、安装依赖、启动后端/前端/MCP，以及运行 `doctor` 检查。
 
-## Categories
+## 目录分类
 
-- `scripts/audit/`: one-off read-only inspection (logs, metrics, audits).
-- `scripts/dev/`: developer helpers and experiments (non-production).
-- `scripts/migrate/`: data/schema maintenance and repair utilities.
-- `scripts/ops/`: operational scripts (local state organization, crawler helpers, etc.).
+- `scripts/audit/`：只读审计、统计、检查脚本。
+- `scripts/dev/`：开发辅助和实验脚本，不作为生产入口。
+- `scripts/migrate/`：数据、schema 或本地状态迁移脚本。
+- `scripts/ops/`：本地运维辅助、状态整理、爬虫相关工具。
 
-## Notes
+## 编写约定
 
-- Keep runtime outputs under `.local/` or `artifacts/` (not under `backend/` or `frontend/`).
-- Scripts should be safe by default; anything destructive should be explicit and well-documented.
+- 运行产物放到 `.local/`、`artifacts/`、`output/` 等忽略目录。
+- 破坏性操作必须显式命名、显式确认，并在脚本头部说明影响范围。
+- 脚本默认从仓库根目录运行；如果依赖当前工作目录，应在代码中明确解析路径。
+- 临时调试脚本不得成为长期入口；稳定能力应迁到后端模块、前端工具或根目录启动器。
 
+## 验收要求
+
+新增或修改脚本时应确认：
+
+- 命令在仓库根目录可运行。
+- 默认执行不删除用户数据。
+- 输出目录位于忽略路径。
+- 如涉及迁移或清理，文档明确输入、输出和回滚方式。

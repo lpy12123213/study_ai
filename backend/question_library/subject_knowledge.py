@@ -132,7 +132,7 @@ _MATH_BANK = SubjectKnowledgeBank(
         "向量几何综合题",
         "数列不等式证明题",
     ],
-    system_role="你是资深高中数学教研员，兼具出题、解题与审题三重视角。",
+    system_role="You are a senior high-school mathematics curriculum researcher with question-writing, solving, and reviewing perspectives.",
 )
 
 _PHYSICS_BANK = SubjectKnowledgeBank(
@@ -226,7 +226,7 @@ _PHYSICS_BANK = SubjectKnowledgeBank(
         "建模题（质点/刚体/系统）",
         "多解法对比题",
     ],
-    system_role="你是资深高中物理教研员，擅长过程建模、受力分析与实验审题。",
+    system_role="You are a senior high-school physics curriculum researcher specializing in process modeling, force analysis, and experimental question review.",
 )
 
 _CHEMISTRY_BANK = SubjectKnowledgeBank(
@@ -320,7 +320,7 @@ _CHEMISTRY_BANK = SubjectKnowledgeBank(
         "生产流程与工艺题",
         "开放性实验设计题",
     ],
-    system_role="你是资深高中化学教研员，强调原理正确性、方程式规范与守恒建模。",
+    system_role="You are a senior high-school chemistry curriculum researcher emphasizing principle correctness, equation standards, and conservation modeling.",
 )
 
 _BIOLOGY_BANK = SubjectKnowledgeBank(
@@ -414,7 +414,7 @@ _BIOLOGY_BANK = SubjectKnowledgeBank(
         "真实情境应用题",
         "科学史与方法题",
     ],
-    system_role="你是资深高中生物教研员，强调实验设计、证据链与概念边界清晰。",
+    system_role="You are a senior high-school biology curriculum researcher emphasizing experimental design, evidence chains, and clear concept boundaries.",
 )
 
 _CHINESE_BANK = SubjectKnowledgeBank(
@@ -508,7 +508,7 @@ _CHINESE_BANK = SubjectKnowledgeBank(
         "微写作/应用文写作题",
         "开放性探究题",
     ],
-    system_role="你是资深高中语文教研员，强调文本证据、表述规范与审题边界。",
+    system_role="You are a senior high-school Chinese curriculum researcher emphasizing textual evidence, standard expression, and question-boundary review.",
 )
 
 _ENGLISH_BANK = SubjectKnowledgeBank(
@@ -602,7 +602,7 @@ _ENGLISH_BANK = SubjectKnowledgeBank(
         "信息匹配题",
         "综合能力题",
     ],
-    system_role="你是资深高中英语教研员，强调语篇理解、语法准确与答案表达规范。",
+    system_role="You are a senior high-school English curriculum researcher emphasizing discourse comprehension, grammar accuracy, and standard answer expression.",
 )
 
 _GENERIC_BANK = SubjectKnowledgeBank(
@@ -696,7 +696,7 @@ _GENERIC_BANK = SubjectKnowledgeBank(
         "写作/表达题",
         "能力迁移题",
     ],
-    system_role="你是资深高中教研员，兼具出题、解题与审题三重视角。",
+    system_role="You are a senior high-school curriculum researcher with question-writing, solving, and reviewing perspectives.",
 )
 
 
@@ -713,4 +713,3 @@ def get_subject_bank(subject: str) -> SubjectKnowledgeBank:
 
 def get_subject_system_role(subject: str) -> str:
     return str(get_subject_bank(subject).system_role or "").strip() or _GENERIC_BANK.system_role
-

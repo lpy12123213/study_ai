@@ -172,11 +172,11 @@ class KnowledgePointsToolsMixin:
                 "topic": topic,
                 "subject": subject,
                 "instructions": (
-                    "请把 topic 拆分为若干个可用于检索的子知识点（短语级关键词）。\n"
+                    "Split topic into several searchable sub-knowledge points as phrase-level keywords.\n"
                     f"- 数量：{min_points} 到 {max_points} 个\n"
                     "- 每个子知识点尽量具体、互不重复\n"
-                    "- 仅输出严格 JSON（不要 Markdown、不要代码块）\n"
-                    '- JSON 格式：{"knowledge_points": ["...", "..."]}\n'
+                    "- Output strict JSON only. Do not output Markdown or code fences.\n"
+                    '- JSON format: {"knowledge_points": ["...", "..."]}\n'
                 ),
             }
             # Even in strict mode, do not block the whole pipeline if the planner model is slow/hangs.
@@ -185,7 +185,7 @@ class KnowledgePointsToolsMixin:
                 text = await asyncio.wait_for(
                     self._call_llm_text(
                         messages=[
-                            {"role": "system", "content": "你是严谨的学科老师，输出必须是JSON。"},
+                            {"role": "system", "content": "You are a rigorous subject teacher. Output JSON only."},
                             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                         ],
                         model=model,
@@ -311,12 +311,12 @@ class KnowledgePointsToolsMixin:
                 "subject": subject,
                 "knowledge_points": points,
                 "requirements": [
-                    "请审核并微调上述知识点列表，使其更适合『逐点检索 + 逐点生成自学讲解』。",
+                    "Review and minimally adjust the knowledge-point list so it works better for point-by-point retrieval and self-study explanation generation.",
                     f"数量要求：{min_points}~{max_points} 个；尽量不超过 {max_points} 个。",
                     "去重：合并重复/同义项；避免过泛（如“概念”“性质”单独出现）。",
-                    "补全：如明显缺失关键子主题，可补充 1~3 个，但不要发散到无关内容。",
-                    "粒度：短语级关键词，便于搜索与组织讲解；尽量保持原有顺序逻辑。",
-                    '只输出严格 JSON：{"knowledge_points": [...], "note": "..."}（不要 Markdown，不要多余文字）。',
+                    "Completion: if key subtopics are clearly missing, add 1-3 items, but do not drift into unrelated content.",
+                    "Granularity: phrase-level keywords suitable for search and explanation organization. Preserve the original logical order when possible.",
+                    'Output strict JSON only: {"knowledge_points": [...], "note": "..."}. Do not output Markdown or extra text.',
                 ],
             }
             last_err = ""
@@ -325,7 +325,7 @@ class KnowledgePointsToolsMixin:
                     text = await asyncio.wait_for(
                         self._call_llm_text(
                             messages=[
-                                {"role": "system", "content": "你是严谨的教研员，输出必须是JSON。"},
+                                {"role": "system", "content": "You are a rigorous curriculum researcher. Output JSON only."},
                                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                             ],
                             model=model,

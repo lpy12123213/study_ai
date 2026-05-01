@@ -17,12 +17,17 @@ from backend.api.question_evaluate_schemas import (
     QuestionSearchResponse,
 )
 from backend.core.settings import DEFAULT_SUBJECT
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion_text
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.crawler.manager import get_crawler
 from backend.core.subjects import resolve_subject
 
 router = APIRouter(prefix="/question-evaluate", tags=["question-evaluate"], dependencies=[Depends(require_auth)])
+
+
+def _prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
 
 
 def _extract_json_obj(text: str) -> Dict[str, Any]:
@@ -156,7 +161,7 @@ async def _evaluate_one(
         messages=[
             {
                 "role": "system",
-                "content": "你是资深教研员，擅长鉴别试题质量。请严格输出 JSON object，不要输出Markdown或解释。",
+                "content": _prompt("question.evaluate.external.v1"),
             },
             {"role": "user", "content": prompt},
         ],
@@ -249,7 +254,7 @@ async def evaluate_generated_question_review(
         messages=[
             {
                 "role": "system",
-                "content": "你是资深教研员，擅长审查 AI 生成试题。请严格输出 JSON object，不要输出Markdown或解释。",
+                "content": _prompt("question.judge.quality.v1"),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],

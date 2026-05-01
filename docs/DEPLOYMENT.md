@@ -1,25 +1,38 @@
-# Deployment
+# 部署与运行
 
-This document reflects the current repository structure as of March 6, 2026.
+本文覆盖本地运行、构建、同源部署、反向代理和上线前检查。项目默认适合本地或内网部署；公网部署前必须检查密钥、鉴权、代理、SSE 和数据持久化策略。
 
-## Requirements
+## 环境要求
+
+必需：
 
 - Python 3.10+
 - Node.js LTS
 - npm
-- Playwright Chromium dependencies
-- Recommended for PDF export + static vector diagrams (TikZ/Asymptote):
-  - `xelatex`
-  - `dvisvgm`
-  - `asy`
+- Playwright Chromium
 
-Notes:
-- Windows: install MiKTeX (or TeX Live) and ensure the executables above are on `PATH`.
-- Linux: install a TeX distribution that includes XeLaTeX + dvisvgm, plus Asymptote.
+按需：
 
-## Recommended path
+- XeLaTeX 或 PDFLaTeX：PDF 导出。
+- `dvisvgm`：TikZ/PGF 转 SVG。
+- Asymptote `asy`：部分图形回退。
+- Pandoc：DOCX 导出。
 
-### Windows
+Windows 上建议安装 MiKTeX 或 TeX Live，并确认相关可执行文件在 `PATH` 中。
+
+## 部署模型
+
+当前支持并维护的部署模型：
+
+- 本地开发：Vite 前端 + Uvicorn 后端。
+- 同源部署：后端托管 `frontend/dist`，浏览器使用 `/api`。
+- 前后端分离部署：前端设置绝对 `VITE_API_BASE_URL`。
+
+当前不提供正式容器化生产入口。容器化部署需要另行维护 Dockerfile、卷、健康检查和 CI 验证。
+
+## 推荐流程
+
+Windows：
 
 ```bat
 start.bat setup
@@ -27,7 +40,7 @@ start.bat doctor
 start.bat dev
 ```
 
-### Linux / macOS
+Linux / macOS：
 
 ```bash
 chmod +x start.sh
@@ -36,46 +49,27 @@ chmod +x start.sh
 ./start.sh dev
 ```
 
-`setup` installs dependencies using requirement and lockfile fingerprints, so rerunning it is safe after dependency changes.
+`setup` 会根据依赖文件指纹安装后端和前端依赖；依赖变化后可以重复运行。
 
-## Manual deployment flow
+## 手动构建
 
-### 1. Backend environment
+后端：
 
 ```bash
 python -m venv venv
-```
-
-Activate:
-
-- Windows: `venv\Scripts\activate`
-- Linux / macOS: `source venv/bin/activate`
-
-Install backend packages:
-
-```bash
+source venv/bin/activate
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
-# Optional: install ChromaDB-backed semantic memory on compatible runtimes.
-python -m pip install -r requirements-semantic-memory.txt
 python -m playwright install chromium
 ```
 
-Base setup does not require ChromaDB. If the optional semantic-memory requirements are skipped, the backend uses the
-built-in JSONL fallback store instead.
+Windows 激活虚拟环境：
 
-## Frontend API base URL
+```bat
+venv\Scripts\activate
+```
 
-The frontend uses a single API base setting:
-
-- `VITE_API_BASE_URL` (defaults to `/api`)
-
-Same-origin deploy (recommended): keep the default `/api` and let the backend serve `frontend/dist`.
-
-Cross-origin deploy (frontend hosted separately): set `VITE_API_BASE_URL` to an absolute URL like `https://your-backend.example/api`
-and rebuild the frontend.
-
-### 2. Frontend build
+前端：
 
 ```bash
 cd frontend
@@ -85,109 +79,121 @@ npm run build
 cd ..
 ```
 
-### 3. Backend start
+启动后端：
 
 ```bash
 python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
 ```
 
-The FastAPI app initializes the SQLite schema on startup (see `backend/database/migrations.py`). No manual bootstrap commands are required.
-
-### 4. MCP server start
+启动 MCP：
 
 ```bash
 python -m backend.mcp.stdio_server
 ```
 
-## Health checks
+## 前端部署方式
 
-Run the built-in doctor command before shipping:
+### 同源部署
+
+推荐同源部署：前端构建产物放在 `frontend/dist`，API 使用默认 `/api`。后端可以同时服务静态资源和 API，浏览器不会遇到跨域问题。
+
+### 前后端分离
+
+如果前端独立托管：
+
+```bash
+VITE_API_BASE_URL=https://your-backend.example/api
+```
+
+然后重新构建前端：
+
+```bash
+cd frontend
+npm run build
+```
+
+后端需要允许对应来源访问，并确认 SSE 不被代理缓冲。
+
+## 反向代理
+
+Nginx / Caddy / Traefik 需要注意：
+
+- `/api/` 转发到 FastAPI。
+- SSE 路径关闭响应缓冲。
+- 静态资源正常缓存。
+- WebSocket 不是主路径，但 SSE 长连接必须保持。
+
+如果需要信任代理传入的客户端 IP：
+
+- `TRUST_PROXY_HEADERS=1`
+- `TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8`
+
+只在受信任的网络边界开启，不要在未知代理后使用 `*`。
+
+## 数据目录
+
+常见本地状态：
+
+- `.local/`：SQLite、媒体缓存、任务事件、内部状态。
+- `.local/media/generated/`：导出文件和生成媒体。
+- `study_archives/`：自学资料归档。
+- `artifacts/`、`output/`：本地检查、导出或调试产物。
+- `data/`：本地数据。
+
+这些目录默认不应提交。
+
+## 安全检查
+
+上线前至少确认：
+
+- `.env` 中的 `JWT_SECRET`、`ADMIN_PASSWORD` 已更换。
+- 不允许提交真实 API key、Cookie、数据库、抓取内容。
+- 只开启必要的 `PAPER_STORE_*` 内容持久化。
+- 媒体代理域名白名单符合预期。
+- 反向代理正确处理 SSE。
+- 日志不会输出密钥明文。
+
+## 备份与恢复
+
+需要保留的本地状态通常包括：
+
+- `.local/` 下的 SQLite 数据库和任务事件。
+- `.local/media/generated/` 下仍需下载的导出文件。
+- `study_archives/` 下的学习资料归档。
+- 自定义 `config/model.json`，但不应把密钥提交到 Git。
+
+恢复时必须先确认 `.env`、模型配置和数据库 schema 与目标版本兼容。
+
+## 上线前验证
 
 ```bash
 start.bat doctor
 ```
 
-or
+或：
 
 ```bash
 ./start.sh doctor
 ```
 
-This covers imports, backend tests, Ruff on maintained backend paths, `pip check`, frontend lint, and frontend build.
+`doctor` 会运行：
 
-## Data and storage
+- Python 编译检查。
+- 后端关键 import。
+- `pip check`。
+- 后端单元测试。
+- Ruff 维护路径检查。
+- 前端 lint。
+- 前端构建。
 
-- SQLite database lives under `.local/`
-- Generated media is stored under `.local/media/`
-- Study-material task snapshots live under `.local/study_materials/tasks/`
+如果部署环境不安装 dev 依赖，可在 CI 或构建机运行完整检查，再把构建产物和运行依赖部署到目标环境。
 
-Paper content persistence is opt-in. Default behavior does not persist stem / answer / analysis text unless the corresponding `PAPER_STORE_*` flags are enabled.
+## 当前不包含
 
-## Used question de-dup scope
+仓库当前没有可直接使用的官方 Docker/Compose 生产部署入口。需要容器化时，应新增真实维护的 Dockerfile、健康检查、卷挂载、环境变量文档和 CI 验证。
 
-Paper composition keeps a "used questions" set to avoid repeating question IDs.
+## 相关文档
 
-By default this is **global** (shared across all users) for backward compatibility.
-For multi-user deployments, you likely want **per-user isolation**:
-
-- `USED_QUESTIONS_SCOPE=global` (default) — all users share a single used set
-- `USED_QUESTIONS_SCOPE=user` — used set is isolated by `user_id`
-
-Back-compat: `USED_QUESTIONS_PER_USER=1` also enables per-user isolation.
-
-## Reverse proxy notes
-
-If you deploy behind Nginx / Caddy / Traefik:
-
-- keep `/api/` routed to FastAPI
-- allow streaming for SSE endpoints
-- avoid buffering SSE responses
-- serve `frontend/dist` assets normally
-
-### Client IP / rate limiting behind proxies
-
-Rate limiting uses either:
-- the access token (preferred), or
-- the client IP address (when no token is present).
-
-If you run behind a reverse proxy and want correct client IPs, enable proxy-header parsing **only** for trusted proxy IPs:
-
-- `TRUST_PROXY_HEADERS=1`
-- `TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8` (comma-separated IPs/CIDRs; use `*` only if you fully trust your network edge)
-
-If `TRUSTED_PROXIES` is not set, the server does not trust `X-Forwarded-For` / `Forwarded` headers (even when `TRUST_PROXY_HEADERS=1`).
-
-### Request-scoped LLM API key override (security)
-
-The web UI can optionally send per-request model keys via headers (`X-LLM-API-Key` / `X-Moonshot-API-Key`).
-This is **disabled by default** for shared deployments.
-
-Controls:
-- `LLM_API_KEY_OVERRIDE_ENABLED=1` to allow this feature
-- `LLM_API_KEY_OVERRIDE_REQUIRE_ADMIN=1` to restrict it to admin users
-
-When disabled or not permitted, requests that include override headers return `403` with a stable error code
-(`llm_api_key_override_disabled` / `llm_api_key_override_forbidden`).
-
-## Pre-commit (optional, recommended)
-
-Install hooks (after backend + frontend dependencies are installed):
-
-```bash
-python -m pip install -r requirements-dev.txt
-pre-commit install
-```
-
-Run checks:
-
-```bash
-pre-commit run -a
-```
-
-Notes:
-- Python hooks use Ruff (`ruff` / `ruff format`).
-- Frontend hook runs `npm --prefix frontend run lint` and requires Node + `frontend/node_modules` present.
-
-## Not supported
-
-The old Docker agent worker files were removed because they were dead code and not wired into the app. If you need containerized execution later, reintroduce it as a real feature with tests and documented entrypoints.
+- `CONFIGURATION.md`：环境变量和模型配置。
+- `TROUBLESHOOTING.md`：运行故障排查。
+- `API.md`：健康检查、任务流和接口路径。

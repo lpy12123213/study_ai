@@ -93,14 +93,14 @@ class Reflector:
                     outline_verify_by_kp[str(kp).strip() or "（未知知识点）"] = secs
 
         prompt = (
-            "请审查下面的自学资料 Markdown 是否满足：\n"
+            "Review whether the self-study Markdown below satisfies:\n"
             "- 结构是否清晰（按知识点分段；讲解逻辑顺畅）\n"
             "- 覆盖度：根据知识点类型尽量覆盖核心定义/直观、关键性质与条件、常见误区、应用/题型；不适用可省略，但不应遗漏核心概念解释。\n"
-            "- 若提供了 outline_verify_by_kp：以其为主要审查基准（允许合并/调整顺序/省略不适用项，但应满足 verify 的意图）。\n"
+            "- If outline_verify_by_kp is provided, use it as the primary review baseline. Merging, reordering, or omitting inapplicable items is allowed only if the verify intent is still satisfied.\n"
             "- 是否有明显事实/逻辑错误，或过度强断言\n"
             "- 若提供了 facts_by_kp：检查内容是否与高置信度事实矛盾；低置信度事实相关表述需用“推断/可能/建议”等措辞\n"
             "\n"
-            "输出严格 JSON（不要 Markdown）。字段：passed(bool), issues(string[]), suggestions(string[])\n"
+            "Output strict JSON, not Markdown. Fields: passed(bool), issues(string[]), suggestions(string[])\n"
             "\n"
             f"主题：{topic}\n\n"
             f"outline_verify_by_kp（可为空）：{json.dumps(outline_verify_by_kp, ensure_ascii=False)}\n\n"
@@ -110,7 +110,7 @@ class Reflector:
         try:
             content = await chat_completion_text(
                 messages=[
-                    {"role": "system", "content": "你是严谨的审稿人，输出必须是JSON。"},
+                    {"role": "system", "content": "You are a rigorous reviewer. Output JSON only."},
                     {"role": "user", "content": prompt},
                 ],
                 model=normalized_model,

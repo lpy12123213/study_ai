@@ -17,6 +17,7 @@ export type UnifiedTask = {
   request?: unknown
   result?: unknown
   error?: unknown
+  events?: TaskStreamEvent[]
   elapsed_s?: number
   eta_s?: number
 }
@@ -44,8 +45,19 @@ export async function listTasks(params?: {
   return response.data
 }
 
-export async function getTask(taskId: string): Promise<any> {
-  const response = await apiClient.get(`/tasks/${encodeURIComponent(taskId)}`)
+export async function getTask(
+  taskId: string,
+  options?: {
+    includeEvents?: boolean
+    eventsLimit?: number
+  }
+): Promise<any> {
+  const params: Record<string, unknown> = {}
+  if (options?.includeEvents !== undefined) params.include_events = Boolean(options.includeEvents)
+  if (options?.eventsLimit !== undefined) params.events_limit = Math.max(1, Math.floor(Number(options.eventsLimit) || 1))
+
+  const config = Object.keys(params).length > 0 ? { params } : undefined
+  const response = await apiClient.get(`/tasks/${encodeURIComponent(taskId)}`, config)
   return response.data
 }
 

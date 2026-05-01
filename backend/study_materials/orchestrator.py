@@ -17,6 +17,7 @@ from backend.database.repositories.content.study_archives import (
     get_study_archive_by_fingerprint,
     upsert_study_archive,
 )
+from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 from backend.database.repositories.system.tasks import get_task as db_get_task
 from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
@@ -571,6 +572,20 @@ class StudyMaterialsTaskManager:
             "max_iterations": max_iterations,
             "iterations_done": 0,
         }
+        try:
+            meta["agent_run_spec"] = build_study_materials_agent_spec(
+                query=q,
+                subject=subj,
+                options=opts,
+                resume_state={
+                    "resume_working_memory": dict(wm),
+                    "iteration_offset": iteration_offset_n,
+                    "max_iterations": max_iterations,
+                    "parent_task_id": parent,
+                },
+            ).to_dict()
+        except Exception:
+            logger.debug("study_materials_agent_spec_build_failed", extra={"task_id": task_id}, exc_info=True)
         if wm:
             _refresh_resume_meta(meta=meta)
 
@@ -762,17 +777,16 @@ class StudyMaterialsTaskManager:
             yield {"taskId": tid or "", "seq": int(after_seq or 0), "type": "error", "data": {"error": "missing_task_id"}}
             return
 
-        runtime_task = await task_runtime.get_task(tid)
-        if runtime_task and str(runtime_task.user_id or "") == uid:
-            async for event in task_runtime.stream(tid, after_seq=after_seq, heartbeat_s=heartbeat_s):
-                yield event
-            return
-
         last_sent = max(0, int(after_seq or 0))
         last_ping_at = 0.0
         while True:
             task = await db_get_task(user_id=uid, task_id=tid, include_events=False)
             if not task:
+                runtime_task = await task_runtime.get_task(tid)
+                if runtime_task and str(runtime_task.user_id or "") == uid:
+                    async for event in task_runtime.stream(tid, after_seq=last_sent, heartbeat_s=heartbeat_s):
+                        yield event
+                    return
                 yield {"taskId": tid, "seq": last_sent, "type": "error", "data": {"error": "task_not_found"}}
                 return
 
@@ -783,6 +797,9 @@ class StudyMaterialsTaskManager:
                     continue
                 last_sent = seq
                 yield evt
+
+            if len(events) >= 500:
+                continue
 
             if str(task.get("status") or "") != "running":
                 return
