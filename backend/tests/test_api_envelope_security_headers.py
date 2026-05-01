@@ -65,7 +65,17 @@ class TestSecurityHeadersAndErrorEnvelope(unittest.TestCase):
                         self.assertIn("request_id", payload["error"])
                         self.assertEqual(payload["error"]["request_id"], not_found.headers.get("X-Request-ID"))
 
-                        validation = client.post("/api/auth/login", json={})
+                        removed_login = client.post(
+                            "/api/auth/login",
+                            json={"username": "any", "password": "any"},
+                        )
+                        self.assertEqual(removed_login.status_code, 405)
+
+                        me = client.get("/api/auth/me")
+                        self.assertEqual(me.status_code, 200)
+                        self.assertEqual(me.json().get("user_id"), "local-user")
+
+                        validation = client.post("/api/auth/change-password", json={})
                         self.assertEqual(validation.status_code, 422)
                         payload = validation.json()
                         self.assertIn("error", payload)
@@ -73,8 +83,11 @@ class TestSecurityHeadersAndErrorEnvelope(unittest.TestCase):
                         self.assertIn("request_id", payload["error"])
                         self.assertEqual(payload["error"]["request_id"], validation.headers.get("X-Request-ID"))
 
-                        with patch("backend.api.auth.authenticate_user", side_effect=RuntimeError("boom")):
-                            internal = client.post("/api/auth/login", json={"username": "any", "password": "any"})
+                        with patch("backend.api.auth.change_user_password", side_effect=RuntimeError("boom")):
+                            internal = client.post(
+                                "/api/auth/change-password",
+                                json={"old_password": "old-pass", "new_password": "new-pass"},
+                            )
                         self.assertEqual(internal.status_code, 500)
                         payload = internal.json()
                         self.assertEqual(payload.get("detail"), "internal_error")

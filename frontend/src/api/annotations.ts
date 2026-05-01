@@ -46,3 +46,13 @@ export async function updateAnnotation(
   const res = await apiClient.patch(`/annotations/${encodeURIComponent(String(annotationId))}`, patch)
   return res.data?.annotation as Annotation
 }
+
+export const annotationsApi = {
+  listAnnotations,
+  createAnnotation,
+  exportAnnotations,
+  updateAnnotation,
+  list: async (): Promise<{ data: any }> => ({
+    data: { annotations: await listAnnotations() },
+  }),
+}

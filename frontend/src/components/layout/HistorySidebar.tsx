@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useAuthStore } from '@/stores/useAuthStore'
+import { useAppearanceStore } from '@/stores/useAppearanceStore'
 import { cn, groupByDate } from '@/lib/utils'
 import * as chatApi from '@/api/chat'
 import * as tasksApi from '@/api/tasks'
@@ -191,6 +192,7 @@ export function HistorySidebar() {
   const location = useLocation()
   const queryClient = useQueryClient()
   const { isAuthenticated, token } = useAuthStore()
+  const { sidebarStyle, sidebarPosition } = useAppearanceStore()
   const {
     currentConversationIdByType,
     removeConversation,
@@ -210,6 +212,8 @@ export function HistorySidebar() {
   })
   const [searchQuery, setSearchQuery] = useState('')
   const [tagFilter, setTagFilter] = useState('')
+  const expandedWidth = sidebarStyle === 'floating' ? 280 : 260
+  const collapsedWidth = isMobile ? 52 : 60
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -447,8 +451,14 @@ export function HistorySidebar() {
   return (
     <motion.aside 
       initial={false}
-      animate={{ width: isCollapsed ? (isMobile ? 52 : 60) : 260 }}
-      className="border-r border-border bg-sidebar-background flex flex-col relative transition-all duration-300 ease-in-out"
+      animate={{ width: isCollapsed ? collapsedWidth : expandedWidth }}
+      className={cn(
+        'bg-sidebar-background flex flex-col relative transition-all duration-300 ease-in-out',
+        sidebarStyle === 'sidebar' &&
+          (sidebarPosition === 'right' ? 'border-l border-border' : 'border-r border-border'),
+        sidebarStyle === 'inset' && 'm-2 rounded-lg border border-border shadow-sm overflow-hidden',
+        sidebarStyle === 'floating' && 'm-3 rounded-lg border border-border shadow-lg overflow-hidden bg-sidebar-background/95',
+      )}
     >
       <div className="p-3 flex items-center justify-between">
         {!isCollapsed && (

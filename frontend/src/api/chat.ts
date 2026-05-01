@@ -350,3 +350,12 @@ export function sendMessageStream(
     { signal: options?.signal }
   )
 }
+
+export const chatApi = {
+  getConversations: async (_scope?: string): Promise<{ data: any }> => ({
+    data: { conversations: await getConversations(100) },
+  }),
+  getMessages: async (conversationId: string): Promise<{ data: any }> => ({
+    data: await getMessages(conversationId),
+  }),
+}

@@ -54,3 +54,15 @@ export async function importTemplates(templates: UserTemplate[]): Promise<UserTe
   return (res.data?.created as UserTemplate[]) || []
 }
 
+export const templatesApi = {
+  listTemplates,
+  getTemplate,
+  createTemplate,
+  updateTemplate,
+  deleteTemplate,
+  exportTemplates,
+  importTemplates,
+  list: async (): Promise<{ data: any }> => ({
+    data: { templates: await listTemplates({ limit: 200 }) },
+  }),
+}

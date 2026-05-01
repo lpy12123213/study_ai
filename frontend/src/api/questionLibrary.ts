@@ -490,3 +490,30 @@ export function streamQuestionLibraryTask(
     onComplete
   )
 }
+
+export const questionLibraryApi = {
+  listQuestionLibrary,
+  getQuestionLibraryItem,
+  hideQuestion,
+  unhideQuestion,
+  starQuestion,
+  unstarQuestion,
+  exportQuestionToBasket,
+  bulkDeleteQuestionLibraryItems,
+  list: async (params?: { search?: string }): Promise<{ data: any }> => {
+    const response = await listQuestionLibrary({
+      q: String(params?.search || '').trim() || undefined,
+      limit: 100,
+      offset: 0,
+    })
+    return {
+      data: {
+        questions: response.items.map((item) => ({
+          id: item.question_id,
+          content: item.stem || item.question_id,
+          type: item.question_type || item.origin || '',
+        })),
+      },
+    }
+  },
+}

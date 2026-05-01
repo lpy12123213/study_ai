@@ -52,3 +52,9 @@ export async function searchAll(params: {
   return response.data
 }
 
+export const searchApi = {
+  searchAll,
+  search: async (params: { q: string; types?: string[]; limit?: number }): Promise<{ data: any }> => ({
+    data: await searchAll(params),
+  }),
+}

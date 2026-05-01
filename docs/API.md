@@ -8,7 +8,7 @@
 
 - 本地后端：`http://localhost:8000`
 - JSON 请求：`Content-Type: application/json`
-- 受保护接口：`Authorization: Bearer <access_token>`
+- 本地默认用户：未提供 `Authorization` 时，后端使用内置本地管理员用户。
 - 流式接口：`text/event-stream`，事件体通常为 `data: {...}\n\n`
 
 ## API 约束
@@ -21,22 +21,8 @@
 
 ## 认证
 
-登录：
-
-```http
-POST /api/auth/login
-```
-
-请求示例：
-
-```json
-{
-  "username": "admin",
-  "password": "dev-admin-change-me"
-}
-```
-
-返回包含 `access_token`、`token_type`、`user_id`、`username` 和 `role`。前端会把 token 存入浏览器本地状态，后续请求自动携带。
+当前本地应用不再暴露登录接口。业务接口仍通过 `require_auth` 获取用户上下文；没有 bearer token
+或 token 已失效时，后端会回退到内置本地管理员用户。
 
 常用认证接口：
 
@@ -83,7 +69,7 @@ POST /api/auth/login
 - system：健康检查、配置、指标、搜索历史、仪表盘。
 - integrations：题源筛选项、学科、知识树。
 - workspace：对话、画布、媒体、试卷、模板、归档、错题、批注、反馈。
-- auth：登录、用户、密码。
+- auth：本地用户上下文、用户、密码。
 - generation：DeepThink、教案、自学资料、题库、AI 出题、学习计划、知识视频。
 - tasks：统一长任务、导出任务、任务回放。
 

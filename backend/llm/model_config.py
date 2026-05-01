@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from backend.core.encryption import decrypt_string
+
 
 def _truthy(value: str) -> bool:
     v = str(value or "").strip().lower()
@@ -28,7 +30,7 @@ def resolve_model_config_path(*, repo_root: Path) -> Path:
     return (repo_root / "config" / "model.json").resolve()
 
 
-def _normalize_base_url(value: str) -> str:
+def normalize_base_url(value: str) -> str:
     raw = str(value or "").strip().rstrip("/")
     if not raw:
         return ""
@@ -36,6 +38,10 @@ def _normalize_base_url(value: str) -> str:
     if raw.endswith("/chat/completions"):
         raw = raw[: -len("/chat/completions")].rstrip("/")
     return raw
+
+
+def _normalize_base_url(value: str) -> str:
+    return normalize_base_url(value)
 
 
 @dataclass(frozen=True)
@@ -94,13 +100,22 @@ def load_model_json_config(*, repo_root: Path) -> Optional[ModelJsonConfig]:
                 continue
             base_url = _normalize_base_url(str(v.get("base_url") or ""))
             api_key = str(v.get("api_key") or "").strip()
+            encrypted_api_key = str(v.get("api_key_encrypted") or "").strip()
+            if encrypted_api_key:
+                api_key = decrypt_string(encrypted_api_key)
+            elif api_key:
+                api_key = decrypt_string(api_key)
             if not base_url and not api_key:
                 continue
             key = name.lower()
             providers[key] = ProviderConfig(name=key, base_url=base_url, api_key=api_key)
 
     active_key = active.lower()
-    pinned = bool(active_key and providers.get(active_key) and not _truthy(payload.get("auto") or "0"))
+    if "pinned" in payload:
+        pinned_raw = payload.get("pinned")
+        pinned = bool(pinned_raw) if isinstance(pinned_raw, bool) else _truthy(str(pinned_raw or ""))
+    else:
+        pinned = bool(active_key and providers.get(active_key) and not _truthy(payload.get("auto") or "0"))
 
     # If active_provider is invalid, still load providers/models/params but don't pin the runtime.
     if active_key and active_key not in providers:

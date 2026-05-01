@@ -8,6 +8,7 @@ All other modules should prefer importing from here (or via the existing
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
@@ -566,6 +567,86 @@ METASO_TIMEOUT = settings.metaso_timeout_seconds
 TAVILY_API_KEY = settings.tavily_api_key.get_secret_value()
 TAVILY_BASE_URL = settings.tavily_base_url
 TAVILY_TIMEOUT = settings.tavily_timeout_seconds
+
+
+def _runtime_value_map(next_settings: Settings) -> Dict[str, Any]:
+    return {
+        "CHAT_PROVIDER": next_settings.chat_provider,
+        "CHAT_API_KEY": next_settings.chat_api_key.get_secret_value(),
+        "CHAT_BASE_URL": next_settings.chat_base_url,
+        "LLM_PROVIDER_PINNED": bool(next_settings.llm_provider_pinned),
+        "OPENROUTER_API_KEY": next_settings.openrouter_api_key.get_secret_value(),
+        "OPENROUTER_BASE_URL": next_settings.openrouter_base_url,
+        "MOONSHOT_API_KEY": next_settings.moonshot_api_key.get_secret_value(),
+        "MOONSHOT_BASE_URL": next_settings.moonshot_base_url,
+        "MAIN_MODEL": next_settings.main_model,
+        "SUB_MODEL": next_settings.sub_model,
+        "LESSON_PLAN_PROVIDER": next_settings.lesson_plan_provider,
+        "LESSON_PLAN_API_KEY": next_settings.lesson_plan_api_key.get_secret_value(),
+        "LESSON_PLAN_BASE_URL": next_settings.lesson_plan_base_url,
+        "LESSON_PLAN_MODEL": next_settings.lesson_plan_model,
+        "LESSON_PLAN_SUBAGENT_CONCURRENCY": next_settings.lesson_plan_subagent_concurrency,
+        "MAIN_MODEL_TEMPERATURE": next_settings.main_model_temperature,
+        "MAIN_MODEL_MAX_TOKENS": next_settings.main_model_max_tokens,
+        "SUB_MODEL_TEMPERATURE": next_settings.sub_model_temperature,
+        "SUB_MODEL_MAX_TOKENS": next_settings.sub_model_max_tokens,
+        "LESSON_PLAN_TEMPERATURE": next_settings.lesson_plan_temperature,
+        "LESSON_PLAN_MAX_TOKENS": next_settings.lesson_plan_max_tokens,
+        "STUDY_MATERIALS_THINKING_EFFORT_DEFAULT": next_settings.study_materials_thinking_effort,
+        "STUDY_MATERIALS_THINKING_MODEL": next_settings.study_materials_thinking_model,
+        "STUDY_MATERIALS_WRITER_MODEL": next_settings.study_materials_writer_model,
+        "MAX_TOOL_ITERATIONS": next_settings.max_tool_iterations,
+        "API_TIMEOUT": next_settings.api_timeout_seconds,
+        "SUB_AI_TIMEOUT": next_settings.sub_ai_timeout_seconds,
+        "LLM_CIRCUIT_BREAKER_FAIL_THRESHOLD": next_settings.llm_circuit_breaker_fail_threshold,
+        "LLM_CIRCUIT_BREAKER_OPEN_SECONDS": next_settings.llm_circuit_breaker_open_seconds,
+        "DEFAULT_SUBJECT": next_settings.default_subject,
+        "DIFFICULTY_QUERY_MODE": next_settings.difficulty_query_mode,
+        "REVIEW_PROVIDER": next_settings.review_provider,
+        "FIREWORKS_API_KEY": next_settings.fireworks_api_key.get_secret_value(),
+        "FIREWORKS_BASE_URL": next_settings.fireworks_base_url,
+        "REVIEW_MODEL": next_settings.review_model,
+        "REVIEW_MODEL_TEMPERATURE": next_settings.review_model_temperature,
+        "REVIEW_MODEL_MAX_TOKENS": next_settings.review_model_max_tokens,
+        "REVIEW_TIMEOUT": next_settings.review_timeout_seconds,
+        "REVIEW_MAX_STEM_CHARS": next_settings.review_max_stem_chars,
+        "REVIEW_HTTP_REFERER": next_settings.review_http_referer,
+        "REVIEW_X_TITLE": next_settings.review_x_title,
+        "ZHIPU_API_KEY": next_settings.zhipu_api_key.get_secret_value(),
+        "ZHIPU_BASE_URL": next_settings.zhipu_base_url,
+        "ZHIPU_MODEL": next_settings.zhipu_model,
+        "ZHIPU_TIMEOUT": next_settings.zhipu_timeout_seconds,
+        "METASO_API_KEY": next_settings.metaso_api_key.get_secret_value(),
+        "METASO_BASE_URL": next_settings.metaso_base_url,
+        "METASO_TIMEOUT": next_settings.metaso_timeout_seconds,
+        "TAVILY_API_KEY": next_settings.tavily_api_key.get_secret_value(),
+        "TAVILY_BASE_URL": next_settings.tavily_base_url,
+        "TAVILY_TIMEOUT": next_settings.tavily_timeout_seconds,
+    }
+
+
+def reload_settings_from_env() -> Settings:
+    """Reload env/model config and refresh already imported backend setting constants best-effort."""
+
+    global settings
+
+    next_settings = Settings.from_env()
+    values = _runtime_value_map(next_settings)
+
+    settings = next_settings
+    globals().update(values)
+
+    for module_name, module in list(sys.modules.items()):
+        if not module_name.startswith("backend."):
+            continue
+        for key, value in values.items():
+            if hasattr(module, key):
+                try:
+                    setattr(module, key, value)
+                except Exception:
+                    pass
+
+    return next_settings
 
 
 def get_config_summary() -> Dict[str, Any]:

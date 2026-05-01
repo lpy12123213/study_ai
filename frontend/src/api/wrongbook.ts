@@ -49,3 +49,12 @@ export async function createPracticePaper(input: {
   return res.data as { paper_id: number }
 }
 
+export const wrongbookApi = {
+  listWrongbook,
+  upsertWrongQuestion,
+  deleteWrongQuestion,
+  createPracticePaper,
+  list: async (): Promise<{ data: any }> => ({
+    data: { items: await listWrongbook({ limit: 200 }) },
+  }),
+}

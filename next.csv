@@ -1,0 +1,9 @@
+优先级,类别,文件/模块,问题描述,建议方案
+P0,安全,backend/core/encryption.py,手写流密码（HMAC-SHA256 keystream）非标准且未经验证,替换为 cryptography.fernet.Fernet 标准实现
+P1,架构,backend/core/settings.py,reload_settings_from_env 遍历 sys.modules 做全局 monkey-patch 且异常被吞掉,所有模块改为从 settings 对象读取属性而非导入模块级常量
+P1,架构,backend/api/system.py:149,put_model_settings 中 globals()["settings"] = reloaded 冗余赋值,删除该行——reload_settings_from_env 已处理全局更新
+P1,架构,frontend/src/stores/useAppearanceStore.ts + useUiPreferencesStore,外观偏好拆分在两个 store 中导致 SettingsView/UserSettingsBootstrap/导入导出逻辑重复,合并为单一 useAppearanceStore
+P2,代码质量,frontend/src/features/settings/SettingsView.tsx,960 行单体组件含约 15 个 useState 混合多个职责,拆分为 ApiConfigTab.tsx / AppearanceTab.tsx / DataTab.tsx；SettingsView 只负责 tab 路由
+P2,代码质量,UserSettingsBootstrap.tsx + SettingsView.tsx,外观设置应用逻辑在两处重复,提取到 utils/applyUserSettings.ts 共享函数
+P2,代码质量,HistorySidebar.tsx + UserSettingsBootstrap.tsx,SIDEBAR_COLLAPSED_STORAGE_KEY 在两处硬编码,移到 constants/storage.ts 统一管理
+P3,健壮性,frontend/src/components/shared/UserSettingsBootstrap.tsx,bootstrap 请求失败时错误被静默吞掉且无回退,失败时回退到 localStorage 持久化值并记录错误

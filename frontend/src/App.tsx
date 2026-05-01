@@ -15,7 +15,6 @@ const PapersPage = lazy(() => import('@/pages/PapersPage'))
 const PaperDetailPage = lazy(() => import('@/pages/PaperDetailPage'))
 const CanvasPage = lazy(() => import('@/pages/CanvasPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
-const LoginPage = lazy(() => import('@/pages/LoginPage'))
 const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
 const QuestionLibraryPage = lazy(() => import('@/pages/QuestionLibraryPage'))
 const AiGeneratePage = lazy(() => import('@/pages/AiGeneratePage'))
@@ -46,7 +45,7 @@ function App() {
   return (
     <Suspense fallback={<PageLoader />}> 
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login" element={<Navigate to="/chat" replace />} />
         <Route path="/share/:token" element={<SharePage />} />
         <Route path="/" element={<ManusLayout />}> 
           <Route index element={<Navigate to="/chat" replace />} />

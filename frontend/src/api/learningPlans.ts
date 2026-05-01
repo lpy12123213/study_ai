@@ -44,3 +44,23 @@ export async function createLearningPlanFromStudyArchive(archiveId: number, inpu
   return res.data?.plan as LearningPlan
 }
 
+export const learningPlansApi = {
+  listLearningPlans,
+  getLearningPlan,
+  createLearningPlan,
+  setLearningPlanItemCompleted,
+  createLearningPlanFromStudyArchive,
+  list: async (): Promise<{ data: any }> => ({
+    data: { todos: await listLearningPlans({ include_archived: false, limit: 50 }) },
+  }),
+  create: async (input: { title: string }): Promise<{ data: any }> => ({
+    data: await createLearningPlan({ title: input.title, items: [] }),
+  }),
+  update: async (id: string, patch: { done?: boolean }): Promise<{ data: any }> => {
+    if (typeof patch.done === 'boolean') {
+      await setLearningPlanItemCompleted(Number(id), patch.done)
+    }
+    return { data: { id, ...patch } }
+  },
+  delete: async (_id: string): Promise<{ data: any }> => ({ data: { success: true } }),
+}

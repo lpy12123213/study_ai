@@ -70,3 +70,20 @@ export async function pauseLessonPlanTask(taskId: string): Promise<void> {
 export async function resumeLessonPlanTask(taskId: string): Promise<void> {
   await apiClient.post(`/tasks/${taskId}/resume`)
 }
+
+export const lessonPlansApi = {
+  getLessonPlans,
+  getLessonPlan,
+  createLessonPlanStream,
+  createLessonPlan,
+  updateLessonPlan,
+  deleteLessonPlan,
+  pauseLessonPlanTask,
+  resumeLessonPlanTask,
+  list: async (): Promise<{ data: any }> => ({
+    data: { plans: await getLessonPlans() },
+  }),
+  get: async (id: string): Promise<{ data: any }> => ({
+    data: await getLessonPlan(id),
+  }),
+}

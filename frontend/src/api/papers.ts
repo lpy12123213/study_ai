@@ -290,3 +290,23 @@ export async function exportPaper(
     log: typeof data?.log === 'string' ? data.log : undefined,
   }
 }
+
+export const papersApi = {
+  getPapers,
+  getPaper,
+  createPaper,
+  deletePaper,
+  getPaperDownloadLink,
+  exportPaper,
+  generateFullPaperStream,
+  list: async (): Promise<{ data: any }> => ({
+    data: { papers: await getPapers({ limit: 100 }) },
+  }),
+  get: async (id: string): Promise<{ data: any }> => ({
+    data: await getPaper(id, { includeAnalysis: true }),
+  }),
+  delete: async (id: string): Promise<{ data: any }> => {
+    await deletePaper(id)
+    return { data: { success: true } }
+  },
+}

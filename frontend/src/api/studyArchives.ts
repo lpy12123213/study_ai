@@ -49,3 +49,13 @@ export async function cloneStudyArchive(
   const res = await apiClient.post(`/study-archives/${encodeURIComponent(String(archiveId))}/clone`, input || {})
   return (res.data?.archive as StudyArchive) || (res.data as StudyArchive)
 }
+
+export const studyArchivesApi = {
+  getStudyArchive,
+  listStudyArchives,
+  createStudyArchive,
+  cloneStudyArchive,
+  get: async (archiveId: string): Promise<{ data: any }> => ({
+    data: await getStudyArchive(archiveId),
+  }),
+}

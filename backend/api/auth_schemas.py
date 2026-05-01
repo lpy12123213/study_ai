@@ -7,23 +7,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class LoginRequest(BaseModel):
-    """Login request body."""
-
-    username: str = Field(..., min_length=1, max_length=100)
-    password: str = Field(..., min_length=1)
-
-
-class LoginResponse(BaseModel):
-    """Login response with token."""
-
-    access_token: str
-    token_type: str = "bearer"
-    user_id: str
-    username: str
-    role: str
-
-
 class UserInfo(BaseModel):
     """User information."""
 

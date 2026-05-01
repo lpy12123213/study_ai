@@ -8,18 +8,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import text
 
-from backend.api.auth import require_auth
+from backend.api.auth import require_admin, require_auth
 from backend.api.schemas import SearchHistoryCreate
 from backend.core.cache import cache_registry_stats
 from backend.core.metrics import generate_metrics, metrics_enabled
-from backend.core.settings import settings
+from backend.core.settings import reload_settings_from_env, settings
 from backend.database.engine import engine, pool_metrics
+from backend.database.repositories.system.search import search_fulltext as db_search_fulltext
 from backend.database.repositories.system.search_history import add_search_history as db_add_search_history
 from backend.database.repositories.system.user_settings import get_user_settings as db_get_user_settings
 from backend.database.repositories.system.user_settings import upsert_user_settings as db_upsert_user_settings
-from backend.database.repositories.system.search import search_fulltext as db_search_fulltext
+from backend.llm.model_config import load_model_json_config
+from backend.llm.model_settings import fetch_provider_models, get_model_settings_payload, save_model_settings_payload
 
 router = APIRouter()
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def _disk_check(path: Path) -> dict:
@@ -126,6 +132,56 @@ async def metrics() -> Response:
 async def get_runtime_config(_: dict = Depends(require_auth)) -> dict:
     """返回当前运行配置摘要（不包含密钥等敏感信息）。"""
     return settings.summary()
+
+
+@router.get("/model-settings")
+async def get_model_settings(_: dict = Depends(require_auth)) -> dict:
+    """返回本地模型配置（API Key 只返回脱敏状态）。"""
+    return get_model_settings_payload(repo_root=_repo_root())
+
+
+@router.put("/model-settings")
+async def put_model_settings(payload: dict, _: dict = Depends(require_admin)) -> dict:
+    """保存本地模型配置。密钥写入前会加密。"""
+    try:
+        result = save_model_settings_payload(repo_root=_repo_root(), payload=payload if isinstance(payload, dict) else {})
+        reloaded = reload_settings_from_env()
+        globals()["settings"] = reloaded
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "invalid_model_settings") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="model_settings_save_failed") from exc
+    result["runtime"] = {
+        "reloaded": True,
+        "active_provider": reloaded.chat_provider,
+        "main_model": reloaded.main_model,
+        "sub_model": reloaded.sub_model,
+    }
+    return result
+
+
+@router.post("/model-settings/fetch-models")
+async def fetch_model_settings_models(payload: dict, _: dict = Depends(require_admin)) -> dict:
+    body = payload if isinstance(payload, dict) else {}
+    provider = str(body.get("provider") or body.get("active_provider") or "").strip().lower()
+    base_url = str(body.get("base_url") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+
+    if provider:
+        current = load_model_json_config(repo_root=_repo_root())
+        saved_provider = (current.providers or {}).get(provider) if current else None
+        if saved_provider:
+            if not base_url:
+                base_url = str(saved_provider.base_url or "").strip()
+            if not api_key:
+                api_key = str(saved_provider.api_key or "").strip()
+
+    try:
+        return await fetch_provider_models(base_url=base_url, api_key=api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "invalid_model_provider") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc) or "fetch_models_failed") from exc
 
 
 @router.get("/user-settings")

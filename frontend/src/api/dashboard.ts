@@ -28,3 +28,11 @@ export async function downloadDashboardCsv(params?: { days?: number; from?: stri
   const { filename } = await downloadBlob(url, { headers: {}, signal: undefined })
   return { filename }
 }
+
+export const dashboardApi = {
+  getDashboardStats,
+  downloadDashboardCsv,
+  get: async (): Promise<{ data: any }> => ({
+    data: await getDashboardStats({ days: 30 }),
+  }),
+}

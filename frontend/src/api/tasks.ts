@@ -118,3 +118,18 @@ export async function exportStudyArchiveTask(
   })
   return { taskId: String((res.data as any)?.taskId || '') }
 }
+
+export const tasksApi = {
+  listTasks,
+  getTask,
+  streamTask,
+  pauseTask,
+  resumeTask,
+  cancelTask,
+  retryTask,
+  exportPaperTask,
+  exportStudyArchiveTask,
+  list: async (): Promise<{ data: any }> => ({
+    data: await listTasks({ limit: 100 }),
+  }),
+}

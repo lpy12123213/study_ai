@@ -13,7 +13,7 @@ const load = (factory: () => Promise<{ default: React.ComponentType }>) => {
 }
 
 export const router = createBrowserRouter([
-  { path: '/login', element: load(() => import('@/pages/auth/LoginPage')) },
+  { path: '/login', element: <Navigate to="/dashboard" replace /> },
   { path: '/share/:token', element: load(() => import('@/pages/share/SharePage')) },
   {
     element: <RequireAuth />,

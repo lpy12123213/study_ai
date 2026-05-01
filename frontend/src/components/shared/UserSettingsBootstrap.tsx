@@ -1,8 +1,15 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
-import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore'
+import { useUiPreferencesStore, type UiContrast, type UiDensity } from '@/stores/useUiPreferencesStore'
 import { useUserSettingsStore } from '@/stores/useUserSettingsStore'
+import {
+  useAppearanceStore,
+  type AppearancePreferences,
+  type ContentLayout,
+  type SidebarPosition,
+  type SidebarStyle,
+} from '@/stores/useAppearanceStore'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'manus.sidebar.collapsed'
 
@@ -57,13 +64,40 @@ export function UserSettingsBootstrap() {
         const contrast = String(uiObj.contrast || '').trim()
         const reduceMotion = toOptionalBoolean(uiObj.reduceMotion)
 
-        useUiPreferencesStore.getState().setPreferences({
+        const uiPatch: {
+          fontScale?: number
+          lineHeight?: number
+          density?: UiDensity
+          contrast?: UiContrast
+          reduceMotion?: boolean
+        } = {
           ...(fontScale != null ? { fontScale } : {}),
           ...(lineHeight != null ? { lineHeight } : {}),
-          ...(density === 'comfortable' || density === 'compact' ? { density: density as any } : {}),
-          ...(contrast === 'normal' || contrast === 'high' || contrast === 'eye' ? { contrast: contrast as any } : {}),
+          ...(density === 'comfortable' || density === 'compact' ? { density } : {}),
+          ...(contrast === 'normal' || contrast === 'high' || contrast === 'eye' ? { contrast } : {}),
           ...(reduceMotion != null ? { reduceMotion } : {}),
-        })
+        }
+        useUiPreferencesStore.getState().setPreferences(uiPatch)
+      }
+
+      const appearanceObj = settings.appearance
+      if (isPlainObject(appearanceObj)) {
+        const sidebarStyle = String(appearanceObj.sidebarStyle || '').trim()
+        const contentLayout = String(appearanceObj.contentLayout || '').trim()
+        const sidebarPosition = String(appearanceObj.sidebarPosition || '').trim()
+
+        const appearancePatch: Partial<AppearancePreferences> = {
+          ...(sidebarStyle === 'inset' || sidebarStyle === 'floating' || sidebarStyle === 'sidebar'
+            ? { sidebarStyle: sidebarStyle as SidebarStyle }
+            : {}),
+          ...(contentLayout === 'default' || contentLayout === 'compact' || contentLayout === 'full'
+            ? { contentLayout: contentLayout as ContentLayout }
+            : {}),
+          ...(sidebarPosition === 'left' || sidebarPosition === 'right'
+            ? { sidebarPosition: sidebarPosition as SidebarPosition }
+            : {}),
+        }
+        useAppearanceStore.getState().setAppearance(appearancePatch)
       }
 
       const sidebarObj = settings.sidebar

@@ -55,6 +55,8 @@ cp .env.example .env
 - 默认路径：`config/model.json`
 - 可用 `MODEL_CONFIG_PATH` 指向其他路径
 - `LLM_PROVIDER_PINNED=1` 可锁定 active provider，避免根据模型名自动切换
+- 也可在 Web 设置页的“API 配置”中维护供应商、Base URL、API Key 和默认模型。
+- 通过 Web 设置页保存的 API Key 会写成 `enc:v1:` 加密值；本机解密密钥默认存放在 `.local/secrets/model_config.key`，可用 `LOCAL_ENCRYPTION_KEY_PATH` 指向其他位置。
 
 示例结构：
 
@@ -84,9 +86,11 @@ cp .env.example .env
 模型配置规则：
 
 - `pinned=true` 时，以 `active_provider` 为准，不做自动 provider 推断。
+- `pinned=false` 时允许运行时按模型名前缀做已有的 provider 推断。
 - 模型名必须符合所选 provider 的格式。
 - `main` 用于复杂推理和编排，`sub` 用于轻量提取、选择和判断。
 - lesson plan、study materials 和 question library 可按需设置独立模型。
+- 设置页“抓取模型”会调用供应商的 OpenAI-compatible `GET /models` 接口；如果输入框未填写新 Key，则会使用已保存的加密 Key。
 
 ## 登录与权限
 

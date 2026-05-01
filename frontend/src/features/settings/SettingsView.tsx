@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
-  LogOut,
   Save,
   Loader2,
-  Monitor,
-  Moon,
-  Sun,
+  Check,
+  RefreshCw,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,21 +15,186 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
-import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore'
+import { useUiPreferencesStore, type UiContrast, type UiDensity } from '@/stores/useUiPreferencesStore'
 import { useUserSettingsStore } from '@/stores/useUserSettingsStore'
+import {
+  useAppearanceStore,
+  type AppearancePreferences,
+  type ContentLayout,
+  type SidebarPosition,
+  type SidebarStyle,
+} from '@/stores/useAppearanceStore'
 import { cn } from '@/lib/utils'
 import { SettingsSidebar, type SettingsTabId } from '@/features/settings/components/SettingsSidebar'
+import * as modelSettingsApi from '@/api/modelSettings'
+import type { ModelOption, ModelSettingsResponse } from '@/api/modelSettings'
 
 const roleLabels: Record<string, string> = {
   admin: '管理员',
   user: '普通用户',
 }
 
+const sidebarOptions: Array<{ value: SidebarStyle; label: string }> = [
+  { value: 'inset', label: 'Inset' },
+  { value: 'floating', label: 'Floating' },
+  { value: 'sidebar', label: 'Sidebar' },
+]
+
+const layoutOptions: Array<{ value: ContentLayout; label: string }> = [
+  { value: 'default', label: 'Default' },
+  { value: 'compact', label: 'Compact' },
+  { value: 'full', label: 'Full layout' },
+]
+
+const positionOptions: Array<{ value: SidebarPosition; label: string }> = [
+  { value: 'left', label: 'Left' },
+  { value: 'right', label: 'Right' },
+]
+
+type ThemeMode = 'system' | 'light' | 'dark'
+
+const themeOptions: Array<{ value: ThemeMode; label: string }> = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+]
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function pickScopedModel(value: unknown, provider: string): string {
+  if (typeof value === 'string') return value.trim()
+  if (!isRecord(value)) return ''
+  const providerValue = value[provider]
+  if (typeof providerValue === 'string' && providerValue.trim()) return providerValue.trim()
+  const defaultValue = value.default
+  if (typeof defaultValue === 'string' && defaultValue.trim()) return defaultValue.trim()
+  for (const item of Object.values(value)) {
+    if (typeof item === 'string' && item.trim()) return item.trim()
+  }
+  return ''
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message
+  if (isRecord(error) && typeof error.message === 'string' && error.message.trim()) return error.message
+  return '操作失败'
+}
+
+function StyleOptionCard(props: {
+  label: string
+  selected: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button type="button" className="group block w-full text-left" onClick={props.onClick}>
+      <div
+        className={cn(
+          'relative h-24 rounded-lg border bg-muted/30 p-3 transition-colors',
+          props.selected ? 'border-primary ring-2 ring-primary/15' : 'border-border hover:border-primary/50',
+        )}
+      >
+        {props.children}
+        {props.selected && (
+          <span className="absolute -right-2 -top-2 flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
+            <Check className="h-4 w-4" />
+          </span>
+        )}
+      </div>
+      <div className="mt-2 text-center text-sm font-medium">{props.label}</div>
+    </button>
+  )
+}
+
+function ThemePreview({ mode }: { mode: 'system' | 'light' | 'dark' }) {
+  const dark = mode === 'dark'
+  const system = mode === 'system'
+  return (
+    <div className={cn('h-full rounded-md border overflow-hidden', dark ? 'bg-slate-950' : 'bg-white')}>
+      <div className={cn('flex h-full', system && 'opacity-80')}>
+        <div className={cn('w-1/3 p-2 space-y-1.5', dark ? 'bg-slate-900' : 'bg-slate-200')}>
+          <div className={cn('h-3 w-3 rounded-full', dark ? 'bg-sky-400' : 'bg-white')} />
+          <div className={cn('h-1.5 w-8 rounded', dark ? 'bg-sky-500/70' : 'bg-white')} />
+          <div className={cn('h-1.5 w-10 rounded', dark ? 'bg-slate-500' : 'bg-slate-400')} />
+          <div className={cn('h-1.5 w-7 rounded', dark ? 'bg-slate-500' : 'bg-slate-400')} />
+        </div>
+        <div className="flex-1 p-3">
+          <div className={cn('ml-auto h-8 w-8 rounded-full', dark ? 'bg-blue-950' : 'bg-slate-100')} />
+          <div className={cn('mt-2 h-10 rounded', dark ? 'bg-slate-800' : 'bg-slate-100')} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SidebarPreview({ value }: { value: SidebarStyle }) {
+  return (
+    <div className="h-full rounded-md border bg-background p-2">
+      <div
+        className={cn(
+          'h-full rounded-md',
+          value === 'sidebar' && 'w-1/3 bg-primary/20',
+          value === 'inset' && 'ml-1 w-1/3 border bg-primary/10',
+          value === 'floating' && 'ml-2 w-1/4 rounded-lg border bg-primary/15 shadow-sm',
+        )}
+      >
+        <div className="space-y-1.5 p-2">
+          <div className="h-2 w-2 rounded-full bg-primary/70" />
+          <div className="h-1.5 w-8 rounded bg-primary/50" />
+          <div className="h-1.5 w-6 rounded bg-muted-foreground/40" />
+          <div className="h-1.5 w-7 rounded bg-muted-foreground/40" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LayoutPreview({ value }: { value: ContentLayout }) {
+  const widthClass = value === 'full' ? 'w-full' : value === 'compact' ? 'w-1/2' : 'w-2/3'
+  return (
+    <div className="h-full rounded-md border bg-background p-2">
+      <div className={cn('mx-auto h-full rounded-md bg-primary/15 p-2', widthClass)}>
+        <div className="h-2 w-full rounded bg-primary/50" />
+        <div className="mt-2 h-8 rounded bg-muted-foreground/25" />
+        <div className="mt-2 flex gap-1">
+          <div className="h-4 flex-1 rounded bg-muted-foreground/25" />
+          <div className="h-4 flex-1 rounded bg-muted-foreground/25" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PositionPreview({ value }: { value: SidebarPosition }) {
+  return (
+    <div className={cn('flex h-full rounded-md border bg-background', value === 'right' && 'flex-row-reverse')}>
+      <div className="w-1/4 bg-primary/20 p-2">
+        <div className="h-2 w-2 rounded-full bg-primary/70" />
+        <div className="mt-2 h-1.5 w-8 rounded bg-primary/50" />
+        <div className="mt-1 h-1.5 w-6 rounded bg-muted-foreground/40" />
+      </div>
+      <div className="flex-1 p-3">
+        <div className="h-8 rounded bg-muted-foreground/25" />
+        <div className="mt-2 h-3 rounded bg-muted-foreground/20" />
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsView() {
   const [activeTab, setActiveTab] = useState<SettingsTabId>('account')
-  const { user, logout, isAuthenticated } = useAuthStore()
+  const { user, isAuthenticated } = useAuthStore()
   const { theme, setTheme } = useThemeStore()
   const { fontScale, lineHeight, density, contrast, reduceMotion, setPreferences, resetPreferences } = useUiPreferencesStore()
+  const {
+    sidebarStyle,
+    contentLayout,
+    sidebarPosition,
+    setAppearance,
+    resetAppearance,
+  } = useAppearanceStore()
   const {
     loaded: userSettingsLoaded,
     loadFromServer,
@@ -70,32 +235,125 @@ export default function SettingsView() {
     return roleLabels[role] || String(user?.role || '普通用户')
   })()
 
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('settings_api_key') || '')
-  const [isSaving, setIsSaving] = useState(false)
+  const [providerName, setProviderName] = useState('openrouter')
+  const [providerBaseUrl, setProviderBaseUrl] = useState('https://openrouter.ai/api/v1')
+  const [providerApiKey, setProviderApiKey] = useState('')
+  const [savedApiKeyMask, setSavedApiKeyMask] = useState('')
+  const [savedApiKeyEncrypted, setSavedApiKeyEncrypted] = useState(false)
+  const [showProviderApiKey, setShowProviderApiKey] = useState(false)
+  const [mainModel, setMainModel] = useState('')
+  const [subModel, setSubModel] = useState('')
+  const [lessonPlanModel, setLessonPlanModel] = useState('')
+  const [providerPinned, setProviderPinned] = useState(true)
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
+  const [modelSettingsLoaded, setModelSettingsLoaded] = useState(false)
+  const [isModelLoading, setIsModelLoading] = useState(false)
+  const [isFetchingModels, setIsFetchingModels] = useState(false)
+  const [isSavingModelSettings, setIsSavingModelSettings] = useState(false)
+  const [modelSettingsMessage, setModelSettingsMessage] = useState('')
 
-  const handleSaveApiKey = async () => {
-    setIsSaving(true)
+  const applyModelSettingsResponse = useCallback((res: ModelSettingsResponse) => {
+    const active = String(res.active_provider || '').trim() || 'openrouter'
+    const provider = (res.providers || []).find((item) => item.name === active) || (res.providers || [])[0]
+    const providerValue = String(provider?.name || active || 'openrouter').trim()
+
+    setProviderName(providerValue)
+    setProviderBaseUrl(String(provider?.base_url || '').trim())
+    setSavedApiKeyMask(String(provider?.api_key_mask || ''))
+    setSavedApiKeyEncrypted(Boolean(provider?.api_key_encrypted))
+    setProviderApiKey('')
+    setProviderPinned(Boolean(res.pinned))
+    setMainModel(pickScopedModel(res.models?.main, providerValue))
+    setSubModel(pickScopedModel(res.models?.sub, providerValue))
+    setLessonPlanModel(pickScopedModel(res.models?.lesson_plan, providerValue))
+  }, [])
+
+  const loadModelSettings = useCallback(async () => {
+    setIsModelLoading(true)
+    setModelSettingsMessage('')
     try {
-      const cleaned = apiKey.trim()
-      if (cleaned) {
-        localStorage.setItem('settings_api_key', cleaned)
-        localStorage.setItem('settings_api_key_enabled', '1')
-        localStorage.removeItem('settings_api_key_disabled_reason')
-      } else {
-        localStorage.removeItem('settings_api_key')
-        localStorage.removeItem('settings_api_key_enabled')
-        localStorage.removeItem('settings_api_key_disabled_reason')
-      }
+      const res = await modelSettingsApi.getModelSettings()
+      applyModelSettingsResponse(res)
+    } catch (error) {
+      setModelSettingsMessage(errorMessage(error))
     } finally {
-      setIsSaving(false)
+      setModelSettingsLoaded(true)
+      setIsModelLoading(false)
+    }
+  }, [applyModelSettingsResponse])
+
+  const handleFetchModels = async () => {
+    setIsFetchingModels(true)
+    setModelSettingsMessage('')
+    try {
+      const res = await modelSettingsApi.fetchProviderModels({
+        provider: providerName.trim(),
+        base_url: providerBaseUrl.trim(),
+        ...(providerApiKey.trim() ? { api_key: providerApiKey.trim() } : {}),
+      })
+      setModelOptions(res.models || [])
+      const first = res.models?.[0]?.id || ''
+      if (first) {
+        if (!mainModel.trim()) setMainModel(first)
+        if (!subModel.trim()) setSubModel(first)
+        if (!lessonPlanModel.trim()) setLessonPlanModel(first)
+      }
+      setModelSettingsMessage(`已抓取 ${res.count || 0} 个模型`)
+    } catch (error) {
+      setModelSettingsMessage(errorMessage(error))
+    } finally {
+      setIsFetchingModels(false)
     }
   }
 
-  const handleLogout = () => {
-    if (confirm('确定要退出登录吗？')) {
-      logout()
-      window.location.href = '/login'
+  const handleSaveModelSettings = async () => {
+    setIsSavingModelSettings(true)
+    setModelSettingsMessage('')
+    try {
+      const res = await modelSettingsApi.saveModelSettings({
+        active_provider: providerName.trim(),
+        pinned: providerPinned,
+        provider: {
+          name: providerName.trim(),
+          base_url: providerBaseUrl.trim(),
+          ...(providerApiKey.trim() ? { api_key: providerApiKey.trim() } : {}),
+        },
+        models: {
+          main: mainModel.trim(),
+          sub: subModel.trim(),
+          lesson_plan: lessonPlanModel.trim(),
+        },
+      })
+      applyModelSettingsResponse(res)
+      setModelSettingsLoaded(true)
+      setModelSettingsMessage('已加密保存并刷新运行配置')
+    } catch (error) {
+      setModelSettingsMessage(errorMessage(error))
+    } finally {
+      setIsSavingModelSettings(false)
     }
+  }
+
+  useEffect(() => {
+    if (activeTab !== 'api') return
+    if (modelSettingsLoaded || isModelLoading) return
+    void loadModelSettings()
+  }, [activeTab, isModelLoading, loadModelSettings, modelSettingsLoaded])
+
+  const modelOptionIds = Array.from(
+    new Set(
+      [
+        mainModel.trim(),
+        subModel.trim(),
+        lessonPlanModel.trim(),
+        ...modelOptions.map((item) => String(item.id || '').trim()),
+      ].filter(Boolean),
+    ),
+  )
+
+  const updateAppearance = (patch: Partial<AppearancePreferences>) => {
+    setAppearance(patch)
+    scheduleAccountSave({ appearance: patch })
   }
 
   return (
@@ -126,19 +384,11 @@ export default function SettingsView() {
                     </div>
                   </div>
 
-                  <div className="pt-4">
-                    <Button variant="destructive" onClick={handleLogout}>
-                      <LogOut className="h-4 w-4 mr-2" />
-                      退出登录
-                    </Button>
-                  </div>
+                  <p className="text-sm text-muted-foreground">当前为本地模式，无需登录。</p>
                 </div>
               ) : (
                 <div className="text-center py-8 bg-muted/30 rounded-lg border border-dashed">
-                  <p className="text-muted-foreground mb-4">你当前处于访客模式</p>
-                  <Button asChild>
-                    <Link to="/login">登录 / 注册</Link>
-                  </Button>
+                  <p className="text-muted-foreground">当前为本地模式，无需登录。</p>
                 </div>
               )}
             </div>
@@ -148,27 +398,137 @@ export default function SettingsView() {
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div>
                 <h2 className="text-lg font-medium">API 配置</h2>
-                <p className="text-sm text-muted-foreground">配置 AI 服务的连接密钥</p>
+                <p className="text-sm text-muted-foreground">配置模型供应商、密钥和默认模型</p>
               </div>
               <Separator />
-              <div className="space-y-4">
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium">OpenAI API Key</label>
-                  <div className="flex gap-2">
+              <div className="space-y-5">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium">供应商</label>
                     <Input
-                      type="password"
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      placeholder="sk-..."
-                      className="flex-1 font-mono"
+                      value={providerName}
+                      onChange={(e) => setProviderName(e.target.value)}
+                      placeholder="openrouter / deepseek / openai-compatible"
+                      className="font-mono"
                     />
-                    <Button onClick={handleSaveApiKey} disabled={isSaving}>
-                      {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium">Base URL</label>
+                    <Input
+                      value={providerBaseUrl}
+                      onChange={(e) => setProviderBaseUrl(e.target.value)}
+                      placeholder="https://api.example.com/v1"
+                      className="font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-sm font-medium">API Key</label>
+                    {savedApiKeyMask ? (
+                      <Badge variant="outline">
+                        {savedApiKeyEncrypted ? '已加密保存' : '已保存'} {savedApiKeyMask}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showProviderApiKey ? 'text' : 'password'}
+                        value={providerApiKey}
+                        onChange={(e) => setProviderApiKey(e.target.value)}
+                        placeholder={savedApiKeyMask ? '留空则继续使用已保存密钥' : 'sk-...'}
+                        className="pr-10 font-mono"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowProviderApiKey((v) => !v)}
+                        aria-label={showProviderApiKey ? '隐藏 API Key' : '显示 API Key'}
+                      >
+                        {showProviderApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <Button variant="outline" onClick={handleFetchModels} disabled={isFetchingModels || isModelLoading}>
+                      {isFetchingModels ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      <span className="ml-2 hidden sm:inline">抓取模型</span>
                     </Button>
                   </div>
-                  <p className="text-[13px] text-muted-foreground">
-                    密钥将保存在本地浏览器中，并在请求时通过请求头发送到你的后端用于调用模型；后端不会持久化或记录该密钥。
-                  </p>
+                </div>
+
+                <datalist id="model-settings-options">
+                  {modelOptionIds.map((id) => (
+                    <option key={id} value={id} />
+                  ))}
+                </datalist>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium">主模型</label>
+                    <Input
+                      list="model-settings-options"
+                      value={mainModel}
+                      onChange={(e) => setMainModel(e.target.value)}
+                      placeholder="openai/gpt-5-mini"
+                      className="font-mono"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium">轻量模型</label>
+                    <Input
+                      list="model-settings-options"
+                      value={subModel}
+                      onChange={(e) => setSubModel(e.target.value)}
+                      placeholder="openai/gpt-4o-mini"
+                      className="font-mono"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium">教案模型</label>
+                    <Input
+                      list="model-settings-options"
+                      value={lessonPlanModel}
+                      onChange={(e) => setLessonPlanModel(e.target.value)}
+                      placeholder={mainModel || 'openai/gpt-5-mini'}
+                      className="font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 rounded-lg border bg-card p-4">
+                  <div>
+                    <div className="text-sm font-medium">锁定当前供应商</div>
+                    <div className="text-xs text-muted-foreground mt-1">模型名不会触发自动供应商切换</div>
+                  </div>
+                  <Switch checked={providerPinned} onCheckedChange={(checked) => setProviderPinned(Boolean(checked))} />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button onClick={handleSaveModelSettings} disabled={isSavingModelSettings || isModelLoading}>
+                    {isSavingModelSettings ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    <span className="ml-2">保存模型配置</span>
+                  </Button>
+                  <Button variant="outline" onClick={() => void loadModelSettings()} disabled={isModelLoading}>
+                    {isModelLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    <span className="ml-2">重新读取</span>
+                  </Button>
+                  {modelSettingsMessage ? (
+                    <span
+                      className={cn(
+                        'text-sm',
+                        /失败|failed|forbidden|http_4|http_5|Admin/i.test(modelSettingsMessage)
+                          ? 'text-destructive'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {modelSettingsMessage}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -182,29 +542,85 @@ export default function SettingsView() {
               </div>
               <Separator />
               <div className="space-y-4">
-                <label className="text-sm font-medium">主题模式</label>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-sm font-medium">主题</label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setTheme('system')
+                      resetAppearance()
+                      scheduleAccountSave({
+                        theme: { mode: 'system' },
+                        appearance: { sidebarStyle: 'sidebar', contentLayout: 'default', sidebarPosition: 'left' },
+                      })
+                    }}
+                  >
+                    重置
+                  </Button>
+                </div>
                 <div className="grid grid-cols-3 gap-4">
-                  {[
-                    { value: 'light', label: '浅色', icon: Sun },
-                    { value: 'dark', label: '深色', icon: Moon },
-                    { value: 'system', label: '跟随系统', icon: Monitor },
-                  ].map((option) => (
-                    <div
+                  {themeOptions.map((option) => (
+                    <StyleOptionCard
                       key={option.value}
-                      className={cn(
-                        "cursor-pointer rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground",
-                        theme === option.value && "border-primary"
-                      )}
+                      label={option.label}
+                      selected={theme === option.value}
                       onClick={() => {
-                        setTheme(option.value as any)
+                        setTheme(option.value)
                         scheduleAccountSave({ theme: { mode: option.value } })
                       }}
                     >
-                      <div className="mb-2 rounded-md bg-background p-2 w-fit border shadow-sm">
-                        <option.icon className="h-5 w-5" />
-                      </div>
-                      <div className="font-medium text-sm">{option.label}</div>
-                    </div>
+                      <ThemePreview mode={option.value} />
+                    </StyleOptionCard>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-sm font-medium">侧边栏</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {sidebarOptions.map((option) => (
+                    <StyleOptionCard
+                      key={option.value}
+                      label={option.label}
+                      selected={sidebarStyle === option.value}
+                      onClick={() => updateAppearance({ sidebarStyle: option.value })}
+                    >
+                      <SidebarPreview value={option.value} />
+                    </StyleOptionCard>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-sm font-medium">布局</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {layoutOptions.map((option) => (
+                    <StyleOptionCard
+                      key={option.value}
+                      label={option.label}
+                      selected={contentLayout === option.value}
+                      onClick={() => updateAppearance({ contentLayout: option.value })}
+                    >
+                      <LayoutPreview value={option.value} />
+                    </StyleOptionCard>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-sm font-medium">方向</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {positionOptions.map((option) => (
+                    <StyleOptionCard
+                      key={option.value}
+                      label={option.label}
+                      selected={sidebarPosition === option.value}
+                      onClick={() => updateAppearance({ sidebarPosition: option.value })}
+                    >
+                      <PositionPreview value={option.value} />
+                    </StyleOptionCard>
                   ))}
                 </div>
               </div>
@@ -304,7 +720,7 @@ export default function SettingsView() {
 
               {isAuthenticated && (
                 <div className="text-xs text-muted-foreground">
-                  {isSyncing ? '正在同步到账号…' : '已同步到账号'}
+                  {isSyncing ? '正在保存本地配置…' : '本地配置已保存'}
                   {syncError ? <span className="text-destructive">（同步失败：{syncError}）</span> : null}
                 </div>
               )}
@@ -343,9 +759,9 @@ export default function SettingsView() {
                 <div className="p-4 rounded-lg border bg-card space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <h4 className="font-medium text-sm">账号配置（跨设备同步）</h4>
+                      <h4 className="font-medium text-sm">本地配置</h4>
                       <p className="text-xs text-muted-foreground mt-1">
-                        主题与显示偏好将保存在账号中；清空浏览器数据后重新登录可恢复。
+                        主题与显示偏好将保存在本地默认用户下。
                       </p>
                     </div>
                     <Button
@@ -387,21 +803,58 @@ export default function SettingsView() {
                               }
                               await importToServer(parsed as Record<string, unknown>)
                               // Apply imported settings immediately
-                              const themeMode = String((parsed as any)?.theme?.mode || '').trim()
+                              const parsedObj = parsed as Record<string, unknown>
+                              const themeObj = isRecord(parsedObj.theme) ? parsedObj.theme : {}
+                              const themeMode = String(themeObj.mode || '').trim()
                               if (themeMode === 'light' || themeMode === 'dark' || themeMode === 'system') {
-                                setTheme(themeMode as any)
+                                setTheme(themeMode)
                               }
-                              const ui = (parsed as any)?.ui
-                              if (ui && typeof ui === 'object' && !Array.isArray(ui)) {
-                                setPreferences({
+                              const ui = parsedObj.ui
+                              if (isRecord(ui)) {
+                                const densityValue = String(ui.density || '').trim()
+                                const contrastValue = String(ui.contrast || '').trim()
+                                const uiPatch: {
+                                  fontScale?: number
+                                  lineHeight?: number
+                                  density?: UiDensity
+                                  contrast?: UiContrast
+                                  reduceMotion?: boolean
+                                } = {
                                   ...(ui.fontScale !== undefined ? { fontScale: Number(ui.fontScale) } : {}),
                                   ...(ui.lineHeight !== undefined ? { lineHeight: Number(ui.lineHeight) } : {}),
-                                  ...(ui.density ? { density: String(ui.density) as any } : {}),
-                                  ...(ui.contrast ? { contrast: String(ui.contrast) as any } : {}),
+                                  ...(densityValue === 'comfortable' || densityValue === 'compact'
+                                    ? { density: densityValue }
+                                    : {}),
+                                  ...(contrastValue === 'normal' || contrastValue === 'high' || contrastValue === 'eye'
+                                    ? { contrast: contrastValue }
+                                    : {}),
                                   ...(ui.reduceMotion !== undefined ? { reduceMotion: Boolean(ui.reduceMotion) } : {}),
-                                })
+                                }
+                                setPreferences(uiPatch)
                               }
-                              alert('已导入并同步到账号')
+                              const appearance = parsedObj.appearance
+                              if (isRecord(appearance)) {
+                                const sidebarStyleValue = String(appearance.sidebarStyle || '').trim()
+                                const contentLayoutValue = String(appearance.contentLayout || '').trim()
+                                const sidebarPositionValue = String(appearance.sidebarPosition || '').trim()
+                                const appearancePatch: Partial<AppearancePreferences> = {
+                                  ...(sidebarStyleValue === 'inset' ||
+                                  sidebarStyleValue === 'floating' ||
+                                  sidebarStyleValue === 'sidebar'
+                                    ? { sidebarStyle: sidebarStyleValue }
+                                    : {}),
+                                  ...(contentLayoutValue === 'default' ||
+                                  contentLayoutValue === 'compact' ||
+                                  contentLayoutValue === 'full'
+                                    ? { contentLayout: contentLayoutValue }
+                                    : {}),
+                                  ...(sidebarPositionValue === 'left' || sidebarPositionValue === 'right'
+                                    ? { sidebarPosition: sidebarPositionValue }
+                                    : {}),
+                                }
+                                setAppearance(appearancePatch)
+                              }
+                              alert('已导入并保存到本地配置')
                             } catch {
                               alert('读取或解析配置失败')
                             } finally {
@@ -417,10 +870,11 @@ export default function SettingsView() {
                       size="sm"
                       disabled={!isAuthenticated}
                       onClick={async () => {
-                        if (!confirm('恢复默认配置？这会覆盖你账号中已同步的设置。')) return
+                        if (!confirm('恢复默认配置？这会覆盖当前本地配置。')) return
                         await resetToDefaults()
                         setTheme('system')
                         resetPreferences()
+                        resetAppearance()
                         alert('已恢复默认配置')
                       }}
                     >

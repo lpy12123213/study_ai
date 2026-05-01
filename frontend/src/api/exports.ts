@@ -20,3 +20,10 @@ export async function zipGeneratedFiles(filenames: string[]): Promise<{ url: str
   return res.data as { url: string; filename: string }
 }
 
+export const exportsApi = {
+  listGeneratedFiles,
+  zipGeneratedFiles,
+  list: async (): Promise<{ data: any }> => ({
+    data: { exports: await listGeneratedFiles({ limit: 200, offset: 0 }) },
+  }),
+}

@@ -13,7 +13,6 @@ import {
   PenTool,
   Film,
   Settings,
-  LogOut,
   Monitor,
   Moon,
   Sun,
@@ -58,15 +57,10 @@ export function Header() {
   const location = useLocation()
   const navigate = useNavigate()
   const { setTheme, theme } = useThemeStore()
-  const { user, isAuthenticated, logout } = useAuthStore()
+  const user = useAuthStore((s) => s.user)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   const initials = (user?.username || 'U').slice(0, 1).toUpperCase()
-
-  const handleLogout = () => {
-    logout()
-    navigate('/login', { replace: true })
-  }
 
   return (
     <header className="h-12 border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-50 flex items-center justify-between px-4">
@@ -173,16 +167,8 @@ export function Header() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>{isAuthenticated && user ? user.username : '未登录'}</DropdownMenuLabel>
+            <DropdownMenuLabel>{user?.username || '本地用户'}</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {!isAuthenticated && (
-              <DropdownMenuItem asChild>
-                <Link to="/login" className="cursor-pointer w-full flex items-center">
-                  <MessagesSquare className="mr-2 h-4 w-4" />
-                  <span>去登录</span>
-                </Link>
-              </DropdownMenuItem>
-            )}
             <DropdownMenuItem asChild>
               <Link to="/settings" className="cursor-pointer w-full flex items-center">
                 <Settings className="mr-2 h-4 w-4" />
@@ -212,16 +198,6 @@ export function Header() {
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            {isAuthenticated && (
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive cursor-pointer"
-                onClick={handleLogout}
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                <span>退出登录</span>
-              </DropdownMenuItem>
-            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

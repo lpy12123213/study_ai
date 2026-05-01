@@ -3,9 +3,11 @@ import { HistorySidebar } from './HistorySidebar'
 import { Header } from './Header'
 import { CommandPalette } from '@/components/shared/CommandPalette'
 import { cn } from '@/lib/utils'
+import { useAppearanceStore } from '@/stores/useAppearanceStore'
 
 export function ManusLayout() {
   const location = useLocation()
+  const { contentLayout, sidebarPosition } = useAppearanceStore()
   
   // Full screen pages (no sidebar)
   const isFullScreenPage = location.pathname.startsWith('/canvas')
@@ -29,6 +31,9 @@ export function ManusLayout() {
   const pageManagesOwnScroll =
     location.pathname.startsWith('/study-materials') || location.pathname.startsWith('/knowledge-videos') || location.pathname.startsWith('/lesson-plans') || location.pathname.startsWith('/tasks') || isStudioPage
 
+  const contentWidthClass =
+    contentLayout === 'full' ? 'w-full' : contentLayout === 'compact' ? 'max-w-3xl w-full' : 'max-w-4xl w-full'
+
   if (isFullScreenPage) {
     return (
       <div className="h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -44,7 +49,7 @@ export function ManusLayout() {
       <CommandPalette />
       
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className={cn('flex-1 flex overflow-hidden', sidebarPosition === 'right' && 'flex-row-reverse')}>
         {/* Left sidebar - History */}
         {!isStudioPage && <HistorySidebar />}
         
@@ -53,7 +58,7 @@ export function ManusLayout() {
           <div className={cn('flex-1 min-h-0', pageManagesOwnScroll ? 'overflow-hidden' : 'overflow-auto')}>
             <div className={cn(
               "h-full mx-auto",
-              !isWidePage && "max-w-4xl w-full"
+              !isWidePage && contentWidthClass
             )}>
                <Outlet />
             </div>

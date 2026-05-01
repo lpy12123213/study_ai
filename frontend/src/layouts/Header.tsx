@@ -1,9 +1,8 @@
 import { useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Moon, Sun, LogOut, Settings, User, Menu, X } from 'lucide-react'
+import { Link, useLocation } from 'react-router-dom'
+import { Moon, Sun, Settings, User, Menu, X } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
-import { authApi } from '@/api/auth'
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
@@ -20,18 +19,10 @@ const NAV_ITEMS = [
 
 export function Header() {
   const location = useLocation()
-  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
-  const clearAuth = useAuthStore((s) => s.clearAuth)
   const { theme, toggleTheme } = useThemeStore()
   const [menuOpen, setMenuOpen] = useState(false)
   const [dropdownOpen, setDropdownOpen] = useState(false)
-
-  const handleLogout = async () => {
-    await authApi.logout().catch(() => {})
-    clearAuth()
-    navigate('/login')
-  }
 
   return (
     <>
@@ -89,13 +80,6 @@ export function Header() {
                   >
                     <Settings size={14} className="text-muted-foreground" /> 设置
                   </Link>
-                  <div className="h-px bg-border mx-2 my-1" />
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent w-full text-left text-destructive transition-colors"
-                  >
-                    <LogOut size={14} /> 退出登录
-                  </button>
                 </div>
               </>
             )}

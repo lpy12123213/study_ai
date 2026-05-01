@@ -58,7 +58,7 @@ export function formatStudyMaterialsError(raw: string): string {
     return '生成内容为空，请换个问题或补充更多要求后再试。'
   }
   if (lower.includes('http error! status: 401') || lower.includes('http error! status: 403')) {
-    return '登录已过期或无权限，请重新登录后重试。'
+    return '当前请求无权限，请检查本地服务配置后重试。'
   }
 
   return msg

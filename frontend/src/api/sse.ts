@@ -49,17 +49,41 @@ export function createSSEConnection(
 export async function fetchSSE(
   url: string,
   body: unknown,
-  onMessage: (data: unknown) => void,
+  onMessage: (data: any) => void,
+  signal?: AbortSignal
+): Promise<void>
+
+export async function fetchSSE(
+  url: string,
+  body: unknown,
+  onMessage: (data: any) => void,
   onError?: (error: Error) => void,
   onComplete?: () => void,
   options?: {
     headers?: Record<string, string>
     signal?: AbortSignal
   }
+): Promise<void>
+
+export async function fetchSSE(
+  url: string,
+  body: unknown,
+  onMessage: (data: any) => void,
+  onErrorOrSignal?: ((error: Error) => void) | AbortSignal,
+  onComplete?: () => void,
+  options?: {
+    headers?: Record<string, string>
+    signal?: AbortSignal
+  }
 ): Promise<void> {
+  const signal =
+    typeof AbortSignal !== 'undefined' && onErrorOrSignal instanceof AbortSignal
+      ? onErrorOrSignal
+      : options?.signal
+  const onError = typeof onErrorOrSignal === 'function' ? onErrorOrSignal : undefined
   return fetchSSERequest(
     url,
-    { method: 'POST', body, headers: options?.headers, signal: options?.signal },
+    { method: 'POST', body, headers: options?.headers, signal },
     onMessage,
     onError,
     onComplete
@@ -115,12 +139,6 @@ async function fetchSSERequestInternal(
     })
 
     if (!response.ok) {
-      if (response.status === 401) {
-        useAuthStore.getState().logout()
-        window.location.href = '/login'
-        return
-      }
-
       const isStudyMaterials = url.startsWith('/study-materials/')
       if (isStudyMaterials && (response.status === 404 || response.status === 405)) {
         const err = await responseToApiError(response, 'backend_not_ready')

@@ -36,6 +36,7 @@ if __package__ is None or __package__ == "":
 from backend.api.media import close_proxy_http_client
 from backend.api.error_codes import ErrorCode, build_error_payload, is_safe_error_code
 from backend.api.router import api_router
+from backend.api.auth import local_auth_user
 from backend.api.middleware.input_validation import InputValidationMiddleware
 from backend.core.auth import validate_access_token
 from backend.core.audit import AuditAction, audit_logger
@@ -586,7 +587,7 @@ def create_app() -> FastAPI:
 
         # Extra strict per-IP rate limiting for auth endpoints (brute-force protection).
         # Count only failure responses (e.g. 401).
-        auth_path = path in {"/api/auth/login", "/api/auth/register"}
+        auth_path = path in {"/api/auth/register"}
         host = _client_ip(request)
         auth_key = f"auth_fail:ip:{host}"
         if auth_path and await auth_fail_limiter.is_limited(auth_key):
@@ -655,6 +656,8 @@ def create_app() -> FastAPI:
             auth = str(request.headers.get("Authorization") or "")
             if auth.lower().startswith("bearer "):
                 payload = validate_access_token(auth[7:].strip())
+            if not payload:
+                payload = local_auth_user()
             role = str((payload or {}).get("role") or "").strip()
             if role != "admin":
                 raise HTTPException(status_code=403, detail="llm_api_key_override_forbidden")

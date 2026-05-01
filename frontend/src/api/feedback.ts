@@ -24,3 +24,14 @@ export async function createFeedback(input: {
   return res.data?.feedback as FeedbackReport
 }
 
+export const feedbackApi = {
+  listFeedback,
+  createFeedback,
+  submit: async (input: { content?: string; description?: string; title?: string }): Promise<{ data: any }> => {
+    const feedback = await createFeedback({
+      title: input.title,
+      description: String(input.description ?? input.content ?? ''),
+    })
+    return { data: feedback }
+  },
+}

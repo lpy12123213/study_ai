@@ -9,16 +9,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.api.auth_schemas import (
     ChangePasswordRequest,
-    LoginRequest,
-    LoginResponse,
     RegisterRequest,
     UserInfo,
     UserListResponse,
 )
 from backend.core.auth import (
-    authenticate_user,
     change_user_password,
-    create_access_token,
     create_user,
     get_all_users,
     revoke_token_jti,
@@ -30,16 +26,26 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
 
 
+def local_auth_user() -> dict:
+    """Return the built-in local user used when login is disabled."""
+
+    return {
+        "user_id": "local-user",
+        "username": "本地用户",
+        "role": "admin",
+    }
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[dict]:
-    """Get current user from JWT token."""
+    """Get current user from JWT token, or the local user when no token is present."""
     if not credentials:
-        return None
+        return local_auth_user()
 
     payload = validate_access_token(credentials.credentials)
     if not payload:
-        return None
+        return local_auth_user()
 
     return {
         "user_id": payload.get("user_id"),
@@ -51,27 +57,23 @@ async def get_current_user(
 async def require_auth(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
-    """Require authentication."""
+    """Return authenticated user data.
+
+    Login is disabled for this local app. Existing bearer tokens are still
+    honored when valid, but missing or stale tokens fall back to the local user
+    so business endpoints remain directly usable.
+    """
     if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
+        return local_auth_user()
 
     payload = validate_access_token(credentials.credentials)
     if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        )
+        return local_auth_user()
 
     user_id = str(payload.get("user_id") or "").strip()
     username = str(payload.get("username") or "").strip()
     if not user_id or not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        )
+        return local_auth_user()
 
     return {
         "user_id": user_id,
@@ -90,60 +92,6 @@ async def require_admin(user: dict = Depends(require_auth)) -> dict:
             detail="Admin access required",
         )
     return user
-
-
-@router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, http_request: Request):
-    """Login and get access token."""
-    def _ip(req: Request) -> str:
-        try:
-            return str(getattr(req.client, "host", "") or "").strip()
-        except Exception:
-            return ""
-
-    user = authenticate_user(payload.username, payload.password)
-    if not user:
-        audit_logger.log(
-            user_id="",
-            action=AuditAction.LOGIN_FAILED,
-            resource="/api/auth/login",
-            ip=_ip(http_request),
-            details={"username": str(payload.username or "").strip()},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-        )
-
-    audit_logger.log(
-        user_id=str(user.get("user_id") or "").strip(),
-        action=AuditAction.LOGIN,
-        resource="/api/auth/login",
-        ip=_ip(http_request),
-        details={"username": str(user.get("username") or "").strip(), "role": str(user.get("role") or "").strip()},
-    )
-
-    token_version = 1
-    try:
-        token_version = int(user.get("token_version") or 1)
-    except Exception:
-        token_version = 1
-
-    token = create_access_token(
-        {
-            "user_id": user["user_id"],
-            "username": user["username"],
-            "role": user["role"],
-            "ver": token_version,
-        }
-    )
-
-    return LoginResponse(
-        access_token=token,
-        user_id=user["user_id"],
-        username=user["username"],
-        role=user["role"],
-    )
 
 
 @router.get("/me", response_model=UserInfo)

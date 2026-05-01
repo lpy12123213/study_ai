@@ -2,26 +2,38 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User } from '@/types'
 
+const LOCAL_USER: User = {
+  id: 'local-user',
+  username: '本地用户',
+  role: 'admin',
+}
+
+const LOCAL_TOKEN = 'local-session'
+
 interface AuthState {
   user: User | null
   token: string | null
   isAuthenticated: boolean
   login: (user: User, token: string) => void
   logout: () => void
+  clearAuth: () => void
   updateUser: (user: Partial<User>) => void
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
-      user: null,
-      token: null,
-      isAuthenticated: false,
+      user: LOCAL_USER,
+      token: LOCAL_TOKEN,
+      isAuthenticated: true,
       login: (user, token) => {
         set({ user, token, isAuthenticated: true })
       },
       logout: () => {
-        set({ user: null, token: null, isAuthenticated: false })
+        set({ user: LOCAL_USER, token: LOCAL_TOKEN, isAuthenticated: true })
+      },
+      clearAuth: () => {
+        set({ user: LOCAL_USER, token: LOCAL_TOKEN, isAuthenticated: true })
       },
       updateUser: (userData) => {
         const currentUser = get().user
@@ -32,20 +44,20 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
-      version: 2,
+      version: 3,
       migrate: (persistedState: unknown) => {
         const state = (persistedState || {}) as Partial<AuthState>
         const token = typeof state.token === 'string' ? state.token : null
 
-        // Drop legacy "guest" sessions: chat now requires a real JWT login.
-        if (token === 'guest-token') {
-          return { user: null, token: null, isAuthenticated: false }
+        if (!token || token === 'guest-token') {
+          return { user: LOCAL_USER, token: LOCAL_TOKEN, isAuthenticated: true }
         }
 
         return {
           ...state,
           token,
-          isAuthenticated: Boolean(token),
+          user: state.user || LOCAL_USER,
+          isAuthenticated: true,
         }
       },
     }
