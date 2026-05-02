@@ -32,7 +32,7 @@ python scripts/tech_debt_report.py --format md --out artifacts/tech_debt_report.
 - `backend/system/`: 系统与运维能力（health/metrics/config/version）
 - `backend/auth/`: 认证与权限（JWT/用户隔离）
 - `backend/workspace/`: 用户工作区与内容组织（会话/画布/归档/标签等）
-- `backend/generation/`: 生成类业务域（deepthink/lesson_plan/question_library/paper_compose 等“产出内容”的编排）
+- `backend/generation/`: 生成类业务域（deepthink/lesson_plan/question_library/paper_compose/knowledge_video 等“产出内容”的编排）
 - `backend/tasks/`: 任务中心与事件模型（`/api/tasks`、TaskRuntime、任务存储）
 - `backend/integrations/`: 外部集成与 IO 边界（crawler/mcp/第三方 provider 适配）
 - `backend/shared/`: 跨域共享的基础设施与小工具（纯粹、无业务语义）

@@ -147,13 +147,46 @@ Authorization: Bearer <access_token>
 **GET** `/api/media/generated/{filename}`
 
 - `filename` 为 `sha256hex.ext`（例如 `b1946ac92492d2347c6235b4d2611184a1d5e0....svg`）
-- 当前支持：`.svg/.png/.jpg/.jpeg/.gif/.webp`
+- 当前支持：`.svg/.png/.jpg/.jpeg/.gif/.webp/.bmp/.md/.tex/.pdf/.zip/.docx/.mp4/.srt/.json/.py`
 
 ### 远程媒体代理（缓存）
 
 **GET** `/api/media/proxy?url={remote_url}`
 
 将远程图片拉取到后端并缓存于 `.local/media/`，用于稳定渲染（避免跨域/链接失效等问题）。
+
+---
+
+## 知识视频（Knowledge Videos）
+
+知识视频生成通过统一任务接口提交，并通过任务流读取进度：
+
+- 提交：`POST /api/tasks/knowledge-videos/generate`
+- 状态：`GET /api/tasks/{task_id}`
+- 事件流：`GET /api/tasks/{task_id}/stream?after_seq=0`
+
+**请求体：**
+```json
+{
+  "topic": "导数的几何意义",
+  "subject": "高中数学",
+  "source_archive_id": 1,
+  "duration_seconds": 30,
+  "style": "clean",
+  "quality": "low",
+  "requirements": "突出切线斜率与瞬时变化率"
+}
+```
+
+完成后 `result` 会包含：
+
+- `video_url` / `video_filename`
+- `subtitle_url` / `subtitle_filename`
+- `script_url` / `script_filename`
+- `metadata_url` / `metadata_filename`
+
+运行依赖：后端需要 Docker，并预先构建 `docker/manim-sandbox` 镜像；默认镜像名为
+`study-ai/manim-sandbox:latest`。
 
 ---
 

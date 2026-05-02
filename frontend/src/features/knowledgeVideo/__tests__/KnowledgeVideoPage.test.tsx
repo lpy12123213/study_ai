@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import KnowledgeVideoPage from '@/features/knowledgeVideo/KnowledgeVideoPage'
 import * as knowledgeVideosApi from '@/api/knowledgeVideos'
 import * as tasksApi from '@/api/tasks'
@@ -21,6 +21,10 @@ vi.mock('@/api/client', () => ({
 }))
 
 describe('KnowledgeVideoPage', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     class MockResizeObserver {
@@ -74,6 +78,34 @@ describe('KnowledgeVideoPage', () => {
       expect(screen.getByRole('button', { name: '下载字幕' })).toBeInTheDocument()
       expect(screen.getByText('/api/media/generated/script.py')).toBeInTheDocument()
       expect(screen.getByText('class KnowledgeVideoScene(Scene): pass')).toBeInTheDocument()
+    })
+  })
+
+  it('restores a completed task from the task query parameter', async () => {
+    vi.mocked(tasksApi.getTask).mockResolvedValue({
+      id: 'knowledge-video-1',
+      status: 'completed',
+      progress: 100,
+      result: {
+        video_url: '/api/media/generated/video.mp4',
+        subtitle_url: '/api/media/generated/subtitle.srt',
+        script_url: '/api/media/generated/script.py',
+        metadata: { attempts: 1, scene_name: 'KnowledgeVideoScene' },
+      },
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/knowledge-videos?task=knowledge-video-1']}>
+        <KnowledgeVideoPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(tasksApi.getTask).toHaveBeenCalledWith('knowledge-video-1')
+      expect(screen.getByText('knowledge-video-1')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载视频' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载字幕' })).toBeInTheDocument()
+      expect(screen.getByText('/api/media/generated/script.py')).toBeInTheDocument()
     })
   })
 })

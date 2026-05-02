@@ -7,6 +7,7 @@ AI-assisted study and exam-paper workspace built with FastAPI and React.
 - Chat-based question search and paper creation
 - Blueprint-based paper composition
 - Study-material generation with resumable SSE tasks
+- Knowledge-video generation with Manim sandbox rendering
 - DeepThink problem solving UI
 - Paper management and export
 - MCP stdio server for external MCP clients
@@ -125,6 +126,22 @@ Start the MCP server:
 ```bash
 python -m backend.mcp.stdio_server
 ```
+
+## Knowledge videos
+
+The `/knowledge-videos` page creates AI-generated Manim lesson videos through the unified task runtime. It requires Docker
+and a local Manim sandbox image:
+
+```bash
+docker build -t study-ai/manim-sandbox:latest docker/manim-sandbox
+```
+
+Useful environment variables:
+
+- `KNOWLEDGE_VIDEO_DOCKER_IMAGE` (default `study-ai/manim-sandbox:latest`)
+- `KNOWLEDGE_VIDEO_QUALITY` (`low`, `medium`, or `high`)
+- `KNOWLEDGE_VIDEO_RENDER_TIMEOUT_S`
+- `KNOWLEDGE_VIDEO_MODEL` (defaults to `STUDY_MATERIALS_WRITER_MODEL` or `SUB_MODEL`)
 
 ## LLM configuration
 

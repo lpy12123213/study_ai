@@ -34,9 +34,18 @@ def _clip(text: str, *, max_chars: int) -> str:
     return s[:max_chars].rstrip()
 
 
+def _strip_code_fence(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw.startswith("```"):
+        return raw
+    raw = re.sub(r"^```(?:python|py)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
+
 def parse_generated_package(text: str) -> GeneratedVideoPackage:
     obj = _json_from_text(text)
-    code = str(obj.get("code") or "").strip()
+    code = _strip_code_fence(str(obj.get("code") or ""))
     scene_name = str(obj.get("scene_name") or obj.get("sceneName") or "KnowledgeVideoScene").strip()
     subtitles = obj.get("subtitles") if isinstance(obj.get("subtitles"), list) else []
     metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
@@ -75,7 +84,7 @@ async def generate_manim_package(
             "content": (
                 "你是 Manim Community 代码生成器。只返回 JSON 对象，不要 Markdown。"
                 "JSON 字段必须包含 code、scene_name、subtitles、metadata。"
-                "code 必须是完整 Python 源码，直接使用 Manim 生成一个单 Scene 知识讲解动画。"
+                "code 必须是完整 Python 源码，不能包含 Markdown 代码围栏，直接使用 Manim 生成一个单 Scene 知识讲解动画。"
                 "代码会在无网络、非 root、资源受限的 Docker 沙盒中运行；可自由使用 Manim 和 Python 表达教学内容。"
                 "默认 scene_name 使用 KnowledgeVideoScene。字幕 subtitles 为数组，每项包含 start/end/text 秒级时间。"
             ),

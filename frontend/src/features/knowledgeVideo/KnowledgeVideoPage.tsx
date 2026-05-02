@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Download, Film, Loader2, Play, RotateCcw, ShieldCheck, Video } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,32 @@ function toStringValue(value: unknown): string {
 
 function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'name' in error && String(error.name) === 'AbortError'
+}
+
+function isTerminalFailure(status: string): boolean {
+  return status === 'failed' || status === 'canceled' || status === 'cancelled'
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function readTaskStatus(task: unknown): string {
+  return String(asRecord(task).status || '')
+}
+
+function readTaskProgress(task: unknown): number | null {
+  const value = Number(asRecord(task).progress)
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null
+}
+
+function readTaskResult(task: unknown): KnowledgeVideoTaskResult {
+  return asRecord(asRecord(task).result) as KnowledgeVideoTaskResult
+}
+
+function readTaskError(task: unknown): string {
+  const err = asRecord(asRecord(task).error)
+  return toStringValue(err.message) || toStringValue(err.error) || '生成失败'
 }
 
 function downloadByUrl(url: string): void {
@@ -58,6 +84,7 @@ export default function KnowledgeVideoPage() {
   const [scriptError, setScriptError] = useState('')
   const videoRevokeRef = useRef<(() => void) | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const restoredTaskRef = useRef('')
 
   useEffect(() => {
     return () => {
@@ -106,58 +133,117 @@ export default function KnowledgeVideoPage() {
     return () => controller.abort()
   }, [result?.script_url])
 
+  const taskParam = (searchParams.get('task') || '').trim()
   const canSubmit = useMemo(() => topic.trim().length > 0 && status !== 'running', [topic, status])
 
-  const finishFromTask = async (id: string) => {
+  const finishFromTask = useCallback(async (id: string) => {
     const task = await getTask(id)
-    const nextStatus = String((task as any)?.status || '')
+    const nextStatus = readTaskStatus(task)
+    const nextProgress = readTaskProgress(task)
+    if (nextProgress !== null) setProgress(nextProgress)
+
     if (nextStatus === 'completed') {
       setStatus('completed')
       setProgress(100)
-      setResult(((task as any)?.result || {}) as KnowledgeVideoTaskResult)
+      setResult(readTaskResult(task))
       return
     }
-    if (nextStatus === 'failed' || nextStatus === 'canceled' || nextStatus === 'cancelled') {
-      setStatus('failed')
-      const err = (task as any)?.error
-      setError(toStringValue((err as any)?.message) || toStringValue((err as any)?.error) || '生成失败')
-    }
-  }
 
-  const startStream = (id: string) => {
+    if (isTerminalFailure(nextStatus)) {
+      setStatus('failed')
+      setError(readTaskError(task))
+    }
+  }, [])
+
+  const startStream = useCallback((id: string) => {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+
+    const isActiveStream = () => abortRef.current === controller && !controller.signal.aborted
 
     streamTask(
       id,
       0,
       (evt: TaskStreamEvent) => {
+        if (!isActiveStream()) return
         if (evt.type === 'progress') {
-          const data = evt.data && typeof evt.data === 'object' ? evt.data : {}
-          const p = Number((data as any).progress || 0)
+          const data = asRecord(evt.data)
+          const p = Number(data.progress || 0)
           if (Number.isFinite(p)) setProgress(Math.max(0, Math.min(100, p)))
-          const stageLabel = toStringValue((data as any).stage_label) || toStringValue((data as any).stage)
+          const stageLabel = toStringValue(data.stage_label) || toStringValue(data.stage)
           if (stageLabel) setCurrentStage(stageLabel)
         }
         const step = taskEventToStep(evt)
         if (step) setSteps((prev) => upsertTaskStep(prev, step))
         if (evt.type === 'error') {
           setStatus('failed')
-          const data = evt.data && typeof evt.data === 'object' ? evt.data : {}
-          setError(String((data as any).error || (data as any).message || '生成失败'))
+          const data = asRecord(evt.data)
+          setError(String(data.error || data.message || '生成失败'))
         }
       },
       (err) => {
+        if (!isActiveStream()) return
         setStatus('failed')
         setError(err.message || 'stream_error')
       },
       () => {
+        if (!isActiveStream()) return
         void finishFromTask(id)
       },
       { signal: controller.signal }
     )
-  }
+  }, [finishFromTask])
+
+  useEffect(() => {
+    const id = taskParam
+    if (!id || restoredTaskRef.current === id) return
+
+    restoredTaskRef.current = id
+    let active = true
+    setTaskId(id)
+    setStatus('running')
+    setProgress(0)
+    setCurrentStage('恢复任务')
+    setSteps([])
+    setResult(null)
+    setError('')
+    setScriptText('')
+    setScriptError('')
+
+    void getTask(id)
+      .then((task) => {
+        if (!active) return
+        const nextStatus = readTaskStatus(task)
+        const nextProgress = readTaskProgress(task)
+        if (nextProgress !== null) setProgress(nextProgress)
+
+        if (nextStatus === 'completed') {
+          setStatus('completed')
+          setProgress(100)
+          setResult(readTaskResult(task))
+          return
+        }
+
+        if (isTerminalFailure(nextStatus)) {
+          setStatus('failed')
+          setError(readTaskError(task))
+          return
+        }
+
+        setStatus('running')
+        startStream(id)
+      })
+      .catch((err) => {
+        if (!active) return
+        setStatus('failed')
+        setError(err instanceof Error ? err.message : '任务加载失败')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [startStream, taskParam])
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -186,6 +272,7 @@ export default function KnowledgeVideoPage() {
     try {
       const { taskId: id } = await generateKnowledgeVideo(payload)
       if (!id) throw new Error('missing_task_id')
+      restoredTaskRef.current = id
       setTaskId(id)
       const next = new URLSearchParams(searchParams)
       next.set('task', id)
@@ -208,6 +295,10 @@ export default function KnowledgeVideoPage() {
     setScriptText('')
     setScriptError('')
     setTaskId('')
+    restoredTaskRef.current = ''
+    const next = new URLSearchParams(searchParams)
+    next.delete('task')
+    setSearchParams(next, { replace: true })
   }
 
   return (
