@@ -16,19 +16,32 @@ from backend.agent.tools.generation.latex_export_utils import _auto_fix_latex
 logger = get_logger(__name__)
 
 
+_LATEX_BLOCKLIST_PATTERNS = [
+    r"\\(?:input|include)\s*\{",
+    r"\\openin\b",
+    r"\\read\b",
+    r"\\usepackage(?:\[[^\]]*\])?\s*\{[^}]*\b(?:catchfile|verbatim|fancyvrb|pythontex)\b[^}]*\}",
+]
+
+
+def _ensure_latex_is_safe(tex: str) -> None:
+    for pattern in _LATEX_BLOCKLIST_PATTERNS:
+        if re.search(pattern, tex, flags=re.IGNORECASE):
+            raise ValueError("latex_unsafe_content")
+
+
 class LatexCompileMixin:
     async def _tool_compile_latex_to_pdf(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """编译 LaTeX 为 PDF，并发布为可下载文件。"""
 
         topic = str(args.get("topic") or ctx.current_task).strip() or "study_archive"
 
-        tex = args.get("latex")
-        if not isinstance(tex, str) or not tex.strip():
-            tex = str(ctx.working_memory.get("latex_tex") or "").strip()
+        tex = str(ctx.working_memory.get("latex_tex") or "").strip()
         if not tex:
             raise ValueError("latex_missing")
 
         tex = _auto_fix_latex(tex).strip() + "\n"
+        _ensure_latex_is_safe(tex)
         try:
             ctx.working_memory["latex_tex"] = tex
         except Exception:
