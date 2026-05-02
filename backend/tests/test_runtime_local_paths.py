@@ -100,10 +100,11 @@ class RuntimeLocalPathTests(unittest.TestCase):
 
         tool = _LatexHarness()
         ctx = _ctx()
+        ctx.working_memory["latex_tex"] = r"\documentclass{article}\begin{document}ok\end{document}"
 
         with patch("pathlib.Path.mkdir", autospec=True, side_effect=fake_mkdir):
             with self.assertRaisesRegex(RuntimeError, "stop-after-build-dir"):
-                asyncio.run(tool._tool_compile_latex_to_pdf({"latex": r"\documentclass{article}\begin{document}ok\end{document}"}, ctx))
+                asyncio.run(tool._tool_compile_latex_to_pdf({}, ctx))
 
         self.assertGreaterEqual(len(created_dirs), 2)
         self.assertEqual(created_dirs[0], (_repo_root() / ".local" / "media" / "generated").resolve())
