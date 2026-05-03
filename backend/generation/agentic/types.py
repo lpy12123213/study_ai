@@ -11,6 +11,8 @@ AGENTIC_DOMAINS = {
     "deepthink",
     "lesson_plan",
     "paper_compose",
+    "knowledge_video",
+    "question_evaluate",
     "chat",
     "mcp",
 }

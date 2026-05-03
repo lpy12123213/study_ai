@@ -5,15 +5,17 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
-from backend.database.schema import Task, TaskEvent
+from backend.database.schema import Task, TaskDurationAggregate, TaskEvent
 
 logger = get_logger(__name__)
+
+TASK_DURATION_EMA_ALPHA = 0.2
 
 
 def _get_int(name: str, default: int) -> int:
@@ -131,6 +133,115 @@ def _event_to_dict(evt: TaskEvent) -> dict:
         "data": _json_loads(evt.payload_json, default={}),
         "created_at": _isoformat_utc_z(evt.created_at),
     }
+
+
+def _task_duration_seconds(task: Task) -> Optional[float]:
+    if str(task.status or "").strip() != "completed":
+        return None
+    started_at = task.started_at
+    ended_at = task.ended_at
+    if not started_at or not ended_at:
+        return None
+    try:
+        duration = (ended_at - started_at).total_seconds()
+    except Exception:
+        return None
+    if duration < 0:
+        return None
+    return float(duration)
+
+
+async def upsert_task_duration_aggregate(
+    *,
+    task_type: str,
+    duration_seconds: float,
+    session: Optional[AsyncSession] = None,
+) -> Optional[TaskDurationAggregate]:
+    ttype = str(task_type or "").strip()
+    if not ttype:
+        return None
+
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            row = await upsert_task_duration_aggregate(
+                task_type=ttype,
+                duration_seconds=duration_seconds,
+                session=session,
+            )
+            await session.commit()
+            return row
+
+    duration = float(duration_seconds or 0.0)
+    res = await session.execute(select(TaskDurationAggregate).where(TaskDurationAggregate.task_type == ttype))
+    row = res.scalar_one_or_none()
+    now = utcnow_naive()
+
+    if row is None:
+        row = TaskDurationAggregate(
+            task_type=ttype,
+            completed_count=1,
+            duration_sum_seconds=duration,
+            duration_ema_seconds=duration,
+            last_duration_seconds=duration,
+            updated_at=now,
+        )
+        session.add(row)
+    else:
+        previous_count = int(row.completed_count or 0)
+        previous_ema = float(row.duration_ema_seconds or 0.0)
+        row.completed_count = previous_count + 1
+        row.duration_sum_seconds = float(row.duration_sum_seconds or 0.0) + duration
+        row.duration_ema_seconds = duration if previous_count <= 0 else (
+            previous_ema * (1.0 - TASK_DURATION_EMA_ALPHA) + duration * TASK_DURATION_EMA_ALPHA
+        )
+        row.last_duration_seconds = duration
+        row.updated_at = now
+
+    await session.flush()
+    return row
+
+
+async def rebuild_task_duration_aggregates(*, session: Optional[AsyncSession] = None) -> int:
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            rebuilt = await rebuild_task_duration_aggregates(session=session)
+            await session.commit()
+            return rebuilt
+
+    await session.execute(delete(TaskDurationAggregate))
+    await session.flush()
+
+    stmt = (
+        select(Task)
+        .where(
+            Task.status == "completed",
+            Task.started_at.is_not(None),
+            Task.ended_at.is_not(None),
+        )
+        .order_by(Task.ended_at.asc(), Task.started_at.asc(), Task.id.asc())
+    )
+    res = await session.execute(stmt)
+    completed_tasks = res.scalars().all()
+
+    rebuilt_types: set[str] = set()
+    for task in completed_tasks:
+        duration_seconds = _task_duration_seconds(task)
+        if duration_seconds is None:
+            continue
+        task_type = str(task.task_type or "").strip()
+        if not task_type:
+            continue
+        await upsert_task_duration_aggregate(
+            task_type=task_type,
+            duration_seconds=duration_seconds,
+            session=session,
+        )
+        rebuilt_types.add(task_type)
+
+    await session.flush()
+    return len(rebuilt_types)
 
 
 async def upsert_task(
@@ -260,6 +371,7 @@ async def update_task_status(
     if not task:
         return False
 
+    previous_status = str(task.status or "").strip()
     task.status = str(status or "").strip() or task.status
     if progress is not None:
         task.progress = float(progress or 0.0)
@@ -272,8 +384,95 @@ async def update_task_status(
     if ended_at is not None:
         task.ended_at = ended_at
     session.add(task)
+
+    duration_seconds = _task_duration_seconds(task)
+    if str(task.status or "").strip() == "completed" and previous_status != "completed":
+        if duration_seconds is not None:
+            await upsert_task_duration_aggregate(
+                task_type=task.task_type,
+                duration_seconds=duration_seconds,
+                session=session,
+            )
+
     await session.flush()
     return True
+
+
+async def append_task_events(
+    *,
+    user_id: str,
+    task_id: str,
+    events: List[Any],
+    session: Optional[AsyncSession] = None,
+) -> int:
+    uid = _require_user_id(user_id)
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise ValueError("missing_task_id")
+
+    writes = [evt for evt in (events or []) if evt is not None]
+    if not writes:
+        return 0
+
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            next_seq = await append_task_events(
+                user_id=uid,
+                task_id=tid,
+                events=writes,
+                session=session,
+            )
+            await session.commit()
+            return next_seq
+
+    res = await session.execute(select(Task).where(Task.id == tid, Task.user_id == uid))
+    task = res.scalar_one_or_none()
+    if not task:
+        raise ValueError("task_not_found")
+
+    current_seq = int(task.last_seq or 0)
+    max_seq = current_seq
+    latest_progress: Optional[float] = None
+
+    for write in writes:
+        if isinstance(write, dict):
+            event_type = str(write.get("event_type") or "").strip() or "event"
+            payload = write.get("payload") if isinstance(write.get("payload"), dict) else {}
+            progress = write.get("progress")
+            seq = write.get("seq")
+        else:
+            event_type = str(getattr(write, "event_type", "") or "").strip() or "event"
+            payload = getattr(write, "payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
+            progress = getattr(write, "progress", None)
+            seq = getattr(write, "seq", None)
+        if seq is None:
+            seq = max_seq + 1
+        seq = int(seq or 0)
+        if seq <= 0:
+            seq = max_seq + 1
+        max_seq = max(max_seq, seq)
+
+        evt = TaskEvent(
+            task_id=tid,
+            seq=seq,
+            event_type=event_type,
+            payload_json=_json_dumps(payload, default="{}"),
+        )
+        session.add(evt)
+        if progress is not None:
+            latest_progress = float(progress or 0.0)
+
+    task.last_seq = max(int(task.last_seq or 0), max_seq)
+    if latest_progress is not None:
+        task.progress = latest_progress
+    task.updated_at = utcnow_naive()
+    session.add(task)
+
+    await session.flush()
+    return max_seq
 
 
 async def append_task_event(
@@ -286,53 +485,12 @@ async def append_task_event(
     progress: Optional[float] = None,
     session: Optional[AsyncSession] = None,
 ) -> int:
-    uid = _require_user_id(user_id)
-    tid = str(task_id or "").strip()
-    if not tid:
-        raise ValueError("missing_task_id")
-
-    own = session is None
-    if own:
-        async with async_session_maker() as session:
-            next_seq = await append_task_event(
-                user_id=uid,
-                task_id=tid,
-                event_type=event_type,
-                payload=payload,
-                seq=seq,
-                progress=progress,
-                session=session,
-            )
-            await session.commit()
-            return next_seq
-
-    res = await session.execute(select(Task).where(Task.id == tid, Task.user_id == uid))
-    task = res.scalar_one_or_none()
-    if not task:
-        raise ValueError("task_not_found")
-
-    if seq is None:
-        seq = int(task.last_seq or 0) + 1
-    seq = int(seq or 0)
-    if seq <= 0:
-        seq = int(task.last_seq or 0) + 1
-
-    evt = TaskEvent(
-        task_id=tid,
-        seq=seq,
-        event_type=str(event_type or "").strip() or "event",
-        payload_json=_json_dumps(payload, default="{}"),
+    return await append_task_events(
+        user_id=user_id,
+        task_id=task_id,
+        events=[{"event_type": event_type, "payload": payload, "seq": seq, "progress": progress}],
+        session=session,
     )
-    session.add(evt)
-
-    task.last_seq = max(int(task.last_seq or 0), seq)
-    if progress is not None:
-        task.progress = float(progress or 0.0)
-    task.updated_at = utcnow_naive()
-    session.add(task)
-
-    await session.flush()
-    return seq
 
 
 async def list_tasks(
@@ -460,6 +618,18 @@ async def average_duration_seconds(
     if own:
         async with async_session_maker() as session:
             return await average_duration_seconds(user_id=uid, task_type=ttype, sample=sample, session=session)
+
+    aggregate_res = await session.execute(
+        select(TaskDurationAggregate).where(TaskDurationAggregate.task_type == ttype)
+    )
+    aggregate = aggregate_res.scalar_one_or_none()
+    if aggregate is not None and int(aggregate.completed_count or 0) > 0:
+        ema = float(aggregate.duration_ema_seconds or 0.0)
+        if ema > 0:
+            return ema
+        total = float(aggregate.duration_sum_seconds or 0.0)
+        if total > 0:
+            return total / max(1, int(aggregate.completed_count or 0))
 
     stmt = (
         select(Task.started_at, Task.ended_at)

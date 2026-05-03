@@ -6,6 +6,14 @@ from typing import Any, Dict, List, Optional, Protocol
 
 
 @dataclass(frozen=True)
+class TaskEventWrite:
+    event_type: str
+    payload: Dict[str, Any]
+    seq: Optional[int] = None
+    progress: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class TaskTerminalUpdate:
     status: str
     ended_at: datetime
@@ -53,6 +61,14 @@ class TaskStore(Protocol):
         progress: Optional[float] = None,
     ) -> int: ...
 
+    async def append_task_events(
+        self,
+        *,
+        user_id: str,
+        task_id: str,
+        events: List[TaskEventWrite],
+    ) -> int: ...
+
     async def get_task(
         self,
         *,
@@ -95,4 +111,3 @@ class TaskStore(Protocol):
         reason: str = "server_restarted",
         limit: int = 5000,
     ) -> int: ...
-

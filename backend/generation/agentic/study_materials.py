@@ -92,5 +92,5 @@ def build_study_materials_agent_spec(
         budget=_preset_budget(preset),
         output_contract={"kind": "study_archive", "formats": ["markdown", "latex", "pdf"]},
         resume_state=dict(resume_state or {}),
-        metadata={"adapter": "backend.agent.AgentCore", "migration_phase": "spec_sidecar"},
+        metadata={"adapter": "backend.agent.AgentCore", "migration_phase": "native_agentic", "native_agentic": True},
     )

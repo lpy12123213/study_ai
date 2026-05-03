@@ -58,7 +58,7 @@ class PromptContractTests(unittest.TestCase):
         registered = create_default_prompt_registry().render("agent.react.controller.v1").content
 
         self.assertEqual(messages[0]["content"], registered)
-        self.assertIn("严格 JSON", messages[0]["content"])
+        self.assertIn("strict JSON object", messages[0]["content"])
         self.assertIn("web_search_knowledge", messages[1]["content"])
 
     def test_deepthink_prompts_render_from_registry(self) -> None:
@@ -89,8 +89,8 @@ class PromptContractTests(unittest.TestCase):
         registered = create_default_prompt_registry().render("lesson_plan.writer.v1").content
 
         self.assertEqual(get_system_prompt(), registered)
-        self.assertIn("严格 JSON", registered)
-        self.assertIn("严禁照抄", registered)
+        self.assertIn("strict JSON object", registered)
+        self.assertIn("Do not copy any source text verbatim", registered)
 
     def test_paper_compose_prompt_renders_from_registry(self) -> None:
         from backend.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
@@ -105,7 +105,7 @@ class PromptContractTests(unittest.TestCase):
 
         self.assertEqual(get_system_prompt("高中数学"), registered)
         self.assertIn(PLAN_TAG_OPEN, registered)
-        self.assertIn("不输出完整题干", registered)
+        self.assertIn("Do not output full question stems", registered)
 
 
 if __name__ == "__main__":

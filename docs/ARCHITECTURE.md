@@ -149,6 +149,8 @@ Study AI backend modules
 
 prompt 应集中维护并有测试覆盖，避免在业务代码里分散硬编码。
 
+中型和重型 AI 长任务必须声明原生 `AgentRunSpec`。当前覆盖 DeepThink、教案、组卷、一键出卷、知识视频、自学资料、AI 出题/评分和好题鉴别；任务启动事件暴露 `agent_run_spec`，现有领域 runner 继续输出兼容 SSE 事件。
+
 ## 前端边界
 
 目标结构是 feature slice：

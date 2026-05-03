@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from backend.question_library.gen_common import DEFAULT_SEARCH_CONFIG, _difficulty_rank
+from backend.question_library.stages import build_stage_progress_payload
 
 StageEventHandler = Optional[Callable[[dict], Awaitable[None] | None]]
 ReasoningEventHandler = Optional[Callable[[dict], Awaitable[None] | None]]
@@ -109,14 +110,13 @@ async def _emit_stage_event(
     if on_stage_event is None:
         return
 
-    payload = {
-        "phase": str(phase or "").strip(),
-        "label": str(label or "").strip(),
-        "progress": float(progress),
-        "stats": dict(stats or {}),
-    }
-    if sample:
-        payload["sample"] = dict(sample)
+    payload = build_stage_progress_payload(
+        str(phase or "").strip(),
+        progress=float(progress),
+        stats=stats,
+        sample=sample,
+        label=str(label or "").strip(),
+    )
 
     try:
         result = on_stage_event(payload)
@@ -186,4 +186,3 @@ def _difficulty_mismatch_penalty(target: str, estimated: str, tolerance: float) 
     if gap >= 0.9:
         return 20
     return 12
-

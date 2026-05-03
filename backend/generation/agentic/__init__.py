@@ -6,6 +6,7 @@ package incrementally instead of creating parallel task runtimes.
 """
 
 from backend.generation.agentic.prompts import PromptRegistry, PromptTemplate, create_default_prompt_registry
+from backend.generation.agentic.task_specs import build_agent_run_spec_for_task, build_agentic_starter_event
 from backend.generation.agentic.types import AgentRunSpec, AgentTraceEvent
 
 __all__ = [
@@ -13,5 +14,7 @@ __all__ = [
     "AgentTraceEvent",
     "PromptRegistry",
     "PromptTemplate",
+    "build_agent_run_spec_for_task",
+    "build_agentic_starter_event",
     "create_default_prompt_registry",
 ]

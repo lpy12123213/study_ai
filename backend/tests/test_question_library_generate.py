@@ -28,7 +28,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         self.assertIn("LaTeX", messages[0]["content"])
         self.assertIn("\\(", messages[0]["content"])
         self.assertIn("\\[", messages[0]["content"])
-        self.assertIn("表格", messages[0]["content"])
+        self.assertTrue("表格" in messages[0]["content"] or "Tables" in messages[0]["content"])
         self.assertTrue("\\begin{array}" in messages[0]["content"] or "array/matrix/cases" in messages[0]["content"])
 
     def test_build_regenerate_section_messages_require_latex_math(self) -> None:
@@ -55,7 +55,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         self.assertIn("LaTeX", messages[0]["content"])
         self.assertIn("\\(", messages[0]["content"])
         self.assertIn("\\[", messages[0]["content"])
-        self.assertIn("表格", messages[0]["content"])
+        self.assertTrue("表格" in messages[0]["content"] or "Tables" in messages[0]["content"])
         self.assertIn('"section_key": "analysis"', messages[1]["content"])
 
 

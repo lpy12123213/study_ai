@@ -30,7 +30,8 @@ export interface QuestionLibraryListItem {
 }
 
 export interface QuestionLibraryListResponse {
-  total: number
+  total: number | null
+  include_total?: boolean
   limit: number
   offset: number
   items: QuestionLibraryListItem[]
@@ -46,6 +47,7 @@ export interface QuestionLibraryListParams {
   order?: 'desc' | 'asc' | string
   limit?: number
   offset?: number
+  include_total?: boolean
 }
 
 export interface QuestionCacheRecord {

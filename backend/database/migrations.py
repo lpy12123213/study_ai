@@ -40,6 +40,24 @@ def sync_migrate_db_schema(conn) -> None:
     versions.
     """
 
+    try:
+        conn.exec_driver_sql(
+            "CREATE TABLE IF NOT EXISTS task_duration_aggregates ("
+            "task_type VARCHAR(50) PRIMARY KEY NOT NULL,"
+            "completed_count INTEGER NOT NULL DEFAULT 0,"
+            "duration_sum_seconds FLOAT NOT NULL DEFAULT 0,"
+            "duration_ema_seconds FLOAT NOT NULL DEFAULT 0,"
+            "last_duration_seconds FLOAT NOT NULL DEFAULT 0,"
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_task_duration_aggregates_updated_at "
+            "ON task_duration_aggregates (updated_at)"
+        )
+    except Exception:
+        logger.warning("legacy_migration_task_duration_aggregate_failed", exc_info=True)
+
     pq_cols = _table_cols(conn, "paper_questions")
     if pq_cols:
         for name, ddl in (
@@ -81,6 +99,38 @@ def sync_migrate_db_schema(conn) -> None:
         _ensure_index(conn, name="ix_question_library_origin", table="question_library", columns="origin")
         _ensure_index(conn, name="ix_question_library_hidden", table="question_library", columns="hidden")
         _ensure_index(conn, name="ix_question_library_starred", table="question_library", columns="starred")
+        _ensure_index(
+            conn,
+            name="ix_question_library_user_hidden_updated",
+            table="question_library",
+            columns="user_id, hidden, updated_at",
+        )
+        _ensure_index(
+            conn,
+            name="ix_question_library_user_subject_hidden_updated",
+            table="question_library",
+            columns="user_id, subject, hidden, updated_at",
+        )
+        _ensure_index(
+            conn,
+            name="ix_question_library_user_origin_hidden_updated",
+            table="question_library",
+            columns="user_id, origin, hidden, updated_at",
+        )
+        _ensure_index(
+            conn,
+            name="ix_question_library_user_score_updated",
+            table="question_library",
+            columns="user_id, ai_score, updated_at",
+        )
+        try:
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_question_library_unscored_crawled "
+                "ON question_library (user_id, subject, question_id) "
+                "WHERE origin = 'crawled' AND ai_score IS NULL"
+            )
+        except Exception:
+            logger.warning("legacy_migration_question_library_unscored_index_failed", exc_info=True)
 
     # Unified tasks additions (best-effort forward-compat).
     tasks_cols = _table_cols(conn, "tasks")
@@ -90,6 +140,28 @@ def sync_migrate_db_schema(conn) -> None:
         _ensure_index(conn, name="ix_tasks_task_type", table="tasks", columns="task_type")
         _ensure_index(conn, name="ix_tasks_status", table="tasks", columns="status")
         _ensure_index(conn, name="ix_tasks_updated_at", table="tasks", columns="updated_at")
+        _ensure_index(conn, name="ix_tasks_user_status_updated", table="tasks", columns="user_id, status, updated_at")
+        _ensure_index(conn, name="ix_tasks_user_type_updated", table="tasks", columns="user_id, task_type, updated_at")
+        _ensure_index(
+            conn,
+            name="ix_tasks_user_type_status_ended",
+            table="tasks",
+            columns="user_id, task_type, status, ended_at",
+        )
+        _ensure_index(conn, name="ix_tasks_user_updated", table="tasks", columns="user_id, updated_at")
+
+    conv_cols = _table_cols(conn, "conversations")
+    if conv_cols:
+        _ensure_index(
+            conn, name="ix_conversations_user_updated", table="conversations", columns="user_id, updated_at"
+        )
+
+    message_cols = _table_cols(conn, "messages")
+    if message_cols:
+        _ensure_index(
+            conn, name="ix_messages_conversation_created", table="messages", columns="conversation_id, created_at"
+        )
+        _ensure_index(conn, name="ix_messages_conversation_id_id", table="messages", columns="conversation_id, id")
 
     # Study archive versioning: introduce deterministic base_fingerprint for cache lookup.
     sa_cols = _table_cols(conn, "study_archives")
@@ -101,8 +173,24 @@ def sync_migrate_db_schema(conn) -> None:
             ddl="VARCHAR(32) NOT NULL DEFAULT ''",
             existing_cols=sa_cols,
         )
+        _add_col(conn, table="study_archives", name="updated_at", ddl="DATETIME", existing_cols=sa_cols)
         _ensure_index(
             conn, name="ix_study_archives_base_fingerprint", table="study_archives", columns="base_fingerprint"
+        )
+        _ensure_index(
+            conn, name="ix_study_archives_user_updated", table="study_archives", columns="user_id, updated_at"
+        )
+        _ensure_index(
+            conn,
+            name="ix_study_archives_user_base_fingerprint",
+            table="study_archives",
+            columns="user_id, base_fingerprint",
+        )
+        _ensure_index(
+            conn,
+            name="ix_study_archives_user_base_fingerprint_created",
+            table="study_archives",
+            columns="user_id, base_fingerprint, created_at",
         )
         try:
             conn.exec_driver_sql(
@@ -111,6 +199,13 @@ def sync_migrate_db_schema(conn) -> None:
             )
         except Exception:
             logger.warning("legacy_migration_base_fingerprint_backfill_failed", exc_info=True)
+        try:
+            conn.exec_driver_sql(
+                "UPDATE study_archives SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
+                "WHERE updated_at IS NULL"
+            )
+        except Exception:
+            logger.warning("legacy_migration_study_archives_updated_at_backfill_failed", exc_info=True)
 
     # Full-text search (SQLite FTS5) — best-effort. If the runtime SQLite build lacks FTS5,
     # we silently skip and fall back to LIKE-based search in the API.

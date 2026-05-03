@@ -22,6 +22,8 @@ from backend.llm.client import chat_completion_text
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.crawler.manager import get_crawler
 from backend.core.subjects import resolve_subject
+from backend.shared.tasks.runtime import RuntimeTask
+from backend.tasks import submit_question_evaluate_task
 
 router = APIRouter(prefix="/question-evaluate", tags=["question-evaluate"], dependencies=[Depends(require_auth)])
 
@@ -105,6 +107,40 @@ def _normalize_dimensions(raw_dims: Any) -> List[Dict[str, Any]]:
         {"name": "表述规范", "score": 0, "comment": ""},
         {"name": "创新性", "score": 0, "comment": ""},
     ]
+
+
+def _response_from_task_payload(data: Dict[str, Any]) -> QuestionEvaluateResponse:
+    raw_results = data.get("results") if isinstance(data.get("results"), list) else []
+    results: List[QuestionEvaluation] = []
+    for item in raw_results:
+        if isinstance(item, QuestionEvaluation):
+            results.append(item)
+        elif isinstance(item, dict):
+            results.append(QuestionEvaluation(**item))
+    return QuestionEvaluateResponse(results=results, model=str(data.get("model") or ""))
+
+
+async def _wait_question_evaluate_response(task: RuntimeTask) -> QuestionEvaluateResponse:
+    while task.status == "running":
+        async with task.cond:
+            if task.status != "running":
+                break
+            try:
+                await asyncio.wait_for(task.cond.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                continue
+
+    if task.status != "completed":
+        message = task.error or "question_evaluate_failed"
+        raise HTTPException(status_code=500, detail=message)
+
+    result = task.meta.get("result") if isinstance(task.meta.get("result"), dict) else None
+    if not isinstance(result, dict):
+        for event in reversed(task.events):
+            if str(event.get("type") or "") == "done" and isinstance(event.get("data"), dict):
+                result = event.get("data")
+                break
+    return _response_from_task_payload(result or {})
 
 
 async def _evaluate_one(
@@ -367,33 +403,13 @@ async def search_questions(payload: QuestionSearchRequest) -> QuestionSearchResp
 
 
 @router.post("/evaluate", response_model=QuestionEvaluateResponse)
-async def evaluate_questions(payload: QuestionEvaluateRequest) -> QuestionEvaluateResponse:
+async def evaluate_questions(payload: QuestionEvaluateRequest, user: dict = Depends(require_auth)) -> QuestionEvaluateResponse:
     if not payload.questions:
         raise HTTPException(status_code=400, detail="missing_questions")
 
-    subject_input = (payload.subject or DEFAULT_SUBJECT).strip()
-    try:
-        subject = resolve_subject(subject_input, strict=True)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    model = (payload.model or "").strip() or str(LESSON_PLAN_MODEL or "").strip()
-    if not model:
-        raise HTTPException(status_code=500, detail="llm_model_not_configured")
-
-    requirements = (payload.requirements or "").strip()
-
-    # Concurrency cap to avoid too many parallel LLM calls
-    sem = asyncio.Semaphore(4)
-
-    async def _run(q: QuestionInput) -> QuestionEvaluation:
-        async with sem:
-            return await _evaluate_one(q, subject=subject, requirements=requirements, model=model)
-
-    tasks = [asyncio.create_task(_run(q)) for q in payload.questions[:50]]
-    results = await asyncio.gather(*tasks)
-
-    # Sort by overall_score desc
-    results_sorted = sorted(results, key=lambda r: int(getattr(r, "overall_score", 0) or 0), reverse=True)
-
-    return QuestionEvaluateResponse(results=results_sorted, model=model)
+    task = await submit_question_evaluate_task(user_id=user_id, request=payload.model_dump())
+    return await _wait_question_evaluate_response(task)

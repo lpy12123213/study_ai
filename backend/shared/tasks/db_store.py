@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.database.repositories.system.tasks import (
     append_task_event as db_append_task_event,
+    append_task_events as db_append_task_events,
     average_duration_seconds as db_average_duration_seconds,
     fail_running_tasks_on_startup as db_fail_running_tasks_on_startup,
     get_task as db_get_task,
@@ -13,7 +14,7 @@ from backend.database.repositories.system.tasks import (
     update_task_status as db_update_task_status,
     upsert_task as db_upsert_task,
 )
-from backend.shared.tasks.store import TaskStore
+from backend.shared.tasks.store import TaskEventWrite, TaskStore
 
 
 class DbTaskStore(TaskStore):
@@ -83,6 +84,15 @@ class DbTaskStore(TaskStore):
             seq=seq,
             progress=progress,
         )
+
+    async def append_task_events(
+        self,
+        *,
+        user_id: str,
+        task_id: str,
+        events: List[TaskEventWrite],
+    ) -> int:
+        return await db_append_task_events(user_id=user_id, task_id=task_id, events=events)
 
     async def get_task(
         self,

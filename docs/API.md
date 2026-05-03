@@ -97,8 +97,11 @@
 - `POST /api/tasks/question-library/crawl`
 - `POST /api/tasks/question-library/generate`
 - `POST /api/tasks/question-library/score`
+- `POST /api/tasks/question-evaluate/evaluate`
 - `POST /api/tasks/export/papers/{paper_id}`
 - `POST /api/tasks/export/study-archives/{archive_id}`
+
+DeepThink、教案、组卷、一键出卷、知识视频、自学资料、AI 出题/评分和好题鉴别属于中型或重型 AI 任务。其任务启动事件会携带 `data.native_agentic=true` 与 `data.agent_run_spec`，用于描述原生 agentic 的 domain、goal、roles、tool_policy、budget、output_contract 和 resume_state。客户端可忽略该字段以保持兼容；任务进度仍以既有 SSE 事件继续输出。
 
 状态与控制：
 
@@ -192,6 +195,8 @@ Preview 与 session：
 - `POST /api/question-library/sessions/{session_id}/archive`
 
 题库的抓取、生成、评分优先使用 `/api/tasks/question-library/*`。
+
+AI 出题任务的 `progress` SSE 事件会携带结构化阶段字段：`stage_id`、`stage_label`、`stage_group`、`stage_order`、`description`、`summary`、`stats` 和可选 `sample`。旧字段 `phase`、`label`、`progress` 保持兼容。
 
 ## 自学资料与教案
 

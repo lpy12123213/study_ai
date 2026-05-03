@@ -8,7 +8,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
-from backend.shared.tasks.store import TaskStore
+from backend.shared.tasks import metrics as task_metrics
+from backend.shared.tasks.store import TaskEventWrite, TaskStore
 
 logger = get_logger(__name__)
 
@@ -63,6 +64,12 @@ class RuntimeTask:
     # Domain-specific extra state (resumable tasks can stash metadata here).
     meta: Dict[str, Any] = field(default_factory=dict)
 
+    # Durable persistence is batched. Live SSE reads `events` directly from memory;
+    # this queue is flushed for reconnect replay and terminal recovery.
+    pending_persist_events: List[TaskEventWrite] = field(default_factory=list)
+    event_flush_task: Optional[asyncio.Task] = None
+    event_flush_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
 
 class TaskRuntime:
     """Unified in-memory task runtime with DB-backed persistence.
@@ -78,6 +85,8 @@ class TaskRuntime:
         max_tasks: int = 200,
         task_ttl_s: int = 60 * 60,
         max_events_per_task: int = 8000,
+        task_event_flush_interval_ms: int = 200,
+        task_event_batch_size: int = 50,
     ) -> None:
         self._store = store
         self._tasks: Dict[str, RuntimeTask] = {}
@@ -86,6 +95,8 @@ class TaskRuntime:
         self._max_tasks = max(1, int(max_tasks or 200))
         self._task_ttl_s = max(60, int(task_ttl_s or (60 * 60)))
         self._max_events_per_task = max(200, int(max_events_per_task or 8000))
+        self._event_flush_interval_s = max(0.0, float(task_event_flush_interval_ms or 0) / 1000.0)
+        self._event_batch_size = max(1, int(task_event_batch_size or 50))
 
     async def restart_recovery(self, *, reason: str = "server_restarted") -> None:
         """Best-effort startup hook to fail orphaned DB tasks left as running."""
@@ -103,6 +114,14 @@ class TaskRuntime:
 
         for task in tasks:
             if task.status != "running":
+                try:
+                    await self.flush_task_events(task)
+                except Exception:
+                    logger.debug(
+                        "task_runtime_shutdown_flush_failed",
+                        extra={"task_id": task.task_id, "user_id": task.user_id, "reason": reason},
+                        exc_info=True,
+                    )
                 continue
             try:
                 await self.cancel_task(task_id=task.task_id, user_id=task.user_id, reason=reason)
@@ -328,30 +347,97 @@ class TaskRuntime:
 
             task.cond.notify_all()
 
-        try:
-            await self._store.append_task_event(
-                user_id=task.user_id,
-                task_id=task.task_id,
+        await self._enqueue_event_write(
+            task,
+            TaskEventWrite(
                 event_type=event_type,
                 payload=data if isinstance(data, dict) else {},
                 seq=seq if seq > 0 else None,
                 progress=progress_value,
-            )
+            ),
+        )
+
+    async def _enqueue_event_write(self, task: RuntimeTask, write: TaskEventWrite) -> None:
+        flush_now = False
+        pending = 0
+        async with task.cond:
+            task.pending_persist_events.append(write)
+            pending = len(task.pending_persist_events)
+            flush_now = pending >= self._event_batch_size
+            if not flush_now and (task.event_flush_task is None or task.event_flush_task.done()):
+                task.event_flush_task = asyncio.create_task(self._delayed_flush_task_events(task))
+
+        task_metrics.event_queued(task_type=task.task_type, event_type=write.event_type, pending=pending)
+
+        if flush_now:
+            await self.flush_task_events(task)
+
+    async def _delayed_flush_task_events(self, task: RuntimeTask) -> None:
+        try:
+            if self._event_flush_interval_s > 0:
+                await asyncio.sleep(self._event_flush_interval_s)
+            await self.flush_task_events(task)
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            logger.exception(
-                "task_runtime_event_write_failed",
-                extra={
-                    "task_id": task.task_id,
-                    "user_id": task.user_id,
-                    "task_type": task.task_type,
-                    "event_type": event_type,
-                },
+            logger.debug(
+                "task_runtime_delayed_event_flush_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id, "task_type": task.task_type},
+                exc_info=True,
             )
+
+    async def flush_task_events(self, task: RuntimeTask) -> None:
+        current = asyncio.current_task()
+        async with task.cond:
+            scheduled = task.event_flush_task
+            if scheduled is not None and scheduled is not current and not scheduled.done():
+                scheduled.cancel()
+            if scheduled is current or scheduled is not None:
+                task.event_flush_task = None
+
+        async with task.event_flush_lock:
+            while True:
+                async with task.cond:
+                    batch = list(task.pending_persist_events[: self._event_batch_size])
+                    if not batch:
+                        task_metrics.pending_events(task_type=task.task_type, pending=0)
+                        return
+                    del task.pending_persist_events[: len(batch)]
+                    pending = len(task.pending_persist_events)
+
+                started_s = task_metrics.now_s()
+                try:
+                    await self._store.append_task_events(user_id=task.user_id, task_id=task.task_id, events=batch)
+                except Exception:
+                    async with task.cond:
+                        task.pending_persist_events = batch + task.pending_persist_events
+                        pending = len(task.pending_persist_events)
+                    task_metrics.pending_events(task_type=task.task_type, pending=pending)
+                    logger.exception(
+                        "task_runtime_event_batch_write_failed",
+                        extra={
+                            "task_id": task.task_id,
+                            "user_id": task.user_id,
+                            "task_type": task.task_type,
+                            "event_count": len(batch),
+                        },
+                    )
+                    return
+
+                duration_s = task_metrics.now_s() - started_s
+                task_metrics.event_flush(
+                    task_type=task.task_type,
+                    status="ok",
+                    count=len(batch),
+                    duration_s=duration_s,
+                )
+                task_metrics.pending_events(task_type=task.task_type, pending=pending)
 
     async def complete_task(self, task: RuntimeTask, *, result: Optional[Dict[str, Any]] = None) -> None:
         task.status = "completed"
         task.progress = 100.0
         task.updated_at_s = _now_s()
+        await self.flush_task_events(task)
         try:
             await self._store.update_task_status(
                 user_id=task.user_id,
@@ -392,6 +478,7 @@ class TaskRuntime:
                     exc_info=True,
                 )
 
+        await self.flush_task_events(task)
         try:
             await self._store.update_task_status(
                 user_id=task.user_id,
@@ -435,6 +522,7 @@ class TaskRuntime:
             },
         )
 
+        await self.flush_task_events(task)
         try:
             await self._store.update_task_status(user_id=uid, task_id=task.task_id, status="paused", error={})
         except Exception:
@@ -477,6 +565,7 @@ class TaskRuntime:
             },
         )
 
+        await self.flush_task_events(task)
         try:
             await self._store.update_task_status(user_id=uid, task_id=task.task_id, status="running", error={})
         except Exception:
@@ -519,6 +608,7 @@ class TaskRuntime:
             },
         )
 
+        await self.flush_task_events(task)
         try:
             await self._store.update_task_status(
                 user_id=uid,
@@ -551,65 +641,73 @@ class TaskRuntime:
 
         last_sent_seq = max(0, int(after_seq or 0))
         last_ping_at = 0.0
+        stream_metrics = None
 
-        while True:
-            task = await self.get_task(tid)
-            if not task:
-                yield {
-                    "taskId": tid,
-                    "seq": last_sent_seq,
-                    "type": "error",
-                    "data": {"error": "task_not_found"},
-                    "created_at": _now_iso(),
-                }
-                return
+        try:
+            while True:
+                task = await self.get_task(tid)
+                if not task:
+                    yield {
+                        "taskId": tid,
+                        "seq": last_sent_seq,
+                        "type": "error",
+                        "data": {"error": "task_not_found"},
+                        "created_at": _now_iso(),
+                    }
+                    return
+                if stream_metrics is None:
+                    stream_metrics = task_metrics.sse_connection(task.task_type)
+                    stream_metrics.__enter__()
 
-            first_seq = task.seq_offset + 1
-            if last_sent_seq < first_seq - 1:
-                yield {
-                    "taskId": tid,
-                    "type": "error",
-                    "seq": task.last_seq,
-                    "data": {
-                        "error": "Event backlog truncated; please restart.",
-                        "first_seq": first_seq,
-                        "last_seq": task.last_seq,
-                    },
-                    "created_at": _now_iso(),
-                }
-                last_sent_seq = first_seq - 1
+                first_seq = task.seq_offset + 1
+                if last_sent_seq < first_seq - 1:
+                    yield {
+                        "taskId": tid,
+                        "type": "error",
+                        "seq": task.last_seq,
+                        "data": {
+                            "error": "Event backlog truncated; please restart.",
+                            "first_seq": first_seq,
+                            "last_seq": task.last_seq,
+                        },
+                        "created_at": _now_iso(),
+                    }
+                    last_sent_seq = first_seq - 1
 
-            start_idx = max(0, last_sent_seq - task.seq_offset)
-            batch = task.events[start_idx:]
-            for evt in batch:
-                seq = int(evt.get("seq") or 0)
-                if seq <= last_sent_seq:
-                    continue
-                last_sent_seq = seq
-                yield evt
+                start_idx = max(0, last_sent_seq - task.seq_offset)
+                batch = task.events[start_idx:]
+                for evt in batch:
+                    seq = int(evt.get("seq") or 0)
+                    if seq <= last_sent_seq:
+                        continue
+                    last_sent_seq = seq
+                    yield evt
 
-            if task.status != "running":
-                return
+                if task.status != "running":
+                    return
 
-            now = _now_s()
-            if now - last_ping_at >= max(1.0, float(heartbeat_s or 4.0)):
-                last_ping_at = now
-                yield {
-                    "taskId": tid,
-                    "seq": last_sent_seq,
-                    "type": "ping",
-                    "data": {"status": task.status, "last_seq": last_sent_seq},
-                    "created_at": _now_iso(),
-                }
+                now = _now_s()
+                if now - last_ping_at >= max(1.0, float(heartbeat_s or 4.0)):
+                    last_ping_at = now
+                    yield {
+                        "taskId": tid,
+                        "seq": last_sent_seq,
+                        "type": "ping",
+                        "data": {"status": task.status, "last_seq": last_sent_seq},
+                        "created_at": _now_iso(),
+                    }
 
-            async with task.cond:
-                try:
-                    await asyncio.wait_for(
-                        task.cond.wait_for(lambda: task.last_seq > last_sent_seq or task.status != "running"),
-                        timeout=max(0.5, float(heartbeat_s or 4.0)),
-                    )
-                except asyncio.TimeoutError:
-                    continue
+                async with task.cond:
+                    try:
+                        await asyncio.wait_for(
+                            task.cond.wait_for(lambda: task.last_seq > last_sent_seq or task.status != "running"),
+                            timeout=max(0.5, float(heartbeat_s or 4.0)),
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+        finally:
+            if stream_metrics is not None:
+                stream_metrics.__exit__(None, None, None)
 
     async def status_payload(
         self,

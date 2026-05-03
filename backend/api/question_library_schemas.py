@@ -20,7 +20,8 @@ class QuestionLibraryListResponseItem(BaseModel):
 
 
 class QuestionLibraryListResponse(BaseModel):
-    total: int = 0
+    total: Optional[int] = 0
+    include_total: bool = True
     limit: int = 50
     offset: int = 0
     items: List[QuestionLibraryListResponseItem] = Field(default_factory=list)

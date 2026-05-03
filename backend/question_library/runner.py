@@ -17,6 +17,11 @@ from backend.database.repositories.content.study_archives import (
 )
 from backend.database.repositories.question.question_cache import get_question_cache, upsert_question_cache
 from backend.database.repositories.question.question_library import list_question_library_items, upsert_question_library_items
+from backend.generation.agentic.task_specs import (
+    agentic_task_meta,
+    build_agent_run_spec_for_task,
+    build_agentic_starter_event,
+)
 from backend.llm.client import is_llm_configured
 from backend.question_library.generation import (
     analyze_reference_questions,
@@ -42,6 +47,7 @@ from backend.question_library.session_utils import (
     normalize_review_status,
 )
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
+from backend.question_library.stages import build_stage_progress_payload, get_question_generation_stage
 from backend.shared.tasks import RuntimeTask, task_runtime
 
 logger = get_logger(__name__)
@@ -480,6 +486,7 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
 
     threshold = _clamp_int(os.getenv("QUESTION_LIBRARY_HIDE_THRESHOLD") or 70, default=70, min_v=0, max_v=100)
     model = str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
+    agent_spec = build_agent_run_spec_for_task(task_type="question_library_score", request=req)
 
     async def runner_factory(task: RuntimeTask) -> None:
         try:
@@ -608,6 +615,10 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
         title=f"题库评分：{subject or 'score'}",
         request=req,
         runner_factory=runner_factory,
+        meta=agentic_task_meta(agent_spec),
+        starter_event=build_agentic_starter_event(spec=agent_spec, title="开始题库评分", tool_name="question_library_score")
+        if agent_spec is not None
+        else None,
     )
 
 
@@ -652,6 +663,7 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
 
     task_id = str(req.get("task_id") or "").strip() or f"ql_gen_{uuid.uuid4().hex[:12]}"
     topic_key = normalize_topic_key(topic_raw) or topic_raw
+    agent_spec = build_agent_run_spec_for_task(task_type="question_library_generate", request=req)
 
     existing_session = load_session(session_id) if session_id else None
     if session_id and existing_session and str(existing_session.get("user_id") or "").strip() != str(user_id or "").strip():
@@ -689,19 +701,6 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
     save_session(current_session)
 
     async def runner_factory(task: RuntimeTask) -> None:
-        stage_labels = {
-            "source_pack": "素材整理",
-            "reference_crawl": "参考题爬取",
-            "reference_analysis": "参考题分析",
-            "brainstorm": "创意发散",
-            "spec_search": "规格搜索",
-            "draft_realization": "草稿生成",
-            "diagram_generation": "配图生成",
-            "judge": "判题筛选",
-            "final_selection": "终选入围",
-            "pending_review": "待审核预览",
-        }
-
         draft_key_to_id: Dict[str, str] = {}
         progress_drafts = normalize_draft_questions(
             ((existing_preview or {}).get("draft_questions") if isinstance(existing_preview, dict) else [])
@@ -742,15 +741,12 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
             )
 
         async def _emit_progress(stage_id: str, *, progress: float, stats: Optional[dict] = None, sample: Optional[dict] = None) -> None:
-            payload: Dict[str, Any] = {
-                "progress": float(progress),
-                "stage_id": stage_id,
-                "stage_label": stage_labels.get(stage_id) or stage_id,
-            }
-            if isinstance(stats, dict) and stats:
-                payload["stats"] = dict(stats)
-            if isinstance(sample, dict) and sample:
-                payload["sample"] = dict(sample)
+            payload = build_stage_progress_payload(
+                stage_id,
+                progress=float(progress),
+                stats=stats if isinstance(stats, dict) else None,
+                sample=sample if isinstance(sample, dict) else None,
+            )
             await _emit_event(task, event_type="progress", data=payload, user_id=user_id, persist_task_id=task_id, progress=progress)
 
         async def _on_stage_event(payload: dict) -> None:
@@ -892,7 +888,7 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
                         {
                             "type": "reasoning_status",
                             "stage_id": "draft_realization",
-                            "stage_label": stage_labels["draft_realization"],
+                            "stage_label": get_question_generation_stage("draft_realization").label,
                             "mode": "trace",
                             "message": f"批次生成异常，将重试: {str(exc)[:220]}",
                         }
@@ -976,4 +972,8 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
         title=f"AI 出题：{subject} {topic_key}".strip(),
         request=req,
         runner_factory=runner_factory,
+        meta=agentic_task_meta(agent_spec),
+        starter_event=build_agentic_starter_event(spec=agent_spec, title="开始 AI 出题", tool_name="question_library_generate")
+        if agent_spec is not None
+        else None,
     )

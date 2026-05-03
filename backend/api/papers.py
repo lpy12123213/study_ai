@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import time
-import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,9 +18,8 @@ from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.question.papers import delete_paper, get_paper, list_papers, save_paper
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.paper_compose.export import export_paper as export_paper_doc
-from backend.paper_compose.workflow import compose_paper_events
-from backend.shared.tasks import RuntimeTask, task_runtime
-from backend.tasks import submit_generate_full_paper_task
+from backend.shared.tasks import task_runtime
+from backend.tasks import submit_generate_full_paper_task, submit_paper_compose_task
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -266,40 +264,6 @@ def _sse_headers() -> dict:
     }
 
 
-async def _run_compose_task(task: RuntimeTask, *, user_id: str) -> None:
-    """Run the compose workflow and emit events into the shared task runtime."""
-
-    try:
-        async for evt in compose_paper_events(task.request, user_id=user_id):
-            if task.status != "running":
-                break
-            await task_runtime.append_event(task, evt)
-
-            kind = str(evt.get("type") or "")
-            if kind == "result":
-                result = evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
-                await task_runtime.complete_task(task, result=result)
-                return
-            if kind == "error":
-                msg = str(evt.get("error") or "compose_failed").strip() or "compose_failed"
-                await task_runtime.fail_task(task, msg, error={"message": msg}, emit_event=False)
-                return
-    except asyncio.CancelledError:
-        # External controllers (e.g. shutdown) may set a terminal status before
-        # cancelling the runner. Respect that state to avoid overwriting DB.
-        if task.status != "running":
-            async with task.cond:
-                task.cond.notify_all()
-            raise
-        await task_runtime.fail_task(task, "Task cancelled")
-        raise
-    except Exception as exc:  # pragma: no cover
-        await task_runtime.fail_task(task, str(exc), error={"message": str(exc)})
-    finally:
-        if task.status == "running":
-            await task_runtime.fail_task(task, "Task ended unexpectedly", error={"message": "Task ended unexpectedly"})
-
-
 @router.post("/papers/compose")
 async def compose_paper(payload: dict, user: dict = Depends(require_auth)) -> StreamingResponse:
     """
@@ -317,31 +281,15 @@ async def compose_paper(payload: dict, user: dict = Depends(require_auth)) -> St
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid_payload")
 
-    task_id = str(payload.get("taskId") or payload.get("task_id") or "").strip()
-    if not task_id:
-        task_id = f"compose-{uuid.uuid4().hex[:12]}"
-        payload["taskId"] = task_id
-
-    async def runner_factory(task: RuntimeTask):
-        await _run_compose_task(task, user_id=user_id)
-
     try:
-        title = str(payload.get("paperName") or payload.get("paper_name") or "组卷任务").strip() or "组卷任务"
-        await task_runtime.create_task(
-            task_id=task_id,
-            user_id=user_id,
-            task_type="paper_compose",
-            title=title,
-            request=payload,
-            runner_factory=runner_factory,
-        )
+        task = await submit_paper_compose_task(user_id=user_id, request=dict(payload))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     heartbeat_s = float(os.getenv("PAPER_COMPOSE_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
-        async for event in task_runtime.stream(task_id, after_seq=0, heartbeat_s=heartbeat_s):
+        async for event in task_runtime.stream(task.task_id, after_seq=0, heartbeat_s=heartbeat_s):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

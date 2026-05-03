@@ -121,6 +121,7 @@ async def list_items(
     order: str = Query("desc"),
     limit: int = Query(50),
     offset: int = Query(0),
+    include_total: bool = Query(True),
     user: dict = Depends(require_auth),
 ) -> dict:
     user_id = _require_user_id(user)
@@ -135,6 +136,7 @@ async def list_items(
         order=order,
         limit=limit,
         offset=offset,
+        include_total=include_total,
     )
 
 

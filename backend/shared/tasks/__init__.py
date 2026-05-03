@@ -8,7 +8,13 @@ DB persistence glue so domains don't re-implement lifecycle and SSE replay logic
 from __future__ import annotations
 
 from backend.shared.tasks.runtime import RuntimeTask, TaskRuntime
-from backend.shared.tasks.runtime_singleton import task_runtime
 
 __all__ = ["RuntimeTask", "TaskRuntime", "task_runtime"]
 
+
+def __getattr__(name: str):
+    if name == "task_runtime":
+        from backend.shared.tasks.runtime_singleton import task_runtime
+
+        return task_runtime
+    raise AttributeError(name)

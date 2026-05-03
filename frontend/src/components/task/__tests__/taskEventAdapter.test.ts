@@ -13,6 +13,10 @@ describe('taskEventAdapter', () => {
         progress: 44,
         stage_id: 'spec_search',
         stage_label: '规格搜索',
+        stage_group: 'design',
+        stage_order: 5,
+        description: '把出题目标展开为候选规格并做 beam 筛选。',
+        summary: 'kept_specs=8',
         stats: {
           kept_specs: 8,
           sample_seed_tags: ['参数变化', '分类讨论'],
@@ -23,7 +27,17 @@ describe('taskEventAdapter', () => {
     expect(step).not.toBeNull()
     expect(step?.id).toBe('stage:spec_search')
     expect(step?.title).toBe('规格搜索')
+    expect(step?.input).toMatchObject({
+      stage_id: 'spec_search',
+      stage_label: '规格搜索',
+      stage_group: 'design',
+      stage_order: 5,
+      description: '把出题目标展开为候选规格并做 beam 筛选。',
+      summary: 'kept_specs=8',
+      progress: 44,
+    })
     expect(step?.output).toEqual({
+      summary: 'kept_specs=8',
       kept_specs: 8,
       sample_seed_tags: ['参数变化', '分类讨论'],
     })

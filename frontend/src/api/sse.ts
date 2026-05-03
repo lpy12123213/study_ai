@@ -8,6 +8,7 @@ import {
   joinBaseUrl,
   responseToApiError,
 } from '@/api/instance'
+import { createStreamEventBatcher } from '@/lib/streamEventBatcher'
 
 // SSE helper for streaming responses
 export function createSSEConnection(
@@ -17,27 +18,36 @@ export function createSSEConnection(
   onComplete?: () => void
 ): EventSource {
   const fullUrl = joinBaseUrl(API_BASE_URL, url)
+  const messageBatcher = createStreamEventBatcher(onMessage)
 
   // Note: EventSource doesn't support custom headers
   // For auth, we'll need to pass token as query param or use fetch-based SSE
   const eventSource = new EventSource(fullUrl)
+  const closeEventSource = eventSource.close.bind(eventSource)
+
+  eventSource.close = () => {
+    messageBatcher.flush()
+    closeEventSource()
+  }
 
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
       if (data.type === 'done' || data.done) {
+        messageBatcher.flush()
         onComplete?.()
         eventSource.close()
       } else {
-        onMessage(data)
+        messageBatcher.enqueue(data)
       }
     } catch {
       // Plain text message
-      onMessage(event.data)
+      messageBatcher.enqueue(event.data)
     }
   }
 
   eventSource.onerror = (error) => {
+    messageBatcher.flush()
     onError?.(error)
     eventSource.close()
   }
@@ -102,7 +112,21 @@ export async function fetchSSERequest(
   onError?: (error: Error) => void,
   onComplete?: () => void
 ): Promise<void> {
-  return fetchSSERequestInternal(url, options, onMessage, onError, onComplete, 0)
+  const messageBatcher = createStreamEventBatcher(onMessage)
+  return fetchSSERequestInternal(
+    url,
+    options,
+    messageBatcher.enqueue,
+    (error) => {
+      messageBatcher.flush()
+      onError?.(error)
+    },
+    () => {
+      messageBatcher.flush()
+      onComplete?.()
+    },
+    0
+  )
 }
 
 async function fetchSSERequestInternal(

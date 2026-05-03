@@ -17,6 +17,7 @@ from backend.api.question_library_schemas import (
     QuestionLibraryGenerateRequest,
     QuestionLibraryScoreRequest,
 )
+from backend.api.question_evaluate_schemas import QuestionEvaluateRequest
 from backend.api.schemas import DeepThinkRequest
 from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, StudyMaterialsGenerateRequest
 from backend.api.knowledge_video_schemas import KnowledgeVideoGenerateRequest
@@ -50,6 +51,7 @@ from backend.tasks import (
     submit_knowledge_video_task,
     submit_lesson_plan_task,
     submit_paper_compose_task,
+    submit_question_evaluate_task,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(require_auth)])
@@ -309,6 +311,18 @@ async def submit_question_library_score(request: QuestionLibraryScoreRequest, us
     return {"success": True, "taskId": task.task_id}
 
 
+@router.post("/question-evaluate/evaluate", response_model=dict)
+async def submit_question_evaluate(request: QuestionEvaluateRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for question quality evaluation."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await submit_question_evaluate_task(user_id=user_id, request=request.model_dump())
+    return {"success": True, "taskId": task.task_id}
+
+
 @router.get("/{task_id}", response_model=dict)
 async def get_task_status(
     task_id: str,
@@ -491,6 +505,10 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
 
     if task_type == "knowledge_video":
         task = await submit_knowledge_video_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
+        return {"success": True, "taskId": task.task_id}
+
+    if task_type == "question_evaluate":
+        task = await submit_question_evaluate_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
         return {"success": True, "taskId": task.task_id}
 
     raise HTTPException(status_code=400, detail="task_not_retryable")

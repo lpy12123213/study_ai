@@ -10,7 +10,9 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-semibold">设置</h1>
       <div className="space-y-2">
         <h2 className="font-medium">账户</h2>
-        <p className="text-sm text-muted-foreground">用户名：{user?.username}　角色：{user?.role}</p>
+        <p className="text-sm text-muted-foreground">
+          用户名：{user?.username} 角色：{user?.role}
+        </p>
       </div>
       <div className="space-y-3">
         <h2 className="font-medium">外观</h2>

@@ -103,6 +103,7 @@ async def list_question_library_items(
     order: str = "desc",
     limit: int = 50,
     offset: int = 0,
+    include_total: bool = True,
     session: Optional[AsyncSession] = None,
 ) -> dict:
     uid = _require_user_id(user_id)
@@ -126,8 +127,24 @@ async def list_question_library_items(
                 order=order,
                 limit=limit,
                 offset=offset,
+                include_total=include_total,
                 session=session,
             )
+
+    where = [QuestionLibraryItem.user_id == uid]
+    if subj:
+        where.append(QuestionLibraryItem.subject == subj)
+    if origin_v:
+        where.append(QuestionLibraryItem.origin == origin_v)
+    if hidden in {"0", "1"}:
+        where.append(QuestionLibraryItem.hidden == (1 if hidden == "1" else 0))
+    if min_score is not None:
+        where.append(QuestionLibraryItem.ai_score >= int(min_score))
+
+    q_filter = None
+    if qv:
+        like = f"%{qv}%"
+        q_filter = or_(QuestionCache.stem.like(like), QuestionLibraryItem.question_id.like(like))
 
     stmt = (
         select(
@@ -155,28 +172,29 @@ async def list_question_library_items(
         )
         .select_from(QuestionLibraryItem)
         .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
-        .where(QuestionLibraryItem.user_id == uid)
+        .where(*where)
     )
-
-    if subj:
-        stmt = stmt.where(QuestionLibraryItem.subject == subj)
-    if origin_v:
-        stmt = stmt.where(QuestionLibraryItem.origin == origin_v)
-    if hidden in {"0", "1"}:
-        stmt = stmt.where(QuestionLibraryItem.hidden == (1 if hidden == "1" else 0))
-    if min_score is not None:
-        stmt = stmt.where(QuestionLibraryItem.ai_score >= int(min_score))
-    if qv:
-        like = f"%{qv}%"
-        stmt = stmt.where(or_(QuestionCache.stem.like(like), QuestionLibraryItem.question_id.like(like)))
+    if q_filter is not None:
+        stmt = stmt.where(q_filter)
 
     sort_key = sort.strip().lower()
     order_key = order.strip().lower()
     col = QuestionLibraryItem.updated_at if sort_key != "ai_score" else QuestionLibraryItem.ai_score
-    stmt = stmt.order_by(desc(col) if order_key != "asc" else col.asc())
+    tie_breaker = QuestionLibraryItem.question_id.asc() if order_key == "asc" else QuestionLibraryItem.question_id.desc()
+    stmt = stmt.order_by(desc(col) if order_key != "asc" else col.asc(), tie_breaker)
 
-    total_stmt = select(func.count()).select_from(stmt.subquery())
-    total = int((await session.execute(total_stmt)).scalar() or 0)
+    total: Optional[int] = None
+    if include_total:
+        if q_filter is not None:
+            total_stmt = (
+                select(func.count())
+                .select_from(QuestionLibraryItem)
+                .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
+                .where(*where, q_filter)
+            )
+        else:
+            total_stmt = select(func.count()).select_from(QuestionLibraryItem).where(*where)
+        total = int((await session.execute(total_stmt)).scalar() or 0)
 
     rows = (await session.execute(stmt.limit(lim).offset(off))).all()
 
@@ -210,7 +228,7 @@ async def list_question_library_items(
             }
         )
 
-    return {"total": total, "items": items, "limit": lim, "offset": off}
+    return {"total": total, "include_total": bool(include_total), "items": items, "limit": lim, "offset": off}
 
 
 async def bulk_delete_question_library_items(

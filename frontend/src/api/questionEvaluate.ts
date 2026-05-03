@@ -1,4 +1,5 @@
 import { apiClient } from './client'
+import { getTask } from './tasks'
 
 export interface QuestionEvaluateSearchRequest {
   query: string
@@ -60,6 +61,7 @@ export interface QuestionEvaluateRequest {
 export interface QuestionEvaluateResponse {
   results: QuestionEvaluateResult[]
   model: string
+  taskId?: string
 }
 
 function toQuestion(input: any): QuestionEvaluateQuestion | undefined {
@@ -159,6 +161,30 @@ function toResult(input: any): QuestionEvaluateResult | undefined {
   }
 }
 
+function toEvaluateResponse(input: any, taskId?: string): QuestionEvaluateResponse {
+  const rawResults: unknown[] = Array.isArray(input?.results) ? input.results : []
+  const results = rawResults.map(toResult).filter((r): r is QuestionEvaluateResult => !!r)
+
+  return {
+    results,
+    model: typeof input?.model === 'string' ? input.model : '',
+    taskId,
+  }
+}
+
+function findDonePayload(events: unknown): any {
+  if (!Array.isArray(events)) return undefined
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i] as any
+    if (event?.type === 'done' && event?.data && typeof event.data === 'object') return event.data
+  }
+  return undefined
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms))
+}
+
 export async function searchQuestions(
   req: QuestionEvaluateSearchRequest,
 ): Promise<QuestionEvaluateSearchResponse> {
@@ -190,7 +216,7 @@ export async function searchQuestions(
 export async function evaluateQuestions(
   req: QuestionEvaluateRequest,
 ): Promise<QuestionEvaluateResponse> {
-  const response = await apiClient.post<unknown>('/question-evaluate/evaluate', {
+  const response = await apiClient.post<unknown>('/tasks/question-evaluate/evaluate', {
     subject: req.subject,
     requirements: req.requirements,
     model: req.model,
@@ -209,12 +235,31 @@ export async function evaluateQuestions(
     })),
   })
 
-  const data = response.data as any
-  const rawResults: unknown[] = Array.isArray(data?.results) ? data.results : []
-  const results = rawResults.map(toResult).filter((r): r is QuestionEvaluateResult => !!r)
+  const taskId = String((response.data as any)?.taskId || '')
+  if (!taskId) throw new Error('missing_task_id')
 
-  return {
-    results,
-    model: typeof data?.model === 'string' ? data.model : '',
+  for (;;) {
+    const task = await getTask(taskId, { includeEvents: true, eventsLimit: 200 })
+    const status = String((task as any)?.status || '')
+
+    if (status === 'completed') {
+      const payload = ((task as any)?.result && typeof (task as any).result === 'object')
+        ? (task as any).result
+        : findDonePayload((task as any)?.events)
+      return toEvaluateResponse(payload || {}, taskId)
+    }
+
+    if (status === 'failed' || status === 'canceled') {
+      const error = (task as any)?.error
+      const message =
+        typeof error === 'string'
+          ? error
+          : typeof error?.message === 'string'
+            ? error.message
+            : '鉴别失败'
+      throw new Error(message)
+    }
+
+    await sleep(800)
   }
 }

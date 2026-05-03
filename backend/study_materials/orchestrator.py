@@ -606,6 +606,8 @@ class StudyMaterialsTaskManager:
                 "subject": subj,
                 "options": dict(opts),
                 "parentTaskId": parent,
+                "native_agentic": True,
+                "agent_run_spec": meta.get("agent_run_spec") if isinstance(meta.get("agent_run_spec"), dict) else {},
             },
         }
 

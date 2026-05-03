@@ -3,8 +3,12 @@ import type { TaskStep } from '@/types'
 
 const STAGE_LABELS: Record<string, string> = {
   source_pack: '素材整理',
+  reference_crawl: '参考题爬取',
+  reference_analysis: '参考题分析',
+  brainstorm: '创意发散',
   spec_search: '规格搜索',
   draft_realization: '草稿生成',
+  diagram_generation: '配图生成',
   judge: '判题筛选',
   final_selection: '终选入围',
   pending_review: '待审核预览',
@@ -40,12 +44,14 @@ function humanizeStage(stageId: string, stageLabel?: string): string {
 }
 
 function buildProgressOutput(data: Record<string, unknown>): unknown {
+  const summary = toOptionalString(data.summary)
   const stats = data.stats
   const sample = data.sample
-  if (stats && sample) return { ...(stats as object), sample }
-  if (stats) return stats
-  if (sample) return { sample }
-  return undefined
+  const output: Record<string, unknown> = {}
+  if (summary) output.summary = summary
+  if (stats && typeof stats === 'object') Object.assign(output, stats as object)
+  if (sample && typeof sample === 'object') output.sample = sample
+  return Object.keys(output).length > 0 ? output : undefined
 }
 
 function normalizeStreamStep(step: Record<string, unknown>, createdAt?: string): TaskStep | null {
@@ -86,6 +92,10 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
     const stageId = normalizeStageId(rawStageId)
     const stageLabel = humanizeStage(stageId, toOptionalString(data.stage_label) || toOptionalString(data.stage))
     const progress = toOptionalNumber(data.progress) ?? 0
+    const stageGroup = toOptionalString(data.stage_group)
+    const stageOrder = toOptionalNumber(data.stage_order)
+    const description = toOptionalString(data.description)
+    const summary = toOptionalString(data.summary)
 
     return {
       id: `stage:${stageId}`,
@@ -93,7 +103,15 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
       status: progress >= 100 ? 'completed' : 'running',
       toolName: 'thinking',
       startTime: evt.created_at,
-      input: { stage_id: stageId, stage_label: stageLabel, progress },
+      input: {
+        stage_id: stageId,
+        stage_label: stageLabel,
+        ...(stageGroup ? { stage_group: stageGroup } : {}),
+        ...(stageOrder !== undefined ? { stage_order: stageOrder } : {}),
+        ...(description ? { description } : {}),
+        ...(summary ? { summary } : {}),
+        progress,
+      },
       output: buildProgressOutput(data),
     }
   }

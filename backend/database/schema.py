@@ -9,7 +9,7 @@ def _utcnow() -> datetime:
     while using timezone-aware UTC as the source of truth.
     """
     return datetime.now(timezone.utc).replace(tzinfo=None)
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from backend.database.base import Base
@@ -101,6 +101,8 @@ class Conversation(Base):
 
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
 
+    __table_args__ = (Index("ix_conversations_user_updated", "user_id", "updated_at"),)
+
 
 class Message(Base):
     """消息表"""
@@ -116,6 +118,11 @@ class Message(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")
+
+    __table_args__ = (
+        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+        Index("ix_messages_conversation_id_id", "conversation_id", "id"),
+    )
 
 
 class CanvasBoard(Base):
@@ -219,6 +226,20 @@ class QuestionLibraryItem(Base):
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
+    __table_args__ = (
+        Index("ix_question_library_user_hidden_updated", "user_id", "hidden", "updated_at"),
+        Index("ix_question_library_user_subject_hidden_updated", "user_id", "subject", "hidden", "updated_at"),
+        Index("ix_question_library_user_origin_hidden_updated", "user_id", "origin", "hidden", "updated_at"),
+        Index("ix_question_library_user_score_updated", "user_id", "ai_score", "updated_at"),
+        Index(
+            "ix_question_library_unscored_crawled",
+            "user_id",
+            "subject",
+            "question_id",
+            sqlite_where=(origin == "crawled") & ai_score.is_(None),
+        ),
+    )
+
 
 class StudyArchive(Base):
     """自学材料归档（本地知识库，用于复用与加速）。"""
@@ -241,6 +262,12 @@ class StudyArchive(Base):
 
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        Index("ix_study_archives_user_updated", "user_id", "updated_at"),
+        Index("ix_study_archives_user_base_fingerprint", "user_id", "base_fingerprint"),
+        Index("ix_study_archives_user_base_fingerprint_created", "user_id", "base_fingerprint", "created_at"),
+    )
 
 
 class UsedQuestionUser(Base):
@@ -298,6 +325,13 @@ class Task(Base):
 
     events = relationship("TaskEvent", back_populates="task", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        Index("ix_tasks_user_status_updated", "user_id", "status", "updated_at"),
+        Index("ix_tasks_user_type_updated", "user_id", "task_type", "updated_at"),
+        Index("ix_tasks_user_type_status_ended", "user_id", "task_type", "status", "ended_at"),
+        Index("ix_tasks_user_updated", "user_id", "updated_at"),
+    )
+
 
 class TaskEvent(Base):
     """Streaming events for tasks (SSE replay)."""
@@ -314,6 +348,21 @@ class TaskEvent(Base):
     task = relationship("Task", back_populates="events")
 
     __table_args__ = (UniqueConstraint("task_id", "seq", name="ux_task_events_task_id_seq"),)
+
+
+class TaskDurationAggregate(Base):
+    """Per-task-type duration summary for ETA inputs."""
+
+    __tablename__ = "task_duration_aggregates"
+
+    task_type = Column(String(50), primary_key=True)
+    completed_count = Column(Integer, nullable=False, default=0)
+    duration_sum_seconds = Column(Float, nullable=False, default=0.0)
+    duration_ema_seconds = Column(Float, nullable=False, default=0.0)
+    last_duration_seconds = Column(Float, nullable=False, default=0.0)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False, index=False)
+
+    __table_args__ = (Index("ix_task_duration_aggregates_updated_at", "updated_at"),)
 
 
 class UserItemMeta(Base):
