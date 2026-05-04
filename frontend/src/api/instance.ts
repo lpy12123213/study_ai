@@ -3,7 +3,8 @@ import { useAuthStore } from '@/stores/useAuthStore'
 import { useRequestLogStore } from '@/stores/useRequestLogStore'
 import { ApiError, type ApiErrorAction } from '@/api/types'
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const viteApiBaseUrl = typeof import.meta.env.VITE_API_BASE_URL === 'string' ? import.meta.env.VITE_API_BASE_URL : ''
+export const API_BASE_URL = viteApiBaseUrl || '/api'
 
 const SETTINGS_API_KEY_STORAGE_KEY = 'settings_api_key'
 const SETTINGS_API_KEY_ENABLED_STORAGE_KEY = 'settings_api_key_enabled'
@@ -21,6 +22,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value)
+}
+
+function recordValue(value: unknown, key: string): unknown {
+  return isRecord(value) ? value[key] : undefined
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined
+}
+
+function hasAbortName(value: unknown): boolean {
+  return isRecord(value) && value.name === 'AbortError'
+}
+
+function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : toOptionalString(recordValue(value, 'message')) || 'network_error'
+}
+
+function headerValue(headers: unknown, name: string): string | undefined {
+  if (!headers) return undefined
+  const getter = recordValue(headers, 'get')
+  if (typeof getter === 'function') {
+    try {
+      return toOptionalString(getter.call(headers, name))
+    } catch {
+      return undefined
+    }
+  }
+  return toOptionalString(recordValue(headers, name))
+}
+
 function extractEnvelopeError(payload: unknown): {
   code?: string
   message?: string
@@ -30,23 +64,23 @@ function extractEnvelopeError(payload: unknown): {
   if (!isRecord(payload)) return {}
   const err = payload.error
   if (!isRecord(err)) return {}
-  const code = toOptionalString((err as any).code)
-  const message = toOptionalString((err as any).message)
-  const requestId = toOptionalString((err as any).request_id) || toOptionalString((err as any).requestId)
-  const actionsRaw = (err as any).recommend_actions
+  const code = toOptionalString(err.code)
+  const message = toOptionalString(err.message)
+  const requestId = toOptionalString(err.request_id) || toOptionalString(err.requestId)
+  const actionsRaw = err.recommend_actions
   const actions = Array.isArray(actionsRaw)
     ? (actionsRaw
         .map((a: unknown) => {
           if (!isRecord(a)) return null
-          const id = toOptionalString((a as any).id) || ''
-          const title = toOptionalString((a as any).title) || ''
+          const id = toOptionalString(a.id) || ''
+          const title = toOptionalString(a.title) || ''
           if (!id || !title) return null
-          const request = (a as any).request
+          const request = a.request
           const parsedRequest = isRecord(request)
             ? {
-                method: (toOptionalString((request as any).method) as 'GET' | 'POST' | undefined) || 'POST',
-                url: toOptionalString((request as any).url) || '',
-                body: (request as any).body,
+                method: (toOptionalString(request.method) as 'GET' | 'POST' | undefined) || 'POST',
+                url: toOptionalString(request.url) || '',
+                body: request.body,
               }
             : undefined
           return { id, title, request: parsedRequest?.url ? parsedRequest : undefined } satisfies ApiErrorAction
@@ -88,17 +122,17 @@ export async function responseToApiError(response: Response, fallbackCode: strin
       // FastAPI commonly returns errors as `{ detail: "some_code" }` (or a list of validation issues).
       // Surface this as the message/code when we don't have an envelope-style `{ error: { ... } }` payload.
       if (!env.code && !env.message && isRecord(payload)) {
-        const detailField = (payload as any).detail
+        const detailField = payload.detail
         const detailText = toOptionalString(detailField)
         if (detailText) {
           message = detailText
           if (String(fallbackCode || '').startsWith('http_')) {
             code = detailText
           }
-        } else if (Array.isArray(detailField) && detailField.length > 0) {
+        } else if (isUnknownArray(detailField) && detailField.length > 0) {
           const first = detailField[0]
           if (isRecord(first)) {
-            const msg = toOptionalString((first as any).msg)
+            const msg = toOptionalString(first.msg)
             if (msg) message = msg
           }
         }
@@ -137,14 +171,12 @@ function axiosErrorToApiError(error: AxiosError): ApiError {
   const status = Number(error.response?.status || 0)
   const payload = error.response?.data as unknown
   const env = extractEnvelopeError(payload)
-  const headerRequestId =
-    toOptionalString((error.response?.headers as any)?.['x-request-id']) ||
-    toOptionalString((error.response?.headers as any)?.['X-Request-ID'])
+  const headerRequestId = headerValue(error.response?.headers, 'x-request-id') || headerValue(error.response?.headers, 'X-Request-ID')
 
   const code = env.code || (status ? `http_${status}` : 'network_error')
   const message =
     env.message ||
-    (typeof (payload as any)?.detail === 'string' ? String((payload as any).detail) : '') ||
+    (typeof recordValue(payload, 'detail') === 'string' ? String(recordValue(payload, 'detail')) : '') ||
     error.message ||
     'request_failed'
 
@@ -217,12 +249,14 @@ export function isLlmOverrideDisabledCode(code: string): boolean {
 function stripLlmApiKeyHeader(headers: unknown): void {
   if (!headers) return
   try {
-    const h: any = headers as any
-    if (typeof h.delete === 'function') {
-      h.delete('X-LLM-API-Key')
-      h.delete('X-Moonshot-API-Key')
+    const h = optionalRecord(headers)
+    const deleter = recordValue(headers, 'delete')
+    if (typeof deleter === 'function') {
+      deleter.call(headers, 'X-LLM-API-Key')
+      deleter.call(headers, 'X-Moonshot-API-Key')
       return
     }
+    if (!h) return
     delete h['X-LLM-API-Key']
     delete h['X-Moonshot-API-Key']
   } catch {
@@ -267,13 +301,29 @@ export function resolveApiResourceUrl(resourceUrl: string): string {
   return joinBaseUrl(baseValue, value)
 }
 
+export const DEFAULT_API_TIMEOUT_MS = 30_000
+export const LONG_TASK_CREATE_TIMEOUT_MS = 120_000
+
 export const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: DEFAULT_API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
 })
+
+function redirectToLoginAfterUnauthorized(): void {
+  const auth = useAuthStore.getState()
+  auth.logout()
+  try {
+    if (typeof window === 'undefined') return
+    const path = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    if (window.location.pathname === '/login') return
+    window.location.assign(`/login?redirect=${encodeURIComponent(path || '/chat')}`)
+  } catch {
+    // ignore
+  }
+}
 
 // Request interceptor - add auth token
 apiClient.interceptors.request.use(
@@ -285,7 +335,11 @@ apiClient.interceptors.request.use(
 
     const settingsApiKey = getSettingsApiKey()
     if (settingsApiKey) {
-      ;(config.headers as any)['X-LLM-API-Key'] = settingsApiKey
+      config.headers.set?.('X-LLM-API-Key', settingsApiKey)
+      if (!config.headers.set) {
+        const headers = optionalRecord(config.headers)
+        if (headers) headers['X-LLM-API-Key'] = settingsApiKey
+      }
     }
     return config
   },
@@ -296,13 +350,11 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => {
     try {
-      const rid =
-        toOptionalString((response.headers as any)?.['x-request-id']) ||
-        toOptionalString((response.headers as any)?.['X-Request-ID'])
+      const rid = headerValue(response.headers, 'x-request-id') || headerValue(response.headers, 'X-Request-ID')
       if (rid) {
         useRequestLogStore.getState().push({
           requestId: rid,
-          url: typeof (response.config as any)?.url === 'string' ? (response.config as any).url : undefined,
+          url: typeof response.config?.url === 'string' ? response.config.url : undefined,
           status: typeof response.status === 'number' ? response.status : undefined,
         })
       }
@@ -312,14 +364,14 @@ apiClient.interceptors.response.use(
     return response
   },
   async (error: unknown) => {
-    const ax = error as AxiosError
-    if (ax && typeof ax === 'object' && (ax as any).isAxiosError) {
+    if (axios.isAxiosError(error)) {
+      const ax = error
       const apiError = axiosErrorToApiError(ax)
       try {
         if (apiError.requestId) {
           useRequestLogStore.getState().push({
             requestId: apiError.requestId,
-            url: typeof (ax.config as any)?.url === 'string' ? (ax.config as any).url : undefined,
+            url: typeof ax.config?.url === 'string' ? ax.config.url : undefined,
             status: apiError.status || undefined,
           })
         }
@@ -327,13 +379,17 @@ apiClient.interceptors.response.use(
         // ignore
       }
       if (apiError.status === 403 && isLlmOverrideDisabledCode(apiError.code)) {
-        const cfg: any = (ax as any).config
-        if (cfg && !cfg.__retryWithoutLlmApiKey) {
+        const cfg = ax.config
+        const retryConfig = cfg as (typeof cfg & { __retryWithoutLlmApiKey?: boolean }) | undefined
+        if (retryConfig && !retryConfig.__retryWithoutLlmApiKey) {
           disableSettingsApiKeyOverride(apiError.code)
-          cfg.__retryWithoutLlmApiKey = true
-          stripLlmApiKeyHeader(cfg.headers)
-          return apiClient.request(cfg)
+          retryConfig.__retryWithoutLlmApiKey = true
+          stripLlmApiKeyHeader(retryConfig.headers)
+          return apiClient.request(retryConfig)
         }
+      }
+      if (apiError.status === 401) {
+        redirectToLoginAfterUnauthorized()
       }
       return Promise.reject(apiError)
     }
@@ -376,6 +432,9 @@ async function downloadTextInternal(
 
     if (!response.ok) {
       const err = await responseToApiError(response, `http_${response.status}`)
+      if (response.status === 401) {
+        redirectToLoginAfterUnauthorized()
+      }
       if (response.status === 403 && isLlmOverrideDisabledCode(err.code) && attempt < 1) {
         disableSettingsApiKeyOverride(err.code)
         return downloadTextInternal(resourceUrl, options, attempt + 1)
@@ -387,10 +446,10 @@ async function downloadTextInternal(
     return await response.text()
   } catch (error) {
     if (error instanceof ApiError) throw error
-    if ((error as any)?.name === 'AbortError') throw error
+    if (hasAbortName(error)) throw error
     throw new ApiError({
       code: 'network_error',
-      message: (error as any)?.message || 'network_error',
+      message: errorMessage(error),
       status: 0,
       detail: error,
       retriable: true,
@@ -433,6 +492,9 @@ async function downloadBlobInternal(
 
     if (!response.ok) {
       const err = await responseToApiError(response, `http_${response.status}`)
+      if (response.status === 401) {
+        redirectToLoginAfterUnauthorized()
+      }
       if (response.status === 403 && isLlmOverrideDisabledCode(err.code) && attempt < 1) {
         disableSettingsApiKeyOverride(err.code)
         return downloadBlobInternal(resourceUrl, options, attempt + 1)
@@ -450,10 +512,10 @@ async function downloadBlobInternal(
     return { blob, contentType, filename: filename || undefined }
   } catch (error) {
     if (error instanceof ApiError) throw error
-    if ((error as any)?.name === 'AbortError') throw error
+    if (hasAbortName(error)) throw error
     throw new ApiError({
       code: 'network_error',
-      message: (error as any)?.message || 'network_error',
+      message: errorMessage(error),
       status: 0,
       detail: error,
       retriable: true,

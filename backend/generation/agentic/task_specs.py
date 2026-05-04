@@ -21,7 +21,7 @@ def _text(value: Any, default: str = "") -> str:
 def _int(value: Any, *, default: int, min_v: int = 1, max_v: int = 10_000) -> int:
     try:
         n = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = int(default)
     return max(min_v, min(max_v, n))
 

@@ -3,8 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.llm.client import is_llm_configured
+from backend.core.logging_utils import get_logger
 from backend.crawler.manager import get_crawler
+from backend.llm.client import is_llm_configured
+
+logger = get_logger(__name__)
 
 
 class QuestionBankToolsMixin:
@@ -78,6 +81,7 @@ class QuestionBankToolsMixin:
                     }
                 )
             except Exception as exc:  # pragma: no cover
+                logger.exception("question_bank_search_failed", extra={"knowledge_point": point})
                 items.append(
                     {
                         "knowledge_point": point,

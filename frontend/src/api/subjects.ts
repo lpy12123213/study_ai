@@ -1,6 +1,10 @@
 import { apiClient } from './client'
 import type { Subject } from '@/types'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object')
+}
+
 export interface SubjectFilters {
   grades?: { id: number; name: string }[]
   textbookVersions?: { id: string; name: string }[]
@@ -40,8 +44,8 @@ export async function getSubjects(): Promise<Subject[]> {
   // backend returns: { subjects: [{ name, short_name, bank_id, edu_id }, ...] }
   const list: BackendSubject[] = Array.isArray(data)
     ? (data as BackendSubject[])
-    : Array.isArray((data as any)?.subjects)
-      ? ((data as any).subjects as BackendSubject[])
+    : isRecord(data) && Array.isArray(data.subjects)
+      ? (data.subjects as BackendSubject[])
       : []
 
   const normalized = list

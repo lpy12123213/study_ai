@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 import time
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Sequence
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import settings
 from backend.deepthink.prompts import (
     get_evaluator_system_prompt,
@@ -14,47 +13,17 @@ from backend.deepthink.prompts import (
 )
 from backend.deepthink.tot_engine import ThoughtNode, ToTEngine
 from backend.llm.client import chat_completion, is_llm_configured
+from backend.llm.json_utils import extract_first_json_array, extract_first_json_object
 
-
-def _strip_code_fences(text: str) -> str:
-    s = (text or "").strip()
-    if not s.startswith("```"):
-        return s
-    s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s).lstrip()
-    s = re.sub(r"\s*```$", "", s).rstrip()
-    return s.strip()
+logger = get_logger(__name__)
 
 
 def _extract_first_json_array(text: str) -> Optional[List[Any]]:
-    raw = _strip_code_fences(text)
-    if not raw:
-        return None
-    left = raw.find("[")
-    right = raw.rfind("]")
-    if left < 0 or right <= left:
-        return None
-    candidate = raw[left : right + 1].strip()
-    try:
-        data = json.loads(candidate)
-        return data if isinstance(data, list) else None
-    except Exception:
-        return None
+    return extract_first_json_array(text, default=None)
 
 
 def _extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
-    raw = _strip_code_fences(text)
-    if not raw:
-        return None
-    left = raw.find("{")
-    right = raw.rfind("}")
-    if left < 0 or right <= left:
-        return None
-    candidate = raw[left : right + 1].strip()
-    try:
-        data = json.loads(candidate)
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
+    return extract_first_json_object(text, default=None)
 
 
 def _format_path(path: Sequence[ThoughtNode]) -> str:
@@ -233,6 +202,7 @@ class DeepThinkService:
                     scope="chat",
                 )
             except Exception as exc:
+                logger.exception("deepthink_stream_answer_failed")
                 error.append(str(exc))
             finally:
                 await queue.put(None)

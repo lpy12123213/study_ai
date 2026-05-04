@@ -1,173 +1,38 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
-import re
-import time
-from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
+from backend.core.subjects import resolve_subject
 from backend.crawler.manager import get_crawler
 from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.database.repositories.question.question_cache import (
     get_question_cache,
-    list_used_question_ids,
     mark_used_questions,
     upsert_question_cache,
 )
+from backend.llm.runner import run_json
 from backend.paper_compose.slot_selection import select_slot_with_relax
-from backend.core.subjects import resolve_subject
+from backend.paper_compose.workflow_support import (
+    _as_list,
+    _clip,
+    _difficulty_from_slot,
+    _format_kps_for_badge,
+    _kp_match_ratio,
+    _load_used_question_ids,
+    _normalize_question_type,
+    _now_iso,
+    _Slot,
+    _split_kps,
+    _stem_fingerprint,
+    _truthy,
+)
 
 logger = get_logger(__name__)
 
-
-def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def _difficulty_from_slot(value: str) -> str:
-    raw = (value or "").strip().lower()
-    if raw in {"easy", "简单", "容易"}:
-        return "简单"
-    if raw in {"hard", "困难", "较难"}:
-        return "困难"
-    if raw in {"medium", "mid", "中等", "适中"}:
-        return "中等"
-    return (value or "").strip() or "中等"
-
-
-def _stem_fingerprint(stem: str) -> str:
-    s = (stem or "").strip().lower()
-    if not s:
-        return ""
-    s = re.sub(r"\s+", "", s)
-    s = s[:1500]
-    return hashlib.md5(s.encode("utf-8", errors="ignore")).hexdigest()
-
-
-def _split_kps(value: Any) -> List[str]:
-    if isinstance(value, list):
-        out: List[str] = []
-        for x in value:
-            s = str(x or "").strip()
-            if s:
-                out.append(s)
-        return out
-    s = str(value or "").strip()
-    if not s:
-        return []
-    parts = re.split(r"[,，;；、。\\n\\r\\t/|]+", s)
-    return [p.strip() for p in parts if p.strip()]
-
-
-def _kp_match_ratio(required: Sequence[str], candidate: Sequence[str]) -> float:
-    required_items = [str(x or "").strip() for x in (required or []) if str(x or "").strip()]
-    if not required_items:
-        return 0.0
-    candidate_items = [str(x or "").strip() for x in (candidate or []) if str(x or "").strip()]
-    if not candidate_items:
-        return 0.0
-    hit = 0
-    for r in required_items:
-        if any((r in c) or (c in r) for c in candidate_items):
-            hit += 1
-    return float(hit) / float(max(1, len(required_items)))
-
-
-def _as_list(v: Any) -> List[Any]:
-    if isinstance(v, list):
-        return v
-    return []
-
-
-def _truthy(v: Any) -> bool:
-    if isinstance(v, bool):
-        return v
-    raw = str(v or "").strip().lower()
-    return raw in {"1", "true", "yes", "y", "on"}
-
-
-def _clip(text: str, max_chars: int) -> str:
-    t = (text or "").strip()
-    if max_chars <= 0:
-        return ""
-    if len(t) <= max_chars:
-        return t
-    return t[: max_chars - 1].rstrip() + "…"
-
-
-def _format_kps_for_badge(kps: Any) -> str:
-    if isinstance(kps, str):
-        return _clip(kps, 200)
-    if isinstance(kps, list):
-        items = [str(x).strip() for x in kps if str(x or "").strip()]
-        if not items:
-            return ""
-        return _clip("、".join(items[:3]), 200)
-    return ""
-
-
-def _normalize_question_type(name: str, available: Sequence[Dict[str, Any]]) -> str:
-    raw = (name or "").strip()
-    if not raw:
-        return ""
-    avail_names = [str(it.get("name") or "").strip() for it in available if isinstance(it, dict)]
-    avail_names = [n for n in avail_names if n]
-    if raw in avail_names:
-        return raw
-
-    aliases = {
-        "单选题": ["单选题", "选择题", "单项选择题"],
-        "多选题": ["多选题", "选择题", "多项选择题"],
-        "填空题": ["填空题"],
-        "简答题": ["简答题", "解答题"],
-        "计算题": ["计算题", "解答题"],
-        "论述题": ["论述题", "解答题"],
-    }
-    candidates = aliases.get(raw, [raw])
-    for cand in candidates:
-        if cand in avail_names:
-            return cand
-    for cand in candidates:
-        for n in avail_names:
-            if cand and (cand in n or n in cand):
-                return n
-    return ""
-
-
-def _extract_json_obj(text: str) -> Dict[str, Any]:
-    raw = (text or "").strip()
-    if not raw:
-        return {}
-    if raw.startswith("```"):
-        raw = raw.strip("`").strip()
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        raw = raw[start : end + 1]
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
-
-
-async def _load_used_question_ids(*, user_id: str, subject: str, limit: int = 20000) -> set[str]:
-    ids = await list_used_question_ids(limit=limit, subject=str(subject or "").strip() or None, user_id=user_id)
-    return {str(x).strip() for x in (ids or []) if str(x or "").strip()}
-
-
-@dataclass
-class _Slot:
-    index: int
-    question_type_raw: str
-    question_type: str
-    count: int
-    difficulty: str
-    keyword: str
 
 
 async def compose_paper_events(
@@ -223,14 +88,14 @@ async def compose_paper_events(
                 continue
             try:
                 slot_index = int(it.get("slotIndex") or it.get("slot_index") or -1)
-            except Exception:
+            except (TypeError, ValueError):
                 slot_index = -1
             if slot_index < 0:
                 continue
             try:
                 requested = int(it.get("requested") or 0)
                 selected = int(it.get("selected") or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             missing = max(0, requested - selected)
             if missing > 0:
@@ -487,6 +352,7 @@ async def compose_paper_events(
         try:
             cache_map = await get_question_cache(question_ids=list(seen_candidate_ids))
         except Exception:
+            logger.warning("paper_compose_question_cache_prefetch_failed", extra={"task_id": task_id}, exc_info=True)
             cache_map = {}
 
         def _maybe_json_list(value: Any) -> List[str]:
@@ -499,7 +365,7 @@ async def compose_paper_events(
                         obj = json.loads(raw)
                         if isinstance(obj, list):
                             return [str(x).strip() for x in obj if str(x or "").strip()]
-                    except Exception:
+                    except json.JSONDecodeError:
                         return []
             return []
 
@@ -536,8 +402,8 @@ async def compose_paper_events(
                 try:
                     if int(cached.get("quality_score") or 0) > int(q.get("quality_score") or 0):
                         q["quality_score"] = int(cached.get("quality_score") or 0)
-                except Exception:
-                    logger.debug(
+                except (TypeError, ValueError):
+                    logger.warning(
                         "paper_compose_quality_score_merge_failed",
                         extra={"task_id": task_id, "question_id": q.get("question_id")},
                         exc_info=True,
@@ -546,13 +412,13 @@ async def compose_paper_events(
                 if cached.get("quality_flags") and not q.get("quality_flags"):
                     try:
                         q["quality_flags"] = json.loads(cached.get("quality_flags") or "[]")
-                    except Exception:
+                    except (TypeError, json.JSONDecodeError):
                         q["quality_flags"] = cached.get("quality_flags")
 
         def _q_quality(q: Dict[str, Any]) -> int:
             try:
                 return int(q.get("quality_score") or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 return 0
 
         if required_kps:
@@ -712,13 +578,13 @@ async def compose_paper_events(
         review_model = str(os.getenv("PAPER_COMPOSE_REVIEW_MODEL") or "").strip()
         try:
             review_timeout_s = float(os.getenv("PAPER_COMPOSE_REVIEW_TIMEOUT_S") or "25")
-        except Exception:
+        except (TypeError, ValueError):
             review_timeout_s = 25.0
         review_timeout_s = max(8.0, min(review_timeout_s, 120.0))
 
         try:
             max_stem_chars = int(os.getenv("PAPER_COMPOSE_REVIEW_MAX_STEM_CHARS") or 420)
-        except Exception:
+        except (TypeError, ValueError):
             max_stem_chars = 420
         max_stem_chars = max(120, min(max_stem_chars, 1200))
 
@@ -737,7 +603,6 @@ async def compose_paper_events(
                     selected_fps.add(fp)
 
         try:
-            from backend.llm.client import chat_completion_text
             from backend.core.settings import MAIN_MODEL
 
             if not review_model:
@@ -777,22 +642,18 @@ async def compose_paper_events(
                     ],
                 }
 
-                text = await asyncio.wait_for(
-                    chat_completion_text(
-                        messages=[
-                            {"role": "system", "content": "你是严格但保守的题目匹配审查员。只输出 JSON。"},
-                            {"role": "user", "content": json.dumps(slot_prompt, ensure_ascii=False)},
-                        ],
-                        model=review_model,
-                        temperature=0.1,
-                        max_tokens=900,
-                        retries=2,
-                        req_id_prefix="paper_review",
-                    ),
-                    timeout=review_timeout_s,
+                obj = await run_json(
+                    messages=[
+                        {"role": "system", "content": "你是严格但保守的题目匹配审查员。只输出 JSON。"},
+                        {"role": "user", "content": json.dumps(slot_prompt, ensure_ascii=False)},
+                    ],
+                    model=review_model,
+                    temperature=0.1,
+                    max_tokens=900,
+                    retries=2,
+                    timeout_s=review_timeout_s,
+                    req_id_prefix="paper_review",
                 )
-
-                obj = _extract_json_obj(text)
                 decisions_raw = obj.get("decisions") if isinstance(obj, dict) else None
                 decisions = (
                     [x for x in (decisions_raw or []) if isinstance(x, dict)] if isinstance(decisions_raw, list) else []
@@ -897,6 +758,7 @@ async def compose_paper_events(
                 },
             }
         except Exception as exc:
+            logger.warning("paper_compose_review_step_failed", extra={"task_id": task_id}, exc_info=True)
             # Best-effort: never block paper composing on optional review.
             yield {
                 "type": "step",
@@ -944,7 +806,7 @@ async def compose_paper_events(
             bucket = "未知"
             try:
                 dvf = float(dv) if dv is not None and str(dv).strip() else None
-            except Exception:
+            except (TypeError, ValueError):
                 dvf = None
             if dvf is not None:
                 if dvf <= 0.39:
@@ -999,7 +861,7 @@ async def compose_paper_events(
             },
         }
     except Exception:
-        logger.debug("paper_compose_balance_step_failed", extra={"task_id": task_id}, exc_info=True)
+        logger.warning("paper_compose_balance_step_failed", extra={"task_id": task_id}, exc_info=True)
 
     if strict_slot_count and slot_shortfalls:
         yield {
@@ -1095,6 +957,7 @@ async def compose_paper_events(
                             }
                         )
         except Exception as exc:
+            logger.warning("paper_compose_detail_fetch_batch_failed", extra={"task_id": task_id}, exc_info=True)
             err_n = len(selected_ids)
             err_samples = [{"error": str(exc)}]
 
@@ -1144,7 +1007,7 @@ async def compose_paper_events(
         kp_badge = _format_kps_for_badge(kps)
         try:
             kps_json = json.dumps(kps, ensure_ascii=False) if isinstance(kps, list) else ""
-        except Exception:
+        except (TypeError, ValueError):
             kps_json = ""
 
         q_dicts.append(

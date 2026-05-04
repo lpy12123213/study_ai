@@ -4,12 +4,6 @@ import json
 import os
 from typing import Any, Dict
 
-from backend.agent.tools.utils.text_utils import _trim_overlap
-from backend.agent.types import CompressedContext
-from backend.core.logging_utils import get_logger
-from backend.llm.client import is_llm_configured
-from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
-
 from backend.agent.tools.generation.latex_export_utils import (
     _auto_fix_latex,
     _clamp_int,
@@ -17,8 +11,10 @@ from backend.agent.tools.generation.latex_export_utils import (
     _looks_truncated_latex_chunk,
     _normalize_latex_text,
 )
-
-logger = get_logger(__name__)
+from backend.agent.tools.utils.text_utils import _trim_overlap
+from backend.agent.types import CompressedContext
+from backend.llm.client import is_llm_configured
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 
 
 class LatexRefineMixin:
@@ -38,10 +34,7 @@ class LatexRefineMixin:
             raise ValueError("latex_missing")
 
         tex = _auto_fix_latex(tex).strip() + "\n"
-        try:
-            ctx.working_memory["latex_tex"] = tex
-        except Exception:
-            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
+        ctx.working_memory["latex_tex"] = tex
 
         compile_error = str(args.get("compile_error") or "").strip()
         if len(compile_error) > 1800:
@@ -64,12 +57,9 @@ class LatexRefineMixin:
             url = str(published.get("url") or "")
             size = int(published.get("bytes") or 0)
 
-            try:
-                ctx.working_memory["latex_tex"] = tex.strip() + "\n"
-                ctx.working_memory["tex_url"] = url
-                ctx.working_memory["tex_filename"] = filename
-            except Exception:
-                logger.debug("latex_export_set_working_memory_failed", exc_info=True)
+            ctx.working_memory["latex_tex"] = tex.strip() + "\n"
+            ctx.working_memory["tex_url"] = url
+            ctx.working_memory["tex_filename"] = filename
 
             return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": size, "model": ""}
 
@@ -202,11 +192,8 @@ class LatexRefineMixin:
         url = str(published.get("url") or "")
         size = int(published.get("bytes") or 0)
 
-        try:
-            ctx.working_memory["latex_tex"] = refined.strip() + "\n"
-            ctx.working_memory["tex_url"] = url
-            ctx.working_memory["tex_filename"] = filename
-        except Exception:
-            logger.debug("latex_export_set_working_memory_failed", exc_info=True)
+        ctx.working_memory["latex_tex"] = refined.strip() + "\n"
+        ctx.working_memory["tex_url"] = url
+        ctx.working_memory["tex_filename"] = filename
 
         return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": size, "model": model}

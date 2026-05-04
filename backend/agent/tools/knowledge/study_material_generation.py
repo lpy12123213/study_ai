@@ -10,18 +10,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
-from backend.llm.client import is_llm_configured
 from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
-
-
-def _clip_text(text: str, limit: int) -> str:
-    s = str(text or "").strip()
-    if not s:
-        return ""
-    if len(s) <= limit:
-        return s
-    return s[: max(0, limit - 1)].rstrip() + "…"
-
+from backend.core.text_utils import clip_text as _clip_text
+from backend.llm.client import is_llm_configured
 
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+.*?$", flags=re.M)
 
@@ -300,7 +291,7 @@ class _KnowledgePointWriterAgent:
             return
         try:
             await self.emit_status(text)
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             return
 
     @staticmethod
@@ -342,7 +333,7 @@ class _KnowledgePointWriterAgent:
         usage = draft.get("usage") if isinstance(draft.get("usage"), dict) else {}
         try:
             continuations = int(draft.get("continuations") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             continuations = 0
         source = str(draft.get("source") or "writer_agent").strip() or "writer_agent"
         actions.append({"action": "draft", "chars": len(markdown), "finish_reason": finish_reason})
@@ -464,7 +455,7 @@ class StudyMaterialGenerationToolsMixin:
                     continue
                 try:
                     conf = float(f.get("confidence") or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     conf = 0.0
                 facts.append({"fact": _clip_text(fact, 180), "confidence": max(0.0, min(conf, 1.0))})
 
@@ -591,7 +582,7 @@ class StudyMaterialGenerationToolsMixin:
         section_conc_raw = args.get("section_concurrency") or os.getenv("STUDY_MATERIALS_SECTION_CONCURRENCY") or "3"
         try:
             section_concurrency = int(section_conc_raw)
-        except Exception:
+        except (TypeError, ValueError):
             section_concurrency = 3
         section_concurrency = max(1, min(section_concurrency, 6))
 
@@ -602,7 +593,7 @@ class StudyMaterialGenerationToolsMixin:
         )
         try:
             writer_revision_rounds = int(revision_rounds_raw)
-        except Exception:
+        except (TypeError, ValueError):
             writer_revision_rounds = 1
         writer_revision_rounds = max(0, min(writer_revision_rounds, 3))
 
@@ -709,7 +700,7 @@ class StudyMaterialGenerationToolsMixin:
                     continue
                 try:
                     conf = float(f.get("confidence") or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     conf = 0.0
                 facts.append({"fact": _clip_text(fact, 180), "confidence": max(0.0, min(conf, 1.0))})
 
@@ -849,7 +840,7 @@ class StudyMaterialGenerationToolsMixin:
                 usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
                 try:
                     conts = int(res.get("continuations") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     conts = 0
                 return (md, finish_reason, usage, conts)
 
@@ -882,7 +873,7 @@ class StudyMaterialGenerationToolsMixin:
                             raw_val = usage.get(k)
                             try:
                                 n = int(raw_val or 0)
-                            except Exception:
+                            except (TypeError, ValueError):
                                 n = 0
                             usage_sum[k] += n
                     cont_sum += int(conts or 0)

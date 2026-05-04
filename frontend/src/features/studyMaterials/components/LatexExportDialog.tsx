@@ -70,26 +70,26 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
     <Dialog open={latexDialogOpen} onOpenChange={setLatexDialogOpen}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-auto">
         <DialogHeader>
-          <DialogTitle>Markdown → LaTeX</DialogTitle>
-          <DialogDescription>从已生成的 Markdown（自学资料/教案）中选择，AI 将转换为可下载的 LaTeX（.tex）。</DialogDescription>
+          <DialogTitle>排版导出</DialogTitle>
+          <DialogDescription>从已生成的文档（自学资料/教案）中选择，转换为可下载的排版源文件（.tex）。</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <div className="text-xs font-medium text-muted-foreground">选择 Markdown 来源</div>
+              <div className="text-xs font-medium text-muted-foreground">选择文档来源</div>
               <Select
                 value={latexLessonPlanId}
                 onValueChange={(v) => void handlePickLessonPlanMarkdown(v)}
                 disabled={latexIsConverting || latexIsLoadingSource}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={options.length > 0 ? '请选择…' : '暂无可选 Markdown（请先生成内容）'} />
+                  <SelectValue placeholder={options.length > 0 ? '请选择…' : '暂无可选文档（请先生成内容）'} />
                 </SelectTrigger>
                 <SelectContent>
                   {options.length === 0 ? (
                     <SelectItem value="__empty" disabled>
-                      暂无可选 Markdown（请先生成内容）
+                      暂无可选文档（请先生成内容）
                     </SelectItem>
                   ) : (
                     options.map((opt) => (
@@ -116,7 +116,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
               <Input
                 value={latexTopic}
                 onChange={(e) => setLatexTopic(e.target.value)}
-                placeholder="用于 LaTeX 标题（可选）"
+                placeholder="用于导出标题（可选）"
                 disabled={latexIsConverting}
               />
             </div>
@@ -134,7 +134,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-medium text-muted-foreground">Markdown 内容</div>
+              <div className="text-xs font-medium text-muted-foreground">文档内容</div>
               <Button
                 type="button"
                 variant="ghost"
@@ -150,7 +150,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
               value={latexMarkdown}
               onChange={(e) => setLatexMarkdown(e.target.value)}
               className="min-h-[180px] font-mono text-xs"
-              placeholder="可从上方选择加载，也可直接粘贴/编辑 Markdown"
+              placeholder="可从上方选择加载，也可直接粘贴/编辑文档内容"
               disabled={latexIsConverting || latexIsLoadingSource}
             />
           </div>
@@ -176,7 +176,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
             <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="text-xs text-muted-foreground">
-                  {latexTexFilename ? `已生成：${latexTexFilename}` : '已生成 LaTeX'}
+                  {latexTexFilename ? `已生成：${latexTexFilename}` : '已生成排版稿'}
                   {latexNotice ? <span className="ml-2">（{latexNotice}）</span> : null}
                 </div>
                 <div className="flex items-center gap-2">
@@ -188,10 +188,10 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
                     onClick={handleCopyLatex}
                     disabled={!latexTexText}
                   >
-                    复制 LaTeX
+                    复制排版稿
                   </Button>
                   <Button type="button" size="sm" className="h-8 px-2 text-xs" onClick={() => void downloadTex()}>
-                    下载 .tex
+                    下载源文件
                   </Button>
                 </div>
               </div>
@@ -199,7 +199,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
                 value={latexTexText}
                 readOnly
                 className="min-h-[220px] font-mono text-xs"
-                placeholder="LaTeX 输出将显示在这里"
+                placeholder="排版稿将显示在这里"
               />
             </div>
           )}

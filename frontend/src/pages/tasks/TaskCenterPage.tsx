@@ -9,7 +9,11 @@ export default function TaskCenterPage() {
     queryFn: () => tasksApi.list().then((r) => r.data),
     refetchInterval: 5000,
   })
-  const tasks: { id: string; name: string; status: string }[] = data?.tasks ?? data ?? []
+  const tasks = (data?.tasks ?? []).map((task) => ({
+    id: task.id,
+    name: task.title || task.task_type,
+    status: task.status,
+  }))
 
   return (
     <div className="space-y-4">

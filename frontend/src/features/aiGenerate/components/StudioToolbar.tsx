@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronDown, PanelsTopLeft, SquareArrowOutUpRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -116,6 +116,7 @@ interface StudioToolbarProps {
 
 export function StudioToolbar(props: StudioToolbarProps) {
   const activeTasks = useTaskStore((state) => state.activeTasks)
+  const [activeTab, setActiveTab] = useState<'timeline' | 'reason'>('timeline')
   const activeTaskSteps = useMemo(
     () => (props.currentTaskId ? activeTasks.get(props.currentTaskId) || EMPTY_TASK_STEPS : EMPTY_TASK_STEPS),
     [activeTasks, props.currentTaskId]
@@ -151,6 +152,12 @@ export function StudioToolbar(props: StudioToolbarProps) {
     () => toReasonEntries(props.session, props.currentTaskId, props.taskEvents),
     [props.currentTaskId, props.session, props.taskEvents]
   )
+
+  useEffect(() => {
+    if (reasonEntries.length > 0) {
+      setActiveTab('reason')
+    }
+  }, [reasonEntries.length])
 
   return (
     <Card className="overflow-hidden rounded-[30px] border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,244,234,0.94))] shadow-[0_22px_56px_rgba(29,33,44,0.08)] dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.96),rgba(16,18,28,0.95))] dark:shadow-[0_24px_82px_rgba(0,0,0,0.56)]">
@@ -193,7 +200,7 @@ export function StudioToolbar(props: StudioToolbarProps) {
               </div>
             ) : null}
 
-            <Tabs defaultValue="timeline">
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value === 'reason' ? 'reason' : 'timeline')}>
               <TabsList className="rounded-full">
                 <TabsTrigger value="timeline" className="rounded-full">任务时间线</TabsTrigger>
                 <TabsTrigger value="reason" className="rounded-full">

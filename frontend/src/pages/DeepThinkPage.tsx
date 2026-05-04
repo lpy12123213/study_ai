@@ -11,88 +11,9 @@ import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useDeepThink } from '@/hooks/useDeepThink'
 import { useSubjects } from '@/hooks/useSubjects'
 import { cn, generateId } from '@/lib/utils'
-import type { Message } from '@/types'
-
-type DeepThinkChatMessage = Message & {
-  meta?: {
-    subject?: string
-    imageUrl?: string
-  }
-}
-
-function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => void }) {
-  const examples = [
-    {
-      title: '函数与导数',
-      desc: '已知函数 f(x)=x^3-3x^2+2，求极值与单调区间。',
-    },
-    {
-      title: '解析几何',
-      desc: '已知椭圆 x^2/4+y^2=1，求过点(0,2)的切线方程。',
-    },
-    {
-      title: '概率统计',
-      desc: '袋中有3红2蓝，连续不放回抽2个，求至少抽到1个红球的概率。',
-    },
-    {
-      title: '物理力学',
-      desc: '一物体在水平面上受恒力F作用，摩擦系数μ，求加速度与位移关系。',
-    },
-  ]
-
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
-      <div className="mb-10 flex flex-col items-center text-center space-y-6">
-        <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center ring-1 ring-border/50 shadow-sm">
-          <Brain className="h-10 w-10 text-primary" />
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-2xl font-semibold tracking-tight">把题目发我，我用“思维树”来解</h2>
-          <div className="text-sm text-muted-foreground max-w-xl">
-            会尝试多个解题分支、评分剪枝并回溯，最后给出更稳的解答。你也可以展开思维树，看每一步是怎么选出来的。
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
-        {examples.map((item) => (
-          <button
-            key={item.title}
-            onClick={() => onExampleClick(item.desc)}
-            className="group relative flex flex-col items-start p-4 h-auto text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
-          >
-            <div className="font-medium text-sm mb-1">{item.title}</div>
-            <div className="text-xs text-muted-foreground line-clamp-3">{item.desc}</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function UserBubble({ message }: { message: DeepThinkChatMessage }) {
-  return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-end mb-6">
-      <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
-        <div className="whitespace-pre-wrap">{message.content}</div>
-        {(message.meta?.subject || message.meta?.imageUrl) && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {message.meta?.subject && (
-              <Badge variant="secondary" className="text-[11px] font-normal">
-                学科：{message.meta.subject}
-              </Badge>
-            )}
-            {message.meta?.imageUrl && (
-              <Badge variant="outline" className="text-[11px] font-normal">
-                已附题图
-              </Badge>
-            )}
-          </div>
-        )}
-      </div>
-    </motion.div>
-  )
-}
+import { DeepThinkUserBubble } from '@/features/deepThink/components/DeepThinkUserBubble'
+import { DeepThinkWelcomeScreen } from '@/features/deepThink/components/DeepThinkWelcomeScreen'
+import type { DeepThinkChatMessage } from '@/features/deepThink/types'
 
 export default function DeepThinkPage() {
   const { data: subjects } = useSubjects()
@@ -253,7 +174,7 @@ export default function DeepThinkPage() {
   return (
     <div className="h-full flex flex-col relative">
       {messages.length === 0 ? (
-        <WelcomeScreen onExampleClick={(text) => setInput(text)} />
+        <DeepThinkWelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
           <div className="max-w-3xl mx-auto py-6">
@@ -265,7 +186,7 @@ export default function DeepThinkPage() {
             <AnimatePresence mode="popLayout">
               {messages.map((message) => {
                 if (message.role === 'user') {
-                  return <UserBubble key={message.id} message={message} />
+                  return <DeepThinkUserBubble key={message.id} message={message} />
                 }
 
                 const isActive = !!activeAssistantId && message.id === activeAssistantId

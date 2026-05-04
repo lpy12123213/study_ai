@@ -77,7 +77,7 @@ class BrowseWebPagesToolsMixin:
         ttl_raw = args.get("cache_ttl_s") or os.getenv("STUDY_MATERIALS_BROWSE_CACHE_TTL_S") or "86400"
         try:
             cache_ttl_s = float(ttl_raw)
-        except Exception:
+        except (TypeError, ValueError):
             cache_ttl_s = 86400.0
         cache_ttl_s = max(30.0, min(cache_ttl_s, 60.0 * 60.0 * 24.0 * 7.0))
 
@@ -86,7 +86,7 @@ class BrowseWebPagesToolsMixin:
         )
         try:
             cache_max_entries = int(max_entries_raw)
-        except Exception:
+        except (TypeError, ValueError):
             cache_max_entries = 256
         cache_max_entries = max(50, min(cache_max_entries, 2000))
 
@@ -95,7 +95,7 @@ class BrowseWebPagesToolsMixin:
         )
         try:
             inline_min_chars = int(inline_min_chars_raw)
-        except Exception:
+        except (TypeError, ValueError):
             inline_min_chars = 900
         inline_min_chars = max(200, min(inline_min_chars, 3000))
 
@@ -115,7 +115,7 @@ class BrowseWebPagesToolsMixin:
                 # Avoid fragment keys exploding the cache.
                 parsed = parsed._replace(fragment="")
                 return parsed.geturl().strip().lower()
-            except Exception:
+            except ValueError:
                 return raw.lower()
 
         def _get_cached_page(url: str) -> Dict[str, Any]:
@@ -127,7 +127,7 @@ class BrowseWebPagesToolsMixin:
                 return {}
             try:
                 ts = float(ent.get("ts") or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 ts = 0.0
             if ts and cache_ttl_s > 0 and (now - ts) > cache_ttl_s:
                 return {}
@@ -171,13 +171,13 @@ class BrowseWebPagesToolsMixin:
                     if target:
                         return unquote(str(target))
                 return raw
-            except Exception:
+            except ValueError:
                 return raw
 
         def _is_zhihu_url(u: str) -> bool:
             try:
                 host = (urlparse(u).netloc or "").lower()
-            except Exception:
+            except ValueError:
                 return False
             return host == "zhihu.com" or host.endswith(".zhihu.com")
 
@@ -188,12 +188,12 @@ class BrowseWebPagesToolsMixin:
                 cookies = (os.getenv("ZHIHU_COOKIES") or "").strip()
                 try:
                     from backend.mcp.search.zhihu import ZhihuFetcher
-                except Exception as exc:
+                except ImportError as exc:
                     return {"url": url, "success": False, "error": f"zhihu_fetcher not available: {exc}"}
 
                 try:
                     zh_timeout = int(max(5.0, min(float(timeout_s), 60.0)))
-                except Exception:
+                except (TypeError, ValueError):
                     zh_timeout = 30
 
                 fetcher = ZhihuFetcher(cookies=cookies, timeout_seconds=zh_timeout)
@@ -243,12 +243,12 @@ class BrowseWebPagesToolsMixin:
                 if "application/pdf" in ct:
                     return {"url": url, "success": False, "error": "pdf not supported", "content_type": ct}
                 html = resp.text or ""
-            except Exception as exc:
+            except httpx.HTTPError as exc:
                 return {"url": url, "success": False, "error": str(exc)}
 
             try:
                 from bs4 import BeautifulSoup  # type: ignore
-            except Exception as exc:
+            except ImportError as exc:
                 return {"url": url, "success": False, "error": f"beautifulsoup4 not available: {exc}"}
 
             try:
@@ -272,12 +272,12 @@ class BrowseWebPagesToolsMixin:
                     try:
                         tag.decompose()
                     except Exception:
-                        logger.debug("browse_decompose_tag_failed", exc_info=True)
+                        logger.warning("browse_decompose_tag_failed", exc_info=True)
                 for tag in soup(["header", "footer", "nav", "aside"]):
                     try:
                         tag.decompose()
                     except Exception:
-                        logger.debug("browse_decompose_tag_failed", exc_info=True)
+                        logger.warning("browse_decompose_tag_failed", exc_info=True)
                 try:
                     for tag in soup.find_all(
                         attrs={"role": re.compile(r"^(navigation|banner|contentinfo|complementary)$", re.I)}
@@ -285,14 +285,14 @@ class BrowseWebPagesToolsMixin:
                         try:
                             tag.decompose()
                         except Exception:
-                            logger.debug("browse_decompose_tag_failed", exc_info=True)
+                            logger.warning("browse_decompose_tag_failed", exc_info=True)
                 except Exception:
-                    logger.debug("browse_find_role_tags_failed", exc_info=True)
+                    logger.warning("browse_find_role_tags_failed", exc_info=True)
 
                 title = ""
                 try:
                     title = str(soup.title.string or "").strip() if soup.title else ""
-                except Exception:
+                except AttributeError:
                     title = ""
 
                 body = soup.body or soup
@@ -317,16 +317,16 @@ class BrowseWebPagesToolsMixin:
                         )
                     )
                 except Exception:
-                    logger.debug("browse_find_candidate_failed", exc_info=True)
+                    logger.warning("browse_find_candidate_failed", exc_info=True)
                 try:
                     _add(body.find("div", id=re.compile(r"(content|main|article|post|entry|text)", re.I)))
                 except Exception:
-                    logger.debug("browse_find_candidate_failed", exc_info=True)
+                    logger.warning("browse_find_candidate_failed", exc_info=True)
 
                 def _len_text(node: Any) -> int:
                     try:
                         return len(node.get_text(" ", strip=True))
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         return 0
 
                 root = max(candidates, key=_len_text, default=body)
@@ -344,6 +344,7 @@ class BrowseWebPagesToolsMixin:
                     "text": extracted,
                 }
             except Exception as exc:
+                logger.warning("browse_parse_failed", extra={"url": url}, exc_info=True)
                 return {"url": url, "success": False, "error": f"parse failed: {exc}"}
 
         concurrency = int(args.get("concurrency") or 2)
@@ -357,8 +358,8 @@ class BrowseWebPagesToolsMixin:
             if cached:
                 try:
                     cache_stats["hits"] += 1
-                except Exception:
-                    logger.debug("browse_cache_stats_update_failed", exc_info=True)
+                except (KeyError, TypeError, ValueError):
+                    logger.warning("browse_cache_stats_update_failed", exc_info=True)
                 return cached
             async with sem:
                 if _is_zhihu_url(normalized):
@@ -373,8 +374,8 @@ class BrowseWebPagesToolsMixin:
                     cache_updates[key] = {"ts": now, "page": dict(out)}
                     try:
                         cache_stats["writes"] += 1
-                    except Exception:
-                        logger.debug("browse_cache_stats_update_failed", exc_info=True)
+                    except (KeyError, TypeError, ValueError):
+                        logger.warning("browse_cache_stats_update_failed", exc_info=True)
             return out
 
         headers = {
@@ -439,8 +440,8 @@ class BrowseWebPagesToolsMixin:
                         try:
                             cache_stats["inline"] += 1
                             cache_stats["writes"] += 1
-                        except Exception:
-                            logger.debug("browse_cache_stats_update_failed", exc_info=True)
+                        except (KeyError, TypeError, ValueError):
+                            logger.warning("browse_cache_stats_update_failed", exc_info=True)
 
                 _add_urls(_extract_urls(web.get("results")))
 
@@ -524,7 +525,7 @@ class BrowseWebPagesToolsMixin:
                         continue
                     try:
                         ts = float(ent.get("ts") or 0.0)
-                    except Exception:
+                    except (TypeError, ValueError):
                         ts = 0.0
                     if ts and (now - ts) > cache_ttl_s:
                         merged.pop(k, None)
@@ -545,6 +546,7 @@ class BrowseWebPagesToolsMixin:
             ctx.working_memory["browse_web_pages_cache"] = cache_blob
             cache_size = len(merged)
         except Exception:
+            logger.warning("browse_cache_update_failed", exc_info=True)
             cache_size = 0
 
         cache_info = {

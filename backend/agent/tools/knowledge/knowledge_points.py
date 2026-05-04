@@ -7,8 +7,8 @@ import re
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
+from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -78,7 +78,7 @@ class KnowledgePointsToolsMixin:
             """Best-effort: use Wikipedia page structure to derive sub-knowledge points."""
             try:
                 from backend.mcp.search.wikipedia import wikipedia_search as _wiki
-            except Exception:
+            except ImportError:
                 return []
 
             q = topic
@@ -94,7 +94,7 @@ class KnowledgePointsToolsMixin:
                     search_results=5,
                     max_content_length=5000,
                 )
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 return []
 
             if not isinstance(res, dict) or not res.get("success"):
@@ -164,7 +164,7 @@ class KnowledgePointsToolsMixin:
             ).strip()
             try:
                 timeout_s = float(timeout_raw) if timeout_raw else 25.0
-            except Exception:
+            except ValueError:
                 timeout_s = 25.0
             timeout_s = max(5.0, min(timeout_s, 180.0))
 
@@ -199,7 +199,7 @@ class KnowledgePointsToolsMixin:
                 )
             except asyncio.TimeoutError:
                 text = ""
-            except Exception:
+            except (RuntimeError, TypeError, ValueError):
                 text = ""
             obj = self._extract_json_obj(text)
             points = _clean_points(list(obj.get("knowledge_points") or []))
@@ -302,7 +302,7 @@ class KnowledgePointsToolsMixin:
             ).strip()
             try:
                 timeout_s = float(timeout_raw) if timeout_raw else 30.0
-            except Exception:
+            except ValueError:
                 timeout_s = 30.0
             timeout_s = max(5.0, min(timeout_s, 240.0))
 
@@ -340,7 +340,7 @@ class KnowledgePointsToolsMixin:
                 except asyncio.TimeoutError:
                     last_err = "timeout"
                     break
-                except Exception as exc:
+                except (RuntimeError, TypeError, ValueError) as exc:
                     last_err = str(exc) or "unknown"
                     break
                 obj = self._extract_json_obj(text)
@@ -400,7 +400,7 @@ class KnowledgePointsToolsMixin:
                 "source": f"review_{source}",
                 "note": note,
             }
-        except Exception:
+        except (AttributeError, TypeError):
             logger.debug("knowledge_points_store_review_failed", exc_info=True)
 
         return out

@@ -18,9 +18,13 @@ import { useThemeStore } from '@/stores/useThemeStore'
 import { useUiPreferencesStore, type UiContrast, type UiDensity } from '@/stores/useUiPreferencesStore'
 import { useUserSettingsStore } from '@/stores/useUserSettingsStore'
 import {
+  DESIGN_STYLE_PRESETS,
+  isDesignStylePreset,
   useAppearanceStore,
   type AppearancePreferences,
   type ContentLayout,
+  type DesignStylePreset,
+  type DesignStylePresetMeta,
   type SidebarPosition,
   type SidebarStyle,
 } from '@/stores/useAppearanceStore'
@@ -84,6 +88,7 @@ function errorMessage(error: unknown): string {
 
 function StyleOptionCard(props: {
   label: string
+  description?: string
   selected: boolean
   onClick: () => void
   children: ReactNode
@@ -98,13 +103,42 @@ function StyleOptionCard(props: {
       >
         {props.children}
         {props.selected && (
-          <span className="absolute -right-2 -top-2 flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
+          <span className="absolute -right-2 -top-2 flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-none">
             <Check className="h-4 w-4" />
           </span>
         )}
       </div>
       <div className="mt-2 text-center text-sm font-medium">{props.label}</div>
+      {props.description ? <div className="mt-1 text-center text-xs text-muted-foreground">{props.description}</div> : null}
     </button>
+  )
+}
+
+function DesignStylePreview({ preset }: { preset: DesignStylePresetMeta }) {
+  return (
+    <div
+      className="h-full overflow-hidden rounded-md border"
+      style={{ backgroundColor: preset.background, borderColor: preset.surface }}
+    >
+      <div className="flex h-full">
+        <div className="w-1/3 border-r p-2" style={{ borderColor: preset.surface, backgroundColor: preset.surface }}>
+          <div className="h-3 w-3 rounded-md" style={{ backgroundColor: preset.accent }} />
+          <div className="mt-2 h-1.5 w-10 rounded" style={{ backgroundColor: preset.foreground, opacity: 0.7 }} />
+          <div className="mt-1 h-1.5 w-7 rounded" style={{ backgroundColor: preset.foreground, opacity: 0.35 }} />
+          <div className="mt-1 h-1.5 w-9 rounded" style={{ backgroundColor: preset.foreground, opacity: 0.25 }} />
+        </div>
+        <div className="flex-1 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="h-2 w-20 rounded" style={{ backgroundColor: preset.foreground, opacity: 0.8 }} />
+            <div className="h-5 w-10 rounded-md" style={{ backgroundColor: preset.accent }} />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="h-9 rounded-md border" style={{ borderColor: preset.surface, backgroundColor: preset.surface }} />
+            <div className="h-9 rounded-md border" style={{ borderColor: preset.surface, backgroundColor: preset.surface }} />
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -189,6 +223,7 @@ export default function SettingsView() {
   const { theme, setTheme } = useThemeStore()
   const { fontScale, lineHeight, density, contrast, reduceMotion, setPreferences, resetPreferences } = useUiPreferencesStore()
   const {
+    designStyle,
     sidebarStyle,
     contentLayout,
     sidebarPosition,
@@ -235,8 +270,8 @@ export default function SettingsView() {
     return roleLabels[role] || String(user?.role || '普通用户')
   })()
 
-  const [providerName, setProviderName] = useState('openrouter')
-  const [providerBaseUrl, setProviderBaseUrl] = useState('https://openrouter.ai/api/v1')
+  const [providerName, setProviderName] = useState('')
+  const [providerBaseUrl, setProviderBaseUrl] = useState('')
   const [providerApiKey, setProviderApiKey] = useState('')
   const [savedApiKeyMask, setSavedApiKeyMask] = useState('')
   const [savedApiKeyEncrypted, setSavedApiKeyEncrypted] = useState(false)
@@ -253,9 +288,9 @@ export default function SettingsView() {
   const [modelSettingsMessage, setModelSettingsMessage] = useState('')
 
   const applyModelSettingsResponse = useCallback((res: ModelSettingsResponse) => {
-    const active = String(res.active_provider || '').trim() || 'openrouter'
+    const active = String(res.active_provider || '').trim()
     const provider = (res.providers || []).find((item) => item.name === active) || (res.providers || [])[0]
-    const providerValue = String(provider?.name || active || 'openrouter').trim()
+    const providerValue = String(provider?.name || active).trim()
 
     setProviderName(providerValue)
     setProviderBaseUrl(String(provider?.base_url || '').trim())
@@ -397,23 +432,23 @@ export default function SettingsView() {
           {activeTab === 'api' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div>
-                <h2 className="text-lg font-medium">API 配置</h2>
-                <p className="text-sm text-muted-foreground">配置模型供应商、密钥和默认模型</p>
+                <h2 className="text-lg font-medium">模型连接</h2>
+                <p className="text-sm text-muted-foreground">配置智能服务通道、访问密钥和默认模型</p>
               </div>
               <Separator />
               <div className="space-y-5">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="grid gap-2">
-                    <label className="text-sm font-medium">供应商</label>
+                    <label className="text-sm font-medium">服务通道</label>
                     <Input
                       value={providerName}
                       onChange={(e) => setProviderName(e.target.value)}
-                      placeholder="openrouter / deepseek / openai-compatible"
+                      placeholder="默认通道 / 自定义通道"
                       className="font-mono"
                     />
                   </div>
                   <div className="grid gap-2">
-                    <label className="text-sm font-medium">Base URL</label>
+                    <label className="text-sm font-medium">服务地址</label>
                     <Input
                       value={providerBaseUrl}
                       onChange={(e) => setProviderBaseUrl(e.target.value)}
@@ -425,7 +460,7 @@ export default function SettingsView() {
 
                 <div className="grid gap-2">
                   <div className="flex items-center justify-between gap-3">
-                    <label className="text-sm font-medium">API Key</label>
+                    <label className="text-sm font-medium">访问密钥</label>
                     {savedApiKeyMask ? (
                       <Badge variant="outline">
                         {savedApiKeyEncrypted ? '已加密保存' : '已保存'} {savedApiKeyMask}
@@ -438,14 +473,14 @@ export default function SettingsView() {
                         type={showProviderApiKey ? 'text' : 'password'}
                         value={providerApiKey}
                         onChange={(e) => setProviderApiKey(e.target.value)}
-                        placeholder={savedApiKeyMask ? '留空则继续使用已保存密钥' : 'sk-...'}
+                        placeholder={savedApiKeyMask ? '留空则继续使用已保存密钥' : '输入访问密钥'}
                         className="pr-10 font-mono"
                       />
                       <button
                         type="button"
                         className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         onClick={() => setShowProviderApiKey((v) => !v)}
-                        aria-label={showProviderApiKey ? '隐藏 API Key' : '显示 API Key'}
+                        aria-label={showProviderApiKey ? '隐藏访问密钥' : '显示访问密钥'}
                       >
                         {showProviderApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
@@ -456,7 +491,7 @@ export default function SettingsView() {
                       ) : (
                         <RefreshCw className="h-4 w-4" />
                       )}
-                      <span className="ml-2 hidden sm:inline">抓取模型</span>
+                      <span className="ml-2 hidden sm:inline">读取模型</span>
                     </Button>
                   </div>
                 </div>
@@ -474,7 +509,7 @@ export default function SettingsView() {
                       list="model-settings-options"
                       value={mainModel}
                       onChange={(e) => setMainModel(e.target.value)}
-                      placeholder="openai/gpt-5-mini"
+                      placeholder="选择或填写主模型"
                       className="font-mono"
                     />
                   </div>
@@ -484,7 +519,7 @@ export default function SettingsView() {
                       list="model-settings-options"
                       value={subModel}
                       onChange={(e) => setSubModel(e.target.value)}
-                      placeholder="openai/gpt-4o-mini"
+                      placeholder="选择或填写轻量模型"
                       className="font-mono"
                     />
                   </div>
@@ -494,7 +529,7 @@ export default function SettingsView() {
                       list="model-settings-options"
                       value={lessonPlanModel}
                       onChange={(e) => setLessonPlanModel(e.target.value)}
-                      placeholder={mainModel || 'openai/gpt-5-mini'}
+                      placeholder={mainModel || '选择或填写教案模型'}
                       className="font-mono"
                     />
                   </div>
@@ -502,8 +537,8 @@ export default function SettingsView() {
 
                 <div className="flex items-center justify-between gap-4 rounded-lg border bg-card p-4">
                   <div>
-                    <div className="text-sm font-medium">锁定当前供应商</div>
-                    <div className="text-xs text-muted-foreground mt-1">模型名不会触发自动供应商切换</div>
+                    <div className="text-sm font-medium">锁定当前通道</div>
+                    <div className="text-xs text-muted-foreground mt-1">模型选择不会自动切换服务通道</div>
                   </div>
                   <Switch checked={providerPinned} onCheckedChange={(checked) => setProviderPinned(Boolean(checked))} />
                 </div>
@@ -542,6 +577,28 @@ export default function SettingsView() {
               </div>
               <Separator />
               <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-medium">样式库</label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    来源于 VoltAgent/awesome-design-md 的品牌设计语言，切换后会立即应用全局配色与界面质感。
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {DESIGN_STYLE_PRESETS.map((option) => (
+                    <StyleOptionCard
+                      key={option.value}
+                      label={option.label}
+                      description={option.source}
+                      selected={designStyle === option.value}
+                      onClick={() => updateAppearance({ designStyle: option.value })}
+                    >
+                      <DesignStylePreview preset={option} />
+                    </StyleOptionCard>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
                 <div className="flex items-center justify-between gap-3">
                   <label className="text-sm font-medium">主题</label>
                   <Button
@@ -553,7 +610,12 @@ export default function SettingsView() {
                       resetAppearance()
                       scheduleAccountSave({
                         theme: { mode: 'system' },
-                        appearance: { sidebarStyle: 'sidebar', contentLayout: 'default', sidebarPosition: 'left' },
+                        appearance: {
+                          designStyle: 'cursor',
+                          sidebarStyle: 'sidebar',
+                          contentLayout: 'default',
+                          sidebarPosition: 'left',
+                        },
                       })
                     }}
                   >
@@ -837,7 +899,11 @@ export default function SettingsView() {
                                 const sidebarStyleValue = String(appearance.sidebarStyle || '').trim()
                                 const contentLayoutValue = String(appearance.contentLayout || '').trim()
                                 const sidebarPositionValue = String(appearance.sidebarPosition || '').trim()
+                                const designStyleValue = String(appearance.designStyle || '').trim()
                                 const appearancePatch: Partial<AppearancePreferences> = {
+                                  ...(isDesignStylePreset(designStyleValue)
+                                    ? { designStyle: designStyleValue as DesignStylePreset }
+                                    : {}),
                                   ...(sidebarStyleValue === 'inset' ||
                                   sidebarStyleValue === 'floating' ||
                                   sidebarStyleValue === 'sidebar'

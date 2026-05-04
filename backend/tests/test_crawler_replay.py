@@ -1,8 +1,8 @@
 import inspect
 import os
+import shutil
 import unittest
 import uuid
-import shutil
 from pathlib import Path
 
 
@@ -36,7 +36,7 @@ class CrawlerRecordReplayTests(unittest.IsolatedAsyncioTestCase):
         finally:
             try:
                 shutil.rmtree(self._tmp_dir, ignore_errors=True)
-            except Exception:
+            except OSError:
                 pass
             os.environ.clear()
             os.environ.update(self._env_before)

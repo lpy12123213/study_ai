@@ -16,6 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
 import { formatDate } from '@/lib/utils'
 import { downloadObjectUrl } from '@/api/client'
+import { APP_BRAND_NAME } from '@/constants/branding'
 
 export default function LessonPlanDetailPage() {
   const { lessonPlanId } = useParams<{ lessonPlanId: string }>()
@@ -133,10 +134,10 @@ export default function LessonPlanDetailPage() {
               <div className="flex flex-wrap gap-2">
                 {plan.mdUrl ? (
                   <Button type="button" onClick={() => void openGeneratedFile(plan.mdUrl!)}>
-                    下载 Markdown
+                    下载可编辑文档
                   </Button>
                 ) : (
-                  <Button disabled>Markdown 未生成</Button>
+                  <Button disabled>可编辑文档未生成</Button>
                 )}
 
                 {plan.pdfUrl ? (
@@ -151,13 +152,13 @@ export default function LessonPlanDetailPage() {
               </div>
 
               <div className="text-xs text-muted-foreground leading-5">
-                页面不展示教案正文，仅提供 Markdown/PDF 下载链接。
+                页面不展示教案正文，仅提供可编辑文档和 PDF 下载链接。
               </div>
             </div>
           </div>
 
           <div className="mt-12 pt-8 border-t border-border text-center text-xs text-muted-foreground print:hidden">
-            生成于 {formatDate(plan.createdAt)} · 学习助手 AI 生成
+            生成于 {formatDate(plan.createdAt)} · {APP_BRAND_NAME} 生成
           </div>
         </div>
       </ScrollArea>

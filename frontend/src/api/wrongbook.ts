@@ -19,8 +19,8 @@ export async function listWrongbook(params?: {
   q?: string
   limit?: number
 }): Promise<WrongQuestion[]> {
-  const res = await apiClient.get('/wrongbook', { params })
-  return (res.data?.items as WrongQuestion[]) || []
+  const res = await apiClient.get<{ items?: WrongQuestion[] }>('/wrongbook', { params })
+  return res.data.items || []
 }
 
 export async function upsertWrongQuestion(input: {
@@ -32,8 +32,8 @@ export async function upsertWrongQuestion(input: {
   tags?: string[]
   source_ref?: Record<string, unknown>
 }): Promise<WrongQuestion> {
-  const res = await apiClient.post('/wrongbook', input)
-  return res.data?.item as WrongQuestion
+  const res = await apiClient.post<{ item: WrongQuestion }>('/wrongbook', input)
+  return res.data.item
 }
 
 export async function deleteWrongQuestion(questionId: string): Promise<void> {
@@ -54,7 +54,7 @@ export const wrongbookApi = {
   upsertWrongQuestion,
   deleteWrongQuestion,
   createPracticePaper,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: { items: WrongQuestion[] } }> => ({
     data: { items: await listWrongbook({ limit: 200 }) },
   }),
 }

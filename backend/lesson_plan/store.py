@@ -35,7 +35,7 @@ def _load_lesson_plans_from_disk() -> Dict[str, Dict[str, Any]]:
                 continue
             out[k] = dict(v)
         return out
-    except Exception:
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return {}
 
 
@@ -45,7 +45,7 @@ def _save_lesson_plans_to_disk(plans: Dict[str, Dict[str, Any]]) -> None:
         tmp = LESSON_PLANS_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(plans, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(LESSON_PLANS_PATH)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return
 
 

@@ -38,7 +38,7 @@ def _as_str(value: Any) -> str:
 def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
     try:
         n = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = default
     return max(min_value, min(max_value, n))
 
@@ -147,7 +147,7 @@ async def metaso_search(
         detail = ""
         try:
             detail = exc.response.text
-        except Exception:
+        except (AttributeError, RuntimeError):
             detail = str(exc)
         return {
             "success": False,
@@ -159,7 +159,7 @@ async def metaso_search(
             "detail": detail[:2000],
             "results": [],
         }
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         return {
             "success": False,
             "provider": "metaso",
@@ -297,7 +297,7 @@ async def metaso_ask(
         detail = ""
         try:
             detail = exc.response.text
-        except Exception:
+        except (AttributeError, RuntimeError):
             detail = str(exc)
         return {
             "success": False,
@@ -311,7 +311,7 @@ async def metaso_ask(
             "detail": detail[:2000],
             "results": [],
         }
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         return {
             "success": False,
             "provider": "metaso",
@@ -356,7 +356,7 @@ async def metaso_ask(
                 content = data["choices"][0]["message"]["content"]
                 if isinstance(content, str):
                     answer = _strip_markdown_blockquotes(content)
-            except Exception:
+            except (KeyError, IndexError, TypeError):
                 answer = ""
 
     results: List[Dict[str, Any]] = []
@@ -416,7 +416,7 @@ async def metaso_reader(*, url: str) -> Dict[str, Any]:
             resp = await client.post(endpoint, headers=headers, json=payload)
             resp.raise_for_status()
             text = resp.text
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         return {"success": False, "provider": "metaso", "url": url_value, "error": str(exc)}
 
     # /reader may also return JSON errors (HTTP 200) when key is invalid, etc.
@@ -431,7 +431,7 @@ async def metaso_reader(*, url: str) -> Dict[str, Any]:
                     "url": url_value,
                     "error": str(obj.get("errMsg") or f"Metaso error code {obj.get('errCode')}").strip(),
                 }
-        except Exception:
-            logger.debug("metaso_error_payload_parse_failed", exc_info=True)
+        except (ValueError, TypeError, AttributeError):
+            logger.warning("metaso_error_payload_parse_failed", exc_info=True)
 
     return {"success": True, "provider": "metaso", "url": url_value, "text": text}

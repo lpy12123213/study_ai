@@ -125,7 +125,7 @@ def lesson_plan_to_markdown(
             dm = sec.get("duration_minutes")
             try:
                 dm_i = int(dm)
-            except Exception:
+            except (TypeError, ValueError):
                 dm_i = 0
             lines.append(f"### {st}{f'（{dm_i}分钟）' if dm_i else ''}")
             lines.append("")

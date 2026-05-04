@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured

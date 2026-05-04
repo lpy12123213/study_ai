@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.question.papers import get_paper as db_get_paper
 from backend.generation.agentic.task_specs import (
@@ -154,14 +156,14 @@ async def submit_export_paper_task(*, user_id: str, request: Dict[str, Any], par
 
     try:
         paper_id = int(request.get("paper_id") or request.get("paperId") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         paper_id = 0
 
     paper = None
     if paper_id > 0:
         try:
             paper = await db_get_paper(user_id=user_id, paper_id=paper_id)
-        except Exception:
+        except (SQLAlchemyError, ValueError):
             paper = None
 
     display = str((paper or {}).get("paper_name") or (paper or {}).get("name") or paper_id).strip() or str(paper_id)
@@ -188,14 +190,14 @@ async def submit_export_study_archive_task(
 
     try:
         archive_id = int(request.get("archive_id") or request.get("archiveId") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         archive_id = 0
 
     archive = None
     if archive_id > 0:
         try:
             archive = await db_get_study_archive(user_id=user_id, archive_id=archive_id)
-        except Exception:
+        except (SQLAlchemyError, ValueError):
             archive = None
 
     display = str((archive or {}).get("topic") or archive_id).strip() or str(archive_id)

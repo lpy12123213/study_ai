@@ -144,7 +144,7 @@ async def get_question_detail(
 
         try:
             from bs4 import BeautifulSoup  # type: ignore
-        except Exception:
+        except ImportError:
             BeautifulSoup = None  # type: ignore
 
         def _extract_sections(text: str) -> Tuple[str, str]:
@@ -226,6 +226,7 @@ async def get_question_detail(
                     try:
                         tag.decompose()
                     except Exception:
+                        logger.warning("zujuan_detail_tag_decompose_failed", exc_info=True)
                         continue
                 raw_text = soup.get_text("\n", strip=True)
             else:
@@ -237,11 +238,12 @@ async def get_question_detail(
             if ana:
                 res["analysis"] = ana
         except Exception:
-            logger.debug("zujuan_parse_answer_or_analysis_failed", exc_info=True)
+            logger.warning("zujuan_parse_answer_or_analysis_failed", exc_info=True)
 
         return res
 
     except subprocess.TimeoutExpired:
         return {"success": False, "question_id": question_id, "error": "请求超时", "url": url}
     except Exception as e:
+        logger.warning("zujuan_get_question_detail_failed", extra={"question_id": question_id, "url": url}, exc_info=True)
         return {"success": False, "question_id": question_id, "error": str(e), "url": url}

@@ -114,7 +114,7 @@ export function QuestionLibraryBrowser() {
   }
 
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden">
+    <div className="h-full w-full flex flex-col">
       <div className="px-6 py-4 border-b bg-background">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

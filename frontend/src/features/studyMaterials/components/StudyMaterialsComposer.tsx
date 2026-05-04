@@ -71,9 +71,9 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
                 onClick={openLatexDialog}
                 disabled={isGenerating}
               >
-                MD→LaTeX
+                排版导出
               </Button>
-              <div className="text-[10px] text-muted-foreground/70">未填写/默认将使用后端配置（.env）</div>
+              <div className="text-[10px] text-muted-foreground/70">未填写时使用本地默认配置</div>
             </div>
           </div>
 
@@ -107,14 +107,14 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
                     disabled={isGenerating}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="默认（standard）" />
+                      <SelectValue placeholder="默认（平衡）" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="default">默认（standard）</SelectItem>
-                      <SelectItem value="quick">quick（更快更短）</SelectItem>
-                      <SelectItem value="standard">standard（平衡）</SelectItem>
-                      <SelectItem value="deep">deep（更深更细）</SelectItem>
-                      <SelectItem value="research">research（更研究型）</SelectItem>
+                      <SelectItem value="default">默认（平衡）</SelectItem>
+                      <SelectItem value="quick">快速（更快更短）</SelectItem>
+                      <SelectItem value="standard">标准（平衡）</SelectItem>
+                      <SelectItem value="deep">深入（更深更细）</SelectItem>
+                      <SelectItem value="research">研究型（更重资料）</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -156,7 +156,7 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-xs font-medium text-muted-foreground">额外检索工具（百科/问答/GitHub）</div>
+                  <div className="text-xs font-medium text-muted-foreground">额外资料来源（百科/问答/公开笔记）</div>
                   <Select
                     value={enableExtraTools}
                     onValueChange={(v) => setEnableExtraTools(v as TriState)}

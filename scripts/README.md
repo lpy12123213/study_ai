@@ -10,6 +10,7 @@
 - Linux / macOS: `./start.sh dev|all|backend|frontend|mcp|setup|doctor`
 
 这些入口最终调用 `scripts/start.py`，它负责创建虚拟环境、安装依赖、启动后端/前端/MCP，以及运行 `doctor` 检查。
+`doctor` 会执行结构审计和异常策略预算 gate；当前异常策略预算用于防止遗留 broad-except 数量反弹。GitHub Actions 会复用这些 gate，并额外运行 Alembic 升降级、后端 unittest、前端 lint/build/vitest coverage 和 Playwright smoke。
 
 ## 目录分类
 
@@ -17,6 +18,12 @@
 - `scripts/dev/`：开发辅助和实验脚本，不作为生产入口。
 - `scripts/migrate/`：数据、schema 或本地状态迁移脚本。
 - `scripts/ops/`：本地运维辅助、状态整理、爬虫相关工具。
+
+常用审计入口：
+
+- `python scripts/audit/structure_lint.py`：检查 API 聚合、领域目录和迁移计划文档。默认只输出 warning；CI 使用 `--strict` 作为 gate。
+- `python scripts/audit/exception_policy.py backend --limit 80`：检查裸 `except`、`except Exception` 和静默兜底处理。默认只输出 warning。
+- 严格异常策略 gate：`python scripts/audit/exception_policy.py backend --strict --max-total 0 --max-kind pass-only-broad-except=0 --limit 0`，用于阻止异常处理债务反弹。
 
 ## 编写约定
 

@@ -11,25 +11,19 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import {
-  BarChart3,
-  BookOpen,
-  Bug,
-  Files,
-  LayoutTemplate,
-  ListChecks,
-  ListTodo,
-  Search,
-  Tag,
-  BookX,
-  Film,
-  Settings,
+  Monitor,
+  Plus,
+  type LucideIcon,
 } from 'lucide-react'
+import { COMMAND_ROUTE_ITEMS, getRouteConfig } from '@/router/routes.config'
+import { useThemeStore } from '@/stores/useThemeStore'
+import { useI18n } from '@/i18n'
 
 type CommandEntry = {
   id: string
   title: string
   subtitle?: string
-  icon?: any
+  icon?: LucideIcon
   shortcut?: string
   run: () => void
 }
@@ -44,30 +38,67 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 export function CommandPalette() {
   const navigate = useNavigate()
+  const toggleTheme = useThemeStore((state) => state.toggleTheme)
+  const { routeLabel, t } = useI18n()
   const [open, setOpen] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
 
-  const commands = useMemo<CommandEntry[]>(() => {
+  const { routeCommands, actionCommands } = useMemo<{
+    routeCommands: CommandEntry[]
+    actionCommands: CommandEntry[]
+  }>(() => {
     const go = (path: string) => () => {
       setOpen(false)
       navigate(path)
     }
-    return [
-      { id: 'nav-search', title: '全文搜索', subtitle: '/search', icon: Search, shortcut: 'Ctrl K', run: go('/search') },
-      { id: 'nav-tasks', title: '任务中心', subtitle: '/tasks', icon: ListChecks, run: go('/tasks') },
-      { id: 'nav-exports', title: '导出中心', subtitle: '/exports', icon: Files, run: go('/exports') },
-      { id: 'nav-templates', title: '模板库', subtitle: '/templates', icon: LayoutTemplate, run: go('/templates') },
-      { id: 'nav-learning', title: '学习计划', subtitle: '/learning-plans', icon: ListTodo, run: go('/learning-plans') },
-      { id: 'nav-wrongbook', title: '错题本', subtitle: '/wrongbook', icon: BookX, run: go('/wrongbook') },
-      { id: 'nav-annotations', title: '批注', subtitle: '/annotations', icon: Tag, run: go('/annotations') },
-      { id: 'nav-feedback', title: '反馈', subtitle: '/feedback', icon: Bug, run: go('/feedback') },
-      { id: 'nav-dashboard', title: '仪表盘', subtitle: '/dashboard', icon: BarChart3, run: go('/dashboard') },
-      { id: 'nav-study-materials', title: '自学资料', subtitle: '/study-materials', icon: BookOpen, run: go('/study-materials') },
-      { id: 'nav-knowledge-videos', title: '知识视频', subtitle: '/knowledge-videos', icon: Film, run: go('/knowledge-videos') },
-      { id: 'nav-blueprint', title: '蓝图组卷', subtitle: '/blueprint', icon: LayoutTemplate, run: go('/blueprint') },
-      { id: 'nav-papers', title: '试卷管理', subtitle: '/papers', icon: Files, run: go('/papers') },
-      { id: 'nav-settings', title: '设置', subtitle: '/settings', icon: Settings, run: go('/settings') },
-    ]
-  }, [navigate])
+    const action = (id: string, title: string, path: string, icon: CommandEntry['icon'], subtitle?: string): CommandEntry => ({
+      id,
+      title,
+      subtitle: subtitle || path,
+      icon,
+      run: go(path),
+    })
+
+    const routeCommands = COMMAND_ROUTE_ITEMS.map((route) => ({
+      id: `nav-${route.id}`,
+      title: routeLabel(route.id, route.label),
+      subtitle: route.path,
+      icon: route.icon,
+      shortcut: route.path === '/search' ? 'Ctrl K' : undefined,
+      run: go(route.path),
+    }))
+
+    return {
+      routeCommands,
+    actionCommands: [
+      action('action-new-chat', t('command.newChat'), '/chat', Plus),
+      action('action-new-blueprint', t('command.newBlueprint'), '/blueprint', getRouteConfig('/blueprint')?.icon),
+      action('action-new-lesson-plan', t('command.newLessonPlan'), '/lesson-plans', getRouteConfig('/lesson-plans')?.icon),
+      action('action-new-study-material', t('command.newStudyMaterial'), '/study-materials', getRouteConfig('/study-materials')?.icon),
+      action('action-open-question-library', t('command.openQuestionLibrary'), '/question-library', getRouteConfig('/question-library')?.icon),
+      {
+        id: 'action-toggle-theme',
+        title: t('command.toggleTheme'),
+        subtitle: t('command.themeSubtitle'),
+        icon: Monitor,
+        run: () => {
+          toggleTheme()
+          setOpen(false)
+        },
+      },
+      {
+        id: 'action-show-shortcuts',
+        title: t('command.showShortcuts'),
+        subtitle: 'Ctrl/⌘ + /',
+        icon: Monitor,
+        shortcut: 'Ctrl /',
+        run: () => {
+          setShowShortcuts(true)
+        },
+      },
+    ],
+  }
+  }, [navigate, routeLabel, t, toggleTheme])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -75,12 +106,18 @@ export function CommandPalette() {
       const ctrlOrMeta = e.ctrlKey || e.metaKey
       if (ctrlOrMeta && key === 'k') {
         e.preventDefault()
+        setShowShortcuts(false)
         if (isTypingTarget(e.target) && !open) {
           // Avoid hijacking common IME/search shortcuts when typing heavily. Still allow opening when already open.
           setOpen(true)
           return
         }
         setOpen((v) => !v)
+      }
+      if (ctrlOrMeta && e.key === '/') {
+        e.preventDefault()
+        setShowShortcuts(true)
+        setOpen(true)
       }
       if (key === 'escape') {
         setOpen(false)
@@ -92,11 +129,11 @@ export function CommandPalette() {
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="搜索功能或跳转…" />
+      <CommandInput placeholder={t('command.searchPlaceholder')} />
       <CommandList>
-        <CommandEmpty>无匹配结果</CommandEmpty>
-        <CommandGroup heading="导航">
-          {commands.map((c) => {
+        <CommandEmpty>{t('command.noResults')}</CommandEmpty>
+        <CommandGroup heading={t('command.navigation')}>
+          {routeCommands.map((c) => {
             const Icon = c.icon
             return (
               <CommandItem key={c.id} onSelect={c.run}>
@@ -109,11 +146,42 @@ export function CommandPalette() {
           })}
         </CommandGroup>
         <CommandSeparator />
-        <CommandGroup heading="提示">
-          <CommandItem disabled>
-            <span className="text-xs text-muted-foreground">快捷键：Ctrl/⌘ + K 打开面板</span>
-          </CommandItem>
+        <CommandGroup heading={t('command.actions')}>
+          {actionCommands.map((c) => {
+            const Icon = c.icon
+            return (
+              <CommandItem key={c.id} onSelect={c.run}>
+                {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
+                <span>{c.title}</span>
+                {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
+                {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
+              </CommandItem>
+            )
+          })}
         </CommandGroup>
+        <CommandSeparator />
+        {showShortcuts ? (
+          <CommandGroup heading={t('command.shortcuts')}>
+            <CommandItem disabled>
+              <span className="text-xs text-muted-foreground">{t('command.openPalette')}</span>
+              <CommandShortcut>Ctrl/⌘ K</CommandShortcut>
+            </CommandItem>
+            <CommandItem disabled>
+              <span className="text-xs text-muted-foreground">{t('command.openShortcutHelp')}</span>
+              <CommandShortcut>Ctrl/⌘ /</CommandShortcut>
+            </CommandItem>
+            <CommandItem disabled>
+              <span className="text-xs text-muted-foreground">{t('command.closePalette')}</span>
+              <CommandShortcut>Esc</CommandShortcut>
+            </CommandItem>
+          </CommandGroup>
+        ) : (
+          <CommandGroup heading={t('command.tips')}>
+            <CommandItem disabled>
+              <span className="text-xs text-muted-foreground">{t('command.shortcutHint')}</span>
+            </CommandItem>
+          </CommandGroup>
+        )}
       </CommandList>
     </CommandDialog>
   )

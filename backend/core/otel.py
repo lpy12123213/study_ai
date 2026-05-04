@@ -45,11 +45,13 @@ def setup_otel(app: Any) -> None:
 
     try:
         from opentelemetry import trace  # type: ignore
-        from opentelemetry.sdk.resources import Resource  # type: ignore
-        from opentelemetry.sdk.resources import SERVICE_NAME  # type: ignore
+        from opentelemetry.sdk.resources import (
+            SERVICE_NAME,  # type: ignore
+            Resource,  # type: ignore
+        )
         from opentelemetry.sdk.trace import TracerProvider  # type: ignore
         from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
-    except Exception:
+    except ImportError:
         logger.warning("otel_not_installed; skipping tracing")
         return
 
@@ -74,7 +76,7 @@ def setup_otel(app: Any) -> None:
 
         FastAPIInstrumentor.instrument_app(app)
     except Exception:
-        logger.debug("otel_fastapi_instrument_failed", exc_info=True)
+        logger.warning("otel_fastapi_instrument_failed", exc_info=True)
 
     # HTTPX instrumentation (covers crawler + LLM HTTP calls if using httpx)
     try:
@@ -82,7 +84,7 @@ def setup_otel(app: Any) -> None:
 
         HTTPXClientInstrumentor().instrument()
     except Exception:
-        logger.debug("otel_httpx_instrument_failed", exc_info=True)
+        logger.warning("otel_httpx_instrument_failed", exc_info=True)
 
     _OTEL_INITIALIZED = True
     logger.info(
@@ -100,7 +102,7 @@ def _build_console_exporter() -> Optional[Any]:  # noqa: ANN401
         from opentelemetry.sdk.trace.export import ConsoleSpanExporter  # type: ignore
 
         return ConsoleSpanExporter()
-    except Exception:
+    except ImportError:
         return None
 
 
@@ -110,6 +112,5 @@ def _build_otlp_exporter(endpoint: str) -> Optional[Any]:  # noqa: ANN401
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # type: ignore
 
         return OTLPSpanExporter(endpoint=str(endpoint or "").strip())
-    except Exception:
+    except ImportError:
         return None
-

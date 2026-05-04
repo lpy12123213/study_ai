@@ -268,7 +268,7 @@ async def get_messages(
     if before_id is not None:
         try:
             before_id_value = int(before_id)
-        except Exception:
+        except (TypeError, ValueError):
             before_id_value = None
 
     own = session is None
@@ -313,7 +313,7 @@ async def get_messages(
         if m.tool_calls:
             try:
                 tool_calls = json.loads(m.tool_calls)
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
                 tool_calls = None
 
         content = m.content or ""
@@ -328,7 +328,7 @@ async def get_messages(
                     err = payload.get("error")
                     if isinstance(err, str) and err.strip():
                         tool_result_meta["error"] = err.strip()[:500]
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
                 tool_result_meta["error"] = tool_result_meta.get("error") or "invalid_tool_payload"
 
             if not include_tool_content:

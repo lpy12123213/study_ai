@@ -2,13 +2,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.database.repositories.content import conversations as conversations_repo
 from backend.database.repositories.question import papers as papers_repo
 from backend.database.repositories.system import canvas as canvas_repo
-from backend.database.schema import Base
+from backend.database.schema import Base, PaperQuestion
 
 
 class TestUserScopingRepositories(unittest.IsolatedAsyncioTestCase):
@@ -90,6 +91,42 @@ class TestUserScopingRepositories(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await papers_repo.delete_paper(user_id="user-b", paper_id=paper_a))
         self.assertTrue(await papers_repo.delete_paper(user_id="user-a", paper_id=paper_a))
         self.assertIsNone(await papers_repo.get_paper(user_id="user-a", paper_id=paper_a))
+
+    async def test_paper_questions_store_user_scope(self) -> None:
+        paper_a = await papers_repo.save_paper(
+            user_id="user-a",
+            paper_name="Paper A",
+            questions=[{"question_id": "shared-q"}],
+        )
+        paper_b = await papers_repo.save_paper(
+            user_id="user-b",
+            paper_name="Paper B",
+            questions=[{"question_id": "shared-q"}],
+        )
+
+        async with self.session_maker() as session:
+            rows_a = (
+                await session.execute(
+                    select(PaperQuestion).where(
+                        PaperQuestion.user_id == "user-a",
+                        PaperQuestion.question_id == "shared-q",
+                    )
+                )
+            ).scalars().all()
+            rows_b = (
+                await session.execute(
+                    select(PaperQuestion).where(
+                        PaperQuestion.user_id == "user-b",
+                        PaperQuestion.question_id == "shared-q",
+                    )
+                )
+            ).scalars().all()
+
+        self.assertEqual([row.paper_id for row in rows_a], [paper_a])
+        self.assertEqual([row.paper_id for row in rows_b], [paper_b])
+
+        paper = await papers_repo.get_paper(user_id="user-a", paper_id=paper_b)
+        self.assertIsNone(paper)
 
     async def test_canvas_boards_are_scoped_by_user(self) -> None:
         board_a = await canvas_repo.create_canvas_board(

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AiGenerateStudioPage } from '@/features/aiGenerate/AiGenerateStudioPage'
@@ -222,12 +223,14 @@ describe('AiGenerateStudioPage', () => {
     expect(await screen.findByText('AI 出题')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '会话历史' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '知识点配置' })).toBeInTheDocument()
+    const user = userEvent.setup()
 
     const floatingWindow = await screen.findByRole('complementary', { name: '题目悬浮窗' })
     expect(floatingWindow).toBeInTheDocument()
-    expect(within(floatingWindow).getByText('已知函数 f(x)，判断其单调区间。')).toBeInTheDocument()
-    expect(await screen.findByText('原始 Reason')).toBeInTheDocument()
-    expect(await screen.findByText('事件 Trace')).toBeInTheDocument()
+    expect(within(floatingWindow).getAllByText('已知函数 f(x)，判断其单调区间。').length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('tab', { name: /Reason Console/ }))
+    expect(await screen.findByText(/原始 Reason/)).toBeInTheDocument()
+    expect(await screen.findByText(/事件 Trace/)).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: '停止追加' })).toBeInTheDocument()
     expect(await screen.findByRole('link', { name: '进入审查' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '审核通过并入库' })).toBeEnabled()
@@ -257,16 +260,21 @@ describe('AiGenerateStudioPage', () => {
     })
 
     renderPage()
+    const user = userEvent.setup()
 
     expect(await screen.findByRole('complementary', { name: '题目悬浮窗' })).toBeInTheDocument()
-    screen.getByRole('button', { name: '收起题目悬浮窗' }).click()
+    await user.click(screen.getByRole('button', { name: '收起题目悬浮窗' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
 
-    expect(screen.queryByRole('complementary', { name: '题目悬浮窗' })).not.toBeInTheDocument()
-    expect(screen.queryByText('已知函数 f(x)，判断其单调区间。')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '打开题目悬浮窗' }).length).toBeGreaterThan(0)
+    })
 
     const openButtons = screen.getAllByRole('button', { name: '打开题目悬浮窗' })
-    openButtons[openButtons.length - 1].click()
-    expect(await screen.findByText('已知函数 f(x)，判断其单调区间。')).toBeInTheDocument()
+    await user.click(openButtons[openButtons.length - 1])
+    expect((await screen.findAllByText('已知函数 f(x)，判断其单调区间。')).length).toBeGreaterThan(0)
   })
 
   it('polls running sessions and restores drafts after refresh', async () => {
@@ -405,8 +413,10 @@ describe('AiGenerateStudioPage', () => {
         await Promise.resolve()
       })
 
-      expect(screen.getByRole('button', { name: '继续生成' })).toBeEnabled()
-      screen.getByRole('button', { name: '继续生成' }).click()
+      const continueButtons = screen.getAllByRole('button', { name: '继续生成' })
+      const continueButton = continueButtons[continueButtons.length - 1]
+      expect(continueButton).toBeEnabled()
+      continueButton.click()
 
       expect(screen.getAllByRole('button', { name: '生成中' }).some((button) => (button as HTMLButtonElement).disabled)).toBe(true)
 

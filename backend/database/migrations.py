@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -10,7 +12,7 @@ logger = get_logger(__name__)
 def _table_cols(conn, table: str) -> list[str]:
     try:
         return [r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()]
-    except Exception:
+    except (IndexError, SQLAlchemyError, TypeError):
         return []
 
 
@@ -19,14 +21,14 @@ def _add_col(conn, *, table: str, name: str, ddl: str, existing_cols: Iterable[s
         return
     try:
         conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-    except Exception:
+    except SQLAlchemyError:
         return
 
 
 def _ensure_index(conn, *, name: str, table: str, columns: str) -> None:
     try:
         conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
-    except Exception:
+    except SQLAlchemyError:
         return
 
 
@@ -60,6 +62,35 @@ def sync_migrate_db_schema(conn) -> None:
 
     pq_cols = _table_cols(conn, "paper_questions")
     if pq_cols:
+        _add_col(
+            conn,
+            table="paper_questions",
+            name="user_id",
+            ddl="VARCHAR(64) NOT NULL DEFAULT ''",
+            existing_cols=pq_cols,
+        )
+        _ensure_index(conn, name="ix_paper_questions_user_id", table="paper_questions", columns="user_id")
+        _ensure_index(
+            conn,
+            name="ix_paper_questions_user_paper_order",
+            table="paper_questions",
+            columns="user_id, paper_id, question_order",
+        )
+        _ensure_index(
+            conn,
+            name="ix_paper_questions_user_question",
+            table="paper_questions",
+            columns="user_id, question_id",
+        )
+        try:
+            conn.exec_driver_sql(
+                "UPDATE paper_questions "
+                "SET user_id = COALESCE((SELECT papers.user_id FROM papers WHERE papers.id = paper_questions.paper_id), '') "
+                "WHERE user_id IS NULL OR user_id = ''"
+            )
+        except SQLAlchemyError:
+            logger.warning("legacy_migration_paper_questions_user_id_backfill_failed", exc_info=True)
+
         for name, ddl in (
             ("stem", "TEXT"),
             ("stem_fingerprint", "VARCHAR(32)"),
@@ -149,6 +180,11 @@ def sync_migrate_db_schema(conn) -> None:
             columns="user_id, task_type, status, ended_at",
         )
         _ensure_index(conn, name="ix_tasks_user_updated", table="tasks", columns="user_id, updated_at")
+
+    task_events_cols = _table_cols(conn, "task_events")
+    if task_events_cols:
+        _ensure_index(conn, name="ix_task_events_task_id", table="task_events", columns="task_id")
+        _ensure_index(conn, name="ix_task_events_task_id_seq", table="task_events", columns="task_id, seq")
 
     conv_cols = _table_cols(conn, "conversations")
     if conv_cols:
@@ -347,7 +383,7 @@ def sync_migrate_db_schema(conn) -> None:
             try:
                 row = conn.exec_driver_sql(f"SELECT 1 FROM {table} LIMIT 1").first()
                 return row is not None
-            except Exception:
+            except SQLAlchemyError:
                 return False
 
         # Backfill is expensive on large DBs. Run it only when the FTS tables are empty
@@ -371,5 +407,5 @@ def sync_migrate_db_schema(conn) -> None:
                 "INSERT OR REPLACE INTO study_archives_fts(rowid,user_id,archive_id,subject,topic,requirements,markdown) "
                 "SELECT id, user_id, id, subject, topic, requirements, markdown FROM study_archives"
             )
-    except Exception:
+    except SQLAlchemyError:
         return

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.llm.client import is_llm_configured
@@ -143,7 +143,7 @@ async def generate_questions(
         if enable_brainstorm and is_llm_configured():
             try:
                 seed_count = int(cfg.get("brainstorm_seed_count") or DEFAULT_SEARCH_CONFIG.get("brainstorm_seed_count") or 8)
-            except Exception:
+            except (TypeError, ValueError):
                 seed_count = 8
             seed_count = max(4, min(seed_count, 12))
             try:
@@ -153,7 +153,10 @@ async def generate_questions(
                     stream_reasoning=stream_reasoning,
                     on_reasoning_event=on_reasoning_event,
                 )
+            except (RuntimeError, AssertionError):
+                brainstorm_seeds = []
             except Exception:
+                logger.warning("question_library_brainstorm_failed", exc_info=True)
                 brainstorm_seeds = []
 
             if brainstorm_seeds:
@@ -247,7 +250,10 @@ async def generate_questions(
                 )
                 out = [dict(item) for item in (ds or []) if isinstance(item, dict)]
                 return out, None
+            except RuntimeError as exc:
+                return [], exc
             except Exception as exc:
+                logger.warning("question_library_realize_drafts_unexpected_failed", exc_info=True)
                 return [], exc
 
     realize_results = await asyncio.gather(*[_realize_spec(spec) for spec in specs]) if specs else []
@@ -375,7 +381,15 @@ async def generate_questions(
                     stream_reasoning=stream_reasoning,
                     on_reasoning_event=on_reasoning_event,
                 )
+            except RuntimeError as exc:
+                result = {
+                    "match": False,
+                    "final_answer": "",
+                    "issues": [f"solver_exception:{str(exc)}"],
+                    "summary": "",
+                }
             except Exception as exc:
+                logger.warning("question_library_solve_draft_unexpected_failed", exc_info=True)
                 result = {
                     "match": False,
                     "final_answer": "",

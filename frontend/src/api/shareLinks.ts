@@ -8,6 +8,13 @@ export type ShareLinkMeta = {
   has_password: boolean
 }
 
+export type SharedContent = {
+  item_type: string
+  paper?: Record<string, unknown>
+  study_archive?: Record<string, unknown>
+  template?: Record<string, unknown>
+}
+
 export async function createShareLink(input: {
   itemType: string
   itemId: string | number
@@ -36,7 +43,7 @@ export async function validateShareLink(token: string, password: string): Promis
 export async function fetchSharedContent(
   token: string,
   password: string
-): Promise<{ item_type: string; paper?: any; study_archive?: any; template?: any }> {
-  const res = await apiClient.post(`/share/${encodeURIComponent(token)}/content`, { password })
-  return res.data as { item_type: string; paper?: any; study_archive?: any; template?: any }
+): Promise<SharedContent> {
+  const res = await apiClient.post<SharedContent>(`/share/${encodeURIComponent(token)}/content`, { password })
+  return res.data
 }

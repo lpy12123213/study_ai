@@ -28,9 +28,9 @@ interface ArtifactSectionProps {
 }
 
 const SECTION_PLACEHOLDERS: Record<ArtifactSectionProps['sectionKey'], string> = {
-  stem: '题干中如有公式，请使用 LaTeX，例如：已知函数 \\(f(x)=x^2+1\\)。',
-  answer: '答案中的公式同样使用 LaTeX，例如：\\(x=1\\) 或 \\[x^2-1=0\\]。',
-  analysis: '解析过程请保持可读，并把推导公式写成 LaTeX。',
+  stem: '题干中如有公式，请使用可渲染标记，例如：已知函数 \\(f(x)=x^2+1\\)。',
+  answer: '答案中的公式同样使用可渲染标记，例如：\\(x=1\\) 或 \\[x^2-1=0\\]。',
+  analysis: '解析过程请保持可读，并把推导公式写成可渲染标记。',
 }
 
 export function ArtifactSection(props: ArtifactSectionProps) {
@@ -80,11 +80,11 @@ export function ArtifactSection(props: ArtifactSectionProps) {
       </div>
 
       <div className="mt-4 rounded-[20px] border border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(246,241,231,0.72))] p-4 dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.92),rgba(18,20,30,0.88))]">
-        <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">LaTeX Preview</div>
+        <div className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">公式预览</div>
         {section.content ? (
           <QuestionContent content={section.content} className="text-sm leading-7 text-foreground/90" />
         ) : (
-          <div className="text-sm text-muted-foreground">内容生成后会在这里按 LaTeX 公式渲染。</div>
+          <div className="text-sm text-muted-foreground">内容生成后会在这里按公式排版渲染。</div>
         )}
       </div>
 

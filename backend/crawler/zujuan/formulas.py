@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import re
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
@@ -108,6 +109,7 @@ def formula_cache_set(crawler: Any, formula_hash: str, latex: str) -> None:
             crawler._formula_cache.max_entries = max_entries
         crawler._formula_cache.set(key, latex or "")
     except Exception:
+        logger.warning("zujuan_formula_cache_set_failed", extra={"hash": key}, exc_info=True)
         return
 
 
@@ -136,14 +138,14 @@ async def fetch_formula_mathml(crawler: Any, formula_hash: str) -> str:
 
     try:
         as_text = raw.decode("utf-8", errors="ignore").strip()
-    except Exception:
+    except UnicodeDecodeError:
         as_text = ""
     if as_text.lstrip().startswith("<math"):
         return as_text
 
     try:
         decoded = base64.b64decode(raw).decode("utf-8", errors="ignore").strip()
-    except Exception:
+    except (ValueError, binascii.Error, UnicodeDecodeError):
         return ""
 
     return decoded if "<math" in decoded else ""
@@ -166,7 +168,7 @@ async def mathml_to_latex_via_pandoc(crawler: Any, mathml_xml: str) -> str:
                 check=True,
             )
             return (result.stdout or "").strip()
-        except Exception:
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
             return ""
 
     async with crawler._formula_pandoc_sem:
@@ -186,13 +188,14 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
     # Persistent cache (DB): survives restarts so repeated crawls don't re-run pandoc/svg conversion.
     try:
         from backend.database.repositories.system.formula_cache import get_formula_latex as db_get_formula_latex
-    except Exception:
+    except ImportError:
         db_get_formula_latex = None  # type: ignore[assignment]
 
     if db_get_formula_latex is not None:
         try:
             persisted = str(await db_get_formula_latex(formula_hash=formula_hash) or "").strip()
         except Exception:
+            logger.warning("zujuan_formula_latex_db_get_failed", extra={"hash": formula_hash}, exc_info=True)
             persisted = ""
         if persisted:
             formula_cache_set(crawler, formula_hash, persisted)
@@ -203,6 +206,7 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
         try:
             return await inflight
         except Exception:
+            logger.warning("zujuan_formula_inflight_failed", extra={"hash": formula_hash}, exc_info=True)
             return ""
 
     loop = asyncio.get_running_loop()
@@ -230,14 +234,16 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
 
                         record_unknown_signatures(unknown_sigs=unknown, source_url=svg_url, context=None)
                     except Exception:
-                        logger.debug("zujuan_record_unknown_signatures_failed", exc_info=True)
+                        logger.warning("zujuan_record_unknown_signatures_failed", exc_info=True)
             except Exception:
-                logger.debug("zujuan_svg_formula_fallback_failed", extra={"hash": formula_hash}, exc_info=True)
+                logger.warning("zujuan_svg_formula_fallback_failed", extra={"hash": formula_hash}, exc_info=True)
 
         latex = _ensure_inline_math_wrapped(latex)
         formula_cache_set(crawler, formula_hash, latex)
         try:
-            from backend.database.repositories.system.formula_cache import upsert_formula_latex as db_upsert_formula_latex
+            from backend.database.repositories.system.formula_cache import (
+                upsert_formula_latex as db_upsert_formula_latex,
+            )
 
             if latex:
                 await db_upsert_formula_latex(formula_hash=formula_hash, latex=latex)
@@ -253,6 +259,7 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
             fut.set_result(latex)
         return latex
     except Exception:
+        logger.warning("zujuan_get_formula_latex_failed", extra={"hash": formula_hash}, exc_info=True)
         if not fut.done():
             fut.set_result("")
         return ""
@@ -304,7 +311,7 @@ async def fetch_formula_svg(_crawler: Any, png_url: str) -> str:
         if svg.startswith("<svg"):
             return svg
     except Exception:
-        logger.debug("zujuan_fetch_formula_svg_failed", extra={"url": svg_url}, exc_info=True)
+        logger.warning("zujuan_fetch_formula_svg_failed", extra={"url": svg_url}, exc_info=True)
     return ""
 
 
@@ -313,7 +320,7 @@ async def replace_formulas_with_latex(crawler: Any, html: str) -> str:
         replaced, _hashes = await replace_formulas_with_latex_mml(crawler, html)
         return replaced
     except Exception:
-        logger.debug("zujuan_replace_formulas_mml_failed; fallback", exc_info=True)
+        logger.warning("zujuan_replace_formulas_mml_failed; fallback", exc_info=True)
 
     try:
         from backend.core.svg_utils.svg_to_latex import replace_formulas_with_latex as replace_svg_formulas
@@ -334,7 +341,7 @@ async def replace_formulas_with_latex(crawler: Any, html: str) -> str:
     except ImportError:
         return await replace_formulas_with_svg(crawler, html)
     except Exception as exc:
-        logger.warning("mathml to latex failed; fallback to svg", extra={"error": str(exc)})
+        logger.warning("mathml to latex failed; fallback to svg", extra={"error": str(exc)}, exc_info=True)
         return await replace_formulas_with_svg(crawler, html)
 
 

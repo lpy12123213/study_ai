@@ -165,7 +165,7 @@ async def _cleanup_container(cfg: DockerRenderConfig, container_name: str) -> No
                 stderr=asyncio.subprocess.DEVNULL,
             )
             await asyncio.wait_for(proc.communicate(), timeout=10)
-        except Exception:
+        except (OSError, asyncio.TimeoutError):
             continue
 
 

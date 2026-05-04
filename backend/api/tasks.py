@@ -6,22 +6,24 @@ import os
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
+from backend.api.knowledge_video_schemas import KnowledgeVideoGenerateRequest
+from backend.api.lesson_plan_schemas import LessonPlanGenerateRequest
+from backend.api.question_evaluate_schemas import QuestionEvaluateRequest
 from backend.api.question_library_schemas import (
     QuestionLibraryCrawlRequest,
     QuestionLibraryGenerateRequest,
     QuestionLibraryScoreRequest,
 )
-from backend.api.question_evaluate_schemas import QuestionEvaluateRequest
 from backend.api.schemas import DeepThinkRequest
 from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, StudyMaterialsGenerateRequest
-from backend.api.knowledge_video_schemas import KnowledgeVideoGenerateRequest
 from backend.core.logging_utils import get_logger
+from backend.core.text_utils import clip_text as _clip_text
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.system.tasks import (
     append_task_event as db_append_task_event,
@@ -41,7 +43,6 @@ from backend.database.repositories.system.tasks import (
 from backend.database.repositories.system.tasks import (
     update_task_status as db_update_task_status,
 )
-from backend.api.lesson_plan_schemas import LessonPlanGenerateRequest
 from backend.shared.tasks import task_runtime
 from backend.tasks import (
     submit_deepthink_task,
@@ -99,7 +100,7 @@ async def list_tasks(
         started_at = str(t.get("started_at") or "").strip()
         try:
             started_ts = datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp() if started_at else None
-        except Exception:
+        except ValueError:
             started_ts = None
         if not started_ts:
             continue
@@ -184,14 +185,6 @@ async def submit_study_materials(request: StudyMaterialsGenerateRequest, user: d
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    def _clip_text(text: str, *, max_chars: int) -> str:
-        if max_chars <= 0:
-            return ""
-        t = text or ""
-        if len(t) <= max_chars:
-            return t
-        return t[: max_chars - 1].rstrip() + "…"
-
     query = (request.query or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="Empty query")
@@ -211,7 +204,7 @@ async def submit_study_materials(request: StudyMaterialsGenerateRequest, user: d
     if request.max_points is not None:
         try:
             n = int(request.max_points)
-        except Exception:
+        except (TypeError, ValueError):
             n = 0
         if n > 0:
             options["max_points"] = max(1, min(n, 15))
@@ -327,7 +320,8 @@ async def submit_question_evaluate(request: QuestionEvaluateRequest, user: dict 
 async def get_task_status(
     task_id: str,
     include_events: bool = Query(False),
-    events_limit: int = Query(500, ge=1, le=5000),
+    events_limit: int = Query(200, ge=1, le=5000),
+    events_after_seq: int = Query(0, ge=0),
     user: dict = Depends(require_auth),
 ) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
@@ -339,6 +333,7 @@ async def get_task_status(
         task_id=task_id,
         include_events=include_events,
         events_limit=events_limit,
+        events_after_seq=events_after_seq,
     )
     if not db_task:
         # Back-compat: in-memory runtime status payload.
@@ -357,7 +352,7 @@ async def get_task_status(
         started_at = str(db_task.get("started_at") or "").strip()
         try:
             started_ts = datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp() if started_at else None
-        except Exception:
+        except ValueError:
             started_ts = None
         if ttype and started_ts:
             try:
@@ -368,7 +363,7 @@ async def get_task_status(
                     db_task["elapsed_s"] = elapsed_s
                     db_task["eta_s"] = max(0.0, float(avg_s) - elapsed_s)
             except Exception:
-                logger.debug(
+                logger.warning(
                     "task_eta_compute_failed",
                     extra={"task_id": task_id, "user_id": user_id, "task_type": ttype},
                     exc_info=True,

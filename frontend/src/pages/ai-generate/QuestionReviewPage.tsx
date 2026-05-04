@@ -1,7 +1,7 @@
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { aiGenerateApi } from '@/api/aiGenerate'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function QuestionReviewPage() {
   const { sessionId, questionId } = useParams()
@@ -15,7 +15,7 @@ export default function QuestionReviewPage() {
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-4">
       <h1 className="text-xl font-semibold">题目审核</h1>
-      {data && <div className="border rounded-lg p-4 bg-card"><MarkdownRenderer content={data.content ?? ''} /></div>}
+      {data && <div className="border rounded-lg p-4 bg-card"><Markdown content={data.content ?? ''} /></div>}
     </div>
   )
 }

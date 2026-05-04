@@ -63,6 +63,11 @@ def make_task() -> RuntimeTask:
 
 
 class TaskRuntimeEventFlushTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_flush_interval_is_500ms(self) -> None:
+        runtime = TaskRuntime(store=FakeTaskStore())
+
+        self.assertEqual(runtime._event_flush_interval_s, 0.5)
+
     async def test_append_event_flushes_in_batches_at_batch_size(self) -> None:
         store = FakeTaskStore()
         runtime = TaskRuntime(

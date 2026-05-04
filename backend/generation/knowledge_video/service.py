@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
+from backend.core.text_utils import clip_text as _clip_text
 from backend.database.repositories.content.study_archives import get_study_archive
 from backend.generation.knowledge_video.llm import generate_manim_package
 from backend.generation.knowledge_video.models import GeneratedVideoPackage, KnowledgeVideoRequest, RenderResult
@@ -26,17 +27,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _TASK_ROOT = (_REPO_ROOT / ".local" / "knowledge_videos").resolve()
 
 
-def _clip_text(text: str, *, max_chars: int) -> str:
-    s = str(text or "").strip()
-    if len(s) <= max_chars:
-        return s
-    return s[: max_chars - 1].rstrip() + "…"
-
-
 def _normalize_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
     try:
         n = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = int(default)
     return max(min_value, min(n, max_value))
 
@@ -66,6 +60,11 @@ async def _hydrate_source_markdown(request: KnowledgeVideoRequest, *, user_id: s
     try:
         archive = await get_study_archive(user_id=user_id, archive_id=request.source_archive_id)
     except Exception:
+        logger.warning(
+            "knowledge_video_source_archive_lookup_failed",
+            extra={"user_id": user_id, "archive_id": request.source_archive_id},
+            exc_info=True,
+        )
         archive = None
     if not isinstance(archive, dict):
         return request
@@ -81,7 +80,7 @@ def subtitles_to_srt(items: List[Dict[str, Any]]) -> str:
     def fmt(seconds: Any) -> str:
         try:
             total_ms = max(0, int(float(seconds) * 1000))
-        except Exception:
+        except (TypeError, ValueError):
             total_ms = 0
         ms = total_ms % 1000
         total_s = total_ms // 1000
@@ -294,6 +293,5 @@ async def run_knowledge_video_task(task: RuntimeTask, *, user_id: str, max_attem
         if task_dir is not None:
             try:
                 shutil.rmtree(task_dir, ignore_errors=True)
-            except Exception:
-                logger.debug("knowledge_video_task_cleanup_failed", extra={"task_id": task.task_id}, exc_info=True)
-
+            except OSError:
+                logger.warning("knowledge_video_task_cleanup_failed", extra={"task_id": task.task_id}, exc_info=True)

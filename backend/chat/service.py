@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from backend.chat.llm_mixin import ChatLLMMixin
 from backend.chat.tools_mixin import ChatToolsMixin
+from backend.core.logging_utils import get_logger
 from backend.core.settings import MAIN_MODEL, MAX_TOOL_ITERATIONS
+
+MUTUALLY_EXCLUSIVE_CHAT_TOOLS = {"create_paper"}
+logger = get_logger(__name__)
 
 
 class ChatService(ChatLLMMixin, ChatToolsMixin):
@@ -47,12 +52,66 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                 if result.get("success") is False:
                     err = str(result.get("error") or "未知错误")
                     responses.append(f"操作失败: {err}")
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 continue
 
         if responses:
             return "\n\n".join(responses) + "\n\n请查看上方的详细结果。如需继续操作，请告诉我。"
         return "操作已完成，请查看上方的工具执行结果。"
+
+    def _prepare_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
+        fn = tool_call.get("function") if isinstance(tool_call, dict) else {}
+        tool_name = str((fn or {}).get("name") or "").strip()
+        tool_id = str(tool_call.get("id") or "").strip()
+        raw_args = (fn or {}).get("arguments") if isinstance(fn, dict) else {}
+        if isinstance(raw_args, str):
+            try:
+                tool_args = json.loads(raw_args)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                tool_args = {}
+        else:
+            tool_args = raw_args if isinstance(raw_args, dict) else {}
+        return {
+            "tool_call": tool_call,
+            "tool_call_id": tool_id,
+            "tool_name": tool_name,
+            "arguments": self._coerce_tool_args(tool_name, tool_args),
+        }
+
+    def _can_execute_tool_calls_concurrently(self, prepared: List[Dict[str, Any]]) -> bool:
+        if len(prepared) <= 1:
+            return False
+        names = [str(x.get("tool_name") or "").strip() for x in prepared]
+        if any(not name for name in names):
+            return False
+        if any(name in MUTUALLY_EXCLUSIVE_CHAT_TOOLS for name in names):
+            return False
+        return True
+
+    async def _execute_prepared_tool_call(
+        self,
+        prepared: Dict[str, Any],
+        *,
+        sub_model: Optional[str],
+        user_id: str,
+    ) -> Dict[str, Any]:
+        tool_name = str(prepared.get("tool_name") or "").strip()
+        tool_args = prepared.get("arguments") if isinstance(prepared.get("arguments"), dict) else {}
+        try:
+            result = await self.execute_tool(
+                tool_name,
+                tool_args,
+                sub_model=sub_model,
+                user_id=user_id,
+            )
+        except Exception as exc:
+            logger.warning("chat_tool_call_failed", extra={"tool_name": tool_name}, exc_info=True)
+            result = {"success": False, "error": str(exc or "tool_failed")}
+        return {
+            "tool_call_id": str(prepared.get("tool_call_id") or "").strip(),
+            "tool_name": tool_name,
+            "result": result,
+        }
 
     async def chat(
         self,
@@ -83,12 +142,62 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
             if iteration > 1:
                 yield {"type": "iteration", "round": iteration, "message": f"AI 正在进行第 {iteration} 轮操作..."}
 
-            result = await self._call_api(
-                messages,
-                model=main_model,
-                include_tools=True,
-                tools_override=tools_override,
+            delta_queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+            streamed_llm_content = ""
+
+            async def on_content_delta(text: str) -> None:
+                nonlocal streamed_llm_content
+                if not text:
+                    return
+                streamed_llm_content += str(text)
+                await delta_queue.put(
+                    {
+                        "type": "text_delta",
+                        "content": str(text),
+                        "iteration": iteration,
+                        "phase": "tool_decision",
+                    }
+                )
+
+            async def on_reasoning_delta(text: str) -> None:
+                if not text:
+                    return
+                await delta_queue.put(
+                    {
+                        "type": "thinking_delta",
+                        "content": str(text),
+                        "iteration": iteration,
+                        "phase": "tool_decision",
+                    }
+                )
+
+            yield {"type": "stream_start", "iteration": iteration, "phase": "tool_decision"}
+            api_task = asyncio.create_task(
+                self._call_api(
+                    messages,
+                    model=main_model,
+                    include_tools=True,
+                    tools_override=tools_override,
+                    stream=True,
+                    on_content_delta=on_content_delta,
+                    on_reasoning_delta=on_reasoning_delta,
+                )
             )
+            while not api_task.done():
+                try:
+                    yield await asyncio.wait_for(delta_queue.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue
+
+            while not delta_queue.empty():
+                yield delta_queue.get_nowait()
+
+            try:
+                result = await api_task
+            except Exception as exc:
+                logger.exception("chat_api_task_failed")
+                yield {"type": "error", "content": str(exc or "api_error")}
+                return
 
             if not result.get("success"):
                 yield {"type": "error", "content": result.get("error") or "api_error"}
@@ -98,9 +207,6 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
             tool_calls = result.get("tool_calls")
 
             if isinstance(tool_calls, list) and tool_calls:
-                if len(tool_calls) > 3:
-                    tool_calls = tool_calls[:3]
-
                 display_content = llm_content
                 if not display_content.strip():
                     tool_names: List[str] = []
@@ -122,35 +228,43 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                     "iteration": iteration,
                 }
 
-                tool_results: List[Dict[str, Any]] = []
-                for tool_call in tool_calls:
-                    fn = tool_call.get("function") if isinstance(tool_call, dict) else {}
-                    tool_name = str((fn or {}).get("name") or "").strip()
-                    tool_id = str(tool_call.get("id") or "").strip()
-                    raw_args = (fn or {}).get("arguments") if isinstance(fn, dict) else {}
-                    if isinstance(raw_args, str):
-                        try:
-                            tool_args = json.loads(raw_args)
-                        except Exception:
-                            tool_args = {}
-                    else:
-                        tool_args = raw_args if isinstance(raw_args, dict) else {}
-                    tool_args = self._coerce_tool_args(tool_name, tool_args)
-
+                prepared_calls = [self._prepare_tool_call(tc) for tc in tool_calls if isinstance(tc, dict)]
+                tool_results_by_id: Dict[str, Dict[str, Any]] = {}
+                for prepared in prepared_calls:
                     yield {
                         "type": "tool_start",
-                        "tool_call_id": tool_id,
-                        "tool_name": tool_name,
-                        "arguments": tool_args,
+                        "tool_call_id": prepared.get("tool_call_id", ""),
+                        "tool_name": prepared.get("tool_name", ""),
+                        "arguments": prepared.get("arguments", {}),
                         "iteration": iteration,
                     }
 
-                    tool_result = await self.execute_tool(
-                        tool_name,
-                        tool_args,
-                        sub_model=sub_model_effective,
-                        user_id=uid,
+                if self._can_execute_tool_calls_concurrently(prepared_calls):
+                    executed = await asyncio.gather(
+                        *[
+                            self._execute_prepared_tool_call(
+                                prepared,
+                                sub_model=sub_model_effective,
+                                user_id=uid,
+                            )
+                            for prepared in prepared_calls
+                        ]
                     )
+                else:
+                    executed = []
+                    for prepared in prepared_calls:
+                        executed.append(
+                            await self._execute_prepared_tool_call(
+                                prepared,
+                                sub_model=sub_model_effective,
+                                user_id=uid,
+                            )
+                        )
+
+                for item in executed:
+                    tool_id = str(item.get("tool_call_id") or "").strip()
+                    tool_name = str(item.get("tool_name") or "").strip()
+                    tool_result = item.get("result")
                     yield {
                         "type": "tool_result",
                         "tool_call_id": tool_id,
@@ -159,13 +273,19 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                         "iteration": iteration,
                     }
 
-                    tool_result_msg = {
+                    tool_results_by_id[tool_id] = {
                         "tool_call_id": tool_id,
                         "role": "tool",
                         "content": json.dumps(tool_result, ensure_ascii=False),
                     }
-                    tool_results.append(tool_result_msg)
-                    all_tool_results.append(tool_result_msg)
+
+                tool_results: List[Dict[str, Any]] = []
+                for prepared in prepared_calls:
+                    tool_id = str(prepared.get("tool_call_id") or "").strip()
+                    tool_result_msg = tool_results_by_id.get(tool_id)
+                    if tool_result_msg:
+                        tool_results.append(tool_result_msg)
+                        all_tool_results.append(tool_result_msg)
 
                 # Preserve tool-calling state for the next turn.
                 messages.append({"role": "assistant", "content": llm_content, "tool_calls": tool_calls})
@@ -174,6 +294,17 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
 
             # No tool calls: model finished.
             if all_tool_results:
+                if llm_content or streamed_llm_content:
+                    final_content = llm_content or streamed_llm_content
+                    if final_content and final_content.startswith(streamed_llm_content):
+                        remaining = final_content[len(streamed_llm_content) :]
+                        if remaining:
+                            yield {"type": "text_delta", "content": remaining, "iteration": iteration}
+                    elif final_content and final_content != streamed_llm_content:
+                        yield {"type": "text_delta", "content": final_content, "iteration": iteration}
+                    yield {"type": "assistant_final", "content": final_content, "total_iterations": iteration}
+                    return
+
                 yield {"type": "stream_start", "iteration": iteration}
 
                 final_content = ""
@@ -195,7 +326,12 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
             yield {"type": "stream_start", "iteration": iteration}
             if llm_content:
                 # Avoid artificial latency; let the client render immediately.
-                yield {"type": "text_delta", "content": llm_content}
+                if llm_content.startswith(streamed_llm_content):
+                    remaining = llm_content[len(streamed_llm_content) :]
+                    if remaining:
+                        yield {"type": "text_delta", "content": remaining}
+                elif llm_content != streamed_llm_content:
+                    yield {"type": "text_delta", "content": llm_content}
             yield {"type": "assistant_final", "content": llm_content, "total_iterations": iteration}
             return
 
@@ -206,5 +342,11 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
             "max_reached": True,
         }
 
+_chat_service: Optional[ChatService] = None
 
-chat_service = ChatService()
+
+def get_chat_service() -> ChatService:
+    global _chat_service
+    if _chat_service is None:
+        _chat_service = ChatService()
+    return _chat_service

@@ -8,6 +8,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     SUB_AI_TIMEOUT,
     SUB_MODEL,
@@ -15,6 +16,8 @@ from backend.core.settings import (
     SUB_MODEL_TEMPERATURE,
 )
 from backend.llm.client import chat_completion, is_llm_configured
+
+logger = get_logger(__name__)
 
 
 async def select_best_question(
@@ -118,6 +121,7 @@ async def select_best_question(
             scope="chat",
         )
     except Exception as exc:  # pragma: no cover
+        logger.exception("sub_ai_selector_request_failed")
         return {"success": False, "error": f"请求错误: {str(exc)}"}
 
     content = str(res.content or "")

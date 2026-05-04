@@ -5,10 +5,13 @@ import json
 import os
 import time
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
+from backend.core.logging_utils import get_logger
 from backend.question_library.gen_common import DEFAULT_SEARCH_CONFIG, _difficulty_rank
 from backend.question_library.stages import build_stage_progress_payload
+
+logger = get_logger(__name__)
 
 StageEventHandler = Optional[Callable[[dict], Awaitable[None] | None]]
 ReasoningEventHandler = Optional[Callable[[dict], Awaitable[None] | None]]
@@ -64,6 +67,7 @@ async def _emit_callback(handler: Optional[Callable[[dict], Awaitable[None] | No
         if inspect.isawaitable(result):
             await result
     except Exception:
+        logger.warning("question_generation_callback_failed", exc_info=True)
         return
 
 
@@ -123,6 +127,7 @@ async def _emit_stage_event(
         if inspect.isawaitable(result):
             await result
     except Exception:
+        logger.warning("question_generation_stage_event_failed", exc_info=True)
         return
 
 
@@ -132,7 +137,7 @@ def _tool_log_preview(value: Any, *, max_chars: int = 1200) -> str:
     else:
         try:
             text = json.dumps(value, ensure_ascii=False, indent=2)
-        except Exception:
+        except (TypeError, ValueError):
             text = repr(value)
     text = str(text or "").strip()
     if len(text) > max_chars:
@@ -169,7 +174,7 @@ def _get_env_float(name: str, default: float) -> float:
         return default
     try:
         return float(raw)
-    except Exception:
+    except ValueError:
         return default
 
 

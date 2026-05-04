@@ -38,7 +38,7 @@ class ModelSettingsTests(unittest.TestCase):
 
                 raw_text = model_path.read_text(encoding="utf-8")
                 self.assertNotIn("ds-secret-key", raw_text)
-                self.assertIn("enc:v1:", raw_text)
+                self.assertIn("enc:v2:", raw_text)
                 self.assertTrue(saved["providers"][0]["api_key_set"])
                 self.assertTrue(saved["providers"][0]["api_key_encrypted"])
 
@@ -69,7 +69,7 @@ class ModelSettingsTests(unittest.TestCase):
                 self.assertEqual(loaded_again.models["lesson_plan"], "deepseek-reasoner")
 
                 stored = json.loads(model_path.read_text(encoding="utf-8"))
-                self.assertTrue(str(stored["providers"]["deepseek"]["api_key"]).startswith("enc:v1:"))
+                self.assertTrue(str(stored["providers"]["deepseek"]["api_key"]).startswith("enc:v2:"))
             finally:
                 if old_model_path is None:
                     os.environ.pop("MODEL_CONFIG_PATH", None)
@@ -79,4 +79,3 @@ class ModelSettingsTests(unittest.TestCase):
                     os.environ.pop("LOCAL_ENCRYPTION_KEY_PATH", None)
                 else:
                     os.environ["LOCAL_ENCRYPTION_KEY_PATH"] = old_key_path
-

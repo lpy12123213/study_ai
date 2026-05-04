@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import bcrypt
@@ -38,7 +38,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
         return raw == ""
     try:
         return bcrypt.checkpw(raw.encode("utf-8"), hashed.encode("utf-8"))
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
 
@@ -88,7 +88,7 @@ async def create_share_link(
     if expires_in_s is not None:
         try:
             expires_in_s_int = int(expires_in_s)
-        except Exception:
+        except (TypeError, ValueError):
             expires_in_s_int = 0
         if expires_in_s_int > 0:
             expires_at = utcnow_naive() + timedelta(seconds=expires_in_s_int)

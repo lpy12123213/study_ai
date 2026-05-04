@@ -1,6 +1,25 @@
 import { apiClient } from '@/api/client'
 import { streamTask, type TaskStreamEvent } from '@/api/tasks'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object')
+}
+
+function recordString(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined
+  const item = value[key]
+  return typeof item === 'string' ? item : undefined
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return recordString(error, 'message') || 'request_failed'
+}
+
+function deepThinkEventType(type: string): DeepThinkEvent['type'] {
+  return type as DeepThinkEvent['type']
+}
+
 export interface DeepThinkSolveRequest {
   question: string
   subject?: string
@@ -82,7 +101,7 @@ export function solveDeepThinkStream(
   apiClient
     .post('/tasks/deepthink', body, { signal: options?.signal })
     .then((res) => {
-      const taskId = String((res.data as any)?.taskId || '').trim()
+      const taskId = String(recordString(res.data, 'taskId') || '').trim()
       if (!taskId) throw new Error('missing_task_id')
 
       streamTask(
@@ -93,26 +112,21 @@ export function solveDeepThinkStream(
           // the unified TaskRuntime wraps domain fields under `data`.
           if (evt.type === 'ping' || evt.type === 'step') return
 
-          const data = evt.data && typeof evt.data === 'object' ? (evt.data as Record<string, unknown>) : {}
+          const data = isRecord(evt.data) ? evt.data : {}
           if (evt.type === 'error') {
-            const message =
-              typeof (data as any)?.message === 'string'
-                ? String((data as any).message)
-                : typeof (data as any)?.error === 'string'
-                  ? String((data as any).error)
-                  : 'deepthink_failed'
+            const message = recordString(data, 'message') || recordString(data, 'error') || 'deepthink_failed'
             onEvent({ taskId: evt.taskId, type: 'error', message } as DeepThinkEvent)
             return
           }
-          onEvent({ taskId: evt.taskId, type: evt.type as any, ...(data as any) } as DeepThinkEvent)
+          onEvent({ taskId: evt.taskId, type: deepThinkEventType(evt.type), ...data } as DeepThinkEvent)
         },
         onError,
         onComplete,
         { signal: options?.signal },
       )
     })
-    .catch((err: any) => {
-      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+    .catch((err: unknown) => {
+      const message = errorMessage(err)
       onError?.(err instanceof Error ? err : new Error(message))
     })
 }

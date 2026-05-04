@@ -92,7 +92,7 @@ def format_answer_key_section(*, answers: List[dict]) -> str:
     for it in items:
         try:
             num = int(it.get("number") or 0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             num = 0
         ans = str(it.get("answer_tex") or "").strip()
         ana = str(it.get("analysis_tex") or "").strip()
@@ -103,4 +103,3 @@ def format_answer_key_section(*, answers: List[dict]) -> str:
             lines.append(ana)
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
-

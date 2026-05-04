@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from backend.core.logging_utils import get_logger
 from backend.crawler.manager import get_crawler
-from backend.question_library.generation import generate_questions
 from backend.question_library.gen_utils import ReasoningEventHandler, build_ai_question_id
+from backend.question_library.generation import generate_questions
 
 logger = get_logger(__name__)
 
@@ -43,7 +43,7 @@ async def fill_slot_with_ai(
     qtype = str(slot_obj.get("question_type") or slot_obj.get("type") or "").strip() or "解答题"
     try:
         count = int(slot_obj.get("count") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         count = 0
     count = max(1, min(count, 30))
     difficulty = str(slot_obj.get("difficulty") or "").strip() or "中等"
@@ -61,7 +61,12 @@ async def fill_slot_with_ai(
             on_stage_event=None,
             config=None,
         )
-    except Exception:
+    except (RuntimeError, TypeError, ValueError):
+        logger.warning(
+            "fill_slot_ai_generation_failed",
+            exc_info=True,
+            extra={"subject": subj, "question_type": qtype, "difficulty": difficulty},
+        )
         drafts = []
 
     out: List[dict] = []
@@ -147,9 +152,8 @@ async def fill_slot_with_ai(
             )
             if len(out) >= count:
                 break
-    except Exception:
-        logger.debug("fill_slot_fallback_crawler_failed", exc_info=True, extra={"subject": subj})
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+        logger.warning("fill_slot_fallback_crawler_failed", exc_info=True, extra={"subject": subj})
         return []
 
     return out[:count]
-

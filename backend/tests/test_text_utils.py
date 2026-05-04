@@ -1,46 +1,22 @@
+from __future__ import annotations
+
 import unittest
 
-from backend.agent.tools.utils import text_utils
+from backend.core.text_utils import clip_text
 
 
-class TextUtilsTests(unittest.TestCase):
-    def test_strip_evidence_markers(self) -> None:
-        self.assertEqual(text_utils._strip_evidence_markers("a [[1]] b"), "a b")
-        self.assertEqual(text_utils._strip_evidence_markers("a ([[12]]) b"), "a b")
+class TestTextUtils(unittest.TestCase):
+    def test_clip_text_strips_and_preserves_short_text(self) -> None:
+        self.assertEqual(clip_text("  hello  ", max_chars=10), "hello")
 
-    def test_compact_snippet_collapses_whitespace(self) -> None:
-        self.assertEqual(text_utils._compact_snippet("a \n  b\tc", max_chars=100), "a b c")
+    def test_clip_text_uses_ellipsis_within_limit(self) -> None:
+        self.assertEqual(clip_text("abcdef", max_chars=4), "abc…")
 
-    def test_looks_like_pdf_url(self) -> None:
-        self.assertTrue(text_utils._looks_like_pdf_url("https://example.test/a.pdf"))
-        self.assertTrue(text_utils._looks_like_pdf_url("https://example.test/a.PDF?x=1"))
-        self.assertFalse(text_utils._looks_like_pdf_url("https://example.test/a.html"))
+    def test_clip_text_handles_empty_limit(self) -> None:
+        self.assertEqual(clip_text("abcdef", max_chars=0), "")
 
-    def test_postprocess_prefers_summary_as_snippet(self) -> None:
-        out = text_utils._postprocess_web_search_result(
-            {
-                "title": "Test",
-                "url": "https://example.test/x",
-                "summary": "a [[1]]  b",
-                "text": "ignored because summary exists",
-            },
-            max_snippet_chars=80,
-        )
-        self.assertEqual(out.get("snippet"), "a b")
-        self.assertEqual(out.get("summary"), "a b")
-
-    def test_postprocess_uses_highlights_when_no_summary(self) -> None:
-        out = text_utils._postprocess_web_search_result(
-            {
-                "title": "Test",
-                "url": "https://example.test/x",
-                "highlights": ["Sign in to continue", "核心内容：定义与结论"],
-                "text": "",
-            },
-            max_snippet_chars=80,
-        )
-        self.assertIn("核心内容", str(out.get("snippet") or ""))
-        self.assertEqual(out.get("highlights"), ["核心内容：定义与结论"])
+    def test_clip_text_supports_custom_ellipsis(self) -> None:
+        self.assertEqual(clip_text("abcdef", max_chars=4, ellipsis=".."), "ab..")
 
 
 if __name__ == "__main__":

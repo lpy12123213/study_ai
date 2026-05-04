@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 
-from backend.core.settings import LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.core.settings import LESSON_PLAN_MODEL
 from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj

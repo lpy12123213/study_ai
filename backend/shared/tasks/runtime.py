@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 
-from backend.core.logging_utils import get_logger
+from backend.core import business_metrics
+from backend.core.logging_utils import get_logger, get_request_id, get_trace_id
 from backend.core.time_utils import utcnow_naive
 from backend.shared.tasks import metrics as task_metrics
 from backend.shared.tasks.store import TaskEventWrite, TaskStore
@@ -85,7 +85,7 @@ class TaskRuntime:
         max_tasks: int = 200,
         task_ttl_s: int = 60 * 60,
         max_events_per_task: int = 8000,
-        task_event_flush_interval_ms: int = 200,
+        task_event_flush_interval_ms: int = 500,
         task_event_batch_size: int = 50,
     ) -> None:
         self._store = store
@@ -104,7 +104,7 @@ class TaskRuntime:
         try:
             await self._store.fail_running_tasks_on_startup(reason=reason)
         except Exception:
-            logger.debug("task_runtime_restart_recovery_failed", extra={"reason": reason}, exc_info=True)
+            logger.warning("task_runtime_restart_recovery_failed", extra={"reason": reason}, exc_info=True)
 
     async def shutdown(self, *, reason: str = "server_shutdown") -> None:
         """Best-effort graceful shutdown: cancel running tasks and persist terminal state."""
@@ -117,7 +117,7 @@ class TaskRuntime:
                 try:
                     await self.flush_task_events(task)
                 except Exception:
-                    logger.debug(
+                    logger.warning(
                         "task_runtime_shutdown_flush_failed",
                         extra={"task_id": task.task_id, "user_id": task.user_id, "reason": reason},
                         exc_info=True,
@@ -126,7 +126,7 @@ class TaskRuntime:
             try:
                 await self.cancel_task(task_id=task.task_id, user_id=task.user_id, reason=reason)
             except Exception:
-                logger.debug(
+                logger.warning(
                     "task_runtime_shutdown_cancel_failed",
                     extra={"task_id": task.task_id, "user_id": task.user_id, "reason": reason},
                     exc_info=True,
@@ -240,7 +240,7 @@ class TaskRuntime:
             try:
                 await self.fail_task(task, str(exc))
             except Exception:
-                logger.debug(
+                logger.warning(
                     "task_runtime_fail_task_after_runner_error_failed",
                     extra={"task_id": task.task_id, "user_id": task.user_id, "task_type": task.task_type},
                     exc_info=True,
@@ -300,17 +300,23 @@ class TaskRuntime:
 
         event_type = str(raw.get("type") or raw.get("event") or "").strip() or "unknown"
         data = dict(raw.get("data") or {}) if isinstance(raw.get("data"), dict) else {}
+        trace_id = str(raw.get("trace_id") or raw.get("traceId") or data.get("trace_id") or data.get("traceId") or "").strip()
+        if not trace_id:
+            trace_id = get_trace_id() or get_request_id()
 
         # Back-compat and generality:
         # Many domains emit events as {type, ...payloadFields} instead of {type, data:{...}}.
         # Preserve *all* top-level payload fields (excluding reserved keys) into `data`.
-        reserved = {"type", "event", "data", "created_at", "createdAt"}
+        reserved = {"type", "event", "data", "created_at", "createdAt", "trace_id", "traceId"}
         for key, value in raw.items():
             if key in reserved:
                 continue
             data[key] = value
 
-        return {"taskId": task_id, "type": event_type, "data": data, "created_at": created_at}
+        payload = {"taskId": task_id, "type": event_type, "data": data, "created_at": created_at}
+        if trace_id:
+            payload["trace_id"] = trace_id
+        return payload
 
     async def append_event(self, task: RuntimeTask, event: Dict[str, Any]) -> None:
         payload = self._normalize_event_payload(task_id=task.task_id, event=event)
@@ -322,7 +328,7 @@ class TaskRuntime:
             try:
                 progress_value = float((data or {}).get("progress") or 0.0)
                 task.progress = progress_value
-            except Exception:
+            except (TypeError, ValueError):
                 progress_value = None
 
         step = (data or {}).get("step") if isinstance(data, dict) else None
@@ -380,7 +386,7 @@ class TaskRuntime:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.debug(
+            logger.warning(
                 "task_runtime_delayed_event_flush_failed",
                 extra={"task_id": task.task_id, "user_id": task.user_id, "task_type": task.task_type},
                 exc_info=True,
@@ -437,6 +443,7 @@ class TaskRuntime:
         task.status = "completed"
         task.progress = 100.0
         task.updated_at_s = _now_s()
+        business_metrics.record_task_terminal(task_type=task.task_type, status="completed")
         await self.flush_task_events(task)
         try:
             await self._store.update_task_status(
@@ -466,13 +473,14 @@ class TaskRuntime:
         task.status = "failed"
         task.error = message
         task.updated_at_s = _now_s()
+        business_metrics.record_task_terminal(task_type=task.task_type, status="failed")
 
         if emit_event:
             # Emit an error event (best-effort) so live clients get a terminal signal.
             try:
                 await self.append_event(task, {"type": "error", "data": {"error": message}})
             except Exception:
-                logger.debug(
+                logger.warning(
                     "task_runtime_error_event_emit_failed",
                     extra={"task_id": task.task_id, "user_id": task.user_id, "task_type": task.task_type},
                     exc_info=True,
@@ -590,6 +598,7 @@ class TaskRuntime:
         task.status = "canceled"
         task.error = reason
         task.updated_at_s = _now_s()
+        business_metrics.record_task_terminal(task_type=task.task_type, status="canceled")
         if task.runner and not task.runner.done():
             task.runner.cancel()
 

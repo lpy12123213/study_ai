@@ -26,12 +26,12 @@ export async function listMeta(params: {
       limit: params.limit ?? 500,
     },
   })
-  return response.data as any
+  return response.data as { items: ItemMeta[]; count: number }
 }
 
 export async function getMeta(itemType: string, itemId: string): Promise<ItemMeta> {
-  const response = await apiClient.get(`/meta/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`)
-  return response.data as any
+  const response = await apiClient.get<ItemMeta>(`/meta/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`)
+  return response.data
 }
 
 export async function setMeta(
@@ -39,7 +39,7 @@ export async function setMeta(
   itemId: string,
   patch: { starred?: boolean; pinned?: boolean; tags?: string[] },
 ): Promise<ItemMeta> {
-  const response = await apiClient.post(`/meta/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`, patch)
-  return response.data as any
+  const response = await apiClient.post<ItemMeta>(`/meta/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`, patch)
+  return response.data
 }
 

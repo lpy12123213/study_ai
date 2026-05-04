@@ -7,6 +7,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from httpx import HTTPError
+
+from backend.core.logging_utils import get_logger
 from backend.crawler.manager import get_crawler
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import list_question_library_items
@@ -14,6 +17,7 @@ from backend.question_library.gen_common import _clip_unique
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _REFERENCE_CACHE_DIR = (_REPO_ROOT / ".local" / "reference_cache").resolve()
+logger = get_logger(__name__)
 
 
 def _normalize_reference_source(value: Any) -> str:
@@ -73,7 +77,7 @@ def _reference_year_threshold(value: Any) -> int:
         return 0
     try:
         years = int(normalized)
-    except Exception:
+    except (TypeError, ValueError):
         return 0
     return max(0, time.localtime().tm_year - years + 1)
 
@@ -93,7 +97,7 @@ def _extract_reference_year(item: dict) -> int:
         if match:
             try:
                 return int(match.group(1))
-            except Exception:
+            except (TypeError, ValueError):
                 continue
     return 0
 
@@ -106,7 +110,7 @@ def _parse_knowledge_points_json(value: Any) -> List[str]:
             return []
         try:
             raw = json.loads(text)
-        except Exception:
+        except json.JSONDecodeError:
             parts = [part.strip() for part in re.split(r"[，,;；、|/]+", text) if part.strip()]
             return _clip_unique(parts, 8)
     if isinstance(raw, list):
@@ -230,13 +234,13 @@ def load_reference_cache(cache_key: str) -> Optional[dict]:
     try:
         raw = path.read_text(encoding="utf-8")
         obj = json.loads(raw) if raw else {}
-    except Exception:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(obj, dict):
         return None
     try:
         crawled_at_s = float(obj.get("crawled_at_s") or 0.0)
-    except Exception:
+    except (TypeError, ValueError):
         crawled_at_s = 0.0
     if crawled_at_s <= 0 or (time.time() - crawled_at_s) > 24 * 60 * 60:
         return None
@@ -332,7 +336,15 @@ async def collect_reference_questions(
                     source_contains=source_token,
                     parse_content=False,
                 )
+            except HTTPError as exc:
+                crawler_errors.append(str(exc))
+                continue
             except Exception as exc:
+                logger.warning(
+                    "question_library_reference_search_failed",
+                    extra={"subject": subject, "query": query},
+                    exc_info=True,
+                )
                 crawler_errors.append(str(exc))
                 continue
             candidates = search_result.get("questions") if isinstance(search_result, dict) else []
@@ -383,7 +395,10 @@ async def collect_reference_questions(
                     "count": len(crawled_questions[:target_count]),
                     "trace": {"cache_key": cache_key, "queries": queries, "crawler_errors": crawler_errors},
                 }
+    except HTTPError as exc:
+        crawler_errors.append(str(exc))
     except Exception as exc:
+        logger.warning("question_library_reference_crawler_failed", extra={"subject": subject}, exc_info=True)
         crawler_errors.append(str(exc))
 
     local_candidates: List[tuple[int, dict]] = []
@@ -399,6 +414,11 @@ async def collect_reference_questions(
                 order="desc",
             )
         except Exception:
+            logger.warning(
+                "question_library_reference_local_list_failed",
+                extra={"subject": subject, "user_id": str(user_id or "").strip()},
+                exc_info=True,
+            )
             local_batch = {}
         local_items = local_batch.get("items") if isinstance(local_batch, dict) else []
         if not isinstance(local_items, list):
@@ -430,7 +450,7 @@ async def collect_reference_questions(
             if str(item.get("quality_score") or "").strip():
                 try:
                     score += max(0, min(5, int(item.get("quality_score") or 0) // 20))
-                except Exception:
+                except (TypeError, ValueError):
                     score += 0
             for label in kp_labels[:6]:
                 if label and any(label in candidate for candidate in knowledge_candidates if candidate):
@@ -447,6 +467,11 @@ async def collect_reference_questions(
             try:
                 cache_records = await get_question_cache(question_ids=local_ids)
             except Exception:
+                logger.warning(
+                    "question_library_reference_local_cache_failed",
+                    extra={"subject": subject, "count": len(local_ids)},
+                    exc_info=True,
+                )
                 cache_records = {}
             normalized_local_questions: List[dict] = []
             for _, item in local_candidates[: target_count * 2]:

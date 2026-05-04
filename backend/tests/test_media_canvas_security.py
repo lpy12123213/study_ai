@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 import backend.app as app_module
-from backend.api.auth import require_auth
 from backend.api import media
+from backend.api.auth import require_auth
 from backend.api.canvas import _sanitize_question_html
 from backend.app import create_app
 from backend.core.subjects import get_all_subjects

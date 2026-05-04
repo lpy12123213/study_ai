@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import List
 
-
 _VALUE_HEADERS = {"ξ", "\\xi", "xi"}
 _PROB_HEADERS = {"p", "P"}
 _ELLIPSIS_TOKENS = {"...", "…", "\\cdots", "\\ldots"}

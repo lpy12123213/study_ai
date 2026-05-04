@@ -35,6 +35,16 @@ function downloadByUrl(url: string): void {
   })
 }
 
+function toDisplayStageLabel(label: string): string {
+  const text = label.trim()
+  if (!text) return ''
+  return text
+    .replace(/Docker\s*沙盒渲染/gi, '安全渲染中')
+    .replace(/Docker\s*沙盒/gi, '安全渲染环境')
+    .replace(/Manim\s*源码/gi, '生成脚本')
+    .replace(/Manim/gi, '动画生成')
+}
+
 export default function KnowledgeVideoPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [topic, setTopic] = useState(() => searchParams.get('topic') || '')
@@ -49,7 +59,7 @@ export default function KnowledgeVideoPage() {
   const [taskId, setTaskId] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [progress, setProgress] = useState(0)
-  const [currentStage, setCurrentStage] = useState('Docker 沙盒')
+  const [currentStage, setCurrentStage] = useState('安全渲染环境')
   const [steps, setSteps] = useState<TaskStep[]>([])
   const [result, setResult] = useState<KnowledgeVideoTaskResult | null>(null)
   const [error, setError] = useState('')
@@ -101,7 +111,7 @@ export default function KnowledgeVideoPage() {
       .then(setScriptText)
       .catch((err) => {
         if (isAbortError(err)) return
-        setScriptError(err instanceof Error ? err.message : '源码加载失败')
+        setScriptError(err instanceof Error ? err.message : '脚本加载失败')
       })
     return () => controller.abort()
   }, [result?.script_url])
@@ -138,7 +148,7 @@ export default function KnowledgeVideoPage() {
           const p = Number((data as any).progress || 0)
           if (Number.isFinite(p)) setProgress(Math.max(0, Math.min(100, p)))
           const stageLabel = toStringValue((data as any).stage_label) || toStringValue((data as any).stage)
-          if (stageLabel) setCurrentStage(stageLabel)
+          if (stageLabel) setCurrentStage(toDisplayStageLabel(stageLabel))
         }
         const step = taskEventToStep(evt)
         if (step) setSteps((prev) => upsertTaskStep(prev, step))
@@ -201,7 +211,7 @@ export default function KnowledgeVideoPage() {
     abortRef.current?.abort()
     setStatus('idle')
     setProgress(0)
-    setCurrentStage('Docker 沙盒')
+    setCurrentStage('安全渲染环境')
     setSteps([])
     setResult(null)
     setError('')
@@ -355,13 +365,13 @@ export default function KnowledgeVideoPage() {
                   <div className="text-xs text-muted-foreground flex items-center justify-between gap-3">
                     <span className="font-mono break-all">{result.script_url}</span>
                     <Button type="button" size="sm" variant="ghost" onClick={() => downloadByUrl(result.script_url || '')}>
-                      源码
+                      脚本
                     </Button>
                   </div>
-                  <div className="text-xs font-medium">Manim 源码（只读）</div>
+                  <div className="text-xs font-medium">生成脚本（只读）</div>
                   <ScrollArea className="h-40 rounded-md border border-border bg-muted/30">
                     <pre className="p-3 text-xs leading-relaxed whitespace-pre-wrap break-words font-mono">
-                      {scriptText || scriptError || '源码加载中'}
+                      {scriptText || scriptError || '脚本加载中'}
                     </pre>
                   </ScrollArea>
                 </div>

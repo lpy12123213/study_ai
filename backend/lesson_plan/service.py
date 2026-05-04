@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from backend.llm.client import is_llm_configured
+from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_SUBAGENT_CONCURRENCY
 from backend.lesson_plan.common import agent_event
 from backend.lesson_plan.export import (
@@ -16,6 +16,9 @@ from backend.lesson_plan.export import (
 )
 from backend.lesson_plan.planning import research_knowledge_point, review_knowledge_points, split_knowledge_points
 from backend.lesson_plan.writing import generate_lesson_plan_json, lesson_plan_to_markdown
+from backend.llm.client import is_llm_configured
+
+logger = get_logger(__name__)
 
 
 async def generate_lesson_plan_stream(
@@ -41,7 +44,7 @@ async def generate_lesson_plan_stream(
     topic = (topic or "").strip()
     try:
         duration_minutes = int(duration_minutes or 45)
-    except Exception:
+    except (TypeError, ValueError):
         duration_minutes = 45
     duration_minutes = max(20, min(duration_minutes, 180))
 
@@ -104,7 +107,7 @@ async def generate_lesson_plan_stream(
 
         try:
             conc_raw = int(LESSON_PLAN_SUBAGENT_CONCURRENCY or 0)
-        except Exception:
+        except (TypeError, ValueError):
             conc_raw = 0
         conc = max(1, min(conc_raw if conc_raw > 0 else 3, 20))
         sem = asyncio.Semaphore(conc)
@@ -176,6 +179,7 @@ async def generate_lesson_plan_stream(
                     },
                 )
         except Exception:
+            logger.exception("lesson_plan_research_tasks_failed")
             for t in tasks:
                 if not t.done():
                     t.cancel()
@@ -424,4 +428,5 @@ async def generate_lesson_plan_stream(
             },
         )
     except Exception as exc:
+        logger.exception("lesson_plan_generation_failed")
         yield agent_event("error", {"message": str(exc)})

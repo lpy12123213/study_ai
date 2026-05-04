@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from backend.core.logging_utils import get_logger
 from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.question.papers import get_paper as db_get_paper
 from backend.deepthink.service import deepthink_service
@@ -13,6 +15,8 @@ from backend.paper_compose.export import export_paper as export_paper_doc
 from backend.paper_compose.full_paper_workflow import generate_full_paper_events
 from backend.paper_compose.workflow import compose_paper_events
 from backend.shared.tasks import RuntimeTask, task_runtime
+
+logger = get_logger(__name__)
 
 
 async def run_paper_compose_task(task: RuntimeTask, *, user_id: str) -> None:
@@ -43,6 +47,7 @@ async def run_paper_compose_task(task: RuntimeTask, *, user_id: str) -> None:
         await task_runtime.fail_task(task, "Task cancelled")
         raise
     except Exception as exc:  # pragma: no cover
+        logger.exception("paper_compose_task_failed", extra={"task_id": task.task_id, "user_id": user_id})
         await task_runtime.fail_task(task, str(exc), error={"message": str(exc)})
     finally:
         if task.status == "running":
@@ -85,6 +90,7 @@ async def run_generate_full_paper_task(task: RuntimeTask, *, user_id: str) -> No
         await task_runtime.fail_task(task, "Task cancelled")
         raise
     except Exception as exc:  # pragma: no cover
+        logger.exception("full_paper_task_failed", extra={"task_id": task.task_id, "user_id": user_id})
         await task_runtime.fail_task(task, str(exc), error={"message": str(exc)})
     finally:
         if task.status == "running":
@@ -101,7 +107,7 @@ async def run_export_paper_task(task: RuntimeTask, *, user_id: str) -> None:
     request = task.request if isinstance(task.request, dict) else {}
     try:
         paper_id = int(request.get("paper_id") or request.get("paperId") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         paper_id = 0
     fmt = str(request.get("format") or request.get("fmt") or "markdown").strip().lower()
     include_stem = bool(request.get("include_stem") or request.get("includeStem"))
@@ -112,7 +118,7 @@ async def run_export_paper_task(task: RuntimeTask, *, user_id: str) -> None:
     if paper_id > 0:
         try:
             paper = await db_get_paper(user_id=user_id, paper_id=paper_id)
-        except Exception:
+        except (SQLAlchemyError, ValueError):
             paper = None
 
     if not paper:
@@ -150,6 +156,7 @@ async def run_export_paper_task(task: RuntimeTask, *, user_id: str) -> None:
         await task_runtime.fail_task(task, msg, error={"message": msg}, emit_event=False)
         return
     except Exception as exc:  # pragma: no cover
+        logger.exception("paper_export_task_failed", extra={"task_id": task.task_id, "user_id": user_id})
         msg = str(exc)
         await task_runtime.append_event(task, {"type": "error", "error": {"code": "export_failed", "message": msg}})
         await task_runtime.fail_task(task, msg, error={"message": msg}, emit_event=False)
@@ -181,7 +188,7 @@ async def run_export_study_archive_task(task: RuntimeTask, *, user_id: str) -> N
     request = task.request if isinstance(task.request, dict) else {}
     try:
         archive_id = int(request.get("archive_id") or request.get("archiveId") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         archive_id = 0
     fmt = str(request.get("format") or request.get("fmt") or "markdown").strip().lower()
     if fmt not in {"md", "markdown"}:
@@ -196,7 +203,7 @@ async def run_export_study_archive_task(task: RuntimeTask, *, user_id: str) -> N
     if archive_id > 0:
         try:
             archive = await db_get_study_archive(user_id=user_id, archive_id=archive_id)
-        except Exception:
+        except (SQLAlchemyError, ValueError):
             archive = None
     if not archive:
         await task_runtime.fail_task(
@@ -229,6 +236,7 @@ async def run_export_study_archive_task(task: RuntimeTask, *, user_id: str) -> N
         await task_runtime.fail_task(task, "Task cancelled")
         raise
     except Exception as exc:  # pragma: no cover
+        logger.exception("archive_export_task_failed", extra={"task_id": task.task_id, "user_id": user_id})
         msg = str(exc)
         await task_runtime.append_event(task, {"type": "error", "error": {"code": "export_failed", "message": msg}})
         await task_runtime.fail_task(task, msg, error={"message": msg}, emit_event=False)
@@ -272,6 +280,7 @@ async def run_deepthink_task(task: RuntimeTask, *, user_id: str) -> None:
         await task_runtime.fail_task(task, "Task cancelled")
         raise
     except Exception as exc:
+        logger.exception("deepthink_task_failed", extra={"task_id": task.task_id, "user_id": user_id})
         msg = str(exc)
         await task_runtime.fail_task(task, msg, error={"message": msg})
     finally:
@@ -325,6 +334,7 @@ async def run_lesson_plan_task(task: RuntimeTask, *, user_id: str) -> None:
         await task_runtime.fail_task(task, "Task cancelled")
         raise
     except Exception as exc:
+        logger.exception("lesson_plan_task_failed", extra={"task_id": task.task_id, "user_id": user_id})
         msg = str(exc)
         await task_runtime.fail_task(task, msg, error={"message": msg})
     finally:

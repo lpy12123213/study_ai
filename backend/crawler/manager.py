@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from typing import Dict, Tuple
 
-from backend.core.settings import DEFAULT_SUBJECT
 from backend.core.logging_utils import get_logger
+from backend.core.settings import DEFAULT_SUBJECT
+from backend.core.subjects import resolve_subject
 from backend.crawler.interface import CrawlerInterface
 from backend.crawler.zujuan_crawler import ZujuanCrawler
-from backend.core.subjects import resolve_subject
 
 # Keep per-subject crawler instances to avoid cross-request races when switching subjects.
 _crawlers: Dict[Tuple[str, str], CrawlerInterface] = {}
@@ -83,7 +83,7 @@ async def close_crawler() -> None:
             if not fut.done():
                 fut.set_exception(RuntimeError("crawler_closed"))
         except Exception:
-            logger.debug("failed to cancel inflight crawler future", exc_info=True)
+            logger.exception("failed to cancel inflight crawler future")
 
     for crawler in crawlers:
         try:

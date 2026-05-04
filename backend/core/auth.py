@@ -48,7 +48,7 @@ def _get_int_env(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -114,17 +114,21 @@ def _load_users_from_disk() -> Dict[str, Dict[str, Any]]:
                 continue
             out[k] = dict(v)
         return out
-    except Exception:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("auth_users_load_failed", extra={"path": str(USERS_PATH)}, exc_info=True)
         return {}
 
 
 def _save_users_to_disk(users: Dict[str, Dict[str, Any]]) -> None:
+    if (os.getenv("STUDY_AI_DISABLE_AUTH_BOOTSTRAP_WRITE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
     try:
         LOCAL_DIR.mkdir(parents=True, exist_ok=True)
         tmp = USERS_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(USERS_PATH)
-    except Exception:
+    except OSError:
+        logger.warning("auth_users_save_failed", extra={"path": str(USERS_PATH)}, exc_info=True)
         return
 
 
@@ -137,11 +141,8 @@ def _bootstrap_users() -> Dict[str, Dict[str, Any]]:
     for u in users.values():
         if not isinstance(u, dict):
             continue
-        try:
-            if "token_version" not in u:
-                u["token_version"] = 1
-        except Exception:
-            continue
+        if "token_version" not in u:
+            u["token_version"] = 1
 
     existing = users.get(admin_username)
     if isinstance(existing, dict):
@@ -213,11 +214,12 @@ def _load_revoked_tokens() -> Dict[str, int]:
                 continue
             try:
                 exp = int(v)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             out[k.strip()] = exp
         return out
-    except Exception:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("auth_revoked_tokens_load_failed", extra={"path": str(REVOKED_TOKENS_PATH)}, exc_info=True)
         return {}
 
 
@@ -227,7 +229,8 @@ def _save_revoked_tokens(tokens: Dict[str, int]) -> None:
         tmp = REVOKED_TOKENS_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(tokens, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(REVOKED_TOKENS_PATH)
-    except Exception:
+    except OSError:
+        logger.warning("auth_revoked_tokens_save_failed", extra={"path": str(REVOKED_TOKENS_PATH)}, exc_info=True)
         return
 
 
@@ -280,11 +283,11 @@ def validate_access_token(token: str) -> Optional[Dict[str, Any]]:
             return None
         try:
             token_ver = int(payload.get("ver") or payload.get("token_version") or 1)
-        except Exception:
+        except (TypeError, ValueError):
             token_ver = 1
         try:
             user_ver = int(user.get("token_version") or 1)
-        except Exception:
+        except (TypeError, ValueError):
             user_ver = 1
         if token_ver != user_ver:
             return None
@@ -376,7 +379,7 @@ def change_user_password(username: str, old_password: str, new_password: str) ->
         user["password_hash"] = hash_password(new_password)
         try:
             user["token_version"] = int(user.get("token_version") or 1) + 1
-        except Exception:
+        except (TypeError, ValueError):
             user["token_version"] = 2
         _save_users_to_disk(_users)
         return True

@@ -25,7 +25,7 @@ const CommandDialog = ({
   ...props
 }: React.ComponentPropsWithoutRef<typeof Dialog>) => (
   <Dialog {...props}>
-    <DialogContent className="overflow-hidden p-0 shadow-2xl">
+    <DialogContent className="overflow-hidden p-0 shadow-none">
       <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium">
         {children}
       </Command>

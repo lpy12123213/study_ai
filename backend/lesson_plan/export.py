@@ -192,7 +192,7 @@ async def compile_latex_to_pdf(*, latex: str, user_id: str) -> Dict[str, Any]:
         ).strip()
         try:
             timeout_s = float(timeout_raw) if timeout_raw else 40.0
-        except Exception:
+        except ValueError:
             timeout_s = 40.0
         timeout_s = max(10.0, min(timeout_s, 300.0))
 
@@ -224,5 +224,5 @@ async def compile_latex_to_pdf(*, latex: str, user_id: str) -> Dict[str, Any]:
     finally:
         try:
             shutil.rmtree(build_dir, ignore_errors=True)
-        except Exception:
-            logger.debug("lesson_plan_export_cleanup_failed", extra={"build_dir": str(build_dir)}, exc_info=True)
+        except OSError:
+            logger.exception("lesson_plan_export_cleanup_failed", extra={"build_dir": str(build_dir)})

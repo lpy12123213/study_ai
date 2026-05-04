@@ -51,7 +51,7 @@ def _extract_date_yyyymmdd(text: str) -> str:
 def _ts_to_yyyymmdd(ts: Any) -> str:
     try:
         ts_int = int(ts)
-    except Exception:
+    except (TypeError, ValueError):
         return ""
     if ts_int <= 0:
         return ""
@@ -59,7 +59,7 @@ def _ts_to_yyyymmdd(ts: Any) -> str:
     try:
         dt = datetime.fromtimestamp(ts_int, tz=timezone.utc)
         return dt.strftime("%Y%m%d")
-    except Exception:
+    except (OSError, OverflowError, ValueError):
         return ""
 
 
@@ -74,7 +74,7 @@ def _normalize_zhihu_link(href: str) -> str:
             target = qs.get("target", [""])[0]
             return unquote(target) if target else raw
         return raw
-    except Exception:
+    except ValueError:
         return raw
 
 
@@ -94,8 +94,8 @@ def _extract_author(soup: BeautifulSoup) -> str:
             meta = author_info.find("meta", attrs={"itemprop": "name"})
             if meta and meta.get("content"):
                 return str(meta.get("content")).strip()
-    except Exception:
-        logger.debug("zhihu_author_parse_failed", exc_info=True)
+    except (AttributeError, TypeError):
+        logger.warning("zhihu_author_parse_failed", exc_info=True)
 
     # 兜底：找可能的作者名节点
     candidates = [
@@ -298,6 +298,7 @@ class ZhihuFetcher:
         except httpx.RequestError:
             return ZhihuFetchResult(success=False, type="unknown", url=target_url, error="network_error")
         except Exception:
+            logger.warning("zhihu_fetch_unknown_failed", extra={"url": target_url}, exc_info=True)
             return ZhihuFetchResult(success=False, type="unknown", url=target_url, error="unknown_error")
 
     async def _get_html(self, url: str, *, cookies: str = "") -> str:
@@ -419,7 +420,7 @@ class ZhihuFetcher:
             soup = BeautifulSoup(html, "lxml")
             _detect_common_errors(soup)
             title = _extract_title(soup, fallback_prefix=slug)
-        except Exception:
+        except (ZhihuFetchError, httpx.HTTPError, ValueError, TypeError):
             title = slug
 
         api_base = f"https://www.zhihu.com/api/v4/columns/{slug}/items"

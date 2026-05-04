@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, PlanStep, ReflectionResult, StepResult, UserProfile
-from backend.llm.client import chat_completion_text
 from backend.core.logging_utils import get_logger
+from backend.llm.client import chat_completion_text
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 logger = get_logger(__name__)
@@ -75,7 +75,7 @@ class ContextManager:
                 if not key:
                     try:
                         key = json.dumps(it, ensure_ascii=False, sort_keys=True)
-                    except Exception:
+                    except (TypeError, ValueError):
                         key = str(it)
                 if key in seen:
                     continue
@@ -342,7 +342,7 @@ class ContextManager:
                 if text:
                     return text
             except Exception:
-                logger.debug("context_compact_text_extract_failed", exc_info=True)
+                logger.exception("context_compact_text_extract_failed")
 
         # Final fallback: never raise; produce a compact local summary.
         parts = []

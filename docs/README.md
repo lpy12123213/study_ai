@@ -24,6 +24,7 @@
 - `DEVELOPMENT.md`：本地开发、测试、代码组织和变更规则。
 - `ARCHITECTURE.md`：后端/前端/任务/crawler/生成链路的架构边界。
 - `API.md`：HTTP API、认证、SSE、任务中心和主要资源接口。
+- `BRANDING.md`：产品名、中文描述和内部标识的使用口径。
 - `CONFIGURATION.md`：环境变量、模型供应商、搜索、导出、任务池配置。
 - `QUALITY_AND_RELEASE.md`：质量门禁、验收标准和发布前检查。
 

@@ -25,7 +25,7 @@ def resolve_model_config_path(*, repo_root: Path) -> Path:
     if raw:
         try:
             return Path(raw).expanduser().resolve()
-        except Exception:
+        except (OSError, RuntimeError):
             return Path(raw)
     return (repo_root / "config" / "model.json").resolve()
 
@@ -74,12 +74,12 @@ def load_model_json_config(*, repo_root: Path) -> Optional[ModelJsonConfig]:
 
     try:
         raw = path.read_text(encoding="utf-8")
-    except Exception:
+    except OSError:
         return None
 
     try:
         payload = json.loads(raw)
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
     if not isinstance(payload, dict):

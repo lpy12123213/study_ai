@@ -93,7 +93,7 @@ async def exa_answer(
             "answer": "",
             "citations": [],
         }
-    except Exception as e:
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as e:
         return {
             "success": False,
             "provider": "exa",
@@ -237,7 +237,7 @@ async def exa_search(
             "error": f"Exa API error: {e.response.status_code}",
             "results": [],
         }
-    except Exception as e:
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as e:
         return {
             "success": False,
             "provider": "exa",
@@ -309,7 +309,7 @@ async def exa_find_similar(
                     for r in data.get("results", [])
                 ],
             }
-    except Exception as e:
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as e:
         return {
             "error": f"Exa find similar failed: {str(e)}",
             "results": [],

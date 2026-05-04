@@ -11,8 +11,8 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         self.assertLessEqual(len(qid), 50)
 
     def test_build_generation_messages_require_latex_math(self) -> None:
-        from backend.question_library.generation import build_generation_messages
         from backend.generation.agentic.prompts import create_default_prompt_registry
+        from backend.question_library.generation import build_generation_messages
 
         messages = build_generation_messages(
             subject="高中数学",
@@ -32,8 +32,8 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
         self.assertTrue("\\begin{array}" in messages[0]["content"] or "array/matrix/cases" in messages[0]["content"])
 
     def test_build_regenerate_section_messages_require_latex_math(self) -> None:
-        from backend.question_library.generation import build_regenerate_section_messages
         from backend.generation.agentic.prompts import create_default_prompt_registry
+        from backend.question_library.generation import build_regenerate_section_messages
 
         messages = build_regenerate_section_messages(
             subject="高中数学",

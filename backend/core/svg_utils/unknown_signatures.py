@@ -39,7 +39,7 @@ def _load_records() -> Dict:
         try:
             with open(UNKNOWN_SIGNATURES_FILE, "r", encoding="utf-8") as f:
                 _cache = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError):
             _cache = {"signatures": {}, "stats": {"total_occurrences": 0}}
     else:
         _cache = {"signatures": {}, "stats": {"total_occurrences": 0}}
@@ -55,7 +55,7 @@ def _save_records(records: Dict) -> None:
         with open(UNKNOWN_SIGNATURES_FILE, "w", encoding="utf-8") as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
         _cache_dirty = False
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         logger.warning("failed to save unknown signatures record", extra={"error": str(e)})
 
 

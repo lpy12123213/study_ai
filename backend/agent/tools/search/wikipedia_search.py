@@ -4,6 +4,9 @@ import asyncio
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class WikipediaToolsMixin:
@@ -59,6 +62,7 @@ class WikipediaToolsMixin:
                 try:
                     return await _lookup_one(point)
                 except Exception as exc:  # pragma: no cover
+                    logger.exception("wikipedia_search_failed", extra={"knowledge_point": point})
                     return {
                         "success": False,
                         "knowledge_point": point,

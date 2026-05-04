@@ -3,7 +3,6 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus,
-  Trash2,
   Play,
   Pause,
   FileText,
@@ -35,6 +34,7 @@ import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
 import { generateFullPaperStream, type GenerateFullPaperStreamEvent } from '@/api/papers'
 import type { BlueprintSlot, TaskStep } from '@/types'
+import { SlotEditor } from '@/features/paperCompose/components/SlotEditor'
 import * as tasksApi from '@/api/tasks'
 
 type SlotShortfall = {
@@ -53,71 +53,6 @@ const defaultQuestionTypes = [
   { id: 'calculation', name: '计算题', defaultScore: 10 },
   { id: 'essay', name: '论述题', defaultScore: 12 },
 ]
-
-interface SlotEditorProps {
-  slot: BlueprintSlot
-  onUpdate: (slot: BlueprintSlot) => void
-  onRemove: () => void
-}
-
-function SlotEditor({ slot, onUpdate, onRemove }: SlotEditorProps) {
-  return (
-    <div className="grid grid-cols-12 gap-3 items-center py-3 border-b border-border/50 last:border-0 text-sm hover:bg-muted/30 transition-colors px-2 rounded-md">
-      <div className="col-span-3 font-medium">{slot.questionType}</div>
-      <div className="col-span-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground w-8">数量</span>
-          <Input
-            type="number"
-            min={1}
-            max={50}
-            value={slot.count}
-            onChange={(e) => onUpdate({ ...slot, count: parseInt(e.target.value) || 1 })}
-            className="h-8"
-          />
-        </div>
-      </div>
-      <div className="col-span-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground w-8">分值</span>
-          <Input
-            type="number"
-            min={1}
-            max={100}
-            value={slot.score || 0}
-            onChange={(e) => onUpdate({ ...slot, score: parseInt(e.target.value) || 0 })}
-            className="h-8"
-          />
-        </div>
-      </div>
-      <div className="col-span-2">
-        <Select
-          value={slot.difficulty || 'medium'}
-          onValueChange={(value) => onUpdate({ ...slot, difficulty: value })}
-        >
-          <SelectTrigger className="h-8 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="easy">简单</SelectItem>
-            <SelectItem value="medium">中等</SelectItem>
-            <SelectItem value="hard">困难</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="col-span-1 text-right">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-destructive"
-          onClick={onRemove}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  )
-}
 
 export default function BlueprintPage() {
   const userId = useAuthStore((s) => s.user?.id || '')
@@ -479,8 +414,8 @@ export default function BlueprintPage() {
             <div className="mt-4">
               <Tabs value={mode} onValueChange={(v) => setMode(v as any)}>
                 <TabsList>
-                  <TabsTrigger value="blueprint">蓝图组卷</TabsTrigger>
-                  <TabsTrigger value="one_click">一键组卷</TabsTrigger>
+                  <TabsTrigger value="blueprint" onClick={() => setMode('blueprint')}>蓝图组卷</TabsTrigger>
+                  <TabsTrigger value="one_click" onClick={() => setMode('one_click')}>一键组卷</TabsTrigger>
                 </TabsList>
               </Tabs>
             </div>

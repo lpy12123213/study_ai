@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend.api.auth import require_auth
 from backend.api.crawler_schemas import AvailableFiltersRequest, ComposeBlueprintRequest
 from backend.core.settings import DEFAULT_SUBJECT
-from backend.crawler.manager import get_crawler
 from backend.core.subjects import resolve_subject
+from backend.crawler.manager import get_crawler
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 

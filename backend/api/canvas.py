@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from backend.api.auth import require_auth
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
 from backend.core.settings import DEFAULT_SUBJECT
+from backend.core.subjects import resolve_subject
 from backend.crawler.manager import get_crawler
 from backend.database.repositories.system.canvas import (
     create_canvas_board,
@@ -23,7 +24,6 @@ from backend.database.repositories.system.canvas import (
     list_canvas_boards,
     update_canvas_board,
 )
-from backend.core.subjects import resolve_subject
 
 router = APIRouter(prefix="/canvas", dependencies=[Depends(require_auth)])
 
@@ -34,7 +34,7 @@ def _parse_snapshot(raw: str) -> Dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -43,7 +43,7 @@ def _snapshot_max_bytes() -> int:
     raw = str(os.getenv("CANVAS_SNAPSHOT_MAX_BYTES") or "").strip()
     try:
         value = int(raw) if raw else 2 * 1024 * 1024
-    except Exception:
+    except ValueError:
         value = 2 * 1024 * 1024
     return max(1024, min(value, 20 * 1024 * 1024))
 

@@ -12,7 +12,7 @@ def _as_str(value: Any) -> str:
 def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
     try:
         n = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = default
     return max(min_value, min(max_value, n))
 
@@ -20,7 +20,7 @@ def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> i
 def _clamp_float(value: Any, *, default: float, min_value: float, max_value: float) -> float:
     try:
         n = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = default
     return max(min_value, min(max_value, n))
 
@@ -37,12 +37,12 @@ def _parse_point(value: Any) -> Optional[Tuple[float, float]]:
     if isinstance(value, (list, tuple)) and len(value) >= 2:
         try:
             return (float(value[0]), float(value[1]))
-        except Exception:
+        except (TypeError, ValueError):
             return None
     if isinstance(value, dict):
         try:
             return (float(value.get("x")), float(value.get("y")))
-        except Exception:
+        except (TypeError, ValueError):
             return None
     return None
 
@@ -253,7 +253,7 @@ def render_svg_diagram(spec: Dict[str, Any]) -> str:
         if r is not None:
             try:
                 radius = float(r)
-            except Exception:
+            except (TypeError, ValueError):
                 radius = None
         elif through:
             tp = _get_point(through)

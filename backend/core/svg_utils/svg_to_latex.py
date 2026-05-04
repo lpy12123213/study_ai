@@ -299,7 +299,7 @@ def load_signatures() -> Dict[str, str]:
                     if not key.startswith("_comment"):
                         GLYPH_SIGNATURES[key] = value
         except Exception:
-            logger.debug("svg_signatures_load_failed", extra={"path": SIGNATURES_FILE}, exc_info=True)
+            logger.warning("svg_signatures_load_failed", extra={"path": SIGNATURES_FILE}, exc_info=True)
 
     # 更新大型运算符签名集合
     update_large_op_signatures()
@@ -314,7 +314,7 @@ def save_signatures():
         with open(SIGNATURES_FILE, "w", encoding="utf-8") as f:
             json.dump(GLYPH_SIGNATURES, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.warning("failed to save glyph signatures", extra={"error": str(e)})
+        logger.warning("failed to save glyph signatures", extra={"error": str(e)}, exc_info=True)
 
 
 def add_signature(signature: str, latex_char: str):
@@ -1395,7 +1395,7 @@ async def svg_url_to_latex(
         return None, unknown
 
     except Exception as e:
-        logger.warning("failed to parse svg to latex", extra={"error": str(e), "svg_url": svg_url})
+        logger.warning("failed to parse svg to latex", extra={"error": str(e), "svg_url": svg_url}, exc_info=True)
         return None, []
     finally:
         if owns_client:
@@ -1636,7 +1636,7 @@ def collect_signatures_from_urls(svg_urls: List[str]) -> Dict[str, Dict]:
                 if len(all_sigs[g.signature]["paths"]) < 3:
                     all_sigs[g.signature]["paths"].append(g.path_d[:200])
         except Exception:
-            logger.debug("svg_signature_fetch_failed", extra={"url": svg_url}, exc_info=True)
+            logger.warning("svg_signature_fetch_failed", extra={"url": svg_url}, exc_info=True)
 
     return dict(all_sigs)
 
@@ -1944,6 +1944,7 @@ def main():
                     svg_urls.append(f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{f_id}.svg")
                 print(f"  题目 {qid}: 找到 {len(formulas)} 个公式")
             except Exception as e:
+                logger.warning("svg_formula_page_fetch_failed", extra={"url": url}, exc_info=True)
                 print(f"  题目 {qid}: 获取失败 - {e}")
 
         print(f"\n收集签名中（共 {len(svg_urls)} 个SVG）...")

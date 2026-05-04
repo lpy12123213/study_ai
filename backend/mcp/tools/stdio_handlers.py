@@ -7,25 +7,18 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from mcp.types import TextContent
 
 from backend.agent.memory import MemoryStore
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     LESSON_PLAN_API_KEY,
     LESSON_PLAN_MODEL,
     MOONSHOT_API_KEY,
     SUB_MODEL,
 )
-from backend.generation.agentic.prompts import create_default_prompt_registry
-from backend.crawler.interface import CrawlerInterface
-from backend.crawler.manager import get_crawler
-from backend.mcp.search.bigmodel import web_search_with_bigmodel_mcp
-from backend.mcp.tools.python_scientific_compute import python_scientific_compute
-from backend.mcp.tools.reviewer import review_questions_with_openrouter
-from backend.mcp.tools.stdio_llm import call_llm_text, extract_json_obj, pick_questions
-from backend.mcp.core.sub_ai_selector import select_best_question
 from backend.core.subjects import (
     DEFAULT_DIFFICULTY,
     DIFFICULTY_LEVELS,
@@ -36,6 +29,16 @@ from backend.core.subjects import (
     normalize_difficulty,
     resolve_subject,
 )
+from backend.crawler.interface import CrawlerInterface
+from backend.crawler.manager import get_crawler
+from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.mcp.core.sub_ai_selector import select_best_question
+from backend.mcp.search.bigmodel import web_search_with_bigmodel_mcp
+from backend.mcp.tools.python_scientific_compute import python_scientific_compute
+from backend.mcp.tools.reviewer import review_questions_with_openrouter
+from backend.mcp.tools.stdio_llm import call_llm_text, extract_json_obj, pick_questions
+
+logger = get_logger(__name__)
 
 
 def _prompt(prompt_id: str) -> str:
@@ -816,13 +819,13 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     from backend.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
 
                     has_tavily = bool(str(_TAVILY_API_KEY or "").strip())
-                except Exception:
+                except ImportError:
                     has_tavily = False
                 try:
                     from backend.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
 
                     has_exa = bool(str(_EXA_API_KEY or "").strip())
-                except Exception:
+                except ImportError:
                     has_exa = False
                 provider_in = "tavily" if has_tavily else "exa" if has_exa else "bigmodel"
 
@@ -840,6 +843,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                         days=recency_days if mode_in == "trending" else None,
                     )
                 except Exception as exc:
+                    logger.warning("stdio_tavily_search_failed", extra={"tool": name}, exc_info=True)
                     result = {
                         "success": False,
                         "provider": "tavily",
@@ -907,6 +911,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                         include_highlights=True,
                     )
                 except Exception as exc:
+                    logger.warning("stdio_exa_search_failed", extra={"tool": name}, exc_info=True)
                     result = {"success": False, "provider": "exa", "query": query, "error": f"exa_search_failed: {exc}", "results": []}
                 else:
                     if not isinstance(res, dict) or not res.get("success"):
@@ -985,6 +990,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     if result.get("success") is False and result.get("error") == "cookies_required" and not cookies:
                         result["note"] = "需要登录态：请在环境变量或 .env 配置 ZHIHU_COOKIES，或通过参数 cookies 传入"
                 except Exception as exc:
+                    logger.warning("stdio_zhihu_fetch_failed", extra={"tool": name}, exc_info=True)
                     result = {"success": False, "error": f"zhihu_fetch failed: {exc}"}
 
         elif name == "diagnose_export":
@@ -1002,6 +1008,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
         ]
 
     except Exception as e:
+        logger.exception("stdio_tool_call_failed", extra={"tool": name})
         return [
             TextContent(
                 type="text",

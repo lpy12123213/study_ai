@@ -44,7 +44,7 @@ def limits_from_env() -> InputLimits:
             return default
         try:
             return int(raw)
-        except Exception:
+        except ValueError:
             return default
 
     strip_html_raw = os.getenv("INPUT_STRIP_HTML_TAGS")
@@ -119,7 +119,7 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         try:
             path = str(request.url.path or "")
-        except Exception:
+        except (AttributeError, RuntimeError, ValueError):
             path = ""
 
         if not path.startswith("/api/"):
@@ -144,7 +144,7 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
 
         try:
             body = await request.body()
-        except Exception:
+        except (OSError, RuntimeError):
             return _err(400, "invalid_body")
 
         if not body:
@@ -155,7 +155,7 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
 
         try:
             data = json.loads(body)
-        except Exception:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return _err(400, "invalid_json")
 
         try:
@@ -163,13 +163,13 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
         except ValueError as exc:
             code = str(exc) or "invalid_payload"
             return _err(400, code)
-        except Exception:
-            logger.debug("input_sanitize_failed", exc_info=True)
+        except (AttributeError, RecursionError, TypeError):
+            logger.warning("input_sanitize_failed", exc_info=True)
             return _err(400, "invalid_payload")
 
         try:
             new_body = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
-        except Exception:
+        except (TypeError, ValueError):
             return _err(400, "invalid_payload")
 
         # Starlette caches body in `request._body` after `.body()`; override so downstream sees sanitized input.

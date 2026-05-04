@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
-import { SecureMarkdown } from '@/components/shared/SecureMarkdown'
+import { Markdown } from '@/components/shared/Markdown'
 import { QrCode } from '@/components/shared/QrCode'
 import { isApiError } from '@/api/client'
 import * as shareApi from '@/api/shareLinks'
@@ -175,7 +175,7 @@ export default function SharePage() {
 
             {content?.item_type === 'study_archive' && (
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <SecureMarkdown markdown={String(content.study_archive?.markdown || '')} />
+                <Markdown markdown={String(content.study_archive?.markdown || '')} />
               </div>
             )}
 

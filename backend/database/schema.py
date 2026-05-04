@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import relationship
+
+from backend.database.base import Base
+
+
 def _utcnow() -> datetime:
     """Return a naive UTC datetime for legacy SQLite schemas.
 
@@ -9,10 +15,6 @@ def _utcnow() -> datetime:
     while using timezone-aware UTC as the source of truth.
     """
     return datetime.now(timezone.utc).replace(tzinfo=None)
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import relationship
-
-from backend.database.base import Base
 
 
 class Paper(Base):
@@ -35,6 +37,7 @@ class PaperQuestion(Base):
     __tablename__ = "paper_questions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
     paper_id = Column(Integer, ForeignKey("papers.id"), nullable=False)
     question_id = Column(String(50), nullable=False)  # 题目编号
     question_order = Column(Integer)  # 题目顺序
@@ -58,6 +61,11 @@ class PaperQuestion(Base):
     analysis = Column(Text, default="")
 
     paper = relationship("Paper", back_populates="questions")
+
+    __table_args__ = (
+        Index("ix_paper_questions_user_paper_order", "user_id", "paper_id", "question_order"),
+        Index("ix_paper_questions_user_question", "user_id", "question_id"),
+    )
 
 
 class Blueprint(Base):

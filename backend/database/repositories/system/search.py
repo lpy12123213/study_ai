@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
@@ -76,7 +77,7 @@ async def search_fulltext(
             res = await session.execute(text(stmt), params)
             rows = res.mappings().all()
             return [dict(r) for r in rows]
-        except Exception:
+        except SQLAlchemyError:
             return []
 
     if "conversation" in want:
@@ -140,7 +141,7 @@ async def search_fulltext(
         def score_key(r: dict) -> float:
             try:
                 return float(r.get("score"))
-            except Exception:
+            except (TypeError, ValueError):
                 return 1e9
 
         results.sort(key=score_key)
@@ -215,7 +216,7 @@ async def search_fulltext(
     def score_key(r: dict) -> float:
         try:
             return float(r.get("score"))
-        except Exception:
+        except (TypeError, ValueError):
             return 1e9
 
     results.sort(key=score_key)

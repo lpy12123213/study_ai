@@ -10,7 +10,11 @@ export default function LearningPlansTodoPage() {
     queryKey: ['learning-plans'],
     queryFn: () => learningPlansApi.list().then((r) => r.data),
   })
-  const todos: { id: string; title: string; done: boolean }[] = data?.todos ?? data ?? []
+  const todos = (data?.todos ?? []).map((item) => ({
+    id: String(item.id),
+    title: item.title,
+    done: item.archived,
+  }))
 
   const add = useMutation({
     mutationFn: () => learningPlansApi.create({ title: newItem }),

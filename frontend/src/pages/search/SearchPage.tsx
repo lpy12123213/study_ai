@@ -1,7 +1,18 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { searchApi } from '@/api/search'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { searchApi, type SearchResult } from '@/api/search'
+import { Markdown } from '@/components/shared/Markdown'
+
+function searchResultId(result: SearchResult, index: number): string {
+  if ('conversation_id' in result) return `conversation-${result.conversation_id}-${result.message_id}`
+  if ('paper_id' in result) return `paper-${result.paper_id}-${result.question_id}`
+  if ('archive_id' in result) return `study-archive-${result.archive_id}`
+  return `${result.type}-${String(result.title || index)}`
+}
+
+function searchResultContent(result: SearchResult): string {
+  return result.snippet || result.title || ''
+}
 
 export default function SearchPage() {
   const [q, setQ] = useState('')
@@ -11,7 +22,11 @@ export default function SearchPage() {
     queryFn: () => searchApi.search({ q: query }).then((r) => r.data),
     enabled: !!query,
   })
-  const results: { id: string; content: string; type: string }[] = data?.results ?? []
+  const results = (data?.results ?? []).map((result, index) => ({
+    id: searchResultId(result, index),
+    content: searchResultContent(result),
+    type: result.type,
+  }))
 
   return (
     <div className="space-y-4">
@@ -25,7 +40,7 @@ export default function SearchPage() {
         {results.map((r) => (
           <div key={r.id} className="border rounded-lg p-4 bg-card">
             <div className="text-xs text-muted-foreground mb-1">{r.type}</div>
-            <MarkdownRenderer content={r.content} />
+            <Markdown content={r.content} />
           </div>
         ))}
       </div>

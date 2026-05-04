@@ -6,13 +6,6 @@ import os
 import re
 from typing import Any, Dict, List
 
-from backend.agent.tools.utils.text_utils import _trim_overlap
-from backend.agent.types import CompressedContext
-from backend.core.logging_utils import get_logger
-from backend.core.settings import STUDY_MATERIALS_WRITER_MODEL
-from backend.llm.client import is_llm_configured
-from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
-
 from backend.agent.tools.generation.latex_export_utils import (
     _auto_fix_latex,
     _clamp_int,
@@ -21,6 +14,12 @@ from backend.agent.tools.generation.latex_export_utils import (
     _looks_truncated_latex_chunk,
     _normalize_latex_text,
 )
+from backend.agent.tools.utils.text_utils import _trim_overlap
+from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+from backend.core.settings import STUDY_MATERIALS_WRITER_MODEL
+from backend.llm.client import is_llm_configured
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 
 logger = get_logger(__name__)
 
@@ -245,7 +244,7 @@ class LatexConvertMixin:
                         or _looks_incomplete_latex(body)
                     )
                 )
-            except Exception:
+            except (re.error, TypeError, ValueError):
                 looks_truncated = False
 
             warning = ""
@@ -317,7 +316,7 @@ class LatexConvertMixin:
                     bodies.append(b)
                 try:
                     conts = int(chunk_res.get("continuations") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     conts = 0
                 conts = max(0, conts)
                 conts_total += conts
@@ -381,7 +380,7 @@ class LatexConvertMixin:
                     bodies.append(b)
                 try:
                     conts = int(chunk_res.get("continuations") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     conts = 0
                 conts = max(0, conts)
                 conts_total += conts
@@ -393,7 +392,7 @@ class LatexConvertMixin:
                     warnings.append(warn)
                 try:
                     part_idx = int(chunk_res.get("__part_index") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     part_idx = 0
                 if part_idx <= 0:
                     part_idx = len(parts_meta) + 1
@@ -424,7 +423,7 @@ class LatexConvertMixin:
             ctx.working_memory["latex_tex"] = tex
             ctx.working_memory["tex_url"] = url
             ctx.working_memory["tex_filename"] = filename
-        except Exception:
+        except (AttributeError, TypeError):
             logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         await self._emit_progress(percent=100, stage="完成")

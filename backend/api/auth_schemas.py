@@ -24,6 +24,22 @@ class RegisterRequest(BaseModel):
     role: str = Field(default="user")
 
 
+class LoginRequest(BaseModel):
+    """User login request."""
+
+    username: str = Field(..., min_length=1, max_length=50)
+    password: str = Field(..., min_length=1)
+
+
+class LoginResponse(BaseModel):
+    """JWT login response."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: int
+    user: UserInfo
+
+
 class ChangePasswordRequest(BaseModel):
     """Change password request."""
 

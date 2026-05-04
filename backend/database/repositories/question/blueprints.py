@@ -45,7 +45,7 @@ async def list_blueprints(
             slots = json.loads(bp.slots_json or "[]")
             if not isinstance(slots, list):
                 slots = []
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             slots = []
         out.append(
             {
@@ -86,7 +86,7 @@ async def get_blueprint(
         slots = json.loads(bp.slots_json or "[]")
         if not isinstance(slots, list):
             slots = []
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         slots = []
 
     return {
@@ -118,7 +118,7 @@ async def save_blueprint(
 
     try:
         slots_json = json.dumps(slots or [], ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         slots_json = "[]"
 
     own = session is None

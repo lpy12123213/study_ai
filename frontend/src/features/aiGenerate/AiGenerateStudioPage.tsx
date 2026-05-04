@@ -47,6 +47,7 @@ export function AiGenerateStudioPage() {
   const [historySheetOpen, setHistorySheetOpen] = useState(false)
   const [contextSheetOpen, setContextSheetOpen] = useState(false)
   const [questionWindowOpen, setQuestionWindowOpen] = useState(false)
+  const [questionWindowDismissedKey, setQuestionWindowDismissedKey] = useState<string | null>(null)
 
   const { data: subjectFiltersData } = useSubjectFilters(lib.filters.subject || undefined)
   const subjectFilters = subjectFiltersData || {}
@@ -71,6 +72,9 @@ export function AiGenerateStudioPage() {
   const effectiveTaskStatus = isSessionRunning ? 'running' : taskStatus || sessionStatus
   const isGenerating = effectiveTaskStatus === 'running'
   const currentTaskEvents = tasks.getTaskEvents(currentTaskId)
+  const questionWindowKey = String(sr.activeSessionId || sr.session?.sessionId || currentTaskId || 'default').trim()
+  const questionWindowDismissed = questionWindowDismissedKey === questionWindowKey
+  const questionWindowEffectiveOpen = questionWindowOpen && !questionWindowDismissed
 
   const inf = useInfiniteMode({
     subject: lib.filters.subject,
@@ -120,11 +124,21 @@ export function AiGenerateStudioPage() {
   const draftCount = sr.session?.drafts.length || 0
   const statusChip = statusLabel(sr.session?.status || effectiveTaskStatus || '')
 
+  const openQuestionWindow = () => {
+    setQuestionWindowDismissedKey(null)
+    setQuestionWindowOpen(true)
+  }
+
+  const closeQuestionWindow = () => {
+    setQuestionWindowDismissedKey(questionWindowKey)
+    setQuestionWindowOpen(false)
+  }
+
   useEffect(() => {
-    if (isGenerating || draftCount > 0) {
+    if (!questionWindowDismissed && (isGenerating || draftCount > 0)) {
       setQuestionWindowOpen(true)
     }
-  }, [draftCount, isGenerating])
+  }, [draftCount, isGenerating, questionWindowDismissed])
 
   const restoreSession = (sessionId: string) => {
     inf.setAutoAppendEnabled(false)
@@ -196,7 +210,7 @@ export function AiGenerateStudioPage() {
                 <Network className="h-4 w-4" />
                 知识点配置
               </Button>
-              <Button type="button" variant="outline" className="rounded-full" onClick={() => setQuestionWindowOpen(true)}>
+              <Button type="button" variant="outline" className="rounded-full" onClick={openQuestionWindow}>
                 <FileText className="h-4 w-4" />
                 打开题目悬浮窗
               </Button>
@@ -293,13 +307,14 @@ export function AiGenerateStudioPage() {
       </div>
 
       <QuestionFloatingWindow
-        open={questionWindowOpen}
+        key={`${questionWindowKey}:${questionWindowEffectiveOpen ? 'open' : 'closed'}`}
+        open={questionWindowEffectiveOpen}
         session={sr.session}
         isGenerating={isGenerating}
         isFetching={sr.sessionDetailQuery.isFetching}
         draftRefs={da.draftRefs}
-        onOpen={() => setQuestionWindowOpen(true)}
-        onClose={() => setQuestionWindowOpen(false)}
+        onOpen={openQuestionWindow}
+        onClose={closeQuestionWindow}
         onConfirm={da.handleConfirmDraft}
         onRegenerateSection={da.handleRegenerateSection}
         onSectionChange={da.handleSectionChange}

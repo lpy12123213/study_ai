@@ -5,8 +5,8 @@ import os
 from typing import Any, Dict, List, Optional
 
 from backend.agent.types import CompressedContext
-from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
+from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -99,17 +99,14 @@ class SelfCritiqueToolsMixin:
                 or os.getenv("STUDY_MATERIALS_REFINE_THRESHOLD")
                 or "7.0"
             )
-        except Exception:
+        except (TypeError, ValueError):
             threshold = 7.0
         threshold = max(0.0, min(threshold, 10.0))
-        try:
-            study_opts = ctx.working_memory.get("study_options")
-            study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
-            preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
-            if preset == "research":
-                threshold = max(threshold, 8.0)
-        except Exception:
-            logger.debug("self_critique_threshold_adjust_failed", exc_info=True)
+        study_opts = ctx.working_memory.get("study_options")
+        study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
+        preset = str(args.get("preset") or study_opts.get("preset") or "standard").strip().lower() or "standard"
+        if preset == "research":
+            threshold = max(threshold, 8.0)
 
         async def _critique_one(kp: str) -> Dict[str, Any]:
             sec = _find_section(material, kp) or {}
@@ -184,7 +181,7 @@ class SelfCritiqueToolsMixin:
 
             try:
                 score = float(obj.get("score") or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 score = 0.0
             score = max(0.0, min(score, 10.0))
 

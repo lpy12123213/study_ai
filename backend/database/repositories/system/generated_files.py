@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.time_utils import utcnow_naive
@@ -203,6 +204,6 @@ async def delete_generated_file(*, filename: str, session: Optional[AsyncSession
         return False
     try:
         await session.delete(existing)
-    except Exception:
+    except SQLAlchemyError:
         return False
     return True

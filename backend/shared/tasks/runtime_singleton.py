@@ -12,7 +12,7 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
     try:
         return int(raw)
-    except Exception:
+    except ValueError:
         return int(default)
 
 
@@ -21,6 +21,6 @@ task_runtime = TaskRuntime(
     max_tasks=_env_int("TASK_RUNTIME_MAX_TASKS", 200),
     task_ttl_s=_env_int("TASK_RUNTIME_TTL_S", 60 * 60),
     max_events_per_task=_env_int("TASK_RUNTIME_MAX_EVENTS", 8000),
-    task_event_flush_interval_ms=_env_int("TASK_EVENT_FLUSH_INTERVAL_MS", 200),
+    task_event_flush_interval_ms=_env_int("TASK_EVENT_FLUSH_INTERVAL_MS", 500),
     task_event_batch_size=_env_int("TASK_EVENT_BATCH_SIZE", 50),
 )

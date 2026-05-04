@@ -206,7 +206,7 @@ class ContentReviewToolsMixin:
                         continue
                     try:
                         conf = float(f.get("confidence") or 0.0)
-                    except Exception:
+                    except (TypeError, ValueError):
                         conf = 0.0
                     item = {"fact": (fact[:180].rstrip() + "…") if len(fact) > 180 else fact, "confidence": conf}
                     if conf >= 0.7 and len(hi) < 6:

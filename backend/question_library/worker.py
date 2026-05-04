@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import os
 
-from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import list_unscored_question_ids
+from backend.llm.client import is_llm_configured
 from backend.question_library.scoring import apply_score_and_hide, score_stem_with_llm
 
 logger = get_logger(__name__)
@@ -23,7 +23,7 @@ def _env_truthy(name: str, *, default: bool = False) -> bool:
 def _as_int(value: str, default: int) -> int:
     try:
         return int(str(value or "").strip())
-    except Exception:
+    except ValueError:
         return int(default)
 
 

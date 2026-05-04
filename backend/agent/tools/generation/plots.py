@@ -30,7 +30,7 @@ class PlotToolsMixin:
 
         try:
             plot_result = render_2d_plot_with_meta(spec)
-        except Exception as exc:
+        except (RuntimeError, TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc), "knowledge_point": kp}
 
         if not plot_result.get("success"):
@@ -91,7 +91,7 @@ class PlotToolsMixin:
             kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             logger.debug("plot_store_working_memory_failed", exc_info=True)
 
         return {
@@ -126,7 +126,7 @@ class PlotToolsMixin:
 
         try:
             png_bytes = render_3d_plot(spec)
-        except Exception as exc:
+        except (RuntimeError, TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc), "knowledge_point": kp}
         user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
         published = await publish_generated_bytes(
@@ -177,7 +177,7 @@ class PlotToolsMixin:
             kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             logger.debug("plot_store_working_memory_failed", exc_info=True)
 
         return {

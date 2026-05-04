@@ -32,38 +32,33 @@ function applyResolvedTheme(theme: ResolvedTheme) {
   }
 }
 
-let _systemListenerAttached = false
-function ensureSystemThemeListener(
-  set: (partial: Partial<ThemeState>) => void,
-  get: () => ThemeState
-) {
-  if (_systemListenerAttached) return
+export function bindSystemThemeListener() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+  const store = useThemeStore
 
   const mql = window.matchMedia('(prefers-color-scheme: dark)')
   const onChange = () => {
-    const state = get()
+    const state = store.getState()
     if (state.theme !== 'system') return
     const next = getSystemTheme()
     if (next === state.resolvedTheme) return
-    set({ resolvedTheme: next })
+    store.setState({ resolvedTheme: next })
     applyResolvedTheme(next)
   }
 
-  _systemListenerAttached = true
   if (typeof mql.addEventListener === 'function') {
     mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
   } else {
     // Safari < 14
     mql.addListener(onChange)
+    return () => mql.removeListener(onChange)
   }
 }
 
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set, get) => {
-      ensureSystemThemeListener(set, get)
-
       const syncTheme = () => {
         const state = get()
         const resolved = resolveTheme(state.theme)
@@ -75,7 +70,6 @@ export const useThemeStore = create<ThemeState>()(
 
       const initialMode: ThemeMode = 'system'
       const initialResolved = resolveTheme(initialMode)
-      applyResolvedTheme(initialResolved)
 
       return {
         theme: initialMode,

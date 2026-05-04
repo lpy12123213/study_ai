@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { fetchSSE } from '@/api/sse'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function QuestionEvaluatePage() {
   const [question, setQuestion] = useState('')
@@ -35,7 +35,7 @@ export default function QuestionEvaluatePage() {
       <button onClick={evaluate} disabled={loading} className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50">
         {loading ? '鉴别中...' : '开始鉴别'}
       </button>
-      {result && <div className="border rounded-lg p-4 bg-card"><MarkdownRenderer content={result} /></div>}
+      {result && <div className="border rounded-lg p-4 bg-card"><Markdown content={result} /></div>}
     </div>
   )
 }

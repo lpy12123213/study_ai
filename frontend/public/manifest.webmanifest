@@ -1,0 +1,18 @@
+{
+  "name": "Study AI",
+  "short_name": "Study AI",
+  "description": "本地优先的学习、出题和资料生成工作台。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

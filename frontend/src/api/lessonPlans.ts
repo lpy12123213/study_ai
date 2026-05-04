@@ -80,10 +80,10 @@ export const lessonPlansApi = {
   deleteLessonPlan,
   pauseLessonPlanTask,
   resumeLessonPlanTask,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: { plans: LessonPlan[] } }> => ({
     data: { plans: await getLessonPlans() },
   }),
-  get: async (id: string): Promise<{ data: any }> => ({
+  get: async (id: string): Promise<{ data: LessonPlan }> => ({
     data: await getLessonPlan(id),
   }),
 }

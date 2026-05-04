@@ -51,7 +51,7 @@ def _configure_project_local_tempdir() -> None:
                 return _real_mkdtemp(suffix=suf, prefix=pre, dir=str(root))
 
             tempfile.mkdtemp = _mkdtemp_safe  # type: ignore[assignment]
-    except Exception:
+    except OSError:
         # Best-effort only: falling back to system temp is acceptable outside sandbox.
         pass
 

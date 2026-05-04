@@ -5,6 +5,7 @@ export type ToastItem = {
   id: string
   title: string
   taskId?: string
+  traceId?: string
   status?: string
   createdAt: number
 }
@@ -13,6 +14,7 @@ export type TaskNotification = {
   id: string
   taskId: string
   title: string
+  traceId?: string
   status: 'completed' | 'failed' | 'canceled' | string
   createdAt: string
   read: boolean

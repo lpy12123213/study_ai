@@ -2,9 +2,10 @@ import asyncio
 import os
 from typing import Any, Dict, List
 
-from backend.llm.client import chat_completion, is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import settings
+from backend.llm.client import is_llm_configured
+from backend.llm.runner import run_text
 
 logger = get_logger(__name__)
 
@@ -84,7 +85,7 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
 请从试卷结构、难度分布、适用对象、答题建议等方面进行简要分析。语言要专业但易懂。"""
 
     async def _call_llm() -> str:
-        res = await chat_completion(
+        return await run_text(
             messages=[{"role": "user", "content": prompt}],
             model=model,
             temperature=0.7,
@@ -96,7 +97,6 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
             req_id_prefix="paper-comment",
             scope="chat",
         )
-        return str(res.content or "").strip()
 
     try:
         # `analyze_paper(...)` is invoked via `run_in_executor(...)`, so this
@@ -107,7 +107,7 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
             # to avoid `asyncio.run` crashes.
             return _fallback_comment(paper_name, q_count, diff_str, type_info)
         except RuntimeError:
-            content = asyncio.run(_call_llm())
+            content = asyncio.run(_call_llm()).strip()
 
         return content or _fallback_comment(paper_name, q_count, diff_str, type_info)
     except Exception as exc:

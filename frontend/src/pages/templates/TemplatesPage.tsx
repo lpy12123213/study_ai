@@ -6,7 +6,10 @@ export default function TemplatesPage() {
     queryKey: ['templates'],
     queryFn: () => templatesApi.list().then((r) => r.data),
   })
-  const templates: { id: string; name: string }[] = data?.templates ?? data ?? []
+  const templates = (data?.templates ?? []).map((template) => ({
+    id: String(template.id),
+    name: template.name,
+  }))
 
   return (
     <div className="space-y-4">

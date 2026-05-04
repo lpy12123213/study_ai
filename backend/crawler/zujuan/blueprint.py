@@ -226,7 +226,7 @@ async def compose_paper_blueprint(
     delay_env_raw = os.getenv("ZUJUAN_BLUEPRINT_SLOT_DELAY_S") or ""
     try:
         delay_env = float(delay_env_raw) if delay_env_raw.strip() else 0.0
-    except Exception:
+    except ValueError:
         delay_env = 0.0
     slot_delay_value = float(slot_delay_s or 0.0)
     if slot_delay_value <= 0:

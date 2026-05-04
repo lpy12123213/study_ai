@@ -10,9 +10,8 @@ export function BrandMark({ size = 32, className }: BrandMarkProps) {
   return (
     <div
       className={cn(
-        'relative inline-flex items-center justify-center rounded-lg',
+        'relative inline-flex items-center justify-center rounded-md',
         'bg-primary text-primary-foreground',
-        'shadow-sm',
         className
       )}
       style={{ width: size, height: size }}

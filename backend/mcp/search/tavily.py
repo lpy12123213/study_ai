@@ -136,7 +136,7 @@ async def tavily_search(
             "error": f"Tavily API error: {e.response.status_code}",
             "results": [],
         }
-    except Exception as e:
+    except (httpx.RequestError, ValueError, AttributeError) as e:
         return {
             "success": False,
             "provider": "tavily",

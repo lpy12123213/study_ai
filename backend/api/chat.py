@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
 from backend.api.schemas import ChatRequest
-from backend.chat.service import chat_service
+from backend.chat.service import ChatService, get_chat_service
 from backend.database.repositories.content.conversations import (
     add_message,
     get_conversation,
@@ -42,7 +42,11 @@ def _truncate_display_width(text: str, max_width: int) -> str:
 
 
 @router.post("/chat")
-async def chat_endpoint(request: ChatRequest, user: dict = Depends(require_auth)) -> StreamingResponse:
+async def chat_endpoint(
+    request: ChatRequest,
+    user: dict = Depends(require_auth),
+    service: ChatService = Depends(get_chat_service),
+) -> StreamingResponse:
     """
     处理聊天请求，返回 SSE 流式响应（前端通过 fetch 读取）。
     支持学科选择。
@@ -63,7 +67,7 @@ async def chat_endpoint(request: ChatRequest, user: dict = Depends(require_auth)
 
     try:
         max_context_messages = int(os.getenv("CHAT_CONTEXT_MAX_MESSAGES") or "40")
-    except Exception:
+    except ValueError:
         max_context_messages = 40
     max_context_messages = max(0, min(max_context_messages, 200))
 
@@ -76,7 +80,7 @@ async def chat_endpoint(request: ChatRequest, user: dict = Depends(require_auth)
         logger.exception("Failed to persist user message")
 
     async def generate():
-        async for chunk in chat_service.chat(
+        async for chunk in service.chat(
             history,
             user_message,
             user_id=user_id,
@@ -103,7 +107,15 @@ async def chat_endpoint(request: ChatRequest, user: dict = Depends(require_auth)
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 continue
 
-            if chunk_type in {"tool_start", "tool_result", "stream_start", "text_delta", "iteration", "error"}:
+            if chunk_type in {
+                "tool_start",
+                "tool_result",
+                "stream_start",
+                "text_delta",
+                "thinking_delta",
+                "iteration",
+                "error",
+            }:
                 if chunk_type == "tool_result":
                     # Persist tool results as tool-role messages (indexed by tool_call_id).
                     try:

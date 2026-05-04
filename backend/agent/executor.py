@@ -9,12 +9,12 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.config import AgentConfig
 from backend.agent.mcp.registry import MCPToolRegistry
-from backend.agent.tools.schemas import get_tool_input_schema
 from backend.agent.tools.registry import TOOL_MIXINS
+from backend.agent.tools.schemas import get_tool_input_schema
 from backend.agent.tools.utils.schema_validation import validate_and_coerce_args
 from backend.agent.tools.utils.text_utils import _looks_truncated_markdown, _repair_incomplete_markdown, _trim_overlap
 from backend.agent.types import CompressedContext, PlanStep, StepResult, agent_event
-from backend.llm.client import ChatCompletionResult, chat_completion
+from backend.core import business_metrics
 from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     API_TIMEOUT,
@@ -22,6 +22,8 @@ from backend.core.settings import (
     LESSON_PLAN_TEMPERATURE,
     STUDY_MATERIALS_THINKING_EFFORT_DEFAULT,
 )
+from backend.llm.client import ChatCompletionResult, chat_completion
+from backend.llm.json_utils import extract_first_json_object
 
 _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]]] = ContextVar(
     "agent_emit_event",
@@ -134,6 +136,7 @@ class Executor:
         try:
             await cb(agent_event(str(event or ""), dict(data or {})))
         except Exception:
+            logger.warning("agent_emit_event_failed", exc_info=True)
             return
 
     async def _emit_status(self, content: str) -> None:
@@ -174,7 +177,7 @@ class Executor:
         try:
             schema = get_tool_input_schema(tool)
             args = validate_and_coerce_args(schema=schema, args=step.arguments or {}, tool_name=tool)
-        except Exception as exc:
+        except (KeyError, TypeError, ValueError) as exc:
             return StepResult(step_id=step.id, tool=tool, success=False, error=str(exc))
 
         timeout_raw = (
@@ -185,7 +188,7 @@ class Executor:
         )
         try:
             timeout_s = float(timeout_raw)
-        except Exception:
+        except (TypeError, ValueError):
             timeout_s = float(API_TIMEOUT or 120)
         timeout_s = max(30.0, min(timeout_s, 60.0 * 30.0))  # clamp to [30s, 30m]
 
@@ -194,7 +197,7 @@ class Executor:
             latex_step_timeout_raw = os.getenv("STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S") or ""
             try:
                 latex_step_timeout_s = float(latex_step_timeout_raw) if latex_step_timeout_raw.strip() else 0.0
-            except Exception:
+            except (TypeError, ValueError):
                 latex_step_timeout_s = 0.0
             # Default to the max clamp (30m). Even if configured, keep a sensible minimum
             # because LaTeX export is typically the slowest stage and otherwise times out
@@ -214,7 +217,7 @@ class Executor:
             )
             try:
                 compile_timeout_s = float(compile_timeout_raw) if str(compile_timeout_raw).strip() else 0.0
-            except Exception:
+            except (TypeError, ValueError):
                 compile_timeout_s = 0.0
             if compile_timeout_s <= 0:
                 compile_timeout_s = 30.0
@@ -222,8 +225,10 @@ class Executor:
             timeout_s = compile_timeout_s
 
         token = _emit_event_var.set(emit_event)
+        tool_success = False
         try:
             output = await asyncio.wait_for(handler(args, context), timeout=timeout_s)
+            tool_success = True
             return StepResult(step_id=step.id, tool=tool, success=True, output=output)
         except asyncio.TimeoutError:
             return StepResult(
@@ -233,11 +238,13 @@ class Executor:
                 error=f"Tool timeout after {int(timeout_s)}s: {tool}",
             )
         except Exception as exc:  # pragma: no cover (best-effort safety)
+            logger.warning("agent_tool_step_failed", extra={"tool": tool}, exc_info=True)
             return StepResult(step_id=step.id, tool=tool, success=False, error=str(exc))
         finally:
+            business_metrics.record_tool_call(name=tool, success=tool_success)
             try:
                 _emit_event_var.reset(token)
-            except Exception:
+            except ValueError:
                 logger.debug("executor_reset_emit_event_var_failed", exc_info=True)
 
     async def _call_llm(
@@ -328,7 +335,7 @@ class Executor:
             ).strip()
             try:
                 v = int(raw)
-            except Exception:
+            except (TypeError, ValueError):
                 v = 3
             return max(1, min(v, 10))
 
@@ -441,7 +448,7 @@ class Executor:
             if isinstance(usage_obj, dict):
                 try:
                     ct = int(usage_obj.get("completion_tokens") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     ct = 0
                 if ct and max_tokens and ct >= int(max_tokens * 0.95):
                     return True
@@ -449,7 +456,7 @@ class Executor:
 
         try:
             max_continuations = int(max_continuations or 0)
-        except Exception:
+        except (TypeError, ValueError):
             max_continuations = 0
         max_continuations = max(0, min(max_continuations, 5))
 
@@ -511,39 +518,7 @@ class Executor:
         }
 
     def _extract_json_obj(self, text: str) -> Dict[str, Any]:
-        raw = (text or "").strip()
-        if not raw:
-            return {}
-        # Strip markdown code fences.
-        if raw.startswith("```"):
-            stripped = raw.strip()
-            first_newline = stripped.find("\n")
-            if first_newline != -1:
-                stripped = stripped[first_newline + 1 :]
-            if stripped.endswith("```"):
-                stripped = stripped[:-3]
-            raw = stripped.strip()
-        # Fast path: whole string is JSON.
-        try:
-            obj = json.loads(raw)
-            return obj if isinstance(obj, dict) else {}
-        except Exception:
-            logger.debug("executor_parse_json_fast_failed", extra={"chars": len(raw)}, exc_info=True)
-
-        # Robust path: find the last valid JSON object in the string.
-        try:
-            decoder = json.JSONDecoder()
-            starts = [i for i, ch in enumerate(raw) if ch == "{"]
-            for i in reversed(starts):
-                try:
-                    obj, _end = decoder.raw_decode(raw[i:])
-                except Exception:
-                    continue
-                if isinstance(obj, dict):
-                    return obj
-        except Exception:
-            logger.debug("executor_parse_json_robust_failed", extra={"chars": len(raw)}, exc_info=True)
-        return {}
+        return extract_first_json_object(text, default={}) or {}
 
     def _pick_questions(self, questions: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
         cleaned: List[Tuple[int, Dict[str, Any]]] = []

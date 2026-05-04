@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Sequence
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server

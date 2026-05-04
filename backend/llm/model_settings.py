@@ -30,7 +30,7 @@ def _normalize_provider_name(value: str) -> str:
 def _json_loads(raw: str) -> Dict[str, Any]:
     try:
         obj = json.loads(str(raw or ""))
-    except Exception:
+    except json.JSONDecodeError:
         return {}
     return obj if isinstance(obj, dict) else {}
 
@@ -52,7 +52,7 @@ def _read_raw_payload(*, repo_root: Path) -> Dict[str, Any]:
         }
     try:
         return _json_loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except OSError:
         return {}
 
 
@@ -291,7 +291,7 @@ def _model_endpoint_candidates(base_url: str) -> List[str]:
         parts = urlsplit(base)
         if parts.scheme and parts.netloc and not str(parts.path or "").strip("/"):
             candidates.append(urlunsplit((parts.scheme, parts.netloc, "/v1/models", parts.query, parts.fragment)))
-    except Exception:
+    except ValueError:
         pass
     return candidates
 
@@ -352,7 +352,7 @@ async def fetch_provider_models(
                 resp.raise_for_status()
                 try:
                     data = resp.json()
-                except Exception:
+                except ValueError:
                     last_error = "invalid_json_response"
                     continue
                 models = _parse_model_items(data)

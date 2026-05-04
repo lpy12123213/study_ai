@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.system.generated_files import (
@@ -46,7 +48,7 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
     try:
         return int(raw)
-    except Exception:
+    except ValueError:
         return int(default)
 
 
@@ -69,7 +71,7 @@ def _expires_at_from_ttl(ttl_s: Optional[int]) -> Optional[datetime]:
         return None
     try:
         ttl = int(ttl_s)
-    except Exception:
+    except (TypeError, ValueError):
         ttl = 0
     if ttl <= 0:
         return None
@@ -118,7 +120,7 @@ async def publish_generated_bytes(
             bytes_size=len(payload),
             expires_at=expires_at,
         )
-    except Exception:
+    except (SQLAlchemyError, ValueError):
         logger.exception("upsert_generated_file_failed", extra={"filename": filename, "user_id": uid})
 
     url = f"/api/media/generated/{filename}"
@@ -176,7 +178,7 @@ async def cleanup_expired_generated_files(*, limit: int = 200) -> Dict[str, Any]
         path = (_GENERATED_DIR / filename).resolve()
         try:
             path.relative_to(_GENERATED_DIR)
-        except Exception:
+        except ValueError:
             # Never delete outside the generated dir.
             continue
 
@@ -186,14 +188,14 @@ async def cleanup_expired_generated_files(*, limit: int = 200) -> Dict[str, Any]
                 deleted_files += 1
             else:
                 missing_files += 1
-        except Exception as exc:  # pragma: no cover (best-effort)
+        except OSError as exc:  # pragma: no cover (best-effort)
             errors.append(f"unlink_failed:{filename}:{exc}")
 
         try:
             ok = await delete_generated_file(filename=filename)
             if ok:
                 deleted_rows += 1
-        except Exception as exc:  # pragma: no cover (best-effort)
+        except (SQLAlchemyError, ValueError) as exc:  # pragma: no cover (best-effort)
             errors.append(f"db_delete_failed:{filename}:{exc}")
 
     return {

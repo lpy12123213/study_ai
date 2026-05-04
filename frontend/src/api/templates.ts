@@ -10,34 +10,34 @@ export type UserTemplate = {
 }
 
 export async function listTemplates(params?: { type?: string; limit?: number }): Promise<UserTemplate[]> {
-  const res = await apiClient.get('/templates', { params })
-  return (res.data?.templates as UserTemplate[]) || []
+  const res = await apiClient.get<{ templates?: UserTemplate[] }>('/templates', { params })
+  return res.data.templates || []
 }
 
 export async function getTemplate(templateId: number): Promise<UserTemplate> {
-  const res = await apiClient.get(`/templates/${templateId}`)
-  return res.data?.template as UserTemplate
+  const res = await apiClient.get<{ template: UserTemplate }>(`/templates/${templateId}`)
+  return res.data.template
 }
 
 export async function createTemplate(input: { type: string; name: string; body: Record<string, unknown> }): Promise<UserTemplate> {
-  const res = await apiClient.post('/templates', {
+  const res = await apiClient.post<{ template: UserTemplate }>('/templates', {
     template_type: input.type,
     name: input.name,
     body: input.body,
   })
-  return res.data?.template as UserTemplate
+  return res.data.template
 }
 
 export async function updateTemplate(
   templateId: number,
   input: { name?: string; type?: string; body?: Record<string, unknown> }
 ): Promise<UserTemplate> {
-  const res = await apiClient.put(`/templates/${templateId}`, {
+  const res = await apiClient.put<{ template: UserTemplate }>(`/templates/${templateId}`, {
     name: input.name,
     template_type: input.type,
     body: input.body,
   })
-  return res.data?.template as UserTemplate
+  return res.data.template
 }
 
 export async function deleteTemplate(templateId: number): Promise<void> {
@@ -45,13 +45,13 @@ export async function deleteTemplate(templateId: number): Promise<void> {
 }
 
 export async function exportTemplates(params?: { type?: string }): Promise<UserTemplate[]> {
-  const res = await apiClient.get('/templates/export', { params })
-  return (res.data?.templates as UserTemplate[]) || []
+  const res = await apiClient.get<{ templates?: UserTemplate[] }>('/templates/export', { params })
+  return res.data.templates || []
 }
 
 export async function importTemplates(templates: UserTemplate[]): Promise<UserTemplate[]> {
-  const res = await apiClient.post('/templates/import', { templates })
-  return (res.data?.created as UserTemplate[]) || []
+  const res = await apiClient.post<{ created?: UserTemplate[] }>('/templates/import', { templates })
+  return res.data.created || []
 }
 
 export const templatesApi = {
@@ -62,7 +62,7 @@ export const templatesApi = {
   deleteTemplate,
   exportTemplates,
   importTemplates,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: { templates: UserTemplate[] } }> => ({
     data: { templates: await listTemplates({ limit: 200 }) },
   }),
 }

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
+
+from backend.core.logging_utils import get_request_id, get_trace_id
+from backend.llm.json_utils import extract_first_json_object
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_DIR = (REPO_ROOT / ".local" / "media" / "generated").resolve()
@@ -22,28 +24,21 @@ def lesson_plan_infinite_max_tokens() -> int:
     raw = (os.getenv("LESSON_PLAN_INFINITE_MAX_TOKENS") or "").strip()
     try:
         v = int(raw) if raw else 0
-    except Exception:
+    except ValueError:
         v = 0
     return v if v > 0 else 200000
 
 
 def agent_event(kind: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    return {"event": kind, "data": data}
+    payload: Dict[str, Any] = {"event": kind, "data": data}
+    trace_id = get_trace_id() or get_request_id()
+    if trace_id:
+        payload["trace_id"] = trace_id
+    return payload
 
 
 def extract_json_obj(text: str) -> Dict[str, Any]:
-    raw = (text or "").strip()
-    if not raw:
-        return {}
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return {}
-    try:
-        obj = json.loads(raw[start : end + 1])
-        return obj if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
+    return extract_first_json_object(text, default={}) or {}
 
 
 def clean_points(items: List[Any], *, max_points: int) -> List[str]:

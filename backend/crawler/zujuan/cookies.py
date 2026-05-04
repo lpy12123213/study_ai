@@ -97,7 +97,7 @@ async def get_cookies_with_playwright() -> str:
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, _sync_get_cookies)
     except Exception as exc:
-        logger.warning("playwright cookie bootstrap failed", extra={"error": str(exc)})
+        logger.warning("playwright cookie bootstrap failed", extra={"error": str(exc)}, exc_info=True)
         return ""
 
 
@@ -137,6 +137,7 @@ def _load_cookie_cache(path: str, *, ttl_s: int) -> str:
             return ""
         return cookie_str
     except Exception:
+        logger.warning("zujuan_cookie_cache_load_failed", extra={"path": path}, exc_info=True)
         return ""
 
 
@@ -149,6 +150,7 @@ def _save_cookie_cache(path: str, *, cookies: str) -> None:
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"cookies": cookie_str, "ts": time.time()}, f, ensure_ascii=False, indent=2)
     except Exception:
+        logger.warning("zujuan_cookie_cache_save_failed", extra={"path": path}, exc_info=True)
         return
 
 
@@ -184,7 +186,7 @@ async def fetch_csrf_token_from_page(cookies: str) -> Optional[str]:
             if m:
                 return m.group(1)
     except Exception as exc:
-        logger.warning("fetch csrf token failed", extra={"error": str(exc)})
+        logger.warning("fetch csrf token failed", extra={"error": str(exc)}, exc_info=True)
     return None
 
 
@@ -261,6 +263,7 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
                         """
                     )
                 except Exception:
+                    logger.warning("zujuan_csrf_token_eval_failed", exc_info=True)
                     csrf_token = None
 
                 if not csrf_token:
@@ -287,7 +290,7 @@ async def get_login_session_with_playwright(*, force_refresh: bool = False) -> D
             _save_login_cookie_cache(cookies)
         return session
     except Exception as exc:
-        logger.warning("login session refresh failed", extra={"error": str(exc)})
+        logger.warning("login session refresh failed", extra={"error": str(exc)}, exc_info=True)
         return {"cookies": "", "user_id": None, "csrf_token": None, "is_logged_in": False, "source": "error"}
 
 

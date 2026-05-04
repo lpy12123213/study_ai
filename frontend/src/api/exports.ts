@@ -11,8 +11,8 @@ export type GeneratedFile = {
 }
 
 export async function listGeneratedFiles(params?: { type?: string; limit?: number; offset?: number }): Promise<GeneratedFile[]> {
-  const res = await apiClient.get('/exports/files', { params })
-  return (res.data?.files as GeneratedFile[]) || []
+  const res = await apiClient.get<{ files?: GeneratedFile[] }>('/exports/files', { params })
+  return res.data.files || []
 }
 
 export async function zipGeneratedFiles(filenames: string[]): Promise<{ url: string; filename: string }> {
@@ -23,7 +23,7 @@ export async function zipGeneratedFiles(filenames: string[]): Promise<{ url: str
 export const exportsApi = {
   listGeneratedFiles,
   zipGeneratedFiles,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: { exports: GeneratedFile[] } }> => ({
     data: { exports: await listGeneratedFiles({ limit: 200, offset: 0 }) },
   }),
 }

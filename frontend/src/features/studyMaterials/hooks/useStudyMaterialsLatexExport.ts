@@ -128,7 +128,7 @@ export function useStudyMaterialsLatexExport(opts: {
     const plan = latexLessonPlanOptionById[resolvedId]
     const mdUrl = toText(plan?.mdUrl)
     if (!mdUrl) {
-      setLatexError('未找到 Markdown，请先成功生成内容后再试。')
+      setLatexError('未找到可导出的文档，请先成功生成内容后再试。')
       return
     }
 
@@ -145,7 +145,7 @@ export function useStudyMaterialsLatexExport(opts: {
       const text = await downloadText(mdUrl, { signal: controller.signal })
       setLatexMarkdown(text)
     } catch (err: any) {
-      const msg = toText(err?.message) || '加载 Markdown 失败'
+      const msg = toText(err?.message) || '加载文档失败'
       setLatexError(formatStudyMaterialsError(msg))
     } finally {
       setLatexIsLoadingSource(false)
@@ -244,7 +244,7 @@ export function useStudyMaterialsLatexExport(opts: {
       setLatexTexFilename(filename)
 
       setLatexProgressPercent(100)
-      setLatexProgressStage('加载 LaTeX…')
+      setLatexProgressStage('加载排版稿…')
 
       const texText = await downloadText(texUrl, { signal: controller.signal })
       setLatexTexText(texText)

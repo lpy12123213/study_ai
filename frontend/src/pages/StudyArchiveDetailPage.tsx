@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BookOpen, Loader2, Search, Share2, Download, ListTodo, MessageSquarePlus, Star, Pin, Tag, Film } from 'lucide-react'
 import { getStudyArchive } from '@/api/studyArchives'
-import { SecureMarkdown } from '@/components/shared/SecureMarkdown'
+import { Markdown } from '@/components/shared/Markdown'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
@@ -264,7 +264,7 @@ export default function StudyArchiveDetailPage() {
                   </Button>
                 </div>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-                  <SecureMarkdown markdown={b.markdown} />
+                  <Markdown markdown={b.markdown} />
                 </div>
               </div>
             )

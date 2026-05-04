@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import shutil
 
 import backend.core.auth as auth
 
@@ -57,7 +57,7 @@ class TestJwtTokenVersioning(unittest.TestCase):
             finally:
                 try:
                     shutil.rmtree(tmpdir, ignore_errors=True)
-                except Exception:
+                except OSError:
                     pass
         finally:
             auth._users.clear()

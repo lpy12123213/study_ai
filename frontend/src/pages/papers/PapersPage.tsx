@@ -9,7 +9,11 @@ export default function PapersPage() {
     queryFn: () => papersApi.list().then((r) => r.data),
   })
 
-  const papers: { id: string; title: string; created_at: string }[] = data?.papers ?? data ?? []
+  const papers = (data?.papers ?? []).map((item) => ({
+    id: String(item.id),
+    title: item.name,
+    created_at: item.createdAt,
+  }))
 
   const handleDelete = async (id: string) => {
     await papersApi.delete(id)

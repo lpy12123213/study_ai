@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional, Tuple
+from typing import Tuple
 
 from fastapi import FastAPI, Request, Response
 from starlette.routing import Match
@@ -29,7 +29,7 @@ def _safe_import_prometheus():
         from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest  # type: ignore
 
         return (CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest)
-    except Exception:
+    except ImportError:
         return None
 
 
@@ -80,7 +80,7 @@ def _route_template(request: Request) -> str:
         # FastAPI mounts APIRoute objects in app.routes; use route.matches to find the
         # matching template path (`/api/tasks/{task_id}` instead of `/api/tasks/abc`).
         from fastapi.routing import APIRoute  # local import: optional in some minimal envs
-    except Exception:
+    except ImportError:
         APIRoute = None  # type: ignore[assignment]
 
     if APIRoute is not None:
@@ -92,7 +92,7 @@ def _route_template(request: Request) -> str:
                 if match == Match.FULL:
                     return str(getattr(route, "path", "") or request.url.path or "")
         except Exception:
-            logger.debug("prom_route_template_match_failed", exc_info=True)
+            logger.warning("prom_route_template_match_failed", exc_info=True)
 
     return str(request.url.path or "")
 
@@ -171,14 +171,17 @@ def instrument_app(app: FastAPI) -> None:
             try:
                 in_progress.labels(method=method).dec()
             except Exception:
+                logger.warning("prom_metrics_update_failed", extra={"op": "in_progress.dec"}, exc_info=True)
                 _warn_metrics_update_once("in_progress.dec")
             try:
                 requests_total.labels(method=method, path=label_path, status_code=str(status_code)).inc()
             except Exception:
+                logger.warning("prom_metrics_update_failed", extra={"op": "requests_total.inc"}, exc_info=True)
                 _warn_metrics_update_once("requests_total.inc")
             try:
                 request_duration.labels(method=method, path=label_path).observe(elapsed)
             except Exception:
+                logger.warning("prom_metrics_update_failed", extra={"op": "request_duration.observe"}, exc_info=True)
                 _warn_metrics_update_once("request_duration.observe")
 
     @app.get("/metrics", include_in_schema=False)

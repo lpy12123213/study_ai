@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional
 
 from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
-from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
+from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -62,7 +62,7 @@ class RefineDraftToolsMixin:
                 or os.getenv("STUDY_MATERIALS_CRITIQUE_THRESHOLD")
                 or "7.0"
             )
-        except Exception:
+        except (TypeError, ValueError):
             threshold = 7.0
         threshold = max(0.0, min(threshold, 10.0))
         try:
@@ -72,7 +72,7 @@ class RefineDraftToolsMixin:
             # In research mode, be stricter: don't skip refine unless score is very high.
             if preset == "research":
                 threshold = max(threshold, 8.5)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             logger.debug("refine_draft_threshold_adjust_failed", exc_info=True)
 
         points = _extract_points(args, ctx)
@@ -95,7 +95,7 @@ class RefineDraftToolsMixin:
             critique = critiques.get(kp) if isinstance(critiques.get(kp), dict) else {}
             try:
                 score = float(critique.get("score") or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 score = 0.0
             score = max(0.0, min(score, 10.0))
             instructions = critique.get("revision_instructions")
@@ -185,7 +185,7 @@ class RefineDraftToolsMixin:
                         s["refine_score_before"] = score
                         s["refine_threshold"] = threshold
                         break
-            except Exception:
+            except (AttributeError, TypeError):
                 logger.debug("refine_draft_patch_working_memory_failed", exc_info=True)
 
             return {

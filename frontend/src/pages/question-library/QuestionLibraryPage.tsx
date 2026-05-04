@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { questionLibraryApi } from '@/api/questionLibrary'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 import { useState } from 'react'
 
 export default function QuestionLibraryPage() {
@@ -9,7 +9,7 @@ export default function QuestionLibraryPage() {
     queryKey: ['question-library', search],
     queryFn: () => questionLibraryApi.list({ search }).then((r) => r.data),
   })
-  const questions: { id: string; content: string; type: string }[] = data?.questions ?? data ?? []
+  const questions = data?.questions ?? []
 
   return (
     <div className="flex flex-col h-full">
@@ -26,7 +26,7 @@ export default function QuestionLibraryPage() {
         {questions.map((q) => (
           <div key={q.id} className="border rounded-lg p-4 bg-card">
             <div className="text-xs text-muted-foreground mb-2">{q.type}</div>
-            <MarkdownRenderer content={q.content} />
+            <Markdown content={q.content} />
           </div>
         ))}
       </div>

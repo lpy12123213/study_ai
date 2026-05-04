@@ -18,8 +18,8 @@ export async function listAnnotations(params?: {
   tag?: string
   limit?: number
 }): Promise<Annotation[]> {
-  const res = await apiClient.get('/annotations', { params })
-  return (res.data?.annotations as Annotation[]) || []
+  const res = await apiClient.get<{ annotations?: Annotation[] }>('/annotations', { params })
+  return res.data.annotations || []
 }
 
 export async function createAnnotation(input: {
@@ -30,21 +30,21 @@ export async function createAnnotation(input: {
   content: string
   tags?: string[]
 }): Promise<Annotation> {
-  const res = await apiClient.post('/annotations', input)
-  return res.data?.annotation as Annotation
+  const res = await apiClient.post<{ annotation: Annotation }>('/annotations', input)
+  return res.data.annotation
 }
 
 export async function exportAnnotations(): Promise<Annotation[]> {
-  const res = await apiClient.get('/annotations/export')
-  return (res.data?.annotations as Annotation[]) || []
+  const res = await apiClient.get<{ annotations?: Annotation[] }>('/annotations/export')
+  return res.data.annotations || []
 }
 
 export async function updateAnnotation(
   annotationId: number | string,
   patch: { content?: string; tags?: string[] },
 ): Promise<Annotation> {
-  const res = await apiClient.patch(`/annotations/${encodeURIComponent(String(annotationId))}`, patch)
-  return res.data?.annotation as Annotation
+  const res = await apiClient.patch<{ annotation: Annotation }>(`/annotations/${encodeURIComponent(String(annotationId))}`, patch)
+  return res.data.annotation
 }
 
 export const annotationsApi = {
@@ -52,7 +52,7 @@ export const annotationsApi = {
   createAnnotation,
   exportAnnotations,
   updateAnnotation,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: { annotations: Annotation[] } }> => ({
     data: { annotations: await listAnnotations() },
   }),
 }

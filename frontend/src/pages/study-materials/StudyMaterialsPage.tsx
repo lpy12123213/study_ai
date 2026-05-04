@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { fetchSSE } from '@/api/sse'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function StudyMaterialsPage() {
   const [topic, setTopic] = useState('')
@@ -37,7 +37,7 @@ export default function StudyMaterialsPage() {
           {loading ? '生成中...' : '生成'}
         </button>
       </div>
-      {content && <div className="border rounded-lg p-4 bg-card"><MarkdownRenderer content={content} /></div>}
+      {content && <div className="border rounded-lg p-4 bg-card"><Markdown content={content} /></div>}
     </div>
   )
 }

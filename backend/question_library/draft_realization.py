@@ -8,7 +8,11 @@ from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
-from backend.question_library.gen_common import DEFAULT_SEARCH_CONFIG, _difficulty_instruction, _resolve_realize_temperature
+from backend.question_library.gen_common import (
+    DEFAULT_SEARCH_CONFIG,
+    _difficulty_instruction,
+    _resolve_realize_temperature,
+)
 from backend.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj, _extract_json_value
 from backend.question_library.gen_utils import ReasoningEventHandler
 from backend.question_library.subject_knowledge import get_subject_bank, infer_subject_family
@@ -37,7 +41,7 @@ def _resolve_realize_max_tokens() -> int:
                 )
     try:
         base = int(LESSON_PLAN_MAX_TOKENS or 0)
-    except Exception:
+    except (TypeError, ValueError):
         base = 0
     min_budget = int(DEFAULT_SEARCH_CONFIG.get("realize_min_max_tokens") or 5000)
     return max(base, min_budget)

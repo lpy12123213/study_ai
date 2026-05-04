@@ -6,6 +6,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Sequence
 
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class ThoughtNode:
@@ -122,14 +126,20 @@ class ToTEngine:
 
             # 1) Generate
             children: List[ThoughtNode] = []
-            for parent in frontier:
+            async def _propose_one(parent: ThoughtNode) -> tuple[ThoughtNode, List[Dict[str, Any]]]:
                 path = self._path_to(parent.id)
                 try:
                     proposals = await self._propose_fn(self.question, self.subject, path, self.branch_factor)
                 except Exception:
+                    logger.exception("tot_propose_failed", extra={"parent_id": parent.id})
                     proposals = []
                 if not isinstance(proposals, list):
                     proposals = []
+                return parent, proposals
+
+            propose_tasks = [asyncio.create_task(_propose_one(parent)) for parent in frontier]
+            for fut in asyncio.as_completed(propose_tasks):
+                parent, proposals = await fut
 
                 for p in proposals[: self.branch_factor]:
                     thought = str((p or {}).get("thought") or "").strip()
@@ -172,11 +182,12 @@ class ToTEngine:
                 try:
                     res = await self._evaluate_fn(self.question, self.subject, parent_path, payload)
                 except Exception:
+                    logger.exception("tot_evaluate_failed", extra={"node_id": node.id})
                     res = {}
                 score = res.get("score")
                 try:
                     node.score = float(score)
-                except Exception:
+                except (TypeError, ValueError):
                     node.score = 0.0
                 node.eval_reasoning = str(res.get("reasoning") or "").strip() or None
                 issues = res.get("issues")

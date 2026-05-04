@@ -69,7 +69,7 @@ async def get_knowledge_tree(self) -> Dict[str, Any]:
         )
         html_text = resp.text or ""
     except Exception as exc:
-        logger.warning("zujuan_knowledge_tree_fetch_failed", extra={"url": url, "error": str(exc)})
+        logger.warning("zujuan_knowledge_tree_fetch_failed", extra={"url": url, "error": str(exc)}, exc_info=True)
         return {"success": False, "error": str(exc), "nodes": []}
 
     if not html_text or len(html_text) < 200:
@@ -89,7 +89,7 @@ def parse_knowledge_sidebar(self, html_text: str, course_id_py: str, category_id
     """Parse the sidebar navigation tree from zujuan HTML into structured nodes."""
     try:
         from bs4 import BeautifulSoup  # type: ignore
-    except Exception:
+    except ImportError:
         return []
 
     soup = BeautifulSoup(html_text, "lxml")
@@ -283,4 +283,3 @@ def parse_sidebar_container(self, container: Any, RE_ZSD_ID) -> List[Dict[str, A
         break  # Only process the first top-level <ul>
 
     return nodes
-

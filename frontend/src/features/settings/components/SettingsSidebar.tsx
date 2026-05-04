@@ -5,7 +5,7 @@ export type SettingsTabId = 'account' | 'api' | 'appearance' | 'data' | 'about'
 
 const tabs: Array<{ id: SettingsTabId; label: string; icon: any }> = [
   { id: 'account', label: '账户', icon: User },
-  { id: 'api', label: 'API 配置', icon: Key },
+  { id: 'api', label: '模型连接', icon: Key },
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'data', label: '数据管理', icon: Database },
   { id: 'about', label: '关于', icon: Info },

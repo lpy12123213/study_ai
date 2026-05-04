@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from backend.agent.types import UserProfile
 from backend.agent.memory.semantic_store import SemanticDoc, SemanticStore
+from backend.agent.types import UserProfile
 
 
 class MemoryStore:
@@ -91,13 +91,13 @@ class MemoryStore:
             raw = self._path.read_text(encoding="utf-8")
             obj = json.loads(raw) if raw.strip() else {}
             return obj if isinstance(obj, dict) else {}
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError):
             return {}
 
     def _save_all(self, data: dict) -> None:
         try:
             self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
+        except (OSError, TypeError, ValueError):
             return None
 
 

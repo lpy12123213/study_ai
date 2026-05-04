@@ -47,7 +47,7 @@ def _study_archive_version_limit() -> int:
         return 20
     try:
         return max(0, min(int(raw), 200))
-    except Exception:
+    except (TypeError, ValueError):
         return 20
 
 
@@ -77,7 +77,7 @@ async def upsert_study_archive(
 
     try:
         sections_json = json.dumps(sections or [], ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         sections_json = "[]"
 
     base_fp = build_study_archive_fingerprint(subject=subj, topic=top, requirements=req, user_id=uid)
@@ -168,7 +168,7 @@ async def get_latest_study_archive(
         sections = json.loads(row.sections_json or "[]")
         if not isinstance(sections, list):
             sections = []
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         sections = []
 
     return {
@@ -221,7 +221,7 @@ async def get_latest_study_archive_for_subject(
         sections = json.loads(row.sections_json or "[]")
         if not isinstance(sections, list):
             sections = []
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         sections = []
 
     return {
@@ -292,7 +292,7 @@ async def get_study_archive_by_fingerprint(
         sections = json.loads(row.sections_json or "[]")
         if not isinstance(sections, list):
             sections = []
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         sections = []
 
     return {
@@ -337,7 +337,7 @@ async def get_study_archive(
         sections = json.loads(row.sections_json or "[]")
         if not isinstance(sections, list):
             sections = []
-    except Exception:
+    except (TypeError, json.JSONDecodeError):
         sections = []
 
     return {

@@ -93,6 +93,8 @@ export function useDeleteConversation() {
 
 export function useChatStream() {
   const [messages, setMessages] = useState<Message[]>([])
+  const [streamingMessageId, setStreamingMessageId] = useState<string>('')
+  const [streamingText, setStreamingText] = useState<string>('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<unknown>(null)
 
@@ -102,6 +104,8 @@ export function useChatStream() {
   const streamAbortRef = useRef<AbortController | null>(null)
   const streamKeyRef = useRef<string | null>(null)
   const taskIdRef = useRef<string | null>(null)
+  const streamingTextRef = useRef('')
+  const streamingMessageIdRef = useRef('')
 
   const cancelStream = useCallback(
     (reason = 'cancelled') => {
@@ -118,6 +122,10 @@ export function useChatStream() {
         taskIdRef.current = null
       }
 
+      streamingTextRef.current = ''
+      streamingMessageIdRef.current = ''
+      setStreamingText('')
+      setStreamingMessageId('')
       setIsStreaming(false)
     },
     [failTask]
@@ -162,20 +170,25 @@ export function useChatStream() {
         createdAt: new Date().toISOString(),
         steps: [],
       }
+      streamingTextRef.current = ''
+      streamingMessageIdRef.current = assistantMessage.id
+      setStreamingText('')
+      setStreamingMessageId(assistantMessage.id)
       setMessages((prev) => [...prev, assistantMessage])
 
       let deltaBuffer = ''
       let deltaRaf: number | null = null
 
       const flushDeltas = () => {
+        if (streamKeyRef.current !== streamKey) {
+          deltaBuffer = ''
+          return
+        }
         if (!deltaBuffer) return
         const chunk = deltaBuffer
         deltaBuffer = ''
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessage.id ? { ...m, content: m.content + chunk } : m
-          )
-        )
+        streamingTextRef.current += chunk
+        setStreamingText(streamingTextRef.current)
       }
 
       const scheduleFlush = () => {
@@ -274,14 +287,10 @@ export function useChatStream() {
               cancelAnimationFrame(deltaRaf)
               deltaRaf = null
             }
-            setMessages((prev) =>
-              prev.map((m) => {
-                if (m.id !== assistantMessage.id) return m
-                // Prefer the longer one to avoid overwriting stream deltas with a shorter payload.
-                if ((m.content || '').length >= finalText.length) return m
-                return { ...m, content: finalText }
-              })
-            )
+            if (streamingTextRef.current !== finalText) {
+              streamingTextRef.current = finalText
+              setStreamingText(finalText)
+            }
             return
           }
 
@@ -296,6 +305,22 @@ export function useChatStream() {
           const msg = err instanceof Error ? err.message : String(err || 'stream_failed')
           setError(err)
           failTask(taskId, msg)
+          if (deltaRaf != null) {
+            cancelAnimationFrame(deltaRaf)
+            deltaRaf = null
+            flushDeltas()
+          }
+          if (streamingMessageIdRef.current) {
+            const committedText = streamingTextRef.current
+            const committedId = streamingMessageIdRef.current
+            setMessages((prev) =>
+              prev.map((m) => (m.id === committedId ? { ...m, content: committedText } : m))
+            )
+          }
+          streamingTextRef.current = ''
+          streamingMessageIdRef.current = ''
+          setStreamingText('')
+          setStreamingMessageId('')
           setIsStreaming(false)
           streamAbortRef.current = null
           streamKeyRef.current = null
@@ -303,6 +328,22 @@ export function useChatStream() {
         },
         () => {
           if (streamKeyRef.current !== streamKey) return
+          if (deltaRaf != null) {
+            cancelAnimationFrame(deltaRaf)
+            deltaRaf = null
+            flushDeltas()
+          }
+          const committedText = streamingTextRef.current
+          const committedId = streamingMessageIdRef.current
+          if (committedId) {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === committedId ? { ...m, content: committedText } : m))
+            )
+          }
+          streamingTextRef.current = ''
+          streamingMessageIdRef.current = ''
+          setStreamingText('')
+          setStreamingMessageId('')
           completeTask(taskId)
           setIsStreaming(false)
           streamAbortRef.current = null
@@ -329,6 +370,8 @@ export function useChatStream() {
   return {
     messages,
     setMessages,
+    streamingMessageId,
+    streamingText,
     isStreaming,
     error,
     sendMessage,

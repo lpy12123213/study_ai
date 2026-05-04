@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -9,21 +10,30 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.api.auth_schemas import (
     ChangePasswordRequest,
+    LoginRequest,
+    LoginResponse,
     RegisterRequest,
     UserInfo,
     UserListResponse,
 )
+from backend.core.audit import AuditAction, audit_logger
 from backend.core.auth import (
+    JWT_EXPIRE_HOURS,
+    authenticate_user,
     change_user_password,
+    create_access_token,
     create_user,
     get_all_users,
     revoke_token_jti,
     validate_access_token,
 )
-from backend.core.audit import AuditAction, audit_logger
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
+
+
+def _request_ip(req: Request) -> str:
+    return str(getattr(req.client, "host", "") or "").strip()
 
 
 def local_auth_user() -> dict:
@@ -34,6 +44,44 @@ def local_auth_user() -> dict:
         "username": "本地用户",
         "role": "admin",
     }
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(payload: LoginRequest, http_request: Request) -> LoginResponse:
+    """Authenticate a user and return a JWT."""
+
+    user = authenticate_user(payload.username, payload.password)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
+
+    expires_delta = timedelta(hours=JWT_EXPIRE_HOURS)
+    expires_at = int((datetime.now(timezone.utc) + expires_delta).timestamp())
+    token = create_access_token(
+        {
+            "user_id": user["user_id"],
+            "username": user["username"],
+            "role": user.get("role") or "user",
+            "ver": int(user.get("token_version") or 1),
+        },
+        expires_delta=expires_delta,
+    )
+    audit_logger.log(
+        user_id=str(user.get("user_id") or "").strip(),
+        action=AuditAction.LOGIN,
+        resource="/api/auth/login",
+        ip=_request_ip(http_request),
+        details={"username": str(user.get("username") or "").strip()},
+    )
+    return LoginResponse(
+        access_token=token,
+        expires_at=expires_at,
+        user=UserInfo(
+            user_id=user["user_id"],
+            username=user["username"],
+            role=user.get("role") or "user",
+            created_at=user.get("created_at"),
+        ),
+    )
 
 
 async def get_current_user(
@@ -107,12 +155,6 @@ async def get_me(user: dict = Depends(require_auth)):
 @router.post("/register", response_model=UserInfo)
 async def register(payload: RegisterRequest, http_request: Request, admin: dict = Depends(require_admin)):
     """Register a new user (admin only)."""
-    def _ip(req: Request) -> str:
-        try:
-            return str(getattr(req.client, "host", "") or "").strip()
-        except Exception:
-            return ""
-
     user = create_user(payload.username, payload.password, payload.role)
     if not user:
         raise HTTPException(
@@ -124,7 +166,7 @@ async def register(payload: RegisterRequest, http_request: Request, admin: dict 
         user_id=str((admin or {}).get("user_id") or "").strip(),
         action=AuditAction.USER_REGISTER,
         resource="/api/auth/register",
-        ip=_ip(http_request),
+        ip=_request_ip(http_request),
         details={
             "created_user_id": str((user or {}).get("user_id") or "").strip(),
             "created_username": str((user or {}).get("username") or "").strip(),
@@ -157,15 +199,11 @@ async def change_password(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid old password",
         )
-    try:
-        ip = str(getattr(http_request.client, "host", "") or "").strip()
-    except Exception:
-        ip = ""
     audit_logger.log(
         user_id=str((user or {}).get("user_id") or "").strip(),
         action=AuditAction.PASSWORD_CHANGE,
         resource="/api/auth/change-password",
-        ip=ip,
+        ip=_request_ip(http_request),
         details={"username": str((user or {}).get("username") or "").strip()},
     )
     return {"message": "Password changed successfully"}
@@ -178,19 +216,15 @@ async def logout(http_request: Request, user: dict = Depends(require_auth)) -> d
     jti = str((user or {}).get("jti") or "").strip()
     try:
         exp_ts = int((user or {}).get("exp") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         exp_ts = 0
     if jti:
         revoke_token_jti(jti=jti, exp_ts=exp_ts)
-    try:
-        ip = str(getattr(http_request.client, "host", "") or "").strip()
-    except Exception:
-        ip = ""
     audit_logger.log(
         user_id=str((user or {}).get("user_id") or "").strip(),
         action=AuditAction.LOGOUT,
         resource="/api/auth/logout",
-        ip=ip,
+        ip=_request_ip(http_request),
         details={"username": str((user or {}).get("username") or "").strip()},
     )
     return {"success": True}

@@ -28,7 +28,7 @@ def _json_dumps(value: Any, *, default: str) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -38,7 +38,7 @@ def _json_loads(value: str, *, default: Any) -> Any:
         return default
     try:
         return json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return default
 
 

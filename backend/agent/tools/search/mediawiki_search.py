@@ -4,6 +4,9 @@ import asyncio
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class MediaWikiToolsMixin:
@@ -58,7 +61,7 @@ class MediaWikiToolsMixin:
                     kp = str(it.get("knowledge_point") or "").strip()
                     if kp:
                         existing_by_kp[kp] = it
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             existing_by_kp = {}
 
         from backend.mcp.search.mediawiki import mediawiki_search
@@ -99,6 +102,7 @@ class MediaWikiToolsMixin:
                 try:
                     return await _lookup_one(point)
                 except Exception as exc:  # pragma: no cover
+                    logger.exception("mediawiki_search_failed", extra={"knowledge_point": point})
                     return {
                         "success": False,
                         "knowledge_point": point,

@@ -169,6 +169,22 @@ PDF 依赖本机 LaTeX 引擎，DOCX 优先使用 Pandoc。
 
 筛选与蓝图字段见 `SEARCH_FILTERS_AND_BLUEPRINTS.md`。
 
+## OpenAI Function Calling 适配器
+
+主服务通过 integrations domain 暴露适配器路由：
+
+- `POST /api/integrations/openai/search-by-keyword`
+- `POST /api/integrations/openai/search-by-knowledge`
+- `POST /api/integrations/openai/filter-questions`
+- `GET /api/integrations/openai/question-info/{question_id}`
+- `POST /api/integrations/openai/create-paper`
+- `POST /api/integrations/openai/available-filters`
+- `POST /api/integrations/openai/compose-blueprint`
+- `GET /api/integrations/openai/papers`
+- `GET /api/integrations/openai/papers/{paper_id}`
+
+`backend.core.openai_adapter` 仅保留为独立启动兼容入口，复用同一个 integrations router。
+
 ## 本地题库与 AI 出题
 
 资源接口：

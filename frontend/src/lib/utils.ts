@@ -46,8 +46,12 @@ export function truncate(str: string, length: number): string {
   return str.slice(0, length) + '...'
 }
 
-export function generateId(): string {
-  return Math.random().toString(36).substring(2, 15)
+export function generateId(prefix = ''): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID().replace(/-/g, '')
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  return `${prefix}${randomId}`
 }
 
 export function groupByDate<T extends { createdAt: string }>(

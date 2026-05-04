@@ -81,7 +81,7 @@ def _parse_base_json(text: str) -> Optional[List[Dict[str, Any]]]:
         if isinstance(obj, list):
             return [x for x in obj if isinstance(x, dict)]
         return None
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
 
@@ -95,7 +95,7 @@ def _parse_province_list_json(text: str) -> Optional[List[Dict[str, Any]]]:
         if isinstance(obj, list):
             return [x for x in obj if isinstance(x, dict)]
         return None
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
 
@@ -139,7 +139,7 @@ def _safe_int(value: Any, default: int) -> int:
         if not s:
             return default
         return int(s)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -155,5 +155,5 @@ def _safe_float(value: Any) -> Optional[float]:
         if not s:
             return None
         return float(s)
-    except Exception:
+    except (TypeError, ValueError):
         return None

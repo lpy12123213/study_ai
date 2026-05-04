@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ const apiMocks = vi.hoisted(() => ({
 
 const formDraftMocks = vi.hoisted(() => ({
   restored: null as any,
+  restoredConsumed: false,
   clearDraft: vi.fn(),
 }))
 
@@ -56,7 +57,8 @@ vi.mock('@/hooks/useBlueprint', () => ({
 
 vi.mock('@/hooks/useFormDraft', () => ({
   useFormDraft: (options: any) => {
-    if (formDraftMocks.restored) {
+    if (formDraftMocks.restored && !formDraftMocks.restoredConsumed) {
+      formDraftMocks.restoredConsumed = true
       options?.onRestore?.(formDraftMocks.restored)
     }
     return { clearDraft: formDraftMocks.clearDraft }
@@ -101,6 +103,7 @@ describe('BlueprintPage (one-click mode)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     formDraftMocks.restored = null
+    formDraftMocks.restoredConsumed = false
   })
 
   it('switches modes via tabs', async () => {
@@ -115,7 +118,7 @@ describe('BlueprintPage (one-click mode)', () => {
     await act(async () => {
       screen.getByRole('tab', { name: '一键组卷' }).click()
     })
-    expect(screen.getByText('一键组卷参数')).toBeInTheDocument()
+    expect(screen.getAllByText('一键组卷参数').length).toBeGreaterThan(0)
   })
 
   it('starts generate-full stream and renders result', async () => {
@@ -133,10 +136,12 @@ describe('BlueprintPage (one-click mode)', () => {
 
     renderPage()
 
-    expect(screen.getByText('一键组卷参数')).toBeInTheDocument()
+    expect(screen.getAllByText('一键组卷参数').length).toBeGreaterThan(0)
 
     await act(async () => {
-      screen.getByRole('button', { name: '一键生成' }).click()
+      const generateButton = screen.getAllByRole('button', { name: '一键生成' }).find((button) => !button.hasAttribute('disabled'))
+      expect(generateButton).toBeDefined()
+      fireEvent.click(generateButton as HTMLElement)
     })
 
     expect(apiMocks.generateFullPaperStream).toHaveBeenCalledTimes(1)

@@ -204,7 +204,7 @@ async def generate_question_diagram(
                 preamble = str(obj.get("preamble") or "").strip()
                 published = await render_tikz_to_url(tikz=tikz, user_id=user_id, alt=alt, preamble=preamble)
     except Exception as exc:
-        logger.debug("question_library_diagram_render_failed", exc_info=True, extra={"subject": subject})
+        logger.exception("question_library_diagram_render_failed", extra={"subject": subject})
         return {"kind": kind, "success": False, "error": str(exc)}
 
     if not isinstance(published, dict) or not published.get("success"):
@@ -263,6 +263,7 @@ async def enrich_drafts_with_diagrams(
                     on_reasoning_event=on_reasoning_event,
                 )
             except Exception:
+                logger.exception("question_library_diagram_decision_failed", extra={"subject": subject})
                 decision = {"need_diagram": True, "kind": "auto"}
 
             if not bool(decision.get("need_diagram")):

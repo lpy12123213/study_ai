@@ -8,8 +8,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from backend.crawler.interface import CrawlerInterface
 from backend.core.subjects import SUBJECTS
+from backend.crawler.interface import CrawlerInterface
 
 
 def resolve_repo_env_file() -> Path:
@@ -74,7 +74,7 @@ async def diagnose_export(
             else:
                 env_check["status"] = "ok"
 
-        except Exception as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             env_check["status"] = "error"
             env_check["error"] = str(exc)
             diagnosis["issues"].append(f"❌ 读取.env文件失败: {exc}")
@@ -164,7 +164,7 @@ async def diagnose_export(
                             "questions_count": len(data.get("questions", [])),
                         }
                         diagnosis["raw_data"]["empty_sync_response"] = data
-                    except Exception:
+                    except (ValueError, TypeError, AttributeError):
                         api_check["details"]["empty_sync"]["response_text"] = (resp.text or "")[:200]
 
                 current_time = int(time.time() * 1000)
@@ -217,14 +217,14 @@ async def diagnose_export(
                             api_check["details"]["add_question"]["question_added"] = False
                             diagnosis["issues"].append(f"⚠️ 题目{test_question_id}未出现在响应的questions中")
 
-                    except Exception as exc:
+                    except (ValueError, TypeError, AttributeError) as exc:
                         api_check["details"]["add_question"]["parse_error"] = str(exc)
                         api_check["details"]["add_question"]["response_text"] = (resp2.text or "")[:200]
                 else:
                     api_check["status"] = "http_error"
                     diagnosis["issues"].append(f"❌ API返回HTTP {resp2.status_code}")
 
-        except Exception as exc:
+        except (httpx.HTTPError, OSError, TypeError, ValueError) as exc:
             api_check["status"] = "error"
             api_check["error"] = str(exc)
             diagnosis["issues"].append(f"❌ API测试失败: {exc}")

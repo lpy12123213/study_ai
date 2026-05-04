@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from backend.llm.client import chat_completion
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     FIREWORKS_API_KEY,
     FIREWORKS_BASE_URL,
@@ -18,6 +18,9 @@ from backend.core.settings import (
     REVIEW_TIMEOUT,
 )
 from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.client import chat_completion
+
+logger = get_logger(__name__)
 
 
 def _prompt(prompt_id: str) -> str:
@@ -119,6 +122,7 @@ async def review_question(
             return {"error": "No response from API", "verdict": "ERROR"}
         return _parse_review(review_text)
     except Exception as exc:
+        logger.exception("mcp_review_question_failed")
         return {"error": f"Review failed: {exc}", "verdict": "ERROR"}
 
 
@@ -357,6 +361,7 @@ Output clear, structured review comments directly. Do not output JSON.
             "questions_reviewed": len(questions),
         }
     except Exception as exc:
+        logger.exception("mcp_review_questions_failed")
         return {
             "success": False,
             "error": f"请求错误: {exc}",

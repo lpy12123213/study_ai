@@ -1,13 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import { annotationsApi } from '@/api/annotations'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function AnnotationsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['annotations'],
     queryFn: () => annotationsApi.list().then((r) => r.data),
   })
-  const items: { id: string; content: string; source: string }[] = data?.annotations ?? data ?? []
+  const items = (data?.annotations ?? []).map((item) => ({
+    id: String(item.id),
+    content: item.content,
+    source: item.snippet || item.item_type,
+  }))
 
   return (
     <div className="space-y-4">
@@ -17,7 +21,7 @@ export default function AnnotationsPage() {
         {items.map((item) => (
           <div key={item.id} className="border rounded-lg p-4 bg-card space-y-1">
             <div className="text-xs text-muted-foreground">{item.source}</div>
-            <MarkdownRenderer content={item.content} />
+            <Markdown content={item.content} />
           </div>
         ))}
       </div>

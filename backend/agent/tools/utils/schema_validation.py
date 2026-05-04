@@ -33,7 +33,7 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
     try:
         return int(s)
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -47,7 +47,7 @@ def _coerce_float(value: Any) -> Optional[float]:
         return None
     try:
         return float(s)
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -56,7 +56,7 @@ def _clamp_number(value: Any, *, minimum: Optional[float], maximum: Optional[flo
         return None
     try:
         v = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return value
     if minimum is not None:
         v = max(float(minimum), v)
@@ -157,11 +157,11 @@ def validate_and_coerce_args(*, schema: Dict[str, Any], args: Any, tool_name: st
             coerced = str(value)
             try:
                 min_len = int(prop_schema.get("minLength")) if prop_schema.get("minLength") is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 min_len = None
             try:
                 max_len = int(prop_schema.get("maxLength")) if prop_schema.get("maxLength") is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 max_len = None
             if max_len is not None and len(coerced) > max_len:
                 coerced = coerced[:max_len]
@@ -197,7 +197,7 @@ def validate_and_coerce_args(*, schema: Dict[str, Any], args: Any, tool_name: st
             # Clamp length if requested.
             try:
                 max_items = int(prop_schema.get("maxItems")) if prop_schema.get("maxItems") is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 max_items = None
             if max_items is not None and len(coerced_items) > max_items:
                 coerced_items = coerced_items[:max_items]
@@ -217,4 +217,3 @@ def validate_and_coerce_args(*, schema: Dict[str, Any], args: Any, tool_name: st
         out[key] = coerced
 
     return out
-

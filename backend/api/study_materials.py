@@ -26,6 +26,7 @@ from backend.api.study_materials_schemas import (
     StudyMaterialsGenerateRequest,
 )
 from backend.core.logging_utils import get_logger
+from backend.core.text_utils import clip_text as _clip_text
 from backend.study_materials.orchestrator_singleton import study_material_tasks as _tasks
 
 router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependencies=[Depends(require_auth)])
@@ -35,15 +36,6 @@ logger = get_logger(__name__)
 def _env_truthy(name: str) -> bool:
     raw = (os.getenv(name) or "").strip().lower()
     return raw in {"1", "true", "yes", "y", "on"}
-
-
-def _clip_text(text: str, *, max_chars: int) -> str:
-    if max_chars <= 0:
-        return ""
-    t = text or ""
-    if len(t) <= max_chars:
-        return t
-    return t[: max_chars - 1].rstrip() + "…"
 
 
 def _sse_headers() -> dict:
@@ -98,7 +90,7 @@ async def generate_study_materials(
     if request.max_points is not None:
         try:
             n = int(request.max_points)
-        except Exception:
+        except (TypeError, ValueError):
             n = 0
         if n > 0:
             options["max_points"] = max(1, min(n, 15))
@@ -127,10 +119,7 @@ async def convert_markdown_to_latex(
 
     profile = UserProfile(user_id=user_id)
     if subject:
-        try:
-            profile.preferences["subject"] = subject
-        except Exception:
-            logger.debug("study_materials_set_subject_pref_failed", extra={"subject": subject}, exc_info=True)
+        profile.preferences["subject"] = subject
 
     ctx = CompressedContext(
         user_profile=profile,
@@ -167,10 +156,7 @@ async def convert_markdown_to_latex_stream(
 
     profile = UserProfile(user_id=user_id)
     if subject:
-        try:
-            profile.preferences["subject"] = subject
-        except Exception:
-            logger.debug("study_materials_set_subject_pref_failed", extra={"subject": subject}, exc_info=True)
+        profile.preferences["subject"] = subject
 
     ctx = CompressedContext(
         user_profile=profile,
@@ -218,7 +204,7 @@ async def convert_markdown_to_latex_stream(
                     evt = None
                     try:
                         evt = queue_task.result()
-                    except Exception:
+                    except asyncio.CancelledError:
                         evt = None
                     if isinstance(evt, dict) and evt.get("event"):
                         yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
@@ -235,8 +221,8 @@ async def convert_markdown_to_latex_stream(
                     evt = event_queue.get_nowait()
                     if isinstance(evt, dict) and evt.get("event"):
                         yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
-            except Exception:
-                logger.debug("study_materials_event_queue_drain_failed", exc_info=True)
+            except asyncio.QueueEmpty:
+                pass
 
             step_result = await tool_task
             elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -251,6 +237,7 @@ async def convert_markdown_to_latex_stream(
             yield f"data: {json.dumps(agent_event('progress', {'percent': 100, 'stage': '完成'}), ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(agent_event('done', out), ensure_ascii=False)}\n\n"
         except Exception as exc:
+            logger.exception("study_materials_latex_stream_failed")
             yield f"data: {json.dumps(agent_event('error', {'message': str(exc)}), ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -296,12 +283,12 @@ async def get_study_materials_task(task_id: str, user: dict = Depends(require_au
         seq_offset = getattr(task, "seq_offset", 0)
         try:
             first_seq = int(seq_offset) + 1
-        except Exception:
+        except (TypeError, ValueError):
             first_seq = 1
     else:
         try:
             first_seq = int(first_seq)
-        except Exception:
+        except (TypeError, ValueError):
             first_seq = 1
 
     return {

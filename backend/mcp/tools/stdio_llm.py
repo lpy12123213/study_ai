@@ -19,7 +19,7 @@ def extract_json_obj(text: str) -> Dict[str, Any]:
     try:
         obj = json.loads(raw)
         return obj if isinstance(obj, dict) else {}
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
 
 

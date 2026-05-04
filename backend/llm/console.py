@@ -41,7 +41,7 @@ def _max_delta_chars() -> int:
         return 3000
     try:
         v = int(raw)
-    except Exception:
+    except (TypeError, ValueError):
         v = 3000
     return max(0, min(v, 20000))
 
@@ -52,7 +52,7 @@ _RAW_STREAM_NEEDS_NEWLINE: Dict[str, bool] = {}
 def _stdout_is_tty() -> bool:
     try:
         return bool(getattr(sys.stdout, "isatty", lambda: False)())
-    except Exception:
+    except (AttributeError, OSError, ValueError):
         return False
 
 
@@ -73,14 +73,14 @@ def _safe_write(text: str) -> None:
         return
     except UnicodeEncodeError:
         pass
-    except Exception:
+    except (AttributeError, OSError, ValueError):
         return
 
     try:
         enc = getattr(sys.stdout, "encoding", None) or "utf-8"
         sys.stdout.buffer.write(s.encode(enc, errors="replace"))
         sys.stdout.buffer.flush()
-    except Exception:
+    except (AttributeError, OSError, TypeError, ValueError):
         return
 
 
@@ -90,14 +90,14 @@ def _safe_print(line: str) -> None:
         return
     except UnicodeEncodeError:
         pass
-    except Exception:
+    except (OSError, ValueError):
         return
 
     try:
         enc = getattr(sys.stdout, "encoding", None) or "utf-8"
         sys.stdout.buffer.write((line + "\n").encode(enc, errors="replace"))
         sys.stdout.buffer.flush()
-    except Exception:
+    except (AttributeError, OSError, TypeError, ValueError):
         return
 
 

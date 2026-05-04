@@ -215,7 +215,7 @@ export default function PaperDetailPage() {
             ) : (
               <Download className="h-4 w-4 mr-2" />
             )}
-            导出 Markdown
+            导出可编辑文档
           </Button>
           <Button
             variant="outline"

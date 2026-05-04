@@ -4,6 +4,9 @@ import asyncio
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class StackExchangeToolsMixin:
@@ -43,7 +46,7 @@ class StackExchangeToolsMixin:
                     kp = str(it.get("knowledge_point") or "").strip()
                     if kp:
                         existing_by_kp[kp] = it
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             existing_by_kp = {}
 
         from backend.mcp.search.stackexchange import stackexchange_search
@@ -100,6 +103,7 @@ class StackExchangeToolsMixin:
                 try:
                     return await _search_one(point)
                 except Exception as exc:  # pragma: no cover
+                    logger.exception("stackexchange_search_failed", extra={"knowledge_point": point})
                     return {
                         "knowledge_point": point,
                         "success": False,

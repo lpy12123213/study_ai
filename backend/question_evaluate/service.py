@@ -11,7 +11,6 @@ from backend.core.subjects import resolve_subject
 from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion_text
 
-
 ProgressCallback = Callable[[int, int, QuestionEvaluation], Awaitable[None]]
 
 
@@ -33,14 +32,14 @@ def _extract_json_obj(text: str) -> Dict[str, Any]:
     try:
         obj = json.loads(raw[start : end + 1])
         return obj if isinstance(obj, dict) else {}
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -205,4 +204,3 @@ async def evaluate_questions_batch(
 
     results = await asyncio.gather(*[_run(q) for q in questions[:50]])
     return sorted(results, key=lambda item: int(getattr(item, "overall_score", 0) or 0), reverse=True)
-

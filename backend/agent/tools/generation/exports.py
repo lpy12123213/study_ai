@@ -47,7 +47,7 @@ class ExportToolsMixin:
 
         try:
             path.write_text(markdown + ("\n" if not markdown.endswith("\n") else ""), encoding="utf-8")
-        except Exception as exc:
+        except OSError as exc:
             return {"success": False, "error": str(exc), "dir": str(out_dir), "filename": filename}
 
         ctx.working_memory["archive_path"] = str(path)
@@ -88,7 +88,7 @@ class ExportToolsMixin:
             ctx.working_memory["md_url"] = url
             ctx.working_memory["md_filename"] = filename
         except Exception:
-            logger.debug("export_store_working_memory_failed", exc_info=True)
+            logger.exception("export_store_working_memory_failed")
 
         return {
             "md_url": url,

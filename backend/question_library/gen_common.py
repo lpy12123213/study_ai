@@ -6,7 +6,6 @@ from typing import List
 from backend.core.settings import LESSON_PLAN_TEMPERATURE
 from backend.question_library.subject_knowledge import get_subject_bank
 
-
 DEFAULT_SEARCH_CONFIG = {
     "preset": "balanced-creative",
     "depth": 4,

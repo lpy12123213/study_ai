@@ -28,7 +28,7 @@ def _json_dumps(value, *, default: str) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -38,7 +38,7 @@ def _json_loads(value: str, *, default):
         return default
     try:
         return json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return default
 
 
@@ -194,4 +194,3 @@ async def list_item_meta(
         if t:
             out = [x for x in out if t in set([str(v).strip() for v in (x.get("tags") or [])])]
     return out
-

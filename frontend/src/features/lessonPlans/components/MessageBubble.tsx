@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
-import { SecureMarkdown } from '@/components/shared/SecureMarkdown'
+import { Markdown } from '@/components/shared/Markdown'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { Button } from '@/components/ui/button'
+import { APP_ASSISTANT_NAME } from '@/constants/branding'
 import type { Message } from '@/types'
 import { LessonPlanAttachment } from '@/features/lessonPlans/components/LessonPlanAttachment'
 
@@ -32,11 +33,11 @@ export function MessageBubble({ message }: { message: Message }) {
         <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
           <BrandMark size={12} />
         </div>
-        <span>学习助手</span>
+        <span>{APP_ASSISTANT_NAME}</span>
       </div>
 
       <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <SecureMarkdown markdown={message.content} />
+        <Markdown markdown={message.content} />
       </div>
 
       {message.attachment?.type === 'lesson_plan' && <LessonPlanAttachment lessonPlanId={message.attachment.lessonPlanId} />}

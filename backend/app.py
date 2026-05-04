@@ -10,14 +10,10 @@ API 路由在 `backend/api/` 下；此文件负责：
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import ipaddress
 import os
 import re
 import sys
-import time
-import uuid
-from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -26,6 +22,7 @@ from typing import AsyncIterator, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -33,25 +30,30 @@ if __package__ is None or __package__ == "":
     # Allow running as a script: `python backend/app.py`
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from backend.api.media import close_proxy_http_client
-from backend.api.error_codes import ErrorCode, build_error_payload, is_safe_error_code
-from backend.api.router import api_router
 from backend.api.auth import local_auth_user
+from backend.api.error_codes import ErrorCode, build_error_payload, is_safe_error_code
+from backend.api.media import close_proxy_http_client
 from backend.api.middleware.input_validation import InputValidationMiddleware
-from backend.core.auth import validate_access_token
+from backend.api.middleware.rate_limit import register_rate_limit_middleware
+from backend.api.middleware.request_id import ensure_request_id, register_request_id_middleware
+from backend.api.middleware.security_headers import register_security_headers_middleware
+from backend.api.router import api_router
 from backend.core.audit import AuditAction, audit_logger
+from backend.core.auth import validate_access_token
+from backend.core.config_check import log_config_check
+from backend.core.logging_utils import configure_logging, get_logger
+from backend.core.metrics import instrument_app
+from backend.crawler.manager import close_crawler
+from backend.database.engine import init_db
 from backend.llm.client import (
+    close_shared_llm_http_client,
     reset_llm_api_key_override,
     reset_moonshot_api_key_override,
     set_llm_api_key_override,
     set_moonshot_api_key_override,
 )
-from backend.core.logging_utils import configure_logging, get_logger, get_request_id, set_client_ip, set_request_id
-from backend.crawler.manager import close_crawler
-from backend.database.engine import init_db
 from backend.media.generated import cleanup_expired_generated_files
 from backend.question_library.worker import run_question_library_scoring_worker
-from backend.core.metrics import instrument_app
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
@@ -76,7 +78,7 @@ def _env_int(name: str, *, default: int) -> int:
         return int(default)
     try:
         return int(raw)
-    except Exception:
+    except ValueError:
         return int(default)
 
 
@@ -116,7 +118,7 @@ def _client_ip(request: Request) -> str:
                             v = host
                     if v and v.lower() != "unknown":
                         return v
-            except Exception:
+            except (IndexError, ValueError):
                 logger.debug("failed to parse Forwarded header", exc_info=True)
 
         # X-Forwarded-For can be a list: client, proxy1, proxy2...
@@ -160,7 +162,7 @@ def _parse_trusted_proxies(raw: str) -> list[ipaddress._BaseNetwork]:
         except ValueError:
             continue
         except Exception:
-            logger.debug("failed to parse TRUSTED_PROXIES entry", extra={"value": p}, exc_info=True)
+            logger.exception("failed to parse TRUSTED_PROXIES entry", extra={"value": p})
     return nets
 
 
@@ -200,27 +202,9 @@ def _is_trusted_proxy(request: Request) -> bool:
     except ValueError:
         return False
     except Exception:
-        logger.debug("failed to parse request.client.host", extra={"host": host}, exc_info=True)
+        logger.exception("failed to parse request.client.host", extra={"host": host})
         return False
     return any(ip in net for net in nets)
-
-
-def _ensure_request_id(request: Request) -> str:
-    """Return a stable request_id for this request, generating one if needed.
-
-    This is used by exception handlers so even error responses produced before
-    middleware completion still include a request_id.
-    """
-
-    rid = get_request_id() or str(request.headers.get("X-Request-ID") or "").strip()
-    if rid:
-        return rid
-    rid = f"req_{uuid.uuid4().hex[:12]}"
-    try:
-        set_request_id(rid)
-    except Exception:
-        logger.debug("failed to set request_id context", exc_info=True)
-    return rid
 
 
 class _CachedAssetFiles(StaticFiles):
@@ -230,7 +214,7 @@ class _CachedAssetFiles(StaticFiles):
             if resp.status_code == 200:
                 resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
         except Exception:
-            logger.debug("failed to set cache headers for asset", exc_info=True)
+            logger.exception("failed to set cache headers for asset")
         return resp
 
 
@@ -245,7 +229,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         await task_runtime.restart_recovery(reason="server_restarted")
     except Exception:
-        logger.debug("task_runtime_restart_recovery_failed", exc_info=True)
+        logger.exception("task_runtime_restart_recovery_failed")
 
     # Question-library sessions/previews are stored as local JSON snapshots. If the
     # process restarts mid-run, some sessions may remain at status=running and the
@@ -257,7 +241,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if changed:
             logger.info("question_library_sessions_interrupted_on_startup", extra={"count": int(changed or 0)})
     except Exception:
-        logger.debug("question_library_sessions_interrupted_on_startup_failed", exc_info=True)
+        logger.exception("question_library_sessions_interrupted_on_startup_failed")
 
     # Restore study-materials tasks snapshots early (under lock) so refresh/replay works.
     try:
@@ -265,7 +249,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         await study_material_tasks.restore_tasks_from_disk()
     except Exception:
-        logger.debug("study_material_tasks_restore_failed", exc_info=True)
+        logger.exception("study_material_tasks_restore_failed")
 
     stop = asyncio.Event()
     worker_task: Optional[asyncio.Task] = None
@@ -286,13 +270,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
             await task_runtime.shutdown(reason="server_shutdown")
         except Exception:
-            logger.debug("task_runtime_shutdown_failed", exc_info=True)
+            logger.exception("task_runtime_shutdown_failed")
         try:
             from backend.study_materials.orchestrator_singleton import study_material_tasks
 
             await study_material_tasks.shutdown(reason="server_shutdown")
         except Exception:
-            logger.debug("study_materials_shutdown_failed", exc_info=True)
+            logger.exception("study_materials_shutdown_failed")
 
         if worker_task is not None:
             try:
@@ -313,105 +297,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             except Exception:
                 logger.exception("cleanup_task_shutdown_failed")
         await close_crawler()
+        await close_shared_llm_http_client()
         await close_proxy_http_client()
-
-
-class _SlidingWindowRateLimiter:
-    """Bounded sliding-window rate limiter (per key).
-
-    - Stores per-key hit timestamps in a deque.
-    - Uses an LRU eviction policy to keep memory bounded (protects against many unique IPs).
-    """
-
-    def __init__(self, *, max_requests: int, window_s: float, max_keys: int) -> None:
-        self.max_requests = max(0, int(max_requests or 0))
-        self.window_s = max(0.001, float(window_s or 0.0))
-        self.max_keys = max(1, int(max_keys or 1))
-
-        self._lock = asyncio.Lock()
-        self._hits: "OrderedDict[str, deque[float]]" = OrderedDict()
-
-    def _prune_bucket(self, bucket: deque[float], *, now: float) -> None:
-        while bucket and (now - bucket[0]) > self.window_s:
-            bucket.popleft()
-
-    def _evict_if_needed(self) -> None:
-        while len(self._hits) > self.max_keys:
-            self._hits.popitem(last=False)
-
-    async def is_limited(self, key: str) -> bool:
-        """Check whether `key` is currently rate-limited without consuming a slot."""
-
-        if self.max_requests <= 0:
-            return False
-
-        k = str(key or "").strip()
-        if not k:
-            return False
-
-        now = time.monotonic()
-        async with self._lock:
-            bucket = self._hits.get(k)
-            if not bucket:
-                self._hits.pop(k, None)
-                return False
-
-            self._prune_bucket(bucket, now=now)
-            if not bucket:
-                self._hits.pop(k, None)
-                return False
-
-            self._hits.move_to_end(k)
-            return len(bucket) >= self.max_requests
-
-    async def allow(self, key: str) -> bool:
-        """Consume a slot for `key` if allowed; returns True when request should proceed."""
-
-        if self.max_requests <= 0:
-            return True
-
-        k = str(key or "").strip()
-        if not k:
-            return True
-
-        now = time.monotonic()
-        async with self._lock:
-            bucket = self._hits.get(k)
-            if bucket is None:
-                bucket = deque()
-                self._hits[k] = bucket
-
-            self._prune_bucket(bucket, now=now)
-            if len(bucket) >= self.max_requests:
-                self._hits.move_to_end(k)
-                return False
-
-            bucket.append(now)
-            self._hits.move_to_end(k)
-            self._evict_if_needed()
-            return True
-
-    async def record(self, key: str) -> None:
-        """Record a hit for `key` (best-effort) without checking allowance."""
-
-        if self.max_requests <= 0:
-            return
-
-        k = str(key or "").strip()
-        if not k:
-            return
-
-        now = time.monotonic()
-        async with self._lock:
-            bucket = self._hits.get(k)
-            if bucket is None:
-                bucket = deque()
-                self._hits[k] = bucket
-
-            self._prune_bucket(bucket, now=now)
-            bucket.append(now)
-            self._hits.move_to_end(k)
-            self._evict_if_needed()
 
 
 def create_app() -> FastAPI:
@@ -427,6 +314,7 @@ def create_app() -> FastAPI:
 
     # Security warnings for proxy-header trust settings (startup-time).
     _warn_proxy_settings_on_startup()
+    log_config_check()
 
     # Optional OpenTelemetry tracing (disabled by default; enable with OTEL_ENABLE=1).
     try:
@@ -434,7 +322,7 @@ def create_app() -> FastAPI:
 
         setup_otel(app)
     except Exception:
-        logger.debug("otel_setup_failed", exc_info=True)
+        logger.exception("otel_setup_failed")
 
     # CORS: restrict origins in production; allow localhost for dev.
     cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
@@ -453,24 +341,14 @@ def create_app() -> FastAPI:
             "X-Moonshot-API-Key",
         ],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(InputValidationMiddleware)
 
-    @app.middleware("http")
-    async def security_headers_middleware(request: Request, call_next):
-        response = await call_next(request)
-        try:
-            response.headers.setdefault("X-Content-Type-Options", "nosniff")
-            response.headers.setdefault("X-Frame-Options", "DENY")
-            response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-            response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-            response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-        except Exception:
-            logger.debug("failed to set security headers", exc_info=True)
-        return response
+    register_security_headers_middleware(app)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-        rid = _ensure_request_id(request)
+        rid = ensure_request_id(request)
         detail = exc.detail
         msg = detail if isinstance(detail, str) else str(ErrorCode.HTTP_ERROR)
         code = f"http_{int(exc.status_code or 500)}"
@@ -491,7 +369,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-        rid = _ensure_request_id(request)
+        rid = ensure_request_id(request)
         errors = exc.errors()
         for err in errors:
             if str(err.get("type") or "").strip() != "string_too_long":
@@ -524,7 +402,7 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled_exception", extra={"path": str(request.url.path or "")})
-        rid = _ensure_request_id(request)
+        rid = ensure_request_id(request)
         payload = build_error_payload(
             code=str(ErrorCode.INTERNAL_ERROR),
             message=str(ErrorCode.INTERNAL_ERROR),
@@ -536,99 +414,8 @@ def create_app() -> FastAPI:
         response.headers.setdefault("X-Request-ID", rid)
         return response
 
-    rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
-    rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")
-    rate_limit_keys_max = int(os.getenv("API_RATE_LIMIT_MAX_KEYS") or "20000")
-    rate_limit_max = max(0, min(rate_limit_max, 50_000))
-    rate_limit_window_s = max(1.0, min(rate_limit_window_s, 3600.0))
-    rate_limit_keys_max = max(100, min(rate_limit_keys_max, 200_000))
-
-    api_rate_limiter = _SlidingWindowRateLimiter(
-        max_requests=rate_limit_max,
-        window_s=rate_limit_window_s,
-        max_keys=rate_limit_keys_max,
-    )
-
-    auth_fail_limit_max = int(os.getenv("AUTH_RATE_LIMIT_MAX_FAILS") or "5")
-    auth_fail_limit_window_s = float(os.getenv("AUTH_RATE_LIMIT_WINDOW_S") or "900")
-    auth_fail_limit_max = max(0, min(auth_fail_limit_max, 10_000))
-    auth_fail_limit_window_s = max(1.0, min(auth_fail_limit_window_s, 24 * 3600.0))
-
-    auth_fail_limiter = _SlidingWindowRateLimiter(
-        max_requests=auth_fail_limit_max,
-        window_s=auth_fail_limit_window_s,
-        max_keys=min(rate_limit_keys_max, 50_000),
-    )
-
-    @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next):
-        incoming = str(request.headers.get("X-Request-ID") or "").strip()
-        rid = incoming or f"req_{uuid.uuid4().hex[:12]}"
-        set_request_id(rid)
-        try:
-            set_client_ip(_client_ip(request))
-        except Exception:
-            logger.debug("failed to set client_ip context", exc_info=True)
-        response = await call_next(request)
-        try:
-            response.headers["X-Request-ID"] = rid
-        except Exception:
-            logger.debug("failed to set X-Request-ID header", exc_info=True)
-        return response
-
-    @app.middleware("http")
-    async def rate_limit_middleware(request: Request, call_next):
-        if request.method == "OPTIONS":
-            return await call_next(request)
-
-        path = request.url.path or ""
-        if not path.startswith("/api/"):
-            return await call_next(request)
-
-        # Extra strict per-IP rate limiting for auth endpoints (brute-force protection).
-        # Count only failure responses (e.g. 401).
-        auth_path = path in {"/api/auth/register"}
-        host = _client_ip(request)
-        auth_key = f"auth_fail:ip:{host}"
-        if auth_path and await auth_fail_limiter.is_limited(auth_key):
-            rid = _ensure_request_id(request)
-            response = JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "rate_limited",
-                    "error": {"code": "rate_limited", "message": "rate_limited", "request_id": rid},
-                },
-            )
-            response.headers.setdefault("X-Request-ID", rid)
-            return response
-
-        key = ""
-        auth = str(request.headers.get("Authorization") or "")
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-            if token:
-                digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
-                key = f"token:{digest}"
-
-        if not key:
-            key = f"ip:{host}"
-
-        if not await api_rate_limiter.allow(key):
-            rid = _ensure_request_id(request)
-            response = JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "rate_limited",
-                    "error": {"code": "rate_limited", "message": "rate_limited", "request_id": rid},
-                },
-            )
-            response.headers.setdefault("X-Request-ID", rid)
-            return response
-
-        response = await call_next(request)
-        if auth_path and response.status_code in {400, 401, 403}:
-            await auth_fail_limiter.record(auth_key)
-        return response
+    register_request_id_middleware(app, client_ip=_client_ip)
+    register_rate_limit_middleware(app, client_ip=_client_ip)
 
     @app.middleware("http")
     async def llm_api_key_override_middleware(request: Request, call_next):
@@ -673,7 +460,7 @@ def create_app() -> FastAPI:
                 )
             except Exception:
                 # Best-effort only; never block request on audit failures.
-                logger.debug("audit_api_key_use_failed", exc_info=True)
+                logger.exception("audit_api_key_use_failed")
 
         llm_token = set_llm_api_key_override(llm_key_header if permitted else "")
         moonshot_token = set_moonshot_api_key_override(moonshot_key_header if permitted else "")

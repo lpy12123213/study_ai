@@ -1,5 +1,21 @@
-import { apiClient, fetchSSERequest } from './client'
+import { LONG_TASK_CREATE_TIMEOUT_MS, apiClient, fetchSSERequest } from './client'
 import type { Blueprint, BlueprintSlot, Paper, TaskStep } from '@/types'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object')
+}
+
+function recordString(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined
+  const item = value[key]
+  return typeof item === 'string' ? item : undefined
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  const message = recordString(error, 'message')
+  return message || 'request_failed'
+}
 
 export interface ComposeRequest {
   taskId?: string
@@ -46,8 +62,7 @@ export interface ComposeStreamEvent {
     result?: Paper
     error?: string
     message?: string
-    [key: string]: any
-  }
+  } & Record<string, unknown>
 }
 
 export interface SaveBlueprintRequest {
@@ -85,14 +100,14 @@ export function composePaperStream(
   onComplete?: () => void
 ): void {
   apiClient
-    .post('/tasks/papers/compose', request)
+    .post('/tasks/papers/compose', request, { timeout: LONG_TASK_CREATE_TIMEOUT_MS })
     .then((res) => {
-      const taskId = String((res.data as any)?.taskId || request.taskId || '').trim()
+      const taskId = String(recordString(res.data, 'taskId') || request.taskId || '').trim()
       if (!taskId) throw new Error('missing_task_id')
       streamComposeTask(taskId, 0, onEvent, onError, onComplete)
     })
-    .catch((err: any) => {
-      const message = typeof err?.message === 'string' ? err.message : 'request_failed'
+    .catch((err: unknown) => {
+      const message = errorMessage(err)
       onError?.(err instanceof Error ? err : new Error(message))
     })
 }

@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -40,21 +39,18 @@ class TestQuestionLibraryWorkerOnce(unittest.IsolatedAsyncioTestCase):
             items=[{"question_id": "q1", "subject": "高中数学", "origin": "crawled"}],
         )
 
-        fake = json.dumps(
-            {
-                "verdict": "差题",
-                "overall_score": 60,
-                "dimensions": [],
-                "highlights": [],
-                "issues": [],
-                "summary": "bad",
-            },
-            ensure_ascii=False,
-        )
+        fake = {
+            "verdict": "差题",
+            "overall_score": 60,
+            "dimensions": [],
+            "highlights": [],
+            "issues": [],
+            "summary": "bad",
+        }
 
         from backend.question_library.worker import score_batch_once
 
-        with patch("backend.question_library.scoring.chat_completion_text", new=AsyncMock(return_value=fake)):
+        with patch("backend.question_library.scoring.run_json", new=AsyncMock(return_value=fake)):
             n = await score_batch_once(user_id="u1", subject="高中数学", model="dummy", threshold=70, limit=10)
         self.assertEqual(n, 1)
 

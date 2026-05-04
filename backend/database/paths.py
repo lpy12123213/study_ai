@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -15,6 +16,17 @@ def resolve_db_path() -> Path:
     """
 
     project_root = resolve_project_root()
+    configured = str(os.getenv("STUDY_AI_DB_PATH") or "").strip()
+    if configured:
+        path = Path(configured)
+        if not path.is_absolute():
+            path = project_root / path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return path
+
     local_dir = project_root / ".local"
     legacy_db_path = project_root / "exam_papers.db"
     db_path = local_dir / "exam_papers.db"
@@ -26,5 +38,5 @@ def resolve_db_path() -> Path:
         else:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         return db_path
-    except Exception:
+    except OSError:
         return legacy_db_path

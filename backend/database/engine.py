@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from typing import AsyncGenerator
 
 from sqlalchemy import event
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -17,13 +19,14 @@ logger = get_logger(__name__)
 DB_PATH = resolve_db_path()
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH.as_posix()}"
 
+
 def _get_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
     if not raw:
         return default
     try:
         return int(raw)
-    except Exception:
+    except ValueError:
         return default
 
 
@@ -33,11 +36,14 @@ def _get_float(name: str, default: float) -> float:
         return default
     try:
         return float(raw)
-    except Exception:
+    except ValueError:
         return default
 
 
 DB_BUSY_TIMEOUT_S = float(_get_float("DB_BUSY_TIMEOUT_S", 30.0))
+# SQLite/aiosqlite still serializes writes at the database-file level. These pool
+# knobs only control how many async connections can wait on SQLite locks; they do
+# not increase write throughput like PostgreSQL. See docs/DB_CONCURRENCY.md.
 DB_POOL_SIZE = int(_get_int("DB_POOL_SIZE", 5))
 DB_MAX_OVERFLOW = int(_get_int("DB_MAX_OVERFLOW", 10))
 DB_POOL_TIMEOUT_S = float(_get_float("DB_POOL_TIMEOUT_S", 30.0))
@@ -46,6 +52,20 @@ DB_BUSY_TIMEOUT_S = max(1.0, min(DB_BUSY_TIMEOUT_S, 300.0))
 DB_POOL_SIZE = max(1, min(DB_POOL_SIZE, 50))
 DB_MAX_OVERFLOW = max(0, min(DB_MAX_OVERFLOW, 200))
 DB_POOL_TIMEOUT_S = max(1.0, min(DB_POOL_TIMEOUT_S, 300.0))
+
+
+def sqlite_pragmas() -> tuple[str, ...]:
+    """SQLite connection tuning used by both connect hooks and init checks."""
+
+    return (
+        "PRAGMA journal_mode=WAL;",
+        f"PRAGMA busy_timeout={int(DB_BUSY_TIMEOUT_S * 1000)};",
+        "PRAGMA foreign_keys=ON;",
+        "PRAGMA synchronous=NORMAL;",
+        "PRAGMA temp_store=MEMORY;",
+        "PRAGMA cache_size=-32000;",
+        "PRAGMA mmap_size=268435456;",
+    )
 
 engine = create_async_engine(
     DATABASE_URL,
@@ -69,13 +89,10 @@ def _on_sqlite_connect(dbapi_connection, _connection_record) -> None:  # pragma:
     # Best-effort: configure SQLite for better concurrency and predictable behavior.
     try:
         cursor = dbapi_connection.cursor()
-        # WAL mode improves concurrent read/write workloads significantly.
-        cursor.execute("PRAGMA journal_mode=WAL;")
-        # Avoid immediate 'database is locked' under concurrent writes.
-        cursor.execute(f"PRAGMA busy_timeout={int(DB_BUSY_TIMEOUT_S * 1000)};")
-        cursor.execute("PRAGMA foreign_keys=ON;")
+        for pragma in sqlite_pragmas():
+            cursor.execute(pragma)
         cursor.close()
-    except Exception:
+    except (AttributeError, RuntimeError, sqlite3.Error):
         # Never fail engine creation due to PRAGMA issues.
         logger.debug("sqlite_pragma_setup_failed", exc_info=True)
 
@@ -91,11 +108,12 @@ async def init_db() -> None:
     """Initialize DB schema (create tables + best-effort migrations)."""
 
     async with engine.begin() as conn:
-        # Ensure WAL is enabled at least once even if connect events are skipped.
+        # Ensure PRAGMAs are applied at least once even if connect events are skipped.
         try:
-            await conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
-        except Exception:
-            logger.debug("sqlite_wal_pragma_failed", exc_info=True)
+            for pragma in sqlite_pragmas():
+                await conn.exec_driver_sql(pragma)
+        except SQLAlchemyError:
+            logger.debug("sqlite_pragma_setup_failed", exc_info=True)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(sync_migrate_db_schema)
 
@@ -115,15 +133,12 @@ def pool_metrics() -> dict:
         return {"pool": None}
     out = {"pool_class": type(pool).__name__}
     for name in ("size", "checkedin", "checkedout", "overflow"):
-        try:
-            fn = getattr(pool, name)
-        except Exception:
-            continue
+        fn = getattr(pool, name, None)
         if not callable(fn):
             continue
         try:
             out[name] = fn()
-        except Exception:
+        except (RuntimeError, TypeError, ValueError):
             continue
     try:
         out["status"] = pool.status()  # type: ignore[no-untyped-call]

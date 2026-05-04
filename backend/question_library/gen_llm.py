@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import inspect
 import json
-import re
 from typing import Any, Dict, List
 
+from backend.core.logging_utils import get_logger
 from backend.core.settings import STUDY_MATERIALS_THINKING_EFFORT_DEFAULT
-from backend.llm.client import chat_completion, chat_completion_text
+from backend.llm.json_utils import strip_code_fences
+from backend.llm.runner import run_text, run_tool_use
 from backend.mcp.tools.python_scientific_compute import openai_tool_spec as scientific_compute_tool_spec
 from backend.mcp.tools.python_scientific_compute import python_scientific_compute
 from backend.question_library.gen_utils import (
@@ -14,6 +15,10 @@ from backend.question_library.gen_utils import (
     _format_generation_tool_call_log,
     _format_generation_tool_result_log,
 )
+
+chat_completion = run_tool_use
+chat_completion_text = run_text
+logger = get_logger(__name__)
 
 
 async def _emit_reasoning_event(
@@ -49,6 +54,7 @@ async def _emit_reasoning_event(
         if inspect.isawaitable(result):
             await result
     except Exception:
+        logger.warning("question_generation_reasoning_event_failed", exc_info=True)
         return
 
 
@@ -113,7 +119,19 @@ async def _chat_json_with_reasoning(
                 retries=retries,
                 req_id_prefix=req_id_prefix,
             )
+        except RuntimeError as exc:
+            tool_mode_failed = True
+            await _emit_reasoning_event(
+                on_reasoning_event,
+                event_type="reasoning_status",
+                stage_id=stage_id,
+                stage_label=stage_label,
+                mode="trace",
+                message=f"科学计算工具接线失败，已回退普通生成: {str(exc or '').strip()[:220]}",
+            )
+            break
         except Exception as exc:
+            logger.warning("question_generation_tool_mode_failed", exc_info=True)
             tool_mode_failed = True
             await _emit_reasoning_event(
                 on_reasoning_event,
@@ -139,7 +157,7 @@ async def _chat_json_with_reasoning(
             if isinstance(raw_args, str):
                 try:
                     arguments = json.loads(raw_args)
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     arguments = {}
             else:
                 arguments = raw_args if isinstance(raw_args, dict) else {}
@@ -229,13 +247,7 @@ def _extract_json_obj(text: str) -> Dict[str, Any]:
 
 
 def _strip_json_fence(text: str) -> str:
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z0-9_-]*\\s*", "", raw).lstrip()
-        raw = re.sub(r"\\s*```$", "", raw).rstrip()
-    return raw
+    return strip_code_fences(text)
 
 
 def _repair_json_backslashes(raw: str) -> str:
@@ -334,6 +346,6 @@ def _extract_json_value(text: str) -> Any:
             repaired = _repair_json_backslashes(candidate)
             if repaired != candidate:
                 return json.loads(repaired)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             continue
     return {}

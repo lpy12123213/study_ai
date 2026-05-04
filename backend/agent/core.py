@@ -5,10 +5,10 @@ import os
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from backend.agent.config import AgentConfig
 from backend.agent import auto_research as agent_auto_research
 from backend.agent import run_init as agent_run_init
 from backend.agent import streaming as agent_streaming
+from backend.agent.config import AgentConfig
 from backend.agent.context import ContextManager
 from backend.agent.executor import Executor
 from backend.agent.memory import MemoryStore, SemanticStore
@@ -16,7 +16,7 @@ from backend.agent.planner import Planner
 from backend.agent.policy import StudyMaterialsPolicy
 from backend.agent.react.loop import ReActLoop
 from backend.agent.reflector import Reflector
-from backend.agent.streaming import _clip_chars, _extract_kp_source_text, _strip_markdown_headings
+from backend.agent.streaming import _extract_kp_source_text, _strip_markdown_headings
 from backend.agent.tool_dispatch import ToolDispatcher
 from backend.agent.types import (
     ActionResults,
@@ -29,7 +29,8 @@ from backend.agent.types import (
     agent_event,
 )
 from backend.core.logging_utils import get_logger
-from backend.llm.client import chat_completion_text, is_llm_configured
+from backend.core.text_utils import clip_text as _clip_chars
+from backend.llm.client import cacheable_message, chat_completion_text, is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -82,6 +83,7 @@ class AgentCore:
 
         self.state: AgentState = AgentState.IDLE
         self.last_context: Optional[CompressedContext] = None
+        self._post_done_tasks: set[asyncio.Task[None]] = set()
 
         self._tool_dispatch = ToolDispatcher(
             config=self.config,
@@ -99,6 +101,40 @@ class AgentCore:
     def _set_state(self, state: AgentState) -> None:
         self.state = state
 
+    def _schedule_post_done_job(self, name: str, coro: Any) -> Optional[asyncio.Task[None]]:
+        task = asyncio.create_task(coro, name=name)
+        self._post_done_tasks.add(task)
+
+        def _finalize(done_task: asyncio.Task[None]) -> None:
+            self._post_done_tasks.discard(done_task)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                logger.debug("%s_canceled", name)
+            except Exception:
+                logger.warning("%s_failed", name, exc_info=True)
+
+        task.add_done_callback(_finalize)
+        return task
+
+    def _schedule_semantic_upsert(
+        self,
+        *,
+        user_id: str,
+        docs: List[Any],
+        timeout_s: float,
+    ) -> Optional[asyncio.Task[None]]:
+        if not docs:
+            return None
+
+        async def _run() -> None:
+            await asyncio.wait_for(
+                self.semantic_store.upsert(user_id=user_id, docs=docs),
+                timeout=timeout_s,
+            )
+
+        return self._schedule_post_done_job("semantic_store_upsert", _run())
+
     async def _summarize_subagent(self, *, ctx: CompressedContext, kp: str) -> str:
         kp = str(kp or "").strip()
         if not kp:
@@ -108,7 +144,10 @@ class AgentCore:
         if not src:
             return ""
 
-        model = str(self.config.summarizer_model or self.config.planner_model or "").strip()
+        model = self.config.model_for_tier(
+            "fast",
+            fallback=str(self.config.summarizer_model or self.config.planner_model or ""),
+        )
         if model and is_llm_configured():
             prompt = (
                 "Write a concise summary for the knowledge point below.\n"
@@ -122,7 +161,7 @@ class AgentCore:
             try:
                 text = await chat_completion_text(
                     messages=[
-                        {"role": "system", "content": "You are an instructional summarizer. Output plain text only."},
+                        cacheable_message("system", "You are an instructional summarizer. Output plain text only."),
                         {"role": "user", "content": prompt},
                     ],
                     model=model,
@@ -136,7 +175,7 @@ class AgentCore:
                     text = _strip_markdown_headings(text).replace("```", "").strip()
                     return _clip_chars(text, max_chars=220)
             except Exception:
-                logger.debug("agent_subagent_summary_llm_failed", exc_info=True)
+                logger.warning("agent_subagent_summary_llm_failed", exc_info=True)
 
         return _clip_chars(_strip_markdown_headings(src), max_chars=220)
 
@@ -146,14 +185,11 @@ class AgentCore:
         if not kp or not summary:
             return
 
-        try:
-            bucket = ctx.working_memory.get("subagent_summaries")
-            if not isinstance(bucket, dict):
-                bucket = {}
-                ctx.working_memory["subagent_summaries"] = bucket
-            bucket[kp] = summary
-        except Exception:
-            logger.debug("agent_subagent_summary_store_failed", exc_info=True)
+        bucket = ctx.working_memory.get("subagent_summaries")
+        if not isinstance(bucket, dict):
+            bucket = {}
+            ctx.working_memory["subagent_summaries"] = bucket
+        bucket[kp] = summary
 
     def _set_plan_summary(
         self,
@@ -164,11 +200,8 @@ class AgentCore:
         plan: Optional[ExecutionPlan],
         export_only: bool,
     ) -> None:
-        try:
-            opts = ctx.working_memory.get("study_options")
-            opts = dict(opts) if isinstance(opts, dict) else {}
-        except Exception:
-            opts = {}
+        opts = ctx.working_memory.get("study_options")
+        opts = dict(opts) if isinstance(opts, dict) else {}
 
         preset = str(opts.get("preset") or "").strip().lower()
         if preset not in {"quick", "standard", "deep", "research"}:
@@ -289,12 +322,9 @@ class AgentCore:
         ):
             yield evt
 
-        try:
-            ctx = out.get("ctx")
-            if isinstance(ctx, CompressedContext):
-                self.last_context = ctx
-        except Exception:
-            logger.debug("agent_last_context_set_failed", exc_info=True)
+        ctx = out.get("ctx")
+        if isinstance(ctx, CompressedContext):
+            self.last_context = ctx
 
     def _build_export_only_plan(self, *, user_input: str, subject: str, compile_err: str) -> ExecutionPlan:
         return ExecutionPlan(
@@ -333,10 +363,7 @@ class AgentCore:
         )
 
     async def _start_export_subagent(self, *, ctx: CompressedContext, kp: str) -> AsyncIterator[Dict[str, Any]]:
-        try:
-            ctx.working_memory["_export_subagent_kp"] = kp
-        except Exception:
-            logger.debug("agent_export_subagent_state_set_failed", exc_info=True)
+        ctx.working_memory["_export_subagent_kp"] = kp
         yield agent_event("subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
         yield agent_event("status", {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
 
@@ -347,10 +374,7 @@ class AgentCore:
         kp: str,
         content: str,
     ) -> AsyncIterator[Dict[str, Any]]:
-        try:
-            ctx.working_memory.pop("_export_subagent_kp", None)
-        except Exception:
-            logger.debug("agent_export_subagent_state_clear_failed", exc_info=True)
+        ctx.working_memory.pop("_export_subagent_kp", None)
         yield agent_event("subagent_end", {"knowledge_point": kp, "content": content})
         yield agent_event("status", {"content": content})
 
@@ -405,10 +429,7 @@ class AgentCore:
                 if degraded_reason in {"timeout", "error"}:
                     yield agent_event("degraded_plan", {"reason": degraded_reason})
 
-            try:
-                self._set_plan_summary(ctx=ctx, topic=user_input, profile=profile, plan=plan, export_only=export_only)
-            except Exception:
-                logger.debug("agent_plan_summary_set_failed", exc_info=True)
+            self._set_plan_summary(ctx=ctx, topic=user_input, profile=profile, plan=plan, export_only=export_only)
 
             if plan.rationale:
                 yield agent_event("status", {"content": plan.rationale})
@@ -624,7 +645,7 @@ class AgentCore:
                     tool_budget = (
                         int(max_iterations) if max_iterations is not None else int(self.config.react_max_iterations)
                     )
-                except Exception:
+                except (TypeError, ValueError):
                     tool_budget = int(self.config.react_max_iterations or 20)
                 tool_budget = max(1, min(tool_budget, 50))
 
@@ -687,12 +708,9 @@ class AgentCore:
                 semantic_timeout_s = float(os.getenv("AGENT_SEMANTIC_UPSERT_TIMEOUT_S") or "3.0")
                 semantic_timeout_s = max(0.2, min(semantic_timeout_s, 30.0))
                 docs = agent_streaming.build_semantic_docs_for_run(ctx=ctx, user_input=user_input, markdown=markdown)
-                await asyncio.wait_for(
-                    self.semantic_store.upsert(user_id=user_id, docs=docs),
-                    timeout=semantic_timeout_s,
-                )
+                self._schedule_semantic_upsert(user_id=user_id, docs=docs, timeout_s=semantic_timeout_s)
             except Exception:
-                logger.debug("semantic_store_upsert_failed", exc_info=True)
+                logger.warning("semantic_store_upsert_schedule_failed", exc_info=True)
 
             async for evt in agent_streaming.compress_context(
                 ctx=ctx,
@@ -743,5 +761,6 @@ class AgentCore:
             )
 
         except Exception as exc:  # pragma: no cover (best-effort safety)
+            logger.exception("study_material_agent_run_failed")
             self.state = AgentState.ERROR
             yield agent_event("error", {"message": str(exc)})

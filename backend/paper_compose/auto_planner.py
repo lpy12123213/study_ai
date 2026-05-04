@@ -100,7 +100,7 @@ async def plan_exam_structure(
 
     try:
         resolved_subject = resolve_subject(subj_input, strict=True)
-    except Exception:
+    except ValueError:
         resolved_subject = subj_input
 
     if not is_llm_configured():
@@ -169,14 +169,14 @@ async def plan_exam_structure(
             continue
         try:
             cnt = int(s.get("count") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             cnt = 0
         if cnt <= 0:
             continue
         diff = str(s.get("difficulty") or "").strip() or "中等"
         try:
             pts = int(s.get("points_each") or s.get("points") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             pts = 0
         pts = max(0, min(pts, 60))
         keyword = str(s.get("keyword") or "").strip()
@@ -199,4 +199,3 @@ async def plan_exam_structure(
         return get_default_paper_structure(resolved_subject)
 
     return {"slots": normalized_slots, "notes": [str(x).strip() for x in (obj.get("notes") or []) if str(x or "").strip()][:8]}
-

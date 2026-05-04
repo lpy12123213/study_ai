@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from backend.api.question_evaluate import evaluate_generated_question_review
+from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.question_library import upsert_question_library_items
@@ -16,13 +17,14 @@ from backend.question_library.generation import regenerate_question_section
 from backend.question_library.preview_store import (
     delete_preview,
     find_latest_pending_preview,
-    find_preview_by_session_id,
     find_session_by_preview_id,
-    list_sessions as list_saved_sessions,
     load_preview,
     load_session,
     save_preview,
     save_session,
+)
+from backend.question_library.preview_store import (
+    list_sessions as list_saved_sessions,
 )
 from backend.question_library.session_utils import (
     committed_ids_from_drafts,
@@ -33,6 +35,8 @@ from backend.question_library.session_utils import (
     serialize_session_preview,
     serialize_session_summary,
 )
+
+logger = get_logger(__name__)
 
 
 async def list_question_library_sessions(*, user_id: str) -> dict:
@@ -494,6 +498,7 @@ async def regenerate_preview_section(
             }
             yield format_event("done", done_payload)
         except Exception as exc:
+            logger.exception("question_library_regenerate_section_stream_failed")
             yield format_event(
                 "error",
                 {
@@ -516,6 +521,7 @@ async def _load_session_task_events(user_id: str, task_ids: List[str]) -> List[d
         try:
             task_events = await db_list_task_events(user_id=user_id, task_id=str(task_id), after_seq=0, limit=500)
         except Exception:
+            logger.exception("question_library_session_task_events_load_failed", extra={"task_id": str(task_id)})
             task_events = []
         for event in task_events or []:
             if isinstance(event, dict):

@@ -24,7 +24,7 @@ def _get_int(name: str, default: int) -> int:
         return int(default)
     try:
         return int(raw)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -46,10 +46,10 @@ def _isoformat_utc_z(dt: Optional[datetime]) -> str:
         else:
             dt = dt.astimezone(timezone.utc)
         return dt.isoformat().replace("+00:00", "Z")
-    except Exception:
+    except (AttributeError, OSError, ValueError):
         try:
             raw = dt.isoformat()
-        except Exception:
+        except AttributeError:
             return ""
         return f"{raw}Z" if raw and not raw.endswith("Z") else raw
 
@@ -74,7 +74,7 @@ def _json_dumps(value: Any, *, default: str) -> str:
     else:
         try:
             raw = json.dumps(value, ensure_ascii=False)
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     if len(raw) <= TASK_JSON_MAX_CHARS:
@@ -99,7 +99,7 @@ def _json_loads(value: str, *, default: Any) -> Any:
         return default
     try:
         return json.loads(raw)
-    except Exception:
+    except json.JSONDecodeError:
         return default
 
 
@@ -144,7 +144,7 @@ def _task_duration_seconds(task: Task) -> Optional[float]:
         return None
     try:
         duration = (ended_at - started_at).total_seconds()
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         return None
     if duration < 0:
         return None
@@ -532,7 +532,8 @@ async def get_task(
     user_id: str,
     task_id: str,
     include_events: bool = False,
-    events_limit: int = 500,
+    events_limit: int = 200,
+    events_after_seq: int = 0,
     session: Optional[AsyncSession] = None,
 ) -> Optional[dict]:
     uid = _require_user_id(user_id)
@@ -548,6 +549,7 @@ async def get_task(
                 task_id=tid,
                 include_events=include_events,
                 events_limit=events_limit,
+                events_after_seq=events_after_seq,
                 session=session,
             )
 
@@ -558,11 +560,14 @@ async def get_task(
 
     out = _task_to_dict(task)
     if include_events:
+        limit_safe = max(1, min(int(events_limit or 200), 5000))
+        requested_after_seq = max(0, int(events_after_seq or 0))
+        after_seq = requested_after_seq if requested_after_seq > 0 else max(0, int(task.last_seq or 0) - limit_safe)
         events = await list_task_events(
             user_id=uid,
             task_id=tid,
-            after_seq=max(0, int(task.last_seq or 0) - int(events_limit or 500)),
-            limit=events_limit,
+            after_seq=after_seq,
+            limit=limit_safe,
             session=session,
         )
         out["events"] = events
@@ -574,7 +579,7 @@ async def list_task_events(
     user_id: str,
     task_id: str,
     after_seq: int = 0,
-    limit: int = 2000,
+    limit: int = 200,
     session: Optional[AsyncSession] = None,
 ) -> List[dict]:
     uid = _require_user_id(user_id)
@@ -591,11 +596,12 @@ async def list_task_events(
     if not res.scalar_one_or_none():
         return []
 
+    limit_safe = max(1, min(int(limit or 200), 5000))
     stmt = (
         select(TaskEvent)
         .where(TaskEvent.task_id == tid, TaskEvent.seq > int(after_seq or 0))
         .order_by(TaskEvent.seq.asc())
-        .limit(int(limit or 2000))
+        .limit(limit_safe)
     )
     result = await session.execute(stmt)
     items = result.scalars().all()
@@ -651,7 +657,7 @@ async def average_duration_seconds(
         try:
             if started_at and ended_at:
                 durations.append((ended_at - started_at).total_seconds())
-        except Exception:
+        except (OverflowError, TypeError, ValueError):
             continue
 
     if not durations:
@@ -684,7 +690,7 @@ async def fail_running_tasks_on_startup(
     now = utcnow_naive()
     try:
         limit_n = int(limit or 0)
-    except Exception:
+    except (TypeError, ValueError):
         limit_n = 5000
     limit_n = max(1, min(limit_n, 50_000))
 

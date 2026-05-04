@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Optional
-
 import os
+from typing import List, Optional
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -229,7 +228,7 @@ async def create_canvas_board_version(
     raw_max_keep = str(os.getenv("CANVAS_VERSION_MAX_KEEP") or "").strip()
     try:
         max_keep = int(raw_max_keep) if raw_max_keep else 30
-    except Exception:
+    except ValueError:
         max_keep = 30
     max_keep = max(0, min(max_keep, 500))
     if max_keep > 0:

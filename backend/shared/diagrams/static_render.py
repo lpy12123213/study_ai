@@ -31,7 +31,7 @@ def _repo_root() -> Path:
 def _clamp_timeout_s(timeout_s: float, *, default: float = 240.0) -> float:
     try:
         t = float(timeout_s or 0.0)
-    except Exception:
+    except (TypeError, ValueError):
         t = float(default)
     return max(10.0, min(t, 60.0 * 20.0))
 

@@ -4,6 +4,8 @@ import re
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 
+from backend.core.text_utils import clip_text as _clip_text
+
 _PDF_URL_RE = re.compile(r"\.pdf(?:$|[?#])", re.IGNORECASE)
 
 
@@ -15,20 +17,9 @@ def _looks_like_pdf_url(url: str) -> bool:
         path = (urlparse(u).path or "").lower()
         if path.endswith(".pdf"):
             return True
-    except Exception:
+    except ValueError:
         return bool(_PDF_URL_RE.search(u))
     return bool(_PDF_URL_RE.search(u))
-
-
-def _clip_text(text: str, *, max_chars: int) -> str:
-    t = (text or "").strip()
-    if not t:
-        return ""
-    if max_chars <= 0:
-        return ""
-    if len(t) <= max_chars:
-        return t
-    return t[: max_chars - 1].rstrip() + "…"
 
 
 def _compact_snippet(text: str, *, max_chars: int = 400) -> str:

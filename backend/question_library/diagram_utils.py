@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from backend.core.logging_utils import get_logger
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
@@ -71,6 +71,7 @@ async def render_schematic_to_url(
     try:
         png_bytes = render_schematic(spec if isinstance(spec, dict) else {})
     except Exception as exc:
+        logger.exception("question_library_diagram_render_failed")
         return {"success": False, "error": str(exc)}
 
     published = await publish_generated_bytes(

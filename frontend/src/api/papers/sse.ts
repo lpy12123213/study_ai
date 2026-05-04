@@ -1,0 +1,1 @@
+export { generateFullPaperStream } from './client'

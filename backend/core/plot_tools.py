@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
+_PLOT_EVAL_EXCEPTIONS = (ArithmeticError, AttributeError, NameError, SyntaxError, TypeError, ValueError)
 
 
 def _as_str(value: Any) -> str:
@@ -18,7 +19,7 @@ def _as_str(value: Any) -> str:
 def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
     try:
         n = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = default
     return max(min_value, min(max_value, n))
 
@@ -26,7 +27,7 @@ def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> i
 def _clamp_float(value: Any, *, default: float, min_value: float, max_value: float) -> float:
     try:
         n = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = default
     if math.isnan(n) or math.isinf(n):
         n = default
@@ -109,7 +110,7 @@ def _style_linestyle(style: Dict[str, Any]) -> str:
 def _float_or_none(value: Any) -> Any:
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -587,7 +588,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
         try:
             y = _safe_eval_expr(expr, variables={"x": x})
             y = np.asarray(y, dtype=float)
-        except Exception as exc:
+        except _PLOT_EVAL_EXCEPTIONS as exc:
             warnings.append({"kind": "curve", "expr": expr, "reason": str(exc)})
             continue
         if y.shape != x.shape:
@@ -616,13 +617,13 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 Z = _safe_eval_expr(expr, variables={"x": X, "y": Y})
                 Z = np.asarray(Z, dtype=float)
-            except Exception as exc:
+            except _PLOT_EVAL_EXCEPTIONS as exc:
                 warnings.append({"kind": "implicit_curve", "expr": expr, "reason": str(exc)})
                 continue
             try:
                 ax.contour(X, Y, Z, levels=[0.0], colors=[color], linewidths=[lw])
                 rendered_any = True
-            except Exception:
+            except (RuntimeError, TypeError, ValueError):
                 continue
 
     vlines = [v for v in _iter_list(spec.get("vlines")) if isinstance(v, (int, float, str, dict))]
@@ -634,7 +635,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
             x0 = v
         try:
             xv = float(x0)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         ax.axvline(xv, color="#9ca3af", linewidth=1.3, linestyle="--", alpha=0.9)
         rendered_any = True
@@ -648,7 +649,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
             y0 = v
         try:
             yv = float(y0)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         ax.axhline(yv, color="#9ca3af", linewidth=1.3, linestyle="--", alpha=0.9)
         rendered_any = True
@@ -658,7 +659,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
         idx = t.get("curve_index")
         try:
             ci = int(idx)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if ci < 0 or ci >= len(curves):
             continue
@@ -668,7 +669,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
             continue
         try:
             x0 = float(t.get("at_x"))
-        except Exception:
+        except (TypeError, ValueError):
             continue
 
         h = _clamp_float(t.get("h"), default=1e-3, min_value=1e-6, max_value=1.0)
@@ -676,7 +677,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
             y0 = float(_safe_eval_expr(expr, variables={"x": x0}))
             yp = float(_safe_eval_expr(expr, variables={"x": x0 + h}))
             ym = float(_safe_eval_expr(expr, variables={"x": x0 - h}))
-        except Exception:
+        except _PLOT_EVAL_EXCEPTIONS:
             continue
         m = (yp - ym) / (2.0 * h)
         xs = np.array([float(x_min), float(x_max)], dtype=float)
@@ -692,7 +693,7 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
         try:
             px = float(p.get("x"))
             py = float(p.get("y"))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         label = _as_str(p.get("label") or "")
         ax.scatter([px], [py], s=32, color=_as_str(p.get("color") or "#111827"))
@@ -708,14 +709,14 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
         try:
             x0 = float(a.get("x"))
             y0 = float(a.get("y"))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         arrow_to = a.get("arrow_to")
         if isinstance(arrow_to, (list, tuple)) and len(arrow_to) >= 2:
             try:
                 tx = float(arrow_to[0])
                 ty = float(arrow_to[1])
-            except Exception:
+            except (TypeError, ValueError):
                 tx, ty = x0, y0
             ax.annotate(text, xy=(tx, ty), xytext=(x0, y0), arrowprops={"arrowstyle": "->", "lw": 1.3})
         else:
@@ -793,8 +794,8 @@ def render_3d_plot(spec: Dict[str, Any]) -> bytes:
     azim = _clamp_float(spec.get("view_azim"), default=-55.0, min_value=-360.0, max_value=360.0)
     try:
         ax.view_init(elev=float(elev), azim=float(azim))
-    except Exception:
-        logger.debug("plot_view_init_failed", exc_info=True)
+    except (TypeError, ValueError, RuntimeError):
+        logger.warning("plot_view_init_failed", exc_info=True)
 
     return _to_png_bytes(fig, dpi=dpi)
 
@@ -962,7 +963,7 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
             ang = f.get("angle_deg")
             try:
                 a = float(ang)
-            except Exception:
+            except (TypeError, ValueError):
                 a = 0.0
             rad = math.radians(a)
             dx, dy = math.cos(rad), math.sin(rad)
@@ -999,14 +1000,14 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
         try:
             x0 = float(a.get("x"))
             y0 = float(a.get("y"))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         arrow_to = a.get("arrow_to")
         if isinstance(arrow_to, (list, tuple)) and len(arrow_to) >= 2:
             try:
                 tx = float(arrow_to[0])
                 ty = float(arrow_to[1])
-            except Exception:
+            except (TypeError, ValueError):
                 tx, ty = x0, y0
             ax.annotate(text, xy=(tx, ty), xytext=(x0, y0), arrowprops={"arrowstyle": "->", "lw": 1.3}, zorder=3.0)
         else:

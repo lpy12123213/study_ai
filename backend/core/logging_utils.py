@@ -49,7 +49,7 @@ def get_trace_id() -> str:
         ctx = span.get_span_context() if span else None
         if ctx and getattr(ctx, "trace_id", 0):
             return f"{int(ctx.trace_id):032x}"
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, OverflowError):
         return ""
     return ""
 

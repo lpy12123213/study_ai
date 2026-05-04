@@ -24,12 +24,11 @@ export type SearchResult =
       archive_id: number
       score?: number
     }
-  | {
+  | ({
       type: string
       title?: string
       snippet?: string
-      [key: string]: any
-    }
+    } & Record<string, unknown>)
 
 export type SearchResponse = {
   query: string
@@ -54,7 +53,7 @@ export async function searchAll(params: {
 
 export const searchApi = {
   searchAll,
-  search: async (params: { q: string; types?: string[]; limit?: number }): Promise<{ data: any }> => ({
+  search: async (params: { q: string; types?: string[]; limit?: number }): Promise<{ data: SearchResponse }> => ({
     data: await searchAll(params),
   }),
 }

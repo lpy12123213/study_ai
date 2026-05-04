@@ -106,15 +106,15 @@ class AuditLogger:
             with self._lock:
                 with self._path.open("a", encoding="utf-8") as f:
                     f.write(line + "\n")
-        except Exception:
-            logger.debug("audit_log_write_failed", extra={"path": str(self._path)}, exc_info=True)
+        except OSError:
+            logger.warning("audit_log_write_failed", extra={"path": str(self._path)}, exc_info=True)
 
     def iter_events(self) -> Iterator[Dict[str, Any]]:
         """Iterate audit events from disk (best-effort)."""
         try:
             if not self._path.exists():
                 return iter(())
-        except Exception:
+        except OSError:
             return iter(())
 
         def _gen() -> Iterator[Dict[str, Any]]:
@@ -126,11 +126,11 @@ class AuditLogger:
                             continue
                         try:
                             obj = json.loads(s)
-                        except Exception:
+                        except (TypeError, ValueError, json.JSONDecodeError):
                             continue
                         if isinstance(obj, dict):
                             yield obj
-            except Exception:
+            except OSError:
                 return
 
         return _gen()
@@ -138,4 +138,3 @@ class AuditLogger:
 
 # Global singleton used across the backend.
 audit_logger = AuditLogger()
-

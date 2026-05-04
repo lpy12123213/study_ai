@@ -16,12 +16,11 @@ from backend.api.question_evaluate_schemas import (
     QuestionSearchRequest,
     QuestionSearchResponse,
 )
-from backend.core.settings import DEFAULT_SUBJECT
+from backend.core.settings import DEFAULT_SUBJECT, LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.core.subjects import resolve_subject
+from backend.crawler.manager import get_crawler
 from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion_text
-from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
-from backend.crawler.manager import get_crawler
-from backend.core.subjects import resolve_subject
 from backend.shared.tasks.runtime import RuntimeTask
 from backend.tasks import submit_question_evaluate_task
 
@@ -48,14 +47,14 @@ def _extract_json_obj(text: str) -> Dict[str, Any]:
     try:
         obj = json.loads(candidate)
         return obj if isinstance(obj, dict) else {}
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
     try:
         v = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
     return int(v)
 

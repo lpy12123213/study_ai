@@ -46,7 +46,7 @@ def fixtures_root() -> Path:
     if raw:
         try:
             return Path(raw).expanduser().resolve()
-        except Exception:
+        except (OSError, RuntimeError):
             return (repo_root / ".local" / "fixtures").resolve()
     return (repo_root / ".local" / "fixtures").resolve()
 
@@ -94,7 +94,7 @@ class RecordReplayStore:
             if not isinstance(obj, dict):
                 return None, key
             return obj, key
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError):
             return None, key
 
     def save(self, *, request: Any, response: Any, meta: Optional[Dict[str, Any]] = None) -> str:
@@ -110,6 +110,6 @@ class RecordReplayStore:
                 "meta": dict(meta or {}),
             }
             path.write_text(_stable_json(payload), encoding="utf-8")
-        except Exception:
+        except (OSError, TypeError, ValueError):
             return key
         return key

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List
 
-from backend.generation.agentic.tooling import AgentDecision, PlannerAgent, ToolExecutor, ToolResult
+from backend.generation.agentic.tooling import PlannerAgent, ToolExecutor, ToolResult
 from backend.generation.agentic.types import AgentArtifactRef, AgentRunResult, AgentRunSpec, AgentTraceEvent
 
 

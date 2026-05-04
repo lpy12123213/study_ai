@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-from backend.agent.types import CompressedContext
+from backend.agent.types import CompressedContext, PolicyState
 
 
 def _env_truthy(name: str, default: bool = False) -> bool:
@@ -21,7 +21,7 @@ def _env_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except Exception:
+    except ValueError:
         return default
 
 
@@ -97,16 +97,11 @@ class StudyMaterialsPolicy:
     def __init__(self, *, config: Optional[StudyMaterialsPolicyConfig] = None) -> None:
         self.config = config or StudyMaterialsPolicyConfig.from_env()
 
-    def _policy_state(self, ctx: CompressedContext) -> Dict[str, Any]:
-        state = ctx.working_memory.get("_study_policy")
-        if isinstance(state, dict):
-            return state
-        state = {}
-        ctx.working_memory["_study_policy"] = state
-        return state
+    def _policy_state(self, ctx: CompressedContext) -> PolicyState:
+        return ctx.policy_state
 
     def iteration_budget(self, ctx: CompressedContext, *, default_cap: int) -> int:
-        opts = ctx.working_memory.get("study_options")
+        opts = ctx.get_working_value("study_options")
         opts = dict(opts) if isinstance(opts, dict) else {}
         preset = str(opts.get("preset") or "").strip().lower()
         if preset not in {"quick", "standard", "deep", "research"}:
@@ -160,7 +155,7 @@ class StudyMaterialsPolicy:
         if not self.config.auto_research:
             return []
 
-        review = ctx.working_memory.get("review_content")
+        review = ctx.get_working_value("review_content")
         if not isinstance(review, dict) or review.get("passed") is not False:
             return []
         if str(review.get("source") or "").strip().lower() != "heuristic":
@@ -171,12 +166,11 @@ class StudyMaterialsPolicy:
             return []
 
         state = self._policy_state(ctx)
-        rounds_done = int(state.get("auto_research_rounds") or 0)
+        rounds_done = int(state.auto_research_rounds or 0)
         if self.config.auto_research_max_rounds <= 0 or rounds_done >= int(self.config.auto_research_max_rounds):
             return []
 
-        done_kps = state.get("auto_research_done_kps")
-        done_set = {str(x or "").strip() for x in done_kps} if isinstance(done_kps, list) else set()
+        done_set = {str(x or "").strip() for x in state.auto_research_done_kps}
         missing = [kp for kp in missing if kp and kp not in done_set]
         if not missing:
             return []
@@ -186,17 +180,16 @@ class StudyMaterialsPolicy:
 
     def mark_auto_research(self, ctx: CompressedContext, kps: List[str]) -> None:
         state = self._policy_state(ctx)
-        state["auto_research_rounds"] = int(state.get("auto_research_rounds") or 0) + 1
-        prev = state.get("auto_research_done_kps")
-        done: List[str] = [str(x or "").strip() for x in prev] if isinstance(prev, list) else []
+        state.auto_research_rounds = int(state.auto_research_rounds or 0) + 1
+        done: List[str] = [str(x or "").strip() for x in state.auto_research_done_kps]
         done.extend([str(x or "").strip() for x in (kps or []) if str(x or "").strip()])
-        state["auto_research_done_kps"] = _clip_list(done, 100)
+        state.auto_research_done_kps = _clip_list(done, 100)
 
     def issues_for_auto_revise(self, ctx: CompressedContext, *, planned_tools: Optional[set[str]] = None) -> List[str]:
         if not self.config.auto_revise:
             return []
 
-        review = ctx.working_memory.get("review_content")
+        review = ctx.get_working_value("review_content")
         if not isinstance(review, dict) or review.get("passed") is not False:
             return []
 
@@ -208,7 +201,7 @@ class StudyMaterialsPolicy:
         if not isinstance(issues, list) or not issues:
             return []
 
-        markdown = str(ctx.working_memory.get("markdown") or "").strip()
+        markdown = str(ctx.get_working_value("markdown") or "").strip()
         if not markdown:
             return []
 
@@ -216,7 +209,7 @@ class StudyMaterialsPolicy:
             return []
 
         state = self._policy_state(ctx)
-        rounds_done = int(state.get("auto_revise_rounds") or 0)
+        rounds_done = int(state.auto_revise_rounds or 0)
         if self.config.auto_revise_max_rounds <= 0 or rounds_done >= int(self.config.auto_revise_max_rounds):
             return []
 
@@ -224,4 +217,4 @@ class StudyMaterialsPolicy:
 
     def mark_auto_revise(self, ctx: CompressedContext) -> None:
         state = self._policy_state(ctx)
-        state["auto_revise_rounds"] = int(state.get("auto_revise_rounds") or 0) + 1
+        state.auto_revise_rounds = int(state.auto_revise_rounds or 0) + 1

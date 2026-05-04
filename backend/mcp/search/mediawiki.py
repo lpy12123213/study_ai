@@ -93,21 +93,23 @@ async def _mw_search_titles(
             resp.raise_for_status()
             data = resp.json()
             break
-        except Exception as exc:
-            last_exc = exc if isinstance(exc, Exception) else Exception(str(exc))
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+            last_exc = exc
             if attempt < 2:
                 await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                 continue
             raise last_exc
 
     hits: List[str] = []
-    try:
-        for it in (data.get("query", {}).get("search") or [])[:10]:
-            title = str((it or {}).get("title") or "").strip()
+    query_obj = data.get("query") if isinstance(data, dict) else {}
+    search_items = query_obj.get("search") if isinstance(query_obj, dict) else []
+    if isinstance(search_items, list):
+        for it in search_items[:10]:
+            if not isinstance(it, dict):
+                continue
+            title = str(it.get("title") or "").strip()
             if title:
                 hits.append(title)
-    except Exception:
-        hits = []
 
     # De-dup while preserving order.
     out: List[str] = []
@@ -153,8 +155,8 @@ async def _mw_fetch_extract(
             resp.raise_for_status()
             data = resp.json()
             break
-        except Exception as exc:
-            last_exc = exc if isinstance(exc, Exception) else Exception(str(exc))
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+            last_exc = exc
             if attempt < 2:
                 await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                 continue
@@ -176,13 +178,8 @@ async def _mw_fetch_extract(
     url = str(page_obj.get("fullurl") or "").strip()
     resolved_title = str(page_obj.get("title") or title).strip()
 
-    is_disambiguation = False
-    try:
-        pageprops = page_obj.get("pageprops")
-        if isinstance(pageprops, dict) and "disambiguation" in pageprops:
-            is_disambiguation = True
-    except Exception:
-        is_disambiguation = False
+    pageprops = page_obj.get("pageprops")
+    is_disambiguation = isinstance(pageprops, dict) and "disambiguation" in pageprops
 
     return {
         "success": True,
@@ -265,5 +262,5 @@ async def mediawiki_search(
                 "disambiguation_options": disambiguation_options,
                 "provider": "mediawiki_api",
             }
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
         return {"success": False, "query": q, "base_url": base, "error": str(exc), "provider": "mediawiki_api"}

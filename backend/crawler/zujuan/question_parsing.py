@@ -35,7 +35,7 @@ async def parse_questions_from_html(
 
     try:
         from bs4 import BeautifulSoup  # type: ignore
-    except Exception:
+    except ImportError:
         BeautifulSoup = None  # type: ignore
 
     if BeautifulSoup is None:
@@ -311,7 +311,7 @@ async def batch_convert_formulas(
     convert_formulas = bool(convert_formulas)
     try:
         stem_max_chars = int(stem_max_chars or 0)
-    except Exception:
+    except (TypeError, ValueError):
         stem_max_chars = 2500
     stem_max_chars = max(120, min(stem_max_chars, 5000))
 
@@ -348,7 +348,7 @@ async def batch_convert_formulas(
 
     try:
         from bs4 import BeautifulSoup  # type: ignore
-    except Exception:
+    except ImportError:
         BeautifulSoup = None  # type: ignore
 
     def _strip_math_wrappers(value: str) -> str:
@@ -420,7 +420,7 @@ async def batch_convert_formulas(
                 for block in soup.select("p,div,li,section,ul,ol,hr,h1,h2,h3,h4,h5,h6"):
                     block.append("\n")
             except Exception:
-                logger.debug("zujuan_soup_normalize_failed", exc_info=True)
+                logger.warning("zujuan_soup_normalize_failed", exc_info=True)
             text = soup.get_text("", strip=False)
         else:
             text = re.sub(r"<[^>]+>", "", converted)
@@ -449,4 +449,3 @@ async def batch_convert_formulas(
         for k in ("raw_html_fragment", "latex_html_fragment"):
             if k in questions[idx]:
                 del questions[idx][k]
-

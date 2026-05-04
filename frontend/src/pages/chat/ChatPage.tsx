@@ -4,8 +4,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowUp, Square } from 'lucide-react'
 import { chatApi } from '@/api/chat'
 import { fetchSSE } from '@/api/sse'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 import { cn } from '@/lib/utils'
+import { APP_ASSISTANT_NAME } from '@/constants/branding'
 
 interface Message { role: 'user' | 'assistant'; content: string }
 
@@ -83,7 +84,7 @@ export default function ChatPage() {
                   </div>
                 ) : (
                   <div className="text-sm leading-7">
-                    <MarkdownRenderer content={msg.content || (streaming && i === messages.length - 1 ? '▋' : '')} />
+                    <Markdown content={msg.content || (streaming && i === messages.length - 1 ? '▋' : '')} />
                   </div>
                 )}
               </div>
@@ -101,7 +102,7 @@ export default function ChatPage() {
               ref={textareaRef}
               rows={1}
               className="w-full resize-none bg-transparent px-5 py-4 pr-14 text-sm focus:outline-none leading-relaxed max-h-[200px]"
-              placeholder="给试卷助手发消息"
+              placeholder={`给 ${APP_ASSISTANT_NAME} 发消息`}
               value={input}
               onChange={(e) => { setInput(e.target.value); autoResize() }}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}

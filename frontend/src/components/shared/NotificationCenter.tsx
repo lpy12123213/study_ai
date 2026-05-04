@@ -75,10 +75,12 @@ export function NotificationCenter() {
 
         const terminal = status === 'completed' || status === 'failed' || status === 'canceled' || status === 'cancelled'
         if (terminal) {
+          const traceId = String((t as any).trace_id || (t as any).traceId || (t as any).error?.trace_id || '').trim() || undefined
           addNotification({
             id: `${id}-${status}-${String((t as any).updated_at || '')}`,
             taskId: id,
             title: String((t as any).title || id),
+            traceId,
             status,
             createdAt: String((t as any).updated_at || new Date().toISOString()),
           })
@@ -86,6 +88,7 @@ export function NotificationCenter() {
             id: `toast-${id}-${status}-${String((t as any).updated_at || '')}`,
             taskId: id,
             title: String((t as any).title || id),
+            traceId,
             status,
           })
         }
@@ -161,6 +164,7 @@ export function NotificationCenter() {
                 <div className="min-w-0 flex-1">
                   <div className="text-sm truncate">{n.title}</div>
                   <div className="text-[11px] text-muted-foreground truncate">{n.taskId}</div>
+                  {n.traceId && <div className="text-[11px] text-muted-foreground truncate">trace_id: {n.traceId}</div>}
                 </div>
                 <Badge variant={isFail ? 'destructive' : 'secondary'} className="ml-2">
                   {isFail ? '失败' : '完成'}

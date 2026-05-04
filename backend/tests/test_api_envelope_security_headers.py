@@ -28,6 +28,7 @@ class TestSecurityHeadersAndErrorEnvelope(unittest.TestCase):
                             with TestClient(app) as client:
                                 api_res = client.get("/api/health")
                                 self.assertEqual(api_res.status_code, 200)
+                                self.assertIn(api_res.json().get("tokenizer_backend"), {"tiktoken", "heuristic"})
                                 for key in (
                                     "X-Content-Type-Options",
                                     "X-Frame-Options",
@@ -65,11 +66,11 @@ class TestSecurityHeadersAndErrorEnvelope(unittest.TestCase):
                         self.assertIn("request_id", payload["error"])
                         self.assertEqual(payload["error"]["request_id"], not_found.headers.get("X-Request-ID"))
 
-                        removed_login = client.post(
+                        invalid_login = client.post(
                             "/api/auth/login",
                             json={"username": "any", "password": "any"},
                         )
-                        self.assertEqual(removed_login.status_code, 405)
+                        self.assertEqual(invalid_login.status_code, 401)
 
                         me = client.get("/api/auth/me")
                         self.assertEqual(me.status_code, 200)

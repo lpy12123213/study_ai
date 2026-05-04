@@ -28,7 +28,7 @@ def _json_dumps(value: Any, *, default: str) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -38,7 +38,7 @@ def _json_loads(value: str, *, default: Any) -> Any:
         return default
     try:
         return json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return default
 
 
@@ -89,4 +89,3 @@ async def upsert_user_settings(
     await session.flush()
     await session.refresh(row)
     return {"user_id": row.user_id, "settings": _json_loads(row.settings_json, default={})}
-

@@ -1,8 +1,9 @@
 import { motion } from 'framer-motion'
 import { BrandMark } from '@/components/shared/BrandMark'
-import { SecureMarkdown } from '@/components/shared/SecureMarkdown'
+import { Markdown } from '@/components/shared/Markdown'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { extractStepKnowledgePoints } from '@/features/studyMaterials/utils'
+import { APP_ASSISTANT_NAME } from '@/constants/branding'
 import type { Message, TaskStep } from '@/types'
 
 export function MessageBubble({ message, disableMotion }: { message: Message; disableMotion: boolean }) {
@@ -38,11 +39,11 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
           <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
             <BrandMark size={12} />
           </div>
-          <span>学习助手</span>
+          <span>{APP_ASSISTANT_NAME}</span>
         </div>
 
         <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-          <SecureMarkdown markdown={message.content} />
+          <Markdown markdown={message.content} />
         </div>
 
         {message.steps && message.steps.length > 0 && (
@@ -84,11 +85,11 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
         <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
           <BrandMark size={12} />
         </div>
-        <span>学习助手</span>
+        <span>{APP_ASSISTANT_NAME}</span>
       </div>
 
       <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <SecureMarkdown markdown={message.content} />
+        <Markdown markdown={message.content} />
       </div>
 
       {message.steps && message.steps.length > 0 && (

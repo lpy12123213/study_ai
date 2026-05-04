@@ -6,7 +6,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PREVIEWS_DIR = (_REPO_ROOT / ".local" / "question_library" / "previews").resolve()
 _SESSIONS_DIR = (_REPO_ROOT / ".local" / "question_library" / "sessions").resolve()
@@ -61,17 +60,17 @@ def save_preview(preview: Dict[str, Any]) -> Dict[str, Any]:
 def load_preview(preview_id: str) -> Optional[dict]:
     try:
         path = _preview_path(preview_id)
-    except Exception:
+    except ValueError:
         return None
     if not path.exists():
         return None
     try:
         raw = path.read_text(encoding="utf-8")
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         obj = json.loads(raw) if raw else {}
-    except Exception:
+    except json.JSONDecodeError:
         obj = {}
     return obj if isinstance(obj, dict) else None
 
@@ -89,7 +88,7 @@ def find_latest_pending_preview(user_id: str) -> Optional[dict]:
         try:
             raw = path.read_text(encoding="utf-8")
             obj = json.loads(raw) if raw else {}
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if not isinstance(obj, dict):
             continue
@@ -100,10 +99,10 @@ def find_latest_pending_preview(user_id: str) -> Optional[dict]:
 
         try:
             score = float(obj.get("created_at_s") or 0.0)
-        except Exception:
+        except (TypeError, ValueError):
             try:
                 score = path.stat().st_mtime
-            except Exception:
+            except OSError:
                 score = 0.0
         if latest_obj is None or score > latest_score:
             latest_obj = obj
@@ -149,17 +148,17 @@ def save_session(session: Dict[str, Any]) -> Dict[str, Any]:
 def load_session(session_id: str) -> Optional[dict]:
     try:
         path = _session_path(session_id)
-    except Exception:
+    except ValueError:
         return None
     if not path.exists():
         return None
     try:
         raw = path.read_text(encoding="utf-8")
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         obj = json.loads(raw) if raw else {}
-    except Exception:
+    except json.JSONDecodeError:
         obj = {}
     return obj if isinstance(obj, dict) else None
 
@@ -174,7 +173,7 @@ def list_sessions(user_id: str, *, include_archived: bool = True, limit: int = 5
         try:
             raw = path.read_text(encoding="utf-8")
             obj = json.loads(raw) if raw else {}
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if not isinstance(obj, dict):
             continue
@@ -188,7 +187,7 @@ def list_sessions(user_id: str, *, include_archived: bool = True, limit: int = 5
     def sort_key(item: dict) -> float:
         try:
             return float(item.get("updated_at_s") or item.get("created_at_s") or 0.0)
-        except Exception:
+        except (TypeError, ValueError):
             return 0.0
 
     items.sort(key=sort_key, reverse=True)
@@ -222,7 +221,7 @@ def find_preview_by_session_id(user_id: str, session_id: str) -> Optional[dict]:
         try:
             raw = path.read_text(encoding="utf-8")
             obj = json.loads(raw) if raw else {}
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if not isinstance(obj, dict):
             continue
@@ -232,7 +231,7 @@ def find_preview_by_session_id(user_id: str, session_id: str) -> Optional[dict]:
             continue
         try:
             score = float(obj.get("updated_at_s") or obj.get("created_at_s") or 0.0)
-        except Exception:
+        except (TypeError, ValueError):
             score = 0.0
         if latest_obj is None or score > latest_score:
             latest_obj = obj
@@ -256,7 +255,7 @@ def mark_running_sessions_interrupted(*, reason: str = "server_restarted", limit
 
     try:
         limit_n = int(limit or 0)
-    except Exception:
+    except (TypeError, ValueError):
         limit_n = 5000
     limit_n = max(1, min(limit_n, 50_000))
 
@@ -267,7 +266,7 @@ def mark_running_sessions_interrupted(*, reason: str = "server_restarted", limit
         try:
             raw = path.read_text(encoding="utf-8")
             obj = json.loads(raw) if raw else {}
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if not isinstance(obj, dict):
             continue
@@ -282,7 +281,7 @@ def mark_running_sessions_interrupted(*, reason: str = "server_restarted", limit
         try:
             path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
             changed += 1
-        except Exception:
+        except (OSError, TypeError, ValueError):
             continue
     return changed
 
@@ -290,11 +289,11 @@ def mark_running_sessions_interrupted(*, reason: str = "server_restarted", limit
 def delete_preview(preview_id: str) -> bool:
     try:
         path = _preview_path(preview_id)
-    except Exception:
+    except ValueError:
         return False
     try:
         if path.exists():
             path.unlink()
         return True
-    except Exception:
+    except OSError:
         return False

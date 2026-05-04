@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useSubjects } from '@/hooks/useSubjects'
 import { useFormDraft } from '@/hooks/useFormDraft'
-import { apiClient, resolveApiResourceUrl } from '@/api/client'
+import { LONG_TASK_CREATE_TIMEOUT_MS, apiClient, resolveApiResourceUrl } from '@/api/client'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
@@ -37,6 +37,10 @@ import {
 import type { SubAgentActivity } from '@/features/lessonPlans/types'
 
 // ── Main page component ─────────────────────────────────────────────
+
+function eventDataRecord(data: unknown): Record<string, unknown> {
+  return data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+}
 
 function LessonPlansView() {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -329,7 +333,7 @@ function LessonPlansView() {
           objectives: resolvedObjectives.length > 0 ? resolvedObjectives : undefined,
           additional_requirements: resolvedAdditional || undefined,
         },
-        { signal: controller.signal }
+        { signal: controller.signal, timeout: LONG_TASK_CREATE_TIMEOUT_MS }
       )
       .then((res) => {
         if (streamAbortRef.current !== controller) return
@@ -349,7 +353,7 @@ function LessonPlansView() {
             const kind = String(evt.type || '').trim()
             if (kind === 'ping' || kind === 'step') return
 
-            const payload = evt.data
+            const payload = eventDataRecord(evt.data)
 
         if (kind === 'thinking') {
           const text = toText(payload?.content) || '思考中…'
@@ -580,7 +584,7 @@ function LessonPlansView() {
           const lines: string[] = [
             '已生成教案，可下载：',
             '',
-            mdHref ? `- Markdown： [下载 Markdown](${mdHref})` : '- Markdown： （生成失败或未导出）',
+            mdHref ? `- 可编辑文档： [下载可编辑文档](${mdHref})` : '- 可编辑文档： （生成失败或未导出）',
             pdfHref ? `- PDF： [下载 PDF](${pdfHref})` : '- PDF： （生成失败或未编译）',
           ]
           const content = lines.join('\n')

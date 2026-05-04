@@ -162,6 +162,26 @@ Nginx / Caddy / Traefik 需要注意：
 - `study_archives/` 下的学习资料归档。
 - 自定义 `config/model.json`，但不应把密钥提交到 Git。
 
+SQLite 数据库使用项目自带脚本备份。备份通过 `VACUUM INTO` 生成一致性副本，不需要直接复制正在写入的数据库文件：
+
+```bash
+python scripts/backup_db.py --name before-upgrade
+```
+
+默认输出目录是 `.local/backups/db/`。如需指定数据库或输出目录：
+
+```bash
+python scripts/backup_db.py --db-path .local/exam_papers.db --output-dir .local/backups/db
+```
+
+恢复前必须停止后端进程，避免运行中的 SQLite 连接继续写入旧 WAL。恢复命令默认拒绝覆盖，必须显式确认：
+
+```bash
+python scripts/restore_db.py .local/backups/db/exam_papers-YYYYMMDD-HHMMSS.db --yes
+```
+
+如果目标数据库已经存在，恢复脚本会先生成 `*.pre-restore-*.db` 安全副本，再覆盖目标库，并在恢复后运行 `PRAGMA integrity_check`。
+
 恢复时必须先确认 `.env`、模型配置和数据库 schema 与目标版本兼容。
 
 ## 上线前验证

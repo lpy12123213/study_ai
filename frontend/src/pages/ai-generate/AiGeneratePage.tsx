@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { fetchSSE } from '@/api/sse'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function AiGeneratePage() {
   const [config, setConfig] = useState({ subject: '', count: 5, type: '选择题' })
@@ -47,7 +47,7 @@ export default function AiGeneratePage() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-6">
-        {result ? <MarkdownRenderer content={result} /> : <div className="text-muted-foreground text-sm">配置参数后点击生成</div>}
+        {result ? <Markdown content={result} /> : <div className="text-muted-foreground text-sm">配置参数后点击生成</div>}
       </div>
     </div>
   )

@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime
 
-from backend.database.schema import Task, TaskEvent
 from backend.database.repositories.system.tasks import _event_to_dict, _task_to_dict
+from backend.database.schema import Task, TaskEvent
 
 
 class TaskTimestampSerializationTests(unittest.TestCase):

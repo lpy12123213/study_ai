@@ -48,6 +48,7 @@ export function ToastHost() {
               >
                 <div className="text-sm font-medium truncate">{t.title}</div>
                 {t.taskId && <div className="text-[11px] text-muted-foreground truncate">{t.taskId}</div>}
+                {t.traceId && <div className="text-[11px] text-muted-foreground truncate">trace_id: {t.traceId}</div>}
               </button>
               <button
                 type="button"

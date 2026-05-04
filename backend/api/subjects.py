@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
-from backend.crawler.manager import get_crawler
 from backend.core.subjects import get_all_subjects, resolve_subject
+from backend.crawler.manager import get_crawler
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -64,7 +64,7 @@ def _subject_filters_cache_ttl_s() -> float:
     raw = str(os.getenv("SUBJECT_FILTERS_CACHE_TTL_S") or "").strip()
     try:
         ttl = float(raw) if raw else 10 * 60.0
-    except Exception:
+    except ValueError:
         ttl = 10 * 60.0
     return max(0.0, min(ttl, 24.0 * 60.0 * 60.0))
 

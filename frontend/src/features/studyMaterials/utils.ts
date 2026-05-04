@@ -43,16 +43,16 @@ export function formatStudyMaterialsError(raw: string): string {
 
   const lower = msg.toLowerCase()
   if (lower.includes('task not found') || lower.includes('task_not_found')) {
-    return '任务已丢失（可能是后端重启或任务过期）。请重新生成。'
+    return '任务已丢失（可能是本地服务重启或任务过期）。请重新生成。'
   }
   if (lower.includes('event backlog truncated')) {
     return '任务输出过长导致回放被截断。建议重新生成以获得完整输出。'
   }
   if (lower.includes('llm_not_configured')) {
-    return '未配置大模型（API Key）。请先配置后端环境变量并重启后端再试。'
+    return '未配置智能服务访问密钥。请先在设置中配置后重试。'
   }
   if (lower.includes('llm_request_failed')) {
-    return '大模型请求失败。请稍后重试，或检查 Key/模型名/网络/额度。'
+    return '智能生成请求失败。请稍后重试，或检查访问密钥、模型、网络与额度。'
   }
   if (lower.includes('markdown_empty')) {
     return '生成内容为空，请换个问题或补充更多要求后再试。'

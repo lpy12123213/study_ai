@@ -702,12 +702,18 @@ _GENERIC_BANK = SubjectKnowledgeBank(
 
 def get_subject_bank(subject: str) -> SubjectKnowledgeBank:
     fam = infer_subject_family(subject)
-    if fam == "math":  return _MATH_BANK
-    if fam == "physics": return _PHYSICS_BANK
-    if fam == "chemistry": return _CHEMISTRY_BANK
-    if fam == "biology": return _BIOLOGY_BANK
-    if fam == "chinese": return _CHINESE_BANK
-    if fam == "english": return _ENGLISH_BANK
+    if fam == "math":
+        return _MATH_BANK
+    if fam == "physics":
+        return _PHYSICS_BANK
+    if fam == "chemistry":
+        return _CHEMISTRY_BANK
+    if fam == "biology":
+        return _BIOLOGY_BANK
+    if fam == "chinese":
+        return _CHINESE_BANK
+    if fam == "english":
+        return _ENGLISH_BANK
     return _GENERIC_BANK
 
 

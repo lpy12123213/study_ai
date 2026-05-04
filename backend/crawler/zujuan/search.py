@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from backend.crawler.zujuan.utils import (
-    _safe_float,
-    _safe_int,
-)
 from backend.core.subjects import (
     DIFFICULTY_LEVELS,
     SUBJECTS,
+)
+from backend.crawler.zujuan.utils import (
+    _safe_float,
+    _safe_int,
 )
 
 

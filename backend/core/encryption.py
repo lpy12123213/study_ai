@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import os
 from pathlib import Path
 
-_ENC_PREFIX = "enc:v1:"
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+_ENC_V1_PREFIX = "enc:v1:"
+_ENC_V2_PREFIX = "enc:v2:"
+_ENC_PREFIX = _ENC_V2_PREFIX
 _SALT_BYTES = 16
-_NONCE_BYTES = 16
-_TAG_BYTES = 32
+_V1_NONCE_BYTES = 16
+_V1_TAG_BYTES = 32
+_V2_NONCE_BYTES = 12
+_V2_TAG_BYTES = 16
 _KEY_BYTES = 32
+_V2_AAD = b"study-ai:model-config:v2"
 
 
 def _repo_root() -> Path:
@@ -44,7 +55,7 @@ def _load_or_create_root_key() -> bytes:
             data = _b64_decode(raw)
             if len(data) >= _KEY_BYTES:
                 return data[:_KEY_BYTES]
-    except Exception:
+    except (OSError, UnicodeError, ValueError, binascii.Error):
         pass
 
     key = os.urandom(_KEY_BYTES)
@@ -53,21 +64,31 @@ def _load_or_create_root_key() -> bytes:
         path.write_text(_b64_encode(key), encoding="ascii")
         try:
             os.chmod(path, 0o600)
-        except Exception:
+        except OSError:
             pass
-    except Exception:
+    except OSError:
         # Fall back to a deterministic process-local key only when the key file cannot be written.
         seed = f"{_repo_root()}:{os.getenv('JWT_SECRET') or ''}".encode("utf-8", errors="ignore")
         key = hashlib.sha256(seed).digest()
     return key
 
 
-def _derive_key(salt: bytes) -> bytes:
+def _derive_v1_key(salt: bytes) -> bytes:
     root_key = _load_or_create_root_key()
     return hashlib.pbkdf2_hmac("sha256", root_key, b"study-ai:model-config:" + salt, 120_000, dklen=_KEY_BYTES)
 
 
-def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+def _derive_v2_key(salt: bytes) -> bytes:
+    root_key = _load_or_create_root_key()
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=_KEY_BYTES,
+        salt=salt,
+        info=_V2_AAD,
+    ).derive(root_key)
+
+
+def _legacy_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
     out = bytearray()
     counter = 0
     while len(out) < length:
@@ -78,7 +99,8 @@ def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
 
 
 def is_encrypted_string(value: str) -> bool:
-    return str(value or "").startswith(_ENC_PREFIX)
+    raw = str(value or "")
+    return raw.startswith(_ENC_V1_PREFIX) or raw.startswith(_ENC_V2_PREFIX)
 
 
 def encrypt_string(value: str) -> str:
@@ -86,38 +108,56 @@ def encrypt_string(value: str) -> str:
     if not plaintext:
         return ""
     salt = os.urandom(_SALT_BYTES)
-    nonce = os.urandom(_NONCE_BYTES)
-    key = _derive_key(salt)
-    stream = _keystream(key, nonce, len(plaintext))
-    ciphertext = bytes(a ^ b for a, b in zip(plaintext, stream))
-    tag = hmac.new(key, b"v1" + salt + nonce + ciphertext, hashlib.sha256).digest()
-    return _ENC_PREFIX + _b64_encode(salt + nonce + ciphertext + tag)
+    nonce = os.urandom(_V2_NONCE_BYTES)
+    key = _derive_v2_key(salt)
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, _V2_AAD)
+    return _ENC_V2_PREFIX + _b64_encode(salt + nonce + ciphertext)
+
+
+def _decrypt_v1(raw: str) -> str:
+    payload = _b64_decode(raw[len(_ENC_V1_PREFIX) :])
+    min_len = _SALT_BYTES + _V1_NONCE_BYTES + _V1_TAG_BYTES + 1
+    if len(payload) < min_len:
+        return ""
+    salt = payload[:_SALT_BYTES]
+    nonce = payload[_SALT_BYTES : _SALT_BYTES + _V1_NONCE_BYTES]
+    tag = payload[-_V1_TAG_BYTES:]
+    ciphertext = payload[_SALT_BYTES + _V1_NONCE_BYTES : -_V1_TAG_BYTES]
+    key = _derive_v1_key(salt)
+    expected = hmac.new(key, b"v1" + salt + nonce + ciphertext, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, expected):
+        return ""
+    stream = _legacy_keystream(key, nonce, len(ciphertext))
+    plaintext = bytes(a ^ b for a, b in zip(ciphertext, stream))
+    return plaintext.decode("utf-8")
+
+
+def _decrypt_v2(raw: str) -> str:
+    payload = _b64_decode(raw[len(_ENC_V2_PREFIX) :])
+    min_len = _SALT_BYTES + _V2_NONCE_BYTES + _V2_TAG_BYTES
+    if len(payload) < min_len:
+        return ""
+    salt = payload[:_SALT_BYTES]
+    nonce = payload[_SALT_BYTES : _SALT_BYTES + _V2_NONCE_BYTES]
+    ciphertext = payload[_SALT_BYTES + _V2_NONCE_BYTES :]
+    key = _derive_v2_key(salt)
+    return AESGCM(key).decrypt(nonce, ciphertext, _V2_AAD).decode("utf-8")
 
 
 def decrypt_string(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
-    if not is_encrypted_string(raw):
+    if raw.startswith(_ENC_V2_PREFIX):
+        decrypt = _decrypt_v2
+    elif raw.startswith(_ENC_V1_PREFIX):
+        decrypt = _decrypt_v1
+    else:
         return raw
 
     try:
-        payload = _b64_decode(raw[len(_ENC_PREFIX) :])
-        min_len = _SALT_BYTES + _NONCE_BYTES + _TAG_BYTES + 1
-        if len(payload) < min_len:
-            return ""
-        salt = payload[:_SALT_BYTES]
-        nonce = payload[_SALT_BYTES : _SALT_BYTES + _NONCE_BYTES]
-        tag = payload[-_TAG_BYTES:]
-        ciphertext = payload[_SALT_BYTES + _NONCE_BYTES : -_TAG_BYTES]
-        key = _derive_key(salt)
-        expected = hmac.new(key, b"v1" + salt + nonce + ciphertext, hashlib.sha256).digest()
-        if not hmac.compare_digest(tag, expected):
-            return ""
-        stream = _keystream(key, nonce, len(ciphertext))
-        plaintext = bytes(a ^ b for a, b in zip(ciphertext, stream))
-        return plaintext.decode("utf-8")
-    except Exception:
+        return decrypt(raw)
+    except (OSError, UnicodeDecodeError, ValueError, binascii.Error, InvalidTag):
         return ""
 
 

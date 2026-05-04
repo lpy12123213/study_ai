@@ -62,7 +62,7 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
     try:
         return int(raw)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -107,7 +107,7 @@ async def close_proxy_http_client() -> None:
         return
     try:
         await client.aclose()
-    except Exception:
+    except (RuntimeError, httpx.HTTPError):
         return
 
 
@@ -140,10 +140,7 @@ def _is_allowed_host(host: str) -> bool:
 
 def _is_public_ip(ip: ipaddress._BaseAddress) -> bool:
     # Fail closed: only allow globally routable addresses.
-    try:
-        return bool(getattr(ip, "is_global", False))
-    except Exception:
-        return False
+    return bool(getattr(ip, "is_global", False))
 
 
 async def _resolve_host_ips(host: str) -> list[ipaddress._BaseAddress]:
@@ -160,7 +157,7 @@ async def _resolve_host_ips(host: str) -> list[ipaddress._BaseAddress]:
     try:
         loop = asyncio.get_running_loop()
         infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except Exception:
+    except (OSError, RuntimeError):
         return []
 
     out: list[ipaddress._BaseAddress] = []
@@ -168,7 +165,7 @@ async def _resolve_host_ips(host: str) -> list[ipaddress._BaseAddress]:
     for _, _, _, _, sockaddr in infos:
         try:
             ip_str = str(sockaddr[0])
-        except Exception:
+        except (IndexError, TypeError):
             continue
         if not ip_str or ip_str in seen:
             continue
@@ -311,14 +308,14 @@ async def get_generated_media(filename: str, user: dict = Depends(require_auth))
                 raise HTTPException(status_code=410, detail="link_expired")
         except HTTPException:
             raise
-        except Exception:
+        except ValueError:
             # If metadata is malformed, fail closed.
             raise HTTPException(status_code=410, detail="link_expired")
 
     path = (GENERATED_DIR / filename).resolve()
     try:
         path.relative_to(GENERATED_DIR.resolve())
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=400, detail="invalid_path")
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="not_found")
@@ -387,7 +384,7 @@ def _prune_proxy_cache() -> dict[str, int]:
                     stats["expired"] += 1
                     continue
             survivors.append((p, mtime, size))
-        except Exception:
+        except OSError:
             continue
 
     if not survivors:
@@ -404,8 +401,8 @@ def _prune_proxy_cache() -> dict[str, int]:
                 p.unlink(missing_ok=True)
                 stats["evicted_files"] += 1
                 stats["evicted_bytes"] += int(size or 0)
-            except Exception:
-                logger.debug("media_proxy_cache_evict_file_failed", extra={"path": str(p)}, exc_info=True)
+            except OSError:
+                logger.warning("media_proxy_cache_evict_file_failed", extra={"path": str(p)}, exc_info=True)
         survivors = survivors[-max_files:]
 
     # 3) Enforce max_bytes.
@@ -420,8 +417,8 @@ def _prune_proxy_cache() -> dict[str, int]:
             p.unlink(missing_ok=True)
             stats["evicted_files"] += 1
             stats["evicted_bytes"] += int(s or 0)
-        except Exception:
-            logger.debug("media_proxy_cache_evict_bytes_failed", extra={"path": str(p)}, exc_info=True)
+        except OSError:
+            logger.warning("media_proxy_cache_evict_bytes_failed", extra={"path": str(p)}, exc_info=True)
         total -= s
         if total <= max_bytes:
             break
@@ -449,8 +446,8 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
     if cached:
         try:
             os.utime(cached, None)
-        except Exception:
-            logger.debug("media_proxy_cache_touch_failed", extra={"path": str(cached)}, exc_info=True)
+        except OSError:
+            logger.warning("media_proxy_cache_touch_failed", extra={"path": str(cached)}, exc_info=True)
         _bump_proxy_cache_stat("hits")
         return _file_response(cached)
 
@@ -461,7 +458,7 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
 
     try:
         max_bytes = int(os.getenv("MEDIA_PROXY_MAX_BYTES") or str(10 * 1024 * 1024))
-    except Exception:
+    except (TypeError, ValueError):
         max_bytes = 10 * 1024 * 1024
     max_bytes = max(256 * 1024, min(max_bytes, 200 * 1024 * 1024))
 
@@ -526,14 +523,14 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
                 except HTTPException:
                     try:
                         tmp_path.unlink(missing_ok=True)
-                    except Exception:
-                        logger.debug("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
+                    except OSError:
+                        logger.warning("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
                     raise
-                except Exception as exc:
+                except (OSError, RuntimeError, httpx.HTTPError) as exc:
                     try:
                         tmp_path.unlink(missing_ok=True)
-                    except Exception:
-                        logger.debug("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
+                    except OSError:
+                        logger.warning("media_proxy_tmp_cleanup_failed", extra={"path": str(tmp_path)}, exc_info=True)
                     logger.exception(
                         "media_proxy_fetch_failed",
                         extra={"url": current, "media_id": media_id},
@@ -544,7 +541,7 @@ async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> F
                 return _file_response(out_path)
         except HTTPException:
             raise
-        except Exception as exc:
+        except (RuntimeError, httpx.HTTPError) as exc:
             logger.exception(
                 "media_proxy_fetch_failed",
                 extra={"url": current, "media_id": media_id},

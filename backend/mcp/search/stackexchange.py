@@ -48,11 +48,12 @@ def _html_to_text(html: str) -> str:
             try:
                 tag.decompose()
             except Exception:
-                logger.debug("stackexchange_html_sanitize_failed", exc_info=True)
+                logger.warning("stackexchange_html_sanitize_failed", exc_info=True)
         text = soup.get_text("\n", strip=True)
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
         return text
     except Exception:
+        logger.warning("stackexchange_html_parse_failed", exc_info=True)
         return re.sub(r"<[^>]+>", "", raw).strip()
 
 
@@ -132,7 +133,7 @@ async def stackexchange_search(
                     payload = resp.json()
                     data = payload if isinstance(payload, dict) else {}
                     break
-                except Exception:
+                except (httpx.HTTPError, ValueError, TypeError):
                     if attempt < 2:
                         await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                         continue
@@ -145,7 +146,7 @@ async def stackexchange_search(
             for it in questions:
                 try:
                     qid = int(it.get("question_id") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     qid = 0
                 if qid > 0:
                     qids.append(qid)
@@ -178,7 +179,7 @@ async def stackexchange_search(
                         payload = ans_resp.json()
                         ans_data = payload if isinstance(payload, dict) else {}
                         break
-                    except Exception:
+                    except (httpx.HTTPError, ValueError, TypeError):
                         if attempt < 2:
                             await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                             continue
@@ -189,7 +190,7 @@ async def stackexchange_search(
                         continue
                     try:
                         qid = int(a.get("question_id") or 0)
-                    except Exception:
+                    except (TypeError, ValueError):
                         qid = 0
                     if qid <= 0:
                         continue
@@ -203,14 +204,14 @@ async def stackexchange_search(
                 url = str(it.get("link") or "").strip()
                 try:
                     score = int(it.get("score") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     score = 0
                 tags = it.get("tags") if isinstance(it.get("tags"), list) else []
                 tags = [str(t) for t in tags if str(t).strip()][:12]
                 is_answered = bool(it.get("is_answered") is True)
                 try:
                     qid = int(it.get("question_id") or 0)
-                except Exception:
+                except (TypeError, ValueError):
                     qid = 0
 
                 question_text = _clip(_html_to_text(str(it.get("body") or "")), max_len=max_question_chars)
@@ -242,5 +243,5 @@ async def stackexchange_search(
                 "results": results,
                 "provider": "stackexchange",
             }
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
         return {"success": False, "query": q, "site": s, "provider": "stackexchange", "error": str(exc)}

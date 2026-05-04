@@ -165,6 +165,26 @@ def doctor(root: Path) -> None:
     print("[doctor] python -m unittest discover -s backend/tests -p test_*.py")
     _run_checked([str(vpy), "-m", "unittest", "discover", "-s", "backend/tests", "-p", "test_*.py"], cwd=root)
 
+    print("[doctor] python scripts/audit/structure_lint.py --strict")
+    _run_checked([str(vpy), str(root / "scripts" / "audit" / "structure_lint.py"), "--strict"], cwd=root)
+
+    print("[doctor] python scripts/audit/exception_policy.py backend --strict --max-total 0")
+    _run_checked(
+        [
+            str(vpy),
+            str(root / "scripts" / "audit" / "exception_policy.py"),
+            "backend",
+            "--strict",
+            "--max-total",
+            "0",
+            "--max-kind",
+            "pass-only-broad-except=0",
+            "--limit",
+            "0",
+        ],
+        cwd=root,
+    )
+
     # Best-effort Ruff; if not installed, skip without failing.
     try:
         print("[doctor] python -m ruff check backend (maintained paths)")

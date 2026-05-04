@@ -49,7 +49,7 @@ export function useStudyMaterialsResumableStream(opts: {
           activeStream: undefined,
           resumable: false,
         })
-        setError('任务已丢失（可能是后端重启或任务过期）。请重新生成。')
+        setError('任务已丢失（可能是本地服务重启或任务过期）。请重新生成。')
         return
       }
 

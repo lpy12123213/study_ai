@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from backend.core.logging_utils import get_request_id, get_trace_id
+
 
 class AgentState(str, Enum):
     IDLE = "idle"
@@ -102,6 +104,39 @@ class UserProfile:
 
 
 @dataclass
+class PolicyState:
+    """State owned by policy modules, kept separate from tool working memory."""
+
+    auto_research_rounds: int = 0
+    auto_research_done_kps: List[str] = field(default_factory=list)
+    auto_revise_rounds: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "auto_research_rounds": int(self.auto_research_rounds or 0),
+            "auto_research_done_kps": list(self.auto_research_done_kps or []),
+            "auto_revise_rounds": int(self.auto_revise_rounds or 0),
+        }
+
+    def load_legacy(self, legacy: Dict[str, Any]) -> None:
+        self.auto_research_rounds = int(legacy.get("auto_research_rounds") or self.auto_research_rounds or 0)
+        self.auto_revise_rounds = int(legacy.get("auto_revise_rounds") or self.auto_revise_rounds or 0)
+        done = legacy.get("auto_research_done_kps")
+        if isinstance(done, list) and not self.auto_research_done_kps:
+            out: List[str] = []
+            seen: set[str] = set()
+            for kp in done:
+                value = str(kp or "").strip()
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                out.append(value)
+                if len(out) >= 100:
+                    break
+            self.auto_research_done_kps = out
+
+
+@dataclass
 class CompressedContext:
     """Conversation context with compaction layers (window/summary/checkpoint)."""
 
@@ -116,6 +151,15 @@ class CompressedContext:
     recent_messages: List[Dict[str, Any]] = field(default_factory=list)
     working_memory: Dict[str, Any] = field(default_factory=dict)
     working_memory_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+    policy_state: PolicyState = field(default_factory=PolicyState)
+
+    def __post_init__(self) -> None:
+        legacy_policy_state = self.working_memory.pop("_study_policy", None)
+        if isinstance(legacy_policy_state, dict):
+            self.policy_state.load_legacy(legacy_policy_state)
+
+    def get_working_value(self, key: str, default: Any = None) -> Any:
+        return self.working_memory.get(key, default)
 
     def to_json(self) -> str:
         return json.dumps(
@@ -128,6 +172,7 @@ class CompressedContext:
                 "compressed_history": self.compressed_history,
                 "recent_messages": self.recent_messages,
                 "working_memory": self.working_memory,
+                "policy_state": self.policy_state.to_dict(),
             },
             ensure_ascii=False,
             indent=2,
@@ -135,4 +180,8 @@ class CompressedContext:
 
 
 def agent_event(event: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return {"event": event, "data": data or {}}
+    payload: Dict[str, Any] = {"event": event, "data": data or {}}
+    trace_id = get_trace_id() or get_request_id()
+    if trace_id:
+        payload["trace_id"] = trace_id
+    return payload

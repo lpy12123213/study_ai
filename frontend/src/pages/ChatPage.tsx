@@ -1,352 +1,20 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Loader2, Search, FileText, GraduationCap, Sparkles, ChevronDown, ChevronUp, Square } from 'lucide-react'
+import { AnimatePresence } from 'framer-motion'
+import { ChevronDown, Loader2, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { useChatStream, useMessages } from '@/hooks/useChat'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { cn } from '@/lib/utils'
-import { BrandMark } from '@/components/shared/BrandMark'
 import * as chatApi from '@/api/chat'
+
+import { MessageBubble } from '@/features/chat/components/MessageBubble'
+import { WelcomeScreen } from '@/features/chat/components/WelcomeScreen'
+import { useVirtualMessages } from '@/features/chat/hooks/useVirtualMessages'
 import type { Message } from '@/types'
-
-function MessageBubble({ message, disableMotion }: { message: Message; disableMotion: boolean }) {
-  const isUser = message.role === 'user'
-  const [showSteps, setShowSteps] = useState(false)
-
-  if (isUser) {
-    if (disableMotion) {
-      return (
-        <div className="flex justify-end mb-6">
-          <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
-            <div className="whitespace-pre-wrap">{message.content}</div>
-          </div>
-        </div>
-      )
-    }
-    return (
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex justify-end mb-6"
-      >
-        <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        </div>
-      </motion.div>
-    )
-  }
-
-  if (disableMotion) {
-    return (
-      <div className="flex flex-col gap-2 mb-8 max-w-3xl w-full">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-          <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
-            <BrandMark size={12} />
-          </div>
-          <span>学习助手</span>
-        </div>
-
-        <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        </div>
-
-        {message.steps && message.steps.length > 0 && (
-          <div className="mt-3">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
-              onClick={() => setShowSteps(!showSteps)}
-            >
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              {showSteps ? '隐藏' : '查看'} {message.steps.length} 个思考步骤
-              {showSteps ? <ChevronUp className="h-3 w-3 opacity-50" /> : <ChevronDown className="h-3 w-3 opacity-50" />}
-            </Button>
-
-            {showSteps && (
-              <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
-                <div className="p-4 bg-muted/30">
-                  <TaskTimeline steps={message.steps} />
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
-    >
-      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-        <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
-          <BrandMark size={12} />
-        </div>
-        <span>学习助手</span>
-      </div>
-      
-      <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <div className="whitespace-pre-wrap">{message.content}</div>
-      </div>
-
-      {message.steps && message.steps.length > 0 && (
-        <div className="mt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
-            onClick={() => setShowSteps(!showSteps)}
-          >
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            {showSteps ? '隐藏' : '查看'} {message.steps.length} 个思考步骤
-            {showSteps ? <ChevronUp className="h-3 w-3 opacity-50" /> : <ChevronDown className="h-3 w-3 opacity-50" />}
-          </Button>
-
-          <AnimatePresence>
-            {showSteps && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
-              >
-                <div className="p-4 bg-muted/30">
-                   <TaskTimeline steps={message.steps} />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      )}
-    </motion.div>
-  )
-}
-
-function WelcomeScreen({ onExampleClick }: { onExampleClick: (text: string) => void }) {
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
-      <div className="mb-10 flex flex-col items-center text-center space-y-6">
-        <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center ring-1 ring-border/50 shadow-sm">
-           <BrandMark size={48} />
-        </div>
-        <h2 className="text-2xl font-semibold tracking-tight">有什么我可以帮你的吗？</h2>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
-        {[
-          { icon: Search, title: '搜索真题', desc: '帮我搜索一些高考数学真题' },
-          { icon: FileText, title: '生成试卷', desc: '生成一份初中物理力学测试卷' },
-          { icon: GraduationCap, title: '生成自学资料', desc: '帮我生成一份“函数单调性”的自学资料' },
-          { icon: Sparkles, title: '概念讲解', desc: '解释一下牛顿第三定律' },
-        ].map((item) => (
-          <button
-            key={item.title}
-            onClick={() => onExampleClick(item.desc)}
-            className="group relative flex flex-col items-start p-4 h-auto text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
-          >
-            <div className="mb-3 rounded-lg bg-muted p-2 group-hover:bg-background transition-colors">
-              <item.icon className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
-            </div>
-            <div className="font-medium text-sm mb-1">{item.title}</div>
-            <div className="text-xs text-muted-foreground line-clamp-2">{item.desc}</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function findLastLessEqual(sorted: number[], value: number): number {
-  // Returns the largest index i such that sorted[i] <= value.
-  // `sorted` is assumed to be non-decreasing.
-  let lo = 0
-  let hi = Math.max(0, sorted.length - 1)
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi + 1) / 2)
-    if (sorted[mid] <= value) lo = mid
-    else hi = mid - 1
-  }
-  return lo
-}
-
-function useVirtualMessages(options: {
-  enabled?: boolean
-  messages: Message[]
-  containerRef: React.RefObject<HTMLDivElement | null>
-  estimatePx?: number
-  overscan?: number
-}) {
-  const enabled = Boolean(options.enabled)
-  const { messages, containerRef } = options
-  const estimatePx = Math.max(48, Number(options.estimatePx ?? 180))
-  const overscan = Math.max(0, Math.floor(Number(options.overscan ?? 10)))
-
-  const listRef = useRef<HTMLDivElement | null>(null)
-  const heightsRef = useRef<Map<string, number>>(new Map())
-  const observersRef = useRef<Map<string, ResizeObserver>>(new Map())
-  const refCallbacksRef = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
-
-  const [measureVersion, setMeasureVersion] = useState(0)
-  const [scrollTop, setScrollTop] = useState(0)
-  const [viewportHeight, setViewportHeight] = useState(0)
-  const [listTop, setListTop] = useState(0)
-
-  const keys = useMemo(() => (enabled ? messages.map((m) => String(m.id)) : []), [enabled, messages])
-  const indexByKey = useMemo(() => new Map(keys.map((k, i) => [k, i] as const)), [keys])
-
-  useEffect(() => {
-    if (!enabled) return
-    const container = containerRef.current
-    if (!container) return
-
-    const update = () => {
-      setScrollTop(container.scrollTop)
-      setViewportHeight(container.clientHeight)
-
-      const listEl = listRef.current
-      if (!listEl) {
-        setListTop(0)
-        return
-      }
-
-      try {
-        const containerRect = container.getBoundingClientRect()
-        const listRect = listEl.getBoundingClientRect()
-        const top = listRect.top - containerRect.top + container.scrollTop
-        setListTop(top)
-      } catch {
-        setListTop(0)
-      }
-    }
-
-    update()
-    container.addEventListener('scroll', update, { passive: true })
-    const ro = new ResizeObserver(() => update())
-    ro.observe(container)
-
-    return () => {
-      container.removeEventListener('scroll', update)
-      ro.disconnect()
-    }
-  }, [containerRef, enabled])
-
-  useEffect(() => {
-    return () => {
-      for (const ro of observersRef.current.values()) ro.disconnect()
-      observersRef.current.clear()
-      refCallbacksRef.current.clear()
-    }
-  }, [])
-
-  const offsets = useMemo(() => {
-    const out: number[] = new Array(keys.length + 1)
-    out[0] = 0
-    for (let i = 0; i < keys.length; i += 1) {
-      const k = keys[i]
-      const h = heightsRef.current.get(k) ?? estimatePx
-      out[i + 1] = out[i] + Math.max(1, h)
-    }
-    return out
-  }, [keys, estimatePx, measureVersion])
-
-  const totalHeight = offsets[offsets.length - 1] ?? 0
-
-  const range = useMemo(() => {
-    const n = keys.length
-    if (n <= 0) return { start: 0, end: 0 }
-
-    const topInList = Math.max(0, scrollTop - listTop)
-    const bottomInList = Math.max(0, scrollTop + viewportHeight - listTop)
-
-    const rawStart = Math.min(n - 1, findLastLessEqual(offsets, topInList))
-    const rawEnd = Math.min(n - 1, findLastLessEqual(offsets, bottomInList))
-
-    const start = Math.max(0, rawStart - overscan)
-    const end = Math.min(n, rawEnd + overscan + 1)
-    return { start, end }
-  }, [keys.length, listTop, offsets, overscan, scrollTop, viewportHeight])
-
-  const getMeasureRef = useCallback((key: string) => {
-    const k = String(key || '').trim()
-    if (!k) return () => {}
-
-    const cached = refCallbacksRef.current.get(k)
-    if (cached) return cached
-
-    const cb = (el: HTMLDivElement | null) => {
-      const existing = observersRef.current.get(k)
-      if (existing) {
-        existing.disconnect()
-        observersRef.current.delete(k)
-      }
-
-      if (!el) return
-
-      const measure = () => {
-        try {
-          const rect = el.getBoundingClientRect()
-          const next = Math.max(1, Math.round(rect.height))
-          const prev = heightsRef.current.get(k)
-          if (prev !== next) {
-            heightsRef.current.set(k, next)
-            setMeasureVersion((v) => v + 1)
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      measure()
-      const ro = new ResizeObserver(() => measure())
-      ro.observe(el)
-      observersRef.current.set(k, ro)
-    }
-
-    refCallbacksRef.current.set(k, cb)
-    return cb
-  }, [])
-
-  const scrollToId = useCallback(
-    (id: string, behavior: ScrollBehavior = 'smooth') => {
-      const container = containerRef.current
-      if (!container) return
-
-      const key = String(id || '').trim()
-      const idx = indexByKey.get(key)
-      if (idx === undefined) return
-
-      const itemTop = offsets[idx] ?? 0
-      const itemBottom = offsets[idx + 1] ?? itemTop + estimatePx
-      const itemHeight = Math.max(1, itemBottom - itemTop)
-      const targetTop = listTop + itemTop - Math.max(0, (viewportHeight - itemHeight) / 2)
-
-      try {
-        container.scrollTo({ top: Math.max(0, targetTop), behavior })
-      } catch {
-        container.scrollTop = Math.max(0, targetTop)
-      }
-    },
-    [containerRef, estimatePx, indexByKey, listTop, offsets, viewportHeight]
-  )
-
-  return {
-    listRef,
-    totalHeight,
-    offsets,
-    range,
-    getMeasureRef,
-    scrollToId,
-  }
-}
 
 export default function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
@@ -369,7 +37,16 @@ export default function ChatPage() {
     fetchNextPage,
     isFetchingNextPage,
   } = useMessages(conversationId)
-  const { messages, setMessages, isStreaming, error, sendMessage, cancelStream } = useChatStream()
+  const {
+    messages,
+    setMessages,
+    streamingMessageId,
+    streamingText,
+    isStreaming,
+    error,
+    sendMessage,
+    cancelStream,
+  } = useChatStream()
   const shouldVirtualize = messages.length >= 500
   const virtual = useVirtualMessages({
     enabled: shouldVirtualize,
@@ -442,9 +119,17 @@ export default function ChatPage() {
     lastConversationIdRef.current = conversationId
   }, [conversationId, setMessages, setCreateError])
 
+  const displayMessage = useCallback(
+    (message: Message): Message => {
+      if (!streamingMessageId || String(message.id) !== streamingMessageId) return message
+      return { ...message, content: streamingText }
+    },
+    [streamingMessageId, streamingText]
+  )
+
   useEffect(() => {
     stick.maybeStick()
-  }, [messages, stick.maybeStick])
+  }, [messages, streamingText, stick.maybeStick])
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -545,7 +230,7 @@ export default function ChatPage() {
                             'rounded-xl ring-2 ring-primary/20 ring-offset-2 ring-offset-background'
                         )}
                       >
-                        <MessageBubble message={message} disableMotion={true} />
+                        <MessageBubble message={displayMessage(message)} disableMotion={true} />
                       </div>
                     </div>
                   )
@@ -561,13 +246,13 @@ export default function ChatPage() {
                       String(message.id) === highlightMid && 'rounded-xl ring-2 ring-primary/20 ring-offset-2 ring-offset-background'
                     )}
                   >
-                    <MessageBubble message={message} disableMotion={false} />
+                    <MessageBubble message={displayMessage(message)} disableMotion={false} />
                   </div>
                 ))}
               </AnimatePresence>
             )}
 
-            {isStreaming && messages[messages.length - 1]?.content === '' && (
+            {isStreaming && !streamingText && messages[messages.length - 1]?.content === '' && (
               <div className="flex gap-3 mb-4 max-w-3xl">
                 <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                    <Loader2 className="h-3 w-3 animate-spin text-primary" />

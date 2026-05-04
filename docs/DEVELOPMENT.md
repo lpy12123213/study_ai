@@ -70,6 +70,39 @@ npm run dev
 - `frontend/src/hooks/`：共享 hooks。
 - `frontend/src/lib/`：通用工具。
 
+## 布局变体
+
+页面必须明确选择一种布局语义，避免在 `ManusLayout` 中继续追加散落的 `pathname.startsWith(...)` 判断。
+
+当前 `frontend/src/components/layout/ManusLayout.tsx` 已存在 4 类行为：
+
+| layout | 侧边栏 | 顶栏 | 内容宽度 | 滚动责任 | 适用页面 |
+| --- | --- | --- | --- | --- | --- |
+| `standard` | 显示 | 显示 | 跟随用户内容宽度设置 | Layout 统一滚动 | chat、papers、settings 等普通工作台页 |
+| `wide` | 显示 | 显示 | 全宽 | 页面或 Layout 按需滚动 | blueprint、lesson-plans、deepthink 等大画布页 |
+| `studio` | 隐藏 | 显示 | 全宽 | 页面自行管理内部滚动 | question-library、ai-generate 等沉浸式工作区 |
+| `fullscreen` | 隐藏 | 隐藏 | 全屏 | 页面完全自管 | canvas 等全屏交互页 |
+
+新增页面的决策顺序：
+
+1. 需要占满整个浏览器且不显示顶栏，选 `fullscreen`。
+2. 需要顶栏但不需要历史侧栏，选 `studio`。
+3. 需要侧栏且主体需要全宽，选 `wide`。
+4. 其他页面选 `standard`。
+
+目标形态是在路由配置中声明布局，而不是在布局组件内写路径判断。迁移到 `ROUTE_CONFIG` 时，每个路由至少标注：
+
+```ts
+{
+  path: '/study-materials',
+  label: '自学资料',
+  layout: 'wide',
+  sidebar: true,
+}
+```
+
+`Header`、`CommandPalette`、`ManusLayout` 和面包屑应从同一份路由配置派生导航、标题、布局和侧边栏行为。
+
 ## 架构约束
 
 后端新增能力必须选择明确领域：

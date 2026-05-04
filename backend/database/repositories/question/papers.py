@@ -5,6 +5,7 @@ import os
 from typing import Any, List, Optional
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,7 +22,7 @@ def _to_json_str(value: Any) -> str:
     if isinstance(value, list) or isinstance(value, dict):
         try:
             return json.dumps(value, ensure_ascii=False)
-        except Exception:
+        except (TypeError, ValueError):
             return ""
     return ""
 
@@ -118,6 +119,7 @@ async def save_paper(
         analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
 
         pq = PaperQuestion(
+            user_id=uid,
             paper_id=paper.id,
             question_id=qid,
             question_order=i + 1,
@@ -163,8 +165,8 @@ async def save_paper(
     for item in cache_items:
         try:
             await session.merge(item)
-        except Exception:
-            logger.debug("paper_question_cache_merge_failed", exc_info=True)
+        except SQLAlchemyError:
+            logger.exception("paper_question_cache_merge_failed")
 
     await session.flush()
     return int(paper.id)
@@ -210,11 +212,19 @@ async def add_questions_to_paper(
         raise ValueError("paper_not_found")
 
     max_order_res = await session.execute(
-        select(func.max(PaperQuestion.question_order)).where(PaperQuestion.paper_id == pid)
+        select(func.max(PaperQuestion.question_order)).where(
+            PaperQuestion.user_id == uid,
+            PaperQuestion.paper_id == pid,
+        )
     )
     max_order = int(max_order_res.scalar() or 0)
 
-    existing_ids_res = await session.execute(select(PaperQuestion.question_id).where(PaperQuestion.paper_id == pid))
+    existing_ids_res = await session.execute(
+        select(PaperQuestion.question_id).where(
+            PaperQuestion.user_id == uid,
+            PaperQuestion.paper_id == pid,
+        )
+    )
     existing_ids = {str(x).strip() for x in existing_ids_res.scalars().all() if str(x or "").strip()}
     existing_mode = _infer_paper_source_mode(list(existing_ids))
 
@@ -259,6 +269,7 @@ async def add_questions_to_paper(
         analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
 
         pq = PaperQuestion(
+            user_id=uid,
             paper_id=pid,
             question_id=qid,
             question_order=max_order + appended + 1,
@@ -304,8 +315,8 @@ async def add_questions_to_paper(
     for item in cache_items:
         try:
             await session.merge(item)
-        except Exception:
-            logger.debug("paper_question_cache_merge_failed", exc_info=True)
+        except SQLAlchemyError:
+            logger.exception("paper_question_cache_merge_failed")
 
     await session.flush()
     return appended
@@ -329,7 +340,9 @@ async def get_paper(
         return None
 
     questions_result = await session.execute(
-        select(PaperQuestion).where(PaperQuestion.paper_id == int(paper_id)).order_by(PaperQuestion.question_order)
+        select(PaperQuestion)
+        .where(PaperQuestion.user_id == uid, PaperQuestion.paper_id == int(paper_id))
+        .order_by(PaperQuestion.question_order)
     )
     questions = questions_result.scalars().all()
 

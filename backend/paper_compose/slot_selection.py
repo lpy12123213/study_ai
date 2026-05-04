@@ -12,7 +12,7 @@ AllowCandidateFn = Callable[[Dict[str, Any]], bool]
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 

@@ -126,7 +126,7 @@ async def import_user_templates(payload: Dict[str, Any], user: dict = Depends(re
         try:
             created.append(await db_create_template(user_id=user_id, template_type=ttype, name=name, body=dict(body)))
         except Exception:
-            logger.debug("import_template_skipped", extra={"user_id": user_id, "template_type": ttype, "name": name}, exc_info=True)
+            logger.exception("import_template_skipped", extra={"user_id": user_id, "template_type": ttype, "name": name})
             continue
 
     return {"success": True, "created": created, "count": len(created)}

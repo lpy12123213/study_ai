@@ -34,6 +34,7 @@ def cache_registry_stats() -> Dict[str, Any]:
         try:
             out[name] = cache.stats()
         except Exception:
+            logger.exception("ttl_cache_stats_failed", extra={"cache": name})
             out[name] = {"name": name, "error": "stats_failed"}
     return out
 
@@ -118,6 +119,7 @@ class TTLCache:
                     self._data.popitem(last=False)
                     self._evictions += 1
                 except Exception:
+                    logger.exception("ttl_cache_evict_failed", extra={"cache": self.name})
                     break
 
     def delete(self, key: Any) -> None:  # noqa: ANN401
@@ -125,6 +127,7 @@ class TTLCache:
             try:
                 self._data.pop(key, None)
             except Exception:
+                logger.exception("ttl_cache_delete_failed", extra={"cache": self.name})
                 return
 
     def stats(self) -> Dict[str, Any]:

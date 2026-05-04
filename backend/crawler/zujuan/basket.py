@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 def _repo_relative_path(path: Path, *, project_root: Path) -> str:
     try:
         return str(path.relative_to(project_root)).replace("\\", "/")
-    except Exception:
+    except ValueError:
         return str(path)
 
 
@@ -72,12 +72,13 @@ async def _resolve_question_type_ids(crawler: Any) -> Dict[str, int]:
         try:
             filters = await get_filters()
         except Exception:
+            logger.warning("zujuan_question_type_filters_failed", exc_info=True)
             filters = {}
         for item in (filters or {}).get("question_types", []) or []:
             name_clean = str((item or {}).get("name") or "").strip()
             try:
                 qid_int = int((item or {}).get("id") or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if name_clean and qid_int > 0:
                 type_map[name_clean] = qid_int
@@ -88,7 +89,7 @@ async def _resolve_question_type_ids(crawler: Any) -> Dict[str, int]:
             name_clean = str(name or "").strip()
             try:
                 qid_int = int(qid or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if name_clean and qid_int > 0 and name_clean not in type_map:
                 type_map[name_clean] = qid_int
@@ -347,15 +348,17 @@ async def export_to_basket(
             for qid in question_ids:
                 try:
                     requested_ids.append(int(qid))
-                except Exception:
-                    logger.debug("zujuan_invalid_question_id", extra={"question_id": str(qid)}, exc_info=True)
+                except (TypeError, ValueError):
+                    logger.warning("zujuan_invalid_question_id", extra={"question_id": str(qid)}, exc_info=True)
             requested_set = set(requested_ids)
             returned_set = set()
             for question in questions:
+                if not isinstance(question, dict):
+                    continue
                 try:
                     returned_set.add(int(question.get("questionId")))
-                except Exception:
-                    logger.debug(
+                except (TypeError, ValueError):
+                    logger.warning(
                         "zujuan_invalid_question_detail_id",
                         extra={"question_id": str(question.get("questionId") or "")},
                         exc_info=True,
@@ -409,6 +412,7 @@ async def export_to_basket(
             return payload
 
     except Exception as exc:
+        logger.warning("zujuan_export_to_basket_failed", exc_info=True)
         return {"success": False, "error": f"导出失败: {exc}"}
 
 
@@ -416,6 +420,7 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
     try:
         import concurrent.futures
 
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
 
         def _sync_login():
@@ -432,8 +437,8 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
                 try:
                     page.wait_for_function("document.cookie.includes('userId=')", timeout=300000)
                     logger.info("login detected (zujuan)")
-                except Exception:
-                    logger.debug("zujuan_login_cookie_wait_failed", exc_info=True)
+                except PlaywrightTimeoutError:
+                    logger.info("zujuan_login_cookie_wait_timeout")
 
                 cookies = browser.cookies()
                 user_id = None
@@ -453,6 +458,7 @@ async def login_interactive(_crawler: Any) -> Dict[str, Any]:
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, _sync_login)
     except Exception as exc:
+        logger.warning("zujuan_interactive_login_failed", exc_info=True)
         return {"success": False, "error": f"登录失败: {exc}"}
 
 
@@ -503,4 +509,5 @@ async def login_via_subprocess(crawler: Any) -> Dict[str, Any]:
             "login_command": login_command,
         }
     except Exception as exc:
+        logger.warning("zujuan_login_subprocess_failed", exc_info=True)
         return {"success": False, "error": f"启动登录窗口失败: {exc}"}

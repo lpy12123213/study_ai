@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.api.auth import require_admin, require_auth
 from backend.api.schemas import SearchHistoryCreate
@@ -18,6 +19,8 @@ from backend.database.repositories.system.search import search_fulltext as db_se
 from backend.database.repositories.system.search_history import add_search_history as db_add_search_history
 from backend.database.repositories.system.user_settings import get_user_settings as db_get_user_settings
 from backend.database.repositories.system.user_settings import upsert_user_settings as db_upsert_user_settings
+from backend.llm.client import tokenizer_backend
+from backend.llm.metrics import recent_llm_calls
 from backend.llm.model_config import load_model_json_config
 from backend.llm.model_settings import fetch_provider_models, get_model_settings_payload, save_model_settings_payload
 
@@ -37,7 +40,7 @@ def _disk_check(path: Path) -> dict:
         min_free = 200 * 1024 * 1024
         ok = free >= min_free
         return {"ok": ok, "path": str(path), "free_bytes": free, "total_bytes": total, "min_free_bytes": min_free}
-    except Exception as exc:  # pragma: no cover (best-effort)
+    except OSError as exc:  # pragma: no cover (best-effort)
         return {"ok": False, "path": str(path), "error": str(exc)}
 
 
@@ -46,7 +49,7 @@ async def _db_check() -> dict:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return {"ok": True}
-    except Exception as exc:  # pragma: no cover (best-effort)
+    except SQLAlchemyError as exc:  # pragma: no cover (best-effort)
         return {"ok": False, "error": str(exc)}
 
 
@@ -105,6 +108,7 @@ async def health_check() -> dict:
         "status": status,
         "service": "exam-paper-assistant",
         "checks": {"db": db, "disk": disk, "llm": llm},
+        "tokenizer_backend": tokenizer_backend(),
         "db_pool": pool_metrics(),
         "caches": cache_registry_stats(),
     }
@@ -126,6 +130,13 @@ async def metrics() -> Response:
         raise HTTPException(status_code=404, detail="metrics_disabled")
     body, content_type = generate_metrics()
     return Response(content=body, media_type=content_type)
+
+
+@router.get("/llm-debug")
+async def llm_debug(limit: int = Query(50, ge=1, le=200), _: dict = Depends(require_auth)) -> dict:
+    """Return recent in-process LLM calls for local debugging."""
+
+    return recent_llm_calls(limit=limit)
 
 
 @router.get("/config")

@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { wrongbookApi } from '@/api/wrongbook'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function WrongbookPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['wrongbook'],
     queryFn: () => wrongbookApi.list().then((r) => r.data),
   })
-  const items: { id: string; content: string }[] = data?.items ?? data ?? []
+  const items = (data?.items ?? []).map((item) => ({
+    id: item.question_id,
+    content: item.note || item.source_ref?.stem?.toString() || item.question_id,
+  }))
 
   return (
     <div className="space-y-4">
@@ -16,7 +19,7 @@ export default function WrongbookPage() {
       <div className="space-y-3">
         {items.map((item) => (
           <div key={item.id} className="border rounded-lg p-4 bg-card">
-            <MarkdownRenderer content={item.content} />
+            <Markdown content={item.content} />
           </div>
         ))}
       </div>

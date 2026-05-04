@@ -6,8 +6,8 @@ import shutil
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.llm.client import is_llm_configured
 from backend.core.logging_utils import get_logger
+from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -223,6 +223,7 @@ class DiagramPlanningToolsMixin:
                     raise_on_fail=False,
                 )
             except Exception as exc:
+                logger.warning("diagram_planner_failed", exc_info=True)
                 msg = str(exc or "").strip().replace("\n", " ")
                 msg = msg[:260]
                 return {
@@ -346,6 +347,7 @@ class DiagramPlanningToolsMixin:
                     if isinstance(res, dict) and res.get("success") and isinstance(res.get("diagram"), dict):
                         created.append(dict(res.get("diagram") or {}))
                 except Exception as exc:  # pragma: no cover (best-effort)
+                    logger.warning("diagram_generation_item_failed", exc_info=True)
                     msg = str(exc or "").strip().replace("\n", " ")
                     if msg:
                         errors.append(msg[:180])
@@ -361,25 +363,22 @@ class DiagramPlanningToolsMixin:
             }
 
         items = [await _gen_one(kp) for kp in points]
-        try:
-            ctx.working_memory["diagram_generation_report"] = {
-                "topic": topic,
-                "subject": subject,
-                "preset": preset,
-                "allowed_kinds": allowed_kinds,
-                "tikz_available": tikz_ok,
-                "asy_available": asy_ok,
-                "seedream_available": seedream_ok,
-                "items": [
-                    {
-                        "knowledge_point": it.get("knowledge_point"),
-                        "created": it.get("created"),
-                        "error": it.get("error"),
-                    }
-                    for it in items
-                    if isinstance(it, dict)
-                ],
-            }
-        except Exception:
-            logger.debug("diagram_generation_report_store_failed", exc_info=True)
+        ctx.working_memory["diagram_generation_report"] = {
+            "topic": topic,
+            "subject": subject,
+            "preset": preset,
+            "allowed_kinds": allowed_kinds,
+            "tikz_available": tikz_ok,
+            "asy_available": asy_ok,
+            "seedream_available": seedream_ok,
+            "items": [
+                {
+                    "knowledge_point": it.get("knowledge_point"),
+                    "created": it.get("created"),
+                    "error": it.get("error"),
+                }
+                for it in items
+                if isinstance(it, dict)
+            ],
+        }
         return {"topic": topic, "subject": subject, "items": items, "allowed_kinds": allowed_kinds}

@@ -19,7 +19,6 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { LATEX_RULE_TEXT } from '@/features/aiGenerate/latexRules'
 import type { AiGenerateSessionMode } from '@/features/aiGenerate/types'
 
 type SubjectOption = {
@@ -216,7 +215,7 @@ export function MissionComposer(props: MissionComposerProps) {
             {canStop && (
               <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={onStop}>
                 <PauseCircle className="h-4 w-4" />
-                停止
+                停止追加
               </Button>
             )}
             <Button type="button" className="rounded-full" disabled={isGenerating} onClick={onGenerate}>
@@ -275,7 +274,8 @@ export function MissionComposer(props: MissionComposerProps) {
           <div className="mt-3 rounded-[20px] border border-blue-200/80 bg-blue-50/70 px-4 py-3 text-sm text-blue-900 dark:border-sky-800/60 dark:bg-sky-950/35 dark:text-sky-100">
             <div className="font-medium">LaTeX 公式规范</div>
             <div className="mt-1 leading-6 text-blue-900/80 dark:text-sky-100/80">
-              {LATEX_RULE_TEXT} 例如行内写成 <code>{'\\(x^2+1\\)'}</code>，独立公式写成 <code>{'\\[x^2-1=0\\]'}</code>。
+              所有数学公式都要使用可渲染标记。例如行内写成 <code>{'\\(x^2+1\\)'}</code>，
+              独立公式写成 <code>{'\\[x^2-1=0\\]'}</code>。
             </div>
           </div>
         </div>

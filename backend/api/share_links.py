@@ -29,7 +29,7 @@ def _is_expired(expires_at: str) -> bool:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc) <= datetime.now(timezone.utc)
-    except Exception:
+    except ValueError:
         # Malformed timestamps fail closed.
         return True
 
@@ -60,7 +60,7 @@ async def create_share_link(payload: Optional[dict] = None, user: dict = Depends
     expires_in_s = body.get("expires_in_s") if "expires_in_s" in body else body.get("expiresInS")
     try:
         expires_in_s_int = int(expires_in_s) if expires_in_s is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         expires_in_s_int = None
 
     password = str(body.get("password") or "").strip()

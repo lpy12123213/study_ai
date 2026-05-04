@@ -206,13 +206,13 @@ const KEY_LABELS: Record<string, string> = {
   term: '术语',
   limit: '数量上限',
   site: '站点',
-  base_url: '站点URL',
+  base_url: '资料站点',
   project: 'Wiki项目',
   lang: '语言',
   include_answers: '含答案',
-  include_readme: '含README',
-  readme_limit: 'README数',
-  readme_max_chars: 'README上限',
+  include_readme: '包含说明文档',
+  readme_limit: '说明文档数量',
+  readme_max_chars: '说明文档长度上限',
   sort: '排序',
   order: '顺序',
   text_max_length: '文本上限',
@@ -220,7 +220,7 @@ const KEY_LABELS: Record<string, string> = {
   knowledge_points: '知识点',
   top_k: '浏览条数',
   max_chars: '正文上限',
-  timeout_s: '超时秒数',
+  timeout_s: '超时时间',
   content: '内容',
   summary: '摘要',
   result: '结果',
@@ -252,9 +252,9 @@ const TOOL_PURPOSE: Record<string, string> = {
   web_search_knowledge: '联网检索每个知识点的资料，补充百科之外的例子、解释与来源链接。',
   browse_web_pages: '浏览关键网页并提取正文摘录，补足搜索摘要的信息不足。',
   wikipedia_search: '从维基百科获取定义/背景摘要，为讲解提供更可靠的基础信息。',
-  mediawiki_search: '从 MediaWiki 站点（如 Wikibooks/ProofWiki 等）检索词条摘要，补充教材式/条目式解释来源。',
-  stackexchange_search: '从 StackExchange 网络检索高质量问答解释与易错点（通常有高票答案）。',
-  github_search: '在 GitHub 上检索可能有用的笔记/教程/讲义仓库，作为进一步阅读补充来源。',
+  mediawiki_search: '从开放知识站点检索词条摘要，补充教材式/条目式解释来源。',
+  stackexchange_search: '从问答社区检索高质量解释与易错点。',
+  github_search: '检索可能有用的公开笔记、教程和讲义，作为进一步阅读补充来源。',
   search_questions_by_knowledge: '按知识点从题库检索例题与练习题，覆盖各子知识点的常见考法。',
   aggregate_knowledge: '将百科、联网搜索、题库结果按知识点聚合，形成结构化素材。',
   synthesize_sources: '将聚合素材去噪、提炼关键事实，生成结构化“源简报”，减轻后续写作上下文负担。',
@@ -263,9 +263,9 @@ const TOOL_PURPOSE: Record<string, string> = {
   generate_study_material: '基于聚合素材生成“讲解 + 例题分步解答 + 练习题”。',
   critique_draft: '对草稿进行多维度自我审查（准确性/清晰度/完整性/原创性/深度匹配），输出可执行的修订指令。',
   refine_draft: '根据自我批判的修订指令做定向精炼（高分草稿可自动跳过）。',
-  generate_diagrams: '为知识点生成教学配图（TikZ/文生图），用于增强直观理解（与批判阶段可并行）。',
-  assemble_study_archive: '把各知识点内容整理成最终的 Markdown 自学档案。',
-  save_markdown_file: '将生成的 Markdown 保存到本地文件，便于下载与复用。',
+  generate_diagrams: '为知识点生成教学配图，用于增强直观理解（与批判阶段可并行）。',
+  assemble_study_archive: '把各知识点内容整理成最终自学档案。',
+  save_markdown_file: '将生成的文档保存到本地文件，便于下载与复用。',
   review_content: '对生成内容做自检与审查，发现问题则进入迭代修正。',
 }
 
@@ -344,16 +344,13 @@ export function StepDetail({ step }: StepDetailProps) {
 
                 return (
                   <div key={`${header}:${idx}`} className="space-y-2">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <div className="text-foreground/90 font-medium">{header}</div>
-                      {item.provider && <div className="text-[10px] text-muted-foreground">{item.provider}</div>}
-                    </div>
+                    <div className="text-foreground/90 font-medium">{header}</div>
 
                     {shown.length > 0 ? (
                       <div className="space-y-2">
                         {shown.map((r, i) => {
                           const title = r.title || r.url || `#${i + 1}`
-                          const metaParts = [r.provider, r.source_query].filter(Boolean)
+                          const metaParts = [r.source_query].filter(Boolean)
                           const meta = metaParts.length > 0 ? metaParts.join(' · ') : ''
 
                           const body = (

@@ -64,7 +64,7 @@ def _is_expired(expires_at: str) -> bool:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc) <= datetime.now(timezone.utc)
-    except Exception:
+    except ValueError:
         return True
 
 
@@ -113,14 +113,14 @@ async def zip_files(payload: Dict[str, Any], user: dict = Depends(require_auth))
             path = (_GENERATED_DIR / fn).resolve()
             try:
                 path.relative_to(_GENERATED_DIR)
-            except Exception:
+            except ValueError:
                 continue
             if not path.exists() or not path.is_file():
                 continue
             try:
                 zf.write(path, arcname=fn)
-            except Exception:
-                logger.debug("zip_file_add_failed", extra={"filename": fn}, exc_info=True)
+            except (OSError, RuntimeError, ValueError):
+                logger.warning("zip_file_add_failed", extra={"filename": fn}, exc_info=True)
                 continue
 
     data = buf.getvalue()

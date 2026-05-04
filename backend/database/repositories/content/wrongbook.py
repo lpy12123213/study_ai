@@ -28,7 +28,7 @@ def _json_dumps(value: Any, *, default: str) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -38,7 +38,7 @@ def _json_loads(value: str, *, default: Any) -> Any:
         return default
     try:
         return json.loads(raw)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return default
 
 
@@ -99,7 +99,7 @@ async def upsert_wrong_question(
         if mastery is not None:
             try:
                 row.mastery = int(mastery)
-            except Exception:
+            except (TypeError, ValueError):
                 row.mastery = int(row.mastery or 0)
         if note is not None:
             row.note = str(note or "").strip()

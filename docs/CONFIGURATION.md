@@ -35,6 +35,53 @@ Linux / macOS：
 cp .env.example .env
 ```
 
+## 配置校验
+
+本地可以用只读脚本检查高影响配置是否缺失：
+
+```bash
+python scripts/check_config.py
+```
+
+机器可读输出：
+
+```bash
+python scripts/check_config.py --json
+```
+
+严格模式会在必填关系缺失时返回非 0，用于发布前检查：
+
+```bash
+python scripts/check_config.py --strict
+```
+
+当前校验覆盖：
+
+| 场景 | 必填或建议项 | 级别 |
+| --- | --- | --- |
+| `CHAT_PROVIDER=openrouter` | `OPENROUTER_API_KEY` | missing |
+| `CHAT_PROVIDER=fireworks` | `FIREWORKS_API_KEY` | missing |
+| `CHAT_PROVIDER=moonshot` | `MOONSHOT_API_KEY` | missing |
+| `LESSON_PLAN_PROVIDER=<provider>` | 对应 provider API Key | missing |
+| 共享或公网部署 | 非占位 `JWT_SECRET`、`ADMIN_PASSWORD` | recommended |
+| `STUDY_MATERIALS_SEARCH_MODE=tavily/metaso/exa` | 对应搜索 API Key | recommended |
+| `WEB_CONCURRENCY` / `UVICORN_WORKERS` / `WORKERS` > 1 | 单进程内存限速不再是全局窗口 | optional |
+
+后端启动时也会执行同一套检查：`missing` 记录为 warning，`recommended` 记录为 info；不会在本地开发环境中阻断启动。
+
+## 限速与 Worker
+
+`backend/app.py` 内置的 API 与登录失败限速器是单进程内存窗口。使用单个后端 worker 时行为明确；如果通过
+`WEB_CONCURRENCY`、`UVICORN_WORKERS` 或 `WORKERS` 启动多个 worker，每个进程都会维护独立窗口，实际全局限速会变宽。
+
+共享或公网部署建议保持单 worker，或把限速下沉到 Redis、Nginx、Traefik 等共享/边缘层。配置检查会在发现多 worker
+环境变量时输出 `optional` 提示，但不会阻断启动。
+
+## SQLite 并发
+
+默认数据库是 SQLite。`DB_POOL_SIZE` 和 `DB_MAX_OVERFLOW` 只控制异步连接等待 SQLite 锁的方式，不会提升写吞吐；
+高频写入应通过批量刷写和单事务提交减少锁占用。详细策略见 `docs/DB_CONCURRENCY.md`。
+
 ## 模型供应商
 
 通用对话供应商：

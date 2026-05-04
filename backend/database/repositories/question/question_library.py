@@ -25,7 +25,7 @@ def _require_user_id(user_id: str) -> str:
 def _as_int(v: Any, default: int = 0) -> int:
     try:
         return int(v)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -75,7 +75,7 @@ async def upsert_question_library_items(
         if "ai_score" in it:
             try:
                 row.ai_score = int(it.get("ai_score")) if it.get("ai_score") is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 row.ai_score = None
         if "ai_verdict" in it:
             row.ai_verdict = str(it.get("ai_verdict") or "").strip()
@@ -257,7 +257,7 @@ async def bulk_delete_question_library_items(
     await session.flush()
     try:
         return int(getattr(result, "rowcount", 0) or 0)
-    except Exception:
+    except (TypeError, ValueError):
         return 0
 
 

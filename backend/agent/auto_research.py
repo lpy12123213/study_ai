@@ -11,7 +11,7 @@ def auto_research_context(*, ctx: CompressedContext, user_input: str) -> Dict[st
     try:
         opts = ctx.working_memory.get("study_options")
         opts = dict(opts) if isinstance(opts, dict) else {}
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         opts = {}
 
     preset = str(opts.get("preset") or "standard").strip().lower()
@@ -289,4 +289,3 @@ async def maybe_auto_revise(
     )
     async for evt in execute_concrete_step(ctx=ctx, results=results, concrete_step=review_step):
         yield evt
-

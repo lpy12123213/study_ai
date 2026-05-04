@@ -60,7 +60,7 @@ def _study_flags(context: CompressedContext) -> Dict[str, Any]:
     max_points = opts.get("max_points")
     try:
         max_points_int = int(max_points) if max_points is not None else 0
-    except Exception:
+    except (TypeError, ValueError):
         max_points_int = 0
 
     return {
@@ -80,4 +80,3 @@ def _difficulty_from_profile(profile: UserProfile) -> str:
     if score < 0.7:
         return "中等"
     return "困难"
-

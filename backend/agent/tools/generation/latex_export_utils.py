@@ -4,6 +4,7 @@ import re
 from typing import Any, List
 
 from backend.core.logging_utils import get_logger
+from backend.llm.json_utils import strip_code_fences
 
 logger = get_logger(__name__)
 
@@ -11,7 +12,7 @@ logger = get_logger(__name__)
 def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
     try:
         n = int(value)
-    except Exception:
+    except (TypeError, ValueError):
         n = default
     return max(min_value, min(max_value, n))
 
@@ -30,7 +31,7 @@ def _strip_verbatim_like_blocks(text: str) -> str:
         s = re.sub(r"(?s)\\begin\{verbatim\}.*?\\end\{verbatim\}", "", s)
         s = re.sub(r"(?s)\\begin\{lstlisting\}.*?\\end\{lstlisting\}", "", s)
         s = re.sub(r"(?s)\\begin\{minted\}.*?\\end\{minted\}", "", s)
-    except Exception:
+    except (re.error, TypeError):
         return text or ""
     return s
 
@@ -55,18 +56,6 @@ def _brace_balance(text: str) -> int:
     return bal
 
 
-def _strip_code_fences(text: str) -> str:
-    raw = (text or "").strip()
-    if raw.startswith("```"):
-        first_newline = raw.find("\n")
-        if first_newline != -1:
-            raw = raw[first_newline + 1 :]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        raw = raw.strip()
-    return raw
-
-
 def _clean_latex_body(body: str) -> str:
     text = (body or "").strip()
     if not text:
@@ -83,7 +72,7 @@ def _clean_latex_body(body: str) -> str:
 
 
 def _extract_latex_body(text: str) -> str:
-    raw = _strip_code_fences(text)
+    raw = strip_code_fences(text)
     if not raw:
         return ""
     begin_matches = list(_BEGIN_BODY_RE.finditer(raw))
@@ -110,7 +99,7 @@ def _looks_truncated_latex_chunk(text: str, finish_reason: str, usage: Any, *, m
     if isinstance(usage, dict):
         try:
             ct = int(usage.get("completion_tokens") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             ct = 0
         if ct and max_tokens and ct >= int(max_tokens * 0.95):
             return True
@@ -123,7 +112,7 @@ def _looks_truncated_latex_chunk(text: str, finish_reason: str, usage: Any, *, m
         ends = len(re.findall(r"\\end\{[^}]+\}", raw))
         if begins > ends:
             return True
-    except Exception:
+    except (re.error, TypeError):
         logger.debug("latex_truncation_env_balance_check_failed", exc_info=True)
     raw_no_esc = re.sub(r"\\\$", "", raw)
     if raw_no_esc.count("$$") % 2 == 1:
@@ -134,7 +123,7 @@ def _looks_truncated_latex_chunk(text: str, finish_reason: str, usage: Any, *, m
         raw_sans_verbatim = _strip_verbatim_like_blocks(raw)
         if _brace_balance(raw_sans_verbatim) != 0:
             return True
-    except Exception:
+    except TypeError:
         logger.debug("latex_truncation_brace_balance_check_failed", exc_info=True)
     tail = raw.rstrip()
     if tail and tail[-1] in {"\\", "{", "[", "(", "=", "+", "-", "$"}:
@@ -155,7 +144,7 @@ def _normalize_latex_text(text: str) -> str:
         s = re.sub(r"\\\\(section|subsection|subsubsection|paragraph)\b", r"\\\1", s)
         s = re.sub(r"\\\\(includegraphics)\b", r"\\\1", s)
         s = re.sub(r"\\\\(textbf|textit|emph|mathrm|mathbf|mathit|mathcal)\b", r"\\\1", s)
-    except Exception:
+    except (re.error, TypeError):
         return text or ""
     return s
 
@@ -173,7 +162,7 @@ def _looks_incomplete_latex(text: str) -> bool:
         ends = len(re.findall(r"\\end\{[^}]+\}", raw))
         if begins > ends:
             return True
-    except Exception:
+    except (re.error, TypeError):
         logger.debug("latex_truncation_env_balance_check_failed", exc_info=True)
     raw_no_esc = re.sub(r"\\\$", "", raw)
     if raw_no_esc.count("$$") % 2 == 1:
@@ -184,7 +173,7 @@ def _looks_incomplete_latex(text: str) -> bool:
         raw_sans_verbatim = _strip_verbatim_like_blocks(raw)
         if _brace_balance(raw_sans_verbatim) != 0:
             return True
-    except Exception:
+    except TypeError:
         logger.debug("latex_truncation_brace_balance_check_failed", exc_info=True)
     tail = raw.rstrip()
     if tail and tail[-1] in {"\\", "{", "[", "(", "=", "+", "-", "$"}:
@@ -206,12 +195,12 @@ def _auto_fix_latex(text: str) -> str:
     s_no_verbatim = ""
     try:
         s_no_verbatim = _strip_verbatim_like_blocks(s)
-    except Exception:
+    except (re.error, TypeError):
         s_no_verbatim = s
 
     try:
         bal = _brace_balance(s_no_verbatim)
-    except Exception:
+    except TypeError:
         bal = 0
     if bal > 0:
         s = s + ("}" * min(bal, 24))
@@ -237,7 +226,7 @@ def _auto_fix_latex(text: str) -> str:
             if stack:
                 for name in reversed(stack[-24:]):
                     s = s.rstrip() + "\n\\end{" + name + "}"
-    except Exception:
+    except (re.error, TypeError):
         logger.debug("latex_auto_fix_env_stack_failed", exc_info=True)
 
     try:
@@ -246,7 +235,7 @@ def _auto_fix_latex(text: str) -> str:
             s = s.rstrip() + "\n$$\n"
         if raw_no_esc.replace("$$", "").count("$") % 2 == 1:
             s = s.rstrip() + "$"
-    except Exception:
+    except (re.error, TypeError):
         logger.debug("latex_auto_fix_math_delimiters_failed", exc_info=True)
 
     if suffix:
@@ -254,4 +243,3 @@ def _auto_fix_latex(text: str) -> str:
             s += "\n"
         s = s + suffix.lstrip("\n")
     return s
-

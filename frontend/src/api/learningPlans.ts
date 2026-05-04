@@ -21,18 +21,18 @@ export type LearningPlan = {
 }
 
 export async function listLearningPlans(params?: { include_archived?: boolean; limit?: number }): Promise<LearningPlan[]> {
-  const res = await apiClient.get('/learning-plans', { params })
-  return (res.data?.plans as LearningPlan[]) || []
+  const res = await apiClient.get<{ plans?: LearningPlan[] }>('/learning-plans', { params })
+  return res.data.plans || []
 }
 
 export async function getLearningPlan(planId: number): Promise<LearningPlan> {
-  const res = await apiClient.get(`/learning-plans/${planId}`)
-  return res.data?.plan as LearningPlan
+  const res = await apiClient.get<{ plan: LearningPlan }>(`/learning-plans/${planId}`)
+  return res.data.plan
 }
 
 export async function createLearningPlan(input: { title: string; items: Array<Partial<LearningPlanItem>> }): Promise<LearningPlan> {
-  const res = await apiClient.post('/learning-plans', input)
-  return res.data?.plan as LearningPlan
+  const res = await apiClient.post<{ plan: LearningPlan }>('/learning-plans', input)
+  return res.data.plan
 }
 
 export async function setLearningPlanItemCompleted(itemId: number, completed: boolean): Promise<void> {
@@ -40,8 +40,8 @@ export async function setLearningPlanItemCompleted(itemId: number, completed: bo
 }
 
 export async function createLearningPlanFromStudyArchive(archiveId: number, input?: { title?: string }): Promise<LearningPlan> {
-  const res = await apiClient.post(`/learning-plans/from-study-archive/${archiveId}`, input || {})
-  return res.data?.plan as LearningPlan
+  const res = await apiClient.post<{ plan: LearningPlan }>(`/learning-plans/from-study-archive/${archiveId}`, input || {})
+  return res.data.plan
 }
 
 export const learningPlansApi = {
@@ -50,17 +50,17 @@ export const learningPlansApi = {
   createLearningPlan,
   setLearningPlanItemCompleted,
   createLearningPlanFromStudyArchive,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: { todos: LearningPlan[] } }> => ({
     data: { todos: await listLearningPlans({ include_archived: false, limit: 50 }) },
   }),
-  create: async (input: { title: string }): Promise<{ data: any }> => ({
+  create: async (input: { title: string }): Promise<{ data: LearningPlan }> => ({
     data: await createLearningPlan({ title: input.title, items: [] }),
   }),
-  update: async (id: string, patch: { done?: boolean }): Promise<{ data: any }> => {
+  update: async (id: string, patch: { done?: boolean }): Promise<{ data: { id: string; done?: boolean } }> => {
     if (typeof patch.done === 'boolean') {
       await setLearningPlanItemCompleted(Number(id), patch.done)
     }
     return { data: { id, ...patch } }
   },
-  delete: async (_id: string): Promise<{ data: any }> => ({ data: { success: true } }),
+  delete: async (_id: string): Promise<{ data: { success: true } }> => ({ data: { success: true } }),
 }

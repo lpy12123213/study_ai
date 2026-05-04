@@ -6,7 +6,11 @@ export default function ExportsPage() {
     queryKey: ['exports'],
     queryFn: () => exportsApi.list().then((r) => r.data),
   })
-  const exports_: { id: string; name: string; status: string }[] = data?.exports ?? data ?? []
+  const exports_ = (data?.exports ?? []).map((item) => ({
+    id: item.filename,
+    name: item.filename,
+    status: item.file_type,
+  }))
 
   return (
     <div className="space-y-4">

@@ -7,6 +7,7 @@ All other modules should prefer importing from here (or via the existing
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -101,6 +102,32 @@ def _normalize_reasoning_effort(value: str, *, default: str = "xhigh") -> str:
     return v
 
 
+def _get_json_dict(name: str) -> Dict[str, Any]:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _normalize_model_tier_map(defaults: Dict[str, str], overrides: Dict[str, Any]) -> Dict[str, str]:
+    allowed = {"fast", "cheap", "main", "heavy"}
+    out: Dict[str, str] = {}
+    for key in allowed:
+        value = str(defaults.get(key) or "").strip()
+        if value:
+            out[key] = value
+    for key, value in (overrides or {}).items():
+        tier = str(key or "").strip().lower()
+        model = str(value or "").strip()
+        if tier in allowed and model:
+            out[tier] = model
+    return out
+
+
 @dataclass(frozen=True)
 class Settings:
     # Model config (local-only json)
@@ -124,6 +151,7 @@ class Settings:
     # Models
     main_model: str
     sub_model: str
+    model_tier_map: Dict[str, str]
 
     # DeepThink / Tree-of-Thoughts
     deepthink_generator_model: str
@@ -351,6 +379,17 @@ class Settings:
             )
         deepthink_generator_model = _get_str("DEEPTHINK_GENERATOR_MODEL", main_model)
         deepthink_evaluator_model = _get_str("DEEPTHINK_EVALUATOR_MODEL", "")
+        review_model = _get_str("REVIEW_MODEL", "accounts/fireworks/models/llama-v3p3-70b-instruct")
+
+        model_tier_map = _normalize_model_tier_map(
+            {
+                "fast": sub_model,
+                "cheap": sub_model,
+                "main": main_model or lesson_plan_model,
+                "heavy": review_model or deepthink_generator_model or main_model or lesson_plan_model,
+            },
+            _get_json_dict("MODEL_TIER_MAP"),
+        )
 
         deepthink_generator_temperature = _get_float("DEEPTHINK_GENERATOR_TEMPERATURE", 0.4)
         deepthink_generator_max_tokens = _get_int("DEEPTHINK_GENERATOR_MAX_TOKENS", 1400)
@@ -405,6 +444,7 @@ class Settings:
             main_model=main_model,
             # Use a cheaper/faster default for intermediate structured steps (summaries/outlines).
             sub_model=sub_model,
+            model_tier_map=model_tier_map,
             deepthink_generator_model=deepthink_generator_model,
             deepthink_generator_temperature=deepthink_generator_temperature,
             deepthink_generator_max_tokens=deepthink_generator_max_tokens,
@@ -445,7 +485,7 @@ class Settings:
             fireworks_api_key=SecretString(fireworks_api_key),
             fireworks_base_url=fireworks_base_url,
             # Fireworks model IDs change over time; default to a currently listed, chat-capable model.
-            review_model=_get_str("REVIEW_MODEL", "accounts/fireworks/models/llama-v3p3-70b-instruct"),
+            review_model=review_model,
             review_model_temperature=_get_float("REVIEW_MODEL_TEMPERATURE", 0.2),
             review_model_max_tokens=_get_int("REVIEW_MODEL_MAX_TOKENS", 1800),
             review_timeout_seconds=_get_int("REVIEW_TIMEOUT", 90),
@@ -472,6 +512,7 @@ class Settings:
             "chat_provider": self.chat_provider,
             "main_model": self.main_model,
             "sub_model": self.sub_model,
+            "model_tier_map": self.model_tier_map,
             "lesson_plan_provider": self.lesson_plan_provider,
             "lesson_plan_model": self.lesson_plan_model,
             "study_materials_thinking_model": self.study_materials_thinking_model,
@@ -511,6 +552,7 @@ MOONSHOT_BASE_URL = settings.moonshot_base_url
 
 MAIN_MODEL = settings.main_model
 SUB_MODEL = settings.sub_model
+MODEL_TIER_MAP = dict(settings.model_tier_map)
 
 # Lesson plan / study-materials provider (OpenAI-compatible)
 LESSON_PLAN_PROVIDER = settings.lesson_plan_provider
@@ -581,6 +623,7 @@ def _runtime_value_map(next_settings: Settings) -> Dict[str, Any]:
         "MOONSHOT_BASE_URL": next_settings.moonshot_base_url,
         "MAIN_MODEL": next_settings.main_model,
         "SUB_MODEL": next_settings.sub_model,
+        "MODEL_TIER_MAP": dict(next_settings.model_tier_map),
         "LESSON_PLAN_PROVIDER": next_settings.lesson_plan_provider,
         "LESSON_PLAN_API_KEY": next_settings.lesson_plan_api_key.get_secret_value(),
         "LESSON_PLAN_BASE_URL": next_settings.lesson_plan_base_url,
@@ -643,7 +686,7 @@ def reload_settings_from_env() -> Settings:
             if hasattr(module, key):
                 try:
                     setattr(module, key, value)
-                except Exception:
+                except (AttributeError, TypeError):
                     pass
 
     return next_settings

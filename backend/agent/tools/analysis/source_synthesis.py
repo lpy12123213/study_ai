@@ -5,16 +5,8 @@ import os
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.text_utils import clip_text as _clip_text
 from backend.llm.client import is_llm_configured
-
-
-def _clip_text(text: str, limit: int) -> str:
-    s = str(text or "").strip()
-    if not s:
-        return ""
-    if len(s) <= limit:
-        return s
-    return s[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -272,7 +264,7 @@ class SourceSynthesisToolsMixin:
                     continue
                 try:
                     conf = float(f.get("confidence") or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     conf = 0.0
                 src_ids = f.get("source_ids")
                 src_ids = [str(x).strip() for x in src_ids if str(x).strip()] if isinstance(src_ids, list) else []

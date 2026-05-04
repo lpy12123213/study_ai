@@ -6,12 +6,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
+from backend.agent.tools.generation.latex_export_utils import _auto_fix_latex
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 from backend.shared.project_paths import resolve_repo_root
-
-from backend.agent.tools.generation.latex_export_utils import _auto_fix_latex
 
 logger = get_logger(__name__)
 
@@ -44,7 +43,7 @@ class LatexCompileMixin:
         _ensure_latex_is_safe(tex)
         try:
             ctx.working_memory["latex_tex"] = tex
-        except Exception:
+        except (AttributeError, TypeError):
             logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         repo_root = resolve_repo_root()
@@ -60,7 +59,7 @@ class LatexCompileMixin:
         # Copy local generated images referenced by includegraphics into build dir.
         try:
             includes = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", tex)
-        except Exception:
+        except (re.error, TypeError):
             includes = []
         copied = 0
         missing: List[str] = []
@@ -86,7 +85,7 @@ class LatexCompileMixin:
                 if not dst.exists():
                     dst.write_bytes(src.read_bytes())
                 copied += 1
-            except Exception:
+            except OSError:
                 continue
 
         # Compile with xelatex directly (avoid latexmk dependency on perl on Windows/MiKTeX).
@@ -154,7 +153,7 @@ class LatexCompileMixin:
         try:
             ctx.working_memory["pdf_url"] = url
             ctx.working_memory["pdf_filename"] = filename
-        except Exception:
+        except (AttributeError, TypeError):
             logger.debug("latex_export_set_working_memory_failed", exc_info=True)
 
         return {

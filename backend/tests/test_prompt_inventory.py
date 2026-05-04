@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 from backend.generation.agentic.prompts import (
     PROMPT_INVENTORY_ALLOWLIST,
     PROMPT_INVENTORY_TARGETS,
 )
-
 
 _PROMPT_MARKERS = re.compile(r"(你是|只输出|严格输出|output_format|instructions|system prompt)", re.IGNORECASE)
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Loader2, PanelRightClose, PanelRightOpen, Sparkles } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -34,16 +35,25 @@ function EmptyQuestionWindow({ isFetching }: { isFetching: boolean }) {
 }
 
 export function QuestionFloatingWindow(props: QuestionFloatingWindowProps) {
+  const [locallyClosed, setLocallyClosed] = useState(false)
   const draftCount = props.session?.drafts.length || 0
   const statusLabel = props.isGenerating ? '生成中' : draftCount > 0 ? `${draftCount} 道题` : '等待生成'
+  const visible = props.open && !locallyClosed
 
-  if (!props.open) {
+  useEffect(() => {
+    if (props.open) setLocallyClosed(false)
+  }, [props.open])
+
+  if (!visible) {
     return (
       <Button
         type="button"
         aria-label="打开题目悬浮窗"
         className="fixed bottom-6 right-6 z-40 h-12 rounded-full px-4 shadow-[0_18px_45px_rgba(15,23,42,0.24)]"
-        onClick={props.onOpen}
+        onClick={() => {
+          setLocallyClosed(false)
+          props.onOpen()
+        }}
       >
         <PanelRightOpen className="h-4 w-4" />
         <span>题目悬浮窗</span>
@@ -75,7 +85,16 @@ export function QuestionFloatingWindow(props: QuestionFloatingWindowProps) {
           <Badge variant="outline" className="rounded-full">
             {statusLabel}
           </Badge>
-          <Button type="button" variant="ghost" size="icon" aria-label="收起题目悬浮窗" onClick={props.onClose}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="收起题目悬浮窗"
+            onClick={() => {
+              setLocallyClosed(true)
+              props.onClose()
+            }}
+          >
             <PanelRightClose className="h-4 w-4" />
           </Button>
         </div>

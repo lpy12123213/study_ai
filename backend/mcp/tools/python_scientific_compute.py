@@ -14,7 +14,11 @@ import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
+
+from backend.core.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 SCIENTIFIC_COMPUTE_INPUT_SCHEMA: Dict[str, Any] = {
@@ -99,6 +103,7 @@ def _limited_repr(value: Any, *, max_chars: int = 1200) -> str:
     try:
         text = repr(value)
     except Exception:
+        logger.warning("scientific_compute_repr_failed", exc_info=True)
         text = f"<unreprable {type(value).__name__}>"
     text = str(text or "")
     if len(text) > max_chars:
@@ -107,10 +112,7 @@ def _limited_repr(value: Any, *, max_chars: int = 1200) -> str:
 
 
 def _result_type_name(value: Any) -> str:
-    try:
-        return type(value).__name__
-    except Exception:
-        return "unknown"
+    return type(value).__name__
 
 
 def _build_env() -> Tuple[Dict[str, Any], List[str]]:
@@ -155,14 +157,14 @@ def _build_env() -> Tuple[Dict[str, Any], List[str]]:
         import numpy as np  # type: ignore
 
         env["np"] = np
-    except Exception:
+    except ImportError:
         warnings.append("numpy_unavailable")
 
     try:
         import sympy as sp  # type: ignore
 
         env["sp"] = sp
-    except Exception:
+    except ImportError:
         warnings.append("sympy_unavailable")
 
     return env, warnings
@@ -283,7 +285,7 @@ def _run_code_isolated(code: str, timeout_seconds: int) -> Dict[str, Any]:
         )
     except subprocess.TimeoutExpired:
         return {"success": False, "error": f"计算超时（>{timeout_seconds}s）"}
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return {"success": False, "error": str(exc)}
 
     if completed.returncode != 0:
@@ -292,7 +294,7 @@ def _run_code_isolated(code: str, timeout_seconds: int) -> Dict[str, Any]:
 
     try:
         result = json.loads(completed.stdout or "{}")
-    except Exception:
+    except (TypeError, ValueError, json.JSONDecodeError):
         detail = (completed.stdout or completed.stderr or "").strip()
         return {"success": False, "error": f"invalid_worker_output: {detail[:1200]}"}
     return result if isinstance(result, dict) else {"success": False, "error": "invalid_worker_result"}
@@ -314,6 +316,7 @@ async def python_scientific_compute(
     try:
         result = await asyncio.to_thread(_run_code_isolated, source, timeout)
     except Exception as exc:
+        logger.warning("scientific_compute_thread_failed", exc_info=True)
         return {"success": False, "error": str(exc), "purpose": str(purpose or "").strip()}
 
     result["purpose"] = str(purpose or "").strip()

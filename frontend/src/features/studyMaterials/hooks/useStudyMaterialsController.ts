@@ -400,7 +400,7 @@ export function useStudyMaterialsController() {
               : mode === 'deepen_research'
           ? '继续迭代：加深检索与补充边界/反例'
           : mode === 'fix_export'
-            ? '继续：修复导出（LaTeX/PDF）'
+            ? '继续：修复排版导出'
             : mode === 'skip_export'
               ? '继续：跳过导出，完成其余内容'
               : '继续迭代优化'

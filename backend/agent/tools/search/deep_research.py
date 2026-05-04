@@ -41,7 +41,7 @@ def _dedup_results(results: List[Dict[str, Any]], *, keep: int) -> List[Dict[str
         if not key:
             try:
                 key = json.dumps(r, ensure_ascii=False, sort_keys=True)
-            except Exception:
+            except (TypeError, ValueError):
                 key = str(r)
         if key in seen:
             continue
@@ -67,7 +67,7 @@ def deepresearch_defaults(preset: str) -> Tuple[int, int, int]:
 def _as_int(value: Any, *, default: int) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 

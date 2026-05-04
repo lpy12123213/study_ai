@@ -8,19 +8,19 @@ export type StudyArchive = {
   preset?: string
   requirements?: string
   markdown: string
-  sections?: Array<Record<string, any>>
+  sections?: Array<Record<string, unknown>>
   created_at?: string
   updated_at?: string
 }
 
 export async function getStudyArchive(archiveId: string): Promise<StudyArchive> {
-  const response = await apiClient.get(`/study-archives/${encodeURIComponent(String(archiveId))}`)
-  return response.data as any
+  const response = await apiClient.get<StudyArchive>(`/study-archives/${encodeURIComponent(String(archiveId))}`)
+  return response.data
 }
 
 export async function listStudyArchives(params?: { limit?: number; offset?: number }): Promise<StudyArchive[]> {
-  const res = await apiClient.get('/study-archives', { params })
-  return (res.data?.items as StudyArchive[]) || []
+  const res = await apiClient.get<{ items?: StudyArchive[] }>('/study-archives', { params })
+  return res.data.items || []
 }
 
 export async function createStudyArchive(input: {
@@ -29,9 +29,9 @@ export async function createStudyArchive(input: {
   preset?: string
   requirements?: string
   markdown: string
-  sections?: Array<Record<string, any>>
+  sections?: Array<Record<string, unknown>>
 }): Promise<StudyArchive> {
-  const res = await apiClient.post('/study-archives', {
+  const res = await apiClient.post<{ archive?: StudyArchive }>('/study-archives', {
     subject: input.subject,
     topic: input.topic,
     preset: input.preset || '',
@@ -39,15 +39,15 @@ export async function createStudyArchive(input: {
     markdown: input.markdown,
     sections: input.sections || [],
   })
-  return (res.data?.archive as StudyArchive) || (res.data as StudyArchive)
+  return res.data.archive || (res.data as StudyArchive)
 }
 
 export async function cloneStudyArchive(
   archiveId: number | string,
   input?: { topic?: string; preset?: string; requirements?: string }
 ): Promise<StudyArchive> {
-  const res = await apiClient.post(`/study-archives/${encodeURIComponent(String(archiveId))}/clone`, input || {})
-  return (res.data?.archive as StudyArchive) || (res.data as StudyArchive)
+  const res = await apiClient.post<{ archive?: StudyArchive }>(`/study-archives/${encodeURIComponent(String(archiveId))}/clone`, input || {})
+  return res.data.archive || (res.data as StudyArchive)
 }
 
 export const studyArchivesApi = {
@@ -55,7 +55,7 @@ export const studyArchivesApi = {
   listStudyArchives,
   createStudyArchive,
   cloneStudyArchive,
-  get: async (archiveId: string): Promise<{ data: any }> => ({
+  get: async (archiveId: string): Promise<{ data: StudyArchive }> => ({
     data: await getStudyArchive(archiveId),
   }),
 }

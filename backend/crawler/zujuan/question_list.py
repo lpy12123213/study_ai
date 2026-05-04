@@ -318,11 +318,11 @@ async def fetch_question_list(
             self._cache_set(cache_key, ([], dbg), ttl=60)
             return [], dbg
         html = resp_json.get("data", {}).get("html", "")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         text = ""
         try:
             text = (resp.text or "").strip()
-        except Exception:
+        except (AttributeError, TypeError):
             text = ""
         lowered = text.lower()
         is_js_challenge = (

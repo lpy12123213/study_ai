@@ -146,7 +146,7 @@ class KnowledgeTypeDetectionToolsMixin:
                 kt = _heuristic_type(kp)
             try:
                 conf = float(obj.get("confidence") or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 conf = 0.0
             focus = obj.get("focus")
             focus_list = [str(x).strip() for x in focus if str(x).strip()] if isinstance(focus, list) else []

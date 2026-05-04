@@ -1,5 +1,15 @@
 import { apiClient, fetchSSERequest } from '@/api/client'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object')
+}
+
+function recordString(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined
+  const item = value[key]
+  return typeof item === 'string' ? item : undefined
+}
+
 export type UnifiedTaskStatus = 'running' | 'paused' | 'completed' | 'failed' | 'canceled' | string
 
 export type UnifiedTask = {
@@ -31,8 +41,10 @@ export type TaskStreamEvent = {
   taskId: string
   seq: number
   type: string
-  data?: any
+  data?: unknown
   created_at?: string
+  trace_id?: string
+  traceId?: string
 }
 
 export async function listTasks(params?: {
@@ -50,14 +62,16 @@ export async function getTask(
   options?: {
     includeEvents?: boolean
     eventsLimit?: number
+    eventsAfterSeq?: number
   }
-): Promise<any> {
+): Promise<UnifiedTask> {
   const params: Record<string, unknown> = {}
   if (options?.includeEvents !== undefined) params.include_events = Boolean(options.includeEvents)
   if (options?.eventsLimit !== undefined) params.events_limit = Math.max(1, Math.floor(Number(options.eventsLimit) || 1))
+  if (options?.eventsAfterSeq !== undefined) params.events_after_seq = Math.max(0, Math.floor(Number(options.eventsAfterSeq) || 0))
 
   const config = Object.keys(params).length > 0 ? { params } : undefined
-  const response = await apiClient.get(`/tasks/${encodeURIComponent(taskId)}`, config)
+  const response = await apiClient.get<UnifiedTask>(`/tasks/${encodeURIComponent(taskId)}`, config)
   return response.data
 }
 
@@ -93,7 +107,7 @@ export async function cancelTask(taskId: string): Promise<void> {
 
 export async function retryTask(taskId: string): Promise<{ taskId: string }> {
   const response = await apiClient.post(`/tasks/${encodeURIComponent(taskId)}/retry`)
-  return { taskId: String((response.data as any)?.taskId || '') }
+  return { taskId: String(recordString(response.data, 'taskId') || '') }
 }
 
 export async function exportPaperTask(
@@ -106,7 +120,7 @@ export async function exportPaperTask(
     includeAnswer: Boolean(input.includeAnswer),
     includeAnalysis: Boolean(input.includeAnalysis),
   })
-  return { taskId: String((res.data as any)?.taskId || '') }
+  return { taskId: String(recordString(res.data, 'taskId') || '') }
 }
 
 export async function exportStudyArchiveTask(
@@ -116,7 +130,7 @@ export async function exportStudyArchiveTask(
   const res = await apiClient.post(`/tasks/export/study-archives/${encodeURIComponent(String(archiveId))}`, {
     format: input.format,
   })
-  return { taskId: String((res.data as any)?.taskId || '') }
+  return { taskId: String(recordString(res.data, 'taskId') || '') }
 }
 
 export const tasksApi = {
@@ -129,7 +143,7 @@ export const tasksApi = {
   retryTask,
   exportPaperTask,
   exportStudyArchiveTask,
-  list: async (): Promise<{ data: any }> => ({
+  list: async (): Promise<{ data: UnifiedTaskListResponse }> => ({
     data: await listTasks({ limit: 100 }),
   }),
 }

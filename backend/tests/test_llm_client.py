@@ -128,8 +128,60 @@ class ApiKeyOverrideTests(unittest.TestCase):
         self.assertFalse(llm_client.is_llm_configured())
         self.assertEqual(llm_client.get_moonshot_api_key_override(), "")
 
+    def test_tokenizer_backend_is_reportable(self) -> None:
+        self.assertIn(llm_client.tokenizer_backend(), {"tiktoken", "heuristic"})
+
 
 class ChatCompletionReasoningCompatTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self) -> None:
+        await llm_client.close_shared_llm_http_client()
+
+    async def test_chat_completion_reuses_shared_async_client(self) -> None:
+        create_count = 0
+        post_count = 0
+        req = httpx.Request("POST", "https://example.test/chat/completions")
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN001,ARG002
+                nonlocal create_count
+                create_count += 1
+
+            async def aclose(self) -> None:
+                return None
+
+            async def post(self, url, headers=None, json=None, timeout=None):  # noqa: ANN001,ANN201
+                nonlocal post_count
+                _ = url, headers, json, timeout
+                post_count += 1
+                return httpx.Response(
+                    200,
+                    json={"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]},
+                    request=req,
+                )
+
+        await llm_client.close_shared_llm_http_client()
+        with patch.object(llm_client.httpx, "AsyncClient", FakeAsyncClient):
+            for _ in range(2):
+                res = await llm_client.chat_completion(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="gpt-5.2",
+                    temperature=0.2,
+                    max_tokens=50,
+                    stream=False,
+                    raise_on_fail=True,
+                    retries=1,
+                    req_id_prefix="test",
+                    provider="ikuncode",
+                    base_url="https://example.test",
+                    api_key="test-key",
+                    moonshot_key="",
+                    moonshot_base_url="",
+                )
+                self.assertEqual(res.content, "ok")
+
+        self.assertEqual(create_count, 1)
+        self.assertEqual(post_count, 2)
+
     async def test_openrouter_deepseek_drops_reasoning_when_not_streaming(self) -> None:
         captured_payloads: list[dict] = []
         req = httpx.Request("POST", "https://example.test/chat/completions")
@@ -400,7 +452,6 @@ class ChatCompletionReasoningCompatTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_ikuncode_supports_streaming_content(self) -> None:
         stream_payloads: list[dict] = []
-        req = httpx.Request("POST", "https://example.test/chat/completions")
 
         class FakeStreamResponse:
             status_code = 200

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useSearchParams } from 'react-router-dom'
 import { Pause, Play, RefreshCcw, Loader2, ListChecks, XCircle, Ban, RotateCcw } from 'lucide-react'
 import { getTask, listTasks, pauseTask, resumeTask, cancelTask, retryTask, streamTask, type TaskStreamEvent, type UnifiedTask } from '@/api/tasks'
@@ -44,6 +45,7 @@ export default function TaskCenterPage() {
   })
 
   const tasks = data?.tasks || []
+  const taskListRef = useRef<HTMLDivElement | null>(null)
 
   const {
     data: selectedTaskSnapshot,
@@ -95,6 +97,14 @@ export default function TaskCenterPage() {
       return true
     })
   }, [tasks, query, timeFilter])
+
+  const taskVirtualizer = useVirtualizer({
+    count: filteredTasks.length,
+    getScrollElement: () => taskListRef.current,
+    estimateSize: () => 92,
+    overscan: 8,
+    getItemKey: (index) => String((filteredTasks[index] as any)?.id || index),
+  })
 
   const selectedTask: UnifiedTask | undefined = useMemo(() => {
     if (!selectedTaskId) return undefined
@@ -211,7 +221,7 @@ export default function TaskCenterPage() {
   const status = selectedTask ? formatStatus(String(selectedTask.status || '')) : null
 
   return (
-    <div className="h-full flex flex-col overflow-hidden min-h-0">
+    <div className="h-full flex flex-col min-h-0">
       <div className="p-4 border-b border-border flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <ListChecks className="h-5 w-5 text-primary" />
@@ -281,9 +291,11 @@ export default function TaskCenterPage() {
             </select>
           </div>
 
-          <ScrollArea className="flex-1">
-            <div className="p-2 space-y-1">
-              {filteredTasks.map((t) => {
+          <div ref={taskListRef} className="flex-1 overflow-auto">
+            <div className="relative p-2" style={{ height: filteredTasks.length > 0 ? taskVirtualizer.getTotalSize() + 16 : '100%' }}>
+              {taskVirtualizer.getVirtualItems().map((virtualItem) => {
+                const t = filteredTasks[virtualItem.index]
+                if (!t) return null
                 const tid = String((t as any).id)
                 const active = tid === selectedTaskId
                 const s = formatStatus(String((t as any).status || ''))
@@ -291,30 +303,37 @@ export default function TaskCenterPage() {
                 const eta = Number((t as any).eta_s || 0)
 
                 return (
-                  <button
-                    key={tid}
-                    type="button"
-                    onClick={() => handleSelectTask(tid)}
-                    className={cn(
-                      'w-full text-left rounded-md border border-border/60 px-3 py-2 hover:bg-accent/30 transition-colors',
-                      active && 'bg-accent/50 border-border'
-                    )}
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    ref={taskVirtualizer.measureElement}
+                    className="absolute left-2 right-2"
+                    style={{ transform: `translateY(${virtualItem.start}px)` }}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium truncate">{String((t as any).title || tid)}</div>
-                        <div className="text-xs text-muted-foreground truncate">{tid}</div>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectTask(tid)}
+                      className={cn(
+                        'w-full text-left rounded-md border border-border/60 px-3 py-2 hover:bg-accent/30 transition-colors',
+                        active && 'bg-accent/50 border-border'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{String((t as any).title || tid)}</div>
+                          <div className="text-xs text-muted-foreground truncate">{tid}</div>
+                        </div>
+                        <Badge variant={s.tone}>{s.label}</Badge>
                       </div>
-                      <Badge variant={s.tone}>{s.label}</Badge>
-                    </div>
-                    <div className="mt-2">
-                      <Progress value={progress} className="h-1.5" />
-                      <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
-                        <span>{Math.round(progress)}%</span>
-                        {eta > 0 ? <span>预计剩余 {Math.ceil(eta)}s</span> : <span />}
+                      <div className="mt-2">
+                        <Progress value={progress} className="h-1.5" />
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                          <span>{Math.round(progress)}%</span>
+                          {eta > 0 ? <span>预计剩余 {Math.ceil(eta)}s</span> : <span />}
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                  </div>
                 )
               })}
 
@@ -322,7 +341,7 @@ export default function TaskCenterPage() {
                 <div className="text-sm text-muted-foreground text-center py-10">暂无任务</div>
               )}
             </div>
-          </ScrollArea>
+          </div>
         </div>
 
         {/* Right: details */}

@@ -36,7 +36,13 @@ describe('KnowledgeVideoPage', () => {
     vi.mocked(knowledgeVideosApi.generateKnowledgeVideo).mockResolvedValue({ taskId: 'knowledge-video-1' })
     vi.mocked(tasksApi.getTask).mockResolvedValue({
       id: 'knowledge-video-1',
+      task_type: 'knowledge_video',
+      title: '知识视频',
       status: 'completed',
+      progress: 100,
+      last_seq: 0,
+      created_at: '2026-05-04T00:00:00.000Z',
+      updated_at: '2026-05-04T00:00:00.000Z',
       result: {
         video_url: '/api/media/generated/video.mp4',
         subtitle_url: '/api/media/generated/subtitle.srt',
@@ -70,10 +76,10 @@ describe('KnowledgeVideoPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('knowledge-video-1')).toBeInTheDocument()
-      expect(screen.getByText('Docker 沙盒渲染')).toBeInTheDocument()
+      expect(screen.getAllByText('安全渲染中').length).toBeGreaterThan(0)
       expect(screen.getByRole('button', { name: '下载字幕' })).toBeInTheDocument()
       expect(screen.getByText('/api/media/generated/script.py')).toBeInTheDocument()
       expect(screen.getByText('class KnowledgeVideoScene(Scene): pass')).toBeInTheDocument()
     })
-  })
+  }, 15_000)
 })

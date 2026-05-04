@@ -70,7 +70,7 @@ class TestAgentReActMode(unittest.IsolatedAsyncioTestCase):
         from backend.agent.core import AgentCore
         from backend.agent.mcp.registry import MCPToolRegistry
         from backend.agent.react.loop import ReActLoop
-        from backend.agent.types import ActionResults, CompressedContext, PlanStep, UserProfile
+        from backend.agent.types import ActionResults, CompressedContext, UserProfile
 
         async def _noop(_args, _ctx):
             return {"ok": True}

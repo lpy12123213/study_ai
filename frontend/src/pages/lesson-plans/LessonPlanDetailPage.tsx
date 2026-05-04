@@ -1,7 +1,7 @@
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { lessonPlansApi } from '@/api/lessonPlans'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { Markdown } from '@/components/shared/Markdown'
 
 export default function LessonPlanDetailPage() {
   const { id } = useParams()
@@ -16,7 +16,7 @@ export default function LessonPlanDetailPage() {
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-semibold">{data?.title}</h1>
       <div className="border rounded-lg p-4 bg-card">
-        <MarkdownRenderer content={data?.content ?? ''} />
+        <Markdown content={data?.content ?? ''} />
       </div>
     </div>
   )

@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import resolve_subject
 from backend.database.repositories.content.study_archives import get_latest_study_archive
-from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.papers import save_paper
+from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.paper_compose.ai_fill import fill_slot_with_ai
 from backend.paper_compose.auto_planner import plan_exam_structure
 from backend.question_library.gen_utils import ReasoningEventHandler
@@ -24,7 +26,7 @@ def _now_iso() -> str:
 def _as_int(value: Any, default: int) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -56,7 +58,7 @@ async def generate_full_paper_events(
 
     try:
         subject = resolve_subject(subject_input, strict=True)
-    except Exception as exc:
+    except ValueError as exc:
         yield {"type": "error", "error": "invalid_subject", "taskId": task_id, "data": {"detail": str(exc)}}
         return
 
@@ -129,7 +131,7 @@ async def generate_full_paper_events(
     if use_archive:
         try:
             archive = await get_latest_study_archive(user_id=str(user_id or "").strip(), subject=subject, topic=topic)
-        except Exception:
+        except (SQLAlchemyError, ValueError):
             archive = None
         if isinstance(archive, dict):
             study_markdown = str(archive.get("markdown") or "")
@@ -312,12 +314,12 @@ async def generate_full_paper_events(
                 if isinstance(q, dict) and str(q.get("question_id") or "").strip()
             ]
         )
-    except Exception:
-        logger.debug("generate_full_paper_upsert_cache_failed", exc_info=True, extra={"task_id": task_id})
+    except (SQLAlchemyError, TypeError, ValueError):
+        logger.warning("generate_full_paper_upsert_cache_failed", exc_info=True, extra={"task_id": task_id})
 
     try:
         paper_id = await save_paper(user_id=str(user_id or "").strip(), paper_name=paper_name, questions=filled)
-    except Exception as exc:
+    except (SQLAlchemyError, TypeError, ValueError) as exc:
         yield {"type": "error", "error": "paper_save_failed", "taskId": task_id, "data": {"detail": str(exc)}}
         return
 

@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Execution plan builder for the study-materials agent.
 
 The public entrypoint remains `backend.agent.planner.Planner`, but the
 implementation now lives under `backend.agent.planning` to keep files smaller
 and responsibilities clearer.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -19,13 +19,13 @@ from backend.agent.planning.json_utils import _extract_json_obj
 from backend.agent.planning.study_options import _difficulty_from_profile, _env_truthy, _study_flags
 from backend.agent.planning.tool_catalog import build_allowed_tools
 from backend.agent.types import CompressedContext, ExecutionPlan, PlanStep, UserProfile
-from backend.llm.client import chat_completion_text, is_llm_configured
 from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     DEFAULT_SUBJECT,
     LESSON_PLAN_MAX_TOKENS,
     LESSON_PLAN_TEMPERATURE,
 )
+from backend.llm.client import chat_completion_text, is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -52,7 +52,7 @@ class Planner:
         ).strip()
         try:
             timeout_s = float(timeout_raw) if timeout_raw else 30.0
-        except Exception:
+        except (TypeError, ValueError):
             timeout_s = 30.0
         timeout_s = max(10.0, min(timeout_s, 300.0))
 
@@ -113,7 +113,7 @@ class Planner:
         max_points_override = 0
         try:
             max_points_override = int(flags.get("max_points") or 0)
-        except Exception:
+        except (TypeError, ValueError):
             max_points_override = 0
 
         # Preset defaults (balance quality/speed). These can still be overridden per-task via flags.
@@ -654,7 +654,7 @@ class Planner:
             foreach_limit = 0
             try:
                 foreach_limit = int(item.get("foreach_limit") or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 foreach_limit = 0
             step_id = str(item.get("id") or "").strip() or sid(f"{tool}-{idx}")
 
@@ -881,7 +881,7 @@ class Planner:
                 gen_args["with_diagrams"] = False
                 steps[gen_idx].arguments = gen_args
             except Exception:
-                logger.debug("planner_adjust_generate_step_args_failed", exc_info=True)
+                logger.warning("planner_adjust_generate_step_args_failed", exc_info=True)
 
             # Post-write pipeline: critique_draft ∥ generate_diagrams → refine_draft
             assemble_idx = _find_first("assemble_study_archive", start=gen_idx + 1)
@@ -950,7 +950,7 @@ class Planner:
                     try:
                         steps[critique_idx].parallel_group = "kp_postwrite"
                     except Exception:
-                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
+                        logger.warning("planner_set_parallel_group_failed", exc_info=True)
                     spec = self._default_step_spec(
                         "generate_diagrams",
                         topic=topic,
@@ -982,7 +982,7 @@ class Planner:
                     try:
                         steps[diagrams_idx].parallel_group = "kp_postwrite"
                     except Exception:
-                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
+                        logger.warning("planner_set_parallel_group_failed", exc_info=True)
                     spec = self._default_step_spec(
                         "critique_draft",
                         topic=topic,
@@ -1017,11 +1017,11 @@ class Planner:
                     try:
                         steps[critique_idx].parallel_group = steps[critique_idx].parallel_group or "kp_postwrite"
                     except Exception:
-                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
+                        logger.warning("planner_set_parallel_group_failed", exc_info=True)
                     try:
                         steps[diagrams_idx].parallel_group = steps[diagrams_idx].parallel_group or "kp_postwrite"
                     except Exception:
-                        logger.debug("planner_set_parallel_group_failed", exc_info=True)
+                        logger.warning("planner_set_parallel_group_failed", exc_info=True)
             else:
                 if critique_idx == -1:
                     spec = self._default_step_spec(
@@ -1249,7 +1249,7 @@ class Planner:
             if parsed is not None:
                 return parsed, degraded_reason
         except Exception:
-            logger.debug("planner_llm_plan_parse_failed; fallback", exc_info=True)
+            logger.warning("planner_llm_plan_parse_failed; fallback", exc_info=True)
 
         return (
             self._fallback_plan(

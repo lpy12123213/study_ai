@@ -8,13 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
+from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.system.learning_plans import create_learning_plan as db_create_learning_plan
 from backend.database.repositories.system.learning_plans import get_learning_plan as db_get_learning_plan
 from backend.database.repositories.system.learning_plans import list_learning_plans as db_list_learning_plans
 from backend.database.repositories.system.learning_plans import (
     set_learning_plan_item_completed as db_set_learning_plan_item_completed,
 )
-from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 
 router = APIRouter(prefix="/learning-plans", tags=["learning-plans"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -28,7 +28,7 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
         return None
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except Exception:
+    except ValueError:
         return None
 
 

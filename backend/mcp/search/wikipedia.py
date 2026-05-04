@@ -99,7 +99,7 @@ async def _wikipedia_api_search(
             title = str((it or {}).get("title") or "").strip()
             if title:
                 hits.append(title)
-    except Exception:
+    except (AttributeError, TypeError):
         hits = []
 
     # De-dup while preserving order
@@ -156,12 +156,9 @@ async def _wikipedia_api_fetch(
     resolved_title = str(page_obj.get("title") or title).strip()
 
     is_disambiguation = False
-    try:
-        pageprops = page_obj.get("pageprops")
-        if isinstance(pageprops, dict) and "disambiguation" in pageprops:
-            is_disambiguation = True
-    except Exception:
-        is_disambiguation = False
+    pageprops = page_obj.get("pageprops")
+    if isinstance(pageprops, dict) and "disambiguation" in pageprops:
+        is_disambiguation = True
 
     return {
         "success": True,
@@ -205,7 +202,7 @@ async def wikipedia_search(
     try:
         import wikipedia  # type: ignore
         from wikipedia.exceptions import DisambiguationError, PageError  # type: ignore
-    except Exception as exc:
+    except ImportError as exc:
         # Fallback to the official MediaWiki API (no extra dependency required).
         wiki_lang = (lang or "zh").strip() or "zh"
         base_url = f"https://{wiki_lang}.wikipedia.org/"
@@ -266,7 +263,7 @@ async def wikipedia_search(
                     "provider": "wikipedia",
                     "fallback": "mediawiki_api",
                 }
-        except Exception as api_exc:
+        except (httpx.HTTPError, ValueError, TypeError) as api_exc:
             return {
                 "success": False,
                 "query": q,
@@ -287,6 +284,7 @@ async def wikipedia_search(
         try:
             hits = list(wikipedia.search(q, results=max(1, min(int(search_results or 5), 10))))  # type: ignore[arg-type]
         except Exception:
+            logger.warning("wikipedia_search_hits_failed", extra={"query": q}, exc_info=True)
             hits = []
 
         title = (hits[0] if hits else q).strip()
@@ -325,7 +323,7 @@ async def wikipedia_search(
         except DisambiguationError as exc:  # pragma: no cover (network-dependent)
             try:
                 disambiguation_options.extend([str(x) for x in (exc.options or []) if str(x).strip()][:10])
-            except Exception:
+            except (AttributeError, TypeError):
                 disambiguation_options = []
 
             # Try a few options as a best-effort fallback.
@@ -333,6 +331,11 @@ async def wikipedia_search(
                 try:
                     return _fetch(opt)
                 except Exception:
+                    logger.warning(
+                        "wikipedia_disambiguation_option_fetch_failed",
+                        extra={"query": q, "option": opt},
+                        exc_info=True,
+                    )
                     continue
 
             return {
@@ -355,6 +358,7 @@ async def wikipedia_search(
                 "provider": "wikipedia",
             }
         except Exception as exc:  # pragma: no cover (network-dependent)
+            logger.warning("wikipedia_query_failed", extra={"query": q}, exc_info=True)
             return {
                 "success": False,
                 "query": q,

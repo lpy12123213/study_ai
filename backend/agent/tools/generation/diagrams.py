@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -10,13 +10,13 @@ import httpx
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
-from backend.shared.project_paths import resolve_repo_root
 from backend.shared.diagrams.static_render import (
     asy_tools_missing_hint,
     render_asy_to_svg_bytes,
     render_tikz_to_svg_bytes,
     tikz_tools_missing_hint,
 )
+from backend.shared.project_paths import resolve_repo_root
 
 logger = get_logger(__name__)
 
@@ -106,6 +106,7 @@ class DiagramToolsMixin:
         try:
             png_bytes = render_schematic(spec)
         except Exception as exc:
+            logger.warning("diagram_render_schematic_failed", exc_info=True)
             return {"success": False, "error": str(exc), "knowledge_point": kp}
 
         user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
@@ -158,7 +159,7 @@ class DiagramToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            logger.debug("diagram_store_working_memory_failed", exc_info=True)
+            logger.warning("diagram_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -204,7 +205,7 @@ class DiagramToolsMixin:
         )
         try:
             timeout_s = float(timeout_raw)
-        except Exception:
+        except (TypeError, ValueError):
             timeout_s = 240.0
         timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
 
@@ -266,7 +267,7 @@ class DiagramToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            logger.debug("diagram_store_working_memory_failed", exc_info=True)
+            logger.warning("diagram_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -305,7 +306,7 @@ class DiagramToolsMixin:
         timeout_raw = os.getenv("STUDY_MATERIALS_ASY_TIMEOUT_S") or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S") or "240"
         try:
             timeout_s = float(timeout_raw)
-        except Exception:
+        except (TypeError, ValueError):
             timeout_s = 240.0
         timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
 
@@ -367,7 +368,7 @@ class DiagramToolsMixin:
             blob["items"] = [x for x in items if isinstance(x, dict)]
             ctx.working_memory["diagrams"] = blob
         except Exception:
-            logger.debug("diagram_store_working_memory_failed", exc_info=True)
+            logger.warning("diagram_store_working_memory_failed", exc_info=True)
 
         return {
             "success": True,
@@ -421,7 +422,7 @@ class DiagramToolsMixin:
         ).strip()
         try:
             n = int(args.get("n") or os.getenv("SEEDREAM_N") or 1)
-        except Exception:
+        except (TypeError, ValueError):
             n = 1
         n = max(1, min(n, 4))
         response_format = str(
@@ -440,7 +441,7 @@ class DiagramToolsMixin:
         )
         try:
             timeout_s = float(timeout_raw)
-        except Exception:
+        except (TypeError, ValueError):
             timeout_s = 120.0
         timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
 
@@ -453,7 +454,7 @@ class DiagramToolsMixin:
         ) as client:
             try:
                 resp = await client.post(endpoint, json=payload)
-            except Exception as exc:
+            except httpx.HTTPError as exc:
                 return {"success": False, "error": f"seedream_request_failed: {str(exc)}", "knowledge_point": kp}
 
             if resp.status_code != 200:
@@ -468,7 +469,7 @@ class DiagramToolsMixin:
                             msg = err.strip()
                         if not msg:
                             msg = str(data.get("message") or data.get("detail") or "").strip()
-                except Exception:
+                except ValueError:
                     msg = ""
                 if not msg:
                     msg = (resp.text or "").strip().replace("\n", " ")
@@ -481,7 +482,7 @@ class DiagramToolsMixin:
 
             try:
                 obj = resp.json()
-            except Exception:
+            except ValueError:
                 obj = {}
 
             data_list = obj.get("data") if isinstance(obj, dict) else None
@@ -508,7 +509,7 @@ class DiagramToolsMixin:
                 if isinstance(b64, str) and b64.strip():
                     try:
                         img_bytes = base64.b64decode(b64.strip())
-                    except Exception:
+                    except (ValueError, binascii.Error):
                         img_bytes = b""
                 if not img_bytes:
                     u = it.get("url")
@@ -522,7 +523,7 @@ class DiagramToolsMixin:
                                 r2 = await dl.get(u.strip())
                                 if r2.status_code == 200:
                                     img_bytes = bytes(r2.content or b"")
-                        except Exception:
+                        except httpx.HTTPError:
                             img_bytes = b""
                 if not img_bytes:
                     continue
@@ -595,7 +596,7 @@ class DiagramToolsMixin:
                 blob["items"] = [x for x in items if isinstance(x, dict)]
                 ctx.working_memory["diagrams"] = blob
             except Exception:
-                logger.debug("diagram_store_working_memory_failed", exc_info=True)
+                logger.warning("diagram_store_working_memory_failed", exc_info=True)
 
             first = diagrams[0]
             first_bytes = 0
@@ -603,7 +604,7 @@ class DiagramToolsMixin:
                 fp = _GENERATED_DIR / str(first.get("filename") or "")
                 if fp.exists() and fp.is_file():
                     first_bytes = int(fp.stat().st_size)
-            except Exception:
+            except (OSError, ValueError):
                 first_bytes = 0
             return {
                 "success": True,

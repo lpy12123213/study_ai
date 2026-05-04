@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Dict, List
 
-from backend.llm.client import chat_completion_text
 from backend.database.repositories.question.question_library import set_hidden, upsert_question_library_items
+from backend.llm.runner import run_json
 
 
 def _to_json_str(value: Any) -> str:
@@ -13,24 +12,8 @@ def _to_json_str(value: Any) -> str:
         return value
     try:
         return json.dumps(value or [], ensure_ascii=False)
-    except Exception:
+    except (TypeError, ValueError):
         return "[]"
-
-
-def _extract_json_obj(text: str) -> dict:
-    raw = (text or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z0-9_-]*\\s*", "", raw).lstrip()
-        raw = re.sub(r"\\s*```$", "", raw).rstrip()
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        return {}
-    try:
-        obj = json.loads(raw[start : end + 1])
-        return obj if isinstance(obj, dict) else {}
-    except Exception:
-        return {}
 
 
 async def score_stem_with_llm(*, subject: str, stem: str, model: str, requirements: str = "") -> dict:
@@ -47,7 +30,7 @@ async def score_stem_with_llm(*, subject: str, stem: str, model: str, requiremen
             "summary": "string",
         },
     }
-    text = await chat_completion_text(
+    obj = await run_json(
         messages=[
             {"role": "system", "content": (
                 "<role>You are a senior high-school curriculum researcher. Evaluate question quality by college-entrance-exam standards and score objectively.</role>\n"
@@ -66,7 +49,7 @@ async def score_stem_with_llm(*, subject: str, stem: str, model: str, requiremen
         retries=2,
         req_id_prefix="ql_score",
     )
-    obj = _extract_json_obj(text)
+    obj = obj if isinstance(obj, dict) else {}
     return {
         "verdict": str(obj.get("verdict") or "").strip(),
         "overall_score": int(obj.get("overall_score") or 0),

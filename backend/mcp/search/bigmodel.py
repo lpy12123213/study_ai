@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional
 
-from backend.llm.client import chat_completion
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     ZHIPU_API_KEY,
     ZHIPU_BASE_URL,
     ZHIPU_MODEL,
     ZHIPU_TIMEOUT,
 )
+from backend.llm.client import chat_completion
+from backend.llm.json_utils import extract_json_value
+
+logger = get_logger(__name__)
 
 
 async def bigmodel_web_search(
@@ -96,9 +100,10 @@ async def bigmodel_web_search(
             "results": web_results[:max_results],
             "summary": content,
         }
-    except Exception as e:
+    except Exception as exc:
+        logger.warning("bigmodel_web_search_failed", exc_info=True)
         return {
-            "error": f"Web search failed: {str(e)}",
+            "error": f"Web search failed: {str(exc)}",
             "results": [],
         }
 
@@ -140,8 +145,9 @@ async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
         if not content:
             return {"error": "No response from API"}
         return {"summary": content}
-    except Exception as e:
-        return {"error": f"Summarization failed: {str(e)}"}
+    except Exception as exc:
+        logger.warning("bigmodel_summarize_url_failed", exc_info=True)
+        return {"error": f"Summarization failed: {str(exc)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -155,38 +161,8 @@ DEFAULT_TIMEOUT_SECONDS = 60
 BIGMODEL_WEB_SEARCH_SSE_URL = "https://open.bigmodel.cn/api/mcp-broker/proxy/web-search/sse"
 
 
-def _strip_code_fences(text: str) -> str:
-    stripped = (text or "").strip()
-    if not stripped.startswith("```"):
-        return stripped
-    first_newline = stripped.find("\n")
-    if first_newline != -1:
-        stripped = stripped[first_newline + 1 :]
-    if stripped.endswith("```"):
-        stripped = stripped[:-3]
-    return stripped.strip()
-
-
 def _extract_json(text: str) -> Optional[Any]:
-    cleaned = _strip_code_fences(text)
-    candidates = [cleaned]
-
-    left_brace = cleaned.find("{")
-    right_brace = cleaned.rfind("}")
-    if 0 <= left_brace < right_brace:
-        candidates.append(cleaned[left_brace : right_brace + 1])
-
-    left_bracket = cleaned.find("[")
-    right_bracket = cleaned.rfind("]")
-    if 0 <= left_bracket < right_bracket:
-        candidates.append(cleaned[left_bracket : right_bracket + 1])
-
-    for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    return None
+    return extract_json_value(text, default=None)
 
 
 async def web_search_with_bigmodel_mcp(
@@ -275,6 +251,7 @@ async def web_search_with_bigmodel_mcp(
             api_key=api_key,
         )
     except Exception as exc:
+        logger.warning("bigmodel_mcp_web_search_failed", exc_info=True)
         return {
             "success": False,
             "error": f"BigModel API 调用异常: {exc}",

@@ -4,7 +4,6 @@ from typing import Dict, Optional
 
 from backend.agent.mcp.registry import MCPToolRegistry
 
-
 _CORE_TOOLS: Dict[str, str] = {
     "split_knowledge_points": "Split the topic into searchable sub-knowledge points; outputs knowledge_points.",
     "review_knowledge_points": "Review and minimally adjust knowledge points for deduplication, coverage, and granularity.",

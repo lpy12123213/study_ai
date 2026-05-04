@@ -1,0 +1,35 @@
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    line-height: var(--app-line-height, 1.6);
+    letter-spacing: 0;
+  }
+}
+
+/* Utilities */
+.surface-raised {
+  @apply bg-card border border-border shadow-none;
+}
+
+.surface-overlay {
+  @apply bg-popover border border-border shadow-none;
+}
+
+.app-display {
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.15;
+}
+
+.app-hairline-card {
+  @apply rounded-lg border border-border bg-card shadow-none;
+}
+
+.app-code-surface {
+  @apply rounded-lg border border-border bg-accent font-mono text-sm;
+}
+

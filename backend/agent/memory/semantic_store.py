@@ -73,7 +73,7 @@ def _safe_meta(value: Any) -> Any:
     # Chroma metadata must be scalar; stringify anything else.
     try:
         return str(value)[:480]
-    except Exception:
+    except (RuntimeError, TypeError, ValueError):
         return ""
 
 
@@ -128,7 +128,7 @@ class SemanticStore:
                 if isinstance(obj, dict) and str(obj.get("text") or "").strip():
                     out.append(obj)
             return out
-        except Exception:
+        except (OSError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
             return []
 
     def _append_fallback(self, user_id: str, docs: List[SemanticDoc]) -> None:
@@ -160,7 +160,7 @@ class SemanticStore:
 
             settings = Settings(anonymized_telemetry=False)
             return chromadb.PersistentClient(path=str(self._persist_dir), settings=settings)
-        except Exception:
+        except (ImportError, RuntimeError, TypeError, ValueError):
             return chromadb.PersistentClient(path=str(self._persist_dir))
 
     def _get_collection(self, user_id: str):  # noqa: ANN001
@@ -231,11 +231,11 @@ class SemanticStore:
             try:
                 await asyncio.to_thread(self._upsert_chroma_sync, uid, cleaned)
                 return
-            except Exception:
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                 logger.debug("semantic_store_upsert_chroma_failed", exc_info=True)
                 try:
                     await asyncio.to_thread(self._append_fallback, uid, cleaned)
-                except Exception:
+                except (OSError, TypeError, ValueError):
                     logger.debug("semantic_store_fallback_write_failed", exc_info=True)
 
     def _upsert_chroma_sync(self, user_id: str, docs: List[SemanticDoc]) -> None:
@@ -264,7 +264,7 @@ class SemanticStore:
         async with self._lock:
             try:
                 return await asyncio.to_thread(self._search_chroma_sync, uid, subject, query, limit)
-            except Exception:
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                 logger.debug("semantic_store_search_chroma_failed", exc_info=True)
                 return self._query_fallback(user_id=uid, subject=subject, query=query, limit=limit)
 

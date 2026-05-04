@@ -3,20 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from backend.paper_compose.analysis import analyze_paper
 from backend.api.auth import require_auth
 from backend.api.schemas import PaperCreate, PaperResponse
 from backend.core.audit import AuditAction, audit_logger
 from backend.core.logging_utils import get_logger
-from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.question.papers import delete_paper, get_paper, list_papers, save_paper
 from backend.database.repositories.question.question_cache import get_question_cache
+from backend.paper_compose.analysis import analyze_paper
 from backend.paper_compose.export import export_paper as export_paper_doc
 from backend.shared.tasks import task_runtime
 from backend.tasks import submit_generate_full_paper_task, submit_paper_compose_task

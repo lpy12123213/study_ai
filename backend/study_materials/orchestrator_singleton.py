@@ -11,7 +11,7 @@ def _env_int(name: str, default: int) -> int:
         return int(default)
     try:
         return int(raw)
-    except Exception:
+    except ValueError:
         return int(default)
 
 

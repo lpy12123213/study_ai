@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from backend.core.settings import LESSON_PLAN_MODEL, SUB_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, MODEL_TIER_MAP, SUB_MODEL
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,12 @@ class AgentConfig:
     planner_model: str = LESSON_PLAN_MODEL
     summarizer_model: str = SUB_MODEL
     reflector_model: str = LESSON_PLAN_MODEL
+    model_tier_map: dict[str, str] = field(default_factory=lambda: dict(MODEL_TIER_MAP))
+
+    def model_for_tier(self, tier: str, *, fallback: str = "") -> str:
+        key = str(tier or "").strip().lower()
+        model = str((self.model_tier_map or {}).get(key) or "").strip()
+        return model or str(fallback or "").strip()
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -88,6 +94,7 @@ class AgentConfig:
             planner_model=_get_str("AGENT_PLANNER_MODEL", cls.planner_model),
             summarizer_model=_get_str("AGENT_SUMMARIZER_MODEL", cls.summarizer_model),
             reflector_model=_get_str("AGENT_REFLECTOR_MODEL", cls.reflector_model),
+            model_tier_map=dict(MODEL_TIER_MAP),
         )
 
 
@@ -106,4 +113,5 @@ AGENT_CONFIG = {
     "planner_model": _cfg.planner_model,
     "summarizer_model": _cfg.summarizer_model,
     "reflector_model": _cfg.reflector_model,
+    "model_tier_map": dict(_cfg.model_tier_map),
 }

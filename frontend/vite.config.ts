@@ -7,11 +7,29 @@ function vendorChunkName(id: string): string | undefined {
   const normalized = id.replace(/\\/g, '/')
   if (!normalized.includes('/node_modules/')) return undefined
 
-  if (
-    normalized.includes('/node_modules/katex/')
-    || normalized.includes('/node_modules/rehype-katex/')
-  ) {
+  if (normalized.includes('/node_modules/katex/')) {
     return 'pkg-katex'
+  }
+
+  if (
+    normalized.includes('/node_modules/react-markdown/')
+    || normalized.includes('/node_modules/remark-')
+    || normalized.includes('/node_modules/rehype-')
+    || normalized.includes('/node_modules/unified/')
+    || normalized.includes('/node_modules/vfile/')
+    || normalized.includes('/node_modules/mdast-util-')
+    || normalized.includes('/node_modules/hast-util-')
+    || normalized.includes('/node_modules/micromark')
+  ) {
+    return 'pkg-markdown'
+  }
+
+  if (normalized.includes('/node_modules/@radix-ui/')) {
+    return 'pkg-radix'
+  }
+
+  if (normalized.includes('/node_modules/cmdk/')) {
+    return 'pkg-cmdk'
   }
 
   if (normalized.includes('/node_modules/react-dom/')) {

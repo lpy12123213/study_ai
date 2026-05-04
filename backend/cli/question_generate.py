@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.api.question_evaluate import evaluate_generated_question_review
-from backend.llm.client import chat_completion, is_llm_configured
+from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL, settings
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.question_library import upsert_question_library_items
+from backend.llm.client import chat_completion, is_llm_configured
 from backend.question_library.generation import (
     analyze_reference_questions,
     build_ai_question_id,
@@ -27,6 +28,8 @@ from backend.question_library.generation import (
 )
 from backend.question_library.preview_store import (
     list_sessions as list_saved_sessions,
+)
+from backend.question_library.preview_store import (
     load_session,
     new_preview_id,
     new_session_id,
@@ -34,8 +37,8 @@ from backend.question_library.preview_store import (
     save_session,
 )
 
-
 _REVIEW_STATUSES = {"pending_review", "in_review", "approved", "rejected", "confirmed", "committed"}
+logger = get_logger(__name__)
 
 
 def _now_stamp() -> str:
@@ -92,7 +95,7 @@ def _resolve_cli_mcp_search_model() -> str:
 def _as_int(v: Any, default: int) -> int:
     try:
         return int(v)
-    except Exception:
+    except (TypeError, ValueError):
         return int(default)
 
 
@@ -121,7 +124,7 @@ def _normalize_draft_questions(input_value: Any) -> List[dict]:
         judge_score: Optional[int]
         try:
             judge_score = int(judge_score_raw) if judge_score_raw is not None else None
-        except Exception:
+        except (TypeError, ValueError):
             judge_score = None
         out.append(
             {
@@ -188,7 +191,7 @@ def _materialize_draft(item: dict, *, draft_key_to_id: Dict[str, str]) -> Option
     judge_score: Optional[int]
     try:
         judge_score = int(judge_score_raw) if judge_score_raw is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         judge_score = None
     return {
         "question_id": qid,
@@ -321,7 +324,7 @@ def _append_reasoning_block(session: dict, *, stage_id: str, stage_label: str, s
 def _fmt_epoch(epoch_s: float) -> str:
     try:
         return datetime.fromtimestamp(float(epoch_s)).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
+    except (TypeError, ValueError, OverflowError, OSError):
         return ""
 
 
@@ -345,7 +348,7 @@ def _prompt_toolkit_available() -> bool:
         import prompt_toolkit  # noqa: F401
 
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
@@ -354,7 +357,7 @@ def _rich_available() -> bool:
         import rich  # noqa: F401
 
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
@@ -451,6 +454,7 @@ def _print_welcome_banner(console) -> None:  # noqa: ANN001
 
     from rich.panel import Panel
     from rich.text import Text
+
     from backend.core.settings import settings as _settings
 
     body = Text()
@@ -475,6 +479,7 @@ def _pick_recent_session(console, *, user_id: str) -> str:  # noqa: ANN001
     try:
         sessions = list_saved_sessions(user_id, include_archived=True, limit=5)
     except Exception:
+        logger.warning("question_generate_list_sessions_failed", extra={"user_id": user_id}, exc_info=True)
         sessions = []
 
     if not sessions:
@@ -602,7 +607,7 @@ def _clip_preview(value: Any, *, max_chars: int = 1200) -> str:
     else:
         try:
             text = json.dumps(value, ensure_ascii=False, indent=2)
-        except Exception:
+        except (TypeError, ValueError):
             text = repr(value)
     text = str(text or "").strip()
     if len(text) > max_chars:
@@ -718,20 +723,20 @@ async def _exec_mcp_web_search_tool(
             from backend.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
 
             has_tavily = bool(str(_TAVILY_API_KEY or "").strip())
-        except Exception:
+        except ImportError:
             has_tavily = False
         try:
             from backend.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
 
             has_exa = bool(str(_EXA_API_KEY or "").strip())
-        except Exception:
+        except ImportError:
             has_exa = False
         provider_in = "tavily" if has_tavily else "exa" if has_exa else "bigmodel"
 
     if provider_in == "tavily":
         try:
             from backend.mcp.search.tavily import tavily_search
-        except Exception as exc:
+        except ImportError as exc:
             return {
                 "success": False,
                 "provider": "tavily",
@@ -787,7 +792,7 @@ async def _exec_mcp_web_search_tool(
     if provider_in == "exa":
         try:
             from backend.mcp.search.exa import exa_search
-        except Exception as exc:
+        except ImportError as exc:
             return {"success": False, "provider": "exa", "query": query, "error": f"import_exa_failed: {exc}", "results": []}
 
         category: Optional[str] = None
@@ -845,7 +850,7 @@ async def _exec_mcp_web_search_tool(
 
     try:
         from backend.mcp.search.bigmodel import web_search_with_bigmodel_mcp
-    except Exception as exc:
+    except ImportError as exc:
         return {
             "success": False,
             "provider": "bigmodel",
@@ -994,6 +999,7 @@ async def _ai_search_materials_via_mcp(
             try:
                 ui_log_tool(msg)
             except Exception:
+                logger.warning("question_generate_ui_log_failed", exc_info=True)
                 return
 
     base_query = str(query or "").strip()
@@ -1065,7 +1071,7 @@ async def _ai_search_materials_via_mcp(
                 if isinstance(raw_args, str):
                     try:
                         args = json.loads(raw_args)
-                    except Exception:
+                    except json.JSONDecodeError:
                         args = {}
                 else:
                     args = raw_args if isinstance(raw_args, dict) else {}
@@ -1499,8 +1505,8 @@ def _run_live(console, state: _UiState):  # noqa: ANN001
         return _NullLive(console)
 
     from rich.console import Group
-    from rich.live import Live
     from rich.layout import Layout
+    from rich.live import Live
     from rich.panel import Panel
     from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
     from rich.table import Table
@@ -1522,7 +1528,7 @@ def _run_live(console, state: _UiState):  # noqa: ANN001
 
         llm_label = f"{str(_settings.chat_provider or '').strip()}/{str(_settings.main_model or '').strip()}".strip("/")
         llm_base_url = str(getattr(_settings, "chat_base_url", "") or "").strip()
-    except Exception:
+    except (ImportError, AttributeError):
         llm_label = ""
         llm_base_url = ""
 
@@ -1758,7 +1764,7 @@ async def _run_generation(params: RunParams) -> dict:
             label = str(event.get("label") or "").strip()
             try:
                 progress = float(event.get("progress") or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 progress = 0.0
             stats = event.get("stats") if isinstance(event.get("stats"), dict) else {}
             nonlocal last_stage_id
@@ -1882,6 +1888,7 @@ async def _run_generation(params: RunParams) -> dict:
                     ui_log_tool=_log_tool,
                 )
             except Exception as exc:
+                logger.warning("question_generate_mcp_search_materials_failed", exc_info=True)
                 search_out = {"success": False, "error": str(exc)}
 
             study_markdown = str((search_out or {}).get("study_markdown") or "").strip()
@@ -2116,7 +2123,7 @@ def _render_question_panel(console, q: dict, *, index: int) -> None:  # noqa: AN
     if judge_score is not None:
         try:
             score_text = f" score={int(judge_score)}"
-        except Exception:
+        except (TypeError, ValueError):
             score_text = f" score={judge_score}"
     diff_text = f" {difficulty}" if difficulty else ""
     title = f"{index}. {str(q.get('question_id') or '').strip()} [{review_status}]{diff_text}{score_text}"
@@ -2209,6 +2216,7 @@ def _review_session(*, user_id: str, session_id: str) -> dict:
                     )
                 )
             except Exception as exc:
+                logger.warning("question_generate_review_failed", exc_info=True)
                 review = {"error": str(exc)}
             q["keep"] = True
             q["review_status"] = "approved"
@@ -2238,6 +2246,7 @@ def _review_session(*, user_id: str, session_id: str) -> dict:
                         )
                     )
                 except Exception as exc:
+                    logger.warning("question_generate_review_failed", exc_info=True)
                     review = {"error": str(exc)}
                 item["keep"] = True
                 item["review_status"] = "approved"

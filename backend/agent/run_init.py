@@ -99,12 +99,13 @@ async def initialize_run(
         try:
             profile = await memory_store.update_user_profile(user_id=user_id, patch=pref_patch)
         except Exception:
+            logger.warning("agent_profile_update_failed; using_in_memory_patch", extra={"user_id": user_id}, exc_info=True)
             try:
                 prefs = dict(profile.preferences or {})
                 prefs.update(pref_patch)
                 profile.preferences = prefs
             except Exception:
-                logger.debug("agent_profile_preference_fallback_failed", exc_info=True)
+                logger.warning("agent_profile_preference_fallback_failed", exc_info=True)
 
     ctx: CompressedContext = context_manager.create_context(
         user_profile=profile,
@@ -145,32 +146,29 @@ async def initialize_run(
             if matches:
                 ctx.working_memory["semantic_memory"] = matches
     except Exception:
-        logger.debug("semantic_store_search_failed", exc_info=True)
+        logger.warning("semantic_store_search_failed", exc_info=True)
 
     context_manager.append_message(ctx, role="user", content=user_input)
 
     policy = StudyMaterialsPolicy()
     try:
         iter_offset = int(iteration_offset or 0)
-    except Exception:
+    except (TypeError, ValueError):
         iter_offset = 0
     iter_offset = max(0, iter_offset)
 
     if max_iterations is not None:
         try:
             budget = int(max_iterations)
-        except Exception:
+        except (TypeError, ValueError):
             budget = 0
         budget = max(1, budget)
     else:
         budget = int(policy.iteration_budget(ctx, default_cap=int(config.max_iterations or 1)) or 1)
         budget = max(1, budget)
 
-    try:
-        opts_for_mode = ctx.working_memory.get("study_options")
-        opts_for_mode = dict(opts_for_mode) if isinstance(opts_for_mode, dict) else {}
-    except Exception:
-        opts_for_mode = {}
+    opts_for_mode = ctx.working_memory.get("study_options")
+    opts_for_mode = dict(opts_for_mode) if isinstance(opts_for_mode, dict) else {}
     continue_mode = str(opts_for_mode.get("continue_mode") or "").strip().lower()
 
     out["profile"] = profile

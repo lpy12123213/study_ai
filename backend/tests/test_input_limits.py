@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import shutil
 
 from fastapi.testclient import TestClient
 
@@ -56,7 +56,7 @@ class TestInputLengthLimits(unittest.TestCase):
             if tmpdir_path:
                 try:
                     shutil.rmtree(tmpdir_path, ignore_errors=True)
-                except Exception:
+                except OSError:
                     pass
         finally:
             auth._users.clear()

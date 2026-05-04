@@ -226,3 +226,26 @@ class TaskDurationAggregateMigrationTests(unittest.TestCase):
 
         self.assertEqual(table_name, "task_duration_aggregates")
         self.assertEqual(index_name, "ix_task_duration_aggregates_updated_at")
+
+    def test_sync_migrate_db_schema_ensures_task_event_indexes(self) -> None:
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE TABLE task_events ("
+                "id INTEGER PRIMARY KEY,"
+                "task_id VARCHAR(64) NOT NULL,"
+                "seq INTEGER NOT NULL,"
+                "event_type VARCHAR(50),"
+                "payload_json TEXT,"
+                "created_at DATETIME"
+                ")"
+            )
+            sync_migrate_db_schema(conn)
+
+            indexes = {
+                row[1]
+                for row in conn.exec_driver_sql("PRAGMA index_list(task_events)").fetchall()
+                if len(row) > 1
+            }
+
+        self.assertIn("ix_task_events_task_id", indexes)
+        self.assertIn("ix_task_events_task_id_seq", indexes)

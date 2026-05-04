@@ -12,21 +12,23 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import html as html_module
 import json
 import os
 import re
-import time
-import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
 from backend.core.cache import TTLCache
-from backend.core.settings import DIFFICULTY_QUERY_MODE
 from backend.core.logging_utils import get_logger
 from backend.core.record_replay import RecordReplayStore, record_enabled, replay_enabled
+from backend.core.settings import DIFFICULTY_QUERY_MODE
+from backend.core.subjects import (
+    DEFAULT_DIFFICULTY,
+    normalize_difficulty,
+    resolve_subject,
+)
 from backend.crawler.rate_limiter import get_rate_limiter
 from backend.crawler.zujuan.cookies import (
     DEFAULT_USER_AGENT,
@@ -39,7 +41,6 @@ from backend.crawler.zujuan.cookies import (
     parse_cookie_string,
     save_antibot_cookie_cache,
 )
-from backend.crawler.zujuan.parsing import FORMULA_HASH_PATTERN, FORMULA_IMG_TAG_PATTERN, IMG_TAG_PATTERN
 from backend.crawler.zujuan.utils import (
     PROVINCE_UNLIMITED_ALIASES,
     _normalize_province_name,
@@ -47,11 +48,6 @@ from backend.crawler.zujuan.utils import (
     _parse_province_list_json,
     _safe_float,
     _safe_int,
-)
-from backend.core.subjects import (
-    DEFAULT_DIFFICULTY,
-    normalize_difficulty,
-    resolve_subject,
 )
 
 logger = get_logger(__name__)
@@ -110,11 +106,11 @@ class ZujuanCrawler:
         burst_raw = os.getenv("ZUJUAN_RATE_LIMIT_BURST") or os.getenv("ZUJIAN_RATE_LIMIT_BURST") or "4"
         try:
             rps = float(rps_raw)
-        except Exception:
+        except (TypeError, ValueError):
             rps = 2.0
         try:
             burst = int(burst_raw)
-        except Exception:
+        except (TypeError, ValueError):
             burst = 4
         self._http_rate_limiter = get_rate_limiter(key="zujuan", rate_per_s=rps, burst=burst)
 
@@ -165,6 +161,7 @@ class ZujuanCrawler:
         try:
             _record_replay_store.save(request=request_obj, response=response_obj, meta={"fn": request_obj.get("fn")})
         except Exception:
+            logger.warning("zujuan_record_replay_save_failed", extra={"fn": request_obj.get("fn")}, exc_info=True)
             return
 
     async def _apply_cookie_string(self, cookie_str: str) -> None:
@@ -175,7 +172,7 @@ class ZujuanCrawler:
         if self.client is not None:
             try:
                 self.client.headers["Cookie"] = cookie_str
-            except Exception:
+            except (AttributeError, TypeError):
                 return
 
     def _load_subject_config(self):
@@ -194,6 +191,7 @@ class ZujuanCrawler:
             self.course_id = _safe_int(config.get("course_id"), 0)
             self.course_id_py = str(config.get("course_id_py") or "").strip()
         except Exception:
+            logger.warning("zujuan_load_subject_config_failed", extra={"subject": self.subject}, exc_info=True)
             # 默认高中数学
             self.bank_id = 11
             self.category_id = "100693"
@@ -291,7 +289,7 @@ class ZujuanCrawler:
                 ) as c:
                     resp = await c.get(f"{self.base_url}/zujuan-api/base")
                 return resp.status_code == 200 and _parse_base_json(resp.text) is not None
-            except Exception:
+            except (httpx.HTTPError, ValueError):
                 return False
 
         missing_antibot = missing_antibot_keys(self.cookies)
@@ -411,7 +409,7 @@ class ZujuanCrawler:
                 return
             self._cache_set("meta:provinces", data, ttl=12 * 60 * 60)
             self._set_provinces_from_list(data)
-        except Exception:
+        except (httpx.HTTPError, ValueError):
             return
 
     async def _resolve_province_id(self, province: str) -> Optional[int]:
@@ -433,7 +431,7 @@ class ZujuanCrawler:
         if raw_compact.isdigit():
             try:
                 return int(raw_compact)
-            except Exception:
+            except ValueError:
                 return None
 
         norm = _normalize_province_name(raw_compact)
@@ -606,14 +604,14 @@ class ZujuanCrawler:
                         try:
                             end_payload = json.loads(line.replace("data:", "").strip())
                             break
-                        except Exception:
+                        except json.JSONDecodeError:
                             continue
                 if not end_payload:
                     return {"success": False, "error": "未获取到搜索结果指引"}
                 result = {"success": True, "payload": end_payload}
                 self._cache_set(cache_key, result, ttl=15 * 60)
                 return result
-        except Exception as e:
+        except httpx.HTTPError as e:
             return {"success": False, "error": str(e)}
 
     async def _ensure_bank_meta_loaded(self) -> None:
@@ -1174,7 +1172,7 @@ class ZujuanCrawler:
                     date_year = int(date_str.split("/", 1)[0])
                     if date_year != year:
                         return False
-                except Exception:
+                except (TypeError, ValueError):
                     logger.debug(
                         "zujuan_parse_date_year_failed",
                         extra={"date": str(date_str or ""), "expected_year": int(year or 0)},
@@ -1470,7 +1468,7 @@ class ZujuanCrawler:
         try:
             cookie_expired = bool(res.get("cookie_expired")) if isinstance(res, dict) else False
             login_required = bool(res.get("login_required")) if isinstance(res, dict) else False
-        except Exception:
+        except (AttributeError, TypeError):
             cookie_expired = False
             login_required = False
 
@@ -1489,7 +1487,7 @@ class ZujuanCrawler:
                     await self._apply_cookie_string(refreshed)
                     res = await impl(**kwargs)
             except Exception as exc:
-                logger.warning("auto refresh login cookie failed", extra={"error": str(exc)})
+                logger.warning("auto refresh login cookie failed", extra={"error": str(exc)}, exc_info=True)
 
         self._maybe_record(rr_req, res)
         return res
@@ -1519,7 +1517,7 @@ class ZujuanCrawler:
         delay_raw = os.getenv("ZUJUAN_BATCH_GET_DETAILS_DELAY_S") or "0.2"
         try:
             delay_s = float(delay_raw)
-        except Exception:
+        except (TypeError, ValueError):
             delay_s = 0.2
         delay_s = max(0.0, min(delay_s, 3.0))
 

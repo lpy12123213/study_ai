@@ -59,7 +59,9 @@ class PromptContractTests(unittest.TestCase):
 
         self.assertEqual(messages[0]["content"], registered)
         self.assertIn("strict JSON object", messages[0]["content"])
-        self.assertIn("web_search_knowledge", messages[1]["content"])
+        self.assertEqual(messages[0].get("cache_control"), {"type": "ephemeral"})
+        self.assertEqual(messages[1].get("cache_control"), {"type": "ephemeral"})
+        self.assertTrue(any("web_search_knowledge" in str(m.get("content") or "") for m in messages))
 
     def test_deepthink_prompts_render_from_registry(self) -> None:
         from backend.deepthink.prompts import (

@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
@@ -43,7 +44,7 @@ def _to_json_str(value: Any) -> str:
     if isinstance(value, (list, dict)):
         try:
             return json.dumps(value, ensure_ascii=False)
-        except Exception:
+        except (TypeError, ValueError):
             return ""
     return ""
 
@@ -127,7 +128,7 @@ async def upsert_question_cache(items: List[dict], *, session: Optional[AsyncSes
         try:
             await session.merge(row)
             n += 1
-        except Exception:
+        except SQLAlchemyError:
             continue
     await session.flush()
     return n
@@ -164,7 +165,7 @@ async def mark_used_questions(
             else:
                 await session.merge(UsedQuestion(question_id=qid, subject=str(subject or "").strip()))
             n += 1
-        except Exception:
+        except SQLAlchemyError:
             continue
     await session.flush()
     return n

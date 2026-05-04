@@ -1,17 +1,17 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '@/stores/useAuthStore'
-import { useThemeStore } from '@/stores/useThemeStore'
+import { bindSystemThemeListener, useThemeStore } from '@/stores/useThemeStore'
 import { useUiPreferencesStore, type UiContrast, type UiDensity } from '@/stores/useUiPreferencesStore'
 import { useUserSettingsStore } from '@/stores/useUserSettingsStore'
 import {
   useAppearanceStore,
+  isDesignStylePreset,
   type AppearancePreferences,
   type ContentLayout,
+  type DesignStylePreset,
   type SidebarPosition,
   type SidebarStyle,
 } from '@/stores/useAppearanceStore'
-
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'manus.sidebar.collapsed'
 
 function toOptionalNumber(value: unknown): number | null {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
@@ -35,6 +35,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 export function UserSettingsBootstrap() {
   const { isAuthenticated, token } = useAuthStore()
+
+  useEffect(() => {
+    const cleanupThemeListener = bindSystemThemeListener()
+    useThemeStore.getState().syncTheme()
+    useAppearanceStore.getState().applyAppearance()
+
+    return () => {
+      cleanupThemeListener?.()
+    }
+  }, [])
 
   useEffect(() => {
     if (!isAuthenticated || !token) return
@@ -85,8 +95,10 @@ export function UserSettingsBootstrap() {
         const sidebarStyle = String(appearanceObj.sidebarStyle || '').trim()
         const contentLayout = String(appearanceObj.contentLayout || '').trim()
         const sidebarPosition = String(appearanceObj.sidebarPosition || '').trim()
+        const designStyle = String(appearanceObj.designStyle || '').trim()
 
         const appearancePatch: Partial<AppearancePreferences> = {
+          ...(isDesignStylePreset(designStyle) ? { designStyle: designStyle as DesignStylePreset } : {}),
           ...(sidebarStyle === 'inset' || sidebarStyle === 'floating' || sidebarStyle === 'sidebar'
             ? { sidebarStyle: sidebarStyle as SidebarStyle }
             : {}),
@@ -104,11 +116,7 @@ export function UserSettingsBootstrap() {
       if (isPlainObject(sidebarObj)) {
         const collapsed = toOptionalBoolean(sidebarObj.collapsed)
         if (collapsed != null) {
-          try {
-            window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false')
-          } catch {
-            // ignore
-          }
+          useAppearanceStore.getState().setAppearance({ sidebarCollapsed: collapsed })
         }
       }
     }

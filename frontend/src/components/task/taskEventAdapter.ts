@@ -38,9 +38,26 @@ function normalizeStageId(value: string): string {
     .toLowerCase()
 }
 
+function sanitizeDisplayText(value: string): string {
+  return String(value || '')
+    .replace(/Docker\s*沙盒渲染/gi, '安全渲染中')
+    .replace(/Docker\s*沙盒/gi, '安全渲染环境')
+    .replace(/Manim\s*源码/gi, '生成脚本')
+    .replace(/Manim/gi, '动画生成')
+    .replace(/Markdown/gi, '文档')
+    .replace(/LaTeX/gi, '排版稿')
+    .replace(/MediaWiki/gi, '开放知识库')
+    .replace(/StackExchange/gi, '问答资料')
+    .replace(/GitHub/gi, '公开资料库')
+    .replace(/API\s*Key/gi, '访问密钥')
+    .replace(/Provider/gi, '服务通道')
+    .replace(/\bLLM\b/gi, '智能服务')
+    .replace(/后端/g, '本地服务')
+}
+
 function humanizeStage(stageId: string, stageLabel?: string): string {
   const normalizedId = normalizeStageId(stageId)
-  return stageLabel || STAGE_LABELS[normalizedId] || stageId || '进度更新'
+  return sanitizeDisplayText(stageLabel || STAGE_LABELS[normalizedId] || stageId || '进度更新')
 }
 
 function buildProgressOutput(data: Record<string, unknown>): unknown {
@@ -60,14 +77,14 @@ function normalizeStreamStep(step: Record<string, unknown>, createdAt?: string):
 
   const normalized: TaskStep = {
     id,
-    title: toOptionalString(step.title) || '步骤',
+    title: sanitizeDisplayText(toOptionalString(step.title) || '步骤'),
     status: (toOptionalString(step.status) as TaskStep['status']) || 'completed',
     toolName: toOptionalString(step.toolName),
     input: step.input,
     output: step.output,
     startTime: toOptionalString(step.startTime) || createdAt,
     endTime: toOptionalString(step.endTime),
-    error: toOptionalString(step.error),
+    error: sanitizeDisplayText(toOptionalString(step.error) || ''),
   }
   return normalized
 }
@@ -117,11 +134,12 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
   }
 
   if (kind === 'reasoning_status') {
-    const stageLabel =
-      toOptionalString(data.stage_label) ||
-      humanizeStage(toOptionalString(data.stage_id) || '', toOptionalString(data.stage_label))
+    const stageLabel = humanizeStage(
+      toOptionalString(data.stage_id) || '',
+      toOptionalString(data.stage_label)
+    )
     const mode = toOptionalString(data.mode) || 'trace'
-    const message = toOptionalString(data.message) || 'reasoning 状态更新'
+    const message = sanitizeDisplayText(toOptionalString(data.message) || '推理状态更新')
     return {
       id: `reasoning-status:${evt.seq}`,
       title: `${mode === 'raw' ? '原始 Reason' : '事件 Trace'}: ${message}`,
@@ -140,11 +158,9 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
     const source = toOptionalString(data.source) || 'trace'
     const content = toOptionalString(data.content) || ''
     const stageId = normalizeStageId(toOptionalString(data.stage_id) || '')
-    const stageLabel =
-      toOptionalString(data.stage_label) ||
-      humanizeStage(stageId, toOptionalString(data.stage_label))
+    const stageLabel = humanizeStage(stageId, toOptionalString(data.stage_label))
     const prefix = source === 'raw' ? '原始 Reason' : '事件 Trace'
-    let title = content ? `${prefix}: ${content}` : prefix
+    let title = content ? `${prefix}: ${sanitizeDisplayText(content)}` : prefix
     if (title.length > 240) title = `${title.slice(0, 240)}…`
     return {
       id: `reasoning:${stageId || 'default'}:${source}`,
@@ -167,7 +183,7 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
     toOptionalString(data.content) ||
     ''
 
-  let title = content ? `${kind}: ${content}` : kind
+  let title = content ? `${kind}: ${sanitizeDisplayText(content)}` : kind
   if (title.length > 240) title = `${title.slice(0, 240)}…`
 
   const failed = kind === 'error' || Boolean(data.error)
@@ -177,7 +193,7 @@ export function taskEventToStep(evt: TaskStreamEvent): TaskStep | null {
     status: failed ? 'failed' : 'completed',
     toolName: kind,
     startTime: evt.created_at,
-    error: failed ? String(data.error || data.message || '') : undefined,
+    error: failed ? sanitizeDisplayText(String(data.error || data.message || '')) : undefined,
   }
 }
 

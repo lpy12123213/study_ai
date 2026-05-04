@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from backend.agent.types import CompressedContext
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.core.logging_utils import get_logger
+from backend.llm.client import cacheable_message
+from backend.llm.prompts import create_llm_prompt_registry
+
+logger = get_logger(__name__)
 
 
 REACT_CONTROLLER_SYSTEM_PROMPT = """You are a tool-driven study-material generation agent (ReAct). Your goal is to complete the task through tool calls: retrieval -> aggregation -> writing -> review -> export.
@@ -13,7 +17,8 @@ Match the language of the user's latest request for all user-facing prose unless
 Use the smallest sufficient tool chain that preserves quality and performance. Avoid redundant tool calls.
 
 重要约束：
-- Every turn must output a strict JSON object only. Do not output Markdown, code fences, or extra explanation.
+- If the model client provides a `react_decision` tool/function, call that tool with the next decision.
+- If tool/function calling is unavailable, output a strict JSON object only. Do not output Markdown, code fences, or extra explanation.
 - JSON fields:
   - thought: string，简短说明你为什么要做这一步（允许 1-3 句）
   - action: string. The next action: either a tool name or "finish".
@@ -219,8 +224,9 @@ def _format_tools(tools: List[Dict[str, Any]]) -> str:
 
 def _controller_system_prompt() -> str:
     try:
-        return create_default_prompt_registry().render("agent.react.controller.v1").content
+        return create_llm_prompt_registry().render("agent.react.controller.v1").content
     except Exception:
+        logger.exception("react_prompt_registry_fallback_failed")
         return REACT_CONTROLLER_SYSTEM_PROMPT
 
 
@@ -234,7 +240,7 @@ def build_react_messages(
     iteration: int,
     max_iterations: int,
     budget_remaining: int,
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     preset = ""
     requirements = ""
     study_opts = ctx.working_memory.get("study_options") if isinstance(ctx.working_memory, dict) else {}
@@ -242,17 +248,20 @@ def build_react_messages(
         preset = str(study_opts.get("preset") or "").strip()
         requirements = str(study_opts.get("requirements") or "").strip()
 
-    user_prompt = (
+    stable_context_prompt = (
         "Task: generate self-study material for the user in Markdown, and complete export and review when possible.\n\n"
         f"- topic: {topic}\n"
         f"- subject: {subject}\n"
         f"- preset: {preset or 'standard'}\n"
         f"- requirements: {requirements or '（无）'}\n"
+        "Current working-memory summary. Use it to decide what is missing next:\n"
+        f"{_wm_summary(ctx)}\n"
+    )
+
+    decision_prompt = (
         f"- iteration: {iteration + 1}/{max_iterations}\n\n"
         f"- tool_iterations_remaining: {max(0, max_iterations - (iteration + 1))}\n"
         f"- budget_remaining: {max(0, int(budget_remaining or 0))}\n\n"
-        "Current working-memory summary. Use it to decide what is missing next:\n"
-        f"{_wm_summary(ctx, budget_remaining=budget_remaining)}\n\n"
         "历史（Thought/Action/Quality/Observation 简述，可能为空）：\n"
         f"{scratchpad or '（空）'}\n\n"
         "Available tools. action must be one of these tools, or finish:\n"
@@ -262,6 +271,7 @@ def build_react_messages(
     )
 
     return [
-        {"role": "system", "content": _controller_system_prompt()},
-        {"role": "user", "content": user_prompt},
+        cacheable_message("system", _controller_system_prompt()),
+        cacheable_message("user", stable_context_prompt),
+        {"role": "user", "content": decision_prompt},
     ]

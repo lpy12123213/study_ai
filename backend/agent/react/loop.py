@@ -5,50 +5,108 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, ValidationError
+from pydantic import Field as PydanticField
+
 from backend.agent.config import AgentConfig
 from backend.agent.mcp.registry import MCPToolRegistry
 from backend.agent.react.prompts import build_react_messages
 from backend.agent.types import ActionResults, CompressedContext, ExecutionPlan, PlanStep, agent_event
 from backend.core.logging_utils import get_logger
+from backend.core.text_utils import clip_text as _clip_text
 from backend.llm.client import chat_completion, is_llm_configured
+from backend.llm.json_utils import extract_first_json_object
 
 logger = get_logger(__name__)
 
 
-def _strip_code_fences(text: str) -> str:
-    s = (text or "").strip()
-    if not s.startswith("```"):
-        return s
-    # ```json ... ```
-    lines = s.splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
-
-
 def _extract_first_json_object(text: str) -> Dict[str, Any]:
-    raw = _strip_code_fences(text)
-    if not raw:
+    return extract_first_json_object(text, default={}) or {}
+
+
+class ReActDecisionPayload(BaseModel):
+    thought: str = ""
+    action: str = ""
+    batch_mode: str = ""
+    arguments: Dict[str, Any] = PydanticField(default_factory=dict)
+    note: str = ""
+
+
+REACT_DECISION_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "react_decision",
+        "description": "Return the next ReAct controller decision.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string"},
+                "action": {"type": "string"},
+                "batch_mode": {"type": "string"},
+                "arguments": {"type": "object", "additionalProperties": True},
+                "note": {"type": "string"},
+            },
+            "required": ["thought", "action", "arguments"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+REACT_DECISION_TOOL_CHOICE: Dict[str, Any] = {
+    "type": "function",
+    "function": {"name": "react_decision"},
+}
+
+
+def _dump_pydantic_model(model: BaseModel) -> Dict[str, Any]:
+    dump = getattr(model, "model_dump", None)
+    if callable(dump):
+        return dict(dump())
+    return dict(model.dict())
+
+
+def _validate_decision_payload(obj: Any) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
         return {}
-    left = raw.find("{")
-    right = raw.rfind("}")
-    if left < 0 or right <= left:
-        return {}
-    candidate = raw[left : right + 1].strip()
+
     try:
-        data = json.loads(candidate)
-        return data if isinstance(data, dict) else {}
-    except Exception:
+        validate = getattr(ReActDecisionPayload, "model_validate", None)
+        if callable(validate):
+            payload = validate(obj)
+        else:
+            payload = ReActDecisionPayload.parse_obj(obj)
+    except (TypeError, ValueError, ValidationError):
         return {}
 
+    data = _dump_pydantic_model(payload)
+    if not str(data.get("action") or "").strip():
+        return {}
+    if not isinstance(data.get("arguments"), dict):
+        return {}
+    return data
 
-def _clip_text(text: str, *, max_chars: int) -> str:
-    s = str(text or "")
-    if len(s) <= max_chars:
-        return s
-    return s[: max(0, max_chars - 1)].rstrip() + "…"
+
+def _extract_tool_decision(res: Any) -> Dict[str, Any]:
+    tool_calls = getattr(res, "tool_calls", None)
+    if not isinstance(tool_calls, list):
+        return {}
+
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = str(fn.get("name") or call.get("name") or "").strip()
+        if name != "react_decision":
+            continue
+
+        raw_args = fn.get("arguments", call.get("arguments"))
+        if isinstance(raw_args, dict):
+            args_obj = raw_args
+        else:
+            args_obj = _extract_first_json_object(str(raw_args or ""))
+        return _validate_decision_payload(args_obj)
+
+    return {}
 
 
 def _normalize_key(text: str) -> str:
@@ -81,7 +139,7 @@ def _extract_primary_kp(arguments: Dict[str, Any]) -> str:
 def _safe_int(value: Any) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return 0
 
 
@@ -266,6 +324,54 @@ def _split_quality_and_observation(observation: str) -> Tuple[str, str]:
     return "Quality: MEDIUM (no_quality_line)", raw
 
 
+def _format_tool_output_preview(tool: str, output: Any) -> str:
+    tool_name = str(tool or "").strip()
+
+    if tool_name == "generate_study_material" and isinstance(output, dict):
+        sections = output.get("sections") if isinstance(output.get("sections"), list) else []
+        kps: List[str] = []
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            kp = str(section.get("knowledge_point") or "").strip()
+            if kp:
+                kps.append(kp)
+        compact = {
+            "success": bool(output.get("success", True)),
+            "sections_count": len(sections),
+            "knowledge_points": kps[:8],
+            "markdown_chars": len(str(output.get("markdown") or output.get("content") or "")),
+        }
+        return json.dumps(compact, ensure_ascii=False)
+
+    try:
+        raw = json.dumps(output, ensure_ascii=False)
+    except (TypeError, ValueError):
+        raw = str(output)
+
+    longer_preview_tools = {
+        "web_search_knowledge",
+        "github_search",
+        "stackexchange_search",
+        "mediawiki_search",
+        "browse_web_pages",
+        "wikipedia_search",
+        "aggregate_knowledge",
+        "synthesize_sources",
+    }
+    code_preview_tools = {
+        "convert_markdown_to_latex",
+        "refine_latex",
+        "compile_latex_to_pdf",
+        "draw_svg_diagram",
+        "render_tikz_diagram",
+        "render_asy_diagram",
+        "plot_data",
+    }
+    max_chars = 600 if tool_name in longer_preview_tools else 480 if tool_name in code_preview_tools else 260
+    return _clip_text(raw, max_chars=max_chars)
+
+
 def _format_observation(
     step_results: List[Any],
     *,
@@ -285,11 +391,7 @@ def _format_observation(
         out = getattr(r, "output", None)
         out_preview = ""
         if out is not None:
-            try:
-                out_preview = json.dumps(out, ensure_ascii=False)
-            except Exception:
-                out_preview = str(out)
-            out_preview = _clip_text(out_preview, max_chars=260)
+            out_preview = _format_tool_output_preview(tool, out)
 
         tool_label = tool
         if step_args_by_id:
@@ -338,6 +440,61 @@ class ReActLoop:
         self.tool_registry = tool_registry
         self._decide_next = decide_next
 
+    async def _json_decide(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        model: str,
+        max_tokens: int,
+        repair_reason: str = "",
+    ) -> Dict[str, Any]:
+        json_messages = list(messages)
+        if repair_reason:
+            json_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "The previous ReAct decision was invalid: "
+                        f"{_clip_text(repair_reason, max_chars=240)}. "
+                        "Return only one JSON object with string fields thought/action/batch_mode/note "
+                        "and an object field arguments."
+                    ),
+                }
+            )
+        try:
+            res = await chat_completion(
+                messages=json_messages,
+                model=model,
+                temperature=0.2,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+                stream=False,
+                retries=3,
+                req_id_prefix="react",
+            )
+        except Exception:
+            logger.warning("react_llm_decide_failed", exc_info=True)
+            return {}
+
+        raw = str(getattr(res, "content", "") or "")
+        obj = _extract_first_json_object(raw)
+        decision = _validate_decision_payload(obj)
+        if decision:
+            return decision
+
+        if repair_reason:
+            return {}
+
+        repair_messages = list(messages)
+        if raw.strip():
+            repair_messages.append({"role": "assistant", "content": raw})
+        return await self._json_decide(
+            messages=repair_messages,
+            model=model,
+            max_tokens=max_tokens,
+            repair_reason="missing or malformed JSON decision",
+        )
+
     async def _llm_decide(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         model = str(self.config.planner_model or "").strip()
         if not model or not is_llm_configured():
@@ -351,16 +508,24 @@ class ReActLoop:
                 model=model,
                 temperature=0.2,
                 max_tokens=max_tokens,
-                response_format={"type": "json_object"},
+                tools=[REACT_DECISION_TOOL],
+                tool_choice=REACT_DECISION_TOOL_CHOICE,
                 stream=False,
                 retries=3,
                 req_id_prefix="react",
             )
+            decision = _extract_tool_decision(res)
+            if decision:
+                return decision
         except Exception:
-            logger.debug("react_llm_decide_failed", exc_info=True)
-            return {}
+            logger.warning("react_llm_tool_decide_failed", exc_info=True)
 
-        return _extract_first_json_object(getattr(res, "content", "") or "")
+        return await self._json_decide(
+            messages=messages,
+            model=model,
+            max_tokens=max_tokens,
+            repair_reason="missing or invalid react_decision tool call",
+        )
 
     async def _decide(self, messages: List[Dict[str, str]]) -> ReActDecision:
         if self._decide_next is not None:
@@ -383,6 +548,7 @@ class ReActLoop:
         try:
             return self.tool_registry.get_tool(name) is not None
         except Exception:
+            logger.warning("react_tool_registry_lookup_failed", extra={"tool": name}, exc_info=True)
             return False
 
     async def run(

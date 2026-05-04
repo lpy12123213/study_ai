@@ -7,7 +7,10 @@ export default function LessonPlansPage() {
     queryKey: ['lesson-plans'],
     queryFn: () => lessonPlansApi.list().then((r) => r.data),
   })
-  const plans: { id: string; title: string }[] = data?.plans ?? data ?? []
+  const plans = (data?.plans ?? []).map((item) => ({
+    id: String(item.id),
+    title: item.title,
+  }))
 
   return (
     <div className="p-6 space-y-4">

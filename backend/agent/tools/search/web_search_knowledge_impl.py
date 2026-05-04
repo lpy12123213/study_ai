@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Implementation module for the `web_search_knowledge` tool.
 
 The stable import path is `backend.agent.tools.search.web_search_knowledge`.
 Keep heavy logic here; the public module re-exports the mixin.
 """
+
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -107,7 +107,7 @@ class WebSearchKnowledgeToolsMixin:
         def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
             try:
                 n = int(value)
-            except Exception:
+            except (TypeError, ValueError):
                 n = default
             return max(min_value, min(max_value, n))
 
@@ -289,13 +289,13 @@ class WebSearchKnowledgeToolsMixin:
         # Stored in working_memory so continuation tasks can reuse results without re-querying.
         try:
             cache_ttl_s = int(os.getenv("STUDY_MATERIALS_WEB_SEARCH_CACHE_TTL_S") or "3600")
-        except Exception:
+        except (TypeError, ValueError):
             cache_ttl_s = 3600
         cache_ttl_s = max(0, min(cache_ttl_s, 60 * 60 * 24))
 
         try:
             cache_max_entries = int(os.getenv("STUDY_MATERIALS_WEB_SEARCH_CACHE_MAX_ENTRIES") or "200")
-        except Exception:
+        except (TypeError, ValueError):
             cache_max_entries = 200
         cache_max_entries = max(0, min(cache_max_entries, 2000))
 
@@ -316,13 +316,13 @@ class WebSearchKnowledgeToolsMixin:
                 return None
             try:
                 ts = float(entry.get("ts_s") or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 ts = 0.0
             if cache_ttl_s and ts and (time.time() - ts) > float(cache_ttl_s):
                 try:
                     cache.pop(key, None)
                 except Exception:
-                    logger.debug("web_search_cache_evict_failed", extra={"key": key}, exc_info=True)
+                    logger.warning("web_search_cache_evict_failed", extra={"key": key}, exc_info=True)
                 return None
             value = entry.get("value")
             return dict(value) if isinstance(value, dict) else None
@@ -354,6 +354,7 @@ class WebSearchKnowledgeToolsMixin:
                 for k, _v in items[:drop_n]:
                     cache.pop(k, None)
             except Exception:
+                logger.warning("web_search_cache_prune_failed", exc_info=True)
                 for k in list(cache.keys())[: max(1, len(cache) - cache_max_entries)]:
                     cache.pop(k, None)
 
@@ -702,6 +703,7 @@ class WebSearchKnowledgeToolsMixin:
                         logger.warning(
                             "Tavily search failed; falling back",
                             extra={"knowledge_point": point, "error": str(exc)},
+                            exc_info=True,
                         )
 
                 try:
@@ -781,6 +783,7 @@ class WebSearchKnowledgeToolsMixin:
                         logger.warning(
                             "Exa search exception; falling back to Metaso",
                             extra={"knowledge_point": point, "error": str(exc)},
+                            exc_info=True,
                         )
 
                 if force_search_mode and search_mode == "deepresearch":
@@ -1007,6 +1010,7 @@ class WebSearchKnowledgeToolsMixin:
                     else "web search failed",
                 }
             except Exception as exc:  # pragma: no cover
+                logger.warning("BigModel search failed", extra={"knowledge_point": point, "error": str(exc)}, exc_info=True)
                 return {
                     "knowledge_point": point,
                     "base_query": base_query,
@@ -1057,7 +1061,7 @@ class WebSearchKnowledgeToolsMixin:
             try:
                 _cache_put(key, res)
             except Exception:
-                logger.debug("web_search_cache_put_failed", extra={"key": key}, exc_info=True)
+                logger.warning("web_search_cache_put_failed", extra={"key": key}, exc_info=True)
             return res
 
         concurrency = int(args.get("concurrency") or 3)
@@ -1069,6 +1073,7 @@ class WebSearchKnowledgeToolsMixin:
                 try:
                     return await _search_one(point)
                 except Exception as exc:  # pragma: no cover
+                    logger.warning("web_search_knowledge_point_failed", extra={"point": point}, exc_info=True)
                     return {
                         "knowledge_point": point,
                         "query": point,

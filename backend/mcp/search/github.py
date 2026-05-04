@@ -90,7 +90,7 @@ async def github_fetch_readme(
             resp.raise_for_status()
             text = (resp.text or "").strip()
             return {"success": True, "provider": "github", "full_name": repo, "readme": _clip(text, max_len=max_chars)}
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             if attempt < 2:
                 await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                 continue
@@ -171,14 +171,14 @@ async def github_search_repositories(
                     data_err = resp.json()
                     if isinstance(data_err, dict) and data_err.get("message"):
                         msg = str(data_err.get("message"))
-                except Exception:
+                except ValueError:
                     logger.debug("github_api_error_payload_parse_failed", exc_info=True)
                 return {"success": False, "query": q, "provider": "github", "error": msg, "note": note}
 
             resp.raise_for_status()
             data = resp.json()
             break
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
             if attempt < 2:
                 await asyncio.sleep(min(6.0, (2**attempt) * 0.8 + random.random() * 0.6))
                 continue
@@ -188,29 +188,29 @@ async def github_search_repositories(
     if not isinstance(items, list):
         items = []
 
-        results: List[Dict[str, Any]] = []
-        for it in items[:limit]:
-            if not isinstance(it, dict):
-                continue
-            results.append(
-                {
-                    "full_name": str(it.get("full_name") or "").strip(),
-                    "url": str(it.get("html_url") or "").strip(),
-                    "description": _clip(str(it.get("description") or ""), max_len=240),
-                    "stars": int(it.get("stargazers_count") or 0),
-                    "language": str(it.get("language") or "").strip(),
-                    "updated_at": str(it.get("updated_at") or "").strip(),
-                    "default_branch": str(it.get("default_branch") or "").strip(),
-                }
-            )
+    results: List[Dict[str, Any]] = []
+    for it in items[:limit]:
+        if not isinstance(it, dict):
+            continue
+        results.append(
+            {
+                "full_name": str(it.get("full_name") or "").strip(),
+                "url": str(it.get("html_url") or "").strip(),
+                "description": _clip(str(it.get("description") or ""), max_len=240),
+                "stars": int(it.get("stargazers_count") or 0),
+                "language": str(it.get("language") or "").strip(),
+                "updated_at": str(it.get("updated_at") or "").strip(),
+                "default_branch": str(it.get("default_branch") or "").strip(),
+            }
+        )
 
-        out: Dict[str, Any] = {
-            "success": True,
-            "query": q,
-            "results": results,
-            "total_count": int(data.get("total_count") or 0) if isinstance(data, dict) else 0,
-            "provider": "github",
-        }
-        if note:
-            out["note"] = note
-        return out
+    out: Dict[str, Any] = {
+        "success": True,
+        "query": q,
+        "results": results,
+        "total_count": int(data.get("total_count") or 0) if isinstance(data, dict) else 0,
+        "provider": "github",
+    }
+    if note:
+        out["note"] = note
+    return out

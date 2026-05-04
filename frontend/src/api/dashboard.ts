@@ -32,7 +32,7 @@ export async function downloadDashboardCsv(params?: { days?: number; from?: stri
 export const dashboardApi = {
   getDashboardStats,
   downloadDashboardCsv,
-  get: async (): Promise<{ data: any }> => ({
+  get: async (): Promise<{ data: DashboardStats }> => ({
     data: await getDashboardStats({ days: 30 }),
   }),
 }

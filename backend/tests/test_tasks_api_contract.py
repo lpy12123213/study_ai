@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from backend.app import create_app
 from backend.api.auth import require_auth
+from backend.app import create_app
 
 
 class TestTasksApiContract(unittest.TestCase):
@@ -132,14 +132,43 @@ class TestTasksApiContract(unittest.TestCase):
         )
 
         with patch("backend.api.tasks.db_get_task", new=get_task):
-            resp = client.get("/api/tasks/task-1?include_events=true&events_limit=25")
+            resp = client.get("/api/tasks/task-1?include_events=true&events_limit=25&events_after_seq=2")
 
         self.assertEqual(resp.status_code, 200)
         get_task.assert_awaited_once()
         kwargs = get_task.await_args.kwargs
         self.assertIs(kwargs["include_events"], True)
         self.assertEqual(kwargs["events_limit"], 25)
+        self.assertEqual(kwargs["events_after_seq"], 2)
         self.assertEqual(resp.json()["events"][0]["seq"], 1)
+
+        app.dependency_overrides.clear()
+
+    def test_get_task_status_defaults_to_small_event_window(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        get_task = AsyncMock(
+            return_value={
+                "id": "task-1",
+                "user_id": "u-1",
+                "task_type": "study_materials",
+                "title": "导数资料",
+                "status": "completed",
+                "progress": 100,
+                "last_seq": 500,
+                "events": [],
+            }
+        )
+
+        with patch("backend.api.tasks.db_get_task", new=get_task):
+            resp = client.get("/api/tasks/task-1?include_events=true")
+
+        self.assertEqual(resp.status_code, 200)
+        kwargs = get_task.await_args.kwargs
+        self.assertEqual(kwargs["events_limit"], 200)
+        self.assertEqual(kwargs["events_after_seq"], 0)
 
         app.dependency_overrides.clear()
 

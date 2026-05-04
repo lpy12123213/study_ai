@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from backend.generation.agentic.prompt_contracts import JsonOutputContract, MarkdownOutputContract
-
 
 JSON_ONLY_GUARDRAIL = "Output a strict JSON object only. Do not output Markdown or extra explanation."
 NO_MARKDOWN_FENCE_GUARDRAIL = "Do not wrap the result in a code fence and do not use ```."
@@ -87,6 +87,7 @@ class PromptRenderResult:
     version: str
     content: str
     output_contract: object
+    content_hash: str = ""
     metadata: Dict[str, object] = field(default_factory=dict)
 
 
@@ -128,6 +129,7 @@ class PromptTemplate:
             version=self.version,
             content=content,
             output_contract=self.output_contract,
+            content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
             metadata={"tags": list(self.tags), "description": self.description},
         )
 
