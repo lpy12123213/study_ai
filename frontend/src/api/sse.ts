@@ -11,7 +11,7 @@ import {
 import { createStreamEventBatcher } from '@/lib/streamEventBatcher'
 
 const IMMEDIATE_STREAM_EVENT_TYPES = new Set(['tool_result', 'assistant_final', 'final', 'done', 'result'])
-const DEFAULT_SSE_INACTIVITY_TIMEOUT_MS = 30_000
+const DEFAULT_SSE_INACTIVITY_TIMEOUT_MS = 120_000
 const SSE_MAX_BUFFER_CHARS = 1_000_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {

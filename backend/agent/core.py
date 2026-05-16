@@ -522,14 +522,10 @@ class AgentCore:
         results = ActionResults()
         reflection: Optional[ReflectionResult] = None
 
-        # Ensure knowledge points are available for batch_mode="per_knowledge_point".
-        async for evt in self._ensure_planner_knowledge_points(
-            ctx=ctx,
-            results=results,
-            user_input=user_input,
-            profile=profile,
-        ):
-            yield evt
+        # Note: the LLM agent decides when/how to split knowledge points via the
+        # split_knowledge_points tool. We no longer force this as a deterministic
+        # first step so the agent can choose alternative strategies (e.g. for very
+        # focused topics it may skip the split entirely).
 
         loop = ReActLoop(config=self.config, tool_registry=self.executor.tool_registry)
         async for evt in loop.run(
@@ -647,7 +643,22 @@ class AgentCore:
                     )
                 except (TypeError, ValueError):
                     tool_budget = int(self.config.react_max_iterations or 20)
-                tool_budget = max(1, min(tool_budget, 50))
+
+                # Scale tool budget by preset so research mode actually researches.
+                preset_budget_floor = {
+                    "quick": 6,
+                    "standard": 14,
+                    "deep": 24,
+                    "research": 32,
+                }
+                opts_for_preset = ctx.working_memory.get("study_options")
+                preset_key = ""
+                if isinstance(opts_for_preset, dict):
+                    preset_key = str(opts_for_preset.get("preset") or "").strip().lower()
+                if preset_key not in preset_budget_floor:
+                    preset_key = "standard"
+                tool_budget = max(tool_budget, preset_budget_floor[preset_key])
+                tool_budget = max(1, min(tool_budget, 60))
 
                 react_state: Dict[str, Any] = {}
                 async for evt in self._run_react(

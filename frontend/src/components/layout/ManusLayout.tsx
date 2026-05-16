@@ -4,6 +4,7 @@ import { HistorySidebar } from './HistorySidebar'
 import { Header } from './Header'
 import { SubHeader } from './SubHeader'
 import { CommandPalette } from '@/components/shared/CommandPalette'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { NotificationCenter } from '@/components/shared/NotificationCenter'
 import { ToastHost } from '@/components/shared/ToastHost'
 import { cn } from '@/lib/utils'
@@ -42,7 +43,9 @@ export function ManusLayout() {
         </div>
         <CommandPalette />
         <ToastHost />
-        <Outlet />
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </div>
     )
   }
@@ -78,7 +81,9 @@ export function ManusLayout() {
               "mx-auto h-full",
               !isWidePage && contentWidthClass
             )}>
-               <Outlet />
+               <ErrorBoundary key={location.pathname}>
+                 <Outlet />
+               </ErrorBoundary>
             </div>
           </div>
         </main>

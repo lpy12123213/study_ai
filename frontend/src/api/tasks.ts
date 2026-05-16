@@ -1,4 +1,5 @@
-import { apiClient, fetchSSERequest } from '@/api/client'
+import { apiClient } from '@/api/client'
+import { streamTaskWs } from '@/api/ws'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object')
@@ -83,14 +84,18 @@ export function streamTask(
   onComplete?: () => void,
   options?: { signal?: AbortSignal }
 ): void {
-  const encodedId = encodeURIComponent(taskId)
-  fetchSSERequest(
-    `/tasks/${encodedId}/stream?after_seq=${Math.max(0, afterSeq || 0)}`,
-    { method: 'GET', signal: options?.signal },
+  const cleanup = streamTaskWs(
+    taskId,
+    afterSeq,
     (data) => onEvent(data as TaskStreamEvent),
     onError,
-    onComplete
+    onComplete,
+    { signal: options?.signal }
   )
+
+  if (options?.signal) {
+    options.signal.addEventListener('abort', () => cleanup())
+  }
 }
 
 export async function pauseTask(taskId: string): Promise<void> {

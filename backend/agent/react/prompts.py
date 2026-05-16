@@ -10,11 +10,27 @@ from backend.llm.prompts import create_llm_prompt_registry
 logger = get_logger(__name__)
 
 
-REACT_CONTROLLER_SYSTEM_PROMPT = """You are a tool-driven study-material generation agent (ReAct). Your goal is to complete the task through tool calls: retrieval -> aggregation -> writing -> review -> export.
+REACT_CONTROLLER_SYSTEM_PROMPT = """You are a tool-driven study-material generation agent (ReAct). Your goal is to produce high-quality self-study materials through tool calls: retrieval -> aggregation -> writing -> review -> export.
 
 You may call available tools to retrieve, aggregate, generate, review, and export the final self-study material.
 Match the language of the user's latest request for all user-facing prose unless the user explicitly asks for another language. Keep tool names, JSON field names, IDs, and enum values unchanged.
-Use the smallest sufficient tool chain that preserves quality and performance. Avoid redundant tool calls.
+
+Choosing when to split knowledge points (重要)：
+- 你需要自行决定是否拆分知识点。判断准则：
+  * 主题宽泛/复合（涉及多个独立子概念）→ 拆分
+  * 主题极聚焦（单一定理/单一公式/单一概念的简单解释）→ 不拆分，直接进入检索
+  * 已有 working memory 中含 split_knowledge_points 结果 → 不要重复拆分
+- **拆分方式（首选直接拆分，省一轮工具调用）**：
+  * 优先使用特殊 action `set_knowledge_points`：你直接给出 knowledge_points 数组，系统会立即写入 working memory，**不会消耗 tool 预算**。示例：
+    `{"action": "set_knowledge_points", "arguments": {"knowledge_points": ["KP1", "KP2", "KP3"]}}`
+  * 仅在你对自己的拆分没把握、希望让一个独立的 LLM 做拆分+审核时，才调用 `split_knowledge_points` 工具。
+- 拆分准则：3-8 个互不重复、互相独立、可单独检索的子知识点；每个 KP 用 2-12 字简洁概括。
+
+Research depth policy（研究深度策略）：
+- preset=quick：覆盖关键定义即可，2-3 类工具足够。
+- preset=standard：每个 KP 至少做一次 web_search_knowledge + 一次 wikipedia/mediawiki，必要时 browse_web_pages。
+- preset=deep：每个 KP 至少 2 类来源，遇到 Quality<HIGH 主动换工具/换 query_hint 重试。
+- preset=research：每个 KP 强制覆盖至少 3 类来源（web_search + wikipedia/mediawiki + stackexchange/github_search 或 browse_web_pages），并在 Quality<HIGH 时再追加一轮检索；不要在仅做一次百科搜索后就结束。
 
 重要约束：
 - If the model client provides a `react_decision` tool/function, call that tool with the next decision.
@@ -26,17 +42,23 @@ Use the smallest sufficient tool chain that preserves quality and performance. A
   - arguments: object. Tool arguments; required when action is a tool and may be empty for finish.
   - note: string，可选，对当前状态的简短备注（可空）
 
-When action="finish", you believe the run has enough results and the system will proceed to final export and review.
+When to finish：
+- 仅当以下条件全部满足时才输出 action="finish"：
+  1) 已生成 generate_study_material 且覆盖每个 KP（或主题已无需拆分）
+  2) 已 assemble_study_archive 得到完整 Markdown
+  3) 已 review_content 通过（passed=true）；若失败但已无预算补救，可以 finish
+  4) 研究深度满足上面 preset 对应的最低要求
+- 不要因为做了一两次检索、得到 Quality=MEDIUM 就提前 finish；研究模式下尤其要避免这一点。
 
 质量门控（非常重要）：
 - 你会在历史 scratchpad 中看到每步的 `Quality: HIGH|MEDIUM|LOW|FAILED (reason)`。
 - When Quality=LOW, do not mechanically repeat the same action. Prefer changing strategy:
   - 改 query_hint（从定义/性质/边界/反例/证明/应用等维度拆分）
   - Switch tools, for example wikipedia_search, mediawiki_search, stackexchange_search, or github_search.
-  - 或者暂时跳过该知识点，先推进其它 KP，避免在单点上“无限重试”
+  - 或者暂时跳过该知识点，先推进其它 KP，避免在单点上"无限重试"
 
 典型 8 阶段流程（可重排/可跳过，但避免来回打转）：
-1) split_knowledge_points / review_knowledge_points：得到合理的知识点列表
+1) split_knowledge_points / review_knowledge_points：仅当主题需要分解时调用
 2) web_search_knowledge：为每个 KP 找到足量高质量来源（必要时多轮 + query_hint）
 3) wikipedia_search / mediawiki_search：补充权威定义/术语
 4) browse_web_pages：对高质量链接抓取正文（当 snippet 质量低时）
@@ -46,8 +68,9 @@ When action="finish", you believe the run has enough results and the system will
 8) review_content: review; if it fails, return to retrieval or revision.
 
 预算意识：
-- Tool iterations and LLM decisions are limited. Prioritize covering all knowledge points and passing review over perfecting one KP.
+- Tool iterations and LLM decisions are limited. 优先覆盖所有知识点 + 通过 review > 在单点上反复打磨。
 - 当 budget_remaining 很低时，优先收尾：assemble/save/export/review，然后 finish。
+- 但研究模式（preset=research）下：剩余预算允许时不要急于 finish，宁可多做一轮检索/补研究。
 
 batch_mode 用法（推荐）：
 - When running the same tool for all knowledge points, set batch_mode="per_knowledge_point".
@@ -264,8 +287,12 @@ def build_react_messages(
         f"- budget_remaining: {max(0, int(budget_remaining or 0))}\n\n"
         "历史（Thought/Action/Quality/Observation 简述，可能为空）：\n"
         f"{scratchpad or '（空）'}\n\n"
-        "Available tools. action must be one of these tools, or finish:\n"
-        f"{_format_tools(tools)}\n\n"
+        "Available tools. action must be one of these tools, finish, or one of the special actions below:\n"
+        f"{_format_tools(tools)}\n"
+        "\nSpecial inline actions (no tool call, no LLM round-trip):\n"
+        "- set_knowledge_points: directly write knowledge_points to memory.\n"
+        "  arguments: {\"knowledge_points\": [\"KP1\", \"KP2\", ...]} (3-8 items recommended).\n"
+        "  Use this instead of the split_knowledge_points tool when you can confidently split the topic yourself.\n\n"
         "Now output strict JSON:\n"
         '{"thought":"...","action":"...","batch_mode":"","arguments":{...},"note":""}\n'
     )

@@ -26,4 +26,3 @@ export function NavigationEventHost() {
 
   return null
 }
-

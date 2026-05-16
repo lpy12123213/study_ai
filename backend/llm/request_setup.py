@@ -139,7 +139,18 @@ async def build_payload(
     if isinstance(response_format, dict) and response_format:
         payload["response_format"] = dict(response_format)
     if isinstance(tools, list) and tools:
-        payload["tools"], payload["tool_choice"] = list(tools), tool_choice if tool_choice is not None else "auto"
+        payload["tools"] = list(tools)
+        # DeepSeek reasoner models don't support tool_choice parameter.
+        # This includes deepseek-reasoner, deepseek-r1*, and deepseek-v4-flash (which is a reasoner variant).
+        effective_tool_choice = tool_choice if tool_choice is not None else "auto"
+        model_lower = (model or "").lower()
+        is_deepseek_reasoner = provider == "deepseek" and (
+            "reasoner" in model_lower
+            or model_lower.startswith("deepseek-r1")
+            or "v4" in model_lower
+        )
+        if not is_deepseek_reasoner:
+            payload["tool_choice"] = effective_tool_choice
     if stream and provider in {"openrouter", "moonshot", "ikuncode"}:
         payload["stream"] = True
     if isinstance(reasoning, dict) and reasoning and not (provider == "openrouter" and not stream and model.lower().startswith("deepseek/")):

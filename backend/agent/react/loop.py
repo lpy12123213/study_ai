@@ -566,13 +566,24 @@ class ReActLoop:
         max_iterations = int(max_iterations or 0)
         if max_iterations <= 0:
             max_iterations = int(self.config.react_max_iterations or 20)
-        max_iterations = max(1, min(max_iterations, 50))
+        max_iterations = max(1, min(max_iterations, 60))
 
         tools = self.tool_registry.list_tools()
 
         scratch: List[Dict[str, Any]] = []
 
         llm_call_budget = int(getattr(self.config, "react_llm_call_budget", 25) or 25)
+        # Scale LLM call budget by preset so research mode actually researches.
+        try:
+            opts_for_preset = ctx.working_memory.get("study_options") if isinstance(ctx.working_memory, dict) else {}
+            preset_for_budget = ""
+            if isinstance(opts_for_preset, dict):
+                preset_for_budget = str(opts_for_preset.get("preset") or "").strip().lower()
+        except (AttributeError, TypeError):
+            preset_for_budget = ""
+        preset_llm_floor = {"quick": 8, "standard": 18, "deep": 32, "research": 45}
+        if preset_for_budget in preset_llm_floor:
+            llm_call_budget = max(llm_call_budget, preset_llm_floor[preset_for_budget])
         llm_call_budget = max(1, min(llm_call_budget, 200))
         llm_calls = 0
 
@@ -647,14 +658,16 @@ class ReActLoop:
                             ),
                         }
 
-            # (3) budget 75% used -> prompt wrap-up.
-            if "budget_75" not in injected_checkpoints and llm_call_budget > 0:
+            # (3) budget threshold reached -> prompt wrap-up.
+            # Research mode is given more headroom (90%) so it has time to do additional retrieval rounds.
+            wrap_up_ratio = 0.90 if preset_for_budget == "research" else (0.85 if preset_for_budget == "deep" else 0.75)
+            if "budget_threshold" not in injected_checkpoints and llm_call_budget > 0:
                 used_ratio = llm_calls / llm_call_budget
-                if used_ratio >= 0.75:
-                    injected_checkpoints.add("budget_75")
+                if used_ratio >= wrap_up_ratio:
+                    injected_checkpoints.add("budget_threshold")
                     remaining = max(0, llm_call_budget - llm_calls)
                     return {
-                        "thought": "Checkpoint: 决策预算已消耗 75%+，建议收尾。",
+                        "thought": "Checkpoint: 决策预算接近用尽，建议收尾。",
                         "action": "checkpoint",
                         "observation": (
                             "Quality: MEDIUM (budget_warning)\n"
@@ -728,6 +741,54 @@ class ReActLoop:
                     }
                 )
                 yield agent_event("status", {"content": "ReAct：未返回 action，已跳过本轮。"})
+                continue
+
+            # Inline knowledge-point splitting. The controller LLM provides the KP list
+            # directly in `arguments.knowledge_points` so we don't pay an extra
+            # split_knowledge_points tool round-trip. This is consumed by the same
+            # downstream code that reads ctx.working_memory["split_knowledge_points"].
+            if action_norm in {"setknowledgepoints", "splitknowledgepointsinline", "providekps", "kpsinline"}:
+                args_obj = decision.arguments if isinstance(decision.arguments, dict) else {}
+                raw_kps = args_obj.get("knowledge_points") if isinstance(args_obj.get("knowledge_points"), list) else []
+                cleaned: List[str] = []
+                seen: set = set()
+                for it in raw_kps or []:
+                    s = str(it or "").strip()
+                    if not s or s in seen:
+                        continue
+                    seen.add(s)
+                    cleaned.append(s)
+                    if len(cleaned) >= 15:
+                        break
+                if cleaned:
+                    ctx.working_memory["split_knowledge_points"] = {
+                        "topic": str(args_obj.get("topic") or topic or "").strip(),
+                        "subject": str(args_obj.get("subject") or subject or "").strip(),
+                        "knowledge_points": cleaned,
+                        "source": "controller_inline",
+                    }
+                    obs = (
+                        "Quality: HIGH (inline_split_ok)\n"
+                        f"- 已记录 {len(cleaned)} 个知识点（由主 agent 直接提供，未消耗 tool 预算）：\n"
+                        f"  {', '.join(cleaned[:8])}{'...' if len(cleaned) > 8 else ''}"
+                    )
+                    yield agent_event(
+                        "status",
+                        {"content": f"已直接采纳主 agent 提供的 {len(cleaned)} 个知识点。"},
+                    )
+                else:
+                    obs = (
+                        "Quality: FAILED (empty_kps)\n"
+                        "- arguments.knowledge_points 为空或格式错误"
+                    )
+                scratch.append(
+                    {
+                        "thought": decision.thought,
+                        "action": action,
+                        "arguments": decision.arguments,
+                        "observation": obs,
+                    }
+                )
                 continue
 
             if not self._tool_exists(action):

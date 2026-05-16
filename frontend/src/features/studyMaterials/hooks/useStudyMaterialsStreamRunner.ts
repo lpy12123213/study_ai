@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react'
 import { ApiError, fetchSSERequest, isApiError } from '@/api/client'
+import { streamTaskWs } from '@/api/ws'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { appendCappedText, mergeAndSanitizeTaskStep, sanitizeTaskStep, sanitizeTaskSteps } from '@/lib/taskPayload'
@@ -12,6 +13,28 @@ import type { SubAgentActivity } from '@/features/studyMaterials/types'
 export type StudyMaterialsStreamRequest = { url: string; method: 'GET' | 'POST'; body?: unknown }
 
 type StreamRecord = Record<string, unknown>
+
+/**
+ * Parse `/tasks/{taskId}/stream?after_seq=N` URL.
+ * Returns null if the URL is not a unified-task stream URL.
+ */
+function parseTaskStreamUrl(url: string, method: string): { taskId: string; afterSeq: number } | null {
+  if (method !== 'GET') return null
+  const m = url.match(/^\/tasks\/([^/?#]+)\/stream(?:\?(.*))?$/)
+  if (!m) return null
+  const taskId = decodeURIComponent(m[1] || '')
+  if (!taskId) return null
+  let afterSeq = 0
+  if (m[2]) {
+    const params = new URLSearchParams(m[2])
+    const raw = params.get('after_seq')
+    if (raw) {
+      const n = Number(raw)
+      if (Number.isFinite(n) && n >= 0) afterSeq = Math.floor(n)
+    }
+  }
+  return { taskId, afterSeq }
+}
 
 export type RunStudyMaterialsStreamOptions = {
   conversationId: string
@@ -542,57 +565,86 @@ export function useStudyMaterialsStreamRunner(opts: {
       setIsGeneratingLocal(true)
       setError(null)
 
+      const handleStreamData = (data: unknown) => {
+        const env = normalizeSseEnvelope(data)
+        const seq = typeof env.seq === 'number' ? env.seq : Number(env.seq || 0)
+        if (Number.isFinite(seq) && seq > lastSeq) lastSeq = seq
+        if (serverTaskId) {
+          useConversationStore.getState().updateConversation(conversationId, {
+            activeStream: { taskType: 'study_materials', taskId: serverTaskId, assistantMessageId, lastSeq },
+            resumable: true,
+          })
+        }
+        handleStreamEvent(env)
+      }
+
+      const handleStreamError = (err: unknown) => {
+        const normalizedError =
+          err instanceof ApiError
+            ? err
+            : isApiError(err)
+              ? new ApiError({
+                  code: err.code,
+                  message: formatStudyMaterialsError(err.message || '生成失败'),
+                  status: err.status,
+                  requestId: err.requestId,
+                  detail: err.detail,
+                  retriable: err.retriable,
+                  actions: err.actions,
+                })
+              : formatStudyMaterialsError(err instanceof Error ? err.message : toText(toRecord(err).message) || '生成失败')
+
+        const msg = isApiError(normalizedError) ? normalizedError.message : String(normalizedError || '生成失败')
+        setError(normalizedError)
+        if (localTaskId) {
+          useTaskStore.getState().failTask(localTaskId, msg)
+        }
+        useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
+          content: `出错：${msg}`,
+          steps: assistantSteps,
+        })
+        // Keep activeStream so the user can refresh/reconnect.
+        setIsGeneratingLocal(false)
+      }
+
+      const handleStreamComplete = () => {
+        if (streamAbortRef.current !== controller) return
+        if (!done) {
+          // Connection closed unexpectedly: keep the task resumable.
+          setIsGeneratingLocal(false)
+        }
+        streamAbortRef.current = null
+      }
+
+      // Use WebSocket for the unified task stream (`GET /tasks/{id}/stream?after_seq=N`).
+      // This avoids SSE timeouts during long-running studies and gives durable
+      // refresh-resume via the persistent connection.
+      const taskStream = parseTaskStreamUrl(request.url, request.method)
+      if (taskStream) {
+        if (taskStream.taskId) serverTaskId = taskStream.taskId
+        const cleanup = streamTaskWs(
+          taskStream.taskId,
+          taskStream.afterSeq,
+          handleStreamData,
+          handleStreamError,
+          handleStreamComplete,
+          { signal: controller.signal },
+        )
+        // Wire abort to cleanup the WS connection.
+        if (controller.signal.aborted) {
+          cleanup()
+        } else {
+          controller.signal.addEventListener('abort', () => cleanup())
+        }
+        return
+      }
+
       void fetchSSERequest(
         request.url,
-        { method: request.method, body: request.body, signal: controller.signal },
-        (data) => {
-          const env = normalizeSseEnvelope(data)
-          const seq = typeof env.seq === 'number' ? env.seq : Number(env.seq || 0)
-          if (Number.isFinite(seq) && seq > lastSeq) lastSeq = seq
-          if (serverTaskId) {
-            useConversationStore.getState().updateConversation(conversationId, {
-              activeStream: { taskType: 'study_materials', taskId: serverTaskId, assistantMessageId, lastSeq },
-              resumable: true,
-            })
-          }
-          handleStreamEvent(env)
-        },
-        (err: unknown) => {
-          const normalizedError =
-            err instanceof ApiError
-              ? err
-              : isApiError(err)
-                ? new ApiError({
-                    code: err.code,
-                    message: formatStudyMaterialsError(err.message || '生成失败'),
-                    status: err.status,
-                    requestId: err.requestId,
-                    detail: err.detail,
-                    retriable: err.retriable,
-                    actions: err.actions,
-                  })
-                : formatStudyMaterialsError(err instanceof Error ? err.message : toText(toRecord(err).message) || '生成失败')
-
-          const msg = isApiError(normalizedError) ? normalizedError.message : String(normalizedError || '生成失败')
-          setError(normalizedError)
-          if (localTaskId) {
-            useTaskStore.getState().failTask(localTaskId, msg)
-          }
-          useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
-            content: `出错：${msg}`,
-            steps: assistantSteps,
-          })
-          // Keep activeStream so the user can refresh/reconnect.
-          setIsGeneratingLocal(false)
-        },
-        () => {
-          if (streamAbortRef.current !== controller) return
-          if (!done) {
-            // Connection closed unexpectedly: keep the task resumable.
-            setIsGeneratingLocal(false)
-          }
-          streamAbortRef.current = null
-        }
+        { method: request.method, body: request.body, signal: controller.signal, inactivityTimeoutMs: 120_000 },
+        handleStreamData,
+        handleStreamError,
+        handleStreamComplete,
       )
     },
     [abortActiveStream, setActiveSubAgentTab, setError, setIsGeneratingLocal, setSubAgentActivities]

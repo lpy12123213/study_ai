@@ -1,4 +1,5 @@
-import { apiClient, fetchSSE } from '../client'
+import { apiClient } from '../client'
+import { streamChatWs } from '@/api/ws'
 import { generateId } from '@/lib/utils'
 import type { ConversationItem, Message, TaskStep } from '@/types'
 
@@ -362,11 +363,10 @@ export function sendMessageStream(
     return
   }
 
-  fetchSSE(
-    '/chat',
+  const cleanup = streamChatWs(
     {
       conversation_id: conversationId,
-      message: request.content,
+      content: request.content,
       subject: request.subject,
       model: request.model,
       sub_model: request.subModel,
@@ -385,13 +385,16 @@ export function sendMessageStream(
         return
       }
 
-      // Pass-through for other event types; the hook will interpret them.
       onEvent({ type: t as ChatStreamEvent['type'], raw })
     },
     onError,
     onComplete,
     { signal: options?.signal }
   )
+
+  if (options?.signal) {
+    options.signal.addEventListener('abort', () => cleanup())
+  }
 }
 
 export const chatApi = {

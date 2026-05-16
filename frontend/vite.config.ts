@@ -69,6 +69,7 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
+    dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom'],
   },
   build: {
     rollupOptions: {
@@ -82,11 +83,19 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      '/api/ws': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        ws: true,
+      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
     },
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-router', 'react-router-dom'],
   },
   test: {
     environment: 'jsdom',

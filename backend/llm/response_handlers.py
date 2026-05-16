@@ -58,6 +58,10 @@ def drop_optional_fields(payload: Dict[str, Any], dropped_response_format: bool,
     if "reasoning" in payload and not dropped_reasoning:
         payload.pop("reasoning", None)
         dropped_reasoning = dropped = True
+    if "tool_choice" in payload:
+        # Some models (e.g. deepseek-reasoner) don't support tool_choice
+        payload.pop("tool_choice", None)
+        dropped = True
     return dropped_response_format, dropped_reasoning, dropped
 
 

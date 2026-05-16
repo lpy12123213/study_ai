@@ -132,6 +132,31 @@ async def require_auth(
     }
 
 
+def validate_ws_token(token: str) -> Optional[dict]:
+    """Validate a WebSocket auth token (passed as query param).
+
+    Returns user dict or None if invalid. Falls back to local user when
+    login is disabled (same behavior as require_auth).
+    """
+    if not token or not token.strip():
+        return local_auth_user()
+
+    payload = validate_access_token(token.strip())
+    if not payload:
+        return local_auth_user()
+
+    user_id = str(payload.get("user_id") or "").strip()
+    username = str(payload.get("username") or "").strip()
+    if not user_id or not username:
+        return local_auth_user()
+
+    return {
+        "user_id": user_id,
+        "username": username,
+        "role": payload.get("role"),
+    }
+
+
 async def require_admin(user: dict = Depends(require_auth)) -> dict:
     """Require admin role."""
     if user.get("role") != "admin":

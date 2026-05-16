@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from 'react'
-import { AlertCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, Home, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface Props {
@@ -26,6 +26,11 @@ export class ErrorBoundary extends Component<Props, State> {
     this.setState({ hasError: false, error: undefined })
   }
 
+  handleGoHome = () => {
+    // Use window.location instead of <Link> to avoid Router context dependency
+    window.location.href = '/dashboard'
+  }
+
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) {
@@ -39,10 +44,16 @@ export class ErrorBoundary extends Component<Props, State> {
           <p className="text-muted-foreground mb-4 max-w-md">
             {this.state.error?.message || '发生了一个未知错误'}
           </p>
-          <Button onClick={this.handleRetry} variant="outline">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            重试
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button onClick={this.handleGoHome} variant="outline">
+              <Home className="h-4 w-4 mr-2" />
+              返回首页
+            </Button>
+            <Button onClick={this.handleRetry} variant="outline">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              重试
+            </Button>
+          </div>
         </div>
       )
     }
