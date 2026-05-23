@@ -149,6 +149,38 @@ def ensure_frontend_deps(root: Path) -> None:
                 raise
 
 
+def _newest_file_mtime(root: Path) -> float:
+    if not root.exists():
+        return 0.0
+    newest = 0.0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            newest = max(newest, path.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def frontend_dist_staleness(root: Path) -> tuple[bool, str]:
+    """Return whether the checked-in frontend build is older than source."""
+
+    frontend = root / "frontend"
+    src = frontend / "src"
+    dist = frontend / "dist"
+    if not dist.exists():
+        return False, ""
+
+    newest_src = _newest_file_mtime(src)
+    newest_dist = _newest_file_mtime(dist)
+    if newest_src <= 0.0 or newest_dist <= 0.0:
+        return False, ""
+    if newest_src <= newest_dist:
+        return False, ""
+    return True, "frontend/dist is stale; run `cd frontend && npm run build` before packaging or serving static assets."
+
+
 def doctor(root: Path) -> None:
     vpy = ensure_venv(root)
     ensure_backend_deps(root, vpy)

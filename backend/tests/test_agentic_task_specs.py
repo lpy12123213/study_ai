@@ -118,7 +118,7 @@ class AgenticTaskSubmitTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(task.starter_event.get("step", {}).get("id"), "agent_run_started")
 
     async def test_question_library_ai_task_submitters_attach_agent_spec_metadata(self) -> None:
-        from backend.question_library import runner as ql_runner
+        from backend.generation.question_library import runner as ql_runner
 
         async def fake_create_task(**kwargs):
             return SimpleNamespace(

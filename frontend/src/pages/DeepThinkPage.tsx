@@ -10,10 +10,11 @@ import { ThinkingTree } from '@/components/deepthink/ThinkingTree'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useDeepThink } from '@/hooks/useDeepThink'
 import { useSubjects } from '@/hooks/useSubjects'
+import { readNumber } from '@/lib/record'
 import { cn, generateId } from '@/lib/utils'
-import { DeepThinkUserBubble } from '@/features/deepThink/components/DeepThinkUserBubble'
-import { DeepThinkWelcomeScreen } from '@/features/deepThink/components/DeepThinkWelcomeScreen'
-import type { DeepThinkChatMessage } from '@/features/deepThink/types'
+import { DeepThinkUserBubble } from '@/features/generation/deepThink/components/DeepThinkUserBubble'
+import { DeepThinkWelcomeScreen } from '@/features/generation/deepThink/components/DeepThinkWelcomeScreen'
+import type { DeepThinkChatMessage } from '@/features/generation/deepThink/types'
 
 export default function DeepThinkPage() {
   const { data: subjects } = useSubjects()
@@ -87,11 +88,12 @@ export default function DeepThinkPage() {
 
   const configSummary = useMemo(() => {
     if (!config) return null
-    const bf = (config as any).branch_factor
-    const bw = (config as any).beam_width
-    const md = (config as any).max_depth
-    const th = (config as any).prune_threshold
-    return { bf, bw, md, th }
+    return {
+      bf: readNumber(config, 'branch_factor', 0),
+      bw: readNumber(config, 'beam_width', 0),
+      md: readNumber(config, 'max_depth', 0),
+      th: readNumber(config, 'prune_threshold', 0),
+    }
   }, [config])
 
   const statusLabel =

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import re
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.generation.study_materials.archive_storage import (
+    resolve_study_archives_dir,
+    safe_study_archive_filename,
+)
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 
 logger = get_logger(__name__)
@@ -26,23 +27,9 @@ class ExportToolsMixin:
                 ctx.working_memory.get("assemble_study_archive") or ctx.working_memory.get("assemble_markdown") or ""
             ).strip()
 
-        rel_dir = str(args.get("dir") or "study_archives").strip() or "study_archives"
-
-        # Resolve repo root: backend/agent/executor.py -> repo root
-        repo_root = Path(__file__).resolve().parents[3]
-        out_dir = (repo_root / rel_dir).resolve()
+        out_dir = resolve_study_archives_dir(str(args.get("dir") or "study_archives"))
         out_dir.mkdir(parents=True, exist_ok=True)
-
-        # Sanitize Windows-unfriendly characters in filename.
-        safe = re.sub(r'[<>:"/\\\\|?*\\x00-\\x1F]', "_", topic)
-        safe = re.sub(r"\s+", " ", safe).strip()
-        safe = safe.strip(". ")
-        safe = safe[:80] if len(safe) > 80 else safe
-        if not safe:
-            safe = "study_archive"
-
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{safe}_{ts}.md"
+        filename = safe_study_archive_filename(topic)
         path = out_dir / filename
 
         try:

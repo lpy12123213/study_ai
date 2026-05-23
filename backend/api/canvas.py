@@ -14,7 +14,7 @@ from backend.api.auth import require_auth
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.core.subjects import resolve_subject
-from backend.crawler.manager import get_crawler
+from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.system.canvas import (
     create_canvas_board,
     create_canvas_board_version,
@@ -318,7 +318,7 @@ async def pick_questions(
         }
 
     # MCP sub-AI selector (picks one from 2-8 candidates each round)
-    from backend.mcp.core.sub_ai_selector import select_best_question
+    from backend.integrations.mcp.core.sub_ai_selector import select_best_question
 
     selected_ids: List[str] = []
     selection: List[Dict[str, Any]] = []

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 class TestQuestionLibraryGenerate(unittest.TestCase):
     def test_build_ai_question_id(self) -> None:
-        from backend.question_library.generation import build_ai_question_id
+        from backend.generation.question_library.generation import build_ai_question_id
 
         qid = build_ai_question_id(now_ts=0, suffix="a1b2c3d4")
         self.assertTrue(qid.startswith("ai_"))
@@ -12,7 +12,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
 
     def test_build_generation_messages_require_latex_math(self) -> None:
         from backend.generation.agentic.prompts import create_default_prompt_registry
-        from backend.question_library.generation import build_generation_messages
+        from backend.generation.question_library.generation import build_generation_messages
 
         messages = build_generation_messages(
             subject="高中数学",
@@ -33,7 +33,7 @@ class TestQuestionLibraryGenerate(unittest.TestCase):
 
     def test_build_regenerate_section_messages_require_latex_math(self) -> None:
         from backend.generation.agentic.prompts import create_default_prompt_registry
-        from backend.question_library.generation import build_regenerate_section_messages
+        from backend.generation.question_library.generation import build_regenerate_section_messages
 
         messages = build_regenerate_section_messages(
             subject="高中数学",
@@ -85,7 +85,7 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(question.get("seed_tag"), seed_tag)
 
     async def test_realize_drafts_raises_real_llm_error(self) -> None:
-        from backend.question_library import generation
+        from backend.generation.question_library import generation
 
         async def _fake_chat_completion_text(**kwargs):
             if not bool(kwargs.get("raise_on_fail")):
@@ -95,16 +95,16 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
         spec = {"subject": "高中数学", "topic": "导数", "difficulty": "困难", "question_type": "解答题"}
         source_pack = {"subject": "高中数学", "topic": "导数", "study_markdown": ""}
 
-        with patch("backend.question_library.draft_realization.is_llm_configured", return_value=True):
+        with patch("backend.generation.question_library.draft_realization.is_llm_configured", return_value=True):
             with patch(
-                "backend.question_library.gen_llm.chat_completion",
+                "backend.generation.question_library.gen_llm.chat_completion",
                 new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
-            ), patch("backend.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
+            ), patch("backend.generation.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
                 with self.assertRaisesRegex(RuntimeError, "llm_request_failed"):
                     await generation.realize_drafts(spec, source_pack=source_pack, n=1)
 
     async def test_realize_drafts_parses_json_code_fence(self) -> None:
-        from backend.question_library import generation
+        from backend.generation.question_library import generation
 
         async def _fake_chat_completion_text(**_kwargs):
             return (
@@ -116,17 +116,17 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
         spec = {"subject": "高中数学", "topic": "导数"}
         source_pack = {"subject": "高中数学", "topic": "导数", "study_markdown": ""}
 
-        with patch("backend.question_library.draft_realization.is_llm_configured", return_value=True):
+        with patch("backend.generation.question_library.draft_realization.is_llm_configured", return_value=True):
             with patch(
-                "backend.question_library.gen_llm.chat_completion",
+                "backend.generation.question_library.gen_llm.chat_completion",
                 new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
-            ), patch("backend.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
+            ), patch("backend.generation.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
                 out = await generation.realize_drafts(spec, source_pack=source_pack, n=1)
         self.assertEqual(len(out), 1)
         self.assertQuestionCore(out[0], stem="题干A", answer="答案A", analysis="解析A")
 
     async def test_realize_drafts_parses_list_root(self) -> None:
-        from backend.question_library import generation
+        from backend.generation.question_library import generation
 
         async def _fake_chat_completion_text(**_kwargs):
             return '[{"stem":"题干B","answer":"答案B","analysis":"解析B"}]'
@@ -134,17 +134,17 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
         spec = {"subject": "高中数学", "topic": "导数"}
         source_pack = {"subject": "高中数学", "topic": "导数", "study_markdown": ""}
 
-        with patch("backend.question_library.draft_realization.is_llm_configured", return_value=True):
+        with patch("backend.generation.question_library.draft_realization.is_llm_configured", return_value=True):
             with patch(
-                "backend.question_library.gen_llm.chat_completion",
+                "backend.generation.question_library.gen_llm.chat_completion",
                 new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
-            ), patch("backend.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
+            ), patch("backend.generation.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
                 out = await generation.realize_drafts(spec, source_pack=source_pack, n=1)
         self.assertEqual(len(out), 1)
         self.assertQuestionCore(out[0], stem="题干B", answer="答案B", analysis="解析B")
 
     async def test_realize_drafts_supports_chinese_keys(self) -> None:
-        from backend.question_library import generation
+        from backend.generation.question_library import generation
 
         async def _fake_chat_completion_text(**_kwargs):
             return '{"questions":[{"题干":"题干C","答案":"答案C","解析":["步骤1","步骤2"]}]}'
@@ -152,17 +152,17 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
         spec = {"subject": "高中数学", "topic": "导数"}
         source_pack = {"subject": "高中数学", "topic": "导数", "study_markdown": ""}
 
-        with patch("backend.question_library.draft_realization.is_llm_configured", return_value=True):
+        with patch("backend.generation.question_library.draft_realization.is_llm_configured", return_value=True):
             with patch(
-                "backend.question_library.gen_llm.chat_completion",
+                "backend.generation.question_library.gen_llm.chat_completion",
                 new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
-            ), patch("backend.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
+            ), patch("backend.generation.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
                 out = await generation.realize_drafts(spec, source_pack=source_pack, n=1)
         self.assertEqual(len(out), 1)
         self.assertQuestionCore(out[0], stem="题干C", answer="答案C", analysis="步骤1\n步骤2")
 
     async def test_realize_drafts_uses_dedicated_higher_max_tokens_budget(self) -> None:
-        from backend.question_library import generation
+        from backend.generation.question_library import generation
 
         seen_max_tokens: list[int] = []
 
@@ -173,12 +173,12 @@ class TestQuestionLibraryGenerateErrors(unittest.IsolatedAsyncioTestCase):
         spec = {"subject": "高中数学", "topic": "导数"}
         source_pack = {"subject": "高中数学", "topic": "导数", "study_markdown": ""}
 
-        with patch("backend.question_library.draft_realization.is_llm_configured", return_value=True), patch(
-            "backend.question_library.gen_llm.chat_completion",
+        with patch("backend.generation.question_library.draft_realization.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
         ), patch(
-            "backend.question_library.draft_realization.LESSON_PLAN_MAX_TOKENS", 2000
-        ), patch("backend.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
+            "backend.generation.question_library.draft_realization.LESSON_PLAN_MAX_TOKENS", 2000
+        ), patch("backend.generation.question_library.gen_llm.chat_completion_text", new=_fake_chat_completion_text):
             out = await generation.realize_drafts(spec, source_pack=source_pack, n=1)
 
         self.assertEqual(len(out), 1)

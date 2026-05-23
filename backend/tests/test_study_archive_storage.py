@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from backend.agent.tools.generation.exports import ExportToolsMixin
 from backend.agent.types import CompressedContext, UserProfile
-from backend.study_materials.archive_storage import (
+from backend.generation.study_materials.archive_storage import (
     safe_study_archive_filename,
     warn_if_legacy_backend_study_archives_present,
 )
@@ -24,7 +24,7 @@ class StudyArchiveStorageTests(unittest.IsolatedAsyncioTestCase):
                 working_memory={"markdown": "# 标题\n"},
             )
 
-            with patch("backend.study_materials.archive_storage._DEFAULT_ARCHIVE_DIR", target):
+            with patch("backend.generation.study_materials.archive_storage._DEFAULT_ARCHIVE_DIR", target):
                 result = await ExportToolsMixin()._tool_save_markdown_file({}, ctx)
 
         self.assertTrue(result["success"])
@@ -44,8 +44,8 @@ class StudyArchiveStorageTests(unittest.IsolatedAsyncioTestCase):
             legacy = Path(tmpdir)
             (legacy / "old.md").write_text("old", encoding="utf-8")
             with (
-                patch("backend.study_materials.archive_storage._LEGACY_BACKEND_ARCHIVE_DIR", legacy),
-                patch("backend.study_materials.archive_storage._DEFAULT_ARCHIVE_DIR", legacy.parent / "target"),
+                patch("backend.generation.study_materials.archive_storage._LEGACY_BACKEND_ARCHIVE_DIR", legacy),
+                patch("backend.generation.study_materials.archive_storage._DEFAULT_ARCHIVE_DIR", legacy.parent / "target"),
             ):
                 self.assertTrue(warn_if_legacy_backend_study_archives_present())
 

@@ -128,6 +128,7 @@ class AgentCore:
             return None
 
         async def _run() -> None:
+            await asyncio.sleep(0)
             await asyncio.wait_for(
                 self.semantic_store.upsert(user_id=user_id, docs=docs),
                 timeout=timeout_s,

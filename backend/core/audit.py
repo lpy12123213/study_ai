@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 class AuditAction(str, Enum):
     LOGIN = "LOGIN"
     LOGIN_FAILED = "LOGIN_FAILED"
+    LOGIN_BRUTE_FORCE = "LOGIN_BRUTE_FORCE"
     LOGOUT = "LOGOUT"
     PASSWORD_CHANGE = "PASSWORD_CHANGE"
     USER_REGISTER = "USER_REGISTER"

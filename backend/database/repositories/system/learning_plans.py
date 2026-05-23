@@ -110,8 +110,6 @@ async def create_learning_plan(
         created_items.append(it)
 
     await session.flush()
-    for it in created_items:
-        await session.refresh(it)
 
     return _plan_to_dict(plan, created_items)
 

@@ -48,9 +48,9 @@ class TestQuestionLibraryWorkerOnce(unittest.IsolatedAsyncioTestCase):
             "summary": "bad",
         }
 
-        from backend.question_library.worker import score_batch_once
+        from backend.generation.question_library.worker import score_batch_once
 
-        with patch("backend.question_library.scoring.run_json", new=AsyncMock(return_value=fake)):
+        with patch("backend.generation.question_library.scoring.run_json", new=AsyncMock(return_value=fake)):
             n = await score_batch_once(user_id="u1", subject="高中数学", model="dummy", threshold=70, limit=10)
         self.assertEqual(n, 1)
 

@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
 sys.path.append(str(PROJECT_ROOT))
 
-from backend.crawler.zujuan.cookies import get_playwright_login_user_data_dir
+from backend.integrations.crawler.zujuan.cookies import get_playwright_login_user_data_dir
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument(

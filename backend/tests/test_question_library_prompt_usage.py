@@ -8,7 +8,7 @@ from backend.generation.agentic.prompts import create_default_prompt_registry
 
 class QuestionLibraryPromptUsageTests(unittest.IsolatedAsyncioTestCase):
     async def test_brainstorm_prompt_includes_registry_base_prompt(self) -> None:
-        from backend.question_library import brainstorm
+        from backend.generation.question_library import brainstorm
 
         captured = {}
 
@@ -16,8 +16,8 @@ class QuestionLibraryPromptUsageTests(unittest.IsolatedAsyncioTestCase):
             captured["system"] = str(messages[0]["content"])
             return '{"seeds":[{"concept":"A","angle":"B","seed_tag":"C","skill_hint":"D","reasoning_hint":"E"}]}'
 
-        with patch("backend.question_library.brainstorm.is_llm_configured", return_value=True):
-            with patch("backend.question_library.brainstorm._chat_json_with_reasoning", new=fake_chat_json_with_reasoning):
+        with patch("backend.generation.question_library.brainstorm.is_llm_configured", return_value=True):
+            with patch("backend.generation.question_library.brainstorm._chat_json_with_reasoning", new=fake_chat_json_with_reasoning):
                 seeds = await brainstorm.brainstorm_creative_seeds(
                     {"subject": "高中数学", "topic": "导数"},
                     seed_count=6,
@@ -30,7 +30,7 @@ class QuestionLibraryPromptUsageTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_judging_prompts_include_registry_base_prompts(self) -> None:
-        from backend.question_library import judging
+        from backend.generation.question_library import judging
 
         captured: list[str] = []
         returns = [
@@ -46,8 +46,8 @@ class QuestionLibraryPromptUsageTests(unittest.IsolatedAsyncioTestCase):
 
         registry = create_default_prompt_registry()
 
-        with patch("backend.question_library.judging.is_llm_configured", return_value=True):
-            with patch("backend.question_library.judging._chat_json_with_reasoning", new=fake_chat_json_with_reasoning):
+        with patch("backend.generation.question_library.judging.is_llm_configured", return_value=True):
+            with patch("backend.generation.question_library.judging._chat_json_with_reasoning", new=fake_chat_json_with_reasoning):
                 await judging.solve_draft("1+1=?", {"subject": "高中数学", "proposed_answer": "2"})
                 await judging.check_ambiguity({"stem": "1+1=?", "answer": "2"})
                 await judging.judge_draft(

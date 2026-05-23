@@ -4,7 +4,7 @@ import asyncio
 import shutil
 import unittest
 
-from backend.question_library.diagram_utils import render_asy_to_url
+from backend.generation.question_library.diagram_utils import render_asy_to_url
 
 
 class TestDiagramBackends(unittest.TestCase):

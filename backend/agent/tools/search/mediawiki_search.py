@@ -64,7 +64,7 @@ class MediaWikiToolsMixin:
         except (AttributeError, TypeError, ValueError):
             existing_by_kp = {}
 
-        from backend.mcp.search.mediawiki import mediawiki_search
+        from backend.integrations.mcp.search.mediawiki import mediawiki_search
 
         async def _lookup_one(point: str) -> Dict[str, Any]:
             query = f"{subject} {point}".strip() if subject and subject not in point else point

@@ -36,7 +36,7 @@ class TestQuestionLibraryScoring(unittest.IsolatedAsyncioTestCase):
         await cache_repo.upsert_question_cache([{"question_id": "q1", "subject": "高中数学", "stem": "stem 1"}])
         await lib_repo.upsert_question_library_items(user_id="u1", items=[{"question_id": "q1", "subject": "高中数学"}])
 
-        from backend.question_library.scoring import apply_score_and_hide
+        from backend.generation.question_library.scoring import apply_score_and_hide
 
         await apply_score_and_hide(
             user_id="u1",

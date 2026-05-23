@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -21,8 +20,9 @@ from backend.api.question_library_schemas import (
     QuestionLibraryRegenerateSectionRequest,
     QuestionLibraryScoreRequest,
 )
+from backend.api.sse_polling import next_poll_delay, wait_for_task_event_or_timeout
 from backend.core.audit import AuditAction, audit_logger
-from backend.crawler.manager import get_crawler
+from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import (
     bulk_delete_question_library_items,
@@ -33,11 +33,11 @@ from backend.database.repositories.question.question_library import (
 )
 from backend.database.repositories.system.tasks import get_task as db_get_task
 from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
-from backend.question_library import runner as ql_runner
-from backend.question_library import session_service
-from backend.question_library.preview_store import load_preview
-from backend.question_library.runner import RunnerError
-from backend.question_library.session_utils import serialize_session_preview
+from backend.generation.question_library import runner as ql_runner
+from backend.generation.question_library import session_service
+from backend.generation.question_library.preview_store import load_preview
+from backend.generation.question_library.runner import RunnerError
+from backend.generation.question_library.session_utils import serialize_session_preview
 from backend.shared.tasks import task_runtime
 
 router = APIRouter(prefix="/question-library", tags=["question-library"], dependencies=[Depends(require_auth)])
@@ -80,6 +80,7 @@ async def _stream_task_from_db(*, task_id: str, user_id: str, after_seq: int) ->
     async def event_generator():
         last_sent = max(0, int(after_seq or 0))
         last_ping_at = 0.0
+        poll_delay = 0.1
         while True:
             task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
             if not task:
@@ -87,11 +88,13 @@ async def _stream_task_from_db(*, task_id: str, user_id: str, after_seq: int) ->
                 return
 
             events = await db_list_task_events(user_id=user_id, task_id=task_id, after_seq=last_sent, limit=500)
+            had_events = False
             for evt in events:
                 seq = int(evt.get("seq") or 0)
                 if seq <= last_sent:
                     continue
                 last_sent = seq
+                had_events = True
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
             if str(task.get("status") or "") != "running":
@@ -102,7 +105,14 @@ async def _stream_task_from_db(*, task_id: str, user_id: str, after_seq: int) ->
                 last_ping_at = now
                 yield f"data: {json.dumps({'taskId': task_id, 'seq': last_sent, 'type': 'ping', 'data': {'status': 'running', 'last_seq': last_sent}}, ensure_ascii=False)}\n\n"
 
-            await asyncio.sleep(0.5)
+            poll_delay = next_poll_delay(poll_delay, had_events=had_events)
+            await wait_for_task_event_or_timeout(
+                runtime=task_runtime,
+                task_id=task_id,
+                user_id=user_id,
+                last_seq=last_sent,
+                timeout_s=poll_delay,
+            )
 
     return StreamingResponse(
         event_generator(),

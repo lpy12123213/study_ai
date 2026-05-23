@@ -4,7 +4,36 @@ import * as blueprintApi from '@/api/blueprint'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { generateId } from '@/lib/utils'
 import { normalizeSseEnvelope } from '@/lib/sse'
-import type { Paper } from '@/types'
+import { isRecord, readNumber, readStringFrom } from '@/lib/record'
+import type { Paper, TaskStep } from '@/types'
+
+/**
+ * Pull the canonical fields out of a normalized SSE envelope's `data` payload
+ * (which is `unknown` because backends send heterogeneous shapes).
+ */
+function readBlueprintEvent(envelopeData: unknown): {
+  step: TaskStep | null
+  progress: number | null
+  result: Paper | null
+  errorText: string
+} {
+  const data = isRecord(envelopeData) ? envelopeData : {}
+  const rawStep = data.step
+  const step = isRecord(rawStep) ? (rawStep as unknown as TaskStep) : null
+
+  const rawProgress = data.progress
+  const progress = typeof rawProgress === 'number' ? rawProgress : readNumber(data, 'progress', NaN)
+
+  const rawResult = data.result
+  const result = isRecord(rawResult) ? (rawResult as unknown as Paper) : null
+
+  return {
+    step,
+    progress: Number.isFinite(progress) ? progress : null,
+    result,
+    errorText: readStringFrom(data, ['error', 'message']),
+  }
+}
 
 export function useBlueprints() {
   return useQuery({
@@ -107,11 +136,7 @@ export function useComposePaper() {
           const seq = env.seq
           if (Number.isFinite(seq) && (seq || 0) > 0) setLastSeq(seq || 0)
 
-          const data = (env.data || {}) as any
-          const step = data?.step
-          const progress = data?.progress
-          const result = data?.result
-          const errText = data?.error || data?.message
+          const { step, progress: progressValue, result: resultValue, errorText } = readBlueprintEvent(env.data)
 
           if (env.type === 'step' && step) {
             const stepId = step.id
@@ -121,14 +146,14 @@ export function useComposePaper() {
               if (stepId) seenStepIds.add(stepId)
               addStep(newTaskId, step)
             }
-          } else if (env.type === 'progress' && progress !== undefined) {
-            setProgress(progress)
-          } else if (env.type === 'result' && result) {
+          } else if (env.type === 'progress' && progressValue !== null) {
+            setProgress(progressValue)
+          } else if (env.type === 'result' && resultValue) {
             endedWithResult = true
-            setResult(result)
+            setResult(resultValue)
             queryClient.invalidateQueries({ queryKey: ['papers'] })
           } else if (env.type === 'error') {
-            const msg = errText || 'Unknown error'
+            const msg = errorText || 'Unknown error'
             setError(msg)
             failTask(newTaskId, msg)
             setIsComposing(false)
@@ -189,11 +214,7 @@ export function useComposePaper() {
             const seq = env.seq
             if (Number.isFinite(seq) && (seq || 0) > 0) setLastSeq(seq || 0)
 
-            const data = (env.data || {}) as any
-            const step = data?.step
-            const progress = data?.progress
-            const result = data?.result
-            const errText = data?.error || data?.message
+            const { step, progress: progressValue, result: resultValue, errorText } = readBlueprintEvent(env.data)
 
             if (env.type === 'step' && step) {
               const stepId = step.id
@@ -203,14 +224,14 @@ export function useComposePaper() {
                 if (stepId) seenStepIds.add(stepId)
                 addStep(taskId, step)
               }
-            } else if (env.type === 'progress' && progress !== undefined) {
-              setProgress(progress)
-            } else if (env.type === 'result' && result) {
+            } else if (env.type === 'progress' && progressValue !== null) {
+              setProgress(progressValue)
+            } else if (env.type === 'result' && resultValue) {
               endedWithResult = true
-              setResult(result)
+              setResult(resultValue)
               queryClient.invalidateQueries({ queryKey: ['papers'] })
             } else if (env.type === 'error') {
-              const msg = errText || 'Unknown error'
+              const msg = errorText || 'Unknown error'
               setError(msg)
               failTask(taskId, msg)
               setIsComposing(false)

@@ -1,4 +1,4 @@
-import StudyMaterialsView from '@/features/studyMaterials/StudyMaterialsView'
+import StudyMaterialsView from '@/features/generation/studyMaterials/StudyMaterialsView'
 
 export default StudyMaterialsView
 

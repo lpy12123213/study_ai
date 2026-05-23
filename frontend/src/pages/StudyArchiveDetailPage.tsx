@@ -56,13 +56,13 @@ export default function StudyArchiveDetailPage() {
   })
 
   const blocks = useMemo<Block[]>(() => {
-    const md = toText((data as any)?.markdown)
-    const sections = (data as any)?.sections
+    const md = toText(data?.markdown)
+    const sections = data?.sections
     if (Array.isArray(sections) && sections.length > 0) {
       const out: Block[] = []
-      sections.forEach((s: any, idx: number) => {
-        const title = toText(s?.title || s?.name || '')
-        const content = toText(s?.content || s?.markdown || '')
+      sections.forEach((section, idx) => {
+        const title = toText((section as Record<string, unknown>)?.title) || toText((section as Record<string, unknown>)?.name)
+        const content = toText((section as Record<string, unknown>)?.content) || toText((section as Record<string, unknown>)?.markdown)
         if (!title && !content) return
         out.push({ id: `section-${idx}`, title: title || undefined, markdown: content })
       })
@@ -110,9 +110,9 @@ export default function StudyArchiveDetailPage() {
     )
   }
 
-  const title = `${toText((data as any)?.subject)} ${toText((data as any)?.topic)}`.trim() || `自学资料 #${String(archiveId)}`
-  const isStarred = Boolean((meta as any)?.starred)
-  const isPinned = Boolean((meta as any)?.pinned)
+  const title = `${toText(data?.subject)} ${toText(data?.topic)}`.trim() || `自学资料 #${String(archiveId)}`
+  const isStarred = Boolean(meta?.starred)
+  const isPinned = Boolean(meta?.pinned)
 
   const exportMarkdown = async () => {
     if (!archiveId) return
@@ -186,7 +186,7 @@ export default function StudyArchiveDetailPage() {
             size="icon"
             className="h-8 w-8"
             onClick={() => {
-              const current = Array.isArray((meta as any)?.tags) ? (((meta as any).tags as string[]) || []).join(', ') : ''
+              const current = Array.isArray(meta?.tags) ? (meta?.tags ?? []).join(', ') : ''
               const raw = window.prompt('标签（逗号分隔）', current)
               if (raw == null) return
               const tags = raw
@@ -212,8 +212,8 @@ export default function StudyArchiveDetailPage() {
             onClick={() => {
               const params = new URLSearchParams()
               params.set('source_archive_id', String(archiveId || ''))
-              params.set('topic', toText((data as any)?.topic) || title)
-              const subj = toText((data as any)?.subject)
+              params.set('topic', toText(data?.topic) || title)
+              const subj = toText(data?.subject)
               if (subj) params.set('subject', subj)
               navigate(`/knowledge-videos?${params.toString()}`)
             }}

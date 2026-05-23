@@ -27,6 +27,7 @@ import { AnnotationDialog } from '@/components/shared/AnnotationDialog'
 import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as tasksApi from '@/api/tasks'
 import * as wrongbookApi from '@/api/wrongbook'
+import type { Question } from '@/types'
 
 export default function PaperDetailPage() {
   const { paperId } = useParams<{ paperId: string }>()
@@ -118,14 +119,14 @@ export default function PaperDetailPage() {
     setAnnotateOpen(true)
   }
 
-  const addToWrongbook = async (question: any) => {
-    const qid = String(question?.questionId || question?.question_id || '').trim()
+  const addToWrongbook = async (question: Question) => {
+    const qid = String(question.questionId || '').trim()
     if (!qid) return
     try {
       await wrongbookApi.upsertWrongQuestion({
         question_id: qid,
         subject: String(paper?.subject || '').trim(),
-        knowledge_point: String(question?.knowledgePoint || question?.knowledge_point || '').trim(),
+        knowledge_point: String(question.knowledgePoint || '').trim(),
         mastery: 0,
         note: '',
         source_ref: {

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.auth import require_auth
 from backend.app import create_app
-from backend.question_library import preview_store
+from backend.generation.question_library import preview_store
 
 
 class TestQuestionLibraryApi(unittest.TestCase):
@@ -132,14 +132,14 @@ class TestQuestionLibraryApi(unittest.TestCase):
 
         tmp, original_previews, original_sessions = self._with_temp_preview_dirs()
         try:
-            with patch("backend.question_library.runner.is_llm_configured", return_value=True), patch(
-                "backend.question_library.runner.build_source_pack", new=AsyncMock(return_value=llm_source_pack)
+            with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
+                "backend.generation.question_library.runner.build_source_pack", new=AsyncMock(return_value=llm_source_pack)
             ), patch(
-                "backend.question_library.runner.generate_questions", new=AsyncMock(return_value=drafts)
+                "backend.generation.question_library.runner.generate_questions", new=AsyncMock(return_value=drafts)
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
             ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
-                "backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
+                "backend.generation.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
             ):
                 client = TestClient(app)
                 with client.stream(
@@ -232,8 +232,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 preview_store.save_session(session)
                 return [{"stem": "新题干", "answer": "新答案", "analysis": "新解析"}]
 
-            with patch("backend.question_library.runner.is_llm_configured", return_value=True), patch(
-                "backend.question_library.runner.build_source_pack",
+            with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
+                "backend.generation.question_library.runner.build_source_pack",
                 new=AsyncMock(
                     return_value={
                         "subject": "高中数学",
@@ -246,12 +246,12 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     }
                 ),
             ), patch(
-                "backend.question_library.runner.generate_questions",
+                "backend.generation.question_library.runner.generate_questions",
                 new=AsyncMock(side_effect=fake_generate_questions),
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
             ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
-                "backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
+                "backend.generation.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
             ):
                 client = TestClient(app)
                 with client.stream(
@@ -302,8 +302,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 preview_store.save_session(session)
                 return [{"stem": "最终题干", "answer": "最终答案", "analysis": "最终解析"}]
 
-            with patch("backend.question_library.runner.is_llm_configured", return_value=True), patch(
-                "backend.question_library.runner.build_source_pack",
+            with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
+                "backend.generation.question_library.runner.build_source_pack",
                 new=AsyncMock(
                     return_value={
                         "subject": "高中数学",
@@ -316,13 +316,13 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     }
                 ),
             ), patch(
-                "backend.question_library.runner.generate_questions",
+                "backend.generation.question_library.runner.generate_questions",
                 new=AsyncMock(side_effect=fake_generate_questions),
-            ), patch("backend.question_library.runner.asyncio.sleep", new=AsyncMock()), patch(
+            ), patch("backend.generation.question_library.runner.asyncio.sleep", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()
             ), patch("backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()
-            ), patch("backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])):
+            ), patch("backend.generation.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])):
                 client = TestClient(app)
                 with client.stream(
                     "POST",
@@ -416,7 +416,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 )
 
             client = TestClient(app)
-            with patch("backend.question_library.session_service.evaluate_generated_question_review", new=AsyncMock(return_value={
+            with patch("backend.generation.question_library.session_service.evaluate_generated_question_review", new=AsyncMock(return_value={
                 "verdict": "好题",
                 "overall_score": 88,
                 "dimensions": [{"name": "思维含量", "score": 9, "comment": "好"}],
@@ -424,8 +424,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 "issues": [],
                 "summary": "可通过",
                 "model": "test-model",
-            })), patch("backend.question_library.session_service.upsert_question_cache", new=AsyncMock()) as cache_mock, patch(
-                "backend.question_library.session_service.upsert_question_library_items", new=AsyncMock()
+            })), patch("backend.generation.question_library.session_service.upsert_question_cache", new=AsyncMock()) as cache_mock, patch(
+                "backend.generation.question_library.session_service.upsert_question_library_items", new=AsyncMock()
             ):
                 approve_resp = client.post("/api/question-library/sessions/sess-review-1/questions/q-1/approve")
                 self.assertEqual(approve_resp.status_code, 200)
@@ -495,7 +495,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 )
 
             client = TestClient(app)
-            with patch("backend.question_library.session_service.evaluate_generated_question_review", new=AsyncMock(return_value={
+            with patch("backend.generation.question_library.session_service.evaluate_generated_question_review", new=AsyncMock(return_value={
                 "verdict": "好题",
                 "overall_score": 90,
                 "dimensions": [],
@@ -503,8 +503,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 "issues": [],
                 "summary": "可通过",
                 "model": "test-model",
-            })), patch("backend.question_library.session_service.upsert_question_cache", new=AsyncMock()) as cache_mock, patch(
-                "backend.question_library.session_service.upsert_question_library_items", new=AsyncMock()
+            })), patch("backend.generation.question_library.session_service.upsert_question_cache", new=AsyncMock()) as cache_mock, patch(
+                "backend.generation.question_library.session_service.upsert_question_library_items", new=AsyncMock()
             ) as lib_mock:
                 confirm_resp = client.post("/api/question-library/sessions/sess-confirm-1/questions/q-1/confirm")
                 self.assertEqual(confirm_resp.status_code, 200)
@@ -544,8 +544,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     )
                 return [{"stem": "题干-带 reasoning", "answer": "答案", "analysis": "解析"}]
 
-            with patch("backend.question_library.runner.is_llm_configured", return_value=True), patch(
-                "backend.question_library.runner.build_source_pack",
+            with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
+                "backend.generation.question_library.runner.build_source_pack",
                 new=AsyncMock(
                     return_value={
                         "subject": "高中数学",
@@ -558,11 +558,11 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     }
                 ),
             ), patch(
-                "backend.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
+                "backend.generation.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
             ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
-                "backend.question_library.session_service.db_list_task_events",
+                "backend.generation.question_library.session_service.db_list_task_events",
                 new=AsyncMock(return_value=[{"taskId": "ql-gen-reason-1", "seq": 3, "type": "reasoning_delta", "data": {"content": "先构造一个更有区分度的导数大题。"}}]),
             ):
                 client = TestClient(app)
@@ -621,8 +621,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
             "provider=fireworks msg=Model not found"
         )
 
-        with patch("backend.question_library.runner.is_llm_configured", return_value=True), patch(
-            "backend.question_library.runner.build_source_pack",
+        with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.runner.build_source_pack",
             new=AsyncMock(
                 return_value={
                     "subject": "高中数学",
@@ -635,7 +635,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 }
             ),
         ), patch(
-            "backend.question_library.runner.generate_questions",
+            "backend.generation.question_library.runner.generate_questions",
             new=AsyncMock(side_effect=RuntimeError(llm_error)),
         ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
             "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
@@ -685,8 +685,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                         await maybe_result
                 raise RuntimeError("judge_stage_boom")
 
-            with patch("backend.question_library.runner.is_llm_configured", return_value=True), patch(
-                "backend.question_library.runner.build_source_pack",
+            with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
+                "backend.generation.question_library.runner.build_source_pack",
                 new=AsyncMock(
                     return_value={
                         "subject": "高中数学",
@@ -699,11 +699,11 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     }
                 ),
             ), patch(
-                "backend.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
+                "backend.generation.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
             ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
-                "backend.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
+                "backend.generation.question_library.session_service.db_list_task_events", new=AsyncMock(return_value=[])
             ):
                 client = TestClient(app)
                 with client.stream(

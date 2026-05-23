@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DeepThinkEvent, DeepThinkNode } from '@/api/deepthink'
 import { solveDeepThinkStream } from '@/api/deepthink'
 import { cancelTask } from '@/api/tasks'
+import { readString } from '@/lib/record'
 
 export type DeepThinkStatus = 'idle' | 'searching' | 'answering' | 'done' | 'error'
 
@@ -112,8 +113,8 @@ export function useDeepThink() {
   }, [cancel])
 
   const applyEvent = useCallback((event: DeepThinkEvent) => {
-    if (typeof (event as any)?.taskId === 'string') {
-      const tid = String((event as any).taskId || '').trim()
+    if (typeof event.taskId === 'string') {
+      const tid = event.taskId.trim()
       if (tid && tid !== taskIdRef.current) {
         taskIdRef.current = tid
         setTaskId(tid)
@@ -142,14 +143,22 @@ export function useDeepThink() {
       case 'node_generated': {
         const n = event.node
         const existing = nodesRef.current[n.id]
-        nodesRef.current[n.id] = {
-          ...(existing || ({} as any)),
-          ...n,
-          score: existing?.score ?? null,
-          evalReasoning: existing?.evalReasoning ?? null,
-          issues: existing?.issues ?? [],
-          createdAt: existing?.createdAt ?? Date.now(),
-        }
+        nodesRef.current[n.id] = existing
+          ? {
+              ...existing,
+              ...n,
+              score: existing.score,
+              evalReasoning: existing.evalReasoning,
+              issues: existing.issues,
+              createdAt: existing.createdAt,
+            }
+          : {
+              ...n,
+              score: null,
+              evalReasoning: null,
+              issues: [],
+              createdAt: Date.now(),
+            }
         scheduleNodesFlush()
         return
       }
@@ -210,8 +219,8 @@ export function useDeepThink() {
       case 'best_path': {
         const ids: string[] = []
         for (const p of event.path || []) {
-          const nodeId = (p as any)?.nodeId
-          if (typeof nodeId === 'string') ids.push(nodeId)
+          const nodeId = readString(p, 'nodeId')
+          if (nodeId) ids.push(nodeId)
         }
         setBestPath(ids)
         setMetrics((m) => ({

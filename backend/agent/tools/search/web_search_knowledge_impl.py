@@ -81,7 +81,7 @@ class WebSearchKnowledgeToolsMixin:
             points = [topic]
         points = points[:15]
 
-        from backend.mcp.search.metaso import metaso_ask, metaso_search
+        from backend.integrations.mcp.search.metaso import metaso_ask, metaso_search
 
         def _env_truthy(name: str, default: bool = False) -> bool:
             raw = (os.getenv(name) or "").strip().lower()
@@ -649,7 +649,7 @@ class WebSearchKnowledgeToolsMixin:
 
                 if search_mode in {"tavily", "deepresearch"}:
                     try:
-                        from backend.mcp.search.tavily import TAVILY_API_KEY, tavily_search
+                        from backend.integrations.mcp.search.tavily import TAVILY_API_KEY, tavily_search
 
                         if not TAVILY_API_KEY:
                             tavily_missing = "TAVILY_API_KEY not configured"
@@ -707,7 +707,7 @@ class WebSearchKnowledgeToolsMixin:
                         )
 
                 try:
-                    from backend.mcp.search.exa import EXA_API_KEY, exa_search
+                    from backend.integrations.mcp.search.exa import EXA_API_KEY, exa_search
 
                     if not EXA_API_KEY:
                         if force_search_mode:
@@ -974,7 +974,7 @@ class WebSearchKnowledgeToolsMixin:
 
             # 2) BigModel MCP fallback (best-effort).
             try:
-                from backend.mcp.search.bigmodel import web_search_with_bigmodel_mcp
+                from backend.integrations.mcp.search.bigmodel import web_search_with_bigmodel_mcp
 
                 zhipu = await web_search_with_bigmodel_mcp(query=query, limit=limit)
                 if isinstance(zhipu, dict) and zhipu.get("success") and zhipu.get("results"):

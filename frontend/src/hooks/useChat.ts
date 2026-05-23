@@ -3,11 +3,8 @@ import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tansta
 import * as chatApi from '@/api/chat'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { generateId } from '@/lib/utils'
+import { isRecord } from '@/lib/record'
 import type { Message, TaskStep } from '@/types'
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
 
 function normalizeError(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim()
@@ -213,9 +210,11 @@ export function useChatStream() {
           }
 
           if (event.type === 'tool_start') {
-            const raw = event.raw as any
-            const toolCallId = String(raw?.tool_call_id || generateId())
-            const toolName = String(raw?.tool_name || 'tool')
+            const raw = event.raw
+            // BackendChatStreamEvent is a discriminated union; use the matching branch's type.
+            const toolStart = raw.type === 'tool_start' ? raw : null
+            const toolCallId = String(toolStart?.tool_call_id || generateId())
+            const toolName = String(toolStart?.tool_name || 'tool')
             const now = new Date().toISOString()
 
             const step: TaskStep = {
@@ -223,7 +222,7 @@ export function useChatStream() {
               title: `调用工具：${toolName}`,
               status: 'running',
               toolName,
-              input: raw?.arguments,
+              input: toolStart?.arguments,
               startTime: now,
             }
 
@@ -239,12 +238,13 @@ export function useChatStream() {
           }
 
           if (event.type === 'tool_result') {
-            const raw = event.raw as any
-            const toolCallId = String(raw?.tool_call_id || '')
+            const raw = event.raw
+            const toolResult = raw.type === 'tool_result' ? raw : null
+            const toolCallId = String(toolResult?.tool_call_id || '')
             if (!toolCallId) return
 
-            const toolName = String(raw?.tool_name || 'tool')
-            const result = raw?.result
+            const toolName = String(toolResult?.tool_name || 'tool')
+            const result: unknown = toolResult?.result
             const { ok, error: toolError } = inferToolResultStatus(result)
             const status: TaskStep['status'] = ok ? 'completed' : 'failed'
             const now = new Date().toISOString()
@@ -279,8 +279,9 @@ export function useChatStream() {
           }
 
           if (event.type === 'assistant_final') {
-            const raw = event.raw as any
-            const finalText = String(raw?.content || '')
+            const raw = event.raw
+            const final = raw.type === 'assistant_final' ? raw : null
+            const finalText = String(final?.content || '')
             if (!finalText) return
             deltaBuffer = ''
             if (deltaRaf != null) {

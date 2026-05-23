@@ -8,8 +8,8 @@ from contextlib import closing
 from pathlib import Path
 from urllib.robotparser import RobotFileParser
 
-from backend.crawler.rate_limiter import SQLiteTokenBucket
-from backend.crawler.robots import RobotsDisallowedError, RobotsPolicy, RobotsTxtCache
+from backend.integrations.crawler.rate_limiter import SQLiteTokenBucket
+from backend.integrations.crawler.robots import RobotsDisallowedError, RobotsPolicy, RobotsTxtCache
 
 
 class CrawlerRateLimiterTests(unittest.IsolatedAsyncioTestCase):

@@ -5,7 +5,7 @@ import unittest
 
 class QuestionGenerationStagesTests(unittest.TestCase):
     def test_catalog_keeps_generation_flow_in_stable_order(self) -> None:
-        from backend.question_library.stages import QUESTION_GENERATION_STAGES
+        from backend.generation.question_library.stages import QUESTION_GENERATION_STAGES
 
         stage_ids = [stage.stage_id for stage in QUESTION_GENERATION_STAGES]
 
@@ -28,7 +28,7 @@ class QuestionGenerationStagesTests(unittest.TestCase):
         self.assertEqual(QUESTION_GENERATION_STAGES[-1].group, "review")
 
     def test_stage_progress_payload_includes_structured_flow_metadata(self) -> None:
-        from backend.question_library.stages import build_stage_progress_payload
+        from backend.generation.question_library.stages import build_stage_progress_payload
 
         payload = build_stage_progress_payload(
             "judge",

@@ -3,7 +3,7 @@ import unittest
 
 class TestPaperExportTexEscape(unittest.TestCase):
     def test_tex_escape_does_not_double_escape_replacement(self) -> None:
-        from backend.paper_compose.export import render_paper_latex
+        from backend.generation.paper_compose.export import render_paper_latex
 
         paper = {
             "paper_name": r"试卷\\名称",
@@ -27,7 +27,7 @@ class TestPaperExportTexEscape(unittest.TestCase):
         self.assertNotIn(r"\textbackslash\{\}", tex)
 
     def test_tex_escape_preserves_math_spans(self) -> None:
-        from backend.paper_compose.export import render_paper_latex
+        from backend.generation.paper_compose.export import render_paper_latex
 
         paper = {
             "paper_name": "math",

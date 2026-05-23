@@ -68,11 +68,11 @@ class TestTasksApiContract(unittest.TestCase):
 
         with (
             patch(
-                "backend.study_materials.orchestrator_singleton.study_material_tasks.create_task",
+                "backend.generation.study_materials.orchestrator_singleton.study_material_tasks.create_task",
                 new=AsyncMock(return_value=dummy_task),
             ),
             patch(
-                "backend.study_materials.orchestrator_singleton.study_material_tasks.continue_task",
+                "backend.generation.study_materials.orchestrator_singleton.study_material_tasks.continue_task",
                 new=AsyncMock(return_value=dummy_task),
             ),
         ):
@@ -85,9 +85,9 @@ class TestTasksApiContract(unittest.TestCase):
             self.assertEqual(resp.json(), {"success": True, "taskId": "task-1"})
 
         with (
-            patch("backend.question_library.runner.create_crawl_task", new=AsyncMock(return_value=dummy_task)),
-            patch("backend.question_library.runner.create_generate_task", new=AsyncMock(return_value=dummy_task)),
-            patch("backend.question_library.runner.create_score_task", new=AsyncMock(return_value=dummy_task)),
+            patch("backend.generation.question_library.runner.create_crawl_task", new=AsyncMock(return_value=dummy_task)),
+            patch("backend.generation.question_library.runner.create_generate_task", new=AsyncMock(return_value=dummy_task)),
+            patch("backend.generation.question_library.runner.create_score_task", new=AsyncMock(return_value=dummy_task)),
         ):
             resp = client.post("/api/tasks/question-library/crawl", json={})
             self.assertEqual(resp.status_code, 200)

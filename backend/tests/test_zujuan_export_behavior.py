@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
     def test_diagnose_export_resolves_repo_root_env_file(self) -> None:
-        import backend.mcp.core.diagnostics as diagnostics
+        import backend.integrations.mcp.core.diagnostics as diagnostics
 
         with patch.object(diagnostics, "__file__", r"C:\repo\backend\mcp\core\diagnostics.py"):
             resolved = diagnostics.resolve_repo_env_file()
@@ -14,7 +14,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(resolved), r"C:\repo\.env")
 
     def test_build_curl_cmd_prefers_crawler_cookie_over_env_cookie(self) -> None:
-        from backend.crawler.zujuan.formulas import build_curl_cmd
+        from backend.integrations.crawler.zujuan.formulas import build_curl_cmd
 
         crawler = SimpleNamespace(
             user_agent="UA",
@@ -22,7 +22,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "backend.crawler.zujuan.formulas.load_env_login",
+            "backend.integrations.crawler.zujuan.formulas.load_env_login",
             return_value={"is_logged_in": True, "cookies": "userId=123; bankId=15"},
         ):
             cmd = build_curl_cmd(crawler, "https://zujuan.xkw.com/15q1.html", use_login_cookie=True)
@@ -31,7 +31,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Cookie: aliyungf_tc=anti-bot; userId=123; bankId=15", joined)
 
     async def test_export_to_basket_uses_subject_question_type_id_map(self) -> None:
-        from backend.crawler.zujuan.basket import export_to_basket
+        from backend.integrations.crawler.zujuan.basket import export_to_basket
 
         captured: dict = {}
 
@@ -75,7 +75,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "backend.crawler.zujuan.basket.get_login_session_with_playwright",
+            "backend.integrations.crawler.zujuan.basket.get_login_session_with_playwright",
             new=AsyncMock(
                 return_value={
                     "is_logged_in": True,
@@ -83,7 +83,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
                     "csrf_token": "csrf-token",
                 }
             ),
-        ), patch("backend.crawler.zujuan.basket.httpx.AsyncClient", FakeClient):
+        ), patch("backend.integrations.crawler.zujuan.basket.httpx.AsyncClient", FakeClient):
             result = await export_to_basket(
                 crawler,
                 question_ids=["1"],
@@ -96,7 +96,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(basket_items[0]["quesTypeId"], 3106)
 
     async def test_export_to_basket_marks_dynamic_select_types(self) -> None:
-        from backend.crawler.zujuan.basket import export_to_basket
+        from backend.integrations.crawler.zujuan.basket import export_to_basket
 
         captured: dict = {}
 
@@ -139,7 +139,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "backend.crawler.zujuan.basket.get_login_session_with_playwright",
+            "backend.integrations.crawler.zujuan.basket.get_login_session_with_playwright",
             new=AsyncMock(
                 return_value={
                     "is_logged_in": True,
@@ -147,7 +147,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
                     "csrf_token": "csrf-token",
                 }
             ),
-        ), patch("backend.crawler.zujuan.basket.httpx.AsyncClient", FakeClient):
+        ), patch("backend.integrations.crawler.zujuan.basket.httpx.AsyncClient", FakeClient):
             result = await export_to_basket(
                 crawler,
                 question_ids=["1"],
@@ -161,7 +161,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(basket_items[0]["ext"]["isSelectType"])
 
     async def test_resolve_question_type_ids_prefers_current_subject_filters(self) -> None:
-        from backend.crawler.zujuan.basket import _resolve_question_type_ids
+        from backend.integrations.crawler.zujuan.basket import _resolve_question_type_ids
 
         crawler = SimpleNamespace(
             ques_type_map={"解答题": 5104, "单选题": 1200401},
@@ -183,7 +183,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved["单选题"], 3101)
 
     def test_resolve_export_question_type_id_normalizes_composite_type_names(self) -> None:
-        from backend.crawler.zujuan.basket import _resolve_export_question_type_id
+        from backend.integrations.crawler.zujuan.basket import _resolve_export_question_type_id
 
         type_map = {
             "单选题": 3101,
@@ -197,7 +197,7 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_resolve_export_question_type_id("解答题", type_map), 3106)
 
     def test_is_select_question_type_supports_dynamic_subject_ids(self) -> None:
-        from backend.crawler.zujuan.basket import _is_select_question_type
+        from backend.integrations.crawler.zujuan.basket import _is_select_question_type
 
         type_map = {
             "单选题": 3101,

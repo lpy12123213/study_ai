@@ -3,13 +3,13 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from backend.crawler.zujuan.question_list import fetch_question_list
-from backend.crawler.zujuan.search import search_by_keyword
+from backend.integrations.crawler.zujuan.question_list import fetch_question_list
+from backend.integrations.crawler.zujuan.search import search_by_keyword
 
 
 class TestZujuanAntibotCookieDetection(unittest.TestCase):
     def test_missing_antibot_keys_accepts_alicfw_cookie_pair(self) -> None:
-        from backend.crawler.zujuan.cookies import missing_antibot_keys
+        from backend.integrations.crawler.zujuan.cookies import missing_antibot_keys
 
         missing = missing_antibot_keys("aliyungf_tc=a; acw_tc=b; alicfw=c; alicfw_gfver=v1.200309.1")
 
@@ -18,14 +18,14 @@ class TestZujuanAntibotCookieDetection(unittest.TestCase):
 
 class TestZujuanSubjectRequestDefaults(unittest.TestCase):
     def test_crawler_initializes_static_course_route_from_subject_config(self) -> None:
-        from backend.crawler.zujuan.client import ZujuanCrawler
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
 
         crawler = ZujuanCrawler(subject="高中数学")
 
         self.assertEqual(crawler.course_id_py, "gzsx")
 
     def test_base_meta_without_course_route_does_not_clear_static_course_route(self) -> None:
-        from backend.crawler.zujuan.client import ZujuanCrawler
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
 
         crawler = ZujuanCrawler(subject="高中数学")
         crawler._base_meta_data = [{"QuesBankList": [{"ID": 11, "QuesTypeList": [], "LearnGradeList": []}]}]
@@ -172,12 +172,12 @@ class TestZujuanSearchRequestFlow(unittest.IsolatedAsyncioTestCase):
 
 class TestZujuanCrawlerInitialization(unittest.IsolatedAsyncioTestCase):
     async def test_initialize_defaults_to_visitor_mode_without_cookie_bootstrap(self) -> None:
-        from backend.crawler.zujuan.client import ZujuanCrawler
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
 
         with (
-            patch("backend.crawler.zujuan.client.load_env_login", return_value={"cookies": "userId=123", "is_logged_in": True}),
-            patch("backend.crawler.zujuan.client.load_antibot_cookie_cache", return_value="aliyungf_tc=a; acw_tc=b"),
-            patch("backend.crawler.zujuan.client.get_cookies_with_playwright", new_callable=AsyncMock) as get_cookies,
+            patch("backend.integrations.crawler.zujuan.client.load_env_login", return_value={"cookies": "userId=123", "is_logged_in": True}),
+            patch("backend.integrations.crawler.zujuan.client.load_antibot_cookie_cache", return_value="aliyungf_tc=a; acw_tc=b"),
+            patch("backend.integrations.crawler.zujuan.client.get_cookies_with_playwright", new_callable=AsyncMock) as get_cookies,
             patch.dict(
                 "os.environ",
                 {

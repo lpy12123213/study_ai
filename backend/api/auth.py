@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.api.auth_schemas import (
@@ -30,10 +32,128 @@ from backend.core.auth import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
+AUTH_ACCESS_COOKIE_NAME = "study_ai_access_token"
+
+
+def _truthy(raw: str) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _auth_cookie_secure() -> bool:
+    raw = os.getenv("AUTH_COOKIE_SECURE")
+    if raw is not None:
+        return _truthy(raw)
+    env = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    return env in {"prod", "production"}
+
+
+class _LoginAttemptLimiter:
+    def __init__(self) -> None:
+        self._attempts: dict[str, list[float]] = {}
+        self._locked_until: dict[str, float] = {}
+
+    def reset(self) -> None:
+        self._attempts.clear()
+        self._locked_until.clear()
+
+    def retry_after(self, key: str) -> int:
+        now = time.monotonic()
+        until = float(self._locked_until.get(key) or 0.0)
+        if until <= now:
+            self._locked_until.pop(key, None)
+            return 0
+        return max(1, int(round(until - now)))
+
+    def record_failure(self, key: str) -> int:
+        max_failures = _int_env("AUTH_LOGIN_MAX_FAILURES", 5)
+        window_s = _int_env("AUTH_LOGIN_WINDOW_S", 300)
+        lock_s = _int_env("AUTH_LOGIN_LOCK_S", 300)
+        if max_failures <= 0 or window_s <= 0 or lock_s <= 0:
+            return 0
+
+        now = time.monotonic()
+        recent = [ts for ts in self._attempts.get(key, []) if now - ts <= window_s]
+        recent.append(now)
+        self._attempts[key] = recent
+        if len(recent) <= max_failures:
+            return 0
+        self._locked_until[key] = now + lock_s
+        return lock_s
+
+    def record_success(self, key: str) -> None:
+        self._attempts.pop(key, None)
+        self._locked_until.pop(key, None)
+
+
+_login_attempt_limiter = _LoginAttemptLimiter()
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def _request_ip(req: Request) -> str:
     return str(getattr(req.client, "host", "") or "").strip()
+
+
+def _login_limiter_key(payload: LoginRequest, http_request: Request) -> str:
+    username = str(getattr(payload, "username", "") or "").strip().lower()
+    return f"{_request_ip(http_request)}:{username}"
+
+
+def _raise_login_locked(*, payload: LoginRequest, http_request: Request, retry_after_s: int) -> None:
+    audit_logger.log(
+        user_id="",
+        action=AuditAction.LOGIN_BRUTE_FORCE,
+        resource="/api/auth/login",
+        ip=_request_ip(http_request),
+        details={"username": str(getattr(payload, "username", "") or "").strip()},
+    )
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="login_locked",
+        headers={"Retry-After": str(max(1, int(retry_after_s or 1)))},
+    )
+
+
+def _set_access_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        AUTH_ACCESS_COOKIE_NAME,
+        token,
+        max_age=max(1, int(JWT_EXPIRE_HOURS or 24)) * 3600,
+        httponly=True,
+        secure=_auth_cookie_secure(),
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_access_cookie(response: Response) -> None:
+    response.delete_cookie(
+        AUTH_ACCESS_COOKIE_NAME,
+        httponly=True,
+        secure=_auth_cookie_secure(),
+        samesite="lax",
+        path="/",
+    )
+
+
+def _token_from_request(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials],
+) -> str:
+    if credentials and credentials.credentials:
+        return str(credentials.credentials or "").strip()
+    try:
+        return str(request.cookies.get(AUTH_ACCESS_COOKIE_NAME) or "").strip()
+    except AttributeError:
+        return ""
 
 
 def local_auth_user() -> dict:
@@ -47,13 +167,29 @@ def local_auth_user() -> dict:
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest, http_request: Request) -> LoginResponse:
+async def login(payload: LoginRequest, http_request: Request, response: Response) -> LoginResponse:
     """Authenticate a user and return a JWT."""
+
+    limiter_key = _login_limiter_key(payload, http_request)
+    retry_after_s = _login_attempt_limiter.retry_after(limiter_key)
+    if retry_after_s > 0:
+        _raise_login_locked(payload=payload, http_request=http_request, retry_after_s=retry_after_s)
 
     user = authenticate_user(payload.username, payload.password)
     if not user:
+        audit_logger.log(
+            user_id="",
+            action=AuditAction.LOGIN_FAILED,
+            resource="/api/auth/login",
+            ip=_request_ip(http_request),
+            details={"username": str(payload.username or "").strip()},
+        )
+        retry_after_s = _login_attempt_limiter.record_failure(limiter_key)
+        if retry_after_s > 0:
+            _raise_login_locked(payload=payload, http_request=http_request, retry_after_s=retry_after_s)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
 
+    _login_attempt_limiter.record_success(limiter_key)
     expires_delta = timedelta(hours=JWT_EXPIRE_HOURS)
     expires_at = int((datetime.now(timezone.utc) + expires_delta).timestamp())
     token = create_access_token(
@@ -72,6 +208,7 @@ async def login(payload: LoginRequest, http_request: Request) -> LoginResponse:
         ip=_request_ip(http_request),
         details={"username": str(user.get("username") or "").strip()},
     )
+    _set_access_cookie(response, token)
     return LoginResponse(
         access_token=token,
         expires_at=expires_at,
@@ -85,13 +222,15 @@ async def login(payload: LoginRequest, http_request: Request) -> LoginResponse:
 
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[dict]:
     """Get current user from JWT token, or the local user when no token is present."""
-    if not credentials:
+    token = _token_from_request(request, credentials)
+    if not token:
         return local_auth_user()
 
-    payload = validate_access_token(credentials.credentials)
+    payload = validate_access_token(token)
     if not payload:
         return local_auth_user()
 
@@ -103,7 +242,8 @@ async def get_current_user(
 
 
 async def require_auth(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> dict:
     """Return authenticated user data.
 
@@ -111,10 +251,11 @@ async def require_auth(
     honored when valid, but missing or stale tokens fall back to the local user
     so business endpoints remain directly usable.
     """
-    if not credentials:
+    token = _token_from_request(request, credentials)
+    if not token:
         return local_auth_user()
 
-    payload = validate_access_token(credentials.credentials)
+    payload = validate_access_token(token)
     if not payload:
         return local_auth_user()
 
@@ -235,9 +376,10 @@ async def change_password(
 
 
 @router.post("/logout")
-async def logout(http_request: Request, user: dict = Depends(require_auth)) -> dict:
+async def logout(http_request: Request, response: Response, user: dict = Depends(require_auth)) -> dict:
     """Revoke the current JWT (best-effort)."""
 
+    _clear_access_cookie(response)
     jti = str((user or {}).get("jti") or "").strip()
     try:
         exp_ts = int((user or {}).get("exp") or 0)

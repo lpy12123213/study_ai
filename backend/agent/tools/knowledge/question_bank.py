@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
-from backend.crawler.manager import get_crawler
+from backend.integrations.crawler.manager import get_crawler
 from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)

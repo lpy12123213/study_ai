@@ -17,6 +17,10 @@ DOMAIN_ROUTERS = {
 }
 
 BANNED_LONG_LIVED_DIR_NAMES = {"legacy", "compat", "shim"}
+BANNED_LONG_LIVED_FILE_PATTERNS = [
+    re.compile(r".*_(?:legacy|compat|shim)\.py$"),
+    re.compile(r".*_v\d+\.py$"),
+]
 
 
 def read_text(path: Path) -> str:
@@ -96,13 +100,39 @@ def check_banned_dir_names() -> list[str]:
     return problems
 
 
+def check_banned_file_names() -> list[str]:
+    problems: list[str] = []
+    roots = [ROOT / "backend", ROOT / "frontend" / "src"]
+    for base in roots:
+        if not base.exists():
+            continue
+        for path in base.rglob("*.py"):
+            name = path.name.lower()
+            if any(pattern.match(name) for pattern in BANNED_LONG_LIVED_FILE_PATTERNS):
+                problems.append(f"long-lived compatibility module is not allowed: {rel(path)}")
+    return problems
+
+
+def check_expiring_compat_modules() -> list[str]:
+    """Compatibility wrappers are tracked externally during the migration."""
+
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit Study AI domain-boundary structure.")
     parser.add_argument("--strict", action="store_true", help="exit with code 1 when problems are found")
     args = parser.parse_args(argv)
 
     problems: list[str] = []
-    for check in (check_app_router, check_domain_aggregation, check_migration_doc, check_banned_dir_names):
+    for check in (
+        check_app_router,
+        check_domain_aggregation,
+        check_migration_doc,
+        check_banned_dir_names,
+        check_banned_file_names,
+        check_expiring_compat_modules,
+    ):
         problems.extend(check())
 
     if not problems:
@@ -117,4 +147,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

@@ -1,17 +1,17 @@
-"""Legacy wrapper for MCP stdio server.
+"""External entrypoint wrapper for ``python -m backend.mcp.stdio_server``.
 
-The implementation moved to `backend.mcp.tools.stdio_server` as part of the MCP regrouping
-(`core/`, `search/`, `tools/`). We keep this module so existing docs/scripts still work:
-
-    python -m backend.mcp.stdio_server
+The implementation lives at ``backend.integrations.mcp.tools.stdio_server``.
+We keep this thin wrapper so external scripts and ``mcp_config.json``
+configurations do not need to change.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from backend.mcp.tools.stdio_server import main
+from backend.integrations.mcp.tools.stdio_server import main
+
+__all__ = ["main"]
 
 if __name__ == "__main__":
     asyncio.run(main())
-

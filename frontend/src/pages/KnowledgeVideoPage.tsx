@@ -1,3 +1,3 @@
-import KnowledgeVideoPage from '@/features/knowledgeVideo/KnowledgeVideoPage'
+import KnowledgeVideoPage from '@/features/generation/knowledgeVideo/KnowledgeVideoPage'
 
 export default KnowledgeVideoPage

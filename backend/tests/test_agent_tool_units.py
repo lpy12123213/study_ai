@@ -133,8 +133,8 @@ class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch("backend.agent.tools.search.web_search_knowledge_impl.is_llm_configured", return_value=False):
-            with patch("backend.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
-                with patch("backend.mcp.search.tavily.tavily_search", tavily_search):
+            with patch("backend.integrations.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
+                with patch("backend.integrations.mcp.search.tavily.tavily_search", tavily_search):
                     result = await agent._tool_web_search_knowledge(args, ctx)
 
         item = result["items"][0]
@@ -167,7 +167,7 @@ class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch("backend.agent.tools.search.web_search_knowledge_impl.is_llm_configured", return_value=False):
-            with patch("backend.mcp.search.metaso.metaso_ask", metaso_ask):
+            with patch("backend.integrations.mcp.search.metaso.metaso_ask", metaso_ask):
                 first = await agent._tool_web_search_knowledge(args, ctx)
                 second = await agent._tool_web_search_knowledge(args, ctx)
 

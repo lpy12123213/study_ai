@@ -187,7 +187,7 @@ class BrowseWebPagesToolsMixin:
             if _is_zhihu_url(url):
                 cookies = (os.getenv("ZHIHU_COOKIES") or "").strip()
                 try:
-                    from backend.mcp.search.zhihu import ZhihuFetcher
+                    from backend.integrations.mcp.search.zhihu import ZhihuFetcher
                 except ImportError as exc:
                     return {"url": url, "success": False, "error": f"zhihu_fetcher not available: {exc}"}
 

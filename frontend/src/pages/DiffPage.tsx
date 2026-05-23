@@ -10,11 +10,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import * as papersApi from '@/api/papers'
 import * as studyArchivesApi from '@/api/studyArchives'
+import { isRecord, readStringFrom, readNumber } from '@/lib/record'
+import type { Paper } from '@/types'
+import type { StudyArchive } from '@/api/studyArchives'
 
 type DiffType = 'paper' | 'study_archive'
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function questionIdsFromPaper(paper: Paper | undefined): string[] {
+  if (!paper) return []
+  return (paper.questions || [])
+    .map((q) => readStringFrom(q, ['questionId', 'question_id']))
+    .filter((id): id is string => Boolean(id))
 }
 
 export default function DiffPage() {
@@ -44,16 +54,14 @@ export default function DiffPage() {
 
   const paperDiff = useMemo(() => {
     if (!data || type !== 'paper') return null
-    const a = data.a as any
-    const b = data.b as any
-    const aQs = Array.isArray(a?.questions) ? a.questions : []
-    const bQs = Array.isArray(b?.questions) ? b.questions : []
-    const aIds = aQs.map((q: any) => String(q.questionId || q.question_id || '')).filter(Boolean)
-    const bIds = bQs.map((q: any) => String(q.questionId || q.question_id || '')).filter(Boolean)
+    const a = data.a as Paper
+    const b = data.b as Paper
+    const aIds = questionIdsFromPaper(a)
+    const bIds = questionIdsFromPaper(b)
     const setA = new Set(aIds)
     const setB = new Set(bIds)
-    const removed = aIds.filter((id: string) => !setB.has(id))
-    const added = bIds.filter((id: string) => !setA.has(id))
+    const removed = aIds.filter((id) => !setB.has(id))
+    const added = bIds.filter((id) => !setA.has(id))
     const replaced: Array<{ order: number; from: string; to: string }> = []
     const max = Math.max(aIds.length, bIds.length)
     for (let i = 0; i < max; i++) {
@@ -66,28 +74,26 @@ export default function DiffPage() {
 
   const textDiff = useMemo(() => {
     if (!data || type !== 'study_archive') return null
-    const a = data.a as any
-    const b = data.b as any
+    const a = data.a as StudyArchive
+    const b = data.b as StudyArchive
     const parts = diffLines(text(a?.markdown), text(b?.markdown))
     return { a, b, parts }
   }, [data, type])
 
   const clonePaper = useMutation({
-    mutationFn: async (paper: any) => {
-      const qids = (Array.isArray(paper?.questions) ? paper.questions : [])
-        .map((q: any) => String(q?.questionId || q?.question_id || '').trim())
-        .filter(Boolean)
+    mutationFn: async (paper: Paper) => {
+      const qids = questionIdsFromPaper(paper)
       const name = `${String(paper?.name || '试卷')}-复制-${new Date().toISOString().slice(0, 10)}`
       return await papersApi.createPaper({ name, questionIds: qids })
     },
     onSuccess: (res) => {
-      const pid = Number((res as any)?.paperId || 0)
+      const pid = Number(res?.paperId || 0)
       if (pid > 0) navigate(`/papers/${pid}`)
     },
   })
 
   const cloneArchive = useMutation({
-    mutationFn: async (archive: any) => {
+    mutationFn: async (archive: StudyArchive) => {
       const id = Number(archive?.id || 0)
       if (id > 0) {
         return await studyArchivesApi.cloneStudyArchive(id)
@@ -102,7 +108,7 @@ export default function DiffPage() {
       })
     },
     onSuccess: (res) => {
-      const id = Number((res as any)?.id || 0)
+      const id = readNumber(isRecord(res) ? res : {}, 'id', 0)
       if (id > 0) navigate(`/study-archives/${id}`)
     },
   })

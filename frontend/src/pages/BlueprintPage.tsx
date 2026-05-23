@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -28,22 +28,19 @@ import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useComposePaper, useSaveBlueprint } from '@/hooks/useBlueprint'
 import { useSubjects, useSubjectFilters } from '@/hooks/useSubjects'
-import { useFormDraft } from '@/hooks/useFormDraft'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useTaskStore } from '@/stores/useTaskStore'
 import { cn, generateId } from '@/lib/utils'
-import { generateFullPaperStream, type GenerateFullPaperStreamEvent } from '@/api/papers'
-import type { BlueprintSlot, TaskStep } from '@/types'
-import { SlotEditor } from '@/features/paperCompose/components/SlotEditor'
-import * as tasksApi from '@/api/tasks'
-
-type SlotShortfall = {
-  slotIndex: number
-  questionType: string
-  difficulty: string
-  requested: number
-  selected: number
-}
+import { isRecord } from '@/lib/record'
+import type { BlueprintSlot } from '@/types'
+import { SlotEditor } from '@/features/generation/paperCompose/components/SlotEditor'
+import { useOneClickPaper } from '@/features/generation/paperCompose/hooks/useOneClickPaper'
+import {
+  useBlueprintDraft,
+  useReuseTaskHydration,
+  type BlueprintMode,
+} from '@/features/generation/paperCompose/hooks/useBlueprintDraft'
+import { extractSlotShortfalls } from '@/features/generation/paperCompose/utils/slotShortfalls'
 
 const defaultQuestionTypes = [
   { id: 'single_choice', name: '单选题', defaultScore: 3 },
@@ -59,7 +56,7 @@ export default function BlueprintPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const reuseTaskId = String(searchParams.get('reuse_task') || '').trim()
 
-  const [mode, setMode] = useState<'blueprint' | 'one_click'>('blueprint')
+  const [mode, setMode] = useState<BlueprintMode>('blueprint')
   const [subject, setSubject] = useState('')
   const [topic, setTopic] = useState('')
   const [slots, setSlots] = useState<BlueprintSlot[]>([])
@@ -72,17 +69,8 @@ export default function BlueprintPage() {
   const [oneClickTimeLimit, setOneClickTimeLimit] = useState<number>(120)
   const [oneClickHardPct, setOneClickHardPct] = useState<number>(20)
   const [oneClickUseArchive, setOneClickUseArchive] = useState<boolean>(true)
-  const [oneClickProgress, setOneClickProgress] = useState<number>(0)
-  const [oneClickSteps, setOneClickSteps] = useState<TaskStep[]>([])
-  const [oneClickTaskId, setOneClickTaskId] = useState<string>('')
-  const [oneClickError, setOneClickError] = useState<string>('')
-  const [oneClickResult, setOneClickResult] = useState<{
-    paperId: number
-    paperName: string
-    questionCount: number
-  } | null>(null)
-  const [isGeneratingFull, setIsGeneratingFull] = useState<boolean>(false)
-  const oneClickAbortRef = useRef<AbortController | null>(null)
+
+  const oneClick = useOneClickPaper()
 
   const { data: subjects } = useSubjects()
   const {
@@ -96,43 +84,15 @@ export default function BlueprintPage() {
   const { mutate: saveBlueprint, isPending: isSaving } = useSaveBlueprint()
 
   const taskSteps = useTaskStore((state) => state.getTaskSteps(taskId ?? ''))
-  const checkpoint = useTaskStore((state) =>
-    taskId ? state.getCheckpoint(taskId) : undefined
-  )
+  const checkpoint = useTaskStore((state) => (taskId ? state.getCheckpoint(taskId) : undefined))
 
-  const slotShortfalls = useMemo<SlotShortfall[]>(() => {
-    const step = (taskSteps || []).find((s) => s?.id === 'paper_balance')
-    const out = (step as any)?.output
-    const list: unknown[] = Array.isArray(out?.slotShortfalls) ? out.slotShortfalls : []
-    return (list as any[])
-      .filter((x: any) => x && typeof x === 'object')
-      .map((x: any): SlotShortfall => ({
-        slotIndex: Number(x.slotIndex),
-        questionType: typeof x.questionType === 'string' ? x.questionType : '',
-        difficulty: typeof x.difficulty === 'string' ? x.difficulty : '',
-        requested: Number(x.requested || 0),
-        selected: Number(x.selected || 0),
-      }))
-      .filter((x: SlotShortfall) => Number.isFinite(x.slotIndex) && x.requested > x.selected)
-  }, [taskSteps])
+  const slotShortfalls = useMemo(() => extractSlotShortfalls(taskSteps || []), [taskSteps])
 
   const totalScore = slots.reduce(
     (sum, slot) => sum + slot.count * (slot.score || 0),
     0
   )
   const totalQuestions = slots.reduce((sum, slot) => sum + slot.count, 0)
-
-  const upsertOneClickStep = useCallback((incoming: TaskStep) => {
-    setOneClickSteps((prev) => {
-      const idx = prev.findIndex((s) => s.id === incoming.id)
-      if (idx >= 0) {
-        const next = [...prev]
-        next[idx] = { ...next[idx], ...incoming }
-        return next
-      }
-      return [...prev, incoming]
-    })
-  }, [])
 
   const handleAddSlot = (type: { id: string; name: string; defaultScore: number }) => {
     const newSlot: BlueprintSlot = {
@@ -171,118 +131,35 @@ export default function BlueprintPage() {
   }
 
   const handleGenerateFull = useCallback(() => {
-    if (!subject) return
-
-    oneClickAbortRef.current?.abort()
-    const controller = new AbortController()
-    oneClickAbortRef.current = controller
-
-    const taskId = generateId().slice(0, 12)
-    setOneClickTaskId(taskId)
-    setOneClickError('')
-    setOneClickResult(null)
-    setOneClickSteps([])
-    setOneClickProgress(0)
-    setIsGeneratingFull(true)
-
-    const hard = Math.max(0, Math.min(0.6, Number(oneClickHardPct || 0) / 100))
-    const easy = (1 - hard) * 0.4
-    const medium = Math.max(0, 1 - hard - easy)
-    const difficultyDistribution = {
-      easy: Number(easy.toFixed(2)),
-      medium: Number(medium.toFixed(2)),
-      hard: Number(hard.toFixed(2)),
-    }
-
-    const safeTotalPoints = Math.max(30, Math.min(Number(oneClickTotalPoints || 150), 300))
-    const safeTimeLimit = Math.max(30, Math.min(Number(oneClickTimeLimit || 120), 240))
-
-    generateFullPaperStream(
-      {
-        taskId,
-        subject,
-        topic: topic.trim() || undefined,
-        paperName: blueprintName.trim() || undefined,
-        totalPoints: safeTotalPoints,
-        timeLimit: safeTimeLimit,
-        difficultyDistribution,
-        useStudyArchive: Boolean(oneClickUseArchive),
-      },
-      (evt: GenerateFullPaperStreamEvent) => {
-        const kind = String(evt?.type || '').trim()
-        if (kind === 'progress') {
-          const p = Number((evt as any).progress)
-          if (Number.isFinite(p)) setOneClickProgress(p)
-          return
-        }
-
-        if (kind === 'step' && evt?.step && typeof evt.step === 'object') {
-          const step = evt.step as any
-          if (typeof step.id === 'string' && typeof step.title === 'string' && typeof step.status === 'string') {
-            upsertOneClickStep(step as TaskStep)
-          }
-          return
-        }
-
-        if (kind === 'result' && evt?.result && typeof evt.result === 'object') {
-          const result = evt.result as any
-          const paperId = Number(result.paper_id)
-          if (Number.isFinite(paperId)) {
-            setOneClickResult({
-              paperId,
-              paperName: typeof result.paper_name === 'string' ? result.paper_name : `试卷-${paperId}`,
-              questionCount: Number(result.question_count || 0),
-            })
-          }
-          setOneClickProgress(100)
-          setIsGeneratingFull(false)
-          return
-        }
-
-        if (kind === 'error') {
-          const message =
-            typeof (evt as any).error === 'string'
-              ? (evt as any).error
-              : typeof (evt as any).message === 'string'
-                ? (evt as any).message
-                : 'generate_full_failed'
-          setOneClickError(message)
-          setIsGeneratingFull(false)
-        }
-      },
-      (error) => {
-        setOneClickError(error?.message || 'generate_full_failed')
-        setIsGeneratingFull(false)
-      },
-      () => {
-        setIsGeneratingFull(false)
-      },
-      { signal: controller.signal }
-    )
+    oneClick.generate({
+      subject,
+      topic,
+      paperName: blueprintName,
+      totalPoints: oneClickTotalPoints,
+      timeLimit: oneClickTimeLimit,
+      hardPct: oneClickHardPct,
+      useStudyArchive: oneClickUseArchive,
+    })
   }, [
     blueprintName,
+    oneClick,
     oneClickHardPct,
     oneClickTimeLimit,
     oneClickTotalPoints,
     oneClickUseArchive,
     subject,
     topic,
-    upsertOneClickStep,
   ])
-
-  const handleStopGenerateFull = useCallback(() => {
-    oneClickAbortRef.current?.abort()
-    oneClickAbortRef.current = null
-    setIsGeneratingFull(false)
-  }, [])
 
   const handleFillShortfalls = () => {
     if (!result || slotShortfalls.length === 0) return
-    const ctx = (checkpoint as any)?.checkpoint?.context
-    const base = ctx && typeof ctx === 'object' ? ctx : { subject, topic: topic.trim(), slots }
+    const ctxRaw = checkpoint?.checkpoint?.context
+    const baseFromCheckpoint = isRecord(ctxRaw)
+      ? (ctxRaw as unknown as Parameters<typeof compose>[0])
+      : null
 
     compose({
-      ...(base as any),
+      ...(baseFromCheckpoint ?? { subject, topic: topic.trim(), slots }),
       mode: 'fill_shortfalls',
       paperId: result.id,
       shortfalls: slotShortfalls,
@@ -298,9 +175,25 @@ export default function BlueprintPage() {
   const isPaused = checkpoint?.status === 'paused'
   const progressPct = Number.isFinite(progress) ? progress : 0
 
-  const draftKey = `draft:blueprint:v1:${userId || 'anon'}`
-  const { clearDraft } = useFormDraft({
-    storageKey: draftKey,
+  const draftSetters = useMemo(
+    () => ({
+      setMode,
+      setSubject,
+      setTopic,
+      setSlots,
+      setBlueprintName,
+      setGradeId,
+      setTextbookVersionId,
+      setOneClickTotalPoints,
+      setOneClickTimeLimit,
+      setOneClickHardPct,
+      setOneClickUseArchive,
+    }),
+    [],
+  )
+
+  useBlueprintDraft({
+    userId,
     enabled: true,
     value: {
       mode,
@@ -315,91 +208,20 @@ export default function BlueprintPage() {
       oneClickHardPct,
       oneClickUseArchive,
     },
-    shouldSave: (v) => {
-      const anySlot = Array.isArray((v as any)?.slots) && (v as any).slots.length > 0
-      return Boolean(String((v as any)?.subject || '').trim() || String((v as any)?.topic || '').trim() || anySlot)
-    },
-    onRestore: (data: any) => {
-      setMode(data?.mode === 'one_click' ? 'one_click' : 'blueprint')
-      setSubject(String(data?.subject || ''))
-      setTopic(String(data?.topic || ''))
-      setBlueprintName(String(data?.blueprintName || ''))
-      setGradeId(String(data?.gradeId || ''))
-      setTextbookVersionId(String(data?.textbookVersionId || ''))
-      setOneClickTotalPoints(Number(data?.oneClickTotalPoints || 150))
-      setOneClickTimeLimit(Number(data?.oneClickTimeLimit || 120))
-      setOneClickHardPct(Number(data?.oneClickHardPct || 20))
-      setOneClickUseArchive(Boolean(data?.oneClickUseArchive ?? true))
-      const restoredSlots = Array.isArray(data?.slots) ? data.slots : []
-      setSlots(
-        restoredSlots
-          .filter((s: any) => s && typeof s === 'object')
-          .map((s: any) => ({
-            id: String(s.id || generateId()),
-            questionType: String(s.questionType || ''),
-            count: Number(s.count || 1),
-            score: Number(s.score || 0),
-            difficulty: String(s.difficulty || 'medium'),
-          })),
-      )
-    },
+    setters: draftSetters,
+    hasResult: Boolean(result || oneClick.result),
   })
 
-  useEffect(() => {
-    if (!result && !oneClickResult) return
-    clearDraft()
-  }, [clearDraft, oneClickResult, result])
-
-  useEffect(() => {
-    return () => {
-      oneClickAbortRef.current?.abort()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!reuseTaskId) return
-    if (mode !== 'blueprint') return
-    let active = true
-    const run = async () => {
-      try {
-        const task = await tasksApi.getTask(reuseTaskId)
-        if (!active) return
-        const req = (task as any)?.request
-        if (!req || typeof req !== 'object') return
-        const subject = String((req as any).subject || '')
-        const topic = String((req as any).topic || '')
-        const paperName = String((req as any).paperName || (req as any).paper_name || '')
-        const slots = Array.isArray((req as any).slots) ? (req as any).slots : []
-        const filters = (req as any).filters && typeof (req as any).filters === 'object' ? (req as any).filters : {}
-
-        setSubject(subject)
-        setTopic(topic)
-        setBlueprintName(paperName)
-        setGradeId(filters.gradeId != null ? String(filters.gradeId) : '')
-        setTextbookVersionId(filters.textbookVersion != null ? String(filters.textbookVersion) : '')
-        setSlots(
-          slots
-            .filter((s: any) => s && typeof s === 'object')
-            .map((s: any) => ({
-              id: generateId(),
-              questionType: String(s.questionType || s.question_type || ''),
-              count: Number(s.count || 1),
-              score: Number(s.score || 0),
-              difficulty: String(s.difficulty || 'medium'),
-            })),
-        )
-      } finally {
-        const next = new URLSearchParams(searchParams)
-        next.delete('reuse_task')
-        setSearchParams(next, { replace: true })
-      }
-    }
-    void run()
-    return () => {
-      active = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, reuseTaskId])
+  useReuseTaskHydration({
+    reuseTaskId,
+    enabled: mode === 'blueprint',
+    setters: draftSetters,
+    onConsumed: () => {
+      const next = new URLSearchParams(searchParams)
+      next.delete('reuse_task')
+      setSearchParams(next, { replace: true })
+    },
+  })
 
   return (
     <div className="h-full grid grid-cols-12 overflow-hidden">
@@ -412,7 +234,7 @@ export default function BlueprintPage() {
               配置试卷结构，AI 将自动搜索并组合题目
             </p>
             <div className="mt-4">
-              <Tabs value={mode} onValueChange={(v) => setMode(v as any)}>
+              <Tabs value={mode} onValueChange={(v) => setMode(v as BlueprintMode)}>
                 <TabsList>
                   <TabsTrigger value="blueprint" onClick={() => setMode('blueprint')}>蓝图组卷</TabsTrigger>
                   <TabsTrigger value="one_click" onClick={() => setMode('one_click')}>一键组卷</TabsTrigger>
@@ -706,9 +528,9 @@ export default function BlueprintPage() {
                     </label>
                   </div>
 
-                  {oneClickError ? (
+                  {oneClick.error ? (
                     <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                      {oneClickError}
+                      {oneClick.error}
                     </div>
                   ) : null}
                 </CardContent>
@@ -717,17 +539,17 @@ export default function BlueprintPage() {
               <div className="flex items-center gap-3 pt-4 border-t border-border">
                 <div className="flex-1 flex items-center gap-2">
                   <Badge variant="secondary" className="font-normal">
-                    进度 {Math.round(oneClickProgress)}%
+                    进度 {Math.round(oneClick.progress)}%
                   </Badge>
-                  {oneClickTaskId ? (
+                  {oneClick.taskId ? (
                     <Badge variant="outline" className="font-normal">
-                      task={oneClickTaskId}
+                      task={oneClick.taskId}
                     </Badge>
                   ) : null}
                 </div>
 
-                {isGeneratingFull ? (
-                  <Button variant="destructive" onClick={handleStopGenerateFull} className="w-32">
+                {oneClick.isGenerating ? (
+                  <Button variant="destructive" onClick={oneClick.stop} className="w-32">
                     <Square className="h-4 w-4 mr-2" />
                     停止
                   </Button>
@@ -751,7 +573,7 @@ export default function BlueprintPage() {
       <div className="col-span-5 h-full bg-sidebar-background border-l border-border flex flex-col overflow-hidden">
         <div className="p-6 border-b border-border">
           <h3 className="font-semibold mb-4 flex items-center gap-2">
-            <Loader2 className={cn("h-4 w-4", ((mode === 'blueprint' && isComposing) || (mode === 'one_click' && isGeneratingFull)) && "animate-spin")} />
+            <Loader2 className={cn("h-4 w-4", ((mode === 'blueprint' && isComposing) || (mode === 'one_click' && oneClick.isGenerating)) && "animate-spin")} />
             任务执行
           </h3>
 
@@ -771,9 +593,9 @@ export default function BlueprintPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>进度</span>
-                <span>{Math.round(oneClickProgress)}%</span>
+                <span>{Math.round(oneClick.progress)}%</span>
               </div>
-              <Progress value={oneClickProgress} className="h-2" />
+              <Progress value={oneClick.progress} className="h-2" />
             </div>
           )}
           </div>
@@ -823,23 +645,23 @@ export default function BlueprintPage() {
                   </Link>
                 </Button>
               </div>
-            ) : mode === 'one_click' && oneClickResult ? (
+            ) : mode === 'one_click' && oneClick.result ? (
               <div className="text-center py-10">
                 <div className="h-16 w-16 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
                   <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-400" />
                 </div>
                 <h3 className="text-lg font-medium mb-2">一键组卷完成</h3>
                 <p className="text-muted-foreground mb-6">
-                  已生成试卷，包含 {oneClickResult.questionCount} 道题目
+                  已生成试卷，包含 {oneClick.result.questionCount} 道题目
                 </p>
                 <Button asChild className="gap-2">
-                  <Link to={`/papers/${oneClickResult.paperId}`}>
+                  <Link to={`/papers/${oneClick.result.paperId}`}>
                     查看试卷 <ArrowRight className="h-4 w-4" />
                   </Link>
                 </Button>
               </div>
             ) : (
-              <TaskTimeline steps={mode === 'blueprint' ? taskSteps : oneClickSteps} />
+              <TaskTimeline steps={mode === 'blueprint' ? taskSteps : oneClick.steps} />
             )}
           </div>
         </ScrollArea>

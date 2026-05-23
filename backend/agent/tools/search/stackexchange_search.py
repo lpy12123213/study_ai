@@ -49,7 +49,7 @@ class StackExchangeToolsMixin:
         except (AttributeError, TypeError, ValueError):
             existing_by_kp = {}
 
-        from backend.mcp.search.stackexchange import stackexchange_search
+        from backend.integrations.mcp.search.stackexchange import stackexchange_search
 
         async def _search_one(point: str) -> Dict[str, Any]:
             base_query = f"{subject} {point}".strip() if subject and subject not in point else point

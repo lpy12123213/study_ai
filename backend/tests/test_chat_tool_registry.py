@@ -4,10 +4,10 @@ import inspect
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from backend.chat.service import ChatService
-from backend.chat.tool_registry import ChatToolRegistry
-from backend.chat.tools_mixin import ChatToolsMixin
-from backend.chat.tools_spec import TOOLS
+from backend.workspace.chat.service import ChatService
+from backend.workspace.chat.tool_registry import ChatToolRegistry
+from backend.workspace.chat.tools_mixin import ChatToolsMixin
+from backend.workspace.chat.tools_spec import TOOLS
 
 
 class ChatToolRegistryTests(unittest.IsolatedAsyncioTestCase):
@@ -37,7 +37,7 @@ class ChatToolRegistryTests(unittest.IsolatedAsyncioTestCase):
         service = ChatService()
         save_paper = AsyncMock(return_value=321)
 
-        with patch("backend.chat.tools_mixin.save_paper", save_paper):
+        with patch("backend.workspace.chat.tools_mixin.save_paper", save_paper):
             result = await service.execute_tool(
                 "create_paper",
                 {"paper_name": "测试卷", "question_ids": '["q1", "q2"]'},

@@ -12,7 +12,7 @@ from backend.generation.agentic.task_specs import (
     build_agent_run_spec_for_task,
     build_agentic_starter_event,
 )
-from backend.question_evaluate.runner import run_question_evaluate_task
+from backend.generation.question_evaluate.runner import run_question_evaluate_task
 from backend.shared.tasks import RuntimeTask, task_runtime
 from backend.tasks.runners import (
     run_deepthink_task,

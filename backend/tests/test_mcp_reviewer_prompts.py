@@ -9,7 +9,7 @@ from backend.generation.agentic.prompts import create_default_prompt_registry
 
 class McpReviewerPromptTests(unittest.IsolatedAsyncioTestCase):
     async def test_question_reviewer_uses_registry_system_prompt(self) -> None:
-        from backend.mcp.tools import reviewer
+        from backend.integrations.mcp.tools import reviewer
 
         captured = {}
 
@@ -17,9 +17,9 @@ class McpReviewerPromptTests(unittest.IsolatedAsyncioTestCase):
             captured["messages"] = kwargs["messages"]
             return SimpleNamespace(content="Overall score: 8/10\nVerdict: APPROVE")
 
-        with patch("backend.mcp.tools.reviewer.OPENROUTER_API_KEY", "or-key"):
-            with patch("backend.mcp.tools.reviewer.REVIEW_PROVIDER", "openrouter"):
-                with patch("backend.mcp.tools.reviewer.chat_completion", new=fake_chat_completion):
+        with patch("backend.integrations.mcp.tools.reviewer.OPENROUTER_API_KEY", "or-key"):
+            with patch("backend.integrations.mcp.tools.reviewer.REVIEW_PROVIDER", "openrouter"):
+                with patch("backend.integrations.mcp.tools.reviewer.chat_completion", new=fake_chat_completion):
                     result = await reviewer.review_question(stem="1+1=?", subject="数学")
 
         self.assertEqual(result["verdict"], "APPROVE")
@@ -29,7 +29,7 @@ class McpReviewerPromptTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_paper_reviewer_uses_registry_system_prompt(self) -> None:
-        from backend.mcp.tools import reviewer
+        from backend.integrations.mcp.tools import reviewer
 
         captured = {}
 
@@ -39,9 +39,9 @@ class McpReviewerPromptTests(unittest.IsolatedAsyncioTestCase):
 
         questions = [{"question_id": "q1", "stem": "1+1=?", "type": "填空题", "difficulty": 0.5}]
 
-        with patch("backend.mcp.tools.reviewer.OPENROUTER_API_KEY", "or-key"):
-            with patch("backend.mcp.tools.reviewer.REVIEW_PROVIDER", "openrouter"):
-                with patch("backend.mcp.tools.reviewer.chat_completion", new=fake_chat_completion):
+        with patch("backend.integrations.mcp.tools.reviewer.OPENROUTER_API_KEY", "or-key"):
+            with patch("backend.integrations.mcp.tools.reviewer.REVIEW_PROVIDER", "openrouter"):
+                with patch("backend.integrations.mcp.tools.reviewer.chat_completion", new=fake_chat_completion):
                     result = await reviewer.review_questions_with_openrouter(
                         questions,
                         paper_name="测试卷",

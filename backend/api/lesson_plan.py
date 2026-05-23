@@ -17,7 +17,7 @@ from backend.api.lesson_plan_schemas import (
     LessonPlanResponse,
 )
 from backend.core.logging_utils import get_logger
-from backend.lesson_plan.store import (
+from backend.generation.lesson_plan.store import (
     create_lesson_plan,
     delete_lesson_plan,
     export_lesson_plan_markdown,

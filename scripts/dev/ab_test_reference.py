@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "artifacts" / "reference_ab_test.json"
 
 from backend.database.engine import init_db
-from backend.question_library.generation import (
+from backend.generation.question_library.generation import (
     analyze_reference_questions,
     build_source_pack,
     collect_reference_questions,

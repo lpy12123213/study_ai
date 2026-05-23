@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.crawler.zujuan.client import ZujuanCrawler
+from backend.integrations.crawler.zujuan.client import ZujuanCrawler
 
 
 class TestZujuanClientUtils(unittest.TestCase):

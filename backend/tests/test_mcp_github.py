@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from backend.mcp.search import github
+from backend.integrations.mcp.search import github
 
 
 class TestGitHubSearch(unittest.IsolatedAsyncioTestCase):

@@ -21,7 +21,7 @@ from backend.api import papers as papers_api
 from backend.api import subjects as subjects_api
 from backend.database.repositories.question import papers as papers_repo
 from backend.database.schema import Base
-from backend.study_materials import orchestrator as task_manager
+from backend.generation.study_materials import orchestrator as task_manager
 
 
 class TestMediaProxyCache(unittest.IsolatedAsyncioTestCase):

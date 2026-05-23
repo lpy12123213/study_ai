@@ -77,7 +77,7 @@ class KnowledgePointsToolsMixin:
         async def _split_from_wikipedia() -> List[str]:
             """Best-effort: use Wikipedia page structure to derive sub-knowledge points."""
             try:
-                from backend.mcp.search.wikipedia import wikipedia_search as _wiki
+                from backend.integrations.mcp.search.wikipedia import wikipedia_search as _wiki
             except ImportError:
                 return []
 

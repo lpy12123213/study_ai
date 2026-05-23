@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
-from backend.study_materials.orchestrator import StudyMaterialsTaskManager
+from backend.generation.study_materials.orchestrator import StudyMaterialsTaskManager
 
 
 class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -40,7 +40,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
                 updated_at_s=1.0,
             )
 
-        with patch("backend.study_materials.orchestrator.task_runtime.create_task", new=AsyncMock(side_effect=fake_create_task)):
+        with patch("backend.generation.study_materials.orchestrator.task_runtime.create_task", new=AsyncMock(side_effect=fake_create_task)):
             with patch.object(manager, "_persist_snapshot"):
                 task = await manager.create_task(
                     query="函数单调性",

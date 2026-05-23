@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 class TestZujuanLoginPaths(unittest.TestCase):
     def test_get_playwright_login_user_data_dir_defaults_to_canonical_dir(self) -> None:
-        import backend.crawler.zujuan.cookies as cookies
+        import backend.integrations.crawler.zujuan.cookies as cookies
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -19,7 +19,7 @@ class TestZujuanLoginPaths(unittest.TestCase):
             self.assertEqual(resolved, root / ".local" / "playwright" / "zujuan_user_data")
 
     def test_get_playwright_login_user_data_dir_reuses_legacy_dir(self) -> None:
-        import backend.crawler.zujuan.cookies as cookies
+        import backend.integrations.crawler.zujuan.cookies as cookies
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -33,7 +33,7 @@ class TestZujuanLoginPaths(unittest.TestCase):
 
 class TestZujuanLoginSubprocess(unittest.TestCase):
     def test_build_login_subprocess_command_prefers_root_wrapper_script_on_windows(self) -> None:
-        import backend.crawler.zujuan.basket as basket
+        import backend.integrations.crawler.zujuan.basket as basket
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -53,7 +53,7 @@ class TestZujuanLoginSubprocess(unittest.TestCase):
 
 class TestMcpExportLoginHints(unittest.IsolatedAsyncioTestCase):
     async def test_export_to_zujuan_returns_login_script_and_command(self) -> None:
-        from backend.mcp.tools.stdio_handlers import handle_tool_call
+        from backend.integrations.mcp.tools.stdio_handlers import handle_tool_call
 
         class FakeCrawler:
             subject = "高中数学"

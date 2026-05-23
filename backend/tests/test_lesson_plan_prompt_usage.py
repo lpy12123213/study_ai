@@ -8,7 +8,7 @@ from backend.generation.agentic.prompts import create_default_prompt_registry
 
 class LessonPlanPromptUsageTests(unittest.IsolatedAsyncioTestCase):
     async def test_planning_prompts_use_registry(self) -> None:
-        from backend.lesson_plan import planning
+        from backend.generation.lesson_plan import planning
 
         captured: list[str] = []
 
@@ -18,7 +18,7 @@ class LessonPlanPromptUsageTests(unittest.IsolatedAsyncioTestCase):
 
         registry = create_default_prompt_registry()
 
-        with patch("backend.lesson_plan.planning.call_llm_text", new=fake_call_llm_text):
+        with patch("backend.generation.lesson_plan.planning.call_llm_text", new=fake_call_llm_text):
             await planning.split_knowledge_points("函数", "高中数学", min_points=1, max_points=3)
             await planning.research_knowledge_point("单调性", "高中数学", "函数")
             await planning.review_knowledge_points("函数", "高中数学", ["A", "B", "C"], min_points=1, max_points=3)
@@ -28,7 +28,7 @@ class LessonPlanPromptUsageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured[2], registry.render("study.kp.review.v1").content)
 
     async def test_latex_export_prompts_use_registry(self) -> None:
-        from backend.lesson_plan import export
+        from backend.generation.lesson_plan import export
 
         captured: list[str] = []
 
@@ -38,7 +38,7 @@ class LessonPlanPromptUsageTests(unittest.IsolatedAsyncioTestCase):
 
         registry = create_default_prompt_registry()
 
-        with patch("backend.lesson_plan.export.call_llm_text", new=fake_call_llm_text):
+        with patch("backend.generation.lesson_plan.export.call_llm_text", new=fake_call_llm_text):
             await export.convert_markdown_to_latex(markdown="# A", title="A", subject="高中数学")
             await export.refine_latex(latex="\\documentclass{article}\\begin{document}x\\end{document}", topic="A", subject="高中数学")
 

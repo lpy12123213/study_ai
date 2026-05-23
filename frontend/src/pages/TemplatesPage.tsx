@@ -87,8 +87,10 @@ export default function TemplatesPage() {
     setEditError(null)
     let body: Record<string, unknown> = {}
     try {
-      const parsed = JSON.parse(bodyText || '{}')
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed as Record<string, unknown>
+      const parsed: unknown = JSON.parse(bodyText || '{}')
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        body = parsed as Record<string, unknown>
+      }
     } catch (e) {
       setEditError(e)
       return
@@ -109,8 +111,17 @@ export default function TemplatesPage() {
 
   const importFromFile = async (file: File) => {
     const text = await file.text()
-    const payload = JSON.parse(text || '{}') as any
-    const list = Array.isArray(payload?.templates) ? payload.templates : Array.isArray(payload) ? payload : []
+    let payload: unknown = {}
+    try {
+      payload = JSON.parse(text || '{}')
+    } catch {
+      payload = {}
+    }
+    const candidate =
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? (payload as { templates?: unknown }).templates
+        : payload
+    const list = Array.isArray(candidate) ? candidate : Array.isArray(payload) ? payload : []
     const created = await templatesApi.importTemplates(list as templatesApi.UserTemplate[])
     return created
   }

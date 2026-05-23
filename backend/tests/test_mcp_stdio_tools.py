@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 class TestMcpStdioTools(unittest.TestCase):
     def test_get_stdio_tools_contains_keyword_search(self) -> None:
-        from backend.mcp.tools.stdio_tools import get_stdio_tools
+        from backend.integrations.mcp.tools.stdio_tools import get_stdio_tools
 
         tools = get_stdio_tools()
         self.assertIsInstance(tools, list)
@@ -16,7 +16,7 @@ class TestMcpStdioTools(unittest.TestCase):
         self.assertIn("search_questions_by_keyword", names)
 
     def test_web_search_tool_schema_allows_tavily_provider(self) -> None:
-        from backend.mcp.tools.stdio_tools import get_stdio_tools
+        from backend.integrations.mcp.tools.stdio_tools import get_stdio_tools
 
         tool = next(t for t in get_stdio_tools() if getattr(t, "name", "") == "web_search")
         provider_schema = tool.inputSchema["properties"]["provider"]
@@ -26,7 +26,7 @@ class TestMcpStdioTools(unittest.TestCase):
 
 class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
     async def test_web_search_auto_uses_tavily_when_configured(self) -> None:
-        from backend.mcp.tools.stdio_handlers import handle_tool_call
+        from backend.integrations.mcp.tools.stdio_handlers import handle_tool_call
 
         tavily_search = AsyncMock(
             return_value={
@@ -39,8 +39,8 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch("backend.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
-            with patch("backend.mcp.search.tavily.tavily_search", tavily_search):
+        with patch("backend.integrations.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
+            with patch("backend.integrations.mcp.search.tavily.tavily_search", tavily_search):
                 texts = await handle_tool_call(
                     object(),
                     "web_search",
@@ -55,7 +55,7 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
 
     async def test_llm_helper_prompts_use_registry(self) -> None:
         from backend.generation.agentic.prompts import create_default_prompt_registry
-        from backend.mcp.tools.stdio_handlers import handle_tool_call
+        from backend.integrations.mcp.tools.stdio_handlers import handle_tool_call
 
         captured: list[str] = []
         returns = [
@@ -74,8 +74,8 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
         server = SimpleNamespace(current_subject="高中数学", crawler=None)
         registry = create_default_prompt_registry()
 
-        with patch("backend.mcp.tools.stdio_handlers.LESSON_PLAN_API_KEY", "lp-key"):
-            with patch("backend.mcp.tools.stdio_handlers.call_llm_text", new=fake_call_llm_text):
+        with patch("backend.integrations.mcp.tools.stdio_handlers.LESSON_PLAN_API_KEY", "lp-key"):
+            with patch("backend.integrations.mcp.tools.stdio_handlers.call_llm_text", new=fake_call_llm_text):
                 await handle_tool_call(server, "retrieve_knowledge", {"topic": "导数"})
                 await handle_tool_call(server, "analyze_topic", {"topic": "导数"})
                 await handle_tool_call(server, "generate_explanation", {"topic": "导数"})

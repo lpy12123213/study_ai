@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
     async def test_chat_json_with_reasoning_executes_scientific_compute_tool_and_emits_logs(self) -> None:
         from backend.llm.client import ChatCompletionResult
-        from backend.question_library import gen_llm
+        from backend.generation.question_library import gen_llm
 
         seen_messages: list[list[dict]] = []
         reasoning_events: list[dict] = []
@@ -40,8 +40,8 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         async def on_reasoning_event(event: dict) -> None:
             reasoning_events.append(dict(event))
 
-        with patch("backend.question_library.gen_llm.chat_completion", new=AsyncMock(side_effect=fake_chat_completion)), patch(
-            "backend.question_library.gen_llm.python_scientific_compute",
+        with patch("backend.generation.question_library.gen_llm.chat_completion", new=AsyncMock(side_effect=fake_chat_completion)), patch(
+            "backend.generation.question_library.gen_llm.python_scientific_compute",
             new=AsyncMock(
                 return_value={
                     "success": True,
@@ -77,7 +77,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertIn("12.0", joined)
 
     async def test_chat_json_with_reasoning_uses_configured_effort_for_chat_and_fallback(self) -> None:
-        from backend.question_library import gen_llm
+        from backend.generation.question_library import gen_llm
 
         seen_chat_reasoning: list[dict] = []
         seen_text_reasoning: list[dict] = []
@@ -91,14 +91,14 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             return '{"ok": true}'
 
         with patch(
-            "backend.question_library.gen_llm.STUDY_MATERIALS_THINKING_EFFORT_DEFAULT",
+            "backend.generation.question_library.gen_llm.STUDY_MATERIALS_THINKING_EFFORT_DEFAULT",
             "xhigh",
             create=True,
         ), patch(
-            "backend.question_library.gen_llm.chat_completion",
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=fake_chat_completion),
         ), patch(
-            "backend.question_library.gen_llm.chat_completion_text",
+            "backend.generation.question_library.gen_llm.chat_completion_text",
             new=AsyncMock(side_effect=fake_chat_completion_text),
         ):
             text = await gen_llm._chat_json_with_reasoning(
@@ -120,7 +120,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen_text_reasoning, [{"effort": "xhigh", "exclude": True}])
 
     def test_build_generation_messages_changes_system_prompt_by_difficulty(self) -> None:
-        from backend.question_library.generation import build_generation_messages
+        from backend.generation.question_library.generation import build_generation_messages
 
         easy = build_generation_messages(
             subject="高中数学",
@@ -151,7 +151,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertIn("高难度", hard_system)
 
     def test_beam_select_preserves_seed_tag_diversity(self) -> None:
-        from backend.question_library.generation import beam_select
+        from backend.generation.question_library.generation import beam_select
 
         out = beam_select(
             [
@@ -166,7 +166,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({str(item.get("seed_tag") or "") for item in out}), 2)
 
     async def test_solve_and_ambiguity_can_use_lightweight_judge_model_override(self) -> None:
-        from backend.question_library.generation import check_ambiguity, solve_draft
+        from backend.generation.question_library.generation import check_ambiguity, solve_draft
 
         seen_models: list[tuple[str, str]] = []
 
@@ -185,8 +185,8 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
-            "backend.question_library.judging._chat_json_with_reasoning",
+        with patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.judging._chat_json_with_reasoning",
             new=AsyncMock(side_effect=fake_chat_json_with_reasoning),
         ), patch.dict("os.environ", {"QUESTION_LIBRARY_JUDGE_MODEL": "openai/test-judge-mini"}, clear=False):
             await solve_draft("题干", {"subject": "高中数学", "proposed_answer": "x=1"})
@@ -198,7 +198,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_generate_questions_reduces_search_beam_for_small_request_count(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         stage_events: list[dict] = []
 
@@ -243,23 +243,23 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 }
             ]
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.seed_root_specs", return_value=base_specs
-        ), patch("backend.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
-            "backend.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
-        ), patch("backend.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
-            "backend.question_library.generation.expand_surface_layer", side_effect=identity_expand
-        ), patch("backend.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
-            "backend.question_library.generation.realize_drafts",
+        with patch("backend.generation.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.generation.seed_root_specs", return_value=base_specs
+        ), patch("backend.generation.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
+            "backend.generation.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
+        ), patch("backend.generation.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
+            "backend.generation.question_library.generation.expand_surface_layer", side_effect=identity_expand
+        ), patch("backend.generation.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
+            "backend.generation.question_library.generation.realize_drafts",
             new=AsyncMock(side_effect=fake_realize_drafts),
         ), patch(
-            "backend.question_library.generation.solve_draft",
+            "backend.generation.question_library.generation.solve_draft",
             new=AsyncMock(return_value={"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}),
         ), patch(
-            "backend.question_library.generation.check_ambiguity",
+            "backend.generation.question_library.generation.check_ambiguity",
             new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
         ), patch(
-            "backend.question_library.generation.judge_draft",
+            "backend.generation.question_library.generation.judge_draft",
             new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "中等"}),
         ):
             out = await generate_questions(
@@ -276,7 +276,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(int(stats.get("search_beam_width") or 0), 8)
 
     async def test_generate_questions_realize_stage_runs_specs_concurrently(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         active_realize = 0
         max_realize = 0
@@ -324,23 +324,23 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 }
             ]
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.seed_root_specs", return_value=base_specs
-        ), patch("backend.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
-            "backend.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
-        ), patch("backend.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
-            "backend.question_library.generation.expand_surface_layer", side_effect=identity_expand
-        ), patch("backend.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
-            "backend.question_library.generation.realize_drafts",
+        with patch("backend.generation.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.generation.seed_root_specs", return_value=base_specs
+        ), patch("backend.generation.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
+            "backend.generation.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
+        ), patch("backend.generation.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
+            "backend.generation.question_library.generation.expand_surface_layer", side_effect=identity_expand
+        ), patch("backend.generation.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
+            "backend.generation.question_library.generation.realize_drafts",
             new=AsyncMock(side_effect=fake_realize_drafts),
         ), patch(
-            "backend.question_library.generation.solve_draft",
+            "backend.generation.question_library.generation.solve_draft",
             new=AsyncMock(return_value={"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}),
         ), patch(
-            "backend.question_library.generation.check_ambiguity",
+            "backend.generation.question_library.generation.check_ambiguity",
             new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
         ), patch(
-            "backend.question_library.generation.judge_draft",
+            "backend.generation.question_library.generation.judge_draft",
             new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "困难"}),
         ):
             out = await generate_questions(
@@ -355,7 +355,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(max_realize, 1)
 
     async def test_generate_questions_judge_stage_runs_solve_concurrently(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         active_solves = 0
         max_solves = 0
@@ -407,23 +407,23 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             active_solves -= 1
             return {"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}
 
-        with patch("backend.question_library.generation.is_llm_configured", return_value=True), patch(
-            "backend.question_library.generation.seed_root_specs", return_value=base_specs
-        ), patch("backend.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
-            "backend.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
-        ), patch("backend.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
-            "backend.question_library.generation.expand_surface_layer", side_effect=identity_expand
-        ), patch("backend.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
-            "backend.question_library.generation.realize_drafts",
+        with patch("backend.generation.question_library.generation.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.generation.seed_root_specs", return_value=base_specs
+        ), patch("backend.generation.question_library.generation.expand_skill_layer", side_effect=identity_expand), patch(
+            "backend.generation.question_library.generation.expand_reasoning_layer", side_effect=identity_expand
+        ), patch("backend.generation.question_library.generation.expand_trap_layer", side_effect=identity_expand), patch(
+            "backend.generation.question_library.generation.expand_surface_layer", side_effect=identity_expand
+        ), patch("backend.generation.question_library.generation.score_spec", side_effect=fake_score_spec), patch(
+            "backend.generation.question_library.generation.realize_drafts",
             new=AsyncMock(side_effect=fake_realize_drafts),
         ), patch(
-            "backend.question_library.generation.solve_draft",
+            "backend.generation.question_library.generation.solve_draft",
             new=AsyncMock(side_effect=fake_solve),
         ), patch(
-            "backend.question_library.generation.check_ambiguity",
+            "backend.generation.question_library.generation.check_ambiguity",
             new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
         ), patch(
-            "backend.question_library.generation.judge_draft",
+            "backend.generation.question_library.generation.judge_draft",
             new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "困难"}),
         ):
             out = await generate_questions(
@@ -438,7 +438,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(max_solves, 1)
 
     async def test_generate_questions_rejects_difficulty_mismatch_after_judge(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
             _ = messages, kwargs
@@ -471,13 +471,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
-            "backend.question_library.draft_realization.is_llm_configured", return_value=True
-        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
-            "backend.question_library.gen_llm.chat_completion",
+        with patch("backend.generation.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
         ), patch(
-            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+            "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
@@ -499,7 +499,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out, [])
 
     async def test_generate_questions_filters_low_quality_and_keeps_novel(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
         stage_events: list[dict] = []
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
@@ -600,13 +600,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
 
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
-            "backend.question_library.draft_realization.is_llm_configured", return_value=True
-        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
-            "backend.question_library.gen_llm.chat_completion",
+        with patch("backend.generation.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
         ), patch(
-            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+            "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数应用", "study_markdown": ""},
@@ -646,7 +646,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertIn("judge_below_floor", reject_counts)
 
     async def test_generate_questions_isolates_single_spec_realize_failure(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         qlg_calls = 0
 
@@ -677,13 +677,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
-            "backend.question_library.draft_realization.is_llm_configured", return_value=True
-        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
-            "backend.question_library.gen_llm.chat_completion",
+        with patch("backend.generation.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
         ), patch(
-            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+            "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
@@ -706,7 +706,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(out[0].get("stem") or ""), "题干-可保留")
 
     async def test_generate_questions_mismatch_and_ambiguity_are_penalties_not_veto(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
             _ = messages, kwargs
@@ -749,13 +749,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
-            "backend.question_library.draft_realization.is_llm_configured", return_value=True
-        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
-            "backend.question_library.gen_llm.chat_completion",
+        with patch("backend.generation.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
         ), patch(
-            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+            "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
@@ -778,7 +778,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(out[0].get("stem") or ""), "题干-高质量")
 
     async def test_generate_questions_skips_repair_for_very_low_scores(self) -> None:
-        from backend.question_library.generation import generate_questions
+        from backend.generation.question_library.generation import generate_questions
 
         repair_calls = 0
 
@@ -812,13 +812,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError(f"unexpected req_id_prefix: {req_id_prefix}")
 
-        with patch("backend.question_library.source_pack.is_llm_configured", return_value=True), patch(
-            "backend.question_library.draft_realization.is_llm_configured", return_value=True
-        ), patch("backend.question_library.judging.is_llm_configured", return_value=True), patch(
-            "backend.question_library.gen_llm.chat_completion",
+        with patch("backend.generation.question_library.source_pack.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.draft_realization.is_llm_configured", return_value=True
+        ), patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
+            "backend.generation.question_library.gen_llm.chat_completion",
             new=AsyncMock(side_effect=RuntimeError("tool_mode_disabled")),
         ), patch(
-            "backend.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
+            "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
                 source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},

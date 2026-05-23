@@ -537,7 +537,7 @@ async def deep_research(
 
 async def deep_research_exa(**kwargs: Any) -> Dict[str, Any]:
     """Backward-compatible wrapper using Exa as the search function."""
-    from backend.mcp.search.exa import EXA_API_KEY, exa_search
+    from backend.integrations.mcp.search.exa import EXA_API_KEY, exa_search
 
     text_max_length = int(kwargs.get("text_max_length") or 2600)
 

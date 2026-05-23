@@ -15,8 +15,8 @@ from backend.api.crawler_schemas import AvailableFiltersRequest, ComposeBlueprin
 from backend.core.logging_utils import get_logger
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.core.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
-from backend.crawler.interface import CrawlerInterface
-from backend.crawler.manager import get_crawler as get_subject_crawler
+from backend.integrations.crawler.interface import CrawlerInterface
+from backend.integrations.crawler.manager import get_crawler as get_subject_crawler
 from backend.database.repositories.question.papers import get_paper, list_papers, save_paper
 
 logger = get_logger(__name__)

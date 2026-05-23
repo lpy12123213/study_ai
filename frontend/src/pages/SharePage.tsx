@@ -9,6 +9,7 @@ import { Markdown } from '@/components/shared/Markdown'
 import { QrCode } from '@/components/shared/QrCode'
 import { isApiError } from '@/api/client'
 import * as shareApi from '@/api/shareLinks'
+import { isRecord, readString, readStringFrom } from '@/lib/record'
 
 function copyText(text: string): Promise<boolean> {
   try {
@@ -28,7 +29,7 @@ export default function SharePage() {
 
   const [meta, setMeta] = useState<shareApi.ShareLinkMeta | null>(null)
   const [password, setPassword] = useState('')
-  const [content, setContent] = useState<{ item_type: string; paper?: any; study_archive?: any; template?: any } | null>(null)
+  const [content, setContent] = useState<shareApi.SharedContent | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isFetchingContent, setIsFetchingContent] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -175,7 +176,7 @@ export default function SharePage() {
 
             {content?.item_type === 'study_archive' && (
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <Markdown markdown={String(content.study_archive?.markdown || '')} />
+                <Markdown markdown={readString(content.study_archive, 'markdown')} />
               </div>
             )}
 
@@ -183,10 +184,10 @@ export default function SharePage() {
               <div className="space-y-4">
                 <div>
                   <div className="text-lg font-semibold">
-                    {String(content.paper?.paper_name || content.paper?.name || '试卷')}
+                    {readStringFrom(content.paper, ['paper_name', 'name']) || '试卷'}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    试卷 ID：{String(content.paper?.paper_id || content.paper?.id || '')}
+                    试卷 ID：{readStringFrom(content.paper, ['paper_id', 'id'])}
                   </div>
                 </div>
 
@@ -203,29 +204,38 @@ export default function SharePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(Array.isArray(content.paper?.questions) ? content.paper.questions : []).map((q: any, idx: number) => (
-                        <tr key={String(q?.question_id || q?.questionId || idx)} className="border-t">
-                          <td className="px-3 py-2">{String(q?.order || q?.question_order || idx + 1)}</td>
-                          <td className="px-3 py-2">{String(q?.type || q?.question_type || '')}</td>
-                          <td className="px-3 py-2">{String(q?.difficulty || '')}</td>
-                          <td className="px-3 py-2">{String(q?.knowledge_point || q?.knowledgePoint || '')}</td>
-                          <td className="px-3 py-2 font-mono">{String(q?.question_id || q?.questionId || '')}</td>
-                          <td className="px-3 py-2">
-                            {String(q?.source_url || q?.sourceUrl || '').trim() ? (
-                              <a
-                                href={String(q?.source_url || q?.sourceUrl)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary underline underline-offset-4"
-                              >
-                                链接
-                              </a>
-                            ) : (
-                              <span className="text-muted-foreground">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                      {(() => {
+                        const rawList = isRecord(content.paper) ? content.paper.questions : undefined
+                        const list = Array.isArray(rawList) ? rawList : []
+                        return list.map((q, idx) => {
+                          const questionId = readStringFrom(q, ['question_id', 'questionId'])
+                          const order = readStringFrom(q, ['order', 'question_order']) || String(idx + 1)
+                          const sourceUrl = readStringFrom(q, ['source_url', 'sourceUrl'])
+                          return (
+                            <tr key={questionId || idx} className="border-t">
+                              <td className="px-3 py-2">{order}</td>
+                              <td className="px-3 py-2">{readStringFrom(q, ['type', 'question_type'])}</td>
+                              <td className="px-3 py-2">{readString(q, 'difficulty')}</td>
+                              <td className="px-3 py-2">{readStringFrom(q, ['knowledge_point', 'knowledgePoint'])}</td>
+                              <td className="px-3 py-2 font-mono">{questionId}</td>
+                              <td className="px-3 py-2">
+                                {sourceUrl ? (
+                                  <a
+                                    href={sourceUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary underline underline-offset-4"
+                                  >
+                                    链接
+                                  </a>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })
+                      })()}
                     </tbody>
                   </table>
                 </div>
@@ -235,13 +245,13 @@ export default function SharePage() {
             {content?.item_type === 'template' && (
               <div className="space-y-4">
                 <div>
-                  <div className="text-lg font-semibold">{String(content.template?.name || '模板')}</div>
+                  <div className="text-lg font-semibold">{readString(content.template, 'name') || '模板'}</div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    模板 ID：{String(content.template?.id || '')} · 类型：{String(content.template?.template_type || '')}
+                    模板 ID：{readString(content.template, 'id')} · 类型：{readString(content.template, 'template_type')}
                   </div>
                 </div>
                 <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-5">
-                  {JSON.stringify(content.template?.body || {}, null, 2)}
+                  {JSON.stringify(isRecord(content.template) ? content.template.body ?? {} : {}, null, 2)}
                 </pre>
               </div>
             )}
@@ -252,7 +262,7 @@ export default function SharePage() {
 
             {!isLoading && meta && isApiError(error) && (
               <div className="mt-2 text-xs text-muted-foreground">
-                requestId: <span className="font-mono">{(error as any).requestId || ''}</span>
+                requestId: <span className="font-mono">{error.requestId || ''}</span>
               </div>
             )}
           </Card>

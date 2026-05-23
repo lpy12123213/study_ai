@@ -1,6 +1,6 @@
 import unittest
 
-from backend.paper_compose.slot_selection import select_slot_with_relax
+from backend.generation.paper_compose.slot_selection import select_slot_with_relax
 
 
 class SlotSelectionRelaxTraceTests(unittest.IsolatedAsyncioTestCase):

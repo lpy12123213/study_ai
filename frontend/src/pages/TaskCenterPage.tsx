@@ -44,7 +44,7 @@ export default function TaskCenterPage() {
     refetchInterval: 5000,
   })
 
-  const tasks = data?.tasks || []
+  const tasks = useMemo(() => data?.tasks || [], [data])
   const taskListRef = useRef<HTMLDivElement | null>(null)
 
   const {
@@ -56,7 +56,7 @@ export default function TaskCenterPage() {
     queryFn: () => getTask(selectedTaskId, { includeEvents: true, eventsLimit: 1000 }),
     enabled: Boolean(selectedTaskId),
     refetchInterval: (q) => {
-      const status = String((q.state.data as any)?.status || '')
+      const status = String(q.state.data?.status || '')
       return status === 'running' ? 5000 : false
     },
   })
@@ -64,7 +64,7 @@ export default function TaskCenterPage() {
   const typeOptions = useMemo(() => {
     const set = new Set<string>()
     tasks.forEach((t) => {
-      const tp = String((t as any).task_type || '').trim()
+      const tp = String(t.task_type || '').trim()
       if (tp) set.add(tp)
     })
     return Array.from(set).sort()
@@ -85,12 +85,12 @@ export default function TaskCenterPage() {
     return tasks.filter((t) => {
       if (q) {
         const ok =
-          String((t as any).title || '').toLowerCase().includes(q) || String((t as any).id || '').includes(q)
+          String(t.title || '').toLowerCase().includes(q) || String(t.id || '').includes(q)
         if (!ok) return false
       }
 
       if (windowMs != null) {
-        const ts = Date.parse(String((t as any).updated_at || (t as any).created_at || ''))
+        const ts = Date.parse(String(t.updated_at || t.created_at || ''))
         if (Number.isFinite(ts) && now - ts > windowMs) return false
       }
 
@@ -103,15 +103,19 @@ export default function TaskCenterPage() {
     getScrollElement: () => taskListRef.current,
     estimateSize: () => 92,
     overscan: 8,
-    getItemKey: (index) => String((filteredTasks[index] as any)?.id || index),
+    getItemKey: (index) => String(filteredTasks[index]?.id || index),
   })
 
   const selectedTask: UnifiedTask | undefined = useMemo(() => {
     if (!selectedTaskId) return undefined
-    return selectedTaskSnapshot || filteredTasks.find((t) => String((t as any).id) === selectedTaskId) || tasks.find((t) => String((t as any).id) === selectedTaskId)
+    return (
+      selectedTaskSnapshot ||
+      filteredTasks.find((t) => String(t.id) === selectedTaskId) ||
+      tasks.find((t) => String(t.id) === selectedTaskId)
+    )
   }, [selectedTaskId, selectedTaskSnapshot, filteredTasks, tasks])
-  const selectedSnapshotLastSeq = Number((selectedTaskSnapshot as any)?.last_seq || 0)
-  const selectedSnapshotStatus = String((selectedTaskSnapshot as any)?.status || '')
+  const selectedSnapshotLastSeq = Number(selectedTaskSnapshot?.last_seq || 0)
+  const selectedSnapshotStatus = String(selectedTaskSnapshot?.status || '')
   const selectedTaskStatus = String(selectedTask?.status || '')
 
   const [steps, setSteps] = useState<TaskStep[]>([])
@@ -133,9 +137,7 @@ export default function TaskCenterPage() {
   useEffect(() => {
     if (!selectedTaskId || !selectedTaskSnapshot) return
 
-    const events = Array.isArray((selectedTaskSnapshot as any).events)
-      ? ((selectedTaskSnapshot as any).events as TaskStreamEvent[])
-      : []
+    const events = Array.isArray(selectedTaskSnapshot.events) ? selectedTaskSnapshot.events : []
     let nextSteps: TaskStep[] = []
     for (const evt of events) {
       const step = taskEventToStep(evt)
@@ -143,7 +145,7 @@ export default function TaskCenterPage() {
     }
     setSteps(nextSteps)
     setStreamError(null)
-    lastSeqRef.current = Math.max(0, Number((selectedTaskSnapshot as any).last_seq || 0))
+    lastSeqRef.current = Math.max(0, Number(selectedTaskSnapshot.last_seq || 0))
   }, [selectedTaskId, selectedTaskSnapshot])
 
   useEffect(() => {
@@ -296,11 +298,11 @@ export default function TaskCenterPage() {
               {taskVirtualizer.getVirtualItems().map((virtualItem) => {
                 const t = filteredTasks[virtualItem.index]
                 if (!t) return null
-                const tid = String((t as any).id)
+                const tid = String(t.id)
                 const active = tid === selectedTaskId
-                const s = formatStatus(String((t as any).status || ''))
-                const progress = Number((t as any).progress || 0)
-                const eta = Number((t as any).eta_s || 0)
+                const s = formatStatus(String(t.status || ''))
+                const progress = Number(t.progress || 0)
+                const eta = Number(t.eta_s || 0)
 
                 return (
                   <div
@@ -320,7 +322,7 @@ export default function TaskCenterPage() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <div className="text-sm font-medium truncate">{String((t as any).title || tid)}</div>
+                          <div className="text-sm font-medium truncate">{String(t.title || tid)}</div>
                           <div className="text-xs text-muted-foreground truncate">{tid}</div>
                         </div>
                         <Badge variant={s.tone}>{s.label}</Badge>

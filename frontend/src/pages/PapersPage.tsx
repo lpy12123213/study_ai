@@ -32,19 +32,19 @@ export default function PapersPage() {
     queryFn: () => metaApi.listMeta({ itemType: 'paper', limit: 500 }),
   })
 
-  const paperMetaItems = (paperMetaResp as any)?.items || []
+  const paperMetaItems: metaApi.ItemMeta[] = useMemo(() => paperMetaResp?.items ?? [], [paperMetaResp])
   const paperMetaById = useMemo(() => {
     const m = new Map<string, metaApi.ItemMeta>()
-    for (const row of paperMetaItems as metaApi.ItemMeta[]) {
-      m.set(String((row as any).item_id), row)
+    for (const row of paperMetaItems) {
+      m.set(String(row.item_id), row)
     }
     return m
   }, [paperMetaItems])
 
   const tagOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const row of paperMetaItems as metaApi.ItemMeta[]) {
-      const tags = Array.isArray((row as any).tags) ? ((row as any).tags as string[]) : []
+    for (const row of paperMetaItems) {
+      const tags = Array.isArray(row.tags) ? row.tags : []
       for (const t of tags) {
         const v = String(t || '').trim()
         if (v) set.add(v)

@@ -5,7 +5,7 @@ import unittest
 
 class QuestionGenerationWorkflowRoutingTests(unittest.TestCase):
     def test_simple_prompt_routes_to_lightweight_workflow(self) -> None:
-        from backend.question_library.workflow_routing import route_question_generation_workflow
+        from backend.generation.question_library.workflow_routing import route_question_generation_workflow
 
         route = route_question_generation_workflow(
             {
@@ -25,7 +25,7 @@ class QuestionGenerationWorkflowRoutingTests(unittest.TestCase):
         self.assertEqual(route.config["solver_consensus_n"], 1)
 
     def test_complex_prompt_routes_to_heavyweight_workflow(self) -> None:
-        from backend.question_library.workflow_routing import route_question_generation_workflow
+        from backend.generation.question_library.workflow_routing import route_question_generation_workflow
 
         route = route_question_generation_workflow(
             {
@@ -48,7 +48,7 @@ class QuestionGenerationWorkflowRoutingTests(unittest.TestCase):
         self.assertIn("压轴", " ".join(route.reasons))
 
     def test_explicit_workflow_mode_overrides_prompt_heuristics(self) -> None:
-        from backend.question_library.workflow_routing import route_question_generation_workflow
+        from backend.generation.question_library.workflow_routing import route_question_generation_workflow
 
         route = route_question_generation_workflow(
             {

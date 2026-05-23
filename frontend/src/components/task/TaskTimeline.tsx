@@ -22,12 +22,20 @@ function isNoiseStep(step: TaskStep): boolean {
   return false
 }
 
+/**
+ * Public helper for callers that want to render the same noise-filtered list
+ * outside of <TaskTimeline> (e.g. ToolUseLogPanel).
+ */
+export function filterTaskTimelineNoise(steps: TaskStep[]): TaskStep[] {
+  return steps.filter((s) => !isNoiseStep(s))
+}
+
 interface TaskTimelineProps {
   steps: TaskStep[]
 }
 
 export function TaskTimeline({ steps }: TaskTimelineProps) {
-  const filtered = steps.filter((s) => !isNoiseStep(s))
+  const filtered = filterTaskTimelineNoise(steps)
   const disableMotion = filtered.length >= 2000
 
   return (

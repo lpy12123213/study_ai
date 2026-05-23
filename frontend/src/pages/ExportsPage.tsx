@@ -10,6 +10,7 @@ import { downloadObjectUrl } from '@/api/client'
 import * as tasksApi from '@/api/tasks'
 import * as exportsApi from '@/api/exports'
 import { cn, formatDate } from '@/lib/utils'
+import { readString, readStringFrom } from '@/lib/record'
 
 type ExportStatusFilter = 'all' | 'running' | 'failed' | 'completed'
 
@@ -75,23 +76,23 @@ export default function ExportsPage() {
   const doZipDownload = async () => {
     if (selectedList.length === 0) return
     const res = await zipFiles.mutateAsync(selectedList)
-    const url = String((res as any)?.url || '')
+    const url = String(res?.url || '')
     if (url) await downloadByUrl(url)
   }
 
   const taskDownloadUrls = (task: tasksApi.UnifiedTask): string[] => {
-    const result = (task.result || {}) as any
-    const urls: string[] = []
-    if (typeof result?.url === 'string' && result.url) urls.push(result.url)
-    if (typeof result?.video_url === 'string' && result.video_url) urls.push(result.video_url)
-    if (typeof result?.subtitle_url === 'string' && result.subtitle_url) urls.push(result.subtitle_url)
-    if (typeof result?.script_url === 'string' && result.script_url) urls.push(result.script_url)
-    if (typeof result?.pdf_url === 'string' && result.pdf_url) urls.push(result.pdf_url)
-    if (typeof result?.tex_url === 'string' && result.tex_url) urls.push(result.tex_url)
-    if (typeof result?.pdfUrl === 'string' && result.pdfUrl) urls.push(result.pdfUrl)
-    if (typeof result?.texUrl === 'string' && result.texUrl) urls.push(result.texUrl)
-    if (typeof result?.pdf_url === 'string') urls.push(result.pdf_url)
-    return Array.from(new Set(urls.filter(Boolean)))
+    const result = task.result || {}
+    const urls = [
+      readString(result, 'url'),
+      readString(result, 'video_url'),
+      readString(result, 'subtitle_url'),
+      readString(result, 'script_url'),
+      readString(result, 'pdf_url'),
+      readString(result, 'tex_url'),
+      readString(result, 'pdfUrl'),
+      readString(result, 'texUrl'),
+    ].filter(Boolean)
+    return Array.from(new Set(urls))
   }
 
   return (
@@ -153,7 +154,7 @@ export default function ExportsPage() {
                       </div>
                       {t.status === 'failed' && Boolean(t.error) && (
                         <div className="mt-2 text-xs text-destructive whitespace-pre-wrap break-words">
-                          {String((t.error as any)?.message || (t.error as any)?.error || '导出失败')}
+                          {readStringFrom(t.error, ['message', 'error']) || '导出失败'}
                         </div>
                       )}
                     </div>

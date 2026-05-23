@@ -5,12 +5,13 @@ import logging
 import os
 import unicodedata
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
 from backend.api.schemas import ChatRequest
-from backend.chat.service import ChatService, get_chat_service
+from backend.api.sse_utils import is_sse_client_disconnected
+from backend.workspace.chat.service import ChatService, get_chat_service
 from backend.database.repositories.content.conversations import (
     add_message,
     get_conversation,
@@ -44,6 +45,7 @@ def _truncate_display_width(text: str, max_width: int) -> str:
 @router.post("/chat")
 async def chat_endpoint(
     request: ChatRequest,
+    http_request: Request,
     user: dict = Depends(require_auth),
     service: ChatService = Depends(get_chat_service),
 ) -> StreamingResponse:
@@ -104,6 +106,8 @@ async def chat_endpoint(
                         )
                     except Exception:
                         logger.exception("Failed to persist assistant tool_calls message")
+                if await is_sse_client_disconnected(http_request):
+                    return
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 continue
 
@@ -128,6 +132,8 @@ async def chat_endpoint(
                         )
                     except Exception:
                         logger.exception("Failed to persist tool_result message")
+                if await is_sse_client_disconnected(http_request):
+                    return
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 continue
 
@@ -145,9 +151,13 @@ async def chat_endpoint(
                     except Exception:
                         logger.exception("Failed to update conversation title")
 
+                if await is_sse_client_disconnected(http_request):
+                    return
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 continue
 
+        if await is_sse_client_disconnected(http_request):
+            return
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

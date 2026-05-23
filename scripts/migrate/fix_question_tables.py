@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database.engine import async_session_maker, init_db
 from backend.database.schema import QuestionCache
-from backend.question_library.table_repair import repair_obvious_broken_tables
+from backend.generation.question_library.table_repair import repair_obvious_broken_tables
 
 
 def _parse_args() -> argparse.Namespace:

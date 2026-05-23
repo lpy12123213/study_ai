@@ -68,7 +68,7 @@ export default function WrongbookPage() {
     if (ids.length === 0) return
     const paperName = kp.trim() ? `错题练习：${kp.trim()}` : '错题练习卷'
     const res = await practiceMutation.mutateAsync({ question_ids: ids, paper_name: paperName })
-    const paperId = Number((res as any)?.paper_id || (res as any)?.paperId || 0)
+    const paperId = Number(res?.paper_id || 0)
     if (paperId > 0) navigate(`/papers/${paperId}`)
   }
 

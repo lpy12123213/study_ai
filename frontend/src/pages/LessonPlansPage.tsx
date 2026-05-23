@@ -1,4 +1,4 @@
-import LessonPlansView from '@/features/lessonPlans/LessonPlansView'
+import LessonPlansView from '@/features/generation/lessonPlans/LessonPlansView'
 
 export default LessonPlansView
 

@@ -54,7 +54,7 @@ class GithubSearchToolsMixin:
         except (AttributeError, TypeError, ValueError):
             existing_by_kp = {}
 
-        from backend.mcp.search.github import github_fetch_readme, github_search_repositories
+        from backend.integrations.mcp.search.github import github_fetch_readme, github_search_repositories
 
         async def _search_one(point: str) -> Dict[str, Any]:
             base_query = f"{subject} {point}".strip() if subject and subject not in point else point

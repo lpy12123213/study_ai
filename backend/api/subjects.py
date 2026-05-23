@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import get_all_subjects, resolve_subject
-from backend.crawler.manager import get_crawler
+from backend.integrations.crawler.manager import get_crawler
 
 router = APIRouter()
 logger = get_logger(__name__)

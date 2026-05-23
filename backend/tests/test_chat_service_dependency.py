@@ -6,7 +6,7 @@ import unittest
 from fastapi.params import Depends
 
 from backend.api.chat import chat_endpoint
-from backend.chat.service import ChatService, get_chat_service
+from backend.workspace.chat.service import ChatService, get_chat_service
 
 
 class TestChatServiceDependency(unittest.TestCase):

@@ -5,7 +5,7 @@ import json
 import unittest
 from typing import Any, Dict, List, Optional
 
-from backend.chat.service import ChatService
+from backend.workspace.chat.service import ChatService
 
 
 def _tool_call(idx: int, name: str) -> Dict[str, Any]:

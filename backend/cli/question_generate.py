@@ -18,7 +18,7 @@ from backend.core.settings import LESSON_PLAN_MODEL, settings
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.question_library import upsert_question_library_items
 from backend.llm.client import chat_completion, is_llm_configured
-from backend.question_library.generation import (
+from backend.generation.question_library.generation import (
     analyze_reference_questions,
     build_ai_question_id,
     build_source_pack,
@@ -26,10 +26,10 @@ from backend.question_library.generation import (
     enrich_source_pack_with_reference,
     generate_questions,
 )
-from backend.question_library.preview_store import (
+from backend.generation.question_library.preview_store import (
     list_sessions as list_saved_sessions,
 )
-from backend.question_library.preview_store import (
+from backend.generation.question_library.preview_store import (
     load_session,
     new_preview_id,
     new_session_id,
@@ -689,7 +689,7 @@ def _mcp_web_search_tool_spec() -> Dict[str, Any]:
 
 
 def _python_scientific_compute_tool_spec() -> Dict[str, Any]:
-    from backend.mcp.tools.python_scientific_compute import openai_tool_spec
+    from backend.integrations.mcp.tools.python_scientific_compute import openai_tool_spec
 
     return openai_tool_spec()
 
@@ -720,13 +720,13 @@ async def _exec_mcp_web_search_tool(
 
     if provider_in == "auto":
         try:
-            from backend.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
+            from backend.integrations.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
 
             has_tavily = bool(str(_TAVILY_API_KEY or "").strip())
         except ImportError:
             has_tavily = False
         try:
-            from backend.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
+            from backend.integrations.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
 
             has_exa = bool(str(_EXA_API_KEY or "").strip())
         except ImportError:
@@ -735,7 +735,7 @@ async def _exec_mcp_web_search_tool(
 
     if provider_in == "tavily":
         try:
-            from backend.mcp.search.tavily import tavily_search
+            from backend.integrations.mcp.search.tavily import tavily_search
         except ImportError as exc:
             return {
                 "success": False,
@@ -791,7 +791,7 @@ async def _exec_mcp_web_search_tool(
 
     if provider_in == "exa":
         try:
-            from backend.mcp.search.exa import exa_search
+            from backend.integrations.mcp.search.exa import exa_search
         except ImportError as exc:
             return {"success": False, "provider": "exa", "query": query, "error": f"import_exa_failed: {exc}", "results": []}
 
@@ -849,7 +849,7 @@ async def _exec_mcp_web_search_tool(
         }
 
     try:
-        from backend.mcp.search.bigmodel import web_search_with_bigmodel_mcp
+        from backend.integrations.mcp.search.bigmodel import web_search_with_bigmodel_mcp
     except ImportError as exc:
         return {
             "success": False,
@@ -900,7 +900,7 @@ async def _exec_python_scientific_compute_tool(
     purpose: str,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
-    from backend.mcp.tools.python_scientific_compute import python_scientific_compute
+    from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
 
     return await python_scientific_compute(
         code=str(code or "").strip(),

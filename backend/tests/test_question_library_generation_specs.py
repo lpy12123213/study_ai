@@ -3,7 +3,7 @@ import unittest
 
 class TestQuestionLibraryGenerationSpecs(unittest.TestCase):
     def test_seed_root_specs_are_diverse(self) -> None:
-        from backend.question_library.generation import seed_root_specs
+        from backend.generation.question_library.generation import seed_root_specs
 
         source_pack = {"subject": "高中数学", "topic": "椭圆", "study_markdown": ""}
         specs = seed_root_specs(source_pack, count=5, difficulty="中等", question_type="解答题")
@@ -14,7 +14,7 @@ class TestQuestionLibraryGenerationSpecs(unittest.TestCase):
         self.assertGreaterEqual(len(seed_tags), 3)
 
     def test_expand_layers_populate_key_fields(self) -> None:
-        from backend.question_library.generation import (
+        from backend.generation.question_library.generation import (
             expand_reasoning_layer,
             expand_skill_layer,
             expand_surface_layer,
@@ -39,7 +39,7 @@ class TestQuestionLibraryGenerationSpecs(unittest.TestCase):
         self.assertTrue(all(str(s.get("surface") or "").strip() for s in specs))
 
     def test_score_spec_prefers_deeper_reasoning(self) -> None:
-        from backend.question_library.generation import score_spec
+        from backend.generation.question_library.generation import score_spec
 
         source_pack = {"subject": "高中数学", "topic": "函数", "study_markdown": ""}
         cfg = {

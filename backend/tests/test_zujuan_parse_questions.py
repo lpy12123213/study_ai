@@ -1,6 +1,6 @@
 import unittest
 
-from backend.crawler.zujuan.client import ZujuanCrawler
+from backend.integrations.crawler.zujuan.client import ZujuanCrawler
 
 
 class TestZujuanParseQuestions(unittest.IsolatedAsyncioTestCase):

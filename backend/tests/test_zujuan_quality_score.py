@@ -3,7 +3,7 @@ import unittest
 
 class TestZujuanQualityScore(unittest.TestCase):
     def setUp(self) -> None:
-        from backend.crawler.zujuan_crawler import ZujuanCrawler
+        from backend.integrations.crawler.zujuan_crawler import ZujuanCrawler
 
         self.crawler = ZujuanCrawler(cookies="", subject="高中数学")
 

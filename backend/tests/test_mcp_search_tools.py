@@ -6,9 +6,9 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from backend.mcp.search import tavily
-from backend.mcp.search._base import FunctionSearchProvider, list_search_providers
-from backend.mcp.search.registry import PROVIDERS
+from backend.integrations.mcp.search import tavily
+from backend.integrations.mcp.search._base import FunctionSearchProvider, list_search_providers
+from backend.integrations.mcp.search.registry import PROVIDERS
 
 
 class TestTavilySearch(unittest.IsolatedAsyncioTestCase):
@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
 import unittest
 
-from backend.mcp.tools.python_scientific_compute import python_scientific_compute
+from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
 
 
 class PythonScientificComputeTests(unittest.IsolatedAsyncioTestCase):
@@ -200,7 +200,7 @@ if __name__ == "__main__":
 
 import unittest
 
-from backend.mcp.search import github
+from backend.integrations.mcp.search import github
 
 
 class TestGitHubSearch(unittest.IsolatedAsyncioTestCase):

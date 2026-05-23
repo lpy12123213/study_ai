@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from typing import Any, Dict, List, Sequence
 
-from backend.deepthink.tot_engine import ThoughtNode, ToTEngine
+from backend.generation.deepthink.tot_engine import ThoughtNode, ToTEngine
 
 
 class ToTEngineConcurrencyTests(unittest.TestCase):

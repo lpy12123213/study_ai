@@ -13,6 +13,13 @@ function recordString(value: unknown, key: string): string | undefined {
 
 export type UnifiedTaskStatus = 'running' | 'paused' | 'completed' | 'failed' | 'canceled' | string
 
+/**
+ * Task error/result payloads come from arbitrary domain runners and are stored as JSON text on the
+ * backend. We type them as a permissive record so callers can read fields with simple narrowing
+ * helpers instead of `as any`.
+ */
+export type UnifiedTaskPayload = Record<string, unknown>
+
 export type UnifiedTask = {
   id: string
   task_type: string
@@ -25,9 +32,9 @@ export type UnifiedTask = {
   started_at?: string
   ended_at?: string
   parent_task_id?: string | null
-  request?: unknown
-  result?: unknown
-  error?: unknown
+  request?: UnifiedTaskPayload
+  result?: UnifiedTaskPayload
+  error?: UnifiedTaskPayload
   events?: TaskStreamEvent[]
   elapsed_s?: number
   eta_s?: number

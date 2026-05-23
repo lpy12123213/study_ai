@@ -64,7 +64,7 @@ class PromptContractTests(unittest.TestCase):
         self.assertTrue(any("web_search_knowledge" in str(m.get("content") or "") for m in messages))
 
     def test_deepthink_prompts_render_from_registry(self) -> None:
-        from backend.deepthink.prompts import (
+        from backend.generation.deepthink.prompts import (
             get_evaluator_system_prompt,
             get_generator_system_prompt,
             get_synthesizer_system_prompt,
@@ -86,7 +86,7 @@ class PromptContractTests(unittest.TestCase):
         )
 
     def test_lesson_plan_writer_prompt_renders_from_registry(self) -> None:
-        from backend.lesson_plan.prompts import get_system_prompt
+        from backend.generation.lesson_plan.prompts import get_system_prompt
 
         registered = create_default_prompt_registry().render("lesson_plan.writer.v1").content
 
@@ -95,7 +95,7 @@ class PromptContractTests(unittest.TestCase):
         self.assertIn("Do not copy any source text verbatim", registered)
 
     def test_paper_compose_prompt_renders_from_registry(self) -> None:
-        from backend.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
+        from backend.workspace.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
 
         registered = create_default_prompt_registry().render(
             "chat.paper_compose.system.v1",

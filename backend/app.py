@@ -43,7 +43,7 @@ from backend.core.auth import validate_access_token
 from backend.core.config_check import log_config_check
 from backend.core.logging_utils import configure_logging, get_logger
 from backend.core.metrics import instrument_app
-from backend.crawler.manager import close_crawler
+from backend.integrations.crawler.manager import close_crawler
 from backend.database.engine import init_db
 from backend.llm.client import (
     close_shared_llm_http_client,
@@ -53,7 +53,7 @@ from backend.llm.client import (
     set_moonshot_api_key_override,
 )
 from backend.media.generated import cleanup_expired_generated_files
-from backend.question_library.worker import run_question_library_scoring_worker
+from backend.generation.question_library.worker import run_question_library_scoring_worker
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
@@ -235,7 +235,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # process restarts mid-run, some sessions may remain at status=running and the
     # frontend will keep waiting. Downgrade them to an interrupted state.
     try:
-        from backend.question_library.preview_store import mark_running_sessions_interrupted
+        from backend.generation.question_library.preview_store import mark_running_sessions_interrupted
 
         changed = mark_running_sessions_interrupted(reason="server_restarted")
         if changed:
@@ -245,7 +245,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     # Restore study-materials tasks snapshots early (under lock) so refresh/replay works.
     try:
-        from backend.study_materials.orchestrator_singleton import study_material_tasks
+        from backend.generation.study_materials.orchestrator_singleton import study_material_tasks
 
         await study_material_tasks.restore_tasks_from_disk()
     except Exception:
@@ -272,7 +272,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("task_runtime_shutdown_failed")
         try:
-            from backend.study_materials.orchestrator_singleton import study_material_tasks
+            from backend.generation.study_materials.orchestrator_singleton import study_material_tasks
 
             await study_material_tasks.shutdown(reason="server_shutdown")
         except Exception:

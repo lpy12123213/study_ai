@@ -79,18 +79,20 @@ export default function SearchPage() {
 
   const openResult = (r: SearchResult) => {
     if (r.type === 'conversation') {
-      navigate(`/chat/${encodeURIComponent(String((r as any).conversation_id))}?mid=${encodeURIComponent(String((r as any).message_id))}&q=${encodeURIComponent(qParam)}`)
+      navigate(
+        `/chat/${encodeURIComponent(String(r.conversation_id))}?mid=${encodeURIComponent(String(r.message_id))}&q=${encodeURIComponent(qParam)}`,
+      )
       return
     }
     if (r.type === 'paper') {
-      const qid = String((r as any).question_id || '').trim()
-      const paperId = String((r as any).paper_id || '').trim()
+      const qid = String(r.question_id || '').trim()
+      const paperId = String(r.paper_id || '').trim()
       if (qid) navigate(`/papers/${encodeURIComponent(paperId)}#question-${encodeURIComponent(qid)}`)
       else navigate(`/papers/${encodeURIComponent(paperId)}`)
       return
     }
     if (r.type === 'study_archive') {
-      navigate(`/study-archives/${encodeURIComponent(String((r as any).archive_id))}?q=${encodeURIComponent(qParam)}`)
+      navigate(`/study-archives/${encodeURIComponent(String(r.archive_id))}?q=${encodeURIComponent(qParam)}`)
       return
     }
     // Unknown type: no-op
@@ -131,10 +133,10 @@ export default function SearchPage() {
 
           <div className="mt-4 space-y-2">
             {results.map((r, idx) => {
-              const info = typeLabel(r.type as any)
+              const info = typeLabel(r.type)
               const Icon = info.icon
-              const title = String((r as any).title || '')
-              const snippet = String((r as any).snippet || '')
+              const title = String(r.title || '')
+              const snippet = String(r.snippet || '')
               return (
                 <button
                   key={`${r.type}-${idx}-${title}`}

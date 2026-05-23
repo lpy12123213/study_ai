@@ -5,9 +5,9 @@ import { Markdown } from '@/components/shared/Markdown'
 import { BrandMark } from '@/components/shared/BrandMark'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { APP_ASSISTANT_NAME } from '@/constants/branding'
-import { LessonPlanAttachment } from '@/features/lessonPlans/components/LessonPlanAttachment'
+import { LessonPlanAttachment } from '@/features/generation/lessonPlans/components/LessonPlanAttachment'
 import { ToolUseLogPanel } from '@/features/shared/ToolUseLogPanel'
-import { extractStepKnowledgePoints } from '@/features/studyMaterials/utils'
+import { extractStepKnowledgePoints } from '@/features/generation/studyMaterials/utils'
 import { cn } from '@/lib/utils'
 import type { Message, TaskStep } from '@/types'
 
@@ -52,8 +52,8 @@ function UserMessage({ content, disableMotion }: { content: string; disableMotio
   )
 }
 
-function AssistantContent({ message, variant, isStreaming }: { message: Message; variant: MessageBubbleVariant; isStreaming?: boolean }) {
-  return <Markdown markdown={message.content} streaming={isStreaming} />
+function AssistantContent({ message }: { message: Message }) {
+  return <Markdown markdown={message.content} />
 }
 
 function filterGlobalSteps(steps: TaskStep[]): TaskStep[] {
@@ -132,7 +132,7 @@ export function MessageBubble({ message, disableMotion = false, variant = 'chat'
       </div>
 
       <div className="prose prose-base dark:prose-invert max-w-none text-foreground/90 leading-8 pl-7">
-        <AssistantContent message={message} variant={variant} isStreaming={isStreaming} />
+        <AssistantContent message={message} />
       </div>
 
       {variant === 'lessonPlan' && message.attachment?.type === 'lesson_plan' && (

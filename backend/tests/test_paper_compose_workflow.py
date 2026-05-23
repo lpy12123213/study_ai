@@ -1,6 +1,6 @@
 import unittest
 
-from backend.paper_compose import workflow
+from backend.generation.paper_compose import workflow
 
 
 class TestPaperComposeWorkflowUtils(unittest.TestCase):

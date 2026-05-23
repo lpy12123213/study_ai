@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -8,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
@@ -21,6 +20,8 @@ from backend.api.question_library_schemas import (
     QuestionLibraryScoreRequest,
 )
 from backend.api.schemas import DeepThinkRequest
+from backend.api.sse_polling import next_poll_delay, wait_for_task_event_or_timeout
+from backend.api.sse_utils import is_sse_client_disconnected
 from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, StudyMaterialsGenerateRequest
 from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_text
@@ -211,7 +212,7 @@ async def submit_study_materials(request: StudyMaterialsGenerateRequest, user: d
     if request.prefer_local_archive is not None:
         options["preferLocalArchive"] = bool(request.prefer_local_archive)
 
-    from backend.study_materials.orchestrator_singleton import study_material_tasks
+    from backend.generation.study_materials.orchestrator_singleton import study_material_tasks
 
     task = await study_material_tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
     return {"success": True, "taskId": task.task_id}
@@ -231,7 +232,7 @@ async def continue_study_materials_task(
 
     mode = str(request.mode or "").strip() or "improve"
 
-    from backend.study_materials.orchestrator_singleton import study_material_tasks
+    from backend.generation.study_materials.orchestrator_singleton import study_material_tasks
 
     try:
         new_task = await study_material_tasks.continue_task(task_id=task_id, user_id=user_id, mode=mode)
@@ -256,8 +257,8 @@ async def submit_question_library_crawl(request: QuestionLibraryCrawlRequest, us
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    from backend.question_library import runner as ql_runner
-    from backend.question_library.runner import RunnerError
+    from backend.generation.question_library import runner as ql_runner
+    from backend.generation.question_library.runner import RunnerError
 
     try:
         task = await ql_runner.create_crawl_task(user_id=user_id, request=request.model_dump())
@@ -276,8 +277,8 @@ async def submit_question_library_generate(
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    from backend.question_library import runner as ql_runner
-    from backend.question_library.runner import RunnerError
+    from backend.generation.question_library import runner as ql_runner
+    from backend.generation.question_library.runner import RunnerError
 
     try:
         task = await ql_runner.create_generate_task(user_id=user_id, request=request.model_dump())
@@ -294,8 +295,8 @@ async def submit_question_library_score(request: QuestionLibraryScoreRequest, us
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
-    from backend.question_library import runner as ql_runner
-    from backend.question_library.runner import RunnerError
+    from backend.generation.question_library import runner as ql_runner
+    from backend.generation.question_library.runner import RunnerError
 
     try:
         task = await ql_runner.create_score_task(user_id=user_id, request=request.model_dump())
@@ -471,7 +472,7 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
         query = str(req.get("query") or "").strip()
         subject = str(req.get("subject") or "").strip()
         options = req.get("options") if isinstance(req.get("options"), dict) else {}
-        from backend.study_materials.orchestrator_singleton import study_material_tasks
+        from backend.generation.study_materials.orchestrator_singleton import study_material_tasks
 
         task = await study_material_tasks.create_task(
             query=query,
@@ -552,6 +553,7 @@ async def export_study_archive_task(
 @router.get("/{task_id}/stream")
 async def stream_task(
     task_id: str,
+    request: Request,
     after_seq: int = Query(0),
     user: dict = Depends(require_auth),
 ) -> StreamingResponse:
@@ -566,26 +568,36 @@ async def stream_task(
         # still alive and its bounded event buffer has moved on.
         last_sent = max(0, int(after_seq or 0))
         last_ping_at = 0.0
+        poll_delay = 0.1
         while True:
             task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
             if not task:
                 runtime_task = await task_runtime.get_task(task_id)
                 if runtime_task and str(runtime_task.user_id or "") == user_id:
                     async for event in task_runtime.stream(task_id, after_seq=last_sent, heartbeat_s=heartbeat_s):
+                        if await is_sse_client_disconnected(request):
+                            return
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    return
+                if await is_sse_client_disconnected(request):
                     return
                 yield f"data: {json.dumps({'taskId': task_id, 'seq': last_sent, 'type': 'error', 'data': {'error': 'task_not_found'}}, ensure_ascii=False)}\n\n"
                 return
 
             events = await db_list_task_events(user_id=user_id, task_id=task_id, after_seq=last_sent, limit=500)
+            had_events = False
             for evt in events:
                 seq = int(evt.get("seq") or 0)
                 if seq <= last_sent:
                     continue
                 last_sent = seq
+                had_events = True
+                if await is_sse_client_disconnected(request):
+                    return
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
             if len(events) >= 500:
+                poll_delay = next_poll_delay(poll_delay, had_events=True)
                 continue
 
             if str(task.get("status") or "") != "running":
@@ -594,9 +606,20 @@ async def stream_task(
             now = time.time()
             if now - last_ping_at >= max(1.0, float(heartbeat_s or 4.0)):
                 last_ping_at = now
+                if await is_sse_client_disconnected(request):
+                    return
                 yield f"data: {json.dumps({'taskId': task_id, 'seq': last_sent, 'type': 'ping', 'data': {'status': 'running', 'last_seq': last_sent}}, ensure_ascii=False)}\n\n"
 
-            await asyncio.sleep(0.5)
+            if await is_sse_client_disconnected(request):
+                return
+            poll_delay = next_poll_delay(poll_delay, had_events=had_events)
+            await wait_for_task_event_or_timeout(
+                runtime=task_runtime,
+                task_id=task_id,
+                user_id=user_id,
+                last_seq=last_sent,
+                timeout_s=poll_delay,
+            )
 
     return StreamingResponse(
         event_generator(),

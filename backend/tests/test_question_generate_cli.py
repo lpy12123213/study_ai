@@ -72,8 +72,8 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        with patch("backend.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
-            with patch("backend.mcp.search.tavily.tavily_search", tavily_search):
+        with patch("backend.integrations.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
+            with patch("backend.integrations.mcp.search.tavily.tavily_search", tavily_search):
                 result = await question_generate._exec_mcp_web_search_tool(
                     query="导数 新闻",
                     limit=3,

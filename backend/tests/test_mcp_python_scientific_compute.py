@@ -1,6 +1,6 @@
 import unittest
 
-from backend.mcp.tools.python_scientific_compute import python_scientific_compute
+from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
 
 
 class PythonScientificComputeTests(unittest.IsolatedAsyncioTestCase):

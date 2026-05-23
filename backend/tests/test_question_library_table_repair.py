@@ -1,6 +1,6 @@
 import unittest
 
-from backend.question_library.table_repair import repair_obvious_broken_tables
+from backend.generation.question_library.table_repair import repair_obvious_broken_tables
 
 
 class TestQuestionLibraryTableRepair(unittest.TestCase):

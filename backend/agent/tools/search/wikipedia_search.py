@@ -35,7 +35,7 @@ class WikipediaToolsMixin:
             points = [topic]
         points = points[:15]
 
-        from backend.mcp.search.wikipedia import wikipedia_search as _wiki
+        from backend.integrations.mcp.search.wikipedia import wikipedia_search as _wiki
 
         async def _lookup_one(point: str) -> Dict[str, Any]:
             query = f"{subject} {point}".strip() if subject and subject not in point else point

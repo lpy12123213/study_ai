@@ -22,6 +22,7 @@ wheels/
 
 # Local runtime data (db/cache/artifacts/user-data)
 .local/
+output/
 
 # Legacy / backup folders
 frontend_old/
@@ -112,6 +113,6 @@ mcp_logs/
 nextstep.md
 todo.csv
 
-.*/
+.orchids/
 .playwright-cli/
 .playwright-mcp/

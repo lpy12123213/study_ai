@@ -23,7 +23,7 @@ class CrawlerRecordReplayTests(unittest.IsolatedAsyncioTestCase):
         os.environ.pop("RECORD", None)
         os.environ.pop("RECORD_REPLAY_MODE", None)
 
-        from backend.crawler.zujuan import client as crawler_client
+        from backend.integrations.crawler.zujuan import client as crawler_client
 
         self._crawler_client = crawler_client
         self._orig_root = getattr(crawler_client._record_replay_store, "_root", None)
@@ -42,7 +42,7 @@ class CrawlerRecordReplayTests(unittest.IsolatedAsyncioTestCase):
             os.environ.update(self._env_before)
 
     async def test_search_by_keyword_uses_replay_fixture(self) -> None:
-        from backend.crawler.zujuan.client import ZujuanCrawler, _record_replay_store
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler, _record_replay_store
 
         crawler = ZujuanCrawler(subject="高中数学")
 
@@ -67,7 +67,7 @@ class CrawlerRecordReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((res.get("record_replay") or {}).get("mode"), "replay")
 
     async def test_get_question_detail_uses_replay_fixture(self) -> None:
-        from backend.crawler.zujuan.client import ZujuanCrawler, _record_replay_store
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler, _record_replay_store
 
         crawler = ZujuanCrawler(subject="高中数学")
 

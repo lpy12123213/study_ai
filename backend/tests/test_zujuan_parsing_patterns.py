@@ -1,6 +1,6 @@
 import unittest
 
-from backend.crawler.zujuan.parsing import FORMULA_IMG_TAG_PATTERN, IMG_TAG_PATTERN
+from backend.integrations.crawler.zujuan.parsing import FORMULA_IMG_TAG_PATTERN, IMG_TAG_PATTERN
 
 
 class TestZujuanParsingPatterns(unittest.TestCase):

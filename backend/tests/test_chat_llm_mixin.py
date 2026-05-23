@@ -5,8 +5,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-from backend.chat.llm_mixin import ChatLLMMixin
-from backend.chat.prompts import get_system_prompt
+from backend.workspace.chat.llm_mixin import ChatLLMMixin
+from backend.workspace.chat.prompts import get_system_prompt
 from backend.llm.client import _estimate_messages_tokens
 
 

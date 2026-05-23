@@ -244,7 +244,7 @@ async def ws_chat_stream(
                     await websocket.send_json({"type": "error", "data": {"error": "missing_fields"}})
                     continue
 
-                from backend.chat.service import get_chat_service
+                from backend.workspace.chat.service import get_chat_service
                 from backend.database.repositories.content.conversations import (
                     get_conversation, get_messages, add_message, update_conversation_title
                 )
