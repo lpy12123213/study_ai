@@ -1,116 +1,17 @@
 import { apiClient } from '../client'
-import { streamChatWs } from '@/api/ws'
 import { generateId } from '@/lib/utils'
 import type { ConversationItem, Message, TaskStep } from '@/types'
-
-interface BackendConversation {
-  id: number
-  title: string
-  created_at: string
-  updated_at: string
-}
-
-interface BackendMessage {
-  id: number
-  role: 'user' | 'assistant' | 'tool' | string
-  content: string
-  tool_calls: unknown[] | null
-  tool_call_id: string | null
-  created_at: string
-  tool_result_meta?: { size?: number; success?: boolean | null; error?: string | null } | null
-}
-
-interface BackendConversationMessagesResponse {
-  conversation: BackendConversation
-  messages: BackendMessage[]
-  paging?: {
-    limit?: number
-    before_id?: number
-    next_before_id?: number
-  }
-}
-
-export interface CreateConversationRequest {
-  title?: string
-}
-
-export interface GetMessagesOptions {
-  limit?: number
-  beforeId?: number
-}
-
-export interface MessagePage {
-  messages: Message[]
-  nextBeforeId: number
-  hasMore: boolean
-}
-
-interface ChatApiConversationsData {
-  conversations: ConversationItem[]
-}
-
-interface ChatApiMessage {
-  role: 'user' | 'assistant'
-  content: string
-}
-
-interface ChatApiMessagePage extends Omit<MessagePage, 'messages'> {
-  messages: ChatApiMessage[]
-}
-
-export interface SendMessageRequest {
-  conversationId: string
-  content: string
-  subject?: string
-  model?: string
-  subModel?: string
-}
-
-export type BackendChatStreamEvent =
-  | { type: 'iteration'; round?: number; message?: string }
-  | { type: 'assistant'; content?: string; tool_calls?: unknown[]; iteration?: number }
-  | {
-      type: 'tool_start'
-      tool_call_id: string
-      tool_name: string
-      arguments?: unknown
-      iteration?: number
-    }
-  | {
-      type: 'tool_result'
-      tool_call_id: string
-      tool_name: string
-      result?: unknown
-      iteration?: number
-    }
-  | { type: 'stream_start'; iteration?: number }
-  | { type: 'text_delta'; content?: string }
-  | { type: 'thinking_delta'; content?: string }
-  | {
-      type: 'assistant_final'
-      content?: string
-      total_iterations?: number
-      max_reached?: boolean
-    }
-  | { type: 'error'; content?: string }
-  | Record<string, unknown>
-
-export interface ChatStreamEvent {
-  type:
-    | 'iteration'
-    | 'assistant'
-    | 'tool_start'
-    | 'tool_result'
-    | 'stream_start'
-    | 'text_delta'
-    | 'thinking_delta'
-    | 'assistant_final'
-    | 'error'
-  raw: BackendChatStreamEvent
-  delta?: string
-  step?: TaskStep
-  error?: string
-}
+import type {
+  BackendConversation,
+  BackendConversationMessagesResponse,
+  BackendMessage,
+  ChatApiConversationsData,
+  ChatApiMessage,
+  ChatApiMessagePage,
+  CreateConversationRequest,
+  GetMessagesOptions,
+  MessagePage,
+} from './types'
 
 function toConversationItem(conv: BackendConversation): ConversationItem {
   return {
@@ -147,21 +48,6 @@ function toolCallParts(value: unknown): { id: string; name: string; args: unknow
   const id = String(recordValue(value, 'id') || '').trim() || generateId()
   const name = String(recordValue(fn, 'name') || recordValue(value, 'name') || 'tool').trim()
   return { id, name, args: recordValue(fn, 'arguments') }
-}
-
-function toBackendChatStreamEvent(value: unknown): BackendChatStreamEvent {
-  if (isRecord(value)) return value as BackendChatStreamEvent
-  return { type: 'error', content: String(value || 'unknown_error') }
-}
-
-function streamEventType(value: BackendChatStreamEvent): string {
-  const type = recordValue(value, 'type')
-  return typeof type === 'string' ? type : 'error'
-}
-
-function streamEventContent(value: BackendChatStreamEvent, fallback: string): string {
-  const content = recordValue(value, 'content')
-  return typeof content === 'string' ? content : fallback
 }
 
 function normalizeToolArgs(rawArgs: unknown): unknown {
@@ -345,55 +231,6 @@ export async function getMessages(
     messages: toMessagesWithSteps(raw),
     nextBeforeId,
     hasMore: raw.length >= limit && nextBeforeId > 0,
-  }
-}
-
-export function sendMessageStream(
-  request: SendMessageRequest,
-  onEvent: (event: ChatStreamEvent) => void,
-  onError?: (error: Error) => void,
-  onComplete?: () => void,
-  options?: {
-    signal?: AbortSignal
-  }
-): void {
-  const conversationId = Number.parseInt(request.conversationId, 10)
-  if (!Number.isFinite(conversationId) || conversationId <= 0) {
-    onError?.(new Error('conversation_id_invalid'))
-    return
-  }
-
-  const cleanup = streamChatWs(
-    {
-      conversation_id: conversationId,
-      content: request.content,
-      subject: request.subject,
-      model: request.model,
-      sub_model: request.subModel,
-    },
-    (data) => {
-      const raw = toBackendChatStreamEvent(data)
-      const t = streamEventType(raw)
-
-      if (t === 'text_delta') {
-        onEvent({ type: 'text_delta', raw, delta: streamEventContent(raw, '') })
-        return
-      }
-
-      if (t === 'error') {
-        onEvent({ type: 'error', raw, error: streamEventContent(raw, 'unknown_error') })
-        return
-      }
-
-      onEvent({ type: t as ChatStreamEvent['type'], raw })
-    },
-    onError,
-    onComplete,
-    { signal: options?.signal }
-  )
-
-  if (options?.signal) {
-    options.signal.addEventListener('abort', () => cleanup())
   }
 }
 

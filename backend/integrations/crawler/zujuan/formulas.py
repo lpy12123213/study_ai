@@ -8,7 +8,6 @@ import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
-from backend.integrations.crawler.zujuan.cookies import load_env_login
 from backend.integrations.crawler.zujuan.parsing import FORMULA_HASH_PATTERN, FORMULA_IMG_TAG_PATTERN
 
 logger = get_logger(__name__)
@@ -34,32 +33,6 @@ def _ensure_inline_math_wrapped(latex: str) -> str:
         return value
 
     return f"\\({value}\\)"
-
-
-def build_curl_cmd(crawler: Any, url: str, timeout: int = 30, use_login_cookie: bool = True) -> list:
-    cmd = [
-        "curl",
-        "-s",
-        "-H",
-        f"User-Agent: {crawler.user_agent}",
-        "-H",
-        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "-H",
-        "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
-        "-H",
-        "Referer: https://zujuan.xkw.com/",
-    ]
-
-    cookie_to_use = crawler.cookies
-    if use_login_cookie and not cookie_to_use:
-        env_session = load_env_login()
-        if env_session.get("is_logged_in") and env_session.get("cookies"):
-            cookie_to_use = env_session["cookies"]
-
-    if cookie_to_use:
-        cmd.extend(["-H", f"Cookie: {cookie_to_use}"])
-    cmd.append(url)
-    return cmd
 
 
 def resolve_url(crawler: Any, url: str) -> str:
@@ -301,13 +274,25 @@ async def fetch_formula_svg(_crawler: Any, png_url: str) -> str:
         return ""
     if not svg_url.lower().endswith(".svg"):
         svg_url = re.sub(r"\.(png|gif|jpe?g)(\?.*)?$", ".svg", svg_url, flags=re.IGNORECASE)
+    # Static formula SVG assets do not require anti-bot fingerprints, so we
+    # fetch them directly via httpx (no subprocess curl). The crawler-bound
+    # client (when available) re-uses pooled connections + http/2, but a
+    # one-shot client is fine if the caller did not set one up yet.
+    client = getattr(_crawler, "client", None)
+    headers = {
+        "User-Agent": getattr(_crawler, "user_agent", "Mozilla/5.0"),
+        "Referer": "https://zujuan.xkw.com/",
+    }
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(["curl", "-s", svg_url], capture_output=True, timeout=10),
-        )
-        svg = result.stdout.decode("utf-8", errors="ignore")
+        if client is not None:
+            response = await client.get(svg_url, headers=headers, timeout=10.0)
+            svg = response.text or ""
+        else:
+            import httpx as _httpx
+
+            async with _httpx.AsyncClient(timeout=10.0) as throwaway:
+                response = await throwaway.get(svg_url, headers=headers)
+                svg = response.text or ""
         if svg.startswith("<svg"):
             return svg
     except Exception:

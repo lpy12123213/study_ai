@@ -53,6 +53,11 @@ class OpenAICompatibleClient:
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "").strip().rstrip("/")
         self.timeout = float(timeout or 120.0)
+        # Strong references to background streaming runners so they are not GC'd.
+        # See https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
+        # ("If a task is no longer referenced, it can be garbage collected
+        # before it completes.")
+        self._runner_tasks: set[asyncio.Task[Any]] = set()
 
     def _provider(self) -> str:
         return _guess_provider(self.base_url)
@@ -141,13 +146,19 @@ class OpenAICompatibleClient:
             finally:
                 await q.put(None)
 
-        asyncio.create_task(runner())
+        runner_task = asyncio.create_task(runner())
+        self._runner_tasks.add(runner_task)
+        runner_task.add_done_callback(self._runner_tasks.discard)
 
-        while True:
-            item = await q.get()
-            if item is None:
-                break
-            yield item
+        try:
+            while True:
+                item = await q.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not runner_task.done():
+                runner_task.cancel()
 
 
 def get_openrouter_client() -> OpenAICompatibleClient:

@@ -10,6 +10,7 @@ import { ChevronDown, GripHorizontal, PauseCircle, SendHorizontal, Sparkles } fr
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import {
   Select,
   SelectContent,
@@ -18,7 +19,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import type { AiGenerateSessionMode } from '@/features/generation/aiGenerate/types'
 
 type SubjectOption = {
@@ -95,7 +95,6 @@ export function MissionComposer(props: MissionComposerProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [missionHeight, setMissionHeight] = useState(MIN_MISSION_HEIGHT)
   const [resizing, setResizing] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const dragStartYRef = useRef(0)
   const dragStartHeightRef = useRef(MIN_MISSION_HEIGHT)
   const resizeModeRef = useRef<ResizeInputMode | null>(null)
@@ -161,13 +160,7 @@ export function MissionComposer(props: MissionComposerProps) {
       resizeModeRef.current = modeInput
       dragStartYRef.current = clientY
 
-      const currentHeight =
-        textareaRef.current?.getBoundingClientRect().height ||
-        textareaRef.current?.offsetHeight ||
-        missionHeight ||
-        MIN_MISSION_HEIGHT
-
-      dragStartHeightRef.current = Math.max(MIN_MISSION_HEIGHT, currentHeight)
+      dragStartHeightRef.current = Math.max(MIN_MISSION_HEIGHT, missionHeight || MIN_MISSION_HEIGHT)
       setResizing(true)
     },
     [missionHeight]
@@ -235,13 +228,16 @@ export function MissionComposer(props: MissionComposerProps) {
             <span>·</span>
             <span>{count || '5'} 题</span>
           </div>
-          <Textarea
-            ref={textareaRef}
-            aria-label="出题任务描述"
+          <RichTextarea
             value={missionText}
-            onChange={(event) => onMissionTextChange(event.target.value)}
+            onChange={onMissionTextChange}
+            ariaLabel="出题任务描述"
+            debounceMs={0}
+            minHeight={MIN_MISSION_HEIGHT}
+            maxHeight={MAX_MISSION_HEIGHT}
             style={{ height: `${missionHeight}px` }}
-            className="min-h-0 resize-none rounded-[24px] border-border/70 bg-background px-5 py-5 pb-10 text-base leading-7 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:bg-card/80 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+            className="min-h-0 rounded-[24px] border-border/70 bg-background text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:bg-card/80 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+            editorClassName="px-5 py-5 pb-10 text-base leading-7"
             placeholder="例如：沿着函数单调性继续出 3 道压轴变式题，优先覆盖导数与分类讨论，审查不过的题不要自动确认。"
           />
           <div className="absolute right-16 bottom-7 z-10 inline-flex items-center gap-1">

@@ -13,22 +13,30 @@ class TestZujuanExportBehavior(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(str(resolved), r"C:\repo\.env")
 
-    def test_build_curl_cmd_prefers_crawler_cookie_over_env_cookie(self) -> None:
-        from backend.integrations.crawler.zujuan.formulas import build_curl_cmd
+    async def test_fetch_formula_svg_uses_crawler_http_client(self) -> None:
+        from backend.integrations.crawler.zujuan.formulas import fetch_formula_svg
 
-        crawler = SimpleNamespace(
-            user_agent="UA",
-            cookies="aliyungf_tc=anti-bot; userId=123; bankId=15",
-        )
+        class FakeSvgResponse:
+            text = "<svg></svg>"
 
-        with patch(
-            "backend.integrations.crawler.zujuan.formulas.load_env_login",
-            return_value={"is_logged_in": True, "cookies": "userId=123; bankId=15"},
-        ):
-            cmd = build_curl_cmd(crawler, "https://zujuan.xkw.com/15q1.html", use_login_cookie=True)
+        class FakeSvgClient:
+            def __init__(self) -> None:
+                self.gets: list[dict] = []
 
-        joined = " ".join(cmd)
-        self.assertIn("Cookie: aliyungf_tc=anti-bot; userId=123; bankId=15", joined)
+            async def get(self, url: str, *, headers: dict, timeout: float) -> FakeSvgResponse:
+                self.gets.append({"url": url, "headers": headers, "timeout": timeout})
+                return FakeSvgResponse()
+
+        client = FakeSvgClient()
+        crawler = SimpleNamespace(user_agent="UA", client=client)
+
+        svg = await fetch_formula_svg(crawler, "https://staticzujuan.xkw.com/quesimg/Upload/formula/abc.png")
+
+        self.assertEqual(svg, "<svg></svg>")
+        self.assertEqual(client.gets[0]["url"], "https://staticzujuan.xkw.com/quesimg/Upload/formula/abc.svg")
+        self.assertEqual(client.gets[0]["headers"]["User-Agent"], "UA")
+        self.assertEqual(client.gets[0]["headers"]["Referer"], "https://zujuan.xkw.com/")
+        self.assertEqual(client.gets[0]["timeout"], 10.0)
 
     async def test_export_to_basket_uses_subject_question_type_id_map(self) -> None:
         from backend.integrations.crawler.zujuan.basket import export_to_basket

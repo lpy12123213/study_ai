@@ -4,10 +4,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import 'katex/dist/katex.min.css'
 import { Loader2, Plus, Send, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { useSubjects } from '@/hooks/useSubjects'
 import { useFormDraft } from '@/hooks/useFormDraft'
+import { useVirtualMessages } from '@/hooks/useVirtualMessages'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useConversationStore } from '@/stores/useConversationStore'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
@@ -31,7 +32,6 @@ import type { SubAgentActivity } from '@/features/generation/lessonPlans/types'
 
 function LessonPlansView() {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const userId = useAuthStore((s) => s.user?.id || '')
   const [searchParams, setSearchParams] = useSearchParams()
@@ -82,6 +82,15 @@ function LessonPlansView() {
   })
 
   const messages = useConversationStore((state) => state.getMessages(activeConversationId ?? ''))
+
+  const shouldVirtualize = messages.length >= 500
+  const virtual = useVirtualMessages({
+    enabled: shouldVirtualize,
+    messages,
+    containerRef: scrollRef,
+    estimatePx: 220,
+    overscan: 12,
+  })
 
   useEffect(() => {
     if (!scrollRef.current) return
@@ -231,13 +240,6 @@ function LessonPlansView() {
     })
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit()
-    }
-  }
-
   const showSplitPane = stream.isGenerating || subAgentActivities.length > 0
 
   return (
@@ -259,11 +261,31 @@ function LessonPlansView() {
                     <TaskProgressHeader taskId={stream.activeUnifiedTaskId} compact />
                   </div>
                 )}
-                <AnimatePresence mode="popLayout">
-                  {messages.map((m) => (
-                    <MessageBubble key={m.id} message={m} />
-                  ))}
-                </AnimatePresence>
+                {shouldVirtualize ? (
+                  <div ref={virtual.listRef} className="relative" style={{ height: virtual.totalHeight }}>
+                    {messages.slice(virtual.range.start, virtual.range.end).map((m, i) => {
+                      const index = virtual.range.start + i
+                      const mid = String(m.id)
+                      const top = virtual.offsets[index] ?? 0
+                      return (
+                        <div
+                          key={m.id}
+                          ref={virtual.getMeasureRef(mid)}
+                          className="absolute left-0 right-0 flow-root"
+                          style={{ transform: `translateY(${top}px)` }}
+                        >
+                          <MessageBubble message={m} disableMotion={true} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <AnimatePresence mode="popLayout">
+                    {messages.map((m) => (
+                      <MessageBubble key={m.id} message={m} disableMotion={false} />
+                    ))}
+                  </AnimatePresence>
+                )}
 
                 {stream.isGenerating && messages[messages.length - 1]?.content === '' && (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3 mb-4">
@@ -325,21 +347,19 @@ function LessonPlansView() {
                 <Plus className="h-5 w-5" />
               </Button>
 
-              <Textarea
-                ref={textareaRef}
+              <RichTextarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
+                onChange={setInput}
+                onSubmit={handleSubmit}
+                submitOnEnter
                 placeholder="例如：帮我写一份高中数学高二《函数单调性与导数应用》45分钟教案，偏互动式..."
-                className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+                ariaLabel="教案生成要求"
+                debounceMs={0}
+                minHeight={44}
+                maxHeight={200}
+                className="min-h-[44px] w-full border-0 bg-transparent shadow-none focus-within:ring-0"
+                editorClassName="px-0 py-2.5 placeholder:text-muted-foreground/50"
                 disabled={stream.isGenerating}
-                rows={1}
-                style={{ height: 'auto', overflow: 'hidden' }}
-                onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement
-                  target.style.height = 'auto'
-                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`
-                }}
               />
 
               <Button

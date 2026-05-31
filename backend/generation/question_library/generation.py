@@ -454,6 +454,7 @@ async def generate_questions(
             "summary": str(best_result.get("summary") or "").strip(),
             "match_votes": true_votes,
             "consensus_n": len(outcomes),
+            "consistency_score": (round(true_votes / len(outcomes), 3) if outcomes else 0.0),
         }
 
     async def _evaluate_candidate(cand: dict) -> dict:
@@ -542,6 +543,10 @@ async def generate_questions(
                 keep["judge"]["solver_final_answer"] = str(solved.get("final_answer") or "").strip()
                 keep["judge"]["solver_issues"] = list(solved.get("issues") or []) if isinstance(solved.get("issues"), list) else []
                 keep["judge"]["solver_votes"] = int(solved.get("match_votes") or 0)
+                keep["judge"]["solver_consensus_n"] = int(solved.get("consensus_n") or 0)
+                consistency_score = float(solved.get("consistency_score") or 0.0)
+                keep["judge"]["consistency_score"] = consistency_score
+                keep["consistency_score"] = consistency_score
                 keep["judge"]["ambiguity"] = bool(amb.get("ambiguous"))
                 keep["judge"]["ambiguity_issues"] = ambiguous_issues
 
@@ -622,6 +627,11 @@ async def generate_questions(
                 "repairs_attempted": repairs_attempted,
                 "reject_reason_counts": dict(reject_reason_counts),
                 "latest_score": int(result.get("score") or 0),
+                "latest_consistency_score": (
+                    float((result.get("candidate") or {}).get("consistency_score") or 0.0)
+                    if isinstance(result.get("candidate"), dict)
+                    else 0.0
+                ),
             },
             sample=result.get("sample") if isinstance(result.get("sample"), dict) else None,
         )

@@ -19,6 +19,8 @@ class SseDisconnectTest(unittest.IsolatedAsyncioTestCase):
             root / "backend" / "api" / "tasks.py",
             root / "backend" / "api" / "chat.py",
             root / "backend" / "chat" / "service.py",
+            root / "backend" / "api" / "lesson_plan.py",
+            root / "backend" / "api" / "question_library.py",
         ]
         for path in targets:
             src = path.read_text(encoding="utf-8")

@@ -1,64 +1,36 @@
-"""Lesson plan generation service."""
+"""Lesson plan persistence (async, DB-backed).
+
+Earlier revisions kept plans in a module-level dict + JSON snapshot. That setup
+broke under multi-worker uvicorn deployments and lost data on restart. The
+canonical store is now SQL via
+:mod:`backend.database.repositories.generation.lesson_plans`; the helpers here
+preserve the previous public surface (and Pydantic return types) so callers
+don't need to know which backend is in use.
+
+All read/write helpers require ``user_id`` and return ``None`` / ``False`` when
+the plan does not exist OR is not owned by the requested user. Cross-tenant
+access is rejected before any data is touched.
+"""
 
 from __future__ import annotations
 
-import json
-import threading
-import uuid
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from backend.api.lesson_plan_schemas import (
     LessonPlanObjective,
     LessonPlanResponse,
     LessonPlanSection,
 )
-from backend.core.time_utils import utcnow
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-LOCAL_DIR = PROJECT_ROOT / ".local"
-LESSON_PLANS_PATH = LOCAL_DIR / "lesson_plans.json"
-_lesson_plans_lock = threading.RLock()
+from backend.database.repositories.generation import lesson_plans as _repo
 
 
-def _load_lesson_plans_from_disk() -> Dict[str, Dict[str, Any]]:
-    try:
-        if not LESSON_PLANS_PATH.exists():
-            return {}
-        raw = LESSON_PLANS_PATH.read_text(encoding="utf-8")
-        obj = json.loads(raw) if raw.strip() else {}
-        if not isinstance(obj, dict):
-            return {}
-        out: Dict[str, Dict[str, Any]] = {}
-        for k, v in obj.items():
-            if not isinstance(k, str) or not isinstance(v, dict):
-                continue
-            out[k] = dict(v)
-        return out
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return {}
+def _to_response(plan: Optional[dict]) -> Optional[LessonPlanResponse]:
+    if not plan:
+        return None
+    return LessonPlanResponse(**plan)
 
 
-def _save_lesson_plans_to_disk(plans: Dict[str, Dict[str, Any]]) -> None:
-    try:
-        LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = LESSON_PLANS_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(plans, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(LESSON_PLANS_PATH)
-    except (OSError, TypeError, ValueError):
-        return
-
-
-def _bootstrap_lesson_plans() -> Dict[str, Dict[str, Any]]:
-    plans = _load_lesson_plans_from_disk()
-    _save_lesson_plans_to_disk(plans)
-    return plans
-
-
-_lesson_plans: Dict[str, Dict[str, Any]] = _bootstrap_lesson_plans()
-
-
-def create_lesson_plan(
+async def create_lesson_plan(
     title: str,
     subject: str,
     topic: str,
@@ -67,124 +39,119 @@ def create_lesson_plan(
     objectives: Optional[List[str]] = None,
     user_id: Optional[str] = None,
 ) -> LessonPlanResponse:
-    """Create a new lesson plan."""
-    plan_id = str(uuid.uuid4())
-    now = utcnow().isoformat()
+    """Create a new lesson plan owned by ``user_id``."""
 
-    plan = {
-        "id": plan_id,
-        "title": title,
-        "subject": subject,
-        "grade": grade,
-        "topic": topic,
-        "objectives": [{"description": obj, "type": "knowledge"} for obj in (objectives or [])],
-        "sections": [],
-        "duration_minutes": duration_minutes,
-        "status": "draft",
-        "user_id": user_id,
-        "created_at": now,
-        "updated_at": now,
-    }
-
-    with _lesson_plans_lock:
-        _lesson_plans[plan_id] = plan
-        _save_lesson_plans_to_disk(_lesson_plans)
-        return LessonPlanResponse(**plan)
+    plan = await _repo.create_lesson_plan(
+        user_id=str(user_id or ""),
+        title=title,
+        subject=subject,
+        topic=topic,
+        grade=grade,
+        duration_minutes=duration_minutes,
+        objectives=objectives,
+    )
+    return LessonPlanResponse(**plan)
 
 
-def get_lesson_plan(plan_id: str) -> Optional[LessonPlanResponse]:
-    """Get a lesson plan by ID."""
-    with _lesson_plans_lock:
-        plan = _lesson_plans.get(plan_id)
-        if not plan:
-            return None
-        return LessonPlanResponse(**plan)
+async def get_lesson_plan(plan_id: str, user_id: str) -> Optional[LessonPlanResponse]:
+    """Fetch a plan by id, scoped to its owner."""
+
+    plan = await _repo.get_lesson_plan(plan_id=plan_id, user_id=user_id)
+    return _to_response(plan)
 
 
-def list_lesson_plans(user_id: Optional[str] = None) -> List[LessonPlanResponse]:
-    """List all lesson plans, optionally filtered by user."""
-    with _lesson_plans_lock:
-        plans: List[LessonPlanResponse] = []
-        for plan in _lesson_plans.values():
-            if user_id is None or plan.get("user_id") == user_id:
-                plans.append(LessonPlanResponse(**plan))
-        return sorted(plans, key=lambda p: p.created_at or "", reverse=True)
+async def list_lesson_plans(user_id: str) -> List[LessonPlanResponse]:
+    """List plans owned by ``user_id``."""
+
+    plans = await _repo.list_lesson_plans(user_id=user_id)
+    return [LessonPlanResponse(**p) for p in plans]
 
 
-def update_lesson_plan(
+async def update_lesson_plan(
     plan_id: str,
+    user_id: str,
     title: Optional[str] = None,
     objectives: Optional[List[LessonPlanObjective]] = None,
     sections: Optional[List[LessonPlanSection]] = None,
     status: Optional[str] = None,
 ) -> Optional[LessonPlanResponse]:
-    """Update a lesson plan."""
-    with _lesson_plans_lock:
-        plan = _lesson_plans.get(plan_id)
-        if not plan:
-            return None
+    """Patch a plan; returns ``None`` if missing or not owned."""
 
-        if title is not None:
-            plan["title"] = title
-        if objectives is not None:
-            plan["objectives"] = [obj.model_dump() for obj in objectives]
-        if sections is not None:
-            plan["sections"] = [sec.model_dump() for sec in sections]
-        if status is not None:
-            plan["status"] = status
-
-        plan["updated_at"] = utcnow().isoformat()
-        _save_lesson_plans_to_disk(_lesson_plans)
-        return LessonPlanResponse(**plan)
-
-
-def delete_lesson_plan(plan_id: str) -> bool:
-    """Delete a lesson plan."""
-    with _lesson_plans_lock:
-        if plan_id in _lesson_plans:
-            del _lesson_plans[plan_id]
-            _save_lesson_plans_to_disk(_lesson_plans)
-            return True
-        return False
+    objectives_payload = (
+        [obj.model_dump() for obj in objectives] if objectives is not None else None
+    )
+    sections_payload = (
+        [sec.model_dump() for sec in sections] if sections is not None else None
+    )
+    plan = await _repo.update_lesson_plan(
+        plan_id=plan_id,
+        user_id=user_id,
+        title=title,
+        objectives=objectives_payload,
+        sections=sections_payload,
+        status=status,
+    )
+    return _to_response(plan)
 
 
-def export_lesson_plan_markdown(plan_id: str) -> Optional[str]:
-    """Export lesson plan as Markdown."""
-    with _lesson_plans_lock:
-        plan = _lesson_plans.get(plan_id)
-        if not plan:
-            return None
+async def delete_lesson_plan(plan_id: str, user_id: str) -> bool:
+    return await _repo.delete_lesson_plan(plan_id=plan_id, user_id=user_id)
+
+
+async def export_lesson_plan_markdown(plan_id: str, user_id: str) -> Optional[str]:
+    """Render a plan as Markdown, owner-scoped."""
+
+    plan = await _repo.get_lesson_plan(plan_id=plan_id, user_id=user_id)
+    if not plan:
+        return None
 
     lines = [
-        f"# {plan['title']}",
+        f"# {plan.get('title') or ''}",
         "",
-        f"**Subject:** {plan['subject']}",
-        f"**Grade:** {plan.get('grade', 'N/A')}",
-        f"**Topic:** {plan['topic']}",
-        f"**Duration:** {plan['duration_minutes']} minutes",
+        f"**Subject:** {plan.get('subject') or ''}",
+        f"**Grade:** {plan.get('grade') or 'N/A'}",
+        f"**Topic:** {plan.get('topic') or ''}",
+        f"**Duration:** {int(plan.get('duration_minutes') or 0)} minutes",
         "",
         "## Learning Objectives",
         "",
     ]
 
-    for obj in plan.get("objectives", []):
-        lines.append(f"- {obj.get('description', '')}")
+    for obj in plan.get("objectives") or []:
+        if isinstance(obj, dict):
+            lines.append(f"- {str(obj.get('description') or '').strip()}")
+        else:
+            lines.append(f"- {str(obj or '').strip()}")
 
     lines.append("")
     lines.append("## Lesson Sections")
     lines.append("")
 
-    for section in plan.get("sections", []):
-        lines.append(f"### {section.get('title', 'Untitled')} ({section.get('duration_minutes', 0)} min)")
+    for section in plan.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title") or "Untitled")
+        duration = int(section.get("duration_minutes") or 0)
+        lines.append(f"### {title} ({duration} min)")
         lines.append("")
-        lines.append(section.get("content", ""))
+        lines.append(str(section.get("content") or ""))
         lines.append("")
 
-        activities = section.get("activities", [])
-        if activities:
+        activities = section.get("activities") or []
+        if isinstance(activities, list) and activities:
             lines.append("**Activities:**")
             for act in activities:
                 lines.append(f"- {act}")
             lines.append("")
 
     return "\n".join(lines)
+
+
+__all__ = [
+    "create_lesson_plan",
+    "delete_lesson_plan",
+    "export_lesson_plan_markdown",
+    "get_lesson_plan",
+    "list_lesson_plans",
+    "update_lesson_plan",
+]

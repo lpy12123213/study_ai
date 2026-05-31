@@ -14,11 +14,21 @@
 按需：
 
 - XeLaTeX 或 PDFLaTeX：PDF 导出。
+- Docker：推荐用于 LaTeX PDF 沙盒编译。
 - `dvisvgm`：TikZ/PGF 转 SVG。
 - Asymptote `asy`：部分图形回退。
 - Pandoc：DOCX 导出。
 
-Windows 上建议安装 MiKTeX 或 TeX Live，并确认相关可执行文件在 `PATH` 中。
+Windows 上建议安装 MiKTeX 或 TeX Live，并确认相关可执行文件在 `PATH` 中。公网或多用户部署建议优先启用
+Docker LaTeX 沙盒：
+
+```bash
+docker build -t study-ai/latex-sandbox:latest docker/latex-sandbox
+```
+
+`.env` 中保持 `PAPER_EXPORT_LATEX_BACKEND=auto` 可在镜像存在时走沙盒、镜像缺失时回退宿主机；如需强制沙盒，
+设为 `docker`。可用 `LATEX_SANDBOX_MEMORY`、`LATEX_SANDBOX_CPUS`、`LATEX_SANDBOX_PIDS_LIMIT`
+限制容器资源。
 
 ## 部署模型
 
@@ -149,6 +159,7 @@ Nginx / Caddy / Traefik 需要注意：
 - `.env` 中的 `JWT_SECRET`、`ADMIN_PASSWORD` 已更换。
 - 不允许提交真实 API key、Cookie、数据库、抓取内容。
 - 只开启必要的 `PAPER_STORE_*` 内容持久化。
+- 多用户部署中 PDF 导出优先使用 `PAPER_EXPORT_LATEX_BACKEND=docker` 或确认 `auto` 能找到沙盒镜像。
 - 媒体代理域名白名单符合预期。
 - 反向代理正确处理 SSE。
 - 日志不会输出密钥明文。
@@ -183,6 +194,20 @@ python scripts/restore_db.py .local/backups/db/exam_papers-YYYYMMDD-HHMMSS.db --
 如果目标数据库已经存在，恢复脚本会先生成 `*.pre-restore-*.db` 安全副本，再覆盖目标库，并在恢复后运行 `PRAGMA integrity_check`。
 
 恢复时必须先确认 `.env`、模型配置和数据库 schema 与目标版本兼容。
+
+建议生产或长期运行环境至少每日备份一次，并保留最近 7 到 14 天的数据库副本。Linux 可使用 cron：
+
+```cron
+15 3 * * * cd /opt/study_ai && .venv/bin/python scripts/backup_db.py --output-dir /var/backups/study_ai/db --name nightly
+```
+
+Windows 服务器可用“任务计划程序”每日运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Location C:\study_ai; .\venv\Scripts\python.exe scripts\backup_db.py --output-dir C:\study_ai-backups\db --name nightly"
+```
+
+备份目录应位于应用目录之外或同步到外部存储。清理旧备份时只删除确认可恢复窗口之外的文件，并至少保留最近一次上线前备份。
 
 ## 上线前验证
 

@@ -194,6 +194,29 @@ function toQuestionMeta(input: unknown): Question | undefined {
   const stem =
     typeof input.stem === 'string' ? input.stem : undefined
 
+  let knowledgePoints: string[] | undefined
+  const kpJsonRaw = input.knowledge_points_json
+  if (typeof kpJsonRaw === 'string' && kpJsonRaw.trim()) {
+    try {
+      const parsed = JSON.parse(kpJsonRaw)
+      if (Array.isArray(parsed)) {
+        knowledgePoints = parsed
+          .map((x) => (typeof x === 'string' ? x.trim() : ''))
+          .filter((x): x is string => Boolean(x))
+        if (knowledgePoints.length === 0) knowledgePoints = undefined
+      }
+    } catch {
+      knowledgePoints = undefined
+    }
+  }
+
+  let difficultyValue: number | null | undefined
+  if (typeof input.difficulty_value === 'number' && Number.isFinite(input.difficulty_value)) {
+    difficultyValue = input.difficulty_value
+  } else if (input.difficulty_value === null) {
+    difficultyValue = null
+  }
+
   return {
     questionId,
     order,
@@ -202,10 +225,12 @@ function toQuestionMeta(input: unknown): Question | undefined {
       typeof input.difficulty === 'string'
         ? input.difficulty
         : undefined,
+    difficultyValue,
     knowledgePoint:
       typeof input.knowledge_point === 'string'
         ? input.knowledge_point
         : undefined,
+    knowledgePoints,
     sourceUrl:
       typeof input.source_url === 'string'
         ? input.source_url

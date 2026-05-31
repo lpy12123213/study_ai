@@ -9,24 +9,11 @@ from typing import Any, Dict, List
 from backend.agent.tools.generation.latex_export_utils import _auto_fix_latex
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.generation.paper_compose.latex_safety import ensure_latex_is_safe
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 from backend.shared.project_paths import resolve_repo_root
 
 logger = get_logger(__name__)
-
-
-_LATEX_BLOCKLIST_PATTERNS = [
-    r"\\(?:input|include)\s*\{",
-    r"\\openin\b",
-    r"\\read\b",
-    r"\\usepackage(?:\[[^\]]*\])?\s*\{[^}]*\b(?:catchfile|verbatim|fancyvrb|pythontex)\b[^}]*\}",
-]
-
-
-def _ensure_latex_is_safe(tex: str) -> None:
-    for pattern in _LATEX_BLOCKLIST_PATTERNS:
-        if re.search(pattern, tex, flags=re.IGNORECASE):
-            raise ValueError("latex_unsafe_content")
 
 
 class LatexCompileMixin:
@@ -40,7 +27,7 @@ class LatexCompileMixin:
             raise ValueError("latex_missing")
 
         tex = _auto_fix_latex(tex).strip() + "\n"
-        _ensure_latex_is_safe(tex)
+        ensure_latex_is_safe(tex)
         try:
             ctx.working_memory["latex_tex"] = tex
         except (AttributeError, TypeError):

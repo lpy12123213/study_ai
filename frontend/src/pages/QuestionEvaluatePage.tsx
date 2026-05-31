@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react'
 import { Loader2, Search, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { shouldSubmitOnEnter } from '@/lib/keyboard'
 import { cn } from '@/lib/utils'
 import { useSubjects } from '@/hooks/useSubjects'
 import * as questionEvaluateApi from '@/api/questionEvaluate'
@@ -174,7 +175,7 @@ export default function QuestionEvaluatePage() {
                     placeholder="输入关键词（如：函数 单调性）"
                     className="pl-9 h-9"
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') doSearch()
+                      if (shouldSubmitOnEnter(e)) doSearch()
                     }}
                   />
                 </div>
@@ -286,11 +287,14 @@ export default function QuestionEvaluatePage() {
             <CardContent className="flex flex-col gap-3 flex-1 min-h-0">
               <div>
                 <label className="text-xs text-muted-foreground">额外要求（可选）</label>
-                <Textarea
+                <RichTextarea
                   value={requirements}
-                  onChange={(e) => setRequirements(e.target.value)}
+                  onChange={setRequirements}
                   placeholder="例如：偏向区分度强、题干表述严谨、避免怪题偏题"
-                  className="min-h-[90px]"
+                  ariaLabel="额外要求"
+                  debounceMs={0}
+                  minHeight={90}
+                  maxHeight={220}
                 />
               </div>
 

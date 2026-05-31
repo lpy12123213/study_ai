@@ -5,14 +5,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import backend.app as app_module
 from backend.api import media
+from backend.api import papers
 from backend.api.auth import require_auth
+from backend.api import canvas
 from backend.api.canvas import _sanitize_question_html
 from backend.app import create_app
+from backend.core.audit import AuditAction
 from backend.core.subjects import get_all_subjects
+from backend.media import generated as generated_media
 
 
 class TestCanvasSanitization(unittest.TestCase):
@@ -33,6 +38,74 @@ class TestCanvasSanitization(unittest.TestCase):
 
         self.assertIn("/api/media/proxy?url=https%3A%2F%2Fzujuan.xkw.com%2Fstatic%2Fquestion.png", sanitized)
         self.assertNotIn("onload", sanitized)
+
+
+class TestControlledQuestionAccess(unittest.IsolatedAsyncioTestCase):
+    async def test_canvas_render_question_rate_limited_by_user(self) -> None:
+        with patch.object(canvas._QUESTION_RENDER_LIMITER, "allow", new=AsyncMock(return_value=False)):
+            with self.assertRaises(HTTPException) as ctx:
+                await canvas.render_question("123", user={"user_id": "u-1"})
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(ctx.exception.detail, "rate_limited")
+
+    async def test_canvas_render_question_audits_successful_access(self) -> None:
+        fake_crawler = AsyncMock()
+        fake_crawler.base_url = "https://zujuan.xkw.com"
+        fake_crawler.get_question_detail.return_value = {
+            "success": True,
+            "question_id": "123",
+            "stem_html": "<p>题干</p>",
+        }
+
+        with patch.object(canvas._QUESTION_RENDER_LIMITER, "allow", new=AsyncMock(return_value=True)), patch.object(
+            canvas,
+            "resolve_subject",
+            return_value="高中数学",
+        ), patch.object(canvas, "get_crawler", new=AsyncMock(return_value=fake_crawler)), patch.object(
+            canvas.audit_logger,
+            "log",
+        ) as audit_log:
+            result = await canvas.render_question("123", subject="高中数学", edu_level="", user={"user_id": "u-1"})
+
+        self.assertTrue(result["success"])
+        audit_log.assert_called_once()
+        kwargs = audit_log.call_args.kwargs
+        self.assertEqual(kwargs["user_id"], "u-1")
+        self.assertEqual(kwargs["action"], AuditAction.QUESTION_RENDER)
+        self.assertEqual(kwargs["details"]["question_id"], "123")
+
+    async def test_paper_download_link_rate_limited_by_user(self) -> None:
+        with patch.object(papers._PAPER_DOWNLOAD_LINK_LIMITER, "allow", new=AsyncMock(return_value=False)):
+            with self.assertRaises(HTTPException) as ctx:
+                await papers.get_download_link(1, user={"user_id": "u-1"})
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(ctx.exception.detail, "rate_limited")
+
+    async def test_paper_download_link_audits_successful_access(self) -> None:
+        paper = {
+            "paper_name": "测试卷",
+            "questions": [{"question_id": "123", "source_url": "https://zujuan.xkw.com/q/123"}],
+        }
+        with patch.object(papers._PAPER_DOWNLOAD_LINK_LIMITER, "allow", new=AsyncMock(return_value=True)), patch.object(
+            papers,
+            "get_paper",
+            new=AsyncMock(return_value=paper),
+        ), patch.object(papers, "get_question_cache", new=AsyncMock(return_value={})), patch.object(
+            papers.audit_logger,
+            "log",
+        ) as audit_log:
+            result = await papers.get_download_link(7, user={"user_id": "u-1"})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["question_ids"], ["123"])
+        audit_log.assert_called_once()
+        kwargs = audit_log.call_args.kwargs
+        self.assertEqual(kwargs["user_id"], "u-1")
+        self.assertEqual(kwargs["action"], AuditAction.PAPER_DOWNLOAD_LINK)
+        self.assertEqual(kwargs["details"]["paper_id"], 7)
+        self.assertEqual(kwargs["details"]["question_ids"], ["123"])
 
 
 class TestMediaProxyNormalization(unittest.IsolatedAsyncioTestCase):
@@ -127,3 +200,29 @@ class TestGeneratedMediaDownloadApi(unittest.TestCase):
                     self.assertIn(filename, content_disposition)
         finally:
             app.dependency_overrides.clear()
+
+
+class TestGeneratedMediaPublishing(unittest.IsolatedAsyncioTestCase):
+    async def test_publish_generated_bytes_scopes_filenames_by_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(generated_media, "_GENERATED_DIR", Path(tmpdir)):
+                with patch.object(generated_media, "upsert_generated_file", new=AsyncMock()):
+                    alice = await generated_media.publish_generated_bytes(
+                        b"same image bytes",
+                        user_id="alice",
+                        ext=".svg",
+                        file_type="image",
+                        mime_type="image/svg+xml",
+                    )
+                    bob = await generated_media.publish_generated_bytes(
+                        b"same image bytes",
+                        user_id="bob",
+                        ext=".svg",
+                        file_type="image",
+                        mime_type="image/svg+xml",
+                    )
+
+        self.assertEqual(alice["sha256"], bob["sha256"])
+        self.assertNotEqual(alice["filename"], bob["filename"])
+        self.assertTrue(str(alice["filename"]).endswith(".svg"))
+        self.assertTrue(str(bob["filename"]).endswith(".svg"))

@@ -12,6 +12,92 @@ from backend.integrations.crawler.zujuan.utils import _safe_int
 
 logger = get_logger(__name__)
 
+OPTION_LABEL_START_RE = re.compile(r"^\s*([A-H])\s*(?:[\.．、\)）:：])")
+OPTION_LABEL_RE = re.compile(r"(?:^|[\s\r\n{};；])([A-H])\s*(?:[\.．、\)）:：])")
+
+
+def _choice_option_count(text: str) -> int:
+    labels = OPTION_LABEL_RE.findall(text or "")
+    return len({label.upper() for label in labels if label})
+
+
+def _extract_option_html(root: Any, content_node: Any) -> str:
+    """Return option HTML found outside the main stem container.
+
+    The site uses several templates. In most of them `exam-item__cnt` contains
+    both stem and choices; in some it contains only the question prompt and the
+    choices live in a sibling block. We keep this conservative: only append
+    nodes that expose at least two A-H option labels.
+    """
+
+    def _inside_content(node: Any) -> bool:
+        if content_node is None:
+            return False
+        if node is content_node:
+            return True
+        return any(parent is content_node for parent in getattr(node, "parents", []) or [])
+
+    def _key(node: Any) -> str:
+        return re.sub(r"\s+", "", node.get_text(" ", strip=True) if hasattr(node, "get_text") else str(node))
+
+    candidates: List[str] = []
+    seen: set[str] = set()
+
+    def _add(node: Any) -> None:
+        if node is None or _inside_content(node):
+            return
+        text = node.get_text(" ", strip=True) if hasattr(node, "get_text") else str(node)
+        if _choice_option_count(text) < 2:
+            return
+        key = _key(node)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        candidates.append(str(node))
+
+    explicit_selectors = (
+        ".exam-item__option",
+        ".exam-item__options",
+        ".question-options",
+        ".ques-option",
+        ".quest-option",
+        ".option-list",
+        ".options",
+        "ul.option",
+        "ul.options",
+        "ol.option",
+        "ol.options",
+    )
+    for selector in explicit_selectors:
+        try:
+            nodes = root.select(selector)
+        except Exception:
+            nodes = []
+        for node in nodes:
+            _add(node)
+
+    try:
+        parents = root.find_all(["ul", "ol", "div", "table"], recursive=True)
+    except Exception:
+        parents = []
+    for parent in parents:
+        if parent is root or _inside_content(parent):
+            continue
+        try:
+            children = parent.find_all(["li", "p", "div", "tr"], recursive=False)
+        except Exception:
+            children = []
+        labels: set[str] = set()
+        for child in children:
+            text = child.get_text(" ", strip=True) if hasattr(child, "get_text") else str(child)
+            match = OPTION_LABEL_START_RE.match(text or "")
+            if match:
+                labels.add(match.group(1).upper())
+        if len(labels) >= 2:
+            _add(parent)
+
+    return "\n".join(candidates)
+
 
 async def parse_questions_from_html(
     self,
@@ -214,6 +300,13 @@ async def parse_questions_from_html(
             content_html = "".join(str(x) for x in content_node.contents)
         else:
             content_html = str(root)
+
+        # Some Zujuan list fragments keep options in a sibling container instead of
+        # `exam-item__cnt`. Pull those siblings in before converting to plain text.
+        if _choice_option_count(content_node.get_text(" ", strip=True) if content_node is not None else content_html) < 2:
+            option_html = _extract_option_html(root, content_node)
+            if option_html:
+                content_html = f"{content_html}\n{option_html}"
         q["_stem_html"] = content_html
         content_fragments.append((len(questions), content_html))
 

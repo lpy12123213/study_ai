@@ -158,11 +158,12 @@ async def ws_task_stream(
                 if isinstance(msg, dict) and msg.get("type") == "ping":
                     try:
                         await websocket.send_json({"type": "pong"})
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - pong is best-effort; any send failure means the socket is gone, so stop draining
                         return
         except WebSocketDisconnect:
             return
-        except Exception:
+        except Exception:  # noqa: BLE001 - terminal drain-loop guard; never let a background reader crash the connection
+            logger.debug("ws_drain_client_messages_stopped", exc_info=True)
             return
 
     try:
@@ -176,18 +177,18 @@ async def ws_task_stream(
         logger.exception("ws_task_stream_error", extra={"task_id": task_id, "user_id": user_id})
         try:
             await websocket.send_json({"type": "error", "data": {"error": "internal_error"}})
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - terminal error-notify; socket may already be closing, nothing more to do
+            logger.debug("ws_task_stream_error_notify_failed", exc_info=True)
     finally:
         if receive_task is not None and not receive_task.done():
             receive_task.cancel()
             try:
                 await receive_task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - cleanup join of cancelled reader task; swallow to guarantee close
                 pass
         try:
             await websocket.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - terminal cleanup, swallow to guarantee socket close
             pass
 
 
@@ -317,8 +318,8 @@ async def ws_chat_stream(
                                 title = content[:30]
                                 try:
                                     await update_conversation_title(user_id=user_id, conv_id=conv_id, title=title)
-                                except Exception:
-                                    pass
+                                except Exception:  # noqa: BLE001 - title is cosmetic; never fail the chat stream over it
+                                    logger.debug("ws_chat_update_title_failed", exc_info=True)
 
                         try:
                             await websocket.send_json(chunk)
@@ -330,8 +331,8 @@ async def ws_chat_stream(
                     logger.exception("ws_chat_error", extra={"user_id": user_id})
                     try:
                         await websocket.send_json({"type": "error", "data": {"error": str(exc)}})
-                    except Exception:
-                        pass
+                    except Exception:  # noqa: BLE001 - terminal error-notify; socket may already be closing, nothing more to do
+                        logger.debug("ws_chat_error_notify_failed", exc_info=True)
                 continue
 
             await websocket.send_json({"type": "error", "data": {"error": f"unknown_type: {msg_type}"}})
@@ -345,5 +346,5 @@ async def ws_chat_stream(
     finally:
         try:
             await websocket.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - terminal cleanup, swallow to guarantee socket close
             pass

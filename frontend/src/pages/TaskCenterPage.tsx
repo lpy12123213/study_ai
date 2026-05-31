@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { RUNNING_TASKS_REFETCH_INTERVAL_MS } from '@/hooks/useRunningTasks'
 import type { TaskStep } from '@/types'
 
 function formatStatus(status: string): { label: string; tone: 'default' | 'secondary' | 'destructive' } {
@@ -41,7 +42,7 @@ export default function TaskCenterPage() {
         type: typeFilter || undefined,
         limit: 200,
       }),
-    refetchInterval: 5000,
+    refetchInterval: RUNNING_TASKS_REFETCH_INTERVAL_MS,
   })
 
   const tasks = useMemo(() => data?.tasks || [], [data])
@@ -57,7 +58,7 @@ export default function TaskCenterPage() {
     enabled: Boolean(selectedTaskId),
     refetchInterval: (q) => {
       const status = String(q.state.data?.status || '')
-      return status === 'running' ? 5000 : false
+      return status === 'running' ? RUNNING_TASKS_REFETCH_INTERVAL_MS : false
     },
   })
 

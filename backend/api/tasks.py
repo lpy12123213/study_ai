@@ -26,6 +26,7 @@ from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, S
 from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_text
 from backend.core.time_utils import utcnow_naive
+from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
 from backend.database.repositories.system.tasks import (
     append_task_event as db_append_task_event,
 )
@@ -47,6 +48,7 @@ from backend.database.repositories.system.tasks import (
 from backend.shared.tasks import task_runtime
 from backend.tasks import (
     submit_deepthink_task,
+    submit_essay_evaluation_task,
     submit_export_paper_task,
     submit_export_study_archive_task,
     submit_generate_full_paper_task,
@@ -314,6 +316,22 @@ async def submit_question_evaluate(request: QuestionEvaluateRequest, user: dict 
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     task = await submit_question_evaluate_task(user_id=user_id, request=request.model_dump())
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/essay-evaluations/evaluate", response_model=dict)
+async def submit_essay_evaluation(request: EssayEvaluationRequest, user: dict = Depends(require_auth)) -> dict:
+    """Canonical long-task submit endpoint for essay evaluation.
+
+    The runner persists the result to ``essay_evaluations`` and emits SSE
+    progress + a final ``done`` event with the structured rubric output.
+    """
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await submit_essay_evaluation_task(user_id=user_id, request=request.model_dump())
     return {"success": True, "taskId": task.task_id}
 
 

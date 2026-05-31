@@ -920,6 +920,388 @@ def get_stdio_tools() -> List[Tool]:
             },
         ),
         Tool(
+            name="solve_paper",
+            description="""【整卷批解】批量为整套试卷的每道题生成分步解答（Markdown）。
+- 与 review_paper 类似：传 paper_id（优先）或 question_ids 二选一。
+- 内部并发（默认 3）调用 generate_solution 的同款 prompt（mcp.solve_stepwise.v1）。
+- 返回每题的 markdown 解答 + 失败项；不会写回数据库。
+- 适合教师生成"答案册"或批量复核。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "paper_id": {
+                        "type": "integer",
+                        "description": "试卷ID（可选，与 question_ids 二选一）",
+                    },
+                    "question_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "题目ID列表（可选，与 paper_id 二选一）",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "学科全名（可选，不填则使用当前学科）",
+                        "default": "",
+                    },
+                    "max_questions": {
+                        "type": "integer",
+                        "description": "最多批解题目数（避免长任务超时），默认 30",
+                        "default": 30,
+                    },
+                    "concurrency": {
+                        "type": "integer",
+                        "description": "并发解题数（1-6），默认 3",
+                        "default": 3,
+                    },
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="align_to_curriculum",
+            description="""【课标对齐】判定题目是否符合普通高中新课标（2017年版2020年修订）。
+- 输入题干（必填）+ 可选学科/知识点/学段/教材版本。
+- 调用 backend.generation.question_library.curriculum_context.build_curriculum_context。
+- 返回 in_scope / out_of_scope / question_requirements / core_competencies / prerequisites。
+- 上层可据此判断是否"超纲"或"偏题"。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "stem": {
+                        "type": "string",
+                        "description": "题干（必填）",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "学科全名（可选，不填则使用当前学科）",
+                        "default": "",
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "主题/章节（可选，例如：导数的应用）",
+                        "default": "",
+                    },
+                    "knowledge_points": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "已知知识点列表（可选）",
+                    },
+                    "grade_id": {
+                        "type": "string",
+                        "description": "年级ID（可选，例如 高一/高二/高三）",
+                        "default": "",
+                    },
+                    "textbook_version_id": {
+                        "type": "string",
+                        "description": "教材版本ID（可选，例如 人教A版）",
+                        "default": "",
+                    },
+                },
+                "required": ["stem"],
+            },
+        ),
+        Tool(
+            name="paper_diff",
+            description="""【试卷相似度】比对一份试卷（目标）与一组参考试卷的题干相似度与知识点覆盖差异。
+- 目标传 paper_id 或 question_ids；参考传 reference_paper_ids 列表。
+- 题干相似度：MD5 指纹做精确去重 + 字符 3-gram + Jaccard 算近似相似。
+- 输出 exact_dup_count、similar_pairs (>=0.6)、unique_kp_in_target、missing_kp_from_target。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "paper_id": {
+                        "type": "integer",
+                        "description": "目标试卷ID（与 question_ids 二选一）",
+                    },
+                    "question_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "目标题目ID列表（与 paper_id 二选一）",
+                    },
+                    "reference_paper_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "参考试卷ID列表（必填，至少 1 个）",
+                    },
+                    "similarity_threshold": {
+                        "type": "number",
+                        "description": "判定 similar 的 Jaccard 下限（0-1），默认 0.6",
+                        "default": 0.6,
+                    },
+                    "max_questions": {
+                        "type": "integer",
+                        "description": "目标试卷最多比对题数（默认 60）",
+                        "default": 60,
+                    },
+                },
+                "required": ["reference_paper_ids"],
+            },
+        ),
+        Tool(
+            name="plot_function",
+            description="""【函数绘图】用 Matplotlib 绘制 2D 函数图，返回 SVG URL。
+- expr 支持多项式/三角/指数/对数等常见表达式（变量 x；如 sin(x)+1/(x*x+1)）。
+- x_range 二元数组 [xmin, xmax]，默认 [-5, 5]。
+- 输出 SVG 矢量图，适合教材与试卷打印。
+- 命中缓存时立即返回（不重复渲染）。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "expr": {"type": "string", "description": "函数表达式（x 为自变量），如 sin(x)+1/(x*x+1)"},
+                    "x_range": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "x 范围 [xmin, xmax]，默认 [-5, 5]",
+                    },
+                    "y_range": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "y 范围（可选）[ymin, ymax]",
+                    },
+                    "title": {"type": "string", "description": "图标题（可选）", "default": ""},
+                    "label": {"type": "string", "description": "曲线图例（可选）", "default": ""},
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "plot"},
+                },
+                "required": ["expr"],
+            },
+        ),
+        Tool(
+            name="render_tikz",
+            description="""【TikZ 渲染】把 TikZ/PGF 代码编译为 SVG 矢量图。
+- 需要 xelatex + dvisvgm 可执行。
+- 支持自定义 preamble（额外 \\usepackage 等）。
+- 命中缓存时立即返回。
+- 失败时返回 error + hint，含编译日志摘要。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tikz": {
+                        "type": "string",
+                        "description": "TikZ 代码（含或不含 \\begin{tikzpicture}...\\end{tikzpicture}；缺失时会自动包裹）",
+                    },
+                    "preamble": {"type": "string", "description": "可选：额外 LaTeX preamble", "default": ""},
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "diagram"},
+                },
+                "required": ["tikz"],
+            },
+        ),
+        Tool(
+            name="render_chemistry",
+            description="""【化学渲染】渲染化学方程式/分子式，输出 SVG。
+- 使用 mhchem 包（自动加载）。
+- expression 可以是裸 mhchem 语法（如 `2H2 + O2 -> 2H2O`）或完整的 `\\ce{...}` 块。
+- 用于化学题题干、教案、自学资料中的化学方程式可视化。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "化学表达式（mhchem 语法），如 2H2 + O2 -> 2H2O 或 \\ce{H2SO4}",
+                    },
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "化学方程式"},
+                },
+                "required": ["expression"],
+            },
+        ),
+        Tool(
+            name="render_graphviz",
+            description="""【流程图】通过 Graphviz (dot) 渲染流程图/状态图/依赖图为 SVG。
+- 需要系统安装 graphviz（dot 可执行）。
+- engine 可选：dot/neato/fdp/sfdp/twopi/circo，默认 dot。
+- 适合生物代谢通路、算法流程、状态机等。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dot": {"type": "string", "description": "DOT 源码，如 digraph G { A -> B -> C; }"},
+                    "engine": {
+                        "type": "string",
+                        "description": "布局引擎，默认 dot",
+                        "enum": ["dot", "neato", "fdp", "sfdp", "twopi", "circo"],
+                        "default": "dot",
+                    },
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "流程图"},
+                },
+                "required": ["dot"],
+            },
+        ),
+        Tool(
+            name="verify_diagram",
+            description="""【绘图校验】用 vision-LLM 检查渲染出的图是否符合题干描述。
+- url 必须是本服务的 /api/media/generated/<filename> 路径。
+- description 是期望"图应该展示什么"的自然语言（通常是题干或要点）。
+- 返回 {ok, issues[], repair_hint, confidence}；不通过时 ok=false。
+- 用于配图生成后的自动质控；前端可据 repair_hint 触发重画。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "图片 URL（/api/media/generated/<filename>）"},
+                    "description": {
+                        "type": "string",
+                        "description": "期望图中体现的内容（通常为题干描述或要点列表）",
+                    },
+                    "strictness": {
+                        "type": "integer",
+                        "description": "严格度 1-5（越高越苛刻），默认 3",
+                        "default": 3,
+                    },
+                },
+                "required": ["url", "description"],
+            },
+        ),
+        Tool(
+            name="render_asy",
+            description="""【Asymptote 渲染】把 Asymptote 代码渲染为 SVG。
+- 需要 `asy` 可执行（Asymptote）。
+- 适合精确几何、3D 投影、参数曲面，比 TikZ 更易写复杂数学图。
+- 命中缓存时立即返回。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "asy": {"type": "string", "description": "Asymptote 代码"},
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "diagram"},
+                },
+                "required": ["asy"],
+            },
+        ),
+        Tool(
+            name="render_circuit",
+            description="""【电路图】用 circuitikz 渲染电路图为 SVG。
+- circuit_body 是 circuitikz 环境内部的电路描述；也可直接传完整的 \\begin{circuitikz}...\\end{circuitikz}。
+- 需要 xelatex + dvisvgm + circuitikz 包（TeX Live/MiKTeX 自带）。
+- 适合物理电路题题图。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "circuit_body": {
+                        "type": "string",
+                        "description": "电路体（circuitikz 内部代码或完整 \\begin{circuitikz}...\\end{circuitikz}）",
+                    },
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "电路图"},
+                },
+                "required": ["circuit_body"],
+            },
+        ),
+        Tool(
+            name="render_matplotlib_3d",
+            description="""【3D 曲面图】用 Matplotlib 绘制 3D 曲面/参数面，返回 SVG。
+- spec 形如 {"surface": {"expr": "sin(x)*cos(y)", "x_range": [-3,3], "y_range": [-3,3]}, "title": "..."}
+- 也支持参数曲面 / 散点。详见 backend.core.plot_tools.render_3d_plot_with_meta。
+- 输出 SVG 矢量。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "spec": {
+                        "type": "object",
+                        "description": "matplotlib_3d 规范 dict（含 surface/parametric/scatter/title/xyz_range 等）",
+                    },
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "plot"},
+                },
+                "required": ["spec"],
+            },
+        ),
+        Tool(
+            name="render_svg_diagram",
+            description="""【SVG 规范图】用结构化 spec 渲染纯几何图为 SVG（无需 LaTeX/外部工具）。
+- spec 是 backend.core.svg_diagram.render_svg_diagram 接受的几何 spec：points/lines/circles/labels 等。
+- 适合简单平面几何（三角形、坐标系、向量），不需要 TeX 工具链。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "spec": {
+                        "type": "object",
+                        "description": "SVG diagram spec（含 points/lines/circles/arrows/labels/axes 等）",
+                    },
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "diagram"},
+                },
+                "required": ["spec"],
+            },
+        ),
+        Tool(
+            name="render_schematic",
+            description="""【示意图】用 Matplotlib schematic 规范渲染示意图（含箭头/方框/标注）。
+- spec 是 backend.core.plot_tools.render_schematic_with_meta 接受的 schematic dict。
+- 适合流程示意、物理过程图、化学装置示意（非精确几何）。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "spec": {
+                        "type": "object",
+                        "description": "schematic spec（含 boxes/arrows/labels/title 等）",
+                    },
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "diagram"},
+                },
+                "required": ["spec"],
+            },
+        ),
+        Tool(
+            name="generate_image",
+            description="""【AI 文生图】通过 Volcano ARK Seedream 文生图模型生成图片。
+- 需要配置 ARK_API_KEY + SEEDREAM_MODEL（或 ARK_IMAGE_MODEL）。
+- 适合自学资料、教案、知识点配图等开放主题；不适合精确数学图（用 plot_function/render_tikz）。
+- size 默认 1024x1024；n 默认 1（最多 4）。
+- 返回 images 列表：每张含 url / markdown / filename / media_id / bytes。
+- 注意：AI 生成图无 source sidecar，**不支持 revise_diagram** 二次编辑。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "文生图提示词（建议英文或中英混合，越具体越好）"},
+                    "alt": {"type": "string", "description": "Markdown 图片 alt 文本", "default": "image"},
+                    "caption": {"type": "string", "description": "可选：图说明文字", "default": ""},
+                    "model": {
+                        "type": "string",
+                        "description": "可选：覆盖 SEEDREAM_MODEL 环境变量",
+                        "default": "",
+                    },
+                    "size": {
+                        "type": "string",
+                        "description": "图片尺寸（如 1024x1024 / 1024x768 / 768x1024）",
+                        "default": "1024x1024",
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": "生成数量（1-4），默认 1",
+                        "default": 1,
+                    },
+                    "response_format": {
+                        "type": "string",
+                        "enum": ["b64_json", "url", ""],
+                        "description": "ARK 响应格式（默认 b64_json）",
+                        "default": "b64_json",
+                    },
+                },
+                "required": ["prompt"],
+            },
+        ),
+        Tool(
+            name="revise_diagram",
+            description="""【增量改图】基于已渲染图的 source sidecar，让 LLM 按自然语言请求改源码并重新渲染。
+- filename：`/api/media/generated/<filename>` 的文件名（自动剥离 URL 前缀）。
+- user_request：改图诉求，如「把直线 AB 改成虚线，在中点处加 D 点」。
+- 仅 sidecar 存在的图可改（含 tikz/asy/chemistry/circuit/graphviz/matplotlib_2d/matplotlib_3d/svg/schematic）。
+- 不允许跨 backend 切换（tikz 不会被改成 matplotlib）。
+- 返回新图 url + markdown + filename + kind；新图会写出新 sidecar，可以继续二次编辑。
+- 失败时返回 error/hint；常见原因：source_sidecar_missing / llm_not_configured / llm_rejected。""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "description": "已渲染图的文件名（可含或不含 /api/media/generated/ 前缀）",
+                    },
+                    "user_request": {
+                        "type": "string",
+                        "description": "自然语言改图请求（如：把直线改成虚线，并加 D 点）",
+                    },
+                    "alt": {
+                        "type": "string",
+                        "description": "可选：覆盖默认 alt 文本（不传则沿用原图 alt）",
+                        "default": "",
+                    },
+                },
+                "required": ["filename", "user_request"],
+            },
+        ),
+        Tool(
             name="diagnose_export",
             description="""【诊断工具】诊断导出到组卷网功能的问题。
 检查项目：

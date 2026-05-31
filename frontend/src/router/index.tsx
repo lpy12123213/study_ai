@@ -19,6 +19,7 @@ const PaperDetailPage = lazy(() => import('@/pages/PaperDetailPage'))
 const CanvasPage = lazy(() => import('@/pages/CanvasPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
+const EssayEvaluationPage = lazy(() => import('@/pages/EssayEvaluationPage'))
 const QuestionLibraryPage = lazy(() => import('@/pages/QuestionLibraryPage'))
 const AiGeneratePage = lazy(() => import('@/pages/AiGeneratePage'))
 const QuestionReviewPage = lazy(() => import('@/features/generation/aiGenerate/QuestionReviewPage'))
@@ -35,6 +36,7 @@ const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
 const AnnotationsPage = lazy(() => import('@/pages/AnnotationsPage'))
 const DiffPage = lazy(() => import('@/pages/DiffPage'))
 const FeedbackPage = lazy(() => import('@/pages/FeedbackPage'))
+const RichTextareaDemoPage = lazy(() => import('@/pages/RichTextareaDemoPage'))
 
 function PageLoader() {
   return (
@@ -76,6 +78,7 @@ export const router = createBrowserRouter([
         element: <ManusLayout />,
         children: [
           { index: true, element: <Navigate to="/chat" replace /> },
+          { path: 'dev/rich-textarea', element: load(RichTextareaDemoPage), handle: handle('dev-rich-textarea') },
           {
             element: <RequireAuth />,
             children: [
@@ -95,6 +98,7 @@ export const router = createBrowserRouter([
               { path: 'knowledge-videos', element: load(KnowledgeVideoPage), handle: handle('knowledge-videos') },
               { path: 'deepthink', element: load(DeepThinkPage), handle: handle('deepthink') },
               { path: 'question-evaluate', element: load(QuestionEvaluatePage), handle: handle('question-evaluate') },
+              { path: 'essay-evaluation', element: load(EssayEvaluationPage), handle: handle('essay-evaluation') },
               { path: 'question-library', element: load(QuestionLibraryPage), handle: handle('question-library') },
               {
                 path: 'ai-generate',

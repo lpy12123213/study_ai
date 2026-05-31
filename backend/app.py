@@ -222,6 +222,17 @@ class _CachedAssetFiles(StaticFiles):
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
 
+    # After the schema is ready, retry the auth bootstrap so the admin row is
+    # always present. The module-level call inside ``backend.core.auth`` is
+    # best-effort and may have been skipped on a fresh DB.
+    try:
+        from backend.core import auth as _auth_mod
+
+        _auth_mod._migrate_local_snapshot_into_db()
+        _auth_mod._bootstrap_admin_once()
+    except Exception:
+        logger.warning("auth_lifespan_bootstrap_failed", exc_info=True)
+
     # Fail orphaned DB tasks that were left as `running` by a previous process.
     # This avoids hanging SSE/polling clients after a server restart.
     try:

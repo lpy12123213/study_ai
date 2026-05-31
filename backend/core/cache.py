@@ -33,7 +33,7 @@ def cache_registry_stats() -> Dict[str, Any]:
     for name, cache in items:
         try:
             out[name] = cache.stats()
-        except Exception:
+        except (RuntimeError, AttributeError, TypeError):
             logger.exception("ttl_cache_stats_failed", extra={"cache": name})
             out[name] = {"name": name, "error": "stats_failed"}
     return out
@@ -90,14 +90,14 @@ class TTLCache:
                 self._misses += 1
                 try:
                     del self._data[key]
-                except Exception:
+                except KeyError:
                     logger.warning("ttl_cache_expired_delete_failed", extra={"cache": self.name}, exc_info=True)
                 return None
 
             self._hits += 1
             try:
                 self._data.move_to_end(key)
-            except Exception:
+            except KeyError:
                 logger.warning("ttl_cache_lru_touch_failed", extra={"cache": self.name}, exc_info=True)
             return value
 
@@ -111,14 +111,14 @@ class TTLCache:
             self._data[key] = (expires_at, value)
             try:
                 self._data.move_to_end(key)
-            except Exception:
+            except KeyError:
                 logger.warning("ttl_cache_lru_touch_failed", extra={"cache": self.name}, exc_info=True)
 
             while len(self._data) > self.max_entries:
                 try:
                     self._data.popitem(last=False)
                     self._evictions += 1
-                except Exception:
+                except KeyError:
                     logger.exception("ttl_cache_evict_failed", extra={"cache": self.name})
                     break
 
@@ -126,7 +126,7 @@ class TTLCache:
         with self._lock:
             try:
                 self._data.pop(key, None)
-            except Exception:
+            except (KeyError, TypeError):
                 logger.exception("ttl_cache_delete_failed", extra={"cache": self.name})
                 return
 

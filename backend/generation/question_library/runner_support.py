@@ -262,6 +262,11 @@ def _materialize_drafts(
                 "keep": bool(item.get("keep", True)),
                 "review_status": normalize_review_status(item.get("review_status")),
                 "review": dict(item.get("review") or {}) if isinstance(item.get("review"), dict) else None,
+                **(
+                    {"consistency_score": float(item.get("consistency_score"))}
+                    if item.get("consistency_score") is not None
+                    else {}
+                ),
                 **({"diagrams": normalized_diagrams} if normalized_diagrams is not None else {}),
             }
         )

@@ -6,22 +6,15 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { ConversationItem, ConversationType } from '@/types'
+// Re-export the canonical implementation so historySidebar callers do not
+// drift from the shared TagEditDialog parser.
+export { parseTagsInput } from '@/components/shared/TagEditDialog'
 
 export const typeIcons: Record<ConversationType, LucideIcon> = {
   chat: MessagesSquare,
   blueprint: LayoutTemplate,
   lesson_plan: BookOpenCheck,
   study_materials: BookOpen,
-}
-
-export function parseTagsInput(raw: string): string[] {
-  const tags = raw
-    .split(/[,，\n]/)
-    .map((tag) => tag.trim())
-    .filter(Boolean)
-    .slice(0, 20)
-
-  return Array.from(new Set(tags))
 }
 
 export function metaKey(itemType: string, itemId: string): string {

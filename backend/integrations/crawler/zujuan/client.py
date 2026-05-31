@@ -4,7 +4,7 @@
 核心思路：
 - 使用公开的 /zujuan-api/search (SSE) 获取推荐的知识点/筛选参数
 - 使用 /zujuan-api/question/list POST 拉取题目列表（返回 HTML），从中解析题号
-- 使用 curl + Playwright获取的cookie 获取题目详情
+- 使用 ZujuanCrawler 的 HTTP client 获取题目详情
 - 支持导出题目到组卷网题篮（需要登录）
 """
 
@@ -713,128 +713,15 @@ class ZujuanCrawler:
         return hashlib.md5(s.encode("utf-8", errors="ignore")).hexdigest()
 
     def _quality_score(self, question: Dict[str, Any]) -> Tuple[int, List[str]]:
-        stem = (question.get("stem") or "").strip()
-        if not stem:
-            return 0, ["missing_stem"]
+        """Backwards-compatible wrapper around :func:`quality_score`.
 
-        flags: List[str] = []
-        score = 100
-        qtype = str(question.get("type") or "").strip()
-        is_choice = any(x in qtype for x in ("单选", "多选", "选择"))
+        See :mod:`backend.integrations.crawler.zujuan.quality_score` for the
+        rule list. Kept on the class to preserve the existing call sites.
+        """
 
-        stem_len = len(stem)
-        if stem_len < 20:
-            flags.append("stem_too_short")
-            score -= 70
-        elif stem_len < 60:
-            flags.append("stem_short")
-            score -= 30
+        from backend.integrations.crawler.zujuan.quality_score import quality_score
 
-        unknown_tokens = len(re.findall(r"\[\?[0-9a-fA-F]{4,}\]", stem))
-        if unknown_tokens > 0:
-            flags.append(f"unknown_tokens:{unknown_tokens}")
-            score -= min(unknown_tokens * 15, 60)
-
-        image_tokens = stem.count("[图片:")
-        if image_tokens > 0:
-            flags.append(f"has_images:{image_tokens}")
-            score -= min(image_tokens * 10, 40)
-
-        formula_placeholders = stem.count("[公式:")
-        if formula_placeholders > 0:
-            flags.append(f"formula_unconverted:{formula_placeholders}")
-            score -= min(formula_placeholders * 15, 60)
-
-        if "(需登录查看)" in stem:
-            flags.append("login_required_content")
-            score -= 30
-
-        # Choice questions should include options; missing/incomplete options usually means truncated HTML.
-        if is_choice:
-            labels = re.findall(r"(?<![A-Za-z0-9])([A-H])\s*(?:[\.．、\)）:：])", stem)
-            opt_count = len({x.upper() for x in labels if x})
-            if opt_count <= 0:
-                flags.append("choice_missing_options")
-                score -= 35
-            elif opt_count < 4:
-                flags.append(f"choice_options_incomplete:{opt_count}")
-                score -= min((4 - opt_count) * 8, 24)
-            else:
-                flags.append(f"choice_options:{opt_count}")
-
-        # Language completeness / readability heuristics.
-        if stem_len >= 80:
-            cjk = len(re.findall(r"[\u4e00-\u9fff]", stem))
-            wordlike = cjk + len(re.findall(r"[A-Za-z0-9]", stem))
-            if wordlike > 0:
-                punct = max(0, stem_len - wordlike)
-                if punct / max(1, stem_len) > 0.70:
-                    flags.append("language_noisy")
-                    score -= 12
-
-        # Dangling punctuation often indicates truncation (except when followed by options in choice questions).
-        if (not is_choice) and re.search(r"[，,、;；:：]$", stem):
-            flags.append("stem_dangling_punct")
-            score -= 8
-
-        # Unbalanced brackets/parentheses are common when HTML/text is truncated.
-        for open_c, close_c, name in (("(", ")", "paren"), ("（", "）", "cjk_paren"), ("[", "]", "bracket")):
-            if stem.count(open_c) != stem.count(close_c):
-                flags.append(f"unbalanced_{name}")
-                score -= 8
-                break
-
-        # Knowledge point match: basic keyword overlap between kp names and stem.
-        kps_raw = question.get("knowledge_points") or []
-        if isinstance(kps_raw, str):
-            kp_list = [x.strip() for x in re.split(r"[，,;；/\\s]+", kps_raw) if x.strip()]
-        elif isinstance(kps_raw, list):
-            kp_list = [str(x or "").strip() for x in kps_raw if str(x or "").strip()]
-        else:
-            kp_list = []
-
-        stopwords = {
-            "函数",
-            "方程",
-            "不等式",
-            "几何",
-            "代数",
-            "解析几何",
-            "概率",
-            "统计",
-            "综合",
-            "应用",
-            "证明",
-            "计算",
-            "解答",
-        }
-        keywords: List[str] = []
-        seen_kw: set[str] = set()
-        for kp in kp_list[:10]:
-            parts = re.findall(r"[\u4e00-\u9fff]{2,}", kp)
-            for part in parts:
-                kw = part.strip()
-                if len(kw) < 3:
-                    continue
-                if not kw or kw in stopwords:
-                    continue
-                if kw in seen_kw:
-                    continue
-                seen_kw.add(kw)
-                keywords.append(kw)
-                if len(keywords) >= 10:
-                    break
-            if len(keywords) >= 10:
-                break
-
-        if keywords:
-            hits = sum(1 for kw in keywords if kw in stem)
-            if hits <= 0:
-                flags.append("kp_match_low")
-                score -= 10
-
-        score = max(0, min(100, score))
-        return score, flags
+        return quality_score(question)
 
     def _parse_target_from_payload(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -1394,11 +1281,6 @@ class ZujuanCrawler:
             "source": "",
             "url": self._question_url(question_id),
         }
-
-    def _build_curl_cmd(self, url: str, timeout: int = 30, use_login_cookie: bool = True) -> list:
-        from backend.integrations.crawler.zujuan.formulas import build_curl_cmd as impl
-
-        return impl(self, url, timeout=timeout, use_login_cookie=use_login_cookie)
 
     def _resolve_url(self, url: str) -> str:
         from backend.integrations.crawler.zujuan.formulas import resolve_url as impl

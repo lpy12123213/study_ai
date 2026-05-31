@@ -261,6 +261,18 @@ function renderKatex(latex: string, displayMode: boolean): ReactNode {
   return <KatexRender latex={src} displayMode={displayMode} />
 }
 
+function resolveFormulaImageSrc(input: string): string {
+  const value = String(input || '').trim()
+  if (!value) return ''
+  if (/^[0-9a-f]{32}$/i.test(value)) {
+    return `https://staticzujuan.xkw.com/quesimg/Upload/formula/${value.toLowerCase()}.svg`
+  }
+  if (/^https?:\/\//i.test(value) || value.startsWith('/') || value.startsWith('api/')) {
+    return value
+  }
+  return ''
+}
+
 export function QuestionContent(props: { content: string; className?: string }) {
   const { content, className } = props
 
@@ -270,12 +282,13 @@ export function QuestionContent(props: { content: string; className?: string }) 
 
     // Tokens:
     // - [图片:https://...]
+    // - [公式:32hex] (crawler fallback when LaTeX conversion is unavailable)
     // - \( ... \)  (inline math)
     // - \[ ... \]  (display math)
     // - $ ... $    (inline math)
     // - $$ ... $$  (display math)
     const tokenRe =
-      /(\[图片(?::([^\]]+))?\])|(\\\[([\s\S]*?)\\\])|(\\\(([\s\S]*?)\\\))|(\$\$([\s\S]*?)\$\$)|(\$([^\n$]*?)\$)/g
+      /(\[图片(?::([^\]]+))?\])|(\[公式(?::([^\]]+))?\])|(\\\[([\s\S]*?)\\\])|(\\\(([\s\S]*?)\\\))|(\$\$([\s\S]*?)\$\$)|(\$([^\n$]*?)\$)/g
 
     const out: ReactNode[] = []
     let lastIndex = 0
@@ -305,16 +318,31 @@ export function QuestionContent(props: { content: string; className?: string }) 
           )
         }
       } else if (match[3]) {
-        const latex = match[4] || ''
-        out.push(<span key={`math:block:${index}`}>{renderKatex(latex, true)}</span>)
+        const src = resolveFormulaImageSrc(match[4] || '')
+        if (!src) {
+          out.push(match[0])
+        } else {
+          out.push(
+            <span key={`formula-img:${index}`} className="inline-flex align-middle mx-0.5">
+              <AuthImage
+                src={src}
+                alt="题目公式"
+                className="inline-block max-h-[2.2em] max-w-[18rem] align-middle object-contain"
+              />
+            </span>
+          )
+        }
       } else if (match[5]) {
         const latex = match[6] || ''
-        out.push(<span key={`math:inline:${index}`}>{renderKatex(latex, false)}</span>)
+        out.push(<span key={`math:block:${index}`}>{renderKatex(latex, true)}</span>)
       } else if (match[7]) {
         const latex = match[8] || ''
-        out.push(<span key={`math:block2:${index}`}>{renderKatex(latex, true)}</span>)
+        out.push(<span key={`math:inline:${index}`}>{renderKatex(latex, false)}</span>)
       } else if (match[9]) {
         const latex = match[10] || ''
+        out.push(<span key={`math:block2:${index}`}>{renderKatex(latex, true)}</span>)
+      } else if (match[11]) {
+        const latex = match[12] || ''
         out.push(<span key={`math:inline2:${index}`}>{renderKatex(latex, false)}</span>)
       }
 

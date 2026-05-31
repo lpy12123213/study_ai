@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import * as wrongbookApi from '@/api/wrongbook'
 
@@ -161,7 +161,14 @@ export default function WrongbookPage() {
             </div>
             <div className="space-y-1.5">
               <div className="text-sm font-medium">备注</div>
-              <Textarea value={note} onChange={(e) => setNote(e.target.value)} className="min-h-28" />
+              <RichTextarea
+                value={note}
+                onChange={setNote}
+                ariaLabel="备注"
+                debounceMs={0}
+                minHeight={112}
+                maxHeight={260}
+              />
             </div>
             <div className="flex items-center justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>

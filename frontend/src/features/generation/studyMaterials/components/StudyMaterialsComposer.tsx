@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { cn } from '@/lib/utils'
 import type { StudyMaterialsController } from '@/features/generation/studyMaterials/hooks/useStudyMaterialsController'
 import type { TriState } from '@/features/generation/studyMaterials/types'
@@ -34,10 +34,8 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
     setRequirements,
     handleSubmit,
     handleNewConversation,
-    textareaRef,
     input,
     setInput,
-    handleKeyDown,
     stopGenerating,
   } = controller
 
@@ -188,13 +186,15 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
 
                 <div className="space-y-1.5 sm:col-span-2">
                   <div className="text-xs font-medium text-muted-foreground">额外要求（可选）</div>
-                  <Textarea
+                  <RichTextarea
                     value={requirements}
-                    onChange={(e) => setRequirements(e.target.value)}
+                    onChange={setRequirements}
                     placeholder="例如：更通俗一些 / 更严谨一些 / 偏直观解释 / 偏推导证明 / 强调常见误区"
-                    className="min-h-[64px] resize-none"
+                    ariaLabel="额外要求"
+                    debounceMs={0}
+                    minHeight={64}
+                    maxHeight={180}
                     disabled={isGenerating}
-                    rows={2}
                   />
                 </div>
               </div>
@@ -215,21 +215,19 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
               <Plus className="h-5 w-5" />
             </Button>
 
-            <Textarea
-              ref={textareaRef}
+            <RichTextarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
+              onChange={setInput}
+              onSubmit={handleSubmit}
+              submitOnEnter
               placeholder="例如：函数单调性 / 二次函数最值 / 受力分析..."
-              className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+              ariaLabel="自学资料生成要求"
+              debounceMs={0}
+              minHeight={44}
+              maxHeight={200}
+              className="min-h-[44px] w-full border-0 bg-transparent shadow-none focus-within:ring-0"
+              editorClassName="px-0 py-2.5 placeholder:text-muted-foreground/50"
               disabled={isGenerating}
-              rows={1}
-              style={{ height: 'auto', overflow: 'hidden' }}
-              onInput={(e) => {
-                const target = e.currentTarget
-                target.style.height = 'auto'
-                target.style.height = `${Math.min(target.scrollHeight, 200)}px`
-              }}
             />
 
             {isGenerating ? (
@@ -244,17 +242,19 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
                 <Square className="h-4 w-4" />
               </Button>
             ) : (
-              <Button
-                type="submit"
-                size="icon"
-                className={cn(
-                  'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
-                  input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                )}
-                disabled={!input.trim()}
-              >
-                <Send className="h-4 w-4" />
-              </Button>
+              <>
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={cn(
+                    'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
+                    input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                  )}
+                  disabled={!input.trim()}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </>
             )}
           </div>
         </form>

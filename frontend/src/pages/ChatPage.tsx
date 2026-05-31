@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { ChevronDown, Loader2, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { useChatStream, useMessages } from '@/hooks/useChat'
@@ -13,7 +13,7 @@ import * as chatApi from '@/api/chat'
 
 import { MessageBubble } from '@/features/chat/components/MessageBubble'
 import { WelcomeScreen } from '@/features/chat/components/WelcomeScreen'
-import { useVirtualMessages } from '@/features/chat/hooks/useVirtualMessages'
+import { useVirtualMessages } from '@/hooks/useVirtualMessages'
 import type { Message } from '@/types'
 
 export default function ChatPage() {
@@ -23,7 +23,6 @@ export default function ChatPage() {
   const targetMid = String(searchParams.get('mid') || '').trim()
   const [highlightMid, setHighlightMid] = useState<string>('')
   const [input, setInput] = useState('')
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const hydratedConversationIdRef = useRef<string | null>(null)
   const lastConversationIdRef = useRef<string | undefined>(conversationId)
   const [isCreatingConversation, setIsCreatingConversation] = useState(false)
@@ -162,13 +161,6 @@ export default function ChatPage() {
       })
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit()
-    }
-  }
-
   return (
     <div className="h-full flex flex-col relative">
       {messages.length === 0 ? (
@@ -290,21 +282,19 @@ export default function ChatPage() {
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="relative group">
             <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
-              <Textarea
-                ref={textareaRef}
+              <RichTextarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
+                onChange={setInput}
+                onSubmit={handleSubmit}
+                submitOnEnter
                 placeholder="输入消息..."
-                className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+                ariaLabel="输入消息"
+                debounceMs={0}
+                minHeight={44}
+                maxHeight={200}
+                className="min-h-[44px] w-full border-0 bg-transparent shadow-none focus-within:ring-0"
+                editorClassName="px-0 py-2.5 placeholder:text-muted-foreground/50"
                 disabled={isStreaming || isCreatingConversation}
-                rows={1}
-                style={{ height: 'auto', overflow: 'hidden' }}
-                onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement;
-                  target.style.height = 'auto';
-                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
-                }}
               />
               
               {isStreaming ? (
@@ -319,22 +309,24 @@ export default function ChatPage() {
                   <Square className="h-4 w-4" />
                 </Button>
               ) : (
-                <Button
-                  type="submit"
-                  size="icon"
-                  className={cn(
-                    "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
-                    input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-                  )}
-                  disabled={!input.trim() || isCreatingConversation}
-                  aria-label="Send message"
-                >
-                  {isCreatingConversation ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
-                </Button>
+                <>
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className={cn(
+                      "h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all",
+                      input.trim() ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                    )}
+                    disabled={!input.trim() || isCreatingConversation}
+                    aria-label="Send message"
+                  >
+                    {isCreatingConversation ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                  </Button>
+                </>
               )}
             </div>
           </form>

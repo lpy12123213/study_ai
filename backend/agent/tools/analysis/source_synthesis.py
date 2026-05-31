@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.agent.tools.utils.text_utils import credibility_for_url
 from backend.core.text_utils import clip_text as _clip_text
 from backend.llm.client import is_llm_configured
 
@@ -107,12 +108,19 @@ class SourceSynthesisToolsMixin:
                 snippet = _clip_text(snippet, 480)
                 if len(snippet) < 40 and not title:
                     continue
+                cred = r.get("credibility_score")
+                if cred is None:
+                    _, cred = credibility_for_url(url)
+                quality_flags = list(r.get("quality_flags") or []) if isinstance(r.get("quality_flags"), list) else []
                 sources.append(
                     {
                         "id": f"web:{idx}",
                         "kind": "web_result",
                         "title": title or url or f"web:{idx}",
                         "url": url,
+                        "domain": str(r.get("domain") or "").strip(),
+                        "credibility": round(float(cred or 0.45), 3),
+                        "quality_flags": quality_flags,
                         "text": snippet,
                     }
                 )
@@ -125,12 +133,19 @@ class SourceSynthesisToolsMixin:
                 text = _clip_text(text, max_page_chars)
                 if len(text) < 120:
                     continue
+                cred = p.get("credibility_score")
+                if cred is None:
+                    _, cred = credibility_for_url(url)
+                quality_flags = list(p.get("quality_flags") or []) if isinstance(p.get("quality_flags"), list) else []
                 sources.append(
                     {
                         "id": f"page:{idx}",
                         "kind": "web_page",
                         "title": title or url or f"page:{idx}",
                         "url": url,
+                        "domain": str(p.get("domain") or "").strip(),
+                        "credibility": round(float(cred or 0.45), 3),
+                        "quality_flags": quality_flags,
                         "text": text,
                     }
                 )
@@ -160,9 +175,21 @@ class SourceSynthesisToolsMixin:
                     }
                 )
 
-            # Keep the payload compact.
+            # Keep the payload compact. Rank web-class sources by credibility before truncation
+            # so the LLM sees the most trustworthy sources first (other kinds stay at the front).
             sources = [s for s in sources if isinstance(s, dict) and str(s.get("text") or "").strip()]
-            sources = sources[:18]
+            _web_kinds = {"web_result", "web_page", "web_summary"}
+            _non_web = [s for s in sources if s.get("kind") not in _web_kinds]
+            _web = [s for s in sources if s.get("kind") in _web_kinds]
+            _credibility_min = float(os.getenv("STUDY_MATERIALS_CREDIBILITY_FILTER_MIN") or 0.0)
+            if _credibility_min > 0:
+                _filtered = [s for s in _web if float(s.get("credibility") or 0.45) >= _credibility_min]
+                # Don't starve the writer: keep top-3 by credibility if filter removed everything.
+                if not _filtered and _web:
+                    _filtered = sorted(_web, key=lambda x: float(x.get("credibility") or 0.0), reverse=True)[:3]
+                _web = _filtered
+            _web.sort(key=lambda x: float(x.get("credibility") or 0.0), reverse=True)
+            sources = (_non_web + _web)[:18]
 
             if not is_llm_configured():
                 if strict_llm:
@@ -197,6 +224,7 @@ class SourceSynthesisToolsMixin:
                     "Output strict JSON only. Do not output Markdown or extra explanation.",
                     "Organize the brief field by dimensions: definition, core_ideas, key_properties, conditions_and_boundaries, common_misconceptions, applications, derivation_or_proof_sketch, notation_and_terms.",
                     "The facts field is a list of key facts: {fact, confidence(0~1), source_ids[]}. Choose source_ids from sources[].id.",
+                    "When sources conflict, prefer those with higher `credibility` (range 0~1; ≥0.8 is highly authoritative). Treat sources flagged with `pdf_unreadable` or other low-quality flags as last-resort hints only.",
                 ],
                 "schema": {
                     "knowledge_point": "string",

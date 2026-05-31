@@ -128,61 +128,66 @@ export function CommandPalette() {
   }, [open])
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder={t('command.searchPlaceholder')} />
-      <CommandList>
-        <CommandEmpty>{t('command.noResults')}</CommandEmpty>
-        <CommandGroup heading={t('command.navigation')}>
-          {routeCommands.map((c) => {
-            const Icon = c.icon
-            return (
-              <CommandItem key={c.id} onSelect={c.run}>
-                {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
-                <span>{c.title}</span>
-                {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
-                {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
-              </CommandItem>
-            )
-          })}
-        </CommandGroup>
-        <CommandSeparator />
-        <CommandGroup heading={t('command.actions')}>
-          {actionCommands.map((c) => {
-            const Icon = c.icon
-            return (
-              <CommandItem key={c.id} onSelect={c.run}>
-                {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
-                <span>{c.title}</span>
-                {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
-                {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
-              </CommandItem>
-            )
-          })}
-        </CommandGroup>
-        <CommandSeparator />
-        {showShortcuts ? (
-          <CommandGroup heading={t('command.shortcuts')}>
-            <CommandItem disabled>
-              <span className="text-xs text-muted-foreground">{t('command.openPalette')}</span>
-              <CommandShortcut>Ctrl/⌘ K</CommandShortcut>
-            </CommandItem>
-            <CommandItem disabled>
-              <span className="text-xs text-muted-foreground">{t('command.openShortcutHelp')}</span>
-              <CommandShortcut>Ctrl/⌘ /</CommandShortcut>
-            </CommandItem>
-            <CommandItem disabled>
-              <span className="text-xs text-muted-foreground">{t('command.closePalette')}</span>
-              <CommandShortcut>Esc</CommandShortcut>
-            </CommandItem>
+    <>
+      <div aria-live="polite" className="sr-only">
+        {open ? t('command.paletteOpen') : t('command.paletteClosed')}
+      </div>
+      <CommandDialog open={open} onOpenChange={setOpen}>
+        <CommandInput aria-label={t('command.searchPlaceholder')} placeholder={t('command.searchPlaceholder')} />
+        <CommandList>
+          <CommandEmpty>{t('command.noResults')}</CommandEmpty>
+          <CommandGroup heading={t('command.navigation')}>
+            {routeCommands.map((c) => {
+              const Icon = c.icon
+              return (
+                <CommandItem key={c.id} onSelect={c.run}>
+                  {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
+                  <span>{c.title}</span>
+                  {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
+                  {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
+                </CommandItem>
+              )
+            })}
           </CommandGroup>
-        ) : (
-          <CommandGroup heading={t('command.tips')}>
-            <CommandItem disabled>
-              <span className="text-xs text-muted-foreground">{t('command.shortcutHint')}</span>
-            </CommandItem>
+          <CommandSeparator />
+          <CommandGroup heading={t('command.actions')}>
+            {actionCommands.map((c) => {
+              const Icon = c.icon
+              return (
+                <CommandItem key={c.id} onSelect={c.run}>
+                  {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
+                  <span>{c.title}</span>
+                  {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
+                  {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
+                </CommandItem>
+              )
+            })}
           </CommandGroup>
-        )}
-      </CommandList>
-    </CommandDialog>
+          <CommandSeparator />
+          {showShortcuts ? (
+            <CommandGroup heading={t('command.shortcuts')}>
+              <CommandItem disabled>
+                <span className="text-xs text-muted-foreground">{t('command.openPalette')}</span>
+                <CommandShortcut>Ctrl/⌘ K</CommandShortcut>
+              </CommandItem>
+              <CommandItem disabled>
+                <span className="text-xs text-muted-foreground">{t('command.openShortcutHelp')}</span>
+                <CommandShortcut>Ctrl/⌘ /</CommandShortcut>
+              </CommandItem>
+              <CommandItem disabled>
+                <span className="text-xs text-muted-foreground">{t('command.closePalette')}</span>
+                <CommandShortcut>Esc</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+          ) : (
+            <CommandGroup heading={t('command.tips')}>
+              <CommandItem disabled>
+                <span className="text-xs text-muted-foreground">{t('command.shortcutHint')}</span>
+              </CommandItem>
+            </CommandGroup>
+          )}
+        </CommandList>
+      </CommandDialog>
+    </>
   )
 }

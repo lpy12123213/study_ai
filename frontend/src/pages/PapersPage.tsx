@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { TagEditDialog, useTagEditor } from '@/components/shared/TagEditDialog'
 import { usePapers, useDeletePaper } from '@/hooks/usePapers'
 import { cn, formatDate } from '@/lib/utils'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -58,6 +59,15 @@ export default function PapersPage() {
       metaApi.setMeta('paper', args.itemId, args.patch),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['itemMeta', 'paper'] })
+    },
+  })
+
+  type PaperRow = NonNullable<typeof papers>[number]
+  const tagEditor = useTagEditor<PaperRow>({
+    getItemId: (paper) => String(paper.id),
+    getInitialValue: (paper) => (paperMetaById.get(String(paper.id))?.tags || []).join(', '),
+    onSave: (paper, tags) => {
+      updateMeta.mutate({ itemId: String(paper.id), patch: { tags } })
     },
   })
 
@@ -233,18 +243,7 @@ export default function PapersPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-muted-foreground"
-                        onClick={() => {
-                          const meta = paperMetaById.get(String(paper.id))
-                          const current = (meta?.tags || []).join(', ')
-                          const raw = window.prompt('标签（逗号分隔）', current)
-                          if (raw == null) return
-                          const tags = raw
-                            .split(',')
-                            .map((t) => t.trim())
-                            .filter((t) => t.length > 0)
-                            .slice(0, 20)
-                          updateMeta.mutate({ itemId: String(paper.id), patch: { tags } })
-                        }}
+                        onClick={() => tagEditor.open(paper)}
                         aria-label="设置标签"
                         title="设置标签"
                       >
@@ -298,6 +297,18 @@ export default function PapersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TagEditDialog
+        open={tagEditor.isOpen}
+        itemTitle={tagEditor.editing?.name || ''}
+        value={tagEditor.value}
+        tagOptions={tagOptions}
+        onValueChange={tagEditor.setValue}
+        onOpenChange={(open) => {
+          if (!open) tagEditor.close()
+        }}
+        onSave={tagEditor.save}
+      />
     </div>
   )
 }

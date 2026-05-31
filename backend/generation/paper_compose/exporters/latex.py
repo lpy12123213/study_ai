@@ -13,6 +13,13 @@ from typing import List, Optional, Tuple
 from backend.core.logging_utils import get_logger
 from backend.generation.paper_compose.exam_templates import format_answer_key_section, format_exam_header, get_exam_preamble
 from backend.generation.paper_compose.exporters.tex_escape import _smart_tex_escape
+from backend.generation.paper_compose.latex_safety import ensure_latex_is_safe
+from backend.generation.paper_compose.latex_sandbox import (
+    SandboxUnavailableError,
+    compile_latex_in_docker,
+    ensure_sandbox_available,
+)
+from backend.shared.project_paths import resolve_repo_root
 
 logger = get_logger(__name__)
 
@@ -163,62 +170,62 @@ def _resolve_paper_export_latex_timeout_s(timeout_s: Optional[float]) -> float:
     return max(5.0, min(timeout_s, 60.0 * 20.0))
 
 
-def compile_latex_to_pdf(*, tex: str, timeout_s: Optional[float] = None) -> Tuple[Optional[bytes], str]:
-    """Compile LaTeX to PDF and return (pdf_bytes, log_text)."""
+def _copy_includegraphics_assets(*, tex_text: str, tmp_dir: Path) -> int:
+    # Copy referenced images from `.local/media/generated/` into the build dir,
+    # so \includegraphics{sha.png} can resolve.
+    generated_dir = (resolve_repo_root() / ".local" / "media" / "generated").resolve()
+    if not generated_dir.exists():
+        return 0
+
+    pattern = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\{([^\}]+)\}")
+    copied = 0
+    for m in pattern.finditer(tex_text or ""):
+        raw = str(m.group(1) or "").strip()
+        if not raw:
+            continue
+        raw = raw.split("?", 1)[0].strip()
+        # Only allow basenames to avoid escaping the temp dir.
+        filename = raw.replace("\\", "/").split("/")[-1]
+        if not filename or any(ch in filename for ch in [":", "\x00"]):
+            continue
+
+        # If extension omitted, try common ones.
+        candidates = [filename]
+        if "." not in filename:
+            candidates = [f"{filename}{ext}" for ext in [".png", ".jpg", ".jpeg", ".pdf", ".svg"]]
+
+        for cand in candidates:
+            src = (generated_dir / cand).resolve()
+            try:
+                src.relative_to(generated_dir)
+            except ValueError:
+                continue
+            if not src.exists() or not src.is_file():
+                continue
+            dst = (tmp_dir / cand).resolve()
+            if dst.exists():
+                break
+            try:
+                shutil.copyfile(str(src), str(dst))
+                copied += 1
+            except OSError:
+                logger.warning(
+                    "paper_export_asset_copy_failed",
+                    extra={"src": str(src), "dst": str(dst)},
+                    exc_info=True,
+                )
+            break
+    return copied
+
+
+def _compile_latex_to_pdf_host(*, tex: str, timeout_s: Optional[float] = None) -> Tuple[Optional[bytes], str]:
+    """Compile LaTeX to PDF on the host and return (pdf_bytes, log_text)."""
 
     engine = _find_latex_engine()
     if not engine:
         return None, "latex_engine_not_found"
 
     timeout_s = _resolve_paper_export_latex_timeout_s(timeout_s)
-
-    def _copy_includegraphics_assets(*, tex_text: str, tmp_dir: Path) -> int:
-        # Copy referenced images from `.local/media/generated/` into the build dir,
-        # so \includegraphics{sha.png} can resolve.
-        repo_root = Path(__file__).resolve().parents[3]
-        generated_dir = (repo_root / ".local" / "media" / "generated").resolve()
-        if not generated_dir.exists():
-            return 0
-
-        pattern = re.compile(r"\\includegraphics(?:\\[[^\\]]*\\])?\\{([^\\}]+)\\}")
-        copied = 0
-        for m in pattern.finditer(tex_text or ""):
-            raw = str(m.group(1) or "").strip()
-            if not raw:
-                continue
-            raw = raw.split("?", 1)[0].strip()
-            # Only allow basenames to avoid escaping the temp dir.
-            filename = raw.replace("\\", "/").split("/")[-1]
-            if not filename or any(ch in filename for ch in [":", "\x00"]):
-                continue
-
-            # If extension omitted, try common ones.
-            candidates = [filename]
-            if "." not in filename:
-                candidates = [f"{filename}{ext}" for ext in [".png", ".jpg", ".jpeg", ".pdf", ".svg"]]
-
-            for cand in candidates:
-                src = (generated_dir / cand).resolve()
-                try:
-                    src.relative_to(generated_dir)
-                except ValueError:
-                    continue
-                if not src.exists() or not src.is_file():
-                    continue
-                dst = (tmp_dir / cand).resolve()
-                if dst.exists():
-                    break
-                try:
-                    shutil.copyfile(str(src), str(dst))
-                    copied += 1
-                except OSError:
-                    logger.warning(
-                        "paper_export_asset_copy_failed",
-                        extra={"src": str(src), "dst": str(dst)},
-                        exc_info=True,
-                    )
-                break
-        return copied
 
     with tempfile.TemporaryDirectory(prefix="paper_export_") as tmp:
         tmp_dir = Path(tmp)
@@ -261,15 +268,67 @@ def compile_latex_to_pdf(*, tex: str, timeout_s: Optional[float] = None) -> Tupl
         return pdf_path.read_bytes(), last_log[-8000:]
 
 
+def compile_latex_to_pdf(*, tex: str, timeout_s: Optional[float] = None) -> Tuple[Optional[bytes], str]:
+    """Compile LaTeX to PDF on the host for legacy synchronous callers."""
+
+    ensure_latex_is_safe(str(tex or ""))
+    return _compile_latex_to_pdf_host(tex=tex, timeout_s=timeout_s)
+
+
+def resolve_latex_backend(value: Optional[str] = None) -> str:
+    raw = str(value if value is not None else os.getenv("PAPER_EXPORT_LATEX_BACKEND") or "auto").strip().lower()
+    if raw in {"docker", "sandbox", "container"}:
+        return "docker"
+    if raw in {"host", "local"}:
+        return "host"
+    return "auto"
+
+
+async def _compile_latex_to_pdf_docker(*, tex: str, timeout_s: Optional[float] = None) -> Tuple[Optional[bytes], str]:
+    with tempfile.TemporaryDirectory(prefix="paper_export_") as tmp:
+        tmp_dir = Path(tmp)
+        (tmp_dir / "main.tex").write_text(tex, encoding="utf-8")
+        _copy_includegraphics_assets(tex_text=tex, tmp_dir=tmp_dir)
+        return await compile_latex_in_docker(build_dir=tmp_dir)
+
+
 async def compile_latex_to_pdf_async(*, tex: str, timeout_s: Optional[float] = None) -> Tuple[Optional[bytes], str]:
-    """Async wrapper around the sync compiler to avoid blocking the event loop."""
+    """Compile LaTeX to PDF with the configured backend.
+
+    PAPER_EXPORT_LATEX_BACKEND:
+    - host: use the local TeX engine.
+    - docker: require the LaTeX sandbox image.
+    - auto: use Docker when the image is available, otherwise fall back to host.
+    """
 
     timeout_s = _resolve_paper_export_latex_timeout_s(timeout_s)
+    tex = str(tex or "")
+    ensure_latex_is_safe(tex)
+    backend = resolve_latex_backend()
+
+    if backend == "docker":
+        try:
+            await ensure_sandbox_available()
+        except SandboxUnavailableError as exc:
+            return None, f"docker_unavailable: {exc}"
+        return await asyncio.wait_for(_compile_latex_to_pdf_docker(tex=tex, timeout_s=timeout_s), timeout=timeout_s + 5.0)
+
+    if backend == "auto":
+        try:
+            await ensure_sandbox_available()
+        except SandboxUnavailableError as exc:
+            pdf, log_text = await asyncio.wait_for(
+                asyncio.to_thread(_compile_latex_to_pdf_host, tex=tex, timeout_s=timeout_s),
+                timeout=timeout_s + 5.0,
+            )
+            prefix = f"docker_unavailable: {exc}"
+            return pdf, f"{prefix}\n{log_text}" if log_text else prefix
+        return await asyncio.wait_for(_compile_latex_to_pdf_docker(tex=tex, timeout_s=timeout_s), timeout=timeout_s + 5.0)
 
     try:
         # We still keep a wall-clock timeout guard to prevent thread pool stalls.
         return await asyncio.wait_for(
-            asyncio.to_thread(compile_latex_to_pdf, tex=tex, timeout_s=timeout_s),
+            asyncio.to_thread(_compile_latex_to_pdf_host, tex=tex, timeout_s=timeout_s),
             timeout=timeout_s + 5.0,
         )
     except asyncio.TimeoutError:

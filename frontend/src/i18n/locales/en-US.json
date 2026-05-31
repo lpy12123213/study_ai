@@ -32,6 +32,8 @@
   "command.openPalette": "Open command palette",
   "command.openShortcutHelp": "Open shortcut help",
   "command.closePalette": "Close palette",
+  "command.paletteOpen": "Command palette opened",
+  "command.paletteClosed": "Command palette closed",
   "command.shortcutHint": "Shortcut: Ctrl/⌘ + K opens the palette, Ctrl/⌘ + / shows shortcuts",
   "history.newChat": "New Chat",
   "history.expandSidebar": "Expand sidebar",

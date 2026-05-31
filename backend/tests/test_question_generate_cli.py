@@ -15,10 +15,10 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.dict(os.environ, {}, clear=False),
-            patch.object(question_generate, "settings", create=True),
-            patch.object(question_generate, "chat_completion", side_effect=fake_chat_completion),
+            patch.object(question_generate.helpers, "settings", create=True),
+            patch.object(question_generate.mcp_tools, "chat_completion", side_effect=fake_chat_completion),
             patch.object(
-                question_generate,
+                question_generate.mcp_tools,
                 "_exec_mcp_web_search_tool",
                 AsyncMock(
                     return_value={
@@ -35,12 +35,12 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
         ):
-            question_generate.settings.chat_provider = "ikuncode"
-            question_generate.settings.lesson_plan_provider = "ikuncode"
-            question_generate.settings.main_model = "gpt-5.2"
-            question_generate.settings.lesson_plan_model = "gpt-5.2"
-            question_generate.settings.chat_base_url = "https://api.ikuncode.cc/v1"
-            question_generate.settings.lesson_plan_base_url = "https://api.ikuncode.cc/v1"
+            question_generate.helpers.settings.chat_provider = "ikuncode"
+            question_generate.helpers.settings.lesson_plan_provider = "ikuncode"
+            question_generate.helpers.settings.main_model = "gpt-5.2"
+            question_generate.helpers.settings.lesson_plan_model = "gpt-5.2"
+            question_generate.helpers.settings.chat_base_url = "https://api.ikuncode.cc/v1"
+            question_generate.helpers.settings.lesson_plan_base_url = "https://api.ikuncode.cc/v1"
 
             with patch.dict(os.environ, {"QUESTION_LIBRARY_MCP_SEARCH_MODEL": ""}, clear=False):
                 out = await question_generate._ai_search_materials_via_mcp(
@@ -92,12 +92,12 @@ class CliMcpSearchModelResolveTests(unittest.TestCase):
     def test_resolve_cli_mcp_search_model_prefers_configured_model_for_non_ikuncode(self) -> None:
         with (
             patch.dict(os.environ, {"QUESTION_LIBRARY_MCP_SEARCH_MODEL": ""}, clear=False),
-            patch.object(question_generate, "settings", create=True),
+            patch.object(question_generate.helpers, "settings", create=True),
         ):
-            question_generate.settings.chat_provider = "openrouter"
-            question_generate.settings.lesson_plan_provider = "openrouter"
-            question_generate.settings.main_model = "anthropic/claude-3.7-sonnet"
-            question_generate.settings.lesson_plan_model = "anthropic/claude-3.7-sonnet"
+            question_generate.helpers.settings.chat_provider = "openrouter"
+            question_generate.helpers.settings.lesson_plan_provider = "openrouter"
+            question_generate.helpers.settings.main_model = "anthropic/claude-3.7-sonnet"
+            question_generate.helpers.settings.lesson_plan_model = "anthropic/claude-3.7-sonnet"
 
             model = question_generate._resolve_cli_mcp_search_model()
 

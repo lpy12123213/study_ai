@@ -30,7 +30,7 @@ class TestLlmRunner(unittest.IsolatedAsyncioTestCase):
         kwargs = fake_chat.await_args.kwargs
         self.assertEqual(kwargs["retries"], 8)
         self.assertEqual(kwargs["timeout_s"], 2.0)
-        self.assertFalse(kwargs["raise_on_fail"])
+        self.assertTrue(kwargs["raise_on_fail"])
         self.assertEqual(kwargs["req_id_prefix"], "unit")
 
     async def test_run_json_sets_json_response_format_and_parses_fenced_json(self) -> None:
@@ -48,6 +48,29 @@ class TestLlmRunner(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(obj, {"ok": True})
         self.assertEqual(fake_chat.await_args.kwargs["response_format"], {"type": "json_object"})
+        self.assertTrue(fake_chat.await_args.kwargs["raise_on_fail"])
+
+    async def test_run_text_marks_system_messages_cacheable_without_mutating_input(self) -> None:
+        from backend.llm import runner
+
+        messages = [
+            {"role": "system", "content": "stable instructions"},
+            {"role": "user", "content": "hello"},
+        ]
+        fake_chat = AsyncMock(return_value=ChatCompletionResult(content="ok"))
+        with patch("backend.llm.runner.chat_completion", new=fake_chat):
+            text = await runner.run_text(
+                messages=messages,
+                model="openai/test-mini",
+                temperature=0.1,
+                max_tokens=64,
+            )
+
+        self.assertEqual(text, "ok")
+        sent_messages = fake_chat.await_args.kwargs["messages"]
+        self.assertEqual(sent_messages[0]["cache_control"], {"type": "ephemeral"})
+        self.assertNotIn("cache_control", sent_messages[1])
+        self.assertNotIn("cache_control", messages[0])
 
     async def test_run_tool_use_preserves_tool_options(self) -> None:
         from backend.llm import runner

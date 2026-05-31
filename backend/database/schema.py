@@ -519,3 +519,98 @@ class WrongQuestion(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
     __table_args__ = (UniqueConstraint("user_id", "question_id", name="ux_wrong_questions_user_question"),)
+
+
+class LessonPlanRecord(Base):
+    """Persisted lesson plan (educator-authored, optionally AI-assisted).
+
+    Replaces the legacy module-level dict in
+    ``backend.generation.lesson_plan.store`` so plans survive restarts and
+    multi-worker deployments.
+    """
+
+    __tablename__ = "lesson_plans"
+
+    # ``id`` mirrors the public plan id used by the API (uuid4 hex). Stored as
+    # ``String`` rather than autoincrement so existing JSON snapshots can be
+    # migrated 1:1 without remapping.
+    id = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    title = Column(String(255), nullable=False, default="")
+    subject = Column(String(100), default="", index=True)
+    grade = Column(String(50), default="")
+    topic = Column(String(200), default="")
+    duration_minutes = Column(Integer, default=45)
+    status = Column(String(32), default="draft", index=True)
+    objectives_json = Column(Text, default="[]")
+    sections_json = Column(Text, default="[]")
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_lesson_plans_user_updated", "user_id", "updated_at"),
+    )
+
+
+class AuthUser(Base):
+    """Persisted application user (login + JWT identity).
+
+    Replaces the module-level ``_users`` dict + ``.local/users.json`` snapshot
+    so credentials are consistent across uvicorn workers.
+    """
+
+    __tablename__ = "auth_users"
+
+    user_id = Column(String(64), primary_key=True, index=True)
+    username = Column(String(120), nullable=False, unique=True, index=True)
+    password_hash = Column(String(200), nullable=False, default="")
+    role = Column(String(32), nullable=False, default="user", index=True)
+    token_version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
+
+
+class RevokedJwt(Base):
+    """JWT ``jti`` revocation list shared across workers.
+
+    Entries with ``exp_ts`` in the past are pruned on read.
+    """
+
+    __tablename__ = "auth_revoked_jwt"
+
+    jti = Column(String(64), primary_key=True)
+    exp_ts = Column(Integer, nullable=False, default=0, index=True)
+    revoked_at = Column(DateTime, default=_utcnow, index=True)
+
+
+
+class EssayEvaluation(Base):
+    """Persisted essay-evaluation history (one row per scored submission)."""
+
+    __tablename__ = "essay_evaluations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    subject = Column(String(40), default="语文", index=True)
+    topic = Column(String(200), default="")
+    essay_type = Column(String(32), default="argumentative", index=True)
+    grade_band = Column(String(32), default="senior", index=True)
+    language = Column(String(8), default="zh", index=True)
+
+    essay_text = Column(Text, nullable=False, default="")
+    requirements = Column(Text, default="")
+
+    score_total = Column(Float, default=0.0, index=True)
+    score_max = Column(Float, default=0.0)
+    grade = Column(String(32), default="")
+
+    scores_json = Column(Text, default="[]")          # List[EssayScore]
+    feedback_json = Column(Text, default="{}")        # summary/strengths/weaknesses/suggestions/paragraph_feedback/rewrite
+    model = Column(String(100), default="")
+
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_essay_evaluations_user_created", "user_id", "created_at"),
+    )

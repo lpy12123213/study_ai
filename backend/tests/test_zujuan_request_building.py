@@ -107,6 +107,81 @@ class TestZujuanQuestionListRequest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("application/json", headers["Accept"])
 
 
+class DetailFakeResponse:
+    status_code = 200
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class DetailCapturingClient:
+    def __init__(self, html: str) -> None:
+        self.html = html
+        self.gets: list[dict] = []
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: dict | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> DetailFakeResponse:
+        self.gets.append(
+            {
+                "url": url,
+                "headers": headers or {},
+                "timeout": timeout,
+                "follow_redirects": follow_redirects,
+            }
+        )
+        return DetailFakeResponse(self.html)
+
+
+class DetailFakeCrawler:
+    base_url = "https://zujuan.xkw.com"
+    user_agent = "test-agent"
+
+    def __init__(self, html: str) -> None:
+        self.client = DetailCapturingClient(html)
+
+    def _question_url(self, question_id: str) -> str:
+        return f"{self.base_url}/15q{question_id}.html"
+
+    async def _replace_formulas_with_latex(self, html: str) -> str:
+        return html
+
+    async def _replace_formulas_with_svg(self, html: str) -> str:
+        return html
+
+    async def _replace_formulas_with_inline_svg(self, html: str) -> str:
+        return html
+
+
+class TestZujuanQuestionDetailRequest(unittest.IsolatedAsyncioTestCase):
+    async def test_get_question_detail_uses_crawler_http_client(self) -> None:
+        from backend.integrations.crawler.zujuan.detail import get_question_detail
+
+        html = (
+            '<span class="info-item">题型：单选题</span>'
+            '<span class="info-item">难度：普通</span>'
+            '<div class="quest-cnt ">测试题干</div><div class="quest-exam">'
+            + ("x" * 10050)
+        )
+        crawler = DetailFakeCrawler(html)
+
+        result = await get_question_detail(crawler, "123")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["stem"], "测试题干")
+        self.assertEqual(result["type"], "单选题")
+        self.assertEqual(result["difficulty"], "普通")
+        self.assertEqual(crawler.client.gets[0]["url"], "https://zujuan.xkw.com/15q123.html")
+        self.assertEqual(crawler.client.gets[0]["headers"]["Referer"], "https://zujuan.xkw.com/")
+        self.assertIn("text/html", crawler.client.gets[0]["headers"]["Accept"])
+        self.assertEqual(crawler.client.gets[0]["timeout"], 30.0)
+
+
 class SearchFakeCrawler:
     client = None
     subject = "高中数学"

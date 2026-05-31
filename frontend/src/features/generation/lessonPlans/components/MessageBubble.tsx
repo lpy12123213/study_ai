@@ -9,11 +9,20 @@ import { APP_ASSISTANT_NAME } from '@/constants/branding'
 import type { Message } from '@/types'
 import { LessonPlanAttachment } from '@/features/generation/lessonPlans/components/LessonPlanAttachment'
 
-export function MessageBubble({ message }: { message: Message }) {
+export function MessageBubble({ message, disableMotion = false }: { message: Message; disableMotion?: boolean }) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
 
   if (isUser) {
+    if (disableMotion) {
+      return (
+        <div className="flex justify-end mb-6">
+          <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          </div>
+        </div>
+      )
+    }
     return (
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-end mb-6">
         <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
@@ -23,12 +32,8 @@ export function MessageBubble({ message }: { message: Message }) {
     )
   }
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col gap-2 mb-8 w-full"
-    >
+  const assistantBody = (
+    <>
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
         <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
           <BrandMark size={12} />
@@ -75,6 +80,20 @@ export function MessageBubble({ message }: { message: Message }) {
           </AnimatePresence>
         </div>
       )}
+    </>
+  )
+
+  if (disableMotion) {
+    return <div className="flex flex-col gap-2 mb-8 w-full">{assistantBody}</div>
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex flex-col gap-2 mb-8 w-full"
+    >
+      {assistantBody}
     </motion.div>
   )
 }

@@ -54,6 +54,60 @@ class AgenticTaskSpecTests(unittest.TestCase):
         self.assertEqual(event["data"]["native_agentic"], True)
         self.assertEqual(event["data"]["agent_run_spec"]["domain"], "deepthink")
 
+    def test_paper_compose_specs_expose_agentic_latex_sandbox_contract(self) -> None:
+        from backend.generation.agentic.task_specs import build_agent_run_spec_for_task
+
+        expected_roles = {
+            "planner",
+            "searcher",
+            "author",
+            "solver",
+            "composer",
+            "compiler",
+            "repairer",
+            "reviewer",
+        }
+        expected_tools = {
+            "get_available_filters",
+            "search_questions",
+            "batch_get_question_details",
+            "compose_paper_blueprint",
+            "review_question_match",
+            "create_paper",
+            "analyze_paper",
+            "crawl_questions_from_bank",
+            "generate_questions_ai",
+            "solve_question_independently",
+            "render_paper_latex",
+            "compile_latex_sandbox",
+            "repair_latex",
+        }
+
+        for task_type in ["paper_compose", "paper_generate_full"]:
+            with self.subTest(task_type=task_type):
+                spec = build_agent_run_spec_for_task(
+                    task_type=task_type,
+                    request={"subject": "高中数学", "topic": "函数", "paperName": "函数测试卷"},
+                )
+
+                self.assertIsNotNone(spec)
+                roles = {role.name: role for role in spec.roles}
+                self.assertEqual(set(roles), expected_roles)
+                self.assertFalse(roles["repairer"].required)
+                self.assertFalse(roles["reviewer"].required)
+                self.assertTrue(expected_tools.issubset(set(spec.tool_policy.allowed_tools)))
+                self.assertEqual(spec.tool_policy.max_consecutive_failures, 3)
+                self.assertEqual(spec.search_policy.providers, ["local_question_library", "crawler"])
+                self.assertEqual(spec.output_contract.get("kind"), "paper")
+                self.assertEqual(spec.output_contract.get("formats"), ["paper", "tex", "pdf"])
+                self.assertEqual(spec.metadata.get("sandbox"), "docker-optional")
+
+                if task_type == "paper_generate_full":
+                    self.assertGreaterEqual(spec.budget.max_llm_calls, 28)
+                    self.assertGreaterEqual(spec.budget.max_tool_calls, 60)
+                    self.assertGreaterEqual(spec.budget.max_iterations, 24)
+                    self.assertGreaterEqual(spec.budget.max_runtime_s, 1500)
+
 
 class AgenticTaskSubmitTests(unittest.IsolatedAsyncioTestCase):
     async def test_core_ai_task_submitters_attach_agent_spec_metadata(self) -> None:

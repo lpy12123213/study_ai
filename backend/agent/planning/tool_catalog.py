@@ -29,6 +29,9 @@ _CORE_TOOLS: Dict[str, str] = {
 _DRAW_TOOLS: Dict[str, str] = {
     "tikz_to_svg": "Compile LaTeX TikZ into an SVG vector diagram.",
     "asy_to_svg": "Compile Asymptote into an SVG vector diagram; fallback for static technical diagrams.",
+    "render_chemistry": "Render a chemistry expression (mhchem syntax, e.g. `2H2 + O2 -> 2H2O` or `\\ce{...}`) into an SVG.",
+    "render_circuit": "Render a circuitikz electrical-circuit description into an SVG.",
+    "render_graphviz": "Render Graphviz DOT source into an SVG (flowcharts, state diagrams, dependency graphs). Engine: dot/neato/fdp/sfdp/twopi/circo.",
     "seedream_generate": "Generate images from natural language with Volcano Cloud Seedream 4.5 ARK images/generations.",
 }
 

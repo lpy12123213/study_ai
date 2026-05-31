@@ -4,10 +4,11 @@ import secrets
 from datetime import timedelta
 from typing import Optional
 
-import bcrypt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.security.password import hash_password as _hash_password
+from backend.core.security.password import verify_password as _verify_password
 from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
 from backend.database.schema import ShareLink
@@ -22,24 +23,6 @@ def _require_user_id(user_id: str) -> str:
     if not uid:
         raise ValueError("missing_user_id")
     return uid
-
-
-def _hash_password(password: str) -> str:
-    raw = str(password or "")
-    if not raw:
-        return ""
-    return bcrypt.hashpw(raw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def _verify_password(password: str, password_hash: str) -> bool:
-    raw = str(password or "")
-    hashed = str(password_hash or "")
-    if not hashed:
-        return raw == ""
-    try:
-        return bcrypt.checkpw(raw.encode("utf-8"), hashed.encode("utf-8"))
-    except (TypeError, ValueError):
-        return False
 
 
 def _row_to_dict(row: ShareLink) -> dict:

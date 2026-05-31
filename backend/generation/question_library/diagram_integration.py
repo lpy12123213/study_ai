@@ -2,18 +2,43 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured
-from backend.generation.question_library.diagram_utils import render_asy_to_url, render_tikz_to_url
+from backend.generation.question_library.diagram_utils import (
+    render_asy_to_url,
+    render_matplotlib_2d_to_url,
+    render_tikz_to_url,
+)
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.subject_knowledge import infer_subject_family
+from backend.generation.question_library.verify_diagram import verify_diagram_with_vision
 from backend.shared.diagrams.static_render import check_asy_tools, check_tikz_tools
 
 logger = get_logger(__name__)
+
+
+_FUNCTION_GRAPH_KEYWORDS = (
+    "函数图象", "函数图像", "图象", "图像", "y=", "y =",
+    "f(x)", "f (x)", "g(x)", "曲线", "正弦曲线", "余弦曲线",
+    "二次函数", "指数函数", "对数函数", "幂函数", "三角函数",
+)
+
+
+def _looks_like_function_graph(stem: str, subject_family: str) -> bool:
+    """Whether the question stem suggests a function-plot rather than geometric figure.
+
+    Used to decide when matplotlib_2d should appear in the available_kinds list."""
+
+    if subject_family != "math":
+        return False
+    s = str(stem or "")
+    return any(kw in s for kw in _FUNCTION_GRAPH_KEYWORDS)
 
 
 def _heuristic_need_diagram(*, subject: str, stem: str) -> bool:
@@ -45,13 +70,18 @@ async def assess_diagram_need(
 
     tikz_ok = len(check_tikz_tools()) == 0
     asy_ok = len(check_asy_tools()) == 0
-    available_kinds = [k for k, ok in (("tikz", tikz_ok), ("asy", asy_ok)) if ok] + ["none"]
+    available_kinds = [k for k, ok in (("tikz", tikz_ok), ("asy", asy_ok)) if ok]
+    # matplotlib_2d is available iff stem mentions function graphs; matplotlib is always installed.
+    fam_early = infer_subject_family(subject)
+    if _looks_like_function_graph(stem, fam_early):
+        available_kinds.append("matplotlib_2d")
+    available_kinds = available_kinds + ["none"]
 
     # If LLM isn't available, rely on a conservative heuristic.
     if not is_llm_configured():
         return {"need_diagram": _heuristic_need_diagram(subject=subject, stem=stem), "kind": "auto", "reason": "heuristic"}
 
-    fam = infer_subject_family(subject)
+    fam = fam_early
     payload: Dict[str, Any] = {
         "subject": str(subject or "").strip(),
         "subject_family": fam,
@@ -59,7 +89,7 @@ async def assess_diagram_need(
         "available_kinds": available_kinds,
         "output_schema": {
             "need_diagram": "bool",
-            "kind": "string (tikz|asy|none)",
+            "kind": "string (tikz|asy|matplotlib_2d|none)",
             "reason": "string",
         },
     }
@@ -68,7 +98,10 @@ async def assess_diagram_need(
         "<role>You are a curriculum question reviewer responsible for deciding whether a question needs a diagram.</role>\n"
         "<rules>\n"
         "  <rule>Set need_diagram=true only when missing a diagram would clearly increase ambiguity or reading difficulty.</rule>\n"
-        "  <rule>The diagram backend is static vector output: prefer TikZ/PGF; choose Asymptote only when TikZ is unsuitable or unavailable.</rule>\n"
+        "  <rule>Choose the most appropriate backend from available_kinds:\n"
+        "    - matplotlib_2d for plotting explicit/implicit function curves (y=f(x), parametric, etc.)\n"
+        "    - tikz/PGF for static geometric figures, schematics, physical setups\n"
+        "    - asy as fallback when TikZ is unsuitable or unavailable.</rule>\n"
         "  <rule>kind must be selected from available_kinds; when need_diagram=false, kind=none.</rule>\n"
         "</rules>\n"
         "<output_format>Output a strict JSON object only.</output_format>"
@@ -119,7 +152,10 @@ async def generate_question_diagram(
     tikz_ok = len(check_tikz_tools()) == 0
     asy_ok = len(check_asy_tools()) == 0
     available_kinds = [k for k, ok in (("tikz", tikz_ok), ("asy", asy_ok)) if ok]
-    prefer = "tikz" if tikz_ok else "asy" if asy_ok else "none"
+    can_plot = _looks_like_function_graph(stem, fam)
+    if can_plot:
+        available_kinds.append("matplotlib_2d")
+    prefer = "matplotlib_2d" if can_plot else ("tikz" if tikz_ok else "asy" if asy_ok else "none")
 
     if not is_llm_configured():
         # Without LLM, we can't reliably build a spec; return None.
@@ -133,25 +169,34 @@ async def generate_question_diagram(
         "stem": _clip(stem, 1400),
         "output_schema": {
             "need_diagram": "bool",
-            "kind": "string (tikz|asy|none)",
+            "kind": "string (tikz|asy|matplotlib_2d|none)",
             "alt": "string",
             "caption": "string",
             "tikz": "string (when kind=tikz; must include \\begin{tikzpicture}...\\end{tikzpicture})",
             "preamble": "string (optional when kind=tikz; appended to TeX preamble)",
             "asy": "string (when kind=asy; Asymptote code)",
+            "matplotlib_spec": {
+                "x_range": "[number, number]",
+                "y_range": "[number, number] (optional)",
+                "title": "string (optional)",
+                "curves": [{"expr": "string (python-like, variable=x)", "label": "string (optional)"}],
+            },
         },
     }
 
     system_content = (
-        "<role>You are a question-bank diagram engineer responsible for generating high-quality static vector diagrams for questions.</role>\n"
+        "<role>You are a question-bank diagram engineer responsible for generating high-quality diagrams for questions.</role>\n"
         "<rules>\n"
-        "  <rule>只允许使用静态矢量后端：TikZ/PGF（首选）与 Asymptote（次选）。禁止选择其他后端。</rule>\n"
-        "  <rule>kind must be selected from available_kinds. Prefer TikZ; choose Asymptote only when TikZ is unsuitable or unavailable.</rule>\n"
+        "  <rule>选择最合适的后端：\n"
+        "    - matplotlib_2d 用于函数图象（y=f(x)、参数曲线等），提供 x_range/y_range/curves 即可，准确度高。\n"
+        "    - TikZ/PGF（首选）用于几何图、物理示意图、电路图等静态矢量图。\n"
+        "    - Asymptote（次选）当 TikZ 不适用或不可用。</rule>\n"
+        "  <rule>kind must be selected from available_kinds.</rule>\n"
         "</rules>\n"
         "<constraints>\n"
         "  <rule>The diagram must serve the question meaning: label key points, directions, and quantities. Do not draw decorative content.</rule>\n"
         "  <rule>若题目不需要图，need_diagram=false 并 kind=none。</rule>\n"
-        "  <rule>All coordinates and labels must be explicit in the code. Do not rely on implicit conventions.</rule>\n"
+        "  <rule>All coordinates and labels must be explicit. Do not rely on implicit conventions.</rule>\n"
         "</constraints>\n"
         "<output_format>Output a strict JSON object only.</output_format>"
     )
@@ -186,7 +231,24 @@ async def generate_question_diagram(
     alt = str(obj.get("alt") or "diagram").strip() or "diagram"
     caption = str(obj.get("caption") or "").strip()
 
+    published: Optional[Dict[str, Any]] = None
     try:
+        if kind == "matplotlib_2d":
+            spec = obj.get("matplotlib_spec")
+            if not isinstance(spec, dict):
+                # Fallback if LLM put curves at the root.
+                spec = {"curves": obj.get("curves") or []}
+            if not (spec.get("curves") or spec.get("expr")):
+                # Couldn't build a usable spec; fall back to TikZ if available.
+                if "tikz" in available_kinds:
+                    kind = "tikz"
+                elif "asy" in available_kinds:
+                    kind = "asy"
+                else:
+                    return None
+            else:
+                published = await render_matplotlib_2d_to_url(spec=spec, user_id=user_id, alt=alt)
+
         if kind == "asy":
             asy = str(obj.get("asy") or obj.get("asymptote") or "").strip()
             if not asy and "tikz" in available_kinds:
@@ -218,6 +280,7 @@ async def generate_question_diagram(
         "alt": alt,
         "caption": caption,
         "markdown": str(published.get("markdown") or "").strip(),
+        "cached": bool(published.get("cached")),
     }
 
 
@@ -240,6 +303,8 @@ async def enrich_drafts_with_diagrams(
         return []
 
     sem = asyncio.Semaphore(3)
+    verify_enabled = (os.getenv("QUESTION_LIBRARY_DIAGRAM_VERIFY") or "").strip().lower() in {"1", "true", "yes", "on"}
+    verify_strictness = int(os.getenv("QUESTION_LIBRARY_DIAGRAM_VERIFY_STRICTNESS") or 3)
 
     async def _enrich_one(d: dict) -> dict:
         existing = d.get("diagrams")
@@ -278,6 +343,25 @@ async def enrich_drafts_with_diagrams(
             )
             if not diagram or not isinstance(diagram, dict) or not str(diagram.get("url") or "").strip():
                 return d
+
+            # Best-effort vision verification (env-gated to avoid extra LLM cost by default).
+            if verify_enabled:
+                try:
+                    verdict = await verify_diagram_with_vision(
+                        diagram_url=str(diagram.get("url") or ""),
+                        description=stem,
+                        strictness=verify_strictness,
+                    )
+                    diagram["verification"] = {
+                        "ok": bool(verdict.get("ok")),
+                        "issues": list(verdict.get("issues") or [])[:5],
+                        "repair_hint": str(verdict.get("repair_hint") or ""),
+                        "confidence": float(verdict.get("confidence") or 0.0),
+                        "mode": str(verdict.get("mode") or ""),
+                    }
+                except Exception:
+                    logger.warning("question_library_diagram_verify_failed", exc_info=True)
+                    diagram["verification"] = {"ok": False, "issues": ["verify_exception"], "mode": "error"}
 
             out = dict(d)
             out["diagrams"] = [diagram]

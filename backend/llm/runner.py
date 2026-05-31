@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from backend.llm.client import ChatCompletionResult, chat_completion
 from backend.llm.json_utils import JsonParseMode, extract_json_value
+from backend.llm.result import mark_message_cacheable
 
 
 def _coerce_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
@@ -41,6 +42,17 @@ def _first_env_value(names: Sequence[str]) -> Optional[str]:
         if value is not None and str(value).strip() != "":
             return str(value).strip()
     return None
+
+
+def _mark_system_messages_cacheable(messages: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for message in messages:
+        item = dict(message or {})
+        role = str(item.get("role") or "").strip().lower()
+        if role == "system" and "cache_control" not in item:
+            item = mark_message_cacheable(item)
+        out.append(item)
+    return out
 
 
 def resolve_retries(
@@ -88,7 +100,7 @@ async def run_tool_use(
     on_content_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     reasoning_emit_chars: int = 240,
     reasoning_emit_interval_s: float = 0.25,
-    raise_on_fail: bool = False,
+    raise_on_fail: bool = True,
     retries: Optional[int] = None,
     retry_env_vars: Sequence[str] = (),
     default_retries: int = 3,
@@ -107,7 +119,7 @@ async def run_tool_use(
     moonshot_base_url: Optional[str] = None,
 ) -> ChatCompletionResult:
     return await chat_completion(
-        messages=messages,
+        messages=_mark_system_messages_cacheable(messages),
         model=str(model or "").strip(),
         temperature=float(temperature),
         max_tokens=int(max_tokens),
@@ -157,7 +169,7 @@ async def run_text(
     on_content_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     reasoning_emit_chars: int = 240,
     reasoning_emit_interval_s: float = 0.25,
-    raise_on_fail: bool = False,
+    raise_on_fail: bool = True,
     retries: Optional[int] = None,
     retry_env_vars: Sequence[str] = (),
     default_retries: int = 3,

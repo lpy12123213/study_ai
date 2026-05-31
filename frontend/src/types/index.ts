@@ -78,7 +78,9 @@ export interface Question {
   order?: number
   type?: string
   difficulty?: string
+  difficultyValue?: number | null
   knowledgePoint?: string
+  knowledgePoints?: string[]
   sourceUrl?: string
   stem?: string
 }

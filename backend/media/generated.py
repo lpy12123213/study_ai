@@ -78,12 +78,13 @@ def _expires_at_from_ttl(ttl_s: Optional[int]) -> Optional[datetime]:
     return utcnow_naive() + timedelta(seconds=ttl)
 
 
-def _safe_filename_for_bytes(data: bytes, ext: str) -> Tuple[str, str]:
+def _safe_filename_for_bytes(data: bytes, ext: str, *, user_id: str) -> Tuple[str, str]:
     sha = hashlib.sha256(data).hexdigest()
+    scoped = hashlib.sha256(str(user_id or "").strip().encode("utf-8") + b"\0" + data).hexdigest()
     suffix = _normalize_ext(ext)
     if not suffix or suffix not in _ALLOWED_EXTS:
         raise ValueError("unsupported_extension")
-    return f"{sha}{suffix}", sha
+    return f"{scoped}{suffix}", sha
 
 
 async def publish_generated_bytes(
@@ -100,7 +101,7 @@ async def publish_generated_bytes(
         raise ValueError("missing_user_id")
 
     payload = bytes(data or b"")
-    filename, sha = _safe_filename_for_bytes(payload, ext)
+    filename, sha = _safe_filename_for_bytes(payload, ext, user_id=uid)
 
     _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     out_path = (_GENERATED_DIR / filename).resolve()

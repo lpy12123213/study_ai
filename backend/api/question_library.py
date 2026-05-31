@@ -5,7 +5,7 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
@@ -21,6 +21,7 @@ from backend.api.question_library_schemas import (
     QuestionLibraryScoreRequest,
 )
 from backend.api.sse_polling import next_poll_delay, wait_for_task_event_or_timeout
+from backend.api.sse_utils import is_sse_client_disconnected
 from backend.core.audit import AuditAction, audit_logger
 from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.question.question_cache import get_question_cache
@@ -58,11 +59,13 @@ def _sse_headers() -> dict:
     }
 
 
-async def _stream_task(task_id: str, *, after_seq: int) -> StreamingResponse:
+async def _stream_task(task_id: str, *, after_seq: int, request: Request | None = None) -> StreamingResponse:
     heartbeat_s = float(os.getenv("QUESTION_LIBRARY_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
         async for event in task_runtime.stream(task_id, after_seq=after_seq, heartbeat_s=heartbeat_s):
+            if request is not None and await is_sse_client_disconnected(request):
+                return
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -72,7 +75,9 @@ async def _stream_task(task_id: str, *, after_seq: int) -> StreamingResponse:
     )
 
 
-async def _stream_task_from_db(*, task_id: str, user_id: str, after_seq: int) -> StreamingResponse:
+async def _stream_task_from_db(
+    *, task_id: str, user_id: str, after_seq: int, request: Request | None = None
+) -> StreamingResponse:
     """DB-backed SSE stream for question-library tasks (survives process restart)."""
 
     heartbeat_s = float(os.getenv("QUESTION_LIBRARY_SSE_HEARTBEAT_S") or "4.0")
@@ -82,6 +87,8 @@ async def _stream_task_from_db(*, task_id: str, user_id: str, after_seq: int) ->
         last_ping_at = 0.0
         poll_delay = 0.1
         while True:
+            if request is not None and await is_sse_client_disconnected(request):
+                return
             task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
             if not task:
                 yield f"data: {json.dumps({'taskId': task_id, 'seq': last_sent, 'type': 'error', 'data': {'error': 'task_not_found'}}, ensure_ascii=False)}\n\n"
@@ -95,6 +102,8 @@ async def _stream_task_from_db(*, task_id: str, user_id: str, after_seq: int) ->
                     continue
                 last_sent = seq
                 had_events = True
+                if request is not None and await is_sse_client_disconnected(request):
+                    return
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
             if str(task.get("status") or "") != "running":
@@ -305,15 +314,20 @@ async def get_task_status(task_id: str, user: dict = Depends(require_auth)) -> d
 
 @router.get("/tasks/{task_id}/stream")
 async def stream_task(
-    task_id: str, after_seq: int = Query(0, ge=0), user: dict = Depends(require_auth)
+    task_id: str,
+    request: Request,
+    after_seq: int = Query(0, ge=0),
+    user: dict = Depends(require_auth),
 ) -> StreamingResponse:
     user_id = _require_user_id(user)
     task = await task_runtime.get_task(task_id)
     if task and task.user_id == user_id:
-        return await _stream_task(task.task_id, after_seq=after_seq)
+        return await _stream_task(task.task_id, after_seq=after_seq, request=request)
 
     # Restart-safe fallback: replay/poll events from DB.
-    return await _stream_task_from_db(task_id=str(task_id or "").strip(), user_id=user_id, after_seq=after_seq)
+    return await _stream_task_from_db(
+        task_id=str(task_id or "").strip(), user_id=user_id, after_seq=after_seq, request=request
+    )
 
 
 @router.get("/previews/{preview_id}", response_model=QuestionLibraryPreviewResponse)
@@ -432,34 +446,36 @@ async def regenerate_preview_section(
 
 
 @router.post("/crawl")
-async def crawl_and_save(request: QuestionLibraryCrawlRequest, user: dict = Depends(require_auth)) -> StreamingResponse:
+async def crawl_and_save(
+    request: QuestionLibraryCrawlRequest, http_request: Request, user: dict = Depends(require_auth)
+) -> StreamingResponse:
     user_id = _require_user_id(user)
     try:
         task = await ql_runner.create_crawl_task(user_id=user_id, request=request.model_dump())
     except RunnerError as exc:
         raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
-    return await _stream_task(task.task_id, after_seq=0)
+    return await _stream_task(task.task_id, after_seq=0, request=http_request)
 
 
 @router.post("/generate")
 async def generate_and_save(
-    request: QuestionLibraryGenerateRequest, user: dict = Depends(require_auth)
+    request: QuestionLibraryGenerateRequest, http_request: Request, user: dict = Depends(require_auth)
 ) -> StreamingResponse:
     user_id = _require_user_id(user)
     try:
         task = await ql_runner.create_generate_task(user_id=user_id, request=request.model_dump())
     except RunnerError as exc:
         raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
-    return await _stream_task(task.task_id, after_seq=0)
+    return await _stream_task(task.task_id, after_seq=0, request=http_request)
 
 
 @router.post("/score")
 async def score_question_library(
-    request: QuestionLibraryScoreRequest, user: dict = Depends(require_auth)
+    request: QuestionLibraryScoreRequest, http_request: Request, user: dict = Depends(require_auth)
 ) -> StreamingResponse:
     user_id = _require_user_id(user)
     try:
         task = await ql_runner.create_score_task(user_id=user_id, request=request.model_dump())
     except RunnerError as exc:
         raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
-    return await _stream_task(task.task_id, after_seq=0)
+    return await _stream_task(task.task_id, after_seq=0, request=http_request)

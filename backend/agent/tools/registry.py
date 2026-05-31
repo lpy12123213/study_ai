@@ -10,6 +10,7 @@ from backend.agent.tools.generation.diagram_planning import DiagramPlanningTools
 from backend.agent.tools.generation.diagrams import DiagramToolsMixin
 from backend.agent.tools.generation.exports import ExportToolsMixin
 from backend.agent.tools.generation.latex_export import LatexToolsMixin
+from backend.agent.tools.generation.paper_compose import PaperComposeToolsMixin
 from backend.agent.tools.generation.plots import PlotToolsMixin
 from backend.agent.tools.knowledge.knowledge_points import KnowledgePointsToolsMixin
 from backend.agent.tools.knowledge.knowledge_type_detection import KnowledgeTypeDetectionToolsMixin
@@ -45,6 +46,7 @@ TOOL_MIXINS: Tuple[Type[object], ...] = (
     ContentReviewToolsMixin,
     ExportToolsMixin,
     LatexToolsMixin,
+    PaperComposeToolsMixin,
     DiagramToolsMixin,
     DiagramPlanningToolsMixin,
     PlotToolsMixin,

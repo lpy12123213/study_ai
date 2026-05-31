@@ -23,6 +23,62 @@ def asy_tools_missing_hint() -> str:
     )
 
 
+def graphviz_tools_missing_hint() -> str:
+    return (
+        "Graphviz rendering requires `dot` on PATH. "
+        "Install Graphviz (https://graphviz.org/download/) or apt/brew install graphviz."
+    )
+
+
+def check_graphviz_tools() -> List[str]:
+    missing: List[str] = []
+    if shutil.which("dot") is None:
+        missing.append("dot")
+    return missing
+
+
+def render_graphviz_to_svg_bytes(
+    *,
+    dot_code: str,
+    engine: str = "dot",
+    timeout_s: float = 60.0,
+) -> Dict[str, Any]:
+    """Render Graphviz DOT source to SVG bytes via `dot -Tsvg` (best-effort)."""
+
+    code = str(dot_code or "").strip()
+    if not code:
+        return {"success": False, "error": "dot_empty"}
+
+    missing = check_graphviz_tools()
+    if missing:
+        return {"success": False, "error": "graphviz_tools_missing", "missing": missing, "hint": graphviz_tools_missing_hint()}
+
+    eng = (engine or "dot").strip().lower()
+    allowed_engines = {"dot", "neato", "fdp", "sfdp", "twopi", "circo"}
+    if eng not in allowed_engines:
+        eng = "dot"
+    timeout = _clamp_timeout_s(timeout_s, default=60.0)
+    cmd = [eng, "-Tsvg"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=code,
+            capture_output=True,
+            text=False,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        return {"success": False, "error": f"graphviz_not_found: {exc}", "hint": graphviz_tools_missing_hint()}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "graphviz_timeout"}
+
+    if proc.returncode != 0 or not proc.stdout:
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        return {"success": False, "error": f"graphviz_failed: {stderr[-1500:] if stderr else 'no_output'}"}
+
+    return {"success": True, "svg_bytes": proc.stdout}
+
+
 def _repo_root() -> Path:
     # backend/shared/diagrams/static_render.py -> repo root
     return Path(__file__).resolve().parents[3]

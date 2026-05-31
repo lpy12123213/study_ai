@@ -12,6 +12,7 @@ import { AccountPanel } from '@/features/settings/components/AccountPanel'
 import { ApiSettingsPanel } from '@/features/settings/components/ApiSettingsPanel'
 import { AppearancePanel } from '@/features/settings/components/AppearancePanel'
 import { DataPanel } from '@/features/settings/components/DataPanel'
+import { LlmDebugPanel } from '@/features/settings/components/LlmDebugPanel'
 import { AboutPanel } from '@/features/settings/components/AboutPanel'
 import { useApiSettings } from '@/features/settings/hooks/useApiSettings'
 
@@ -118,6 +119,8 @@ export default function SettingsView() {
               resetAppearance={resetAppearance}
             />
           )}
+
+          {activeTab === 'debug' && <LlmDebugPanel isActive={activeTab === 'debug'} />}
 
           {activeTab === 'about' && <AboutPanel />}
         </div>

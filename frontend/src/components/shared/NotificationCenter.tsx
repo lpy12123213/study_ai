@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Bell, CheckCircle2, XCircle } from 'lucide-react'
-import { listTasks, type UnifiedTask } from '@/api/tasks'
+import type { UnifiedTask } from '@/api/tasks'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,6 +15,7 @@ import {
 import { useNotificationStore } from '@/stores/useNotificationStore'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { cn } from '@/lib/utils'
+import { useRunningTasks } from '@/hooks/useRunningTasks'
 
 const SEEN_STATUS_STORAGE_KEY = 'task.status_seen.v1'
 
@@ -50,12 +50,7 @@ export function NotificationCenter() {
     seenRef.current = loadSeenStatuses()
   }
 
-  const { data } = useQuery({
-    queryKey: ['runningTasks'],
-    queryFn: () => listTasks({ status: 'running', limit: 50 }),
-    refetchInterval: 10_000,
-    enabled: isAuthenticated && Boolean(token),
-  })
+  const { data } = useRunningTasks({ enabled: isAuthenticated && Boolean(token), limit: 50 })
 
   useEffect(() => {
     const tasks = (data?.tasks || []) as UnifiedTask[]

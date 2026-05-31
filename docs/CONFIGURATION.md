@@ -227,13 +227,30 @@ python scripts/check_config.py --strict
 
 ## 试卷导出
 
+- `PAPER_EXPORT_LATEX_BACKEND`: `auto` / `docker` / `host`
 - `PAPER_EXPORT_LATEX_ENGINE`
 - `PAPER_EXPORT_LATEX_TIMEOUT_S`
 - `AGENT_LATEX_COMPILE_TIMEOUT_S`
+- `LATEX_SANDBOX_DOCKER_IMAGE`
+- `LATEX_SANDBOX_TIMEOUT_S`
+- `LATEX_SANDBOX_MEMORY`
+- `LATEX_SANDBOX_CPUS`
+- `LATEX_SANDBOX_PIDS_LIMIT`
+- `LATEX_SANDBOX_USER`
 - `PAPER_EXPORT_DOCX_ENGINE`
 - `PAPER_EXPORT_PANDOC_TIMEOUT_S`
 
-PDF 需要本机可执行的 LaTeX 引擎，DOCX 推荐安装 Pandoc。
+PDF 编译默认 `PAPER_EXPORT_LATEX_BACKEND=auto`：如果 Docker 和 `LATEX_SANDBOX_DOCKER_IMAGE`
+镜像可用，会在 `--network none`、只读根文件系统、drop capabilities 的容器内运行 `xelatex`；否则回退到本机
+LaTeX 引擎。生产或公网环境建议构建并启用 Docker 沙盒，避免让模型生成的 LaTeX 直接在宿主机编译。
+
+构建默认沙盒镜像：
+
+```bash
+docker build -t study-ai/latex-sandbox:latest docker/latex-sandbox
+```
+
+DOCX 推荐安装 Pandoc。
 
 内容持久化：
 

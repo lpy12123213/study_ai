@@ -71,7 +71,7 @@ class TestDatabaseAlembic(unittest.TestCase):
             self.assertEqual(row, ("user-a",))
             self.assertIn("ix_paper_questions_user_question", indexes)
 
-            command.downgrade(cfg, "-1")
+            command.downgrade(cfg, "0001_initial")
             self.assertNotIn("user_id", _columns(db_path, "paper_questions"))
             gc.collect()
 

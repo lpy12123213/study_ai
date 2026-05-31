@@ -15,6 +15,7 @@ import {
   ListTodo,
   MessagesSquare,
   PenTool,
+  PenSquare,
   Search,
   Settings,
   Sparkles,
@@ -63,6 +64,7 @@ export const ROUTE_CONFIG: RouteConfig[] = [
   defineRoute({ id: 'study-materials', path: '/study-materials', label: '自学资料', icon: BookOpen, layout: 'wide', sidebar: true, navGroup: 'main', command: true }),
   defineRoute({ id: 'knowledge-videos', path: '/knowledge-videos', label: '知识视频', icon: Film, layout: 'wide', sidebar: true, navGroup: 'main', command: true }),
   defineRoute({ id: 'question-evaluate', path: '/question-evaluate', label: '好题鉴别', icon: Award, layout: 'wide', sidebar: true, navGroup: 'main', command: true }),
+  defineRoute({ id: 'essay-evaluation', path: '/essay-evaluation', label: '作文批改', icon: PenSquare, layout: 'wide', sidebar: true, navGroup: 'main', command: true }),
   defineRoute({ id: 'question-library', path: '/question-library', label: '本地题库', icon: Library, layout: 'studio', sidebar: false, navGroup: 'main', command: true }),
   defineRoute({ id: 'ai-generate', path: '/ai-generate', label: 'AI 出题', icon: Sparkles, layout: 'studio', sidebar: false, navGroup: 'main', command: true }),
   defineRoute({ id: 'ai-generate-review', path: '/ai-generate/review/:sessionId/:questionId', label: '题目审核', icon: Sparkles, layout: 'studio', sidebar: false, navGroup: 'hidden', command: false, parentId: 'ai-generate' }),
@@ -83,6 +85,7 @@ export const ROUTE_CONFIG: RouteConfig[] = [
   defineRoute({ id: 'dashboard', path: '/dashboard', label: '仪表盘', icon: BarChart3, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'diff', path: '/diff', label: '内容对比', icon: Files, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'settings', path: '/settings', label: '设置', icon: Settings, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
+  defineRoute({ id: 'dev-rich-textarea', path: '/dev/rich-textarea', label: 'RichTextarea', icon: Bug, layout: 'wide', sidebar: false, navGroup: 'hidden', command: false, requireAuth: false }),
 ]
 
 export const HEADER_NAV_ITEMS = ROUTE_CONFIG.filter((route) => route.navGroup === 'main')

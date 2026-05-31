@@ -13,6 +13,7 @@ class QuestionGenerationStagesTests(unittest.TestCase):
             stage_ids,
             [
                 "source_pack",
+                "curriculum_context",
                 "reference_crawl",
                 "reference_analysis",
                 "brainstorm",
@@ -40,7 +41,7 @@ class QuestionGenerationStagesTests(unittest.TestCase):
         self.assertEqual(payload["stage_id"], "judge")
         self.assertEqual(payload["stage_label"], "判题筛选")
         self.assertEqual(payload["stage_group"], "quality")
-        self.assertEqual(payload["stage_order"], 8)
+        self.assertEqual(payload["stage_order"], 9)
         self.assertEqual(payload["progress"], 84.0)
         self.assertIn("description", payload)
         self.assertIn("summary", payload)

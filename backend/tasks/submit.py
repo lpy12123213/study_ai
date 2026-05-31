@@ -12,6 +12,7 @@ from backend.generation.agentic.task_specs import (
     build_agent_run_spec_for_task,
     build_agentic_starter_event,
 )
+from backend.generation.essay_evaluation.runner import run_essay_evaluation_task
 from backend.generation.question_evaluate.runner import run_question_evaluate_task
 from backend.shared.tasks import RuntimeTask, task_runtime
 from backend.tasks.runners import (
@@ -271,4 +272,40 @@ async def submit_question_evaluate_task(
         starter_event=build_agentic_starter_event(spec=agent_spec, title="开始好题鉴别", tool_name="question_evaluate")
         if agent_spec is not None
         else {"type": "step", "step": {"id": "task_started", "title": "开始好题鉴别", "status": "running"}},
+    )
+
+
+
+async def submit_essay_evaluation_task(
+    *, user_id: str, request: Dict[str, Any], parent_task_id: Optional[str] = None
+) -> RuntimeTask:
+    """Submit an essay-evaluation long task.
+
+    Adds title metadata so the task list can show subject + topic at a glance.
+    The runner will persist the scoring result into ``essay_evaluations`` and
+    fire a ``done`` SSE event with a ``result`` payload mirroring
+    ``EssayEvaluationResult``.
+    """
+
+    tid = _new_task_id("essay-eval")
+    req = dict(request or {})
+    subject = str(req.get("subject") or "").strip() or "语文"
+    topic = str(req.get("topic") or "").strip()
+    title = _clip_title(f"作文批改：{subject}{('·' + topic) if topic else ''}") or "作文批改"
+
+    async def runner_factory(task: RuntimeTask) -> None:
+        await run_essay_evaluation_task(task, user_id=user_id)
+
+    return await task_runtime.create_task(
+        task_id=tid,
+        user_id=user_id,
+        task_type="essay_evaluation",
+        title=title,
+        request=req,
+        parent_task_id=str(parent_task_id or "").strip() or None,
+        runner_factory=runner_factory,
+        starter_event={
+            "type": "step",
+            "step": {"id": "task_started", "title": "开始批改作文", "status": "running"},
+        },
     )

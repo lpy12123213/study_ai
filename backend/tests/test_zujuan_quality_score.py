@@ -34,6 +34,30 @@ class TestZujuanQualityScore(unittest.TestCase):
         self.assertFalse(any(str(f).startswith("choice_options_incomplete:") for f in flags))
         self.assertGreaterEqual(score, 90)
 
+    def test_infers_choice_prompt_without_type(self) -> None:
+        q = {
+            "type": "综合题",
+            "knowledge_points": ["弹簧", "动量"],
+            "stem": "如图所示，A、B两个物体之间用轻弹簧连接，放在光滑水平面上，则（　　）",
+        }
+        score, flags = self.crawler._quality_score(q)
+        self.assertIn("choice_missing_options", flags)
+        self.assertLess(score, 80)
+
+    def test_inferred_choice_with_embedded_options(self) -> None:
+        q = {
+            "type": "综合题",
+            "knowledge_points": ["弹簧", "动量"],
+            "stem": (
+                "如图所示，A、B两个物体之间用轻弹簧连接，放在光滑水平面上，"
+                "从静止释放后判断系统运动情况，则（　　） A．甲 B．乙 C．丙 D．丁"
+            ),
+        }
+        score, flags = self.crawler._quality_score(q)
+        self.assertTrue(any(str(f).startswith("choice_options:") for f in flags))
+        self.assertNotIn("choice_missing_options", flags)
+        self.assertGreaterEqual(score, 80)
+
     def test_kp_match_low(self) -> None:
         q = {
             "type": "填空题",

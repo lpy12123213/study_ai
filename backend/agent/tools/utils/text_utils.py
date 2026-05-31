@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from backend.core.text_utils import clip_text as _clip_text
@@ -20,6 +20,81 @@ def _looks_like_pdf_url(url: str) -> bool:
     except ValueError:
         return bool(_PDF_URL_RE.search(u))
     return bool(_PDF_URL_RE.search(u))
+
+
+# Domain credibility table for source ranking in study-material generation.
+# Higher = more trustworthy. Lookup is suffix-based (e.g. "wiki.example.edu.cn" matches "edu.cn").
+# Curated for K-12 / Gaokao Chinese context; tweak via STUDY_MATERIALS_DOMAIN_WEIGHTS if needed.
+_DOMAIN_CREDIBILITY: Tuple[Tuple[str, float], ...] = (
+    # Government / official curricular sources
+    ("moe.gov.cn", 0.98),
+    ("pep.com.cn", 0.95),  # 人教社
+    ("ncct.gov.cn", 0.95),
+    ("edu.cn", 0.85),
+    ("gov.cn", 0.85),
+    # University-hosted educational material
+    ("bnu.edu.cn", 0.85),
+    ("tsinghua.edu.cn", 0.85),
+    ("pku.edu.cn", 0.85),
+    ("ecnu.edu.cn", 0.82),
+    # Encyclopedia / reference
+    ("zh.wikipedia.org", 0.85),
+    ("en.wikipedia.org", 0.85),
+    ("britannica.com", 0.85),
+    ("baike.baidu.com", 0.65),
+    # Exam / problem aggregators (authoritative content but may include user uploads)
+    ("zujuan.xkw.com", 0.75),
+    ("xkw.com", 0.7),
+    ("21cnjy.com", 0.7),
+    ("zxxk.com", 0.65),
+    # General Q&A / blogs (mixed quality)
+    ("zhuanlan.zhihu.com", 0.55),
+    ("zhihu.com", 0.5),
+    ("csdn.net", 0.45),
+    ("jianshu.com", 0.4),
+    ("cnblogs.com", 0.45),
+    # Search-result spam / low-trust aggregators
+    ("docin.com", 0.25),
+    ("doc88.com", 0.25),
+    ("doczj.com", 0.25),
+    ("wenku.baidu.com", 0.3),
+    ("max.book118.com", 0.25),
+)
+
+_DOMAIN_DEFAULT_CREDIBILITY = 0.45
+
+
+def _extract_domain(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        netloc = urlparse(raw).netloc.lower()
+    except ValueError:
+        return ""
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    return netloc
+
+
+def _credibility_for_domain(domain: str) -> float:
+    if not domain:
+        return _DOMAIN_DEFAULT_CREDIBILITY
+    d = domain.lower()
+    for suffix, score in _DOMAIN_CREDIBILITY:
+        if d == suffix or d.endswith("." + suffix):
+            return score
+    return _DOMAIN_DEFAULT_CREDIBILITY
+
+
+def credibility_for_url(url: str) -> Tuple[str, float]:
+    """Public helper: return (domain, credibility_score) for a given URL.
+
+    Suffix matches a curated table; defaults to 0.45 for unknown domains.
+    """
+
+    domain = _extract_domain(url)
+    return domain, _credibility_for_domain(domain)
 
 
 def _compact_snippet(text: str, *, max_chars: int = 400) -> str:
@@ -302,9 +377,20 @@ def _postprocess_web_search_result(result: Dict[str, Any], *, max_snippet_chars:
     if url and not str(out.get("url") or "").strip():
         out["url"] = url
 
+    domain, credibility = credibility_for_url(url)
+    if domain:
+        out.setdefault("domain", domain)
+    out["credibility_score"] = round(credibility, 3)
+
     if _looks_like_pdf_url(url):
         # Avoid injecting garbled "PDF text" into the archive (common for math formulas).
         out["content_type_hint"] = "application/pdf"
+        flags = list(out.get("quality_flags") or []) if isinstance(out.get("quality_flags"), list) else []
+        if "pdf_unreadable" not in flags:
+            flags.append("pdf_unreadable")
+        out["quality_flags"] = flags
+        # Downweight unreadable PDFs so synthesizer prefers other sources first.
+        out["credibility_score"] = round(min(out["credibility_score"], 0.25), 3)
         pdf_summary = _remove_ui_noise(str(out.get("summary") or ""))
         if pdf_summary:
             out["summary"] = _clip_text(_compact_snippet(pdf_summary, max_chars=1200), max_chars=1200)

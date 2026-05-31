@@ -21,7 +21,7 @@ from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.system.generated_files import get_generated_file
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -429,13 +429,19 @@ def _prune_proxy_cache() -> dict[str, int]:
 
 
 @router.get("/media/proxy")
-async def proxy_media(url: str = Query(..., min_length=1, max_length=2000)) -> FileResponse:
+async def proxy_media(
+    url: str = Query(..., min_length=1, max_length=2000),
+    user: dict = Depends(require_auth),
+) -> FileResponse:
     """
     Fetch a remote media URL and cache it on disk for stable rendering.
 
+    - Requires an authenticated user (router-level + explicit dep for clarity).
     - Returns a cached file if available.
     - Downloads and stores into `.local/media/` otherwise.
     """
+    if not str((user or {}).get("user_id") or "").strip():
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     try:
         normalized = await _normalize_remote_url(url)
     except ValueError as exc:

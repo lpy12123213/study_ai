@@ -2,7 +2,10 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const generatedPath = path.resolve('src/api/__generated__.ts')
+const generatedDir = path.resolve('src/api/__generated__')
+const indexPath = path.join(generatedDir, 'index.ts')
+const componentsPath = path.join(generatedDir, 'components.ts')
+const pathsPath = path.join(generatedDir, 'paths.ts')
 const metadataRe = /^\/\*\*\n \* Study AI OpenAPI metadata\n \* Generated at: .+\n \* Git SHA: .+\n \*\/\n\n/u
 
 function readTextIfExists(filePath) {
@@ -47,14 +50,27 @@ function gitSha() {
   }
 }
 
-if (!fs.existsSync(generatedPath)) {
-  console.error('[gen:api] ERROR: src/api/__generated__.ts is missing after generation.')
+if (!fs.existsSync(generatedDir)) {
+  console.error('[gen:api] ERROR: src/api/__generated__/ is missing after generation.')
   process.exit(1)
 }
 
-const raw = fs.readFileSync(generatedPath, 'utf8')
-if (!raw.includes('export interface paths')) {
-  console.error('[gen:api] ERROR: generated API file does not contain OpenAPI paths.')
+const componentsRaw = fs.existsSync(componentsPath) ? fs.readFileSync(componentsPath, 'utf8') : ''
+const pathsRaw = fs.existsSync(pathsPath) ? fs.readFileSync(pathsPath, 'utf8') : ''
+const indexRaw = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf8') : ''
+
+if (!componentsRaw.includes('export interface components') || !componentsRaw.includes('export interface operations')) {
+  console.error('[gen:api] ERROR: src/api/__generated__/components.ts is missing OpenAPI components/operations.')
+  process.exit(1)
+}
+
+if (!pathsRaw.includes('export interface paths')) {
+  console.error('[gen:api] ERROR: src/api/__generated__/paths.ts is missing OpenAPI paths.')
+  process.exit(1)
+}
+
+if (!indexRaw.includes("from './components'") || !indexRaw.includes("from './paths'")) {
+  console.error('[gen:api] ERROR: src/api/__generated__/index.ts is missing split API re-exports.')
   process.exit(1)
 }
 
@@ -67,5 +83,5 @@ const header = [
   '',
 ].join('\n')
 
-const body = raw.replace(metadataRe, '')
-fs.writeFileSync(generatedPath, `${header}\n${body}`, 'utf8')
+const body = indexRaw.replace(metadataRe, '')
+fs.writeFileSync(indexPath, `${header}\n${body}`, 'utf8')

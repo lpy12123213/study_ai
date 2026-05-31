@@ -3,7 +3,7 @@ import { Loader2, Tag } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import * as annotationsApi from '@/api/annotations'
 
@@ -69,11 +69,14 @@ export function AnnotationDialog(props: {
 
           {Boolean(error) && <ErrorNotice error={error} />}
 
-          <Textarea
+          <RichTextarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={setContent}
             placeholder="写下你的批注/疑问/总结…"
-            className="min-h-28"
+            ariaLabel="批注内容"
+            debounceMs={0}
+            minHeight={112}
+            maxHeight={280}
           />
 
           <div className="space-y-1.5">

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
-import subprocess
 from typing import Any, Dict, List, Tuple
+
+import httpx
 
 from backend.core.logging_utils import get_logger
 from backend.integrations.crawler.zujuan.cookies import (
@@ -23,7 +23,7 @@ async def get_question_detail(
     stem_mode: str = "text",
 ) -> Dict[str, Any]:
     """
-    使用 curl 获取题目详情（httpx会被反爬拦截）。
+    使用 ZujuanCrawler 自身的 HTTP client 获取题目详情。
     返回题目的题干、选项、答案、解析等信息。
 
     Args:
@@ -39,11 +39,26 @@ async def get_question_detail(
     stem_mode = (stem_mode or "").strip().lower()
 
     try:
-        # 使用curl获取页面（在线程池中运行避免阻塞）
-        loop = asyncio.get_running_loop()
-        cmd = self._build_curl_cmd(url)
-        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=30))
-        html = result.stdout.decode("utf-8", errors="ignore")
+        client = getattr(self, "client", None)
+        if client is None:
+            initialize = getattr(self, "initialize", None)
+            if callable(initialize):
+                await initialize()
+                client = getattr(self, "client", None)
+        if client is None:
+            raise RuntimeError("zujuan crawler client not initialized")
+
+        response = await client.get(
+            url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": f"{getattr(self, 'base_url', 'https://zujuan.xkw.com').rstrip('/')}/",
+            },
+            timeout=30.0,
+            follow_redirects=True,
+        )
+        html = response.text or ""
 
         def _looks_like_login_page(text: str) -> bool:
             s = text or ""
@@ -242,7 +257,7 @@ async def get_question_detail(
 
         return res
 
-    except subprocess.TimeoutExpired:
+    except httpx.TimeoutException:
         return {"success": False, "question_id": question_id, "error": "请求超时", "url": url}
     except Exception as e:
         logger.warning("zujuan_get_question_detail_failed", extra={"question_id": question_id, "url": url}, exc_info=True)

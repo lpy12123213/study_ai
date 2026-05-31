@@ -79,14 +79,14 @@ describe('MissionComposer', () => {
 
     const textareas = screen.getAllByRole('textbox', { name: '出题任务描述' })
     const handles = screen.getAllByRole('button', { name: '调整任务输入框高度' })
-    const textarea = textareas[textareas.length - 1] as HTMLTextAreaElement
+    const editorRoot = textareas[textareas.length - 1]!.closest('[data-rich-textarea-root]') as HTMLElement
     const handle = handles[handles.length - 1]
 
     fireEvent.mouseDown(handle, { clientY: 200 })
     fireEvent.mouseMove(document, { clientY: 280 })
     fireEvent.mouseUp(document)
 
-    expect(textarea.style.height).toBe('204px')
+    expect(editorRoot.style.height).toBe('204px')
   })
 
   it('clamps mission textarea height at max value while dragging', () => {
@@ -120,14 +120,14 @@ describe('MissionComposer', () => {
 
     const textareas = screen.getAllByRole('textbox', { name: '出题任务描述' })
     const handles = screen.getAllByRole('button', { name: '调整任务输入框高度' })
-    const textarea = textareas[textareas.length - 1] as HTMLTextAreaElement
+    const editorRoot = textareas[textareas.length - 1]!.closest('[data-rich-textarea-root]') as HTMLElement
     const handle = handles[handles.length - 1]
 
     fireEvent.mouseDown(handle, { clientY: 200 })
     fireEvent.mouseMove(document, { clientY: 800 })
     fireEvent.mouseUp(document)
 
-    expect(textarea.style.height).toBe('320px')
+    expect(editorRoot.style.height).toBe('320px')
   })
 
   it('adjusts mission textarea height using click controls', () => {
@@ -160,16 +160,16 @@ describe('MissionComposer', () => {
     )
 
     const textareas = screen.getAllByRole('textbox', { name: '出题任务描述' })
-    const textarea = textareas[textareas.length - 1] as HTMLTextAreaElement
+    const editorRoot = textareas[textareas.length - 1]!.closest('[data-rich-textarea-root]') as HTMLElement
     const increaseButtons = screen.getAllByRole('button', { name: '增大任务输入框高度' })
     const decreaseButtons = screen.getAllByRole('button', { name: '减小任务输入框高度' })
     const increase = increaseButtons[increaseButtons.length - 1]!
     const decrease = decreaseButtons[decreaseButtons.length - 1]!
 
-    expect(textarea.style.height).toBe('124px')
+    expect(editorRoot.style.height).toBe('124px')
     fireEvent.click(increase)
-    expect(textarea.style.height).toBe('148px')
+    expect(editorRoot.style.height).toBe('148px')
     fireEvent.click(decrease)
-    expect(textarea.style.height).toBe('124px')
+    expect(editorRoot.style.height).toBe('124px')
   })
 })

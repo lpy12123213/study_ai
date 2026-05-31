@@ -61,7 +61,10 @@ class TestMediaProxyCache(unittest.IsolatedAsyncioTestCase):
             with patch("backend.api.media._resolve_host_ips", new=fake_resolve):
                 with patch("backend.api.media.httpx.AsyncClient", new=FakeClient):
                     with self.assertRaises(HTTPException) as cm:
-                        await media_api.proxy_media("https://example.com/test.svg")
+                        await media_api.proxy_media(
+                            "https://example.com/test.svg",
+                            user={"user_id": "unittest"},
+                        )
 
         self.assertEqual(cm.exception.status_code, 415)
         self.assertEqual(cm.exception.detail, "svg_not_allowed")

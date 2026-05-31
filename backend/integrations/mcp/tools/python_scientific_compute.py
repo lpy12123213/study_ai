@@ -9,6 +9,7 @@ import fractions
 import io
 import json
 import math
+import os
 import statistics
 import subprocess
 import sys
@@ -283,22 +284,45 @@ def _run_code(code: str) -> Dict[str, Any]:
 def _run_code_isolated(code: str, timeout_seconds: int) -> Dict[str, Any]:
     # File lives under ``backend/integrations/mcp/tools/``, so repo root is 4 levels up.
     repo_root = Path(__file__).resolve().parents[4]
+
+    # Inject ``repo_root`` into sys.path *inside the worker* so that
+    # ``backend.*`` imports work even when the parent process's PYTHONPATH was
+    # mutated by an earlier test (e.g. via sys.path tweaks). Combined with
+    # ``-I`` this also makes the worker independent of inherited site-packages
+    # paths and PYTHONSTARTUP files.
     wrapper = (
         "import json,sys;"
+        f"sys.path.insert(0, {str(repo_root)!r});"
         "from backend.integrations.mcp.tools.python_scientific_compute import _run_code;"
         "src=sys.stdin.read();"
         "res=_run_code(src);"
         "print(json.dumps(res, ensure_ascii=False))"
     )
 
+    # Build a minimal, deterministic env for the worker. Inheriting the parent
+    # process env makes this subprocess sensitive to test-suite pollution
+    # (sys.path tweaks via ``PYTHONPATH``, ``PYTHONDONTWRITEBYTECODE`` toggles,
+    # tracemalloc, etc.). We only forward the variables required for Python to
+    # boot and resolve native dependencies.
+    env = {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1",
+    }
+    for forwarded in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA"):
+        value = os.environ.get(forwarded)
+        if value is not None:
+            env[forwarded] = value
+
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", wrapper],
+            [sys.executable, "-I", "-c", wrapper],
             input=code,
             text=True,
             capture_output=True,
             timeout=timeout_seconds,
             cwd=str(repo_root),
+            env=env,
             check=False,
         )
     except subprocess.TimeoutExpired:

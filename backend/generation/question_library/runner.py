@@ -213,7 +213,7 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
             await task_runtime.fail_task(task, "Task cancelled")
             raise
         except Exception as exc:  # pragma: no cover
-            logger.exception("question_library_import_runner_failed", extra={"task_id": task.id})
+            logger.exception("question_library_import_runner_failed", extra={"task_id": task.task_id})
             await task_runtime.fail_task(task, str(exc))
         finally:
             if task.status == "running":
@@ -361,7 +361,7 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
             await task_runtime.fail_task(task, "Task cancelled")
             raise
         except Exception as exc:  # pragma: no cover
-            logger.exception("question_library_score_runner_failed", extra={"task_id": task.id})
+            logger.exception("question_library_score_runner_failed", extra={"task_id": task.task_id})
             await task_runtime.fail_task(task, str(exc))
         finally:
             if task.status == "running":
@@ -570,7 +570,7 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
                 except Exception:
                     logger.warning(
                         "question_library_latest_archive_lookup_failed",
-                        extra={"task_id": task.id, "subject": subject, "topic": topic_key},
+                        extra={"task_id": task.task_id, "subject": subject, "topic": topic_key},
                         exc_info=True,
                     )
                     archive = None
@@ -580,7 +580,7 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
                     except Exception:
                         logger.warning(
                             "question_library_subject_archive_lookup_failed",
-                            extra={"task_id": task.id, "subject": subject},
+                            extra={"task_id": task.task_id, "subject": subject},
                             exc_info=True,
                         )
                         archive = None

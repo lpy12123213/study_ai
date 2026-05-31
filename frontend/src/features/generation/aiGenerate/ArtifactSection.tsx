@@ -1,8 +1,8 @@
 import { RotateCcw, UnlockKeyhole, LockKeyhole } from 'lucide-react'
 import { QuestionContent } from '@/components/shared/QuestionContent'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import type { AiGenerateSectionState } from '@/features/generation/aiGenerate/types'
 
@@ -88,11 +88,15 @@ export function ArtifactSection(props: ArtifactSectionProps) {
         )}
       </div>
 
-      <Textarea
+      <RichTextarea
         value={section.content}
-        onChange={(event) => onChange?.(event.target.value)}
+        onChange={(content) => onChange?.(content)}
+        ariaLabel={section.label}
+        debounceMs={0}
+        minHeight={132}
+        maxHeight={260}
         className={cn(
-          'mt-4 min-h-[132px] rounded-[20px] border-border/70 bg-background/80 text-sm leading-6 shadow-none',
+          'mt-4 rounded-[20px] border-border/70 bg-background/80 shadow-none',
           section.status === 'streaming' && 'border-blue-200 bg-blue-50/40 dark:border-sky-800/60 dark:bg-sky-950/20',
           section.status === 'failed' && 'border-destructive/40 bg-destructive/5'
         )}

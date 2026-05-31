@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
-    "gen:api": "python ../scripts/export_openapi.py --out ./.tmp/openapi.json && openapi-typescript ./.tmp/openapi.json -o src/api/__generated__.ts",
+    "gen:api": "python ../scripts/export_openapi.py --out ./.tmp/openapi.json && openapi-typescript ./.tmp/openapi.json -o src/api/__generated__.ts && python ../scripts/split_openapi_types.py --src src/api/__generated__.ts --out src/api/__generated__ --delete-source",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -33,6 +33,11 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-query": "^5.90.20",
     "@tanstack/react-virtual": "^3.13.24",
+    "@tiptap/extension-mathematics": "^3.23.6",
+    "@tiptap/markdown": "^3.23.6",
+    "@tiptap/pm": "^3.23.6",
+    "@tiptap/react": "^3.23.6",
+    "@tiptap/starter-kit": "^3.23.6",
     "axios": "^1.13.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -42,6 +47,7 @@
     "framer-motion": "^12.33.0",
     "katex": "^0.16.22",
     "lucide-react": "^1.14.0",
+    "mathlive": "^0.105.3",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

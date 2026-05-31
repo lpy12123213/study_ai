@@ -9,6 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { ShareLinkDialog } from '@/components/shared/ShareLinkDialog'
 import { AnnotationDialog } from '@/components/shared/AnnotationDialog'
+import { TagEditDialog, useTagEditor } from '@/components/shared/TagEditDialog'
 import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as tasksApi from '@/api/tasks'
 import * as learningPlansApi from '@/api/learningPlans'
@@ -53,6 +54,16 @@ export default function StudyArchiveDetailPage() {
     mutationFn: (patch: { starred?: boolean; pinned?: boolean; tags?: string[] }) =>
       metaApi.setMeta('study_archive', String(archiveId || ''), patch),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['itemMeta', 'study_archive', archiveId] }),
+  })
+
+  // Single-archive tag editor: the "item" is just the archive id; the dialog
+  // pulls current tags from the cached meta payload.
+  const tagEditor = useTagEditor<string>({
+    getItemId: (id) => id,
+    getInitialValue: () => (Array.isArray(meta?.tags) ? (meta?.tags ?? []).join(', ') : ''),
+    onSave: (_id, tags) => {
+      updateMeta.mutate({ tags })
+    },
   })
 
   const blocks = useMemo<Block[]>(() => {
@@ -185,17 +196,7 @@ export default function StudyArchiveDetailPage() {
             variant="ghost"
             size="icon"
             className="h-8 w-8"
-            onClick={() => {
-              const current = Array.isArray(meta?.tags) ? (meta?.tags ?? []).join(', ') : ''
-              const raw = window.prompt('标签（逗号分隔）', current)
-              if (raw == null) return
-              const tags = raw
-                .split(',')
-                .map((t) => t.trim())
-                .filter((t) => t.length > 0)
-                .slice(0, 20)
-              updateMeta.mutate({ tags })
-            }}
+            onClick={() => tagEditor.open(String(archiveId || ''))}
             aria-label="设置标签"
             title="设置标签"
           >
@@ -287,6 +288,17 @@ export default function StudyArchiveDetailPage() {
         itemId={String(archiveId || '')}
         anchor={annotateAnchor}
         snippet={annotateSnippet}
+      />
+
+      <TagEditDialog
+        open={tagEditor.isOpen}
+        itemTitle={title}
+        value={tagEditor.value}
+        onValueChange={tagEditor.setValue}
+        onOpenChange={(open) => {
+          if (!open) tagEditor.close()
+        }}
+        onSave={tagEditor.save}
       />
     </div>
   )

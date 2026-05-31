@@ -32,6 +32,21 @@ function vendorChunkName(id: string): string | undefined {
     return 'pkg-cmdk'
   }
 
+  if (normalized.includes('/node_modules/lucide-react/')) {
+    return 'pkg-icons'
+  }
+
+  if (normalized.includes('/node_modules/mathlive/')) {
+    return 'pkg-mathlive'
+  }
+
+  if (
+    normalized.includes('/node_modules/@tiptap/')
+    || normalized.includes('/node_modules/prosemirror-')
+  ) {
+    return 'pkg-tiptap'
+  }
+
   if (normalized.includes('/node_modules/react-dom/')) {
     return 'pkg-react-dom'
   }

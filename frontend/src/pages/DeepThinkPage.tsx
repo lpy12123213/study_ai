@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Brain, ChevronDown, ChevronUp, Loader2, Paperclip, RefreshCw, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ThinkingTree } from '@/components/deepthink/ThinkingTree'
@@ -30,7 +30,6 @@ export default function DeepThinkPage() {
   const activeAssistantIdRef = useRef<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const stickToBottomRef = useRef(true)
   const [showJumpToBottom, setShowJumpToBottom] = useState(false)
 
@@ -155,13 +154,6 @@ export default function DeepThinkPage() {
       subject,
       imageUrl: imageUrl.trim() ? imageUrl.trim() : undefined,
     })
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit()
-    }
   }
 
   const assistantIndicatorTone =
@@ -426,21 +418,19 @@ export default function DeepThinkPage() {
                 <RefreshCw className="h-5 w-5" />
               </Button>
 
-              <Textarea
-                ref={textareaRef}
+              <RichTextarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
+                onChange={setInput}
+                onSubmit={handleSubmit}
+                submitOnEnter
                 placeholder="输入题目..."
-                className="min-h-[44px] max-h-[200px] w-full resize-none border-0 bg-transparent py-2.5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50"
+                ariaLabel="输入题目"
+                debounceMs={0}
+                minHeight={44}
+                maxHeight={200}
+                className="min-h-[44px] w-full border-0 bg-transparent shadow-none focus-within:ring-0"
+                editorClassName="px-0 py-2.5 placeholder:text-muted-foreground/50"
                 disabled={isStreaming}
-                rows={1}
-                style={{ height: 'auto', overflow: 'hidden' }}
-                onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement
-                  target.style.height = 'auto'
-                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`
-                }}
               />
 
               {isStreaming ? (
@@ -455,17 +445,19 @@ export default function DeepThinkPage() {
                   <Square className="h-4 w-4" />
                 </Button>
               ) : (
-                <Button
-                  type="submit"
-                  size="icon"
-                  className={cn(
-                    'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
-                    input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
-                  )}
-                  disabled={!input.trim()}
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
+                <>
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className={cn(
+                      'h-9 w-9 rounded-xl shrink-0 mb-0.5 transition-all',
+                      input.trim() ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+                    )}
+                    disabled={!input.trim()}
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </>
               )}
             </div>
           </form>

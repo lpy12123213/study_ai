@@ -110,9 +110,9 @@ mcp_logs/
 .cursor/
 
 # vibe coding
-nextstep.md
-nextstep.csv
+nextstep/
 todo.csv
+TODO/
 
 .orchids/
 .playwright-cli/

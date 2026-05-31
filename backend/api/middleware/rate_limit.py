@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import sys
 import time
 from collections import OrderedDict, deque
 from typing import Awaitable, Callable
@@ -10,9 +11,75 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from backend.api.middleware.request_id import ensure_request_id
+from backend.core.logging_utils import get_logger
 
 CallNext = Callable[[Request], Awaitable[Response]]
 ClientIpGetter = Callable[[Request], str]
+
+logger = get_logger(__name__)
+
+
+def _detect_worker_count() -> int:
+    """Best-effort detection of the configured uvicorn/gunicorn worker count.
+
+    The in-memory ``SlidingWindowRateLimiter`` keeps state per-process. When
+    the server is launched with multiple workers, each worker keeps its own
+    counters and the effective rate limit becomes ``max_requests * workers``,
+    which silently lets attackers bypass throttling. We surface a startup
+    warning so operators notice before security relies on it.
+    """
+
+    for env_name in ("WORKERS", "WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        raw = os.environ.get(env_name)
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError:
+                continue
+            if value > 0:
+                return value
+
+    argv = sys.argv or []
+    for idx, arg in enumerate(argv):
+        if arg in {"--workers", "-w"} and idx + 1 < len(argv):
+            try:
+                value = int(argv[idx + 1])
+            except ValueError:
+                continue
+            if value > 0:
+                return value
+        if arg.startswith("--workers="):
+            try:
+                value = int(arg.split("=", 1)[1])
+            except ValueError:
+                continue
+            if value > 0:
+                return value
+    return 1
+
+
+def _rate_limit_backend() -> str:
+    return str(os.environ.get("RATE_LIMIT_BACKEND") or "memory").strip().lower()
+
+
+def warn_if_multi_worker_in_memory_rate_limit() -> None:
+    """Emit a single startup warning when multi-worker + in-memory limiter combo is detected."""
+
+    workers = _detect_worker_count()
+    backend = _rate_limit_backend()
+    if workers > 1 and backend in {"", "memory", "in-memory", "inmemory"}:
+        logger.warning(
+            "rate_limit_in_memory_multi_worker_detected",
+            extra={
+                "workers": workers,
+                "rate_limit_backend": backend or "memory",
+                "hint": (
+                    "SlidingWindowRateLimiter state is per-process. With multiple workers the "
+                    "effective rate limit is multiplied by the worker count; configure "
+                    "RATE_LIMIT_BACKEND=redis or apply edge throttling (nginx, ALB, ...)."
+                ),
+            },
+        )
 
 
 class SlidingWindowRateLimiter:
@@ -116,6 +183,8 @@ def _rate_limited_response(request: Request) -> JSONResponse:
 
 
 def register_rate_limit_middleware(app: FastAPI, *, client_ip: ClientIpGetter) -> None:
+    warn_if_multi_worker_in_memory_rate_limit()
+
     rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
     rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")
     rate_limit_keys_max = int(os.getenv("API_RATE_LIMIT_MAX_KEYS") or "20000")

@@ -112,4 +112,12 @@ p_n`
     await waitFor(() => expect(image).toHaveAttribute('src', 'blob:question-content-image'))
     expect(clientMocks.downloadObjectUrl).toHaveBeenCalledWith(imageUrl)
   })
+
+  it('renders crawled formula hash placeholders as formula images', () => {
+    const hash = '294f5ba74cdf695fc9a8a8e52f421328'
+    render(<QuestionContent content={`已知速度为[公式:${hash}]，求位移。`} />)
+
+    const formula = screen.getByAltText('题目公式')
+    expect(formula).toHaveAttribute('src', expect.stringContaining(`${hash}.svg`))
+  })
 })

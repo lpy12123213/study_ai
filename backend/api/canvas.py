@@ -11,7 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.api.auth import require_auth
+from backend.api.middleware.rate_limit import SlidingWindowRateLimiter
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
+from backend.core.audit import AuditAction, audit_logger
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.core.subjects import resolve_subject
 from backend.integrations.crawler.manager import get_crawler
@@ -26,6 +28,11 @@ from backend.database.repositories.system.canvas import (
 )
 
 router = APIRouter(prefix="/canvas", dependencies=[Depends(require_auth)])
+_QUESTION_RENDER_LIMITER = SlidingWindowRateLimiter(
+    max_requests=int(os.getenv("CANVAS_RENDER_QUESTION_RATE_LIMIT_MAX") or "60"),
+    window_s=float(os.getenv("CANVAS_RENDER_QUESTION_RATE_LIMIT_WINDOW_S") or "60"),
+    max_keys=int(os.getenv("CANVAS_RENDER_QUESTION_RATE_LIMIT_MAX_KEYS") or "20000"),
+)
 
 
 def _parse_snapshot(raw: str) -> Dict[str, Any]:
@@ -437,8 +444,16 @@ async def render_question(
     question_id: str,
     subject: str = Query("", max_length=100),
     edu_level: str = Query("", max_length=50),
+    user: dict = Depends(require_auth),
 ) -> dict:
     """Render a single question as HTML with inline SVG formulas and cached images."""
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    qid = str(question_id or "").strip()
+    if not await _QUESTION_RENDER_LIMITER.allow(f"canvas_render:{user_id}"):
+        raise HTTPException(status_code=429, detail="rate_limited")
+
     subject_input = (subject or DEFAULT_SUBJECT).strip()
     edu_level = (edu_level or "").strip()
     try:
@@ -447,9 +462,15 @@ async def render_question(
         raise HTTPException(status_code=400, detail=str(exc))
 
     crawler = await get_crawler(subject=resolved, edu_level=edu_level, strict=True)
-    detail = await crawler.get_question_detail(question_id, formula_mode="svg", stem_mode="html")
+    detail = await crawler.get_question_detail(qid, formula_mode="svg", stem_mode="html")
     if not detail.get("success"):
         raise HTTPException(status_code=400, detail=detail.get("error") or "render_failed")
 
     stem_html = _sanitize_question_html(detail.get("stem_html", ""), base_url=getattr(crawler, "base_url", ""))
+    audit_logger.log(
+        user_id=user_id,
+        action=AuditAction.QUESTION_RENDER,
+        resource=f"/api/canvas/questions/{qid}/render",
+        details={"question_id": qid, "subject": resolved, "edu_level": edu_level},
+    )
     return {"success": True, "question": {**detail, "stem_html": stem_html}}

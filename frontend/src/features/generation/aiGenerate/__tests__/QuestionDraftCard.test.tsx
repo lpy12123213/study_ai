@@ -80,7 +80,7 @@ describe('QuestionDraftCard', () => {
     expect(screen.getByText('答案')).toBeInTheDocument()
     expect(screen.getByText('解析')).toBeInTheDocument()
     expect(screen.getByText('待审查')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('已知函数 \\(f(x)=x^2+1\\)，判断其单调区间。')).toBeInTheDocument()
+    expect(await screen.findByRole('textbox', { name: '题干' })).toHaveTextContent('已知函数')
     expect(screen.getByRole('link', { name: '进入审查' })).toHaveAttribute('href', '/ai-generate/review/session-001/q-001')
     expect(screen.getByRole('button', { name: '审核通过并入库' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '重生成解析' })).toBeInTheDocument()

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
+from backend.api.middleware.rate_limit import SlidingWindowRateLimiter
 from backend.api.schemas import PaperCreate, PaperResponse
 from backend.core.audit import AuditAction, audit_logger
 from backend.core.logging_utils import get_logger
@@ -22,6 +23,11 @@ from backend.tasks import submit_generate_full_paper_task, submit_paper_compose_
 router = APIRouter(dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
 _PAPER_ANALYSIS_CACHE: dict[tuple[int, str], dict] = {}
+_PAPER_DOWNLOAD_LINK_LIMITER = SlidingWindowRateLimiter(
+    max_requests=int(os.getenv("PAPER_DOWNLOAD_LINK_RATE_LIMIT_MAX") or "30"),
+    window_s=float(os.getenv("PAPER_DOWNLOAD_LINK_RATE_LIMIT_WINDOW_S") or "60"),
+    max_keys=int(os.getenv("PAPER_DOWNLOAD_LINK_RATE_LIMIT_MAX_KEYS") or "20000"),
+)
 
 
 def clear_paper_analysis_cache() -> None:
@@ -139,6 +145,8 @@ async def get_download_link(paper_id: int, user: dict = Depends(require_auth)) -
     user_id = str((user or {}).get("user_id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    if not await _PAPER_DOWNLOAD_LINK_LIMITER.allow(f"paper_download_link:{user_id}"):
+        raise HTTPException(status_code=429, detail="rate_limited")
     paper = await get_paper(user_id=user_id, paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
@@ -163,6 +171,18 @@ async def get_download_link(paper_id: int, user: dict = Depends(require_auth)) -
         if not src:
             src = str((cache.get(qid) or {}).get("source_url") or "").strip()
         question_links.append(src or f"https://zujuan.xkw.com/q/{qid}")
+
+    audit_logger.log(
+        user_id=user_id,
+        action=AuditAction.PAPER_DOWNLOAD_LINK,
+        resource=f"/api/papers/{int(paper_id)}/download-link",
+        details={
+            "paper_id": int(paper_id),
+            "paper_name": str(paper.get("paper_name") or ""),
+            "question_count": len(question_ids),
+            "question_ids": question_ids[:200],
+        },
+    )
 
     return {
         "success": True,

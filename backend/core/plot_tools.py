@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import ast
 import io
 import math
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -419,126 +419,54 @@ def _magnetic_marker_size(
     return max(span * 0.03, 0.18)
 
 
-_ALLOWED_FUNCS = {
-    "sin",
-    "cos",
-    "tan",
-    "asin",
-    "acos",
-    "atan",
-    "sinh",
-    "cosh",
-    "tanh",
-    "exp",
-    "log",
-    "ln",
-    "log10",
-    "sqrt",
-    "abs",
-    "floor",
-    "ceil",
-    "sign",
-}
-
-_ALLOWED_NAMES = {"x", "y", "pi", "e", "np", *_ALLOWED_FUNCS}
-
-_ALLOWED_NODES = (
-    ast.Expression,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Call,
-    ast.Name,
-    ast.Load,
-    ast.Constant,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.Pow,
-    ast.Mod,
-    ast.USub,
-    ast.UAdd,
-    ast.Attribute,
-)
-
-
-class _ExprValidator(ast.NodeVisitor):
-    def visit(self, node: ast.AST):
-        if not isinstance(node, _ALLOWED_NODES):
-            raise ValueError("unsupported_expr")
-        return super().visit(node)
-
-    def visit_Name(self, node: ast.Name):
-        if node.id not in _ALLOWED_NAMES:
-            raise ValueError("unsupported_name")
-        return None
-
-    def visit_Attribute(self, node: ast.Attribute):
-        if not isinstance(node.value, ast.Name) or node.value.id != "np":
-            raise ValueError("unsupported_attr")
-        if node.attr not in _ALLOWED_FUNCS and node.attr not in {"pi", "e"}:
-            raise ValueError("unsupported_attr")
-        return None
-
-    def visit_Call(self, node: ast.Call):
-        fn = node.func
-        if isinstance(fn, ast.Name):
-            if fn.id not in _ALLOWED_FUNCS:
-                raise ValueError("unsupported_call")
-        elif isinstance(fn, ast.Attribute):
-            self.visit_Attribute(fn)
-        else:
-            raise ValueError("unsupported_call")
-
-        if node.keywords:
-            raise ValueError("unsupported_call")
-
-        for a in node.args:
-            self.visit(a)
-        return None
-
-
 def _safe_eval_expr(expr: str, *, variables: Dict[str, Any]) -> Any:
-    raw = _as_str(expr)
-    if not raw:
-        raise ValueError("empty_expr")
-    raw = raw.replace("^", "**")
-    tree = ast.parse(raw, mode="eval")
-    _ExprValidator().visit(tree)
+    # Whitelist + AST validator live in ``backend.core.plot_expr_eval`` so they
+    # can be unit-tested without importing matplotlib. The local underscore
+    # name is kept for backwards compatibility with the call sites below.
+    from backend.core.plot_expr_eval import safe_eval_expr
 
-    import numpy as np
-
-    env: Dict[str, Any] = {
-        "np": np,
-        "pi": float(np.pi),
-        "e": float(np.e),
-        "sin": np.sin,
-        "cos": np.cos,
-        "tan": np.tan,
-        "asin": np.arcsin,
-        "acos": np.arccos,
-        "atan": np.arctan,
-        "sinh": np.sinh,
-        "cosh": np.cosh,
-        "tanh": np.tanh,
-        "exp": np.exp,
-        "log": np.log,
-        "ln": np.log,
-        "log10": np.log10,
-        "sqrt": np.sqrt,
-        "abs": np.abs,
-        "floor": np.floor,
-        "ceil": np.ceil,
-        "sign": np.sign,
-    }
-    env.update(variables)
-    return eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, env)
+    return safe_eval_expr(expr, variables=variables)
 
 
 def _to_png_bytes(fig: Any, *, dpi: int) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
     return buf.getvalue()
+
+
+def _to_svg_bytes(fig: Any) -> bytes:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="svg", bbox_inches="tight")
+    return buf.getvalue()
+
+
+def _default_plot_format() -> str:
+    raw = (os.getenv("STUDY_AI_PLOT_FORMAT") or "").strip().lower()
+    if raw in {"svg", "png"}:
+        return raw
+    return "svg"
+
+
+def _to_image_bytes(fig: Any, *, dpi: int, fmt: str) -> Dict[str, Any]:
+    """Render a Matplotlib Figure to either SVG or PNG bytes.
+
+    Returns {"bytes": bytes, "format": "svg"|"png", "ext": ".svg"|".png", "mime": ...}.
+    """
+
+    chosen = (fmt or _default_plot_format()).strip().lower()
+    if chosen == "png":
+        return {
+            "bytes": _to_png_bytes(fig, dpi=dpi),
+            "format": "png",
+            "ext": ".png",
+            "mime": "image/png",
+        }
+    return {
+        "bytes": _to_svg_bytes(fig),
+        "format": "svg",
+        "ext": ".svg",
+        "mime": "image/svg+xml",
+    }
 
 
 def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -737,7 +665,19 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
     if not rendered_any:
         return {"success": False, "error": "no_renderable_curves", "warnings": warnings, "png_bytes": b""}
 
-    return {"success": True, "png_bytes": _to_png_bytes(fig, dpi=dpi), "warnings": warnings}
+    fmt = (spec.get("image_format") or _default_plot_format()).strip().lower() if isinstance(spec.get("image_format"), str) else _default_plot_format()
+    img = _to_image_bytes(fig, dpi=dpi, fmt=fmt)
+    return {
+        "success": True,
+        # Keep legacy `png_bytes` populated even when the primary output is SVG.
+        # Older callers use render_2d_plot()/png_bytes directly.
+        "png_bytes": img["bytes"] if img["format"] == "png" else _to_png_bytes(fig, dpi=dpi),
+        "image_bytes": img["bytes"],
+        "image_format": img["format"],
+        "image_ext": img["ext"],
+        "image_mime": img["mime"],
+        "warnings": warnings,
+    }
 
 
 def render_2d_plot(spec: Dict[str, Any]) -> bytes:
@@ -798,6 +738,68 @@ def render_3d_plot(spec: Dict[str, Any]) -> bytes:
         logger.warning("plot_view_init_failed", exc_info=True)
 
     return _to_png_bytes(fig, dpi=dpi)
+
+
+def render_3d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """SVG/PNG-aware variant. Returns {image_bytes, image_format, image_ext, image_mime}."""
+
+    import numpy as np
+
+    width = _clamp_int(spec.get("width"), default=860, min_value=420, max_value=1800)
+    height = _clamp_int(spec.get("height"), default=620, min_value=320, max_value=1400)
+    dpi = _clamp_int(spec.get("dpi"), default=150, min_value=72, max_value=240)
+
+    x_min, x_max = _parse_range(spec.get("x_range"), default=(-5.0, 5.0))
+    y_min, y_max = _parse_range(spec.get("y_range"), default=(-5.0, 5.0))
+
+    expr = _as_str(spec.get("expr") or "")
+    if not expr:
+        return {"success": False, "error": "missing_expr"}
+
+    n = _clamp_int(spec.get("resolution"), default=80, min_value=25, max_value=220)
+    xs = np.linspace(float(x_min), float(x_max), int(n))
+    ys = np.linspace(float(y_min), float(y_max), int(n))
+    X, Y = np.meshgrid(xs, ys)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(width / dpi, height / dpi), dpi=dpi)
+    FigureCanvas(fig)
+    ax = fig.add_subplot(111, projection="3d")
+
+    try:
+        Z = _safe_eval_expr(expr, variables={"x": X, "y": Y})
+        Z = np.asarray(Z, dtype=float)
+    except Exception as exc:
+        return {"success": False, "error": f"eval_failed: {exc}"}
+
+    cmap = _as_str(spec.get("colormap") or "viridis")
+    ax.plot_surface(X, Y, Z, cmap=cmap, linewidth=0.0, antialiased=True)
+
+    title = _as_str(spec.get("title") or "")
+    if title:
+        ax.set_title(title)
+
+    elev = _clamp_float(spec.get("view_elev"), default=28.0, min_value=-89.0, max_value=89.0)
+    azim = _clamp_float(spec.get("view_azim"), default=-55.0, min_value=-360.0, max_value=360.0)
+    try:
+        ax.view_init(elev=float(elev), azim=float(azim))
+    except (TypeError, ValueError, RuntimeError):
+        logger.warning("plot_view_init_failed", exc_info=True)
+
+    fmt = (spec.get("image_format") or _default_plot_format()).strip().lower() if isinstance(spec.get("image_format"), str) else _default_plot_format()
+    img = _to_image_bytes(fig, dpi=dpi, fmt=fmt)
+    return {
+        "success": True,
+        "image_bytes": img["bytes"],
+        "image_format": img["format"],
+        "image_ext": img["ext"],
+        "image_mime": img["mime"],
+    }
 
 
 def render_schematic(spec: Dict[str, Any]) -> bytes:
@@ -1298,4 +1300,44 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
     if not rendered_any:
         raise ValueError("no_renderable_elements")
 
+    # Historical contract: render_schematic() returns PNG bytes unless the
+    # caller explicitly requests SVG. New URL-publishing paths use
+    # render_schematic_with_meta(), which injects image_format below.
+    fmt = spec.get("image_format")
+    fmt = fmt.strip().lower() if isinstance(fmt, str) else "png"
+    if fmt == "svg":
+        return _to_svg_bytes(fig)
     return _to_png_bytes(fig, dpi=dpi)
+
+
+def render_schematic_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Format-aware wrapper around render_schematic.
+
+    Returns dict with image_bytes / image_format / image_ext / image_mime so callers
+    can publish the correct mime type. PNG/SVG selected by spec.image_format or env.
+    """
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure  # noqa: F401  (warm up backend cache before render_schematic)
+
+    fmt = (spec.get("image_format") or _default_plot_format()).strip().lower() if isinstance(spec.get("image_format"), str) else _default_plot_format()
+    spec_for_render = dict(spec or {})
+    spec_for_render["image_format"] = "png" if fmt == "png" else "svg"
+    bytes_out = render_schematic(spec_for_render)
+    if fmt == "png":
+        return {
+            "success": True,
+            "image_bytes": bytes_out,
+            "image_format": "png",
+            "image_ext": ".png",
+            "image_mime": "image/png",
+        }
+    return {
+        "success": True,
+        "image_bytes": bytes_out,
+        "image_format": "svg",
+        "image_ext": ".svg",
+        "image_mime": "image/svg+xml",
+    }

@@ -54,14 +54,26 @@ class RuntimeLocalPathTests(unittest.TestCase):
         published = {"sha256": "abc", "filename": "abc.svg", "url": "/api/media/generated/abc.svg", "bytes": 11}
 
         with patch(
-            "backend.agent.tools.generation.diagrams.render_tikz_to_svg_bytes",
+            "backend.generation.question_library.diagram_utils.render_tikz_to_svg_bytes",
             side_effect=fake_render_tikz_to_svg_bytes,
         ):
             with patch(
-                "backend.agent.tools.generation.diagrams.publish_generated_bytes",
-                new=AsyncMock(return_value=published),
+                "backend.generation.question_library.diagram_utils.cache_lookup",
+                new=AsyncMock(return_value=None),
             ):
-                result = asyncio.run(tool._tool_tikz_to_svg({"tikz": r"\draw (0,0) -- (1,1);"}, ctx))
+                with patch(
+                    "backend.generation.question_library.diagram_utils.cache_record",
+                    new=AsyncMock(return_value=None),
+                ):
+                    with patch(
+                        "backend.generation.question_library.diagram_utils.write_source_sidecar",
+                        return_value=None,
+                    ):
+                        with patch(
+                            "backend.generation.question_library.diagram_utils.publish_generated_bytes",
+                            new=AsyncMock(return_value=published),
+                        ):
+                            result = asyncio.run(tool._tool_tikz_to_svg({"tikz": r"\draw (0,0) -- (1,1);"}, ctx))
 
         self.assertTrue(result["success"])
         self.assertEqual(captured["repo_root"], _repo_root())
@@ -78,14 +90,26 @@ class RuntimeLocalPathTests(unittest.TestCase):
         published = {"sha256": "abc", "filename": "abc.svg", "url": "/api/media/generated/abc.svg", "bytes": 11}
 
         with patch(
-            "backend.agent.tools.generation.diagrams.render_asy_to_svg_bytes",
+            "backend.generation.question_library.diagram_utils.render_asy_to_svg_bytes",
             side_effect=fake_render_asy_to_svg_bytes,
         ):
             with patch(
-                "backend.agent.tools.generation.diagrams.publish_generated_bytes",
-                new=AsyncMock(return_value=published),
+                "backend.generation.question_library.diagram_utils.cache_lookup",
+                new=AsyncMock(return_value=None),
             ):
-                result = asyncio.run(tool._tool_asy_to_svg({"asy": "draw((0,0)--(1,1));"}, ctx))
+                with patch(
+                    "backend.generation.question_library.diagram_utils.cache_record",
+                    new=AsyncMock(return_value=None),
+                ):
+                    with patch(
+                        "backend.generation.question_library.diagram_utils.write_source_sidecar",
+                        return_value=None,
+                    ):
+                        with patch(
+                            "backend.generation.question_library.diagram_utils.publish_generated_bytes",
+                            new=AsyncMock(return_value=published),
+                        ):
+                            result = asyncio.run(tool._tool_asy_to_svg({"asy": "draw((0,0)--(1,1));"}, ctx))
 
         self.assertTrue(result["success"])
         self.assertEqual(captured["repo_root"], _repo_root())

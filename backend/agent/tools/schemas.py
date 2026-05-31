@@ -281,6 +281,110 @@ TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "timeout_s": {"type": "number", "minimum": 5, "maximum": 3600},
         }
     ),
+    "get_available_filters": _obj(
+        {
+            "subject": {"type": "string"},
+            "edu_level": {"type": "string"},
+        }
+    ),
+    "search_questions": _obj(
+        {
+            "subject": {"type": "string"},
+            "edu_level": {"type": "string"},
+            "keyword": {"type": "string"},
+            "topic": {"type": "string"},
+            "difficulty": {"type": "string"},
+            "question_type": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 80},
+            "max_pages": {"type": "integer", "minimum": 1, "maximum": 5},
+        }
+    ),
+    "batch_get_question_details": _obj(
+        {
+            "subject": {"type": "string"},
+            "question_ids": {"type": "array", "items": {"type": "string"}},
+            "max_concurrent": {"type": "integer", "minimum": 1, "maximum": 20},
+        }
+    ),
+    "compose_paper_blueprint": _obj(
+        {
+            "subject": {"type": "string"},
+            "topic": {"type": "string"},
+            "blueprint": {"type": "array", "items": {"type": "object"}},
+            "total_points": {"type": "integer", "minimum": 1, "maximum": 300},
+            "time_limit": {"type": "integer", "minimum": 1, "maximum": 300},
+        }
+    ),
+    "review_question_match": _obj(
+        {
+            "question": {"type": "object"},
+            "slot": {"type": "object"},
+        }
+    ),
+    "create_paper": _obj(
+        {
+            "paper_name": {"type": "string"},
+            "subject": {"type": "string"},
+            "questions": {"type": "array", "items": {"type": "object"}},
+        }
+    ),
+    "analyze_paper": _obj(
+        {
+            "paper_id": {"type": "integer"},
+            "paper": {"type": "object"},
+        }
+    ),
+    "crawl_questions_from_bank": _obj(
+        {
+            "subject": {"type": "string"},
+            "topic": {"type": "string"},
+            "keyword": {"type": "string"},
+            "mode": {"type": "string"},
+            "difficulty": {"type": "string"},
+            "question_type": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 80},
+            "max_pages": {"type": "integer", "minimum": 1, "maximum": 5},
+        }
+    ),
+    "generate_questions_ai": _obj(
+        {
+            "subject": {"type": "string"},
+            "topic": {"type": "string"},
+            "source_pack": {"type": "object"},
+            "count": {"type": "integer", "minimum": 1, "maximum": 20},
+            "difficulty": {"type": "string"},
+            "question_type": {"type": "string"},
+        }
+    ),
+    "solve_question_independently": _obj(
+        {
+            "subject": {"type": "string"},
+            "question": {"type": "object"},
+            "stem": {"type": "string"},
+            "answer": {"type": "string"},
+        }
+    ),
+    "render_paper_latex": _obj(
+        {
+            "paper_id": {"type": "integer"},
+            "paper": {"type": "object"},
+            "include_stem": {"type": "boolean"},
+            "include_answer": {"type": "boolean"},
+            "include_analysis": {"type": "boolean"},
+        }
+    ),
+    "compile_latex_sandbox": _obj(
+        {
+            "latex_tex": {"type": "string"},
+            "timeout_s": {"type": "number", "minimum": 5, "maximum": 3600},
+        }
+    ),
+    "repair_latex": _obj(
+        {
+            "latex_tex": {"type": "string"},
+            "compile_log": {"type": "string"},
+        }
+    ),
 
     # diagrams
     "generate_diagrams": _obj(
@@ -329,6 +433,43 @@ TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "asymptote": {"type": "string"},
             "code": {"type": "string"},
             "text": {"type": "string"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
+        }
+    ),
+    "render_chemistry": _obj(
+        {
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
+            "expression": {"type": "string"},
+            "ce": {"type": "string"},
+            "text": {"type": "string"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
+        }
+    ),
+    "render_circuit": _obj(
+        {
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
+            "circuit": {"type": "string"},
+            "circuitikz": {"type": "string"},
+            "code": {"type": "string"},
+            "alt": {"type": "string"},
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
+        }
+    ),
+    "render_graphviz": _obj(
+        {
+            "knowledge_point": {"type": "string"},
+            "knowledge_points": {"type": "array", "items": {"type": "string"}},
+            "dot": {"type": "string"},
+            "code": {"type": "string"},
+            "graphviz": {"type": "string"},
+            "engine": {"type": "string"},
             "alt": {"type": "string"},
             "title": {"type": "string"},
             "caption": {"type": "string"},

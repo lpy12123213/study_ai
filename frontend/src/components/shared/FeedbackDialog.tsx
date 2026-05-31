@@ -5,7 +5,7 @@ import { Bug, Copy, ExternalLink, Loader2, Paperclip, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useRequestLogStore } from '@/stores/useRequestLogStore'
 import { useNotificationStore } from '@/stores/useNotificationStore'
@@ -157,11 +157,14 @@ export function FeedbackDialog(props: {
 
           <div className="grid gap-2">
             <label className="text-sm font-medium">描述</label>
-            <Textarea
+            <RichTextarea
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
               placeholder="发生了什么？期望是什么？可以复现的步骤？"
-              className="min-h-[120px]"
+              ariaLabel="描述"
+              debounceMs={0}
+              minHeight={120}
+              maxHeight={300}
             />
           </div>
 

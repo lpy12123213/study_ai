@@ -1,6 +1,118 @@
-export {
-  crawlQuestions,
-  generateQuestions,
-  regenerateQuestionLibrarySection,
-  streamQuestionLibraryTask,
-} from './client'
+import { apiClient, fetchSSE, fetchSSERequest } from '@/api/client'
+import { streamTask } from '@/api/tasks'
+import { normalizeSseEnvelope, type SseEnvelope } from '@/lib/sse'
+import type {
+  CrawlQuestionsPayload,
+  GenerateQuestionsPayload,
+  RegenerateQuestionLibrarySectionEvent,
+  RegenerateQuestionLibrarySectionPayload,
+} from './types'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object')
+}
+
+function recordString(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined
+  const item = value[key]
+  return typeof item === 'string' ? item : undefined
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return recordString(error, 'message') || 'request_failed'
+}
+
+export function normalizeQuestionLibraryTaskEvent(input: unknown): SseEnvelope {
+  return normalizeSseEnvelope(input)
+}
+
+export function regenerateQuestionLibrarySection(
+  previewId: string,
+  payload: RegenerateQuestionLibrarySectionPayload,
+  onEvent: (event: SseEnvelope<RegenerateQuestionLibrarySectionEvent>) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void,
+  options?: {
+    signal?: AbortSignal
+  }
+): void {
+  const pid = String(previewId || '').trim()
+  if (!pid) throw new Error('missing_preview_id')
+  fetchSSE(
+    `/question-library/previews/${encodeURIComponent(pid)}/regenerate-section`,
+    payload,
+    (data) => onEvent(normalizeQuestionLibraryTaskEvent(data) as SseEnvelope<RegenerateQuestionLibrarySectionEvent>),
+    onError,
+    onComplete,
+    { signal: options?.signal }
+  )
+}
+
+export function crawlQuestions(
+  payload: CrawlQuestionsPayload,
+  onEvent: (event: SseEnvelope) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void
+): void {
+  apiClient
+    .post('/tasks/question-library/crawl', payload)
+    .then((res) => {
+      const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+      streamTask(
+        taskId,
+        0,
+        (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
+        onError,
+        onComplete
+      )
+    })
+    .catch((err: unknown) => {
+      const message = errorMessage(err)
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
+}
+
+export function generateQuestions(
+  payload: GenerateQuestionsPayload,
+  onEvent: (event: SseEnvelope) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void
+): void {
+  apiClient
+    .post('/tasks/question-library/generate', payload)
+    .then((res) => {
+      const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+      streamTask(
+        taskId,
+        0,
+        (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
+        onError,
+        onComplete
+      )
+    })
+    .catch((err: unknown) => {
+      const message = errorMessage(err)
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
+}
+
+export function streamQuestionLibraryTask(
+  taskId: string,
+  afterSeq: number,
+  onEvent: (event: SseEnvelope) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void
+): void {
+  const id = String(taskId || '').trim()
+  if (!id) throw new Error('missing_task_id')
+  fetchSSERequest(
+    `/question-library/tasks/${encodeURIComponent(id)}/stream?after_seq=${Math.max(0, afterSeq || 0)}`,
+    { method: 'GET' },
+    (data) => onEvent(normalizeQuestionLibraryTaskEvent(data)),
+    onError,
+    onComplete
+  )
+}

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { searchApi, type SearchResult } from '@/api/search'
 import { Markdown } from '@/components/shared/Markdown'
+import { shouldSubmitOnEnter } from '@/lib/keyboard'
 
 function searchResultId(result: SearchResult, index: number): string {
   if ('conversation_id' in result) return `conversation-${result.conversation_id}-${result.message_id}`
@@ -32,7 +33,7 @@ export default function SearchPage() {
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">搜索</h1>
       <div className="flex gap-2">
-        <input className="flex-1 border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring" placeholder="搜索..." value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && setQuery(q)} />
+        <input className="flex-1 border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring" placeholder="搜索..." value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => shouldSubmitOnEnter(e) && setQuery(q)} />
         <button onClick={() => setQuery(q)} className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm">搜索</button>
       </div>
       {isLoading && <div className="text-muted-foreground text-sm">搜索中...</div>}

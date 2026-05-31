@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List
@@ -13,6 +14,7 @@ from backend.database.repositories.content.study_archives import get_latest_stud
 from backend.database.repositories.question.papers import save_paper
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
+from backend.generation.paper_compose.agentic_workflow import run_agentic_full_paper_events
 from backend.generation.paper_compose.auto_planner import plan_exam_structure
 from backend.generation.question_library.gen_utils import ReasoningEventHandler
 
@@ -30,6 +32,17 @@ def _as_int(value: Any, default: int) -> int:
         return int(default)
 
 
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 async def generate_full_paper_events(
     request: Dict[str, Any],
     *,
@@ -41,6 +54,12 @@ async def generate_full_paper_events(
 
     req = dict(request or {})
     task_id = str(req.get("taskId") or req.get("task_id") or "").strip() or uuid.uuid4().hex[:12]
+
+    use_agentic = _truthy(req.get("agentic"), default=_truthy(os.getenv("PAPER_COMPOSE_AGENTIC_FULL"), default=True))
+    if use_agentic:
+        async for evt in run_agentic_full_paper_events(req, user_id=user_id):
+            yield evt
+        return
 
     subject_input = str(req.get("subject") or "").strip()
     topic = str(req.get("topic") or "").strip() or "相关知识点"

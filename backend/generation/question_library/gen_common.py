@@ -24,7 +24,7 @@ DEFAULT_SEARCH_CONFIG = {
     "reference_alignment_weight": 0.12,
     "judge_pass_score": 70,
     "difficulty_tolerance": 0.22,
-    "solver_consensus_n": 2,
+    "solver_consensus_n": 3,
     "max_repair_rounds": 2,
     # Only attempt a repair when the judge score is close to the pass floor.
     # Low-quality "template" questions should be discarded rather than rewritten.

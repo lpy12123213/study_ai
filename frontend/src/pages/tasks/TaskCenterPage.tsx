@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { tasksApi } from '@/api/tasks'
+import { RUNNING_TASKS_REFETCH_INTERVAL_MS } from '@/hooks/useRunningTasks'
 
 const STATUS_LABEL: Record<string, string> = { pending: '等待中', running: '运行中', done: '已完成', failed: '失败' }
 
@@ -7,7 +8,7 @@ export default function TaskCenterPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['tasks'],
     queryFn: () => tasksApi.list().then((r) => r.data),
-    refetchInterval: 5000,
+    refetchInterval: RUNNING_TASKS_REFETCH_INTERVAL_MS,
   })
   const tasks = (data?.tasks ?? []).map((task) => ({
     id: task.id,

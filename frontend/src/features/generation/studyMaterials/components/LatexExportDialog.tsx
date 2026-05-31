@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import type { StudyMaterialsController } from '@/features/generation/studyMaterials/hooks/useStudyMaterialsController'
 import type { LatexLessonPlanOption } from '@/features/generation/studyMaterials/types'
 
@@ -146,10 +147,14 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
                 清除选择
               </Button>
             </div>
-            <Textarea
+            <RichTextarea
               value={latexMarkdown}
-              onChange={(e) => setLatexMarkdown(e.target.value)}
-              className="min-h-[180px] font-mono text-xs"
+              onChange={setLatexMarkdown}
+              ariaLabel="文档内容"
+              debounceMs={0}
+              minHeight={180}
+              maxHeight={420}
+              editorClassName="font-mono text-xs leading-5"
               placeholder="可从上方选择加载，也可直接粘贴/编辑文档内容"
               disabled={latexIsConverting || latexIsLoadingSource}
             />

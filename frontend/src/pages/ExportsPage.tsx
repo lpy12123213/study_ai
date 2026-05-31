@@ -11,6 +11,7 @@ import * as tasksApi from '@/api/tasks'
 import * as exportsApi from '@/api/exports'
 import { cn, formatDate } from '@/lib/utils'
 import { readString, readStringFrom } from '@/lib/record'
+import { DEFAULT_RESOURCE_REFETCH_INTERVAL_MS, RUNNING_TASKS_REFETCH_INTERVAL_MS } from '@/hooks/useRunningTasks'
 
 type ExportStatusFilter = 'all' | 'running' | 'failed' | 'completed'
 
@@ -41,7 +42,7 @@ export default function ExportsPage() {
       if (statusFilter === 'all') return tasks
       return tasks.filter((t) => String(t.status || '') === statusFilter)
     },
-    refetchInterval: 5000,
+    refetchInterval: RUNNING_TASKS_REFETCH_INTERVAL_MS,
   })
 
   const exportTasks = tasksResp || []
@@ -49,7 +50,7 @@ export default function ExportsPage() {
   const { data: files = [], isLoading: isLoadingFiles, error: filesError } = useQuery({
     queryKey: ['generatedFiles'],
     queryFn: () => exportsApi.listGeneratedFiles({ limit: 200, offset: 0 }),
-    refetchInterval: 8000,
+    refetchInterval: DEFAULT_RESOURCE_REFETCH_INTERVAL_MS,
   })
 
   const cancelTask = useMutation({

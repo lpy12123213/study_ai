@@ -6,8 +6,8 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import { RichTextarea } from '@/components/shared/RichTextarea'
 import { downloadObjectUrl, downloadText } from '@/api/client'
 import { generateKnowledgeVideo, type KnowledgeVideoTaskResult } from '@/api/knowledgeVideos'
 import { getTask, streamTask, type TaskStreamEvent } from '@/api/tasks'
@@ -292,16 +292,26 @@ export default function KnowledgeVideoPage() {
 
               <label className="block space-y-1.5">
                 <span className="text-sm font-medium">参考资料</span>
-                <Textarea
+                <RichTextarea
                   value={sourceMarkdown}
-                  onChange={(e) => setSourceMarkdown(e.target.value)}
-                  className="min-h-32"
+                  onChange={setSourceMarkdown}
+                  ariaLabel="参考资料"
+                  debounceMs={0}
+                  minHeight={128}
+                  maxHeight={320}
                 />
               </label>
 
               <label className="block space-y-1.5">
                 <span className="text-sm font-medium">额外要求</span>
-                <Textarea value={requirements} onChange={(e) => setRequirements(e.target.value)} className="min-h-24" />
+                <RichTextarea
+                  value={requirements}
+                  onChange={setRequirements}
+                  ariaLabel="额外要求"
+                  debounceMs={0}
+                  minHeight={96}
+                  maxHeight={260}
+                />
               </label>
             </div>
           </ScrollArea>

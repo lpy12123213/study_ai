@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { fetchSSE } from '@/api/sse'
 import { Markdown } from '@/components/shared/Markdown'
+import { shouldSubmitOnEnter } from '@/lib/keyboard'
 
 export default function StudyMaterialsPage() {
   const [topic, setTopic] = useState('')
@@ -31,7 +32,7 @@ export default function StudyMaterialsPage() {
           placeholder="输入主题..."
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && generate()}
+          onKeyDown={(e) => shouldSubmitOnEnter(e) && generate()}
         />
         <button onClick={generate} disabled={loading} className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50">
           {loading ? '生成中...' : '生成'}

@@ -91,7 +91,7 @@ def _route_template(request: Request) -> str:
                 match, _ = route.matches(request.scope)
                 if match == Match.FULL:
                     return str(getattr(route, "path", "") or request.url.path or "")
-        except Exception:
+        except (RuntimeError, AttributeError, KeyError, TypeError):
             logger.warning("prom_route_template_match_failed", exc_info=True)
 
     return str(request.url.path or "")
@@ -107,7 +107,7 @@ def generate_metrics() -> Tuple[bytes, str]:
     _ = (_Counter, _Gauge, _Histogram)
     try:
         data = generate_latest()  # default global registry
-    except Exception:
+    except (RuntimeError, ValueError):
         logger.exception("prom_generate_latest_failed")
         return (b"# prom_generate_latest_failed\n", "text/plain; charset=utf-8")
     return (data, str(CONTENT_TYPE_LATEST))
@@ -139,7 +139,7 @@ def instrument_app(app: FastAPI) -> None:
 
     try:
         requests_total, request_duration, in_progress = _ensure_metrics_objects()
-    except Exception:
+    except (RuntimeError, ValueError, ImportError):
         logger.exception("prom_metrics_init_failed")
         return
 
@@ -170,17 +170,17 @@ def instrument_app(app: FastAPI) -> None:
             elapsed = max(0.0, time.perf_counter() - t0)
             try:
                 in_progress.labels(method=method).dec()
-            except Exception:
+            except (RuntimeError, ValueError):
                 logger.warning("prom_metrics_update_failed", extra={"op": "in_progress.dec"}, exc_info=True)
                 _warn_metrics_update_once("in_progress.dec")
             try:
                 requests_total.labels(method=method, path=label_path, status_code=str(status_code)).inc()
-            except Exception:
+            except (RuntimeError, ValueError):
                 logger.warning("prom_metrics_update_failed", extra={"op": "requests_total.inc"}, exc_info=True)
                 _warn_metrics_update_once("requests_total.inc")
             try:
                 request_duration.labels(method=method, path=label_path).observe(elapsed)
-            except Exception:
+            except (RuntimeError, ValueError):
                 logger.warning("prom_metrics_update_failed", extra={"op": "request_duration.observe"}, exc_info=True)
                 _warn_metrics_update_once("request_duration.observe")
 

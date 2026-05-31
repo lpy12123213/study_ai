@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { learningPlansApi } from '@/api/learningPlans'
 import { Check, Plus, Trash2 } from 'lucide-react'
+import { shouldSubmitOnEnter } from '@/lib/keyboard'
 
 export default function LearningPlansTodoPage() {
   const qc = useQueryClient()
@@ -33,7 +34,7 @@ export default function LearningPlansTodoPage() {
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">学习计划</h1>
       <div className="flex gap-2">
-        <input className="flex-1 border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring" placeholder="添加计划..." value={newItem} onChange={(e) => setNewItem(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && newItem.trim() && add.mutate()} />
+        <input className="flex-1 border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring" placeholder="添加计划..." value={newItem} onChange={(e) => setNewItem(e.target.value)} onKeyDown={(e) => shouldSubmitOnEnter(e) && newItem.trim() && add.mutate()} />
         <button onClick={() => add.mutate()} disabled={!newItem.trim()} className="p-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50"><Plus size={16} /></button>
       </div>
       {isLoading && <div className="text-muted-foreground text-sm">加载中...</div>}

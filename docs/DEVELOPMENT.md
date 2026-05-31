@@ -5,6 +5,7 @@
 ## 开发基线
 
 - 代码风格以 `.editorconfig`、`pyproject.toml`、前端 ESLint 和 TypeScript 配置为准。
+- Ruff 已启用 `BLE001`（flake8-blind-except）：新代码不得使用裸 `except Exception`，应捕获具体异常类型。确属终态/清理/兜底路径需保留时，加 `# noqa: BLE001 - <原因>` 说明；存量已审阅的宽泛捕获通过 `pyproject.toml` 的 `[tool.ruff.lint.per-file-ignores]` 豁免。
 - 后端测试框架为 `unittest`。
 - 前端测试框架为 Vitest，端到端测试使用 Playwright。
 - 新增长任务必须接入 `/api/tasks` 和 `TaskRuntime`。
@@ -162,6 +163,28 @@ frontend/src/pages/<domain>/<Page>.tsx
 - 导航或命令面板，如适用
 - 相关测试
 
+### 前端轮询频率
+
+轮询间隔统一从 `frontend/src/hooks/useRunningTasks.ts` 引入常量：
+
+- 运行中任务：`RUNNING_TASKS_REFETCH_INTERVAL_MS`，固定 5 秒。
+- dashboard 汇总：`DASHBOARD_REFETCH_INTERVAL_MS`，固定 15 秒。
+- 非紧迫资源列表：`DEFAULT_RESOURCE_REFETCH_INTERVAL_MS`，默认 30 秒。
+
+查询运行中任务时优先使用 `useRunningTasks()`，需要更多条目时传 `limit`，不要在组件内重新写
+`listTasks({ status: 'running' })` 和新的 `refetchInterval`。
+
+### PWA 缓存
+
+PWA 由 `frontend/public/sw.js` 手写维护：
+
+- 导航请求使用 network-first，离线时回退到 `/offline.html`。
+- 指纹化静态资源使用 cache-first；非指纹资源使用 network-first。
+- 读多写少 API 缓存仅限 `/api/system/config` 和 `/api/conversations`。
+- 发布时如需强制失效旧缓存，递增 `CACHE_VERSION`。
+
+开发环境下 `registerStudyAiServiceWorker()` 会注销旧 service worker 并清理 `study-ai-*` cache，避免本地调试时被旧 bundle 卡住。
+
 ## 测试
 
 后端：
@@ -229,6 +252,17 @@ git diff --check
 - 任务事件。
 
 不要把长 prompt 分散硬编码在 UI 组件里。
+
+### LLM Prompt Cache
+
+通过 `backend.llm.runner.run_text`、`run_json`、`run_tool_use` 进入 LLM 的 `system` message 会自动附加
+`cache_control: {"type": "ephemeral"}`，调用方不需要重复手写。确实不希望缓存的短生命周期指令应避免放在
+`system` message 中，改放本轮 `user` message 或工具输入。
+
+LLM 响应中的缓存命中数会从 `cached_tokens`、`cache_read_input_tokens`、
+`prompt_tokens_details.cached_tokens` 等 provider 字段归一到 `ChatCompletionResult.cached_tokens`，并出现在
+`backend.llm.metrics.recent_llm_calls()` 的 `usage.cached_tokens` / `totals.cached_tokens` 中，方便本地调试面板和
+Prometheus 后续对齐。
 
 ## 文档变更
 

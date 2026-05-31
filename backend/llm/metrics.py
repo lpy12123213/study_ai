@@ -6,6 +6,7 @@ from collections import deque
 from typing import Any, Deque, Dict, Mapping
 
 from backend.core import business_metrics
+from backend.llm.sse_parser import usage_cached_tokens
 
 _DEBUG_LIMIT = 200
 _debug_lock = threading.Lock()
@@ -45,10 +46,12 @@ def usage_summary(usage: Mapping[str, Any] | None) -> Dict[str, Any]:
     if total_tokens <= 0:
         total_tokens = prompt_tokens + completion_tokens
     cost_usd = _usage_float(usage, "cost_usd", "estimated_cost_usd", "total_cost_usd", "cost", "estimated_cost")
+    cached_tokens = usage_cached_tokens(dict(usage or {}))
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
+        "cached_tokens": cached_tokens,
         "cost_usd": round(cost_usd, 8),
     }
 
@@ -95,17 +98,25 @@ def recent_llm_calls(limit: int = 50) -> Dict[str, Any]:
     with _debug_lock:
         calls = list(_debug_calls)[-n:]
 
-    totals: Dict[str, Any] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cost_usd": 0.0}
+    totals: Dict[str, Any] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cached_tokens": 0,
+        "cost_usd": 0.0,
+    }
     by_model: Dict[str, Dict[str, Any]] = {}
     for call in calls:
         usage = call.get("usage") if isinstance(call.get("usage"), dict) else {}
         model_key = f"{call.get('provider') or 'unknown'}:{call.get('model') or 'unknown'}"
-        bucket = by_model.setdefault(model_key, {"requests": 0, "total_tokens": 0, "cost_usd": 0.0})
+        bucket = by_model.setdefault(
+            model_key, {"requests": 0, "total_tokens": 0, "cached_tokens": 0, "cost_usd": 0.0}
+        )
         bucket["requests"] += 1
-        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):
             value = int(usage.get(key) or 0)
             totals[key] += value
-            if key == "total_tokens":
+            if key in {"total_tokens", "cached_tokens"}:
                 bucket[key] += value
         cost = float(usage.get("cost_usd") or 0)
         totals["cost_usd"] = round(float(totals["cost_usd"]) + cost, 8)

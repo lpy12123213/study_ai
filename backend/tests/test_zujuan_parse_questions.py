@@ -45,3 +45,27 @@ class TestZujuanParseQuestions(unittest.IsolatedAsyncioTestCase):
         self.assertIn("\\xi", stem)
         self.assertIn("p_0", stem)
         self.assertNotIn("\n0\n1\n2", stem)
+
+    async def test_parse_questions_from_html_appends_sibling_options(self) -> None:
+        crawler = ZujuanCrawler(subject="高中物理")
+
+        html = """
+        <div class=" tk-quest-item  quesroot  " questionindex="0" questionid="31391676" bankid="13">
+            <div class="exam-item__cnt">
+                <p>如图所示，A、B两个物体之间用轻弹簧连接，放在光滑水平面上，则（　　）</p>
+            </div>
+            <div class="exam-item__options">
+                <p>A．A先向左运动</p>
+                <p>B．B先向右运动</p>
+                <p>C．弹簧长度保持不变</p>
+                <p>D．系统动量守恒</p>
+            </div>
+        </div>
+        """
+
+        questions = await crawler._parse_questions_from_html(html, bank_id=13, parse_content=False)
+
+        self.assertEqual(len(questions), 1)
+        stem = str(questions[0].get("stem") or "")
+        self.assertIn("A．A先向左运动", stem)
+        self.assertIn("D．系统动量守恒", stem)

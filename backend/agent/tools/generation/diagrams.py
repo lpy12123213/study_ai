@@ -9,11 +9,18 @@ import httpx
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.generation.question_library.diagram_utils import (
+    render_asy_to_url,
+    render_chemistry_to_url,
+    render_circuit_to_url,
+    render_graphviz_to_url,
+    render_schematic_to_url,
+    render_svg_to_url,
+    render_tikz_to_url,
+)
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 from backend.shared.diagrams.static_render import (
     asy_tools_missing_hint,
-    render_asy_to_svg_bytes,
-    render_tikz_to_svg_bytes,
     tikz_tools_missing_hint,
 )
 from backend.shared.project_paths import resolve_repo_root
@@ -33,156 +40,110 @@ def _asy_missing_hint() -> str:
     return asy_tools_missing_hint()
 
 
+def _resolve_kp(args: Dict[str, Any], ctx: CompressedContext) -> str:
+    kp = str(args.get("knowledge_point") or "").strip()
+    if not kp:
+        kps = args.get("knowledge_points")
+        if isinstance(kps, list) and kps:
+            kp = str(kps[0] or "").strip()
+    if not kp:
+        kp = str(ctx.current_task or "").strip()
+    return kp
+
+
+def _store_diagram(ctx: CompressedContext, kp: str, diagram: Dict[str, Any]) -> None:
+    try:
+        blob = ctx.working_memory.get("diagrams")
+        if not isinstance(blob, dict):
+            blob = {}
+        items = blob.get("items")
+        if not isinstance(items, list):
+            items = []
+        kp_item: Optional[Dict[str, Any]] = None
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("knowledge_point") or "").strip() == kp:
+                kp_item = it
+                break
+        if kp_item is None:
+            kp_item = {"knowledge_point": kp, "diagrams": []}
+            items.append(kp_item)
+        dlist = kp_item.get("diagrams")
+        if not isinstance(dlist, list):
+            dlist = []
+        filename = str(diagram.get("filename") or "").strip()
+        if filename and not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
+            dlist.append(diagram)
+        kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
+        blob["items"] = [x for x in items if isinstance(x, dict)]
+        ctx.working_memory["diagrams"] = blob
+    except Exception:
+        logger.warning("diagram_store_working_memory_failed", exc_info=True)
+
+
 class DiagramToolsMixin:
     async def _tool_draw_svg_diagram(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
-        """Render an SVG diagram and persist it under `.local/media/generated/`.
-
-        Args:
-            spec: dict - SVG diagram spec (see `backend/core/svg_diagram.py`)
-            alt: str (optional) - used in returned Markdown image tag
-
-        Returns:
-            {
-              "success": bool,
-              "media_id": str,
-              "filename": str,
-              "url": str,
-              "markdown": str,
-              "bytes": int
-            }
-        """
-
         spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
         alt = str(args.get("alt") or args.get("title") or "diagram").strip() or "diagram"
         if not spec:
             return {"success": False, "error": "spec 不能为空"}
 
-        from backend.core.svg_diagram import render_svg_diagram
-
-        svg = render_svg_diagram(spec)
-        svg_bytes = (svg or "").encode("utf-8")
-
         user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
-        published = await publish_generated_bytes(
-            svg_bytes,
-            user_id=user_id,
-            ext=".svg",
-            file_type="image",
-            mime_type="image/svg+xml",
-            ttl_s=default_generated_media_ttl_s(),
-        )
-
-        media_id = str(published.get("sha256") or "")
-        filename = str(published.get("filename") or "")
-        url = str(published.get("url") or "")
-        markdown = f"![{alt}]({url})"
+        published = await render_svg_to_url(spec=spec, user_id=user_id, alt=alt)
+        if not published.get("success"):
+            return published
         return {
             "success": True,
-            "media_id": media_id,
-            "filename": filename,
-            "url": url,
-            "markdown": markdown,
-            "bytes": int(published.get("bytes") or len(svg_bytes)),
+            "media_id": str(published.get("media_id") or ""),
+            "filename": str(published.get("filename") or ""),
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "bytes": int(published.get("bytes") or 0),
+            "cached": bool(published.get("cached")),
         }
 
     async def _tool_draw_diagram(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
         alt = str(args.get("alt") or args.get("title") or "diagram").strip() or "diagram"
         caption = str(args.get("caption") or spec.get("caption") or "").strip()
-
-        kp = str(args.get("knowledge_point") or "").strip()
-        if not kp:
-            kps = args.get("knowledge_points")
-            if isinstance(kps, list) and kps:
-                kp = str(kps[0] or "").strip()
-        if not kp:
-            kp = str(ctx.current_task or "").strip()
+        kp = _resolve_kp(args, ctx)
 
         if not spec:
             return {"success": False, "error": "spec 不能为空", "knowledge_point": kp}
 
-        from backend.core.plot_tools import render_schematic
-
-        try:
-            png_bytes = render_schematic(spec)
-        except Exception as exc:
-            logger.warning("diagram_render_schematic_failed", exc_info=True)
-            return {"success": False, "error": str(exc), "knowledge_point": kp}
-
         user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
-        published = await publish_generated_bytes(
-            png_bytes,
-            user_id=user_id,
-            ext=".png",
-            file_type="image",
-            mime_type="image/png",
-            ttl_s=default_generated_media_ttl_s(),
-        )
+        published = await render_schematic_to_url(spec=spec, user_id=user_id, alt=alt)
+        if not published.get("success"):
+            return {"success": False, "error": str(published.get("error") or "schematic_failed"), "knowledge_point": kp}
 
-        media_id = str(published.get("sha256") or "")
-        filename = str(published.get("filename") or "")
-        url = str(published.get("url") or "")
-        markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
             "kind": "draw_diagram",
-            "url": url,
-            "markdown": markdown,
-            "filename": filename,
-            "media_id": media_id,
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "filename": str(published.get("filename") or ""),
+            "media_id": str(published.get("media_id") or ""),
             "caption": caption,
+            "cached": bool(published.get("cached")),
         }
-
-        try:
-            blob = ctx.working_memory.get("diagrams")
-            if not isinstance(blob, dict):
-                blob = {}
-            items = blob.get("items")
-            if not isinstance(items, list):
-                items = []
-            kp_item: Optional[Dict[str, Any]] = None
-            for it in items:
-                if not isinstance(it, dict):
-                    continue
-                if str(it.get("knowledge_point") or "").strip() == kp:
-                    kp_item = it
-                    break
-            if kp_item is None:
-                kp_item = {"knowledge_point": kp, "diagrams": []}
-                items.append(kp_item)
-            dlist = kp_item.get("diagrams")
-            if not isinstance(dlist, list):
-                dlist = []
-            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
-                dlist.append(diagram)
-            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
-            blob["items"] = [x for x in items if isinstance(x, dict)]
-            ctx.working_memory["diagrams"] = blob
-        except Exception:
-            logger.warning("diagram_store_working_memory_failed", exc_info=True)
-
+        _store_diagram(ctx, kp, diagram)
         return {
             "success": True,
             "knowledge_point": kp,
             "diagram": diagram,
-            "media_id": media_id,
-            "filename": filename,
-            "url": url,
-            "markdown": markdown,
-            "bytes": int(published.get("bytes") or len(png_bytes)),
+            "media_id": diagram["media_id"],
+            "filename": diagram["filename"],
+            "url": diagram["url"],
+            "markdown": diagram["markdown"],
+            "bytes": int(published.get("bytes") or 0),
+            "cached": diagram["cached"],
         }
 
     async def _tool_tikz_to_svg(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         alt = str(args.get("alt") or args.get("title") or "diagram").strip() or "diagram"
         caption = str(args.get("caption") or "").strip()
-
-        kp = str(args.get("knowledge_point") or "").strip()
-        if not kp:
-            kps = args.get("knowledge_points")
-            if isinstance(kps, list) and kps:
-                kp = str(kps[0] or "").strip()
-        if not kp:
-            kp = str(ctx.current_task or "").strip()
+        kp = _resolve_kp(args, ctx)
 
         tikz = args.get("tikz")
         if not isinstance(tikz, str) or not tikz.strip():
@@ -197,6 +158,7 @@ class DiagramToolsMixin:
         if not isinstance(preamble, str):
             preamble = ""
         preamble = preamble.strip()
+
         timeout_raw = (
             os.getenv("STUDY_MATERIALS_TIKZ_TIMEOUT_S")
             or os.getenv("STUDY_MATERIALS_LATEX_TIMEOUT_S")
@@ -209,88 +171,43 @@ class DiagramToolsMixin:
             timeout_s = 240.0
         timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
 
-        repo_root = resolve_repo_root()
-        res = render_tikz_to_svg_bytes(tikz=tikz, preamble=preamble, timeout_s=timeout_s, repo_root=repo_root)
-        if not bool(res.get("success")):
-            out = dict(res)
-            out.setdefault("hint", _tikz_missing_hint())
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await render_tikz_to_url(
+            tikz=tikz, user_id=user_id, alt=alt, preamble=preamble, timeout_s=timeout_s
+        )
+        if not published.get("success"):
+            out = dict(published)
             out["knowledge_point"] = kp
+            out.setdefault("hint", _tikz_missing_hint())
             return out
 
-        svg_bytes = bytes(res.get("svg_bytes") or b"")
-        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
-        published = await publish_generated_bytes(
-            svg_bytes,
-            user_id=user_id,
-            ext=".svg",
-            file_type="image",
-            mime_type="image/svg+xml",
-            ttl_s=default_generated_media_ttl_s(),
-        )
-        media_id = str(published.get("sha256") or "")
-        filename = str(published.get("filename") or "")
-        url = str(published.get("url") or "")
-        markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
             "kind": "tikz_to_svg",
-            "url": url,
-            "markdown": markdown,
-            "filename": filename,
-            "media_id": media_id,
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "filename": str(published.get("filename") or ""),
+            "media_id": str(published.get("media_id") or ""),
             "caption": caption,
+            "cached": bool(published.get("cached")),
         }
-
-        try:
-            blob = ctx.working_memory.get("diagrams")
-            if not isinstance(blob, dict):
-                blob = {}
-            items = blob.get("items")
-            if not isinstance(items, list):
-                items = []
-            kp_item: Optional[Dict[str, Any]] = None
-            for it in items:
-                if not isinstance(it, dict):
-                    continue
-                if str(it.get("knowledge_point") or "").strip() == kp:
-                    kp_item = it
-                    break
-            if kp_item is None:
-                kp_item = {"knowledge_point": kp, "diagrams": []}
-                items.append(kp_item)
-            dlist = kp_item.get("diagrams")
-            if not isinstance(dlist, list):
-                dlist = []
-            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
-                dlist.append(diagram)
-            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
-            blob["items"] = [x for x in items if isinstance(x, dict)]
-            ctx.working_memory["diagrams"] = blob
-        except Exception:
-            logger.warning("diagram_store_working_memory_failed", exc_info=True)
-
+        _store_diagram(ctx, kp, diagram)
         return {
             "success": True,
             "knowledge_point": kp,
             "diagram": diagram,
-            "media_id": media_id,
-            "filename": filename,
-            "url": url,
-            "markdown": markdown,
-            "bytes": len(svg_bytes),
+            "media_id": diagram["media_id"],
+            "filename": diagram["filename"],
+            "url": diagram["url"],
+            "markdown": diagram["markdown"],
+            "bytes": int(published.get("bytes") or 0),
+            "cached": diagram["cached"],
         }
 
     async def _tool_asy_to_svg(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         alt = str(args.get("alt") or args.get("title") or "diagram").strip() or "diagram"
         caption = str(args.get("caption") or "").strip()
-
-        kp = str(args.get("knowledge_point") or "").strip()
-        if not kp:
-            kps = args.get("knowledge_points")
-            if isinstance(kps, list) and kps:
-                kp = str(kps[0] or "").strip()
-        if not kp:
-            kp = str(ctx.current_task or "").strip()
+        kp = _resolve_kp(args, ctx)
 
         asy = args.get("asy")
         if not isinstance(asy, str) or not asy.strip():
@@ -310,75 +227,168 @@ class DiagramToolsMixin:
             timeout_s = 240.0
         timeout_s = max(10.0, min(timeout_s, 60.0 * 20.0))
 
-        repo_root = resolve_repo_root()
-        res = render_asy_to_svg_bytes(asy=asy, timeout_s=timeout_s, repo_root=repo_root)
-        if not bool(res.get("success")):
-            out = dict(res)
-            out.setdefault("hint", _asy_missing_hint())
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await render_asy_to_url(asy=asy, user_id=user_id, alt=alt, timeout_s=timeout_s)
+        if not published.get("success"):
+            out = dict(published)
             out["knowledge_point"] = kp
+            out.setdefault("hint", _asy_missing_hint())
             return out
 
-        svg_bytes = bytes(res.get("svg_bytes") or b"")
-        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
-        published = await publish_generated_bytes(
-            svg_bytes,
-            user_id=user_id,
-            ext=".svg",
-            file_type="image",
-            mime_type="image/svg+xml",
-            ttl_s=default_generated_media_ttl_s(),
-        )
-        media_id = str(published.get("sha256") or "")
-        filename = str(published.get("filename") or "")
-        url = str(published.get("url") or "")
-        markdown = f"![{alt}]({url})"
         diagram = {
             "knowledge_point": kp,
             "kind": "asy_to_svg",
-            "url": url,
-            "markdown": markdown,
-            "filename": filename,
-            "media_id": media_id,
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "filename": str(published.get("filename") or ""),
+            "media_id": str(published.get("media_id") or ""),
             "caption": caption,
+            "cached": bool(published.get("cached")),
         }
-
-        try:
-            blob = ctx.working_memory.get("diagrams")
-            if not isinstance(blob, dict):
-                blob = {}
-            items = blob.get("items")
-            if not isinstance(items, list):
-                items = []
-            kp_item: Optional[Dict[str, Any]] = None
-            for it in items:
-                if not isinstance(it, dict):
-                    continue
-                if str(it.get("knowledge_point") or "").strip() == kp:
-                    kp_item = it
-                    break
-            if kp_item is None:
-                kp_item = {"knowledge_point": kp, "diagrams": []}
-                items.append(kp_item)
-            dlist = kp_item.get("diagrams")
-            if not isinstance(dlist, list):
-                dlist = []
-            if not any(isinstance(d, dict) and str(d.get("filename") or "").strip() == filename for d in dlist):
-                dlist.append(diagram)
-            kp_item["diagrams"] = [d for d in dlist if isinstance(d, dict)][-20:]
-            blob["items"] = [x for x in items if isinstance(x, dict)]
-            ctx.working_memory["diagrams"] = blob
-        except Exception:
-            logger.warning("diagram_store_working_memory_failed", exc_info=True)
-
+        _store_diagram(ctx, kp, diagram)
         return {
             "success": True,
             "knowledge_point": kp,
             "diagram": diagram,
-            "media_id": media_id,
-            "filename": filename,
-            "url": url,
-            "markdown": markdown,
-            "bytes": len(svg_bytes),
+            "media_id": diagram["media_id"],
+            "filename": diagram["filename"],
+            "url": diagram["url"],
+            "markdown": diagram["markdown"],
+            "bytes": int(published.get("bytes") or 0),
+            "cached": diagram["cached"],
+        }
+
+    async def _tool_render_chemistry(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Render a chemistry expression via mhchem → TikZ → SVG."""
+
+        alt = str(args.get("alt") or args.get("title") or "化学方程式").strip() or "化学方程式"
+        caption = str(args.get("caption") or "").strip()
+        kp = _resolve_kp(args, ctx)
+
+        expression = args.get("expression")
+        if not isinstance(expression, str) or not expression.strip():
+            expression = args.get("ce")
+        if not isinstance(expression, str) or not expression.strip():
+            expression = args.get("text")
+        expression = str(expression or "").strip()
+        if not expression:
+            return {"success": False, "error": "expression 不能为空", "knowledge_point": kp}
+
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await render_chemistry_to_url(expression=expression, user_id=user_id, alt=alt)
+        if not published.get("success"):
+            out = dict(published)
+            out["knowledge_point"] = kp
+            return out
+
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "chemistry",
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "filename": str(published.get("filename") or ""),
+            "media_id": str(published.get("media_id") or ""),
+            "caption": caption,
+            "cached": bool(published.get("cached")),
+        }
+        _store_diagram(ctx, kp, diagram)
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": diagram["media_id"],
+            "filename": diagram["filename"],
+            "url": diagram["url"],
+            "markdown": diagram["markdown"],
+            "bytes": int(published.get("bytes") or 0),
+            "cached": diagram["cached"],
+        }
+
+    async def _tool_render_circuit(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Render a circuitikz circuit description to SVG."""
+
+        alt = str(args.get("alt") or args.get("title") or "电路图").strip() or "电路图"
+        caption = str(args.get("caption") or "").strip()
+        kp = _resolve_kp(args, ctx)
+
+        circuit_code = args.get("circuit") or args.get("code") or args.get("circuitikz") or ""
+        circuit_code = str(circuit_code or "").strip()
+        if not circuit_code:
+            return {"success": False, "error": "circuit 不能为空", "knowledge_point": kp}
+
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await render_circuit_to_url(circuit_code=circuit_code, user_id=user_id, alt=alt)
+        if not published.get("success"):
+            out = dict(published)
+            out["knowledge_point"] = kp
+            return out
+
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "circuit",
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "filename": str(published.get("filename") or ""),
+            "media_id": str(published.get("media_id") or ""),
+            "caption": caption,
+            "cached": bool(published.get("cached")),
+        }
+        _store_diagram(ctx, kp, diagram)
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": diagram["media_id"],
+            "filename": diagram["filename"],
+            "url": diagram["url"],
+            "markdown": diagram["markdown"],
+            "bytes": int(published.get("bytes") or 0),
+            "cached": diagram["cached"],
+        }
+
+    async def _tool_render_graphviz(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """Render Graphviz DOT source to SVG via `dot -Tsvg`."""
+
+        alt = str(args.get("alt") or args.get("title") or "流程图").strip() or "流程图"
+        caption = str(args.get("caption") or "").strip()
+        kp = _resolve_kp(args, ctx)
+
+        dot_code = args.get("dot") or args.get("code") or args.get("graphviz") or ""
+        dot_code = str(dot_code or "").strip()
+        if not dot_code:
+            return {"success": False, "error": "dot 不能为空", "knowledge_point": kp}
+
+        engine = str(args.get("engine") or "dot").strip().lower() or "dot"
+
+        user_id = str(getattr(ctx.user_profile, "user_id", "") or "").strip() or "anonymous"
+        published = await render_graphviz_to_url(dot_code=dot_code, user_id=user_id, alt=alt, engine=engine)
+        if not published.get("success"):
+            out = dict(published)
+            out["knowledge_point"] = kp
+            return out
+
+        diagram = {
+            "knowledge_point": kp,
+            "kind": "graphviz",
+            "url": str(published.get("url") or ""),
+            "markdown": str(published.get("markdown") or ""),
+            "filename": str(published.get("filename") or ""),
+            "media_id": str(published.get("media_id") or ""),
+            "caption": caption,
+            "engine": engine,
+            "cached": bool(published.get("cached")),
+        }
+        _store_diagram(ctx, kp, diagram)
+        return {
+            "success": True,
+            "knowledge_point": kp,
+            "diagram": diagram,
+            "media_id": diagram["media_id"],
+            "filename": diagram["filename"],
+            "url": diagram["url"],
+            "markdown": diagram["markdown"],
+            "bytes": int(published.get("bytes") or 0),
+            "cached": diagram["cached"],
         }
 
     async def _tool_seedream_generate(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:

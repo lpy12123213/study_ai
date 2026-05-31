@@ -3,6 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Layers, Loader2 } from 'lucide-
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
 import { Button } from '@/components/ui/button'
+import { useVirtualMessages } from '@/hooks/useVirtualMessages'
 import { DraggableDivider } from '@/features/generation/studyMaterials/components/DraggableDivider'
 import { MessageBubble } from '@/features/generation/studyMaterials/components/MessageBubble'
 import { SubAgentPanel } from '@/features/generation/studyMaterials/components/SubAgentPanel'
@@ -48,7 +49,14 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
           : lastFailedStage === 'export'
             ? '导出'
             : ''
-  const disableMotion = messages.length >= 500
+  const shouldVirtualize = messages.length >= 500
+  const virtual = useVirtualMessages({
+    enabled: shouldVirtualize,
+    messages,
+    containerRef: scrollRef,
+    estimatePx: 220,
+    overscan: 12,
+  })
 
   return (
     <div className="flex-1 flex overflow-hidden min-h-0 relative">
@@ -147,8 +155,24 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
               </div>
             )}
 
-            {disableMotion ? (
-              messages.map((m) => <MessageBubble key={m.id} message={m} disableMotion={true} />)
+            {shouldVirtualize ? (
+              <div ref={virtual.listRef} className="relative" style={{ height: virtual.totalHeight }}>
+                {messages.slice(virtual.range.start, virtual.range.end).map((m, i) => {
+                  const index = virtual.range.start + i
+                  const mid = String(m.id)
+                  const top = virtual.offsets[index] ?? 0
+                  return (
+                    <div
+                      key={m.id}
+                      ref={virtual.getMeasureRef(mid)}
+                      className="absolute left-0 right-0 flow-root"
+                      style={{ transform: `translateY(${top}px)` }}
+                    >
+                      <MessageBubble message={m} disableMotion={true} />
+                    </div>
+                  )
+                })}
+              </div>
             ) : (
               <AnimatePresence mode="popLayout">
                 {messages.map((m) => (

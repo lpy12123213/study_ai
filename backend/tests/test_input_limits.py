@@ -1,41 +1,51 @@
+"""Input-length safety tests that go through the FastAPI test client.
+
+The auth store is now SQL-backed; we redirect the DB path to a tempfile and
+reload the relevant modules so the bootstrap admin and the test user land in
+that isolated database. The ``setUpClass`` snapshots and restores the auth
+module cache so other tests in the suite are not affected.
+"""
+
 from __future__ import annotations
 
-import shutil
+import importlib
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-import backend.core.auth as auth
-from backend.app import create_app
+
+_RELOAD_MODULES = [
+    "backend.app",
+    "backend.api.auth",
+    "backend.core.auth",
+    "backend.database.repositories.system.auth_users",
+    "backend.database.engine",
+    "backend.database.paths",
+]
 
 
 class TestInputLengthLimits(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._original_users = dict(auth._users)
-        cls._original_revoked = dict(auth._revoked_tokens)
-        # Windows sandbox environments sometimes deny deleting system-temp folders (WinError 5).
-        # Keep test tmp under project-local `.local/` and ignore cleanup errors.
         repo_root = Path(__file__).resolve().parents[2]
         tmp_root = repo_root / ".local" / "tmp" / "unittest"
         tmp_root.mkdir(parents=True, exist_ok=True)
-        cls._tmpdir_path = tempfile.mkdtemp(dir=str(tmp_root))
-        tmp = Path(cls._tmpdir_path)
+        cls._tmpdir = tempfile.TemporaryDirectory(prefix="input_limits_", dir=str(tmp_root))
+        cls._original_db_path = os.environ.get("STUDY_AI_DB_PATH")
+        os.environ["STUDY_AI_DB_PATH"] = str(Path(cls._tmpdir.name) / "input_limits.db")
+        os.environ.setdefault("ADMIN_PASSWORD", "test-admin-pw")
+        os.environ.setdefault("JWT_SECRET", "test-secret-32-bytes-minimum-length!!")
 
-        cls._patchers = [
-            patch.object(auth, "LOCAL_DIR", tmp),
-            patch.object(auth, "USERS_PATH", tmp / "users.json"),
-            patch.object(auth, "REVOKED_TOKENS_PATH", tmp / "jwt_revoked.json"),
-            patch.object(auth, "JWT_SECRET", "test-secret-32-bytes-minimum-length!!"),
-        ]
-        for p in cls._patchers:
-            p.start()
+        cls._mod_snapshot = {name: sys.modules.get(name) for name in _RELOAD_MODULES}
+        for name in _RELOAD_MODULES:
+            sys.modules.pop(name, None)
 
-        auth._users.clear()
-        auth._revoked_tokens.clear()
+        auth = importlib.import_module("backend.core.auth")
+        app_mod = importlib.import_module("backend.app")
 
         user = auth.create_user("tester", "pw", role="user")
         assert user is not None
@@ -44,25 +54,31 @@ class TestInputLengthLimits(unittest.TestCase):
             {"user_id": user["user_id"], "username": user["username"], "role": "user", "ver": token_ver}
         )
 
-        cls.client = TestClient(create_app())
+        cls.client = TestClient(app_mod.create_app())
         cls.headers = {"Authorization": f"Bearer {token}"}
 
     @classmethod
     def tearDownClass(cls) -> None:
         try:
-            for p in reversed(getattr(cls, "_patchers", [])):
-                p.stop()
-            tmpdir_path = getattr(cls, "_tmpdir_path", "")
-            if tmpdir_path:
-                try:
-                    shutil.rmtree(tmpdir_path, ignore_errors=True)
-                except OSError:
-                    pass
-        finally:
-            auth._users.clear()
-            auth._users.update(getattr(cls, "_original_users", {}))
-            auth._revoked_tokens.clear()
-            auth._revoked_tokens.update(getattr(cls, "_original_revoked", {}))
+            cls.client.close()
+        except Exception:
+            pass
+
+        for name in _RELOAD_MODULES:
+            sys.modules.pop(name, None)
+        for name, mod in cls._mod_snapshot.items():
+            if mod is not None:
+                sys.modules[name] = mod
+
+        try:
+            cls._tmpdir.cleanup()
+        except OSError:
+            pass
+
+        if cls._original_db_path is None:
+            os.environ.pop("STUDY_AI_DB_PATH", None)
+        else:
+            os.environ["STUDY_AI_DB_PATH"] = cls._original_db_path
 
     def test_chat_rejects_oversized_message_with_400(self) -> None:
         response = self.client.post(

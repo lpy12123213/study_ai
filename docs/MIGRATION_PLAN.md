@@ -24,16 +24,16 @@
 
 | 当前位置 | 目标领域 | 状态 | 迁移说明 |
 | --- | --- | --- | --- |
-| `backend/api/system.py` | `system` | 聚合中 | 继续通过 `backend/api/domains/system.py` 挂载。 |
-| `backend/api/auth.py`, `auth_schemas.py` | `auth` | 聚合中 | 保持 auth domain 聚合，后续迁移到 `backend/auth/` 服务边界。 |
-| `backend/api/tasks.py` | `tasks` | 聚合中 | `/api/tasks` 是长任务 canonical API；新增长任务必须走 `TaskRuntime`。 |
-| `backend/api/conversations.py`, `chat.py`, `canvas.py` | `workspace` | 聚合中 | 工作区内容 API 保持 workspace 聚合；业务服务逐步迁到 `backend/workspace/` 或明确仓储层。 |
-| `backend/api/papers.py`, `blueprints.py`, `study_archives.py`, `templates.py` | `workspace` | 聚合中 | 试卷、蓝图、归档、模板属于用户工作区；生成流程只返回任务或结果引用。 |
-| `backend/api/annotations.py`, `feedback.py`, `item_meta.py`, `learning_plans.py`, `wrongbook.py` | `workspace` | 聚合中 | 保持工作区聚合，统一权限、分页和 envelope 约定。 |
-| `backend/api/study_materials.py`, `lesson_plan.py`, `deepthink.py`, `question_library.py`, `question_evaluate.py` | `generation` | 聚合中 | 长流程入口逐步收敛到 `backend/generation/` 领域 runner。 |
-| `backend/api/media.py`, `exports.py`, `share_links.py` | `workspace` / `integrations` | 待拆分 | 用户生成物和分享元数据归 workspace；外部渲染/导出工具链归 integrations。 |
-| `backend/api/crawler_tools.py`, `subjects.py` | `integrations` | 聚合中 | crawler、题源、学科源数据接入归 integrations。 |
-| `backend/api/schemas.py`, `error_codes.py`, `error_messages.py` | `shared` | 待收敛 | 仅保留跨域公共 schema/error；领域 schema 放回各 domain。 |
+| `backend/api/system.py` | `system` | 已完成 (2026-04) | 通过 `backend/api/domains/system.py` 挂载，业务逻辑在 `backend/system/`。 |
+| `backend/api/auth.py`, `auth_schemas.py` | `auth` | 已完成 (2026-04) | auth domain 已聚合；后续 `backend/auth/` 服务化为长期演进项。 |
+| `backend/api/tasks.py` | `tasks` | 已完成 (2026-04) | `/api/tasks` 是长任务 canonical API；新增长任务必须走 `TaskRuntime`。 |
+| `backend/api/conversations.py`, `chat.py`, `canvas.py` | `workspace` | 已完成 (2026-04) | 工作区内容 API 已聚合 workspace；业务服务逐步内化到 `backend/workspace/` 仓储层。 |
+| `backend/api/papers.py`, `blueprints.py`, `study_archives.py`, `templates.py` | `workspace` | 已完成 (2026-04) | 试卷、蓝图、归档、模板已归 workspace；生成流程只返回任务或结果引用。 |
+| `backend/api/annotations.py`, `feedback.py`, `item_meta.py`, `learning_plans.py`, `wrongbook.py` | `workspace` | 已完成 (2026-05) | workspace 聚合稳定；权限、分页和 envelope 约定一致。 |
+| `backend/api/study_materials.py`, `lesson_plan.py`, `deepthink.py`, `question_library.py`, `question_evaluate.py` | `generation` | 已完成 (2026-05) | 长流程入口已收敛到 `backend/generation/` 领域 runner。 |
+| `backend/api/media.py`, `share_links.py` | `workspace` / `integrations` | 进行中 | 用户生成物归 workspace；外部渲染/导出工具链归 integrations。`backend/api/exports.py` 死代码已移除（2026-05）。 |
+| `backend/api/crawler_tools.py`, `subjects.py` | `integrations` | 已完成 (2026-04) | crawler、题源、学科源数据已归 integrations。 |
+| `backend/api/schemas.py`, `error_codes.py`, `error_messages.py` | `shared` | 进行中 | 仅保留跨域公共 schema/error；领域 schema 持续放回各 domain。 |
 
 ## 后端目录迁移表
 
@@ -115,3 +115,17 @@ python scripts/audit/structure_lint.py --strict
 - 文档、测试、启动脚本与实际入口一致。
 - 兼容层有明确删除计划，且不承载业务逻辑。
 - 相关检查已在本地或 CI 中验证。
+
+
+## 迁移结束
+
+批次 A-E 的主路径迁移已经完成（2026-05）。后续维护工作：
+
+- **Forwarder 删除窗口**：`backend/study_materials/`、`backend/lesson_plan/`、`backend/question_library/`、`backend/question_evaluate/`、`backend/deepthink/`、`backend/paper_compose/` 下的薄 forwarder 模块计划在 2026-09 之前清理；新代码不应导入这些路径。
+- **结构 lint**：`scripts/audit/structure_lint.py --strict` 已纳入 CI，会阻止新增到已迁移的历史目录。
+- **新功能落地约束**：
+  - 长任务必须走 `/api/tasks` + `TaskRuntime`；
+  - 业务路由挂在 `backend/api/domains/<area>.py`；
+  - 前端业务进 `frontend/src/features/<domain>/`，页面只做路由薄壳；
+  - 新仓储层文件按 domain 分组，命名 `repositories/<domain>/<scope>.py`。
+- **死代码与重复实现**：`backend/database/repositories/system/exports.py` 已删除（2026-05）。后续应避免在 repositories 下复制粘贴跨域实现，统一在 `backend/core/security/` 等共享模块提供单一来源。

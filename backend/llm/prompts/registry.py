@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Dict, List
 
-from backend.generation.agentic.prompts import PromptRegistry, create_default_prompt_registry
+from backend.llm.prompts.agentic_registry import PromptRegistry, create_default_prompt_registry
 
 
 def hash_prompt_content(content: str) -> str:
@@ -24,7 +24,7 @@ class LlmPromptRecord:
 class LlmPromptRegistry:
     """Stable LLM prompt registry facade.
 
-    The underlying templates currently live in `backend.generation.agentic.prompts`.
+    The underlying templates live in `backend.llm.prompts.agentic_registry`.
     This facade gives all LLM-facing domains one canonical place to inspect prompt
     identity, version, output schema, and rendered-content hash.
     """

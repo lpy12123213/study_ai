@@ -21,7 +21,7 @@ import { Card } from '@/components/ui/card'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { downloadObjectUrl } from '@/api/client'
 import * as dashboardApi from '@/api/dashboard'
-import { useRunningTasks } from '@/hooks/useRunningTasks'
+import { DASHBOARD_REFETCH_INTERVAL_MS, useRunningTasks } from '@/hooks/useRunningTasks'
 
 function pct(value?: number): string {
   const numeric = Number(value)
@@ -61,7 +61,7 @@ export default function DashboardPage() {
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['dashboard', days],
     queryFn: () => dashboardApi.getDashboardStats({ days }),
-    refetchInterval: 15_000,
+    refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
   })
 
   const { data: runningTasksData } = useRunningTasks()

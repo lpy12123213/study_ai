@@ -17,7 +17,12 @@ class LlmMetricsTests(unittest.TestCase):
         llm_metrics.record_llm_call(
             provider="openrouter",
             model="test-model",
-            usage={"prompt_tokens": 3, "completion_tokens": 4, "cost_usd": 0.0012},
+            usage={
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "cost_usd": 0.0012,
+                "prompt_tokens_details": {"cached_tokens": 2},
+            },
             stream=True,
             elapsed_s=1.23456,
             finish_reason="stop",
@@ -28,8 +33,10 @@ class LlmMetricsTests(unittest.TestCase):
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["totals"]["total_tokens"], 7)
+        self.assertEqual(payload["totals"]["cached_tokens"], 2)
         self.assertEqual(payload["totals"]["cost_usd"], 0.0012)
         self.assertEqual(payload["calls"][0]["usage"]["prompt_tokens"], 3)
+        self.assertEqual(payload["calls"][0]["usage"]["cached_tokens"], 2)
         self.assertEqual(payload["calls"][0]["elapsed_s"], 1.2346)
         self.assertTrue(payload["calls"][0]["stream"])
 
