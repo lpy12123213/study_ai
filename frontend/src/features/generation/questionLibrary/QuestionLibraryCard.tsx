@@ -33,6 +33,13 @@ function formatDifficulty(difficulty: string, difficultyValue: unknown): string 
   return label || ''
 }
 
+function thinkingDepthLabel(item: QuestionLibraryListItem): string {
+  const score = item.thinking_depth_score
+  if (!isFiniteNumber(score)) return ''
+  const family = String(item.thinking_method_family || '').trim()
+  return family ? `思维 ${score}/10 · ${family}` : `思维 ${score}/10`
+}
+
 function safeParseJsonArray(input: string): string[] {
   const raw = String(input || '').trim()
   if (!raw) return []
@@ -131,6 +138,8 @@ export function QuestionLibraryCard(props: Props) {
     if (diff) parts.push(diff)
     return parts.join(' | ')
   }, [item.difficulty, item.difficulty_value, item.question_type])
+
+  const thinkingLabel = useMemo(() => thinkingDepthLabel(item), [item])
 
   const toggleStar = async () => {
     if (!qid) return
@@ -236,6 +245,11 @@ export function QuestionLibraryCard(props: Props) {
                 </Badge>
               ))}
             </div>
+          )}
+          {thinkingLabel && (
+            <Badge variant="outline" className="text-[11px] font-normal">
+              {thinkingLabel}
+            </Badge>
           )}
         </div>
 

@@ -11,16 +11,18 @@ import {
   crawlQuestions,
   generateQuestions,
   getLatestPendingQuestionLibraryPreview,
+  importMediaQuestions,
   type QuestionLibraryDraftQuestion,
   type CrawlQuestionsPayload,
   type GenerateQuestionsPayload,
+  type ImportMediaQuestionsPayload,
   type QuestionLibraryListItem,
   type QuestionLibraryListResponse,
   type ScoreQuestionLibraryBatchPayload,
 } from '@/api/questionLibrary'
 import type { QuestionLibraryFilters } from '@/features/generation/questionLibrary/hooks/useQuestionLibrary'
 
-export type QuestionLibraryTaskKind = 'crawl' | 'generate' | 'score'
+export type QuestionLibraryTaskKind = 'crawl' | 'generate' | 'score' | 'media_import'
 
 export interface QuestionLibraryTaskMeta {
   taskId: string
@@ -369,6 +371,35 @@ export function useQuestionLibraryTasks(options: {
     [clearDraftPreview, failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
   )
 
+  const runMediaImport = useCallback(
+    (payload: Omit<ImportMediaQuestionsPayload, 'task_id'> & { task_id?: string }) => {
+      const taskId = String(payload.task_id || '').trim() || `ql-media-${generateId()}`
+      clearDraftPreview()
+      startTask(taskId)
+      upsertTask({ taskId, kind: 'media_import', status: 'running', progress: 0, stage: '图片/PDF 录入', lastSeq: 0 })
+
+      importMediaQuestions(
+        { ...payload, task_id: taskId },
+        (env) => handleEnvelope(taskId, normalizeSseEnvelope(env)),
+        (err) => {
+          upsertTask({ taskId, status: 'failed', error: err.message })
+          failTask(taskId, err.message)
+        },
+        () => {
+          const steps = getTaskSteps(taskId)
+          const hasTerminal = steps.some((s) => s.status === 'failed') || steps.some((s) => s.status === 'completed')
+          if (!hasTerminal) {
+            failTask(taskId, 'Task ended unexpectedly')
+            upsertTask({ taskId, status: 'failed', error: 'Task ended unexpectedly' })
+          }
+        }
+      )
+
+      return taskId
+    },
+    [clearDraftPreview, failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
+  )
+
   const runScore = useCallback(
     (payload: Omit<ScoreQuestionLibraryBatchPayload, 'task_id'> & { task_id?: string }) => {
       const taskId = String(payload.task_id || '').trim() || `ql-score-${generateId()}`
@@ -460,6 +491,7 @@ export function useQuestionLibraryTasks(options: {
     preferredTask,
     runCrawl,
     runGenerate,
+    runMediaImport,
     runScore,
       draftPreview,
     clearDraftPreview,

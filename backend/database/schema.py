@@ -68,6 +68,95 @@ class PaperQuestion(Base):
     )
 
 
+class ExamSession(Base):
+    """Student paper-taking session."""
+
+    __tablename__ = "exam_sessions"
+
+    id = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    paper_id = Column(Integer, ForeignKey("papers.id"), nullable=False, index=True)
+    paper_name = Column(String(200), nullable=False, default="")
+    mode = Column(String(20), nullable=False, default="untimed", index=True)
+    time_limit_minutes = Column(Integer, nullable=True)
+    started_at = Column(DateTime, default=_utcnow, index=True)
+    submitted_at = Column(DateTime, nullable=True, index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+    status = Column(String(20), nullable=False, default="in_progress", index=True)
+    total_score = Column(Float, default=0.0)
+    max_score = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
+
+    answers = relationship("StudentAnswer", back_populates="session", cascade="all, delete-orphan")
+    result = relationship("ExamResult", back_populates="session", cascade="all, delete-orphan", uselist=False)
+
+    __table_args__ = (
+        Index("ix_exam_sessions_user_status", "user_id", "status"),
+        Index("ix_exam_sessions_user_paper", "user_id", "paper_id"),
+    )
+
+
+class StudentAnswer(Base):
+    """Autosaved student answer for one question in an exam session."""
+
+    __tablename__ = "student_answers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(64), ForeignKey("exam_sessions.id"), nullable=False, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    question_id = Column(String(100), nullable=False, index=True)
+    question_type = Column(String(50), nullable=False, default="")
+    question_order = Column(Integer, default=0)
+
+    selected_options_json = Column(Text, default="[]")
+    fill_blank_text = Column(Text, default="")
+    handwriting_image_path = Column(String(500), default="")
+    text_answer = Column(Text, default="")
+
+    is_correct = Column(Integer, nullable=True)
+    score = Column(Float, default=0.0)
+    max_score = Column(Float, default=0.0)
+    grading_json = Column(Text, default="{}")
+    auto_saved_at = Column(DateTime, default=_utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
+
+    session = relationship("ExamSession", back_populates="answers")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "question_id", name="uq_student_answers_session_question"),
+        Index("ix_student_answers_user_session", "user_id", "session_id"),
+    )
+
+
+class ExamResult(Base):
+    """Final score summary for a submitted exam session."""
+
+    __tablename__ = "exam_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(64), ForeignKey("exam_sessions.id"), nullable=False, unique=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True, default="")
+    total_score = Column(Float, default=0.0)
+    max_score = Column(Float, default=0.0)
+    score_ratio = Column(Float, default=0.0)
+    objective_correct = Column(Integer, default=0)
+    objective_total = Column(Integer, default=0)
+    subjective_score = Column(Float, default=0.0)
+    subjective_max = Column(Float, default=0.0)
+    breakdown_json = Column(Text, default="[]")
+    ai_feedback_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
+
+    session = relationship("ExamSession", back_populates="result")
+
+    __table_args__ = (
+        Index("ix_exam_results_user_session", "user_id", "session_id"),
+    )
+
+
 class Blueprint(Base):
     """组卷蓝图（教师侧配置）。"""
 

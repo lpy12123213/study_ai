@@ -312,17 +312,8 @@ export const apiClient: AxiosInstance = axios.create({
   },
 })
 
-function redirectToLoginAfterUnauthorized(): void {
-  const auth = useAuthStore.getState()
-  auth.logout()
-  try {
-    if (typeof window === 'undefined') return
-    const path = `${window.location.pathname}${window.location.search}${window.location.hash}`
-    if (window.location.pathname === '/login') return
-    window.location.assign(`/login?redirect=${encodeURIComponent(path || '/chat')}`)
-  } catch {
-    // ignore
-  }
+function resetLocalSessionAfterUnauthorized(): void {
+  useAuthStore.getState().clearAuth()
 }
 
 // Request interceptor - add auth token
@@ -389,7 +380,7 @@ apiClient.interceptors.response.use(
         }
       }
       if (apiError.status === 401) {
-        redirectToLoginAfterUnauthorized()
+        resetLocalSessionAfterUnauthorized()
       }
       return Promise.reject(apiError)
     }
@@ -433,7 +424,7 @@ async function downloadTextInternal(
     if (!response.ok) {
       const err = await responseToApiError(response, `http_${response.status}`)
       if (response.status === 401) {
-        redirectToLoginAfterUnauthorized()
+        resetLocalSessionAfterUnauthorized()
       }
       if (response.status === 403 && isLlmOverrideDisabledCode(err.code) && attempt < 1) {
         disableSettingsApiKeyOverride(err.code)
@@ -493,7 +484,7 @@ async function downloadBlobInternal(
     if (!response.ok) {
       const err = await responseToApiError(response, `http_${response.status}`)
       if (response.status === 401) {
-        redirectToLoginAfterUnauthorized()
+        resetLocalSessionAfterUnauthorized()
       }
       if (response.status === 403 && isLlmOverrideDisabledCode(err.code) && attempt < 1) {
         disableSettingsApiKeyOverride(err.code)

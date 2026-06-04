@@ -20,6 +20,7 @@ python-dotenv>=1.0.0,<2
 httpx>=0.25.2,<1
 openai>=1.0.0,<2
 wikipedia>=1.4.0,<2
+python-multipart>=0.0.9,<1
 
 # Agent semantic memory uses a JSONL fallback by default.
 # Install requirements-semantic-memory.txt to enable ChromaDB storage.
@@ -27,6 +28,8 @@ wikipedia>=1.4.0,<2
 numpy>=1.26.4,<3
 sympy>=1.13.1,<2
 matplotlib>=3.9.2,<4
+Pillow>=10.0.0,<13
+PyMuPDF>=1.24.0,<2
 
 # TUI / CLI
 rich>=13.7.0,<14

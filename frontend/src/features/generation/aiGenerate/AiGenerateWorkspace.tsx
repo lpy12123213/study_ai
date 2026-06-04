@@ -8,6 +8,7 @@ import { QuestionBar } from '@/features/generation/questionLibrary/QuestionBar'
 import { RunPanel } from '@/features/generation/questionLibrary/RunPanel'
 import { GenerateConfigCard, DIFFICULTY_ANY } from '@/features/generation/aiGenerate/components/GenerateConfigCard'
 import { DraftPreviewCard } from '@/features/generation/aiGenerate/components/DraftPreviewCard'
+import { MediaImportCard } from '@/features/generation/aiGenerate/components/MediaImportCard'
 import { RecentQuestionsSection } from '@/features/generation/aiGenerate/components/RecentQuestionsSection'
 import { useAiGenerateDraftPreview } from '@/features/generation/aiGenerate/hooks/useAiGenerateDraftPreview'
 import { useAiGenerateBulkSelection } from '@/features/generation/aiGenerate/hooks/useAiGenerateBulkSelection'
@@ -70,6 +71,20 @@ export function AiGenerateWorkspace() {
     })
   }
 
+  const runMediaImport = (payload: { files: File[]; maxQuestions: number }) => {
+    if (!lib.filters.subject.trim() || !payload.files.length) return
+    lib.setOrigin('media')
+    tasks.runMediaImport({
+      subject: lib.filters.subject,
+      topic: topic.trim(),
+      difficulty: difficulty === DIFFICULTY_ANY ? '' : difficulty,
+      question_type: questionType.trim(),
+      count: payload.maxQuestions,
+      max_pdf_pages: 12,
+      files: payload.files,
+    })
+  }
+
   const openDetail = (qid: string) => {
     lib.setSelectedId(qid)
     setDetailOpen(true)
@@ -113,6 +128,15 @@ export function AiGenerateWorkspace() {
               canGenerate={canGenerate}
               isRunning={tasks.preferredTask?.status === 'running'}
               onRun={run}
+            />
+
+            <MediaImportCard
+              subject={lib.filters.subject}
+              topic={topic}
+              difficulty={difficulty === DIFFICULTY_ANY ? '' : difficulty}
+              questionType={questionType}
+              isRunning={tasks.preferredTask?.status === 'running'}
+              onRun={runMediaImport}
             />
 
             {preview.draftPreview && preview.meta && (

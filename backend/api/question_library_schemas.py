@@ -14,7 +14,14 @@ class QuestionLibraryListResponseItem(BaseModel):
     hidden: bool = False
     ai_score: Optional[int] = None
     ai_verdict: str = ""
+    ai_dimensions_json: str = ""
     ai_summary: str = ""
+    thinking_depth_score: Optional[int] = None
+    thinking_method_family: str = ""
+    thinking_method_signature: str = ""
+    thinking_method_rarity: str = ""
+    thinking_method_count: Optional[int] = None
+    thinking_depth_comment: str = ""
     updated_at: str = ""
     stem: str = ""
 
@@ -152,6 +159,7 @@ class QuestionLibraryCommitPreviewResponse(BaseModel):
 class QuestionLibraryScoreRequest(BaseModel):
     subject: str = ""
     limit: int = 50
+    batch_size: int = 50
     only_unscored: bool = True
     task_id: str = ""
 

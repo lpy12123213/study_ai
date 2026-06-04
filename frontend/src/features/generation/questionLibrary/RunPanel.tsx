@@ -18,7 +18,8 @@ const EMPTY_STEPS: TaskStep[] = []
 function kindLabel(kind: string): string {
   if (kind === 'crawl') return '爬取入库'
   if (kind === 'generate') return 'AI 出题'
-  if (kind === 'score') return '手动评分'
+  if (kind === 'media_import') return '图片/PDF 录入'
+  if (kind === 'score') return '思维评分'
   return '任务'
 }
 

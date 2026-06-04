@@ -7,6 +7,7 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { downloadObjectUrl } from '@/api/client'
 import { usePaper, usePaperDownloadLink, usePaperExport } from '@/hooks/usePapers'
+import { useStartExam } from '@/hooks/useExam'
 import { formatDate } from '@/lib/utils'
 import { ShareLinkDialog } from '@/components/shared/ShareLinkDialog'
 import { AnnotationDialog } from '@/components/shared/AnnotationDialog'
@@ -19,6 +20,7 @@ import {
 import { PaperAnalysisPanel } from '@/features/workspace/papers/components/PaperAnalysisPanel'
 import { PaperDetailQuestions } from '@/features/workspace/papers/components/PaperDetailQuestions'
 import { PaperDownloadLinks } from '@/features/workspace/papers/components/PaperDownloadLinks'
+import { StartExamDialog } from '@/features/workspace/papers/components/StartExamDialog'
 import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as tasksApi from '@/api/tasks'
 import * as wrongbookApi from '@/api/wrongbook'
@@ -41,6 +43,7 @@ export default function PaperDetailPage() {
     isPending: isLoadingLinks,
   } = usePaperDownloadLink()
   const { mutateAsync: exportPaper, isPending: isExporting } = usePaperExport()
+  const startExam = useStartExam()
   const paper = paperWithAnalysis || paperBase
   const pushToast = useNotificationStore((s) => s.pushToast)
   const [shareOpen, setShareOpen] = useState(false)
@@ -49,6 +52,7 @@ export default function PaperDetailPage() {
   const [annotateSnippet, setAnnotateSnippet] = useState<string>('')
   const [docxIncludeAnswer, setDocxIncludeAnswer] = useState(true)
   const [docxIncludeAnalysis, setDocxIncludeAnalysis] = useState(true)
+  const [examOpen, setExamOpen] = useState(false)
 
   useEffect(() => {
     const anchor = String(location.hash || '').replace(/^#/, '').trim()
@@ -62,6 +66,17 @@ export default function PaperDetailPage() {
 
   const handlePrint = () => {
     window.print()
+  }
+
+  const handleStartExam = async (payload: { mode: 'timed' | 'untimed'; timeLimitMinutes: number | null }) => {
+    if (!paperId) return
+    const session = await startExam.mutateAsync({
+      paperId: Number(paperId),
+      mode: payload.mode,
+      timeLimitMinutes: payload.timeLimitMinutes,
+    })
+    setExamOpen(false)
+    navigate(`/exam/${session.sessionId}`)
   }
 
   const handleExport = async (format: PaperExportFormat) => {
@@ -191,6 +206,7 @@ export default function PaperDetailPage() {
         onDocxIncludeAnalysisChange={setDocxIncludeAnalysis}
         isLoadingLinks={isLoadingLinks}
         onShare={() => setShareOpen(true)}
+        onStartExam={() => setExamOpen(true)}
         onPrint={handlePrint}
         onExport={handleExport}
         onLoadDownloadLinks={() => paperId && loadDownloadLinks(paperId)}
@@ -251,6 +267,13 @@ export default function PaperDetailPage() {
         itemId={String(paperId || paper?.id || '')}
         anchor={annotateAnchor}
         snippet={annotateSnippet}
+      />
+
+      <StartExamDialog
+        open={examOpen}
+        isPending={startExam.isPending}
+        onOpenChange={setExamOpen}
+        onStart={handleStartExam}
       />
     </div>
   )

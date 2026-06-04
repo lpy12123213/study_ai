@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
 from backend.database.schema import QuestionCache, QuestionLibraryItem
+from backend.shared.question_thinking import extract_thinking_depth
 
 HiddenFilter = Literal["0", "1", "all"]
 
@@ -27,6 +28,17 @@ def _as_int(v: Any, default: int = 0) -> int:
         return int(v)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _with_thinking_depth_fields(item: Dict[str, Any], dimensions_json: Any) -> Dict[str, Any]:
+    depth = extract_thinking_depth(dimensions_json)
+    item["thinking_depth_score"] = depth.get("score")
+    item["thinking_method_family"] = depth.get("method_family") or ""
+    item["thinking_method_signature"] = depth.get("method_signature") or ""
+    item["thinking_method_rarity"] = depth.get("method_rarity") or ""
+    item["thinking_method_count"] = depth.get("similar_method_count")
+    item["thinking_depth_comment"] = depth.get("comment") or ""
+    return item
 
 
 async def upsert_question_library_items(
@@ -155,6 +167,7 @@ async def list_question_library_items(
             QuestionLibraryItem.starred,
             QuestionLibraryItem.ai_score,
             QuestionLibraryItem.ai_verdict,
+            QuestionLibraryItem.ai_dimensions_json,
             QuestionLibraryItem.ai_summary,
             QuestionLibraryItem.updated_at,
             QuestionCache.stem,
@@ -200,33 +213,33 @@ async def list_question_library_items(
 
     items: List[Dict[str, Any]] = []
     for r in rows:
-        has_answer = int(r[19] or 0) > 0
-        has_analysis = int(r[20] or 0) > 0
-        items.append(
-            {
-                "question_id": r[0],
-                "subject": r[1] or "",
-                "origin": r[2] or "",
-                "hidden": bool(r[3]),
-                "starred": bool(r[4]),
-                "ai_score": r[5],
-                "ai_verdict": r[6] or "",
-                "ai_summary": r[7] or "",
-                "updated_at": r[8].isoformat() if r[8] else "",
-                "stem": (r[9] or ""),
-                "question_type": r[10] or "",
-                "difficulty": r[11] or "",
-                "difficulty_value": r[12],
-                "knowledge_point": r[13] or "",
-                "knowledge_points_json": r[14] or "",
-                "source_url": r[15] or "",
-                "quality_score": int(r[16] or 0),
-                "source": r[17] or "",
-                "date": r[18] or "",
-                "has_answer": has_answer,
-                "has_analysis": has_analysis,
-            }
-        )
+        has_answer = int(r[20] or 0) > 0
+        has_analysis = int(r[21] or 0) > 0
+        item = {
+            "question_id": r[0],
+            "subject": r[1] or "",
+            "origin": r[2] or "",
+            "hidden": bool(r[3]),
+            "starred": bool(r[4]),
+            "ai_score": r[5],
+            "ai_verdict": r[6] or "",
+            "ai_dimensions_json": r[7] or "",
+            "ai_summary": r[8] or "",
+            "updated_at": r[9].isoformat() if r[9] else "",
+            "stem": (r[10] or ""),
+            "question_type": r[11] or "",
+            "difficulty": r[12] or "",
+            "difficulty_value": r[13],
+            "knowledge_point": r[14] or "",
+            "knowledge_points_json": r[15] or "",
+            "source_url": r[16] or "",
+            "quality_score": int(r[17] or 0),
+            "source": r[18] or "",
+            "date": r[19] or "",
+            "has_answer": has_answer,
+            "has_analysis": has_analysis,
+        }
+        items.append(_with_thinking_depth_fields(item, r[7] or ""))
 
     return {"total": total, "include_total": bool(include_total), "items": items, "limit": lim, "offset": off}
 
@@ -356,7 +369,7 @@ async def get_question_library_item(
     if not row:
         return None
 
-    return {
+    item = {
         "question_id": row.question_id,
         "subject": row.subject or "",
         "origin": row.origin or "",
@@ -369,6 +382,7 @@ async def get_question_library_item(
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
     }
+    return _with_thinking_depth_fields(item, row.ai_dimensions_json or "")
 
 
 async def list_unscored_question_ids(
@@ -397,3 +411,60 @@ async def list_unscored_question_ids(
     stmt = stmt.limit(lim)
     rows = (await session.execute(stmt)).scalars().all()
     return [str(x).strip() for x in rows if str(x or "").strip()]
+
+
+async def list_thinking_method_stats(
+    *,
+    user_id: str,
+    subject: str = "",
+    limit: int = 5000,
+    session: Optional[AsyncSession] = None,
+) -> List[Dict[str, Any]]:
+    uid = _require_user_id(user_id)
+    subj = str(subject or "").strip()
+    lim = max(1, min(_as_int(limit, 5000), 20000))
+
+    own = session is None
+    if own:
+        async with async_session_maker() as session:
+            return await list_thinking_method_stats(user_id=uid, subject=subj, limit=lim, session=session)
+
+    stmt = (
+        select(QuestionLibraryItem.question_id, QuestionLibraryItem.ai_dimensions_json)
+        .where(
+            QuestionLibraryItem.user_id == uid,
+            QuestionLibraryItem.ai_dimensions_json != "",
+        )
+        .limit(lim)
+    )
+    if subj:
+        stmt = stmt.where(QuestionLibraryItem.subject == subj)
+
+    rows = (await session.execute(stmt)).all()
+    by_family: Dict[str, Dict[str, Any]] = {}
+    for qid, dims_json in rows:
+        depth = extract_thinking_depth(dims_json or "")
+        family = str(depth.get("method_family") or "").strip()
+        if not family:
+            continue
+        key = family.lower()
+        row = by_family.setdefault(
+            key,
+            {
+                "method_family": family,
+                "count": 0,
+                "method_rarity": str(depth.get("method_rarity") or "").strip(),
+                "method_signature": str(depth.get("method_signature") or "").strip(),
+                "example_question_ids": [],
+            },
+        )
+        row["count"] = int(row.get("count") or 0) + 1
+        examples = row.get("example_question_ids") if isinstance(row.get("example_question_ids"), list) else []
+        q = str(qid or "").strip()
+        if q and q not in examples and len(examples) < 5:
+            examples.append(q)
+        row["example_question_ids"] = examples
+
+    out = list(by_family.values())
+    out.sort(key=lambda x: (-int(x.get("count") or 0), str(x.get("method_family") or "")))
+    return out

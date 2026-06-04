@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, Link2, Loader2, Printer, Share2 } from 'lucide-react'
+import { ArrowLeft, ClipboardCheck, Download, Link2, Loader2, Printer, Share2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -16,6 +16,7 @@ export interface PaperDetailHeaderProps {
   onDocxIncludeAnalysisChange: (value: boolean) => void
   isLoadingLinks: boolean
   onShare: () => void
+  onStartExam: () => void
   onPrint: () => void
   onExport: (format: PaperExportFormat) => void
   onLoadDownloadLinks: () => void
@@ -31,6 +32,7 @@ export function PaperDetailHeader({
   onDocxIncludeAnalysisChange,
   isLoadingLinks,
   onShare,
+  onStartExam,
   onPrint,
   onExport,
   onLoadDownloadLinks,
@@ -49,6 +51,10 @@ export function PaperDetailHeader({
       </div>
 
       <div className="flex items-center gap-2">
+        <Button variant="default" size="sm" onClick={onStartExam} disabled={!paperId}>
+          <ClipboardCheck className="h-4 w-4 mr-2" />
+          开始答题
+        </Button>
         <Button variant="outline" size="sm" onClick={onShare} disabled={!paperId}>
           <Share2 className="h-4 w-4 mr-2" />
           分享

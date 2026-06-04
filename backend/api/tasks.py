@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
@@ -26,7 +26,6 @@ from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, S
 from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_text
 from backend.core.time_utils import utcnow_naive
-from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
 from backend.database.repositories.system.tasks import (
     append_task_event as db_append_task_event,
 )
@@ -45,6 +44,7 @@ from backend.database.repositories.system.tasks import (
 from backend.database.repositories.system.tasks import (
     update_task_status as db_update_task_status,
 )
+from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
 from backend.shared.tasks import task_runtime
 from backend.tasks import (
     submit_deepthink_task,
@@ -284,6 +284,67 @@ async def submit_question_library_generate(
 
     try:
         task = await ql_runner.create_generate_task(user_id=user_id, request=request.model_dump())
+    except RunnerError as exc:
+        raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
+    return {"success": True, "taskId": task.task_id}
+
+
+@router.post("/question-library/import-media", response_model=dict)
+async def submit_question_library_import_media(
+    subject: str = Form(""),
+    topic: str = Form(""),
+    difficulty: str = Form(""),
+    question_type: str = Form(""),
+    count: int = Form(10),
+    max_pdf_pages: int = Form(12),
+    task_id: str = Form(""),
+    files: list[UploadFile] = File(...),
+    user: dict = Depends(require_auth),
+) -> dict:
+    """Canonical long-task submit endpoint for question-library image/PDF import."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    from backend.generation.question_library import runner as ql_runner
+    from backend.generation.question_library.media_import import (
+        MediaImportError,
+        persist_upload_files,
+        safe_media_import_task_id,
+    )
+    from backend.generation.question_library.runner import RunnerError
+
+    tid = safe_media_import_task_id(task_id)
+    try:
+        refs = await persist_upload_files(task_id=tid, uploads=files or [])
+        task = await ql_runner.create_media_import_task(
+            user_id=user_id,
+            request={
+                "task_id": tid,
+                "subject": subject,
+                "topic": topic,
+                "difficulty": difficulty,
+                "question_type": question_type,
+                "count": count,
+                "max_pdf_pages": max_pdf_pages,
+                "files": [
+                    {
+                        "path": str(ref.path),
+                        "filename": ref.filename,
+                        "content_type": ref.content_type,
+                    }
+                    for ref in refs
+                ],
+            },
+        )
+    except MediaImportError as exc:
+        detail = str(exc) or "media_import_error"
+        if detail == "file_too_large":
+            raise HTTPException(status_code=413, detail=detail) from exc
+        if detail == "unsupported_media_type":
+            raise HTTPException(status_code=415, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
     except RunnerError as exc:
         raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
     return {"success": True, "taskId": task.task_id}

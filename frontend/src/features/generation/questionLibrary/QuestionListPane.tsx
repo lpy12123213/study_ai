@@ -9,6 +9,7 @@ import { getQuestionLibraryItem, type QuestionLibraryListItem } from '@/api/ques
 function originLabel(origin: string): string {
   if (origin === 'ai') return 'AI 出题'
   if (origin === 'crawled') return '爬取题'
+  if (origin === 'media') return '图片/PDF 录入'
   return origin || '题目'
 }
 
@@ -17,6 +18,14 @@ function scoreClass(score: number | null | undefined): string {
   if (s === null) return 'text-muted-foreground'
   if (s >= 80) return 'text-emerald-600'
   if (s >= 60) return 'text-amber-600'
+  return 'text-rose-600'
+}
+
+function depthScoreClass(score: number | null | undefined): string {
+  const s = typeof score === 'number' ? score : null
+  if (s === null) return 'text-muted-foreground'
+  if (s >= 8) return 'text-emerald-600'
+  if (s >= 5) return 'text-amber-600'
   return 'text-rose-600'
 }
 
@@ -107,6 +116,7 @@ export function QuestionListPane(props: Props) {
                 const qid = String(it.question_id || '').trim()
                 const isSelected = qid && qid === selected
                 const score = typeof it.ai_score === 'number' ? it.ai_score : null
+                const depthScore = typeof it.thinking_depth_score === 'number' ? it.thinking_depth_score : null
                 const canExpand = Boolean(canExpandById[qid])
                 const isExpanded = qid && qid === expandedId
 
@@ -138,6 +148,9 @@ export function QuestionListPane(props: Props) {
                           </div>
                           <div className={cn('text-xs mt-1', scoreClass(score))}>
                             {score === null ? '待评分' : `AI 分数：${score}`}
+                          </div>
+                          <div className={cn('text-xs mt-1', depthScoreClass(depthScore))}>
+                            {depthScore === null ? '思维深度待评' : `思维深度：${depthScore}/10`}
                           </div>
                         </div>
                         {canExpand && (

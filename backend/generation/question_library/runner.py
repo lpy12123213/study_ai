@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.content.study_archives import (
     get_latest_study_archive,
     get_latest_study_archive_for_subject,
@@ -16,6 +17,7 @@ from backend.database.repositories.content.study_archives import (
 from backend.database.repositories.question.question_cache import get_question_cache, upsert_question_cache
 from backend.database.repositories.question.question_library import (
     list_question_library_items,
+    list_thinking_method_stats,
     upsert_question_library_items,
 )
 from backend.generation.agentic.task_specs import (
@@ -23,7 +25,10 @@ from backend.generation.agentic.task_specs import (
     build_agent_run_spec_for_task,
     build_agentic_starter_event,
 )
-from backend.llm.client import is_llm_configured
+from backend.generation.question_library.curriculum_context import (
+    build_curriculum_context,
+    enrich_source_pack_with_curriculum,
+)
 from backend.generation.question_library.generation import (
     analyze_reference_questions,
     build_source_pack,
@@ -31,9 +36,13 @@ from backend.generation.question_library.generation import (
     enrich_source_pack_with_reference,
     generate_questions,
 )
-from backend.generation.question_library.curriculum_context import (
-    build_curriculum_context,
-    enrich_source_pack_with_curriculum,
+from backend.generation.question_library.media_import import (
+    MediaFileRef,
+    MediaImportError,
+    build_media_question_id,
+    extract_questions_from_media_pages,
+    load_all_media_pages,
+    safe_media_import_task_id,
 )
 from backend.generation.question_library.preview_store import (
     find_preview_by_session_id,
@@ -55,12 +64,19 @@ from backend.generation.question_library.runner_support import (
     infer_question_type_from_topic,
     normalize_topic_key,
 )
-from backend.generation.question_library.scoring import apply_score_and_hide, score_stem_with_llm
+from backend.generation.question_library.scoring import (
+    apply_score_and_hide,
+    extract_thinking_depth,
+    merge_method_context,
+    score_question_batch_with_thinking_depth,
+)
 from backend.generation.question_library.session_utils import (
     merge_drafts,
     normalize_draft_questions,
 )
 from backend.generation.question_library.stages import build_stage_progress_payload, get_question_generation_stage
+from backend.integrations.crawler.manager import get_crawler
+from backend.llm.client import is_llm_configured
 from backend.shared.tasks import RuntimeTask, task_runtime
 
 logger = get_logger(__name__)
@@ -229,6 +245,239 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
     )
 
 
+async def create_media_import_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
+    req = dict(request or {})
+    if not is_llm_configured(scope="chat"):
+        raise RunnerError("llm_not_configured", status_code=500)
+
+    subject = str(req.get("subject") or "").strip()
+    if not subject:
+        raise RunnerError("subject_required", status_code=400)
+
+    topic = str(req.get("topic") or "").strip() or "图片/PDF 录入"
+    difficulty = str(req.get("difficulty") or "").strip()
+    question_type = str(req.get("question_type") or "").strip()
+    count = _clamp_int(req.get("count"), default=10, min_v=1, max_v=30)
+    task_id = safe_media_import_task_id(str(req.get("task_id") or "").strip())
+    max_pdf_pages = _clamp_int(req.get("max_pdf_pages"), default=12, min_v=1, max_v=30)
+    max_images = _clamp_int(req.get("max_images"), default=12, min_v=1, max_v=30)
+
+    raw_files = req.get("files") if isinstance(req.get("files"), list) else []
+    file_refs: List[MediaFileRef] = []
+    for item in raw_files:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        filename = str(item.get("filename") or "").strip()
+        content_type = str(item.get("content_type") or "").strip()
+        if not path:
+            continue
+        resolved = Path(path).resolve()
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        file_refs.append(MediaFileRef(path=resolved, filename=filename or resolved.name, content_type=content_type))
+    if not file_refs:
+        raise RunnerError("files_required", status_code=400)
+
+    session_id = str(req.get("session_id") or "").strip() or new_session_id()
+    preview_id = str(req.get("preview_id") or "").strip() or new_preview_id()
+    agent_spec = build_agent_run_spec_for_task(task_type="question_library_media_import", request=req)
+
+    current_session = _ensure_session(
+        session_id=session_id,
+        user_id=user_id,
+        preview_id=preview_id,
+        subject=subject,
+        topic=topic,
+        difficulty=difficulty,
+        question_type=question_type,
+        mode="standard",
+        count=count,
+        use_study_archive=False,
+        use_reference_questions=False,
+        reference_source="any",
+        reference_year_range="all",
+        grade_id="",
+        textbook_version_id="",
+        knowledge_point_ids=[],
+        knowledge_points=[],
+        task_id=task_id,
+        stream_reasoning=False,
+    )
+    current_session["status"] = "running"
+    current_session["source_type"] = "media_import"
+    save_session(current_session)
+
+    def _save_snapshot(*, session_status: str, preview_status: str, drafts: List[dict]) -> None:
+        session = load_session(session_id) or {}
+        if isinstance(session, dict):
+            session = dict(session)
+            session["status"] = session_status
+            session["source_type"] = "media_import"
+            session["draft_questions"] = normalize_draft_questions(drafts)
+            save_session(session)
+
+        save_preview(
+            {
+                "preview_id": preview_id,
+                "session_id": session_id,
+                "mode": "standard",
+                "status": preview_status,
+                "user_id": str(user_id or "").strip(),
+                "task_id": task_id,
+                "subject": subject,
+                "topic": topic,
+                "difficulty": difficulty,
+                "question_type": question_type,
+                "use_reference_questions": False,
+                "reference_source": "any",
+                "reference_year_range": "all",
+                "source_type": "media_import",
+                "draft_questions": normalize_draft_questions(drafts),
+            }
+        )
+
+    async def runner_factory(task: RuntimeTask) -> None:
+        drafts: List[dict] = []
+        try:
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "step",
+                    "step": {
+                        "id": "media_import",
+                        "title": "图片/PDF 录入",
+                        "status": "running",
+                        "startTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "toolName": "question_library_media_import",
+                        "input": {
+                            "taskId": task.task_id,
+                            "subject": subject,
+                            "topic": topic,
+                            "difficulty": difficulty,
+                            "question_type": question_type,
+                            "count": count,
+                            "files": [ref.filename for ref in file_refs],
+                        },
+                    },
+                },
+            )
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "progress",
+                    "data": {"progress": 10, "stage": "convert_media", "stage_label": "转换图片"},
+                },
+            )
+
+            pages = load_all_media_pages(file_refs, max_pdf_pages=max_pdf_pages, max_images=max_images)
+            if not pages:
+                raise MediaImportError("no_image_pages")
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "progress",
+                    "data": {
+                        "progress": 35,
+                        "stage": "vision_extract",
+                        "stage_label": "识别试题",
+                        "stats": {"image_count": len(pages)},
+                    },
+                },
+            )
+
+            questions = await extract_questions_from_media_pages(
+                pages=pages,
+                subject=subject,
+                topic=topic,
+                difficulty=difficulty,
+                question_type=question_type,
+                max_questions=count,
+            )
+            if not questions:
+                raise MediaImportError("no_questions_extracted")
+
+            for item in questions[:count]:
+                drafts.append(
+                    {
+                        "question_id": build_media_question_id(suffix=uuid.uuid4().hex[:8]),
+                        "stem": str(item.get("stem") or "").strip(),
+                        "answer": str(item.get("answer") or "").strip(),
+                        "analysis": str(item.get("analysis") or "").strip(),
+                        "keep": True,
+                        "review_status": "pending_review",
+                    }
+                )
+
+            _save_snapshot(session_status="pending_review", preview_status="pending_review", drafts=drafts)
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "progress",
+                    "data": {
+                        "progress": 96,
+                        "stage": "pending_review",
+                        "stage_label": "待审核",
+                        "stats": {"draft_count": len(drafts)},
+                    },
+                },
+            )
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "done",
+                    "data": {
+                        "success": True,
+                        "session_id": session_id,
+                        "preview_id": preview_id,
+                        "subject": subject,
+                        "topic": topic,
+                        "count": len(drafts),
+                        "draft_questions": drafts,
+                    },
+                },
+            )
+            await task_runtime.complete_task(
+                task,
+                result={"success": True, "session_id": session_id, "preview_id": preview_id, "count": len(drafts)},
+            )
+        except asyncio.CancelledError:
+            if task.status != "running":
+                async with task.cond:
+                    task.cond.notify_all()
+                raise
+            await task_runtime.fail_task(task, "Task cancelled")
+            raise
+        except Exception as exc:  # pragma: no cover
+            if drafts:
+                try:
+                    _save_snapshot(session_status="partial_failure", preview_status="pending_review", drafts=drafts)
+                except Exception:
+                    logger.warning(
+                        "question_library_media_import_snapshot_failed",
+                        extra={"task_id": task.task_id, "user_id": user_id},
+                        exc_info=True,
+                    )
+            logger.exception("question_library_media_import_failed", extra={"task_id": task.task_id, "user_id": user_id})
+            await task_runtime.fail_task(task, str(exc))
+        finally:
+            if task.status == "running":
+                await task_runtime.fail_task(task, "Task ended unexpectedly")
+
+    return await task_runtime.create_task(
+        task_id=task_id,
+        user_id=user_id,
+        task_type="question_library_media_import",
+        title=f"图片/PDF 录入：{subject} {topic}".strip(),
+        request=req,
+        runner_factory=runner_factory,
+        meta=agentic_task_meta(agent_spec),
+        starter_event=build_agentic_starter_event(spec=agent_spec, title="开始图片/PDF 录入", tool_name="question_library_media_import")
+        if agent_spec is not None
+        else None,
+    )
+
+
 async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
     req = dict(request or {})
     if not is_llm_configured():
@@ -239,6 +488,7 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
         raise RunnerError("subject_required", status_code=400)
 
     limit = _clamp_int(req.get("limit"), default=50, min_v=1, max_v=500)
+    batch_size = _clamp_int(req.get("batch_size"), default=50, min_v=1, max_v=50)
     only_unscored = bool(req.get("only_unscored"))
     task_id = str(req.get("task_id") or "").strip() or f"ql_score_{uuid.uuid4().hex[:12]}"
 
@@ -271,7 +521,8 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
                 qid = str(it.get("question_id") or "").strip()
                 if not qid:
                     continue
-                if only_unscored and it.get("ai_score") is not None:
+                depth = extract_thinking_depth(it.get("ai_dimensions_json") or "")
+                if only_unscored and it.get("ai_score") is not None and depth.get("score") is not None:
                     continue
                 qids.append(qid)
                 if len(qids) >= limit:
@@ -289,58 +540,124 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
             scored = 0
             hidden_n = 0
             total = len(qids)
-            await task_runtime.append_event(task, {"type": "progress", "data": {"progress": 10, "stage": "Score"}})
+            method_context = await list_thinking_method_stats(user_id=user_id, subject=subject, limit=5000)
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "progress",
+                    "data": {
+                        "progress": 10,
+                        "stage": "Score",
+                        "batch_size": batch_size,
+                        "method_families": len(method_context),
+                    },
+                },
+            )
 
-            for idx, qid in enumerate(qids, start=1):
+            processed = 0
+            for start in range(0, len(qids), batch_size):
                 if task.status != "running":
                     break
-                stem = str((cache.get(qid) or {}).get("stem") or "").strip()
-                if not stem:
+                chunk_qids = qids[start : start + batch_size]
+                questions: list[dict] = []
+                for qid in chunk_qids:
+                    cached = cache.get(qid) or {}
+                    stem = str(cached.get("stem") or "").strip()
+                    if not stem:
+                        continue
+                    questions.append(
+                        {
+                            "question_id": qid,
+                            "stem": stem,
+                            "answer": str(cached.get("answer") or "").strip(),
+                            "analysis": str(cached.get("analysis") or "").strip(),
+                            "difficulty": str(cached.get("difficulty") or "").strip(),
+                            "question_type": str(cached.get("question_type") or "").strip(),
+                            "knowledge_point": str(cached.get("knowledge_point") or "").strip(),
+                        }
+                    )
+                if not questions:
                     continue
 
-                res = await score_stem_with_llm(subject=subject, stem=stem, model=model)
-                overall = int(res.get("overall_score") or 0)
-                verdict = str(res.get("verdict") or "").strip()
-                dims = list(res.get("dimensions") or [])
-                summary = str(res.get("summary") or "").strip()
-
-                await apply_score_and_hide(
-                    user_id=user_id,
-                    question_id=qid,
-                    overall_score=overall,
-                    verdict=verdict,
-                    dimensions=[x for x in dims if isinstance(x, dict)],
-                    summary=summary,
-                    threshold=threshold,
+                batch_res = await score_question_batch_with_thinking_depth(
+                    subject=subject,
+                    questions=questions,
+                    model=model,
+                    method_context=method_context,
+                )
+                score_items = [x for x in (batch_res.get("items") or []) if isinstance(x, dict)]
+                method_context = merge_method_context(
+                    method_context,
+                    [x for x in (batch_res.get("method_summary") or []) if isinstance(x, dict)],
+                    max_families=120,
                 )
 
-                scored += 1
-                if overall < threshold:
-                    hidden_n += 1
+                stem_by_id = {str(q.get("question_id") or "").strip(): str(q.get("stem") or "").strip() for q in questions}
+                for res in score_items:
+                    if task.status != "running":
+                        break
+                    qid = str(res.get("question_id") or "").strip()
+                    if not qid:
+                        continue
+                    stem = stem_by_id.get(qid, "")
+                    overall = int(res.get("overall_score") or 0)
+                    verdict = str(res.get("verdict") or "").strip()
+                    dims = list(res.get("dimensions") or [])
+                    summary = str(res.get("summary") or "").strip()
+                    depth = extract_thinking_depth(dims)
 
-                await task_runtime.append_event(
-                    task,
-                    {
-                        "type": "item_saved",
-                        "data": {
-                            "item": {
-                                "question_id": qid,
-                                "subject": subject,
-                                "origin": "crawled",
-                                "ai_score": overall,
-                                "ai_verdict": verdict,
-                                "ai_summary": summary,
-                                "hidden": overall < threshold,
-                                "stem": stem,
-                            }
+                    await apply_score_and_hide(
+                        user_id=user_id,
+                        question_id=qid,
+                        overall_score=overall,
+                        verdict=verdict,
+                        dimensions=[x for x in dims if isinstance(x, dict)],
+                        summary=summary,
+                        threshold=threshold,
+                    )
+
+                    scored += 1
+                    processed += 1
+                    if overall < threshold:
+                        hidden_n += 1
+
+                    await task_runtime.append_event(
+                        task,
+                        {
+                            "type": "item_saved",
+                            "data": {
+                                "item": {
+                                    "question_id": qid,
+                                    "subject": subject,
+                                    "origin": "crawled",
+                                    "ai_score": overall,
+                                    "ai_verdict": verdict,
+                                    "ai_dimensions_json": json.dumps(dims, ensure_ascii=False),
+                                    "ai_summary": summary,
+                                    "thinking_depth_score": depth.get("score"),
+                                    "thinking_method_family": depth.get("method_family") or "",
+                                    "thinking_method_rarity": depth.get("method_rarity") or "",
+                                    "thinking_method_count": depth.get("similar_method_count"),
+                                    "hidden": overall < threshold,
+                                    "stem": stem,
+                                }
+                            },
                         },
-                    },
-                )
+                    )
 
-                pct = 10 + int((idx / max(1, total)) * 88)
-                await task_runtime.append_event(
-                    task, {"type": "progress", "data": {"progress": min(98, pct), "stage": "Score"}}
-                )
+                    pct = 10 + int((processed / max(1, total)) * 88)
+                    await task_runtime.append_event(
+                        task,
+                        {
+                            "type": "progress",
+                            "data": {
+                                "progress": min(98, pct),
+                                "stage": "Score",
+                                "batch_size": batch_size,
+                                "method_families": len(method_context),
+                            },
+                        },
+                    )
 
             await task_runtime.append_event(
                 task,
@@ -353,6 +670,8 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
                         "scored": scored,
                         "hidden": hidden_n,
                         "threshold": threshold,
+                        "batch_size": batch_size,
+                        "method_summary": method_context,
                     },
                 },
             )

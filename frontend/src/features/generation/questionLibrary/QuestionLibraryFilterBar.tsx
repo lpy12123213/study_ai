@@ -58,6 +58,7 @@ export function QuestionLibraryFilterBar(props: Props) {
             <SelectItem value="all">全部</SelectItem>
             <SelectItem value="crawled">爬取题</SelectItem>
             <SelectItem value="ai">AI 题</SelectItem>
+            <SelectItem value="media">图片/PDF</SelectItem>
           </SelectContent>
         </Select>
       </div>

@@ -8,7 +8,6 @@ import { NavigationEventHost } from '@/components/shared/NavigationEventHost'
 import { getRouteConfigById } from '@/router/routes.config'
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'))
-const LoginPage = lazy(() => import('@/pages/auth/LoginPage'))
 const BlueprintPage = lazy(() => import('@/pages/BlueprintPage'))
 const LessonPlansPage = lazy(() => import('@/pages/LessonPlansPage'))
 const LessonPlanDetailPage = lazy(() => import('@/pages/LessonPlanDetailPage'))
@@ -16,6 +15,8 @@ const StudyMaterialsPage = lazy(() => import('@/pages/StudyMaterialsPage'))
 const KnowledgeVideoPage = lazy(() => import('@/pages/KnowledgeVideoPage'))
 const PapersPage = lazy(() => import('@/pages/PapersPage'))
 const PaperDetailPage = lazy(() => import('@/pages/PaperDetailPage'))
+const ExamPage = lazy(() => import('@/pages/ExamPage'))
+const ExamResultPage = lazy(() => import('@/pages/ExamResultPage'))
 const CanvasPage = lazy(() => import('@/pages/CanvasPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
@@ -71,7 +72,7 @@ export const router = createBrowserRouter([
   {
     element: <RootRouteShell />,
     children: [
-      { path: '/login', element: load(LoginPage) },
+      { path: '/login', element: <Navigate to="/chat" replace /> },
       { path: '/share/:token', element: load(SharePage) },
       {
         path: '/',
@@ -122,6 +123,8 @@ export const router = createBrowserRouter([
                   { path: ':paperId', element: load(PaperDetailPage), handle: handle('paper-detail') },
                 ],
               },
+              { path: 'exam/:sessionId', element: load(ExamPage), handle: handle('exam-session') },
+              { path: 'exam/:sessionId/result', element: load(ExamResultPage), handle: handle('exam-result') },
               { path: 'canvas', element: load(CanvasPage), handle: handle('canvas') },
               { path: 'settings', element: load(SettingsPage), handle: handle('settings') },
               { path: 'tasks', element: load(TaskCenterPage), handle: handle('tasks') },

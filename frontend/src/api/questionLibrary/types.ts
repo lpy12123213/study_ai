@@ -1,6 +1,6 @@
 import type { SseEnvelope } from '@/lib/sse'
 
-export type QuestionOrigin = 'crawled' | 'ai' | string
+export type QuestionOrigin = 'crawled' | 'ai' | 'media' | string
 
 export interface QuestionLibraryListItem {
   question_id: string
@@ -14,6 +14,12 @@ export interface QuestionLibraryListItem {
   ai_verdict?: string
   ai_dimensions_json?: string
   ai_summary?: string
+  thinking_depth_score?: number | null
+  thinking_method_family?: string
+  thinking_method_signature?: string
+  thinking_method_rarity?: string
+  thinking_method_count?: number | null
+  thinking_depth_comment?: string
   updated_at?: string
   stem?: string
   question_type?: string
@@ -100,6 +106,17 @@ export interface GenerateQuestionsPayload {
   append?: boolean
   stream_reasoning?: boolean
   task_id?: string
+}
+
+export interface ImportMediaQuestionsPayload {
+  subject: string
+  topic?: string
+  difficulty?: string
+  question_type?: string
+  count?: number
+  max_pdf_pages?: number
+  task_id?: string
+  files: File[]
 }
 
 export interface QuestionLibraryDraftQuestion {
@@ -221,6 +238,7 @@ export interface QuestionLibrarySessionDetail extends QuestionLibrarySessionSumm
 export interface ScoreQuestionLibraryBatchPayload {
   subject: string
   limit?: number
+  batch_size?: number
   only_unscored?: boolean
   task_id?: string
 }

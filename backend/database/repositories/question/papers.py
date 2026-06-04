@@ -58,7 +58,7 @@ def _infer_paper_source_mode(question_ids: list[str]) -> str:
     has_digits = any(x.isdigit() for x in ids)
     has_non_digits = any(not x.isdigit() for x in ids)
     if has_digits and has_non_digits:
-        return "mixed"
+        return "hybrid"
     return "zujuan" if has_digits else "local"
 
 
@@ -79,8 +79,7 @@ async def save_paper(
         qid = str(payload.get("question_id") or "").strip()
         if qid:
             qids.append(qid)
-    if _infer_paper_source_mode(qids) == "mixed":
-        raise ValueError("paper_mixed_sources")
+    source_mode = _infer_paper_source_mode(qids)
 
     own = session is None
     if own:
@@ -96,6 +95,8 @@ async def save_paper(
 
     cache_items: List[QuestionCache] = []
     store_stem, store_answer, store_analysis = _paper_storage_flags()
+    if source_mode in {"hybrid", "local"}:
+        store_stem = store_answer = store_analysis = True
 
     for i, q_data in enumerate(questions or []):
         payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
@@ -235,14 +236,13 @@ async def add_questions_to_paper(
         if qid and qid not in existing_ids:
             incoming_ids.append(qid)
     incoming_mode = _infer_paper_source_mode(incoming_ids)
-    if incoming_mode == "mixed":
-        raise ValueError("paper_mixed_sources")
-    if existing_ids and incoming_ids and existing_mode != incoming_mode:
-        raise ValueError("paper_mixed_sources")
+    combined_mode = _infer_paper_source_mode(list(existing_ids) + incoming_ids)
 
     cache_items: List[QuestionCache] = []
     appended = 0
     store_stem, store_answer, store_analysis = _paper_storage_flags()
+    if combined_mode in {"hybrid", "local"} or existing_mode == "local" or incoming_mode == "local":
+        store_stem = store_answer = store_analysis = True
 
     for q_data in entries:
         payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
@@ -352,6 +352,7 @@ async def get_paper(
         "paper_name": paper.paper_name,
         "created_at": paper.created_at.isoformat() if paper.created_at else "",
         "updated_at": paper.updated_at.isoformat() if paper.updated_at else "",
+        "source_mode": _infer_paper_source_mode([str(q.question_id or "") for q in questions]),
         "questions": [
             {
                 "question_id": q.question_id,

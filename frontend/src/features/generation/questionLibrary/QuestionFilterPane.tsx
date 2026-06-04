@@ -78,6 +78,7 @@ export function QuestionFilterPane(props: Props) {
               <SelectItem value="all">全部</SelectItem>
               <SelectItem value="crawled">爬取题</SelectItem>
               <SelectItem value="ai">AI 出题</SelectItem>
+              <SelectItem value="media">图片/PDF 录入</SelectItem>
             </SelectContent>
           </Select>
         </div>

@@ -115,6 +115,9 @@ async def commit_preview_to_library(
     topic = str(obj.get("topic") or "").strip()
     difficulty = str(obj.get("difficulty") or "").strip()
     question_type = str(obj.get("question_type") or "").strip()
+    source_type = str(obj.get("source_type") or "").strip()
+    allow_partial_questions = source_type == "media_import"
+    origin = "media" if allow_partial_questions else "ai"
 
     preview_items = normalize_draft_questions(obj.get("draft_questions") if isinstance(obj.get("draft_questions"), list) else [])
     preview_by_id: dict[str, dict] = {}
@@ -148,7 +151,7 @@ async def commit_preview_to_library(
         stem = str(q.get("stem") or "").strip()
         answer = str(q.get("answer") or "").strip()
         analysis = str(q.get("analysis") or "").strip()
-        if not stem or not answer or not analysis:
+        if not stem or ((not allow_partial_questions) and (not answer or not analysis)):
             continue
         inserted_ids.append(qid)
         accepted_payload.append(
@@ -172,7 +175,7 @@ async def commit_preview_to_library(
         await upsert_question_cache(accepted_payload)
         await upsert_question_library_items(
             user_id=user_id,
-            items=[{"question_id": qid, "subject": subject, "origin": "ai"} for qid in inserted_ids],
+            items=[{"question_id": qid, "subject": subject, "origin": origin} for qid in inserted_ids],
         )
 
     obj = dict(obj)
@@ -559,7 +562,8 @@ async def _commit_single_draft_to_library(*, user_id: str, session: dict, draft:
     stem = str(draft.get("stem") or "").strip()
     answer = str(draft.get("answer") or "").strip()
     analysis = str(draft.get("analysis") or "").strip()
-    if not stem or not answer or not analysis:
+    allow_partial_questions = str(session.get("source_type") or "").strip() == "media_import"
+    if not stem or ((not allow_partial_questions) and (not answer or not analysis)):
         raise HTTPException(status_code=400, detail="draft_incomplete_for_commit")
 
     await upsert_question_cache(
@@ -579,7 +583,7 @@ async def _commit_single_draft_to_library(*, user_id: str, session: dict, draft:
     )
     await upsert_question_library_items(
         user_id=user_id,
-        items=[{"question_id": qid, "subject": subject, "origin": "ai"}],
+        items=[{"question_id": qid, "subject": subject, "origin": "media" if allow_partial_questions else "ai"}],
     )
 
     next_draft = dict(draft)

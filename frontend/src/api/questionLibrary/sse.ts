@@ -4,6 +4,7 @@ import { normalizeSseEnvelope, type SseEnvelope } from '@/lib/sse'
 import type {
   CrawlQuestionsPayload,
   GenerateQuestionsPayload,
+  ImportMediaQuestionsPayload,
   RegenerateQuestionLibrarySectionEvent,
   RegenerateQuestionLibrarySectionPayload,
 } from './types'
@@ -82,6 +83,43 @@ export function generateQuestions(
 ): void {
   apiClient
     .post('/tasks/question-library/generate', payload)
+    .then((res) => {
+      const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
+      if (!taskId) throw new Error('missing_task_id')
+      streamTask(
+        taskId,
+        0,
+        (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
+        onError,
+        onComplete
+      )
+    })
+    .catch((err: unknown) => {
+      const message = errorMessage(err)
+      onError?.(err instanceof Error ? err : new Error(message))
+    })
+}
+
+export function importMediaQuestions(
+  payload: ImportMediaQuestionsPayload,
+  onEvent: (event: SseEnvelope) => void,
+  onError?: (error: Error) => void,
+  onComplete?: () => void
+): void {
+  const form = new FormData()
+  form.set('subject', String(payload.subject || '').trim())
+  form.set('topic', String(payload.topic || '').trim())
+  form.set('difficulty', String(payload.difficulty || '').trim())
+  form.set('question_type', String(payload.question_type || '').trim())
+  form.set('count', String(Math.max(1, Math.min(30, Math.floor(Number(payload.count) || 10)))))
+  form.set('max_pdf_pages', String(Math.max(1, Math.min(30, Math.floor(Number(payload.max_pdf_pages) || 12)))))
+  if (payload.task_id) form.set('task_id', payload.task_id)
+  for (const file of payload.files || []) {
+    form.append('files', file)
+  }
+
+  apiClient
+    .post('/tasks/question-library/import-media', form)
     .then((res) => {
       const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
       if (!taskId) throw new Error('missing_task_id')

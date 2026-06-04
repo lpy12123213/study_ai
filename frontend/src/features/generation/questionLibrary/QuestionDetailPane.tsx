@@ -18,6 +18,7 @@ import { isRecord, readNumber, readString } from '@/lib/record'
 function originLabel(origin: string): string {
   if (origin === 'ai') return 'AI 出题'
   if (origin === 'crawled') return '爬取题'
+  if (origin === 'media') return '图片/PDF 录入'
   return origin || '题目'
 }
 
@@ -26,6 +27,14 @@ function scoreClass(score: number | null | undefined): string {
   if (s === null) return 'text-muted-foreground'
   if (s >= 80) return 'text-emerald-600'
   if (s >= 60) return 'text-amber-600'
+  return 'text-rose-600'
+}
+
+function depthScoreClass(score: number | null | undefined): string {
+  const s = typeof score === 'number' ? score : null
+  if (s === null) return 'text-muted-foreground'
+  if (s >= 8) return 'text-emerald-600'
+  if (s >= 5) return 'text-amber-600'
   return 'text-rose-600'
 }
 
@@ -177,6 +186,14 @@ export function QuestionDetailPane(props: Props) {
                 <div className={cn('text-xs mt-1', scoreClass(libItem.ai_score ?? null))}>
                   {typeof libItem.ai_score === 'number' ? `AI 分数：${libItem.ai_score}` : '待评分'}
                   {libItem.ai_verdict ? <span className="ml-2">({libItem.ai_verdict})</span> : null}
+                </div>
+                <div className={cn('text-xs mt-1', depthScoreClass(libItem.thinking_depth_score ?? null))}>
+                  {typeof libItem.thinking_depth_score === 'number'
+                    ? `思维深度：${libItem.thinking_depth_score}/10`
+                    : '思维深度待评'}
+                  {libItem.thinking_method_family ? (
+                    <span className="ml-2">{libItem.thinking_method_family}</span>
+                  ) : null}
                 </div>
               </div>
 

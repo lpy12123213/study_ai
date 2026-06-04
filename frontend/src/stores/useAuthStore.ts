@@ -2,6 +2,23 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User } from '@/types'
 
+const LOCAL_USER: User = {
+  id: 'local-user',
+  username: '本地用户',
+  role: 'admin',
+}
+
+const LOCAL_SESSION_TOKEN = 'local-session'
+
+function localAuthState() {
+  return {
+    user: LOCAL_USER,
+    token: LOCAL_SESSION_TOKEN,
+    expiresAt: null,
+    isAuthenticated: true,
+  }
+}
+
 interface AuthState {
   user: User | null
   token: string | null
@@ -17,18 +34,15 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
-      user: null,
-      token: null,
-      expiresAt: null,
-      isAuthenticated: false,
+      ...localAuthState(),
       login: (user, token, expiresAt = null) => {
-        set({ user, token, expiresAt, isAuthenticated: true })
+        set({ user: user || LOCAL_USER, token: token || LOCAL_SESSION_TOKEN, expiresAt, isAuthenticated: true })
       },
       logout: () => {
-        set({ user: null, token: null, expiresAt: null, isAuthenticated: false })
+        set(localAuthState())
       },
       clearAuth: () => {
-        set({ user: null, token: null, expiresAt: null, isAuthenticated: false })
+        set(localAuthState())
       },
       updateUser: (userData) => {
         const currentUser = get().user
@@ -37,6 +51,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
       isTokenExpired: () => {
+        if (get().token === LOCAL_SESSION_TOKEN) return false
         const expiresAt = get().expiresAt
         if (!expiresAt) return false
         return Date.now() >= Number(expiresAt) * 1000
@@ -44,24 +59,8 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
-      version: 4,
-      migrate: (persistedState: unknown) => {
-        const state = (persistedState || {}) as Partial<AuthState>
-        const token = typeof state.token === 'string' ? state.token : null
-        const expiresAt = typeof state.expiresAt === 'number' ? state.expiresAt : null
-
-        if (!token || token === 'guest-token' || token === 'local-session') {
-          return { user: null, token: null, expiresAt: null, isAuthenticated: false }
-        }
-
-        return {
-          ...state,
-          token,
-          expiresAt,
-          user: state.user || null,
-          isAuthenticated: Boolean(state.user && token),
-        }
-      },
+      version: 5,
+      migrate: () => localAuthState(),
     }
   )
 )

@@ -15,6 +15,15 @@ from backend.database.repositories.question.question_cache import (
     upsert_question_cache,
 )
 from backend.llm.runner import run_json
+from backend.generation.paper_compose.answer_synthesis import synthesize_missing_answers
+from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
+from backend.generation.paper_compose.auto_review import review_questions
+from backend.generation.paper_compose.slot_fill import (
+    allows_ai_backfill,
+    allows_bank_lookup,
+    fetch_local_candidates,
+    normalize_source_strategy,
+)
 from backend.generation.paper_compose.slot_selection import select_slot_with_relax
 from backend.generation.paper_compose.workflow_support import (
     _as_list,
@@ -117,6 +126,26 @@ async def compose_paper_events(
     min_quality_score = int(options.get("minQualityScore") or 60)
     dedup_by_stem = bool(options.get("dedupByStem") if "dedupByStem" in options else True)
     avoid_used = bool(options.get("avoidUsed") if "avoidUsed" in options else True)
+    source_strategy = normalize_source_strategy(options.get("sourceStrategy") or options.get("source_strategy"))
+    auto_ai_backfill = bool(options.get("autoAiBackfill") if "autoAiBackfill" in options else True)
+    max_ai_questions_per_paper = int(options.get("maxAiQuestionsPerPaper") or 20)
+    max_ai_questions_per_paper = max(0, min(max_ai_questions_per_paper, 100))
+    ai_answer_synthesis = _truthy(
+        options.get("aiAnswerSynthesis")
+        if "aiAnswerSynthesis" in options
+        else options.get("ai_answer_synthesis")
+        if "ai_answer_synthesis" in options
+        else os.getenv("PAPER_COMPOSE_AI_ANSWER_SYNTHESIS") or "1"
+    )
+    auto_review = _truthy(
+        options.get("autoReview")
+        if "autoReview" in options
+        else options.get("auto_review")
+        if "auto_review" in options
+        else os.getenv("PAPER_COMPOSE_AUTO_REVIEW") or "1"
+    )
+    judge_pass_score = int(options.get("judgePassScore") or options.get("judge_pass_score") or 65)
+    judge_pass_score = max(0, min(judge_pass_score, 100))
     strict_slot_count = _truthy(
         options.get("strictSlotCount") if "strictSlotCount" in options else options.get("strict_slot_count")
     )
@@ -285,12 +314,13 @@ async def compose_paper_events(
             return [q for q in qs if isinstance(q, dict)], ""
 
     prefetch_tasks: Dict[int, asyncio.Task] = {}
-    for slot in slot_plans:
-        requested = int(slot.count or 0)
-        search_limit = min(50, max(requested * per_slot_expand, requested))
-        prefetch_tasks[int(slot.index)] = asyncio.create_task(
-            _fetch_slot_candidates(slot, search_limit=search_limit, max_pages_value=max_pages)
-        )
+    if allows_bank_lookup(source_strategy):
+        for slot in slot_plans:
+            requested = int(slot.count or 0)
+            search_limit = min(50, max(requested * per_slot_expand, requested))
+            prefetch_tasks[int(slot.index)] = asyncio.create_task(
+                _fetch_slot_candidates(slot, search_limit=search_limit, max_pages_value=max_pages)
+            )
 
     for i, slot in enumerate(slot_plans):
         step_id = f"slot-{slot.index}"
@@ -316,15 +346,28 @@ async def compose_paper_events(
         candidates: List[Dict[str, Any]] = []
         seen_candidate_ids: set[str] = set()
 
-        prefetch = prefetch_tasks.get(int(slot.index))
-        if prefetch is not None:
-            fetched, fetch_err = await prefetch
-        else:
-            fetched, fetch_err = await _fetch_slot_candidates(
-                slot,
-                search_limit=search_limit,
-                max_pages_value=slot_max_pages,
+        local_candidates: List[Dict[str, Any]] = []
+        if allows_bank_lookup(source_strategy):
+            local_candidates = await fetch_local_candidates(
+                user_id=user_id,
+                subject=subject,
+                keyword=slot.keyword,
+                limit=search_limit,
+                min_quality_score=min_quality_score,
             )
+
+        if source_strategy == "ai_only":
+            fetched, fetch_err = [], ""
+        else:
+            prefetch = prefetch_tasks.get(int(slot.index))
+            if prefetch is not None:
+                fetched, fetch_err = await prefetch
+            else:
+                fetched, fetch_err = await _fetch_slot_candidates(
+                    slot,
+                    search_limit=search_limit,
+                    max_pages_value=slot_max_pages,
+                )
         if fetch_err:
             yield {
                 "type": "step",
@@ -340,7 +383,7 @@ async def compose_paper_events(
             }
             continue
 
-        for q in fetched:
+        for q in [*local_candidates, *fetched]:
             qid = str(q.get("question_id") or "").strip()
             if not qid or qid in seen_candidate_ids:
                 continue
@@ -476,6 +519,112 @@ async def compose_paper_events(
         slot_max_pages = int(sel.get("max_pages") or slot_max_pages)
         quality_threshold = int(sel.get("min_quality_score") or quality_threshold)
         dedup_stem = bool(sel.get("dedup_by_stem") if "dedup_by_stem" in sel else dedup_stem)
+
+        if len(slot_selected) < requested and allows_ai_backfill(
+            source_strategy,
+            auto_ai_backfill=auto_ai_backfill,
+        ):
+            remaining_ai_budget = max_ai_questions_per_paper - sum(
+                1
+                for q in selected_questions
+                if isinstance(q, dict) and str(q.get("question_id") or "").strip().startswith("ai_")
+            )
+            missing = min(requested - len(slot_selected), max(0, remaining_ai_budget))
+            if missing > 0:
+                ai_step_id = "ai_backfill"
+                yield {
+                    "type": "step",
+                    "step": {
+                        "id": ai_step_id,
+                        "title": "AI 补齐缺口题目",
+                        "status": "running",
+                        "startTime": _now_iso(),
+                        "toolName": "generate_questions_ai",
+                        "input": {
+                            "slotIndex": slot.index,
+                            "questionType": slot.question_type or slot.question_type_raw,
+                            "difficulty": slot.difficulty,
+                            "count": missing,
+                            "sourceStrategy": source_strategy,
+                        },
+                    },
+                }
+                ai_items: List[Dict[str, Any]] = []
+                try:
+                    ai_items = await fill_slot_with_ai(
+                        source_pack={"subject": subject, "topic": topic},
+                        subject=subject,
+                        topic=topic,
+                        slot={
+                            "question_type": slot.question_type or slot.question_type_raw,
+                            "type": slot.question_type or slot.question_type_raw,
+                            "count": missing,
+                            "difficulty": slot.difficulty,
+                            "keyword": slot.keyword,
+                        },
+                        user_id=user_id,
+                        slot_index=slot.index,
+                        fallback_to_crawler=False,
+                    )
+                except Exception as exc:
+                    logger.warning("paper_compose_ai_backfill_failed", extra={"task_id": task_id}, exc_info=True)
+                    yield {
+                        "type": "step",
+                        "step": {
+                            "id": ai_step_id,
+                            "title": "AI 补齐缺口题目",
+                            "status": "failed",
+                            "startTime": _now_iso(),
+                            "endTime": _now_iso(),
+                            "toolName": "generate_questions_ai",
+                            "error": str(exc),
+                        },
+                    }
+                    ai_items = []
+
+                accepted_ai: List[Dict[str, Any]] = []
+                for q in ai_items or []:
+                    if not isinstance(q, dict):
+                        continue
+                    qid = str(q.get("question_id") or "").strip()
+                    if not qid or qid in global_seen_ids or qid in used_ids:
+                        continue
+                    stem = str(q.get("stem") or "").strip()
+                    fp = _stem_fingerprint(stem) if dedup_by_stem else ""
+                    if fp and fp in global_seen_fps:
+                        continue
+                    global_seen_ids.add(qid)
+                    if fp:
+                        global_seen_fps.add(fp)
+                    q.setdefault("source", "ai_generate_full")
+                    q.setdefault("subject", subject)
+                    q.setdefault("difficulty", slot.difficulty)
+                    q.setdefault("question_type", slot.question_type or slot.question_type_raw)
+                    q.setdefault("type", slot.question_type or slot.question_type_raw)
+                    q.setdefault("knowledge_point", topic)
+                    accepted_ai.append(q)
+                    if len(accepted_ai) >= missing:
+                        break
+
+                slot_selected.extend(accepted_ai)
+                candidates.extend(accepted_ai)
+                yield {
+                    "type": "step",
+                    "step": {
+                        "id": ai_step_id,
+                        "title": "AI 补齐缺口题目",
+                        "status": "completed",
+                        "startTime": _now_iso(),
+                        "endTime": _now_iso(),
+                        "toolName": "generate_questions_ai",
+                        "output": {
+                            "slotIndex": slot.index,
+                            "requested": missing,
+                            "selected": len(accepted_ai),
+                            "sourceStrategy": source_strategy,
+                        },
+                    },
+                }
 
         selected_questions.extend(slot_selected)
         slot_results.append(
@@ -980,6 +1129,99 @@ async def compose_paper_events(
             },
         }
 
+    if ai_answer_synthesis and selected_questions:
+        synthesis_step_id = "answer_synthesis"
+        missing_count = sum(
+            1
+            for q in selected_questions
+            if isinstance(q, dict)
+            and str(q.get("stem") or "").strip()
+            and (not str(q.get("answer") or "").strip() or not str(q.get("analysis") or "").strip())
+        )
+        if missing_count > 0:
+            yield {
+                "type": "step",
+                "step": {
+                    "id": synthesis_step_id,
+                    "title": "AI 补全答案/解析",
+                    "status": "running",
+                    "startTime": _now_iso(),
+                    "toolName": "answer_synthesis",
+                    "input": {"missing": missing_count},
+                },
+            }
+            try:
+                synthesis = await synthesize_missing_answers(
+                    selected_questions,
+                    subject=subject,
+                    topic=topic,
+                    max_items=max_ai_questions_per_paper,
+                )
+            except Exception as exc:
+                logger.warning("paper_compose_answer_synthesis_step_failed", extra={"task_id": task_id}, exc_info=True)
+                synthesis = {"updated": 0, "skipped": 0, "failed": missing_count, "error": str(exc)}
+            cache_updates = [
+                {**q, "subject": subject}
+                for q in selected_questions
+                if isinstance(q, dict) and str(q.get("answer_source") or "") == "ai_synthesis"
+            ]
+            if cache_updates:
+                try:
+                    await upsert_question_cache(cache_updates)
+                except Exception:
+                    logger.exception("paper_compose_answer_synthesis_cache_upsert_failed", extra={"task_id": task_id})
+            yield {
+                "type": "step",
+                "step": {
+                    "id": synthesis_step_id,
+                    "title": "AI 补全答案/解析",
+                    "status": "completed",
+                    "startTime": _now_iso(),
+                    "endTime": _now_iso(),
+                    "toolName": "answer_synthesis",
+                    "output": synthesis,
+                },
+            }
+
+    if auto_review and selected_questions:
+        review_step_id = "auto_review"
+        yield {
+            "type": "step",
+            "step": {
+                "id": review_step_id,
+                "title": "自动审核题目质量",
+                "status": "running",
+                "startTime": _now_iso(),
+                "toolName": "auto_review",
+                "input": {"count": len(selected_questions), "judgePassScore": judge_pass_score},
+            },
+        }
+        try:
+            review_summary = await review_questions(
+                selected_questions,
+                subject=subject,
+                topic=topic,
+                judge_pass_score=judge_pass_score,
+                run_llm=True,
+                review_bank_questions=enable_llm_review,
+                max_items=max_ai_questions_per_paper,
+            )
+        except Exception as exc:
+            logger.warning("paper_compose_auto_review_step_failed", extra={"task_id": task_id}, exc_info=True)
+            review_summary = {"passed": 0, "failed": 0, "skipped": len(selected_questions), "error": str(exc)}
+        yield {
+            "type": "step",
+            "step": {
+                "id": review_step_id,
+                "title": "自动审核题目质量",
+                "status": "completed",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "auto_review",
+                "output": review_summary,
+            },
+        }
+
     save_title = "保存试卷" if mode != "fill_shortfalls" else "补齐试卷（追加题目）"
     save_tool = "create_paper" if mode != "fill_shortfalls" else "update_paper"
     save_input = {"paperName": paper_name, "count": len(selected_questions)}
@@ -1028,6 +1270,11 @@ async def compose_paper_events(
                 "quality_flags": q.get("quality_flags") or [],
                 "answer": str(q.get("answer") or "").strip(),
                 "analysis": str(q.get("analysis") or "").strip(),
+                "answer_source": str(q.get("answer_source") or "").strip(),
+                "review_status": str(q.get("review_status") or "").strip(),
+                "review_action": str(q.get("review_action") or "").strip(),
+                "review_score": q.get("review_score"),
+                "review_summary": str(q.get("review_summary") or "").strip(),
             }
         )
 
@@ -1066,6 +1313,7 @@ async def compose_paper_events(
         "id": int(paper.get("paper_id") or paper_id),
         "name": str(paper.get("paper_name") or paper_name),
         "createdAt": str(paper.get("created_at") or ""),
+        "sourceMode": str(paper.get("source_mode") or ""),
         "questions": [
             {
                 "questionId": str(q.get("question_id") or ""),

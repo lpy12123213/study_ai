@@ -59,11 +59,12 @@ export function QuestionLibraryStudio() {
                 tasks.runScore({
                   subject: lib.filters.subject,
                   limit: 50,
+                  batch_size: 50,
                   only_unscored: true,
                 })
               }
             >
-              手动评分
+              思维评分
             </Button>
           </div>
         </div>

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -102,6 +103,70 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(it.get("subject"), "高中数学")
         self.assertEqual(it.get("origin"), "crawled")
         self.assertEqual(it.get("ai_score"), 80)
+
+    async def test_list_and_detail_expose_thinking_depth_from_dimensions(self) -> None:
+        await cache_repo.upsert_question_cache([{"question_id": "q1", "subject": "高中数学", "stem": "stem 1"}])
+        dims = [
+            {
+                "name": "思维深度",
+                "score": 8,
+                "comment": "辅助构造较少见",
+                "method_family": "辅助圆构造",
+                "method_rarity": "rare",
+                "similar_method_count": 3,
+            }
+        ]
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[
+                {
+                    "question_id": "q1",
+                    "subject": "高中数学",
+                    "ai_dimensions_json": json.dumps(dims, ensure_ascii=False),
+                }
+            ],
+        )
+
+        rows = await lib_repo.list_question_library_items(user_id="user-a", subject="高中数学", hidden="all", limit=10)
+        self.assertEqual(rows["items"][0]["thinking_depth_score"], 8)
+        self.assertEqual(rows["items"][0]["thinking_method_family"], "辅助圆构造")
+        self.assertEqual(rows["items"][0]["thinking_method_rarity"], "rare")
+
+        detail = await lib_repo.get_question_library_item(user_id="user-a", question_id="q1")
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail.get("thinking_depth_score"), 8)
+
+    async def test_method_stats_come_from_existing_thinking_depth_dimensions(self) -> None:
+        dims = [
+            {
+                "name": "思维深度",
+                "score": 7,
+                "method_family": "辅助圆构造",
+                "method_rarity": "uncommon",
+                "similar_method_count": 2,
+            }
+        ]
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[
+                {
+                    "question_id": "q1",
+                    "subject": "高中数学",
+                    "origin": "crawled",
+                    "ai_dimensions_json": json.dumps(dims, ensure_ascii=False),
+                },
+                {
+                    "question_id": "q2",
+                    "subject": "高中数学",
+                    "origin": "crawled",
+                    "ai_dimensions_json": json.dumps(dims, ensure_ascii=False),
+                },
+            ],
+        )
+
+        stats = await lib_repo.list_thinking_method_stats(user_id="user-a", subject="高中数学")
+        self.assertEqual(stats[0]["method_family"], "辅助圆构造")
+        self.assertEqual(stats[0]["count"], 2)
 
     async def test_bulk_delete_scoped_by_user(self) -> None:
         await cache_repo.upsert_question_cache(

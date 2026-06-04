@@ -39,7 +39,7 @@ def _infer_paper_source_mode(question_ids: list[str]) -> str:
     has_digits = any(x.isdigit() for x in ids)
     has_non_digits = any(not x.isdigit() for x in ids)
     if has_digits and has_non_digits:
-        return "mixed"
+        return "hybrid"
     return "zujuan" if has_digits else "local"
 
 
@@ -70,8 +70,6 @@ async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -
         q_dicts = paper.to_question_dicts()
         qids = [str((q or {}).get("question_id") or "").strip() for q in q_dicts if isinstance(q, dict)]
         mode = _infer_paper_source_mode(qids)
-        if mode == "mixed":
-            raise HTTPException(status_code=400, detail="paper_mixed_sources")
 
         paper_id = await save_paper(user_id=user_id, paper_name=paper.paper_name, questions=q_dicts)
         audit_logger.log(
@@ -80,7 +78,12 @@ async def create_paper(paper: PaperCreate, user: dict = Depends(require_auth)) -
             resource=f"/api/papers/{paper_id}",
             details={"paper_name": str(paper.paper_name or "").strip(), "question_count": len(qids), "source_mode": mode},
         )
-        return {"success": True, "paper_id": paper_id, "message": f"试卷 '{paper.paper_name}' 创建成功"}
+        return {
+            "success": True,
+            "paper_id": paper_id,
+            "source_mode": mode,
+            "message": f"试卷 '{paper.paper_name}' 创建成功",
+        }
     except HTTPException:
         raise
     except ValueError as exc:

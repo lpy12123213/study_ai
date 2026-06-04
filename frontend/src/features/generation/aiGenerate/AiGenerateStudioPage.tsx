@@ -10,6 +10,7 @@ import { ContextRail } from '@/features/generation/aiGenerate/ContextRail'
 import { ConfirmedShelf } from '@/features/generation/aiGenerate/ConfirmedShelf'
 import { MissionComposer } from '@/features/generation/aiGenerate/MissionComposer'
 import { QuestionFloatingWindow } from '@/features/generation/aiGenerate/components/QuestionFloatingWindow'
+import { MediaImportCard } from '@/features/generation/aiGenerate/components/MediaImportCard'
 import { SessionHistoryPanel } from '@/features/generation/aiGenerate/components/SessionHistoryPanel'
 import { StudioToolbar } from '@/features/generation/aiGenerate/components/StudioToolbar'
 import { useDraftActions } from '@/features/generation/aiGenerate/hooks/useDraftActions'
@@ -132,6 +133,22 @@ export function AiGenerateStudioPage() {
   const closeQuestionWindow = () => {
     setQuestionWindowDismissedKey(questionWindowKey)
     setQuestionWindowOpen(false)
+  }
+
+  const runMediaImport = (payload: { files: File[]; maxQuestions: number }) => {
+    if (!lib.filters.subject.trim() || payload.files.length === 0) return
+    lib.setOrigin('media')
+    setQuestionWindowDismissedKey(null)
+    setQuestionWindowOpen(true)
+    tasks.runMediaImport({
+      subject: lib.filters.subject,
+      topic: sr.missionText.trim(),
+      difficulty: sr.difficulty,
+      question_type: sr.questionType,
+      count: payload.maxQuestions,
+      max_pdf_pages: 12,
+      files: payload.files,
+    })
   }
 
   useEffect(() => {
@@ -259,6 +276,15 @@ export function AiGenerateStudioPage() {
               onModeChange={sr.setMode}
               onGenerate={inf.startGeneration}
               onStop={inf.stopAppend}
+            />
+
+            <MediaImportCard
+              subject={lib.filters.subject}
+              topic={sr.missionText}
+              difficulty={sr.difficulty}
+              questionType={sr.questionType}
+              isRunning={isGenerating}
+              onRun={runMediaImport}
             />
 
             <StudioToolbar

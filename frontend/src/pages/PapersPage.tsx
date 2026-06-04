@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { FileText, Search, Trash2, Loader2, Plus, Calendar, Star, Pin, Tag } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { ClipboardCheck, FileText, Search, Trash2, Loader2, Plus, Calendar, Star, Pin, Tag } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog"
 import { TagEditDialog, useTagEditor } from '@/components/shared/TagEditDialog'
 import { usePapers, useDeletePaper } from '@/hooks/usePapers'
+import { useStartExam } from '@/hooks/useExam'
 import { cn, formatDate } from '@/lib/utils'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as metaApi from '@/api/meta'
@@ -24,9 +25,11 @@ export default function PapersPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [tagFilter, setTagFilter] = useState('')
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { data: papers, isLoading } = usePapers({ limit: 200 })
   const { mutate: deletePaper, isPending: isDeleting } = useDeletePaper()
+  const startExam = useStartExam()
 
   const { data: paperMetaResp } = useQuery({
     queryKey: ['itemMeta', 'paper'],
@@ -76,6 +79,11 @@ export default function PapersPage() {
       deletePaper(deleteId)
       setDeleteId(null)
     }
+  }
+
+  const startUntimedExam = async (paperId: number) => {
+    const session = await startExam.mutateAsync({ paperId, mode: 'untimed' })
+    navigate(`/exam/${session.sessionId}`)
   }
 
   const filtered = useMemo(() => {
@@ -238,6 +246,17 @@ export default function PapersPage() {
                   </div>
                   <div className="col-span-1 text-right">
                     <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground"
+                        onClick={() => startUntimedExam(Number(paper.id))}
+                        aria-label="答题"
+                        title="答题"
+                      >
+                        <ClipboardCheck className="h-4 w-4" />
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
