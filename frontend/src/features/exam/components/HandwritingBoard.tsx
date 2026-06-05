@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { HandwritingToolbar } from './HandwritingToolbar'
@@ -7,8 +7,12 @@ type Point = { x: number; y: number }
 type Stroke = { color: string; width: number; points: Point[] }
 
 interface HandwritingBoardProps {
-  onImageFile: (file: File) => void
+  onImageFile: (file: File) => void | Promise<void>
   imageUrl?: string
+}
+
+export interface HandwritingBoardHandle {
+  exportImage: () => Promise<boolean>
 }
 
 function canvasPoint(canvas: HTMLCanvasElement, event: React.PointerEvent<HTMLCanvasElement>): Point {
@@ -38,8 +42,12 @@ function drawStrokes(canvas: HTMLCanvasElement, strokes: Stroke[]) {
   }
 }
 
-export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProps) {
+export const HandwritingBoard = forwardRef<HandwritingBoardHandle, HandwritingBoardProps>(function HandwritingBoard(
+  { onImageFile, imageUrl },
+  ref
+) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const dirtyRef = useRef(false)
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [, setRedo] = useState<Stroke[]>([])
   const [color, setColor] = useState('#111827')
@@ -51,18 +59,19 @@ export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProp
     if (canvas) drawStrokes(canvas, strokes)
   }, [strokes])
 
-  const exportImage = () => {
+  const exportImage = useCallback(async (): Promise<boolean> => {
     const canvas = canvasRef.current
-    if (!canvas) return
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return
-        onImageFile(new File([blob], `handwriting-${Date.now()}.jpg`, { type: 'image/jpeg' }))
-      },
-      'image/jpeg',
-      0.85
-    )
-  }
+    if (!canvas || !dirtyRef.current) return false
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', 0.85)
+    })
+    if (!blob) return false
+    await onImageFile(new File([blob], `handwriting-${Date.now()}.jpg`, { type: 'image/jpeg' }))
+    dirtyRef.current = false
+    return true
+  }, [onImageFile])
+
+  useImperativeHandle(ref, () => ({ exportImage }), [exportImage])
 
   const appendPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
@@ -85,6 +94,7 @@ export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProp
         onColorChange={setColor}
         onWidthChange={setWidth}
         onUndo={() => {
+          dirtyRef.current = true
           setStrokes((prev) => {
             if (!prev.length) return prev
             setRedo((r) => [prev[prev.length - 1], ...r])
@@ -92,6 +102,7 @@ export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProp
           })
         }}
         onRedo={() => {
+          dirtyRef.current = true
           setRedo((prev) => {
             if (!prev.length) return prev
             setStrokes((s) => [...s, prev[0]])
@@ -99,6 +110,7 @@ export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProp
           })
         }}
         onClear={() => {
+          dirtyRef.current = true
           setRedo(strokes)
           setStrokes([])
         }}
@@ -112,6 +124,7 @@ export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProp
           event.currentTarget.setPointerCapture(event.pointerId)
           const point = canvasPoint(event.currentTarget, event)
           setRedo([])
+          dirtyRef.current = true
           setStrokes((prev) => [...prev, { color, width, points: [point] }])
           setDrawing(true)
         }}
@@ -132,11 +145,11 @@ export function HandwritingBoard({ onImageFile, imageUrl }: HandwritingBoardProp
         ) : (
           <span className="text-xs text-muted-foreground">切题或提交前请保存当前手写内容</span>
         )}
-        <Button type="button" size="sm" onClick={exportImage}>
+        <Button type="button" size="sm" onClick={() => void exportImage()}>
           <Upload className="h-4 w-4" />
           保存手写
         </Button>
       </div>
     </div>
   )
-}
+})

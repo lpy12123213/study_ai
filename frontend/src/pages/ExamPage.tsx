@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Send } from 'lucide-react'
 import { Markdown } from '@/components/shared/Markdown'
@@ -9,7 +9,7 @@ import { useBatchSaveAnswers, useExamSession, useSubmitExam, useUploadHandwritin
 import { useExamStore } from '@/stores/useExamStore'
 import { BubbleSheetCard } from '@/features/exam/components/BubbleSheetCard'
 import { ExamTimer } from '@/features/exam/components/ExamTimer'
-import { HandwritingBoard } from '@/features/exam/components/HandwritingBoard'
+import { HandwritingBoard, type HandwritingBoardHandle } from '@/features/exam/components/HandwritingBoard'
 import { QuestionNavigator } from '@/features/exam/components/QuestionNavigator'
 import { SubmitConfirmDialog } from '@/features/exam/components/SubmitConfirmDialog'
 import type { ExamQuestion, SaveExamAnswerRequest, StudentAnswer } from '@/types/exam'
@@ -52,11 +52,12 @@ function isAnswered(answer?: SaveExamAnswerRequest): boolean {
 export default function ExamPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
-  const { data: session, isLoading, error } = useExamSession(sessionId)
+  const { data: session, isLoading, error } = useExamSession(sessionId, { includeAnswers: true })
   const batchSave = useBatchSaveAnswers(sessionId)
   const uploadHandwriting = useUploadHandwriting(sessionId)
   const submitExam = useSubmitExam()
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const handwritingRef = useRef<HandwritingBoardHandle | null>(null)
 
   const store = useExamStore()
   const currentQuestion = session?.questions[store.currentQuestionIndex]
@@ -96,25 +97,33 @@ export default function ExamPage() {
   }, [session, store.answers])
 
   const saveDirty = async () => {
-    if (!sessionId || !store.dirtyQuestionIds.length) return
-    const payload = store.dirtyQuestionIds.map((qid) => store.answers[qid]).filter(Boolean)
+    const state = useExamStore.getState()
+    if (!sessionId || !state.dirtyQuestionIds.length) return
+    const payload = state.dirtyQuestionIds.map((qid) => state.answers[qid]).filter(Boolean)
     if (!payload.length) return
-    store.setSaving(true)
+    state.setSaving(true)
     try {
       await batchSave.mutateAsync(payload)
-      store.markSaved(payload.map((x) => x.questionId))
+      useExamStore.getState().markSaved(payload.map((x) => x.questionId))
     } finally {
-      store.setSaving(false)
+      useExamStore.getState().setSaving(false)
     }
   }
 
+  const saveCurrentHandwriting = async () => {
+    if (!currentQuestion || questionMode(currentQuestion) !== 'handwriting') return
+    await handwritingRef.current?.exportImage()
+  }
+
   const handleSelectQuestion = async (index: number) => {
+    await saveCurrentHandwriting()
     await saveDirty()
     store.setCurrentQuestionIndex(index)
   }
 
   const handleSubmit = async (fromTimer = false) => {
     if (!sessionId) return
+    await saveCurrentHandwriting()
     await saveDirty()
     const result = await submitExam.mutateAsync(sessionId)
     setConfirmOpen(false)
@@ -231,6 +240,7 @@ export default function ExamPage() {
                 ) : (
                   <div className="space-y-3">
                     <HandwritingBoard
+                      ref={handwritingRef}
                       imageUrl={currentQuestion.studentAnswer?.handwritingImageUrl}
                       onImageFile={async (file) => {
                         const uploaded = await uploadHandwriting.mutateAsync({ questionId: currentQuestion.questionId, file })
@@ -239,7 +249,6 @@ export default function ExamPage() {
                           questionType: currentQuestion.questionType,
                           handwritingImagePath: uploaded.path,
                         })
-                        store.markSaved([currentQuestion.questionId])
                       }}
                     />
                     <Textarea

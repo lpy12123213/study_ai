@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import shutil
 import tempfile
@@ -54,6 +55,30 @@ class TestQuestionLibraryMediaImport(unittest.TestCase):
         self.assertEqual(len(image_blocks), 2)
         self.assertTrue(str(image_blocks[0]["image_url"]["url"]).startswith("data:image/png;base64,"))
         self.assertTrue(str(image_blocks[1]["image_url"]["url"]).startswith("data:image/jpeg;base64,"))
+
+    def test_publish_media_pages_for_preview_builds_auth_media_diagrams(self) -> None:
+        from backend.generation.question_library.media_import import ImagePage, publish_media_pages_for_preview
+
+        calls = []
+
+        async def fake_publish(data: bytes, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append({"data": data, **kwargs})
+            filename = f"{len(calls):064d}.png"
+            return {"url": f"/api/media/generated/{filename}", "filename": filename, "sha256": f"sha-{len(calls)}"}
+
+        pages = [
+            ImagePage(source_filename="paper.pdf", page_number=1, mime="image/png", data=b"page-1"),
+            ImagePage(source_filename="paper.pdf", page_number=2, mime="image/png", data=b"page-2"),
+        ]
+
+        diagrams = asyncio.run(publish_media_pages_for_preview(pages, user_id="u-1", publisher=fake_publish))
+
+        self.assertEqual([call["data"] for call in calls], [b"page-1", b"page-2"])
+        self.assertEqual([call["user_id"] for call in calls], ["u-1", "u-1"])
+        self.assertEqual([d["url"] for d in diagrams], ["/api/media/generated/0000000000000000000000000000000000000000000000000000000000000001.png", "/api/media/generated/0000000000000000000000000000000000000000000000000000000000000002.png"])
+        self.assertEqual(diagrams[0]["kind"], "source")
+        self.assertIn("paper.pdf", diagrams[0]["caption"])
+        self.assertIn(diagrams[0]["url"], diagrams[0]["markdown"])
 
     @unittest.skipUnless(importlib.util.find_spec("fitz"), "PyMuPDF is not installed")
     def test_load_pdf_as_image_pages_renders_each_page(self) -> None:

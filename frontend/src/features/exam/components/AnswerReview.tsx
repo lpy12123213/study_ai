@@ -1,5 +1,6 @@
 import { CheckCircle2, XCircle } from 'lucide-react'
 import { Markdown } from '@/components/shared/Markdown'
+import { AuthImage } from '@/components/shared/AuthImage'
 import type { ExamQuestion, ExamResult } from '@/types/exam'
 
 interface AnswerReviewProps {
@@ -30,7 +31,7 @@ export function AnswerReview({ questions, result }: AnswerReviewProps) {
               <Markdown content={question.stem || ''} />
             </div>
             {question.studentAnswer?.handwritingImageUrl && (
-              <img
+              <AuthImage
                 src={question.studentAnswer.handwritingImageUrl}
                 alt="手写作答"
                 className="mt-3 max-h-80 rounded-md border bg-white object-contain"

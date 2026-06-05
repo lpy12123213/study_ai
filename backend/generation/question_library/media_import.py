@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable, List, Optional, Sequence
 from backend.core.settings import LESSON_PLAN_MODEL, settings
 from backend.llm.client import is_llm_configured
 from backend.llm.runner import run_json
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 from backend.shared.project_paths import resolve_repo_local_dir
 
 SUPPORTED_IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
@@ -52,6 +53,7 @@ class MediaImportError(ValueError):
 
 
 JsonExtractor = Callable[..., Awaitable[Any]]
+MediaPublisher = Callable[..., Awaitable[dict]]
 
 
 def safe_media_import_task_id(value: str) -> str:
@@ -296,6 +298,59 @@ def load_all_media_pages(
         if len(pages) >= limit:
             return pages[:limit]
     return pages
+
+
+def _preview_ext_for_mime(mime: str) -> str:
+    normalized = str(mime or "").split(";", 1)[0].strip().lower()
+    if normalized == "image/png":
+        return ".png"
+    if normalized == "image/webp":
+        return ".webp"
+    return ".jpg"
+
+
+async def publish_media_pages_for_preview(
+    pages: Sequence[ImagePage],
+    *,
+    user_id: str,
+    max_diagrams: int = 6,
+    publisher: Optional[MediaPublisher] = None,
+) -> List[dict]:
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise MediaImportError("missing_user_id")
+
+    limit = max(1, min(int(max_diagrams or 6), 6))
+    publish = publisher or publish_generated_bytes
+    diagrams: List[dict] = []
+    for page in list(pages or [])[:limit]:
+        if not isinstance(page, ImagePage) or not page.data:
+            continue
+        meta = await publish(
+            page.data,
+            user_id=uid,
+            ext=_preview_ext_for_mime(page.mime),
+            file_type="question_library_media_import_source",
+            mime_type=page.mime,
+            ttl_s=default_generated_media_ttl_s(),
+        )
+        url = str((meta or {}).get("url") or "").strip()
+        if not url:
+            continue
+        source = str(page.source_filename or "upload").strip() or "upload"
+        label = f"{source} 第 {int(page.page_number or 1)} 页"
+        diagrams.append(
+            {
+                "kind": "source",
+                "url": url,
+                "filename": str((meta or {}).get("filename") or "").strip(),
+                "media_id": str((meta or {}).get("sha256") or "").strip(),
+                "alt": label,
+                "caption": f"原始导入：{label}",
+                "markdown": f"![{label}]({url})",
+            }
+        )
+    return diagrams
 
 
 def _data_url(page: ImagePage) -> str:

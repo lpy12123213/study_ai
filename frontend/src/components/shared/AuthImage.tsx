@@ -8,11 +8,11 @@ function isAbsoluteUrl(href: string): boolean {
 
 export function isGeneratedMediaResource(href: string): boolean {
   const value = String(href || '').trim()
-  if (value.startsWith('/api/media/generated/') || value.startsWith('api/media/generated/')) return true
+  if (value.startsWith('/api/media/') || value.startsWith('api/media/')) return true
   if (isAbsoluteUrl(value)) {
     try {
       const u = new URL(value)
-      return String(u.pathname || '').startsWith('/api/media/generated/')
+      return String(u.pathname || '').startsWith('/api/media/')
     } catch {
       return false
     }

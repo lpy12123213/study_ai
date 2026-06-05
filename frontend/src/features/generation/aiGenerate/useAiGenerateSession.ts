@@ -433,6 +433,19 @@ export function toCommitQuestions(session: AiGenerateStudioSession): QuestionLib
     answer: draft.sections.answer.content,
     analysis: draft.sections.analysis.content,
     keep: confirmed.has(draft.questionId),
+    diagrams: Array.isArray(draft.diagrams)
+      ? draft.diagrams
+          .map((item) => ({
+            kind: item.kind,
+            url: item.url,
+            filename: item.filename,
+            media_id: item.mediaId,
+            alt: item.alt,
+            caption: item.caption,
+            markdown: item.markdown,
+          }))
+          .filter((item) => item.url)
+      : undefined,
     review_status: draft.reviewStatus,
     review: draft.review
       ? {

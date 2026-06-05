@@ -42,6 +42,7 @@ from backend.generation.question_library.media_import import (
     build_media_question_id,
     extract_questions_from_media_pages,
     load_all_media_pages,
+    publish_media_pages_for_preview,
     safe_media_import_task_id,
 )
 from backend.generation.question_library.preview_store import (
@@ -386,6 +387,7 @@ async def create_media_import_task(*, user_id: str, request: Dict[str, Any]) -> 
                 },
             )
 
+            source_diagrams = await publish_media_pages_for_preview(pages, user_id=user_id)
             questions = await extract_questions_from_media_pages(
                 pages=pages,
                 subject=subject,
@@ -406,6 +408,7 @@ async def create_media_import_task(*, user_id: str, request: Dict[str, Any]) -> 
                         "analysis": str(item.get("analysis") or "").strip(),
                         "keep": True,
                         "review_status": "pending_review",
+                        **({"diagrams": source_diagrams} if source_diagrams else {}),
                     }
                 )
 

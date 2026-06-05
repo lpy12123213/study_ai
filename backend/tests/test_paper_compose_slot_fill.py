@@ -221,6 +221,154 @@ class PaperComposeSlotFillTests(unittest.IsolatedAsyncioTestCase):
         )
         ai_fill.assert_awaited_once()
 
+    async def test_compose_workflow_ai_first_prefers_ai_before_bank_candidates(self) -> None:
+        from backend.generation.paper_compose import workflow
+
+        class BankCrawler:
+            def __init__(self) -> None:
+                self.search_calls = 0
+
+            async def get_available_filters(self) -> dict:
+                return {"question_types": [{"name": "解答题"}]}
+
+            async def search_by_keyword(self, **_kwargs) -> dict:
+                self.search_calls += 1
+                return {
+                    "success": True,
+                    "questions": [
+                        {
+                            "question_id": "123456",
+                            "subject": "高中数学",
+                            "type": "解答题",
+                            "question_type": "解答题",
+                            "difficulty": "中等",
+                            "knowledge_points": ["函数"],
+                            "stem": "题库候选题干",
+                            "answer": "2",
+                            "analysis": "题库解析。",
+                            "quality_score": 100,
+                            "source": "zujuan",
+                        }
+                    ],
+                }
+
+        crawler = BankCrawler()
+        ai_question = {
+            "question_id": "ai_first_1",
+            "subject": "高中数学",
+            "type": "解答题",
+            "question_type": "解答题",
+            "difficulty": "中等",
+            "knowledge_point": "函数",
+            "stem": "AI 优先题干",
+            "answer": "1",
+            "analysis": "AI 解析。",
+            "source": "ai_generate_full",
+        }
+        saved_questions = []
+
+        async def fake_save_paper(**kwargs) -> int:
+            saved_questions.extend(kwargs["questions"])
+            return 102
+
+        async def fake_get_paper(**_kwargs) -> dict:
+            return {
+                "paper_id": 102,
+                "paper_name": "测试卷",
+                "source_mode": "local",
+                "created_at": "2026-05-31T00:00:00",
+                "questions": [{"question_id": "ai_first_1", "order": 1, "type": "解答题", "stem": "AI 优先题干"}],
+            }
+
+        request = {
+            "taskId": "task-ai-first",
+            "subject": "高中数学",
+            "topic": "函数",
+            "paperName": "测试卷",
+            "slots": [{"questionType": "解答题", "count": 1, "difficulty": "medium"}],
+            "options": {"fetchDetails": False, "sourceStrategy": "ai_first", "autoReview": False},
+        }
+
+        with patch.object(workflow, "get_crawler", new=AsyncMock(return_value=crawler)), patch.object(
+            workflow,
+            "fetch_local_candidates",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        "question_id": "local-1",
+                        "subject": "高中数学",
+                        "type": "解答题",
+                        "question_type": "解答题",
+                        "difficulty": "中等",
+                        "knowledge_points": ["函数"],
+                        "stem": "本地题库候选题干",
+                        "answer": "3",
+                        "analysis": "本地解析。",
+                        "quality_score": 100,
+                        "source": "local_question_library",
+                    }
+                ]
+            ),
+        ) as local_fetch, patch.object(
+            workflow,
+            "fill_slot_with_ai",
+            new=AsyncMock(return_value=[ai_question]),
+            create=True,
+        ) as ai_fill, patch.object(workflow, "save_paper", new=fake_save_paper), patch.object(
+            workflow,
+            "get_paper",
+            new=fake_get_paper,
+        ), patch.object(
+            workflow,
+            "mark_used_questions",
+            new=AsyncMock(return_value=1),
+        ), patch.object(
+            workflow,
+            "upsert_question_cache",
+            new=AsyncMock(return_value=1),
+        ):
+            events = [event async for event in workflow.compose_paper_events(request, user_id="user-a")]
+
+        self.assertTrue(any(event.get("type") == "result" for event in events))
+        self.assertEqual(saved_questions[0]["question_id"], "ai_first_1")
+        ai_fill.assert_awaited_once()
+        local_fetch.assert_not_awaited()
+        self.assertEqual(crawler.search_calls, 0)
+
+    async def test_compose_workflow_respects_string_false_auto_ai_backfill(self) -> None:
+        from backend.generation.paper_compose import workflow
+
+        class EmptyCrawler:
+            async def get_available_filters(self) -> dict:
+                return {"question_types": [{"name": "解答题"}]}
+
+            async def search_by_keyword(self, **_kwargs) -> dict:
+                return {"success": True, "questions": []}
+
+        request = {
+            "taskId": "task-no-backfill",
+            "subject": "高中数学",
+            "topic": "函数",
+            "paperName": "测试卷",
+            "slots": [{"questionType": "解答题", "count": 1, "difficulty": "medium"}],
+            "options": {"fetchDetails": False, "sourceStrategy": "bank_first", "autoAiBackfill": "false"},
+        }
+
+        with patch.object(workflow, "get_crawler", new=AsyncMock(return_value=EmptyCrawler())), patch.object(
+            workflow,
+            "fetch_local_candidates",
+            new=AsyncMock(return_value=[]),
+        ), patch.object(
+            workflow,
+            "fill_slot_with_ai",
+            new=AsyncMock(return_value=[{"question_id": "ai_should_not_run"}]),
+            create=True,
+        ) as ai_fill:
+            events = [event async for event in workflow.compose_paper_events(request, user_id="user-a")]
+
+        self.assertTrue(any(event.get("type") == "error" and event.get("error") == "no_questions_selected" for event in events))
+        ai_fill.assert_not_awaited()
+
     async def test_compose_workflow_synthesizes_missing_answer_before_save(self) -> None:
         from backend.generation.paper_compose import workflow
 

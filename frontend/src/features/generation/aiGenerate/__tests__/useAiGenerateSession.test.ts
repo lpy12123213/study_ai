@@ -8,6 +8,7 @@ import {
   reduceTaskPreviewToSession,
   setSessionStopRequested,
   toggleDraftConfirmed,
+  toCommitQuestions,
 } from '@/features/generation/aiGenerate/useAiGenerateSession'
 
 describe('reduceTaskPreviewToSession', () => {
@@ -225,5 +226,53 @@ describe('reduceTaskPreviewToSession', () => {
 
     expect(next.stopRequested).toBe(true)
     expect(next.status).toBe('stopped')
+  })
+
+  it('keeps draft diagrams when building the preview commit payload', () => {
+    const detail: QuestionLibrarySessionDetail = {
+      session_id: 'session-media',
+      preview_id: 'preview-media',
+      status: 'pending_review',
+      mode: 'standard',
+      subject: '高中物理',
+      topic: '电磁感应',
+      count: 1,
+      task_ids: ['task-media'],
+      latest_task_id: 'task-media',
+      updated_at_s: 1710000000,
+      created_at_s: 1710000000,
+      reasoning_blocks_count: 0,
+      confirmed_question_ids: ['media-q-1'],
+      stop_requested: false,
+      draft_questions: [
+        {
+          question_id: 'media-q-1',
+          stem: '观察图示回答问题。',
+          answer: '答案',
+          analysis: '解析',
+          keep: true,
+          review_status: 'confirmed',
+          review: null,
+          diagrams: [
+            {
+              kind: 'source',
+              url: '/api/media/proxy?url=https%3A%2F%2Fzujuan.xkw.com%2Fstatic%2Fquestion.png',
+              filename: 'question.png',
+              media_id: 'media-1',
+              alt: '导入原图',
+              caption: '原始试题图片',
+              markdown: '![导入原图](/api/media/proxy?url=https%3A%2F%2Fzujuan.xkw.com%2Fstatic%2Fquestion.png)',
+            },
+          ],
+        },
+      ],
+      reasoning_blocks: [],
+      task_events: [],
+    }
+
+    const session = reduceSessionDetailToSession(detail)
+    const payload = toCommitQuestions(session)
+
+    expect(payload[0].diagrams).toEqual(detail.draft_questions[0].diagrams)
   })
 })

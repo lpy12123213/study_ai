@@ -56,6 +56,8 @@ export const useExamStore = create<ExamState>((set, get) => ({
       sessionId,
       questions,
       currentQuestionIndex: 0,
+      answers: {},
+      dirtyQuestionIds: [],
       remainingSeconds: remaining,
       timerColor: timerColor(remaining),
     })

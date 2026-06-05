@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QuestionContent } from '@/components/shared/QuestionContent'
 
 const clientMocks = vi.hoisted(() => ({
@@ -13,6 +13,10 @@ vi.mock('@/api/client', () => ({
 }))
 
 describe('QuestionContent', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     clientMocks.downloadObjectUrl.mockResolvedValue({
@@ -106,6 +110,15 @@ p_n`
 
   it('loads generated media image tokens through authenticated blob URLs', async () => {
     const imageUrl = `/api/media/generated/${'c'.repeat(64)}.png`
+    render(<QuestionContent content={`如图所示：[图片:${imageUrl}]`} />)
+
+    const image = await screen.findByAltText('题目图片')
+    await waitFor(() => expect(image).toHaveAttribute('src', 'blob:question-content-image'))
+    expect(clientMocks.downloadObjectUrl).toHaveBeenCalledWith(imageUrl)
+  })
+
+  it('loads proxied question media through authenticated blob URLs', async () => {
+    const imageUrl = '/api/media/proxy?url=https%3A%2F%2Fzujuan.xkw.com%2Fstatic%2Fquestion.png'
     render(<QuestionContent content={`如图所示：[图片:${imageUrl}]`} />)
 
     const image = await screen.findByAltText('题目图片')

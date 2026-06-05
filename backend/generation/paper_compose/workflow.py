@@ -127,7 +127,7 @@ async def compose_paper_events(
     dedup_by_stem = bool(options.get("dedupByStem") if "dedupByStem" in options else True)
     avoid_used = bool(options.get("avoidUsed") if "avoidUsed" in options else True)
     source_strategy = normalize_source_strategy(options.get("sourceStrategy") or options.get("source_strategy"))
-    auto_ai_backfill = bool(options.get("autoAiBackfill") if "autoAiBackfill" in options else True)
+    auto_ai_backfill = _truthy(options.get("autoAiBackfill") if "autoAiBackfill" in options else "1")
     max_ai_questions_per_paper = int(options.get("maxAiQuestionsPerPaper") or 20)
     max_ai_questions_per_paper = max(0, min(max_ai_questions_per_paper, 100))
     ai_answer_synthesis = _truthy(
@@ -314,7 +314,7 @@ async def compose_paper_events(
             return [q for q in qs if isinstance(q, dict)], ""
 
     prefetch_tasks: Dict[int, asyncio.Task] = {}
-    if allows_bank_lookup(source_strategy):
+    if allows_bank_lookup(source_strategy) and source_strategy != "ai_first":
         for slot in slot_plans:
             requested = int(slot.count or 0)
             search_limit = min(50, max(requested * per_slot_expand, requested))
@@ -345,9 +345,123 @@ async def compose_paper_events(
 
         candidates: List[Dict[str, Any]] = []
         seen_candidate_ids: set[str] = set()
+        slot_selected: List[Dict[str, Any]] = []
 
+        def _accept_ai_items(ai_items: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
+            accepted: List[Dict[str, Any]] = []
+            for q in ai_items or []:
+                if not isinstance(q, dict):
+                    continue
+                qid = str(q.get("question_id") or "").strip()
+                if not qid or qid in global_seen_ids or qid in used_ids:
+                    continue
+                stem = str(q.get("stem") or "").strip()
+                fp = _stem_fingerprint(stem) if dedup_by_stem else ""
+                if fp and fp in global_seen_fps:
+                    continue
+                global_seen_ids.add(qid)
+                if fp:
+                    global_seen_fps.add(fp)
+                q.setdefault("source", "ai_generate_full")
+                q.setdefault("subject", subject)
+                q.setdefault("difficulty", slot.difficulty)
+                q.setdefault("question_type", slot.question_type or slot.question_type_raw)
+                q.setdefault("type", slot.question_type or slot.question_type_raw)
+                q.setdefault("knowledge_point", topic)
+                accepted.append(q)
+                if len(accepted) >= limit:
+                    break
+            return accepted
+
+        async def _generate_ai_items(missing: int) -> List[Dict[str, Any]]:
+            if missing <= 0:
+                return []
+            try:
+                return await fill_slot_with_ai(
+                    source_pack={"subject": subject, "topic": topic},
+                    subject=subject,
+                    topic=topic,
+                    slot={
+                        "question_type": slot.question_type or slot.question_type_raw,
+                        "type": slot.question_type or slot.question_type_raw,
+                        "count": missing,
+                        "difficulty": slot.difficulty,
+                        "keyword": slot.keyword,
+                    },
+                    user_id=user_id,
+                    slot_index=slot.index,
+                    fallback_to_crawler=False,
+                )
+            except Exception as exc:
+                logger.warning("paper_compose_ai_backfill_failed", extra={"task_id": task_id}, exc_info=True)
+                raise
+
+        if source_strategy == "ai_first":
+            remaining_ai_budget = max_ai_questions_per_paper - sum(
+                1
+                for q in selected_questions
+                if isinstance(q, dict) and str(q.get("question_id") or "").strip().startswith("ai_")
+            )
+            missing = min(requested, max(0, remaining_ai_budget))
+            if missing > 0:
+                ai_step_id = "ai_backfill"
+                yield {
+                    "type": "step",
+                    "step": {
+                        "id": ai_step_id,
+                        "title": "AI 优先生成题目",
+                        "status": "running",
+                        "startTime": _now_iso(),
+                        "toolName": "generate_questions_ai",
+                        "input": {
+                            "slotIndex": slot.index,
+                            "questionType": slot.question_type or slot.question_type_raw,
+                            "difficulty": slot.difficulty,
+                            "count": missing,
+                            "sourceStrategy": source_strategy,
+                        },
+                    },
+                }
+                try:
+                    ai_items = await _generate_ai_items(missing)
+                except Exception as exc:
+                    yield {
+                        "type": "step",
+                        "step": {
+                            "id": ai_step_id,
+                            "title": "AI 优先生成题目",
+                            "status": "failed",
+                            "startTime": _now_iso(),
+                            "endTime": _now_iso(),
+                            "toolName": "generate_questions_ai",
+                            "error": str(exc),
+                        },
+                    }
+                    ai_items = []
+                accepted_ai = _accept_ai_items(ai_items, limit=missing)
+                slot_selected.extend(accepted_ai)
+                candidates.extend(accepted_ai)
+                yield {
+                    "type": "step",
+                    "step": {
+                        "id": ai_step_id,
+                        "title": "AI 优先生成题目",
+                        "status": "completed",
+                        "startTime": _now_iso(),
+                        "endTime": _now_iso(),
+                        "toolName": "generate_questions_ai",
+                        "output": {
+                            "slotIndex": slot.index,
+                            "requested": missing,
+                            "selected": len(accepted_ai),
+                            "sourceStrategy": source_strategy,
+                        },
+                    },
+                }
+
+        remaining_for_bank = max(0, requested - len(slot_selected))
         local_candidates: List[Dict[str, Any]] = []
-        if allows_bank_lookup(source_strategy):
+        if remaining_for_bank > 0 and allows_bank_lookup(source_strategy):
             local_candidates = await fetch_local_candidates(
                 user_id=user_id,
                 subject=subject,
@@ -356,7 +470,7 @@ async def compose_paper_events(
                 min_quality_score=min_quality_score,
             )
 
-        if source_strategy == "ai_only":
+        if remaining_for_bank <= 0 or source_strategy == "ai_only":
             fetched, fetch_err = [], ""
         else:
             prefetch = prefetch_tasks.get(int(slot.index))
@@ -496,29 +610,32 @@ async def compose_paper_events(
         async def _fetch_more(pages: int):
             return await _fetch_slot_candidates(slot, search_limit=search_limit, max_pages_value=int(pages or 1))
 
-        sel = await select_slot_with_relax(
-            requested=requested,
-            candidates=candidates,
-            fetch_more=_fetch_more,
-            sort_candidates=(lambda items: items.sort(key=_q_quality, reverse=True)),
-            global_seen_ids=global_seen_ids,
-            global_seen_fps=global_seen_fps,
-            used_ids=used_ids,
-            max_pages=slot_max_pages,
-            max_pages_cap=max_pages_cap,
-            min_quality_score=quality_threshold,
-            quality_floor=quality_floor,
-            dedup_by_stem=dedup_stem,
-            stem_fingerprint=_stem_fingerprint,
-            allow_candidate=_allow_candidate,
-        )
+        remaining_for_bank = max(0, requested - len(slot_selected))
+        if remaining_for_bank > 0 and source_strategy != "ai_only":
+            sel = await select_slot_with_relax(
+                requested=remaining_for_bank,
+                candidates=candidates,
+                fetch_more=_fetch_more,
+                sort_candidates=(lambda items: items.sort(key=_q_quality, reverse=True)),
+                global_seen_ids=global_seen_ids,
+                global_seen_fps=global_seen_fps,
+                used_ids=used_ids,
+                max_pages=slot_max_pages,
+                max_pages_cap=max_pages_cap,
+                min_quality_score=quality_threshold,
+                quality_floor=quality_floor,
+                dedup_by_stem=dedup_stem,
+                stem_fingerprint=_stem_fingerprint,
+                allow_candidate=_allow_candidate,
+            )
 
-        slot_selected = sel.get("selected") if isinstance(sel.get("selected"), list) else []
-        candidates = sel.get("candidates") if isinstance(sel.get("candidates"), list) else candidates
-        relax_trace = sel.get("relax_trace") if isinstance(sel.get("relax_trace"), list) else relax_trace
-        slot_max_pages = int(sel.get("max_pages") or slot_max_pages)
-        quality_threshold = int(sel.get("min_quality_score") or quality_threshold)
-        dedup_stem = bool(sel.get("dedup_by_stem") if "dedup_by_stem" in sel else dedup_stem)
+            bank_selected = sel.get("selected") if isinstance(sel.get("selected"), list) else []
+            slot_selected.extend(bank_selected)
+            candidates = sel.get("candidates") if isinstance(sel.get("candidates"), list) else candidates
+            relax_trace = sel.get("relax_trace") if isinstance(sel.get("relax_trace"), list) else relax_trace
+            slot_max_pages = int(sel.get("max_pages") or slot_max_pages)
+            quality_threshold = int(sel.get("min_quality_score") or quality_threshold)
+            dedup_stem = bool(sel.get("dedup_by_stem") if "dedup_by_stem" in sel else dedup_stem)
 
         if len(slot_selected) < requested and allows_ai_backfill(
             source_strategy,
@@ -551,23 +668,8 @@ async def compose_paper_events(
                 }
                 ai_items: List[Dict[str, Any]] = []
                 try:
-                    ai_items = await fill_slot_with_ai(
-                        source_pack={"subject": subject, "topic": topic},
-                        subject=subject,
-                        topic=topic,
-                        slot={
-                            "question_type": slot.question_type or slot.question_type_raw,
-                            "type": slot.question_type or slot.question_type_raw,
-                            "count": missing,
-                            "difficulty": slot.difficulty,
-                            "keyword": slot.keyword,
-                        },
-                        user_id=user_id,
-                        slot_index=slot.index,
-                        fallback_to_crawler=False,
-                    )
+                    ai_items = await _generate_ai_items(missing)
                 except Exception as exc:
-                    logger.warning("paper_compose_ai_backfill_failed", extra={"task_id": task_id}, exc_info=True)
                     yield {
                         "type": "step",
                         "step": {
@@ -582,30 +684,7 @@ async def compose_paper_events(
                     }
                     ai_items = []
 
-                accepted_ai: List[Dict[str, Any]] = []
-                for q in ai_items or []:
-                    if not isinstance(q, dict):
-                        continue
-                    qid = str(q.get("question_id") or "").strip()
-                    if not qid or qid in global_seen_ids or qid in used_ids:
-                        continue
-                    stem = str(q.get("stem") or "").strip()
-                    fp = _stem_fingerprint(stem) if dedup_by_stem else ""
-                    if fp and fp in global_seen_fps:
-                        continue
-                    global_seen_ids.add(qid)
-                    if fp:
-                        global_seen_fps.add(fp)
-                    q.setdefault("source", "ai_generate_full")
-                    q.setdefault("subject", subject)
-                    q.setdefault("difficulty", slot.difficulty)
-                    q.setdefault("question_type", slot.question_type or slot.question_type_raw)
-                    q.setdefault("type", slot.question_type or slot.question_type_raw)
-                    q.setdefault("knowledge_point", topic)
-                    accepted_ai.append(q)
-                    if len(accepted_ai) >= missing:
-                        break
-
+                accepted_ai = _accept_ai_items(ai_items, limit=missing)
                 slot_selected.extend(accepted_ai)
                 candidates.extend(accepted_ai)
                 yield {
