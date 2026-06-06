@@ -18,6 +18,7 @@ from backend.llm.runner import run_json
 from backend.generation.paper_compose.answer_synthesis import synthesize_missing_answers
 from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
 from backend.generation.paper_compose.auto_review import review_questions
+from backend.generation.paper_compose.balance import apply_balance_corrections
 from backend.generation.paper_compose.slot_fill import (
     allows_ai_backfill,
     allows_bank_lookup,
@@ -41,6 +42,47 @@ from backend.generation.paper_compose.workflow_support import (
 )
 
 logger = get_logger(__name__)
+
+
+def _build_save_question_dicts(selected_questions: List[Dict[str, Any]], *, subject: str) -> List[dict]:
+    q_dicts: List[dict] = []
+    for q in selected_questions:
+        qid = str(q.get("question_id") or "").strip()
+        if not qid:
+            continue
+        kps = q.get("knowledge_points")
+        kp_badge = _format_kps_for_badge(kps)
+        try:
+            kps_json = json.dumps(kps, ensure_ascii=False) if isinstance(kps, list) else ""
+        except (TypeError, ValueError):
+            kps_json = ""
+
+        q_dicts.append(
+            {
+                "subject": subject,
+                "question_id": qid,
+                "type": str(q.get("type") or "").strip(),
+                "difficulty": str(q.get("difficulty") or "").strip(),
+                "difficulty_value": q.get("difficulty_value"),
+                "knowledge_point": kp_badge,
+                "knowledge_points_json": kps_json,
+                "source_url": str(q.get("source_url") or "").strip(),
+                "source": str(q.get("source") or "").strip(),
+                "date": str(q.get("date") or "").strip(),
+                "stem": str(q.get("stem") or "").strip(),
+                "stem_fingerprint": _stem_fingerprint(str(q.get("stem") or "")),
+                "quality_score": int(q.get("quality_score") or 0),
+                "quality_flags": q.get("quality_flags") or [],
+                "answer": str(q.get("answer") or "").strip(),
+                "analysis": str(q.get("analysis") or "").strip(),
+                "answer_source": str(q.get("answer_source") or "").strip(),
+                "review_status": str(q.get("review_status") or "").strip(),
+                "review_action": str(q.get("review_action") or "").strip(),
+                "review_score": q.get("review_score"),
+                "review_summary": str(q.get("review_summary") or "").strip(),
+            }
+        )
+    return q_dicts
 
 
 
@@ -143,6 +185,20 @@ async def compose_paper_events(
         else options.get("auto_review")
         if "auto_review" in options
         else os.getenv("PAPER_COMPOSE_AUTO_REVIEW") or "1"
+    )
+    paper_balance_correction = _truthy(
+        options.get("paperBalanceCorrection")
+        if "paperBalanceCorrection" in options
+        else options.get("paper_balance_correction")
+        if "paper_balance_correction" in options
+        else os.getenv("PAPER_COMPOSE_BALANCE_CORRECTION") or "1"
+    )
+    require_human_review = _truthy(
+        options.get("requireHumanReview")
+        if "requireHumanReview" in options
+        else options.get("require_human_review")
+        if "require_human_review" in options
+        else os.getenv("PAPER_COMPOSE_REQUIRE_HUMAN_REVIEW") or "0"
     )
     judge_pass_score = int(options.get("judgePassScore") or options.get("judge_pass_score") or 65)
     judge_pass_score = max(0, min(judge_pass_score, 100))
@@ -1001,6 +1057,50 @@ async def compose_paper_events(
                 },
             }
 
+    balance_correction_summary: Dict[str, Any] = {"enabled": False, "totalReplaced": 0}
+    if paper_balance_correction and slot_results:
+        balance_step_id = "paper_balance_correction"
+        yield {
+            "type": "step",
+            "step": {
+                "id": balance_step_id,
+                "title": "整卷平衡性修正",
+                "status": "running",
+                "startTime": _now_iso(),
+                "toolName": "paper_balance",
+                "input": {"slots": len(slot_results), "selected": len(selected_questions)},
+            },
+        }
+        try:
+            balance_correction_summary = apply_balance_corrections(
+                slot_results,
+                used_ids=used_ids,
+                stem_fingerprint=_stem_fingerprint,
+                min_quality_score=min_quality_score,
+            )
+            selected_questions = [
+                q
+                for sr in slot_results
+                for q in (sr.get("selected") or [])
+                if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+            ]
+        except Exception as exc:
+            logger.warning("paper_compose_balance_correction_failed", extra={"task_id": task_id}, exc_info=True)
+            balance_correction_summary = {"enabled": True, "skipped": True, "error": str(exc), "totalReplaced": 0}
+
+        yield {
+            "type": "step",
+            "step": {
+                "id": balance_step_id,
+                "title": "整卷平衡性修正",
+                "status": "completed",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "paper_balance",
+                "output": balance_correction_summary,
+            },
+        }
+
     slot_shortfalls: List[Dict[str, Any]] = []
 
     # Paper-level balance report (difficulty distribution / knowledge point repetition).
@@ -1085,6 +1185,7 @@ async def compose_paper_events(
                     "duplicateStemCount": dup_stems,
                     "topKnowledgePoints": [{"name": k, "count": v} for k, v in top_kps],
                     "slotShortfalls": slot_shortfalls[:12],
+                    "correction": balance_correction_summary,
                 },
             },
         }
@@ -1262,6 +1363,7 @@ async def compose_paper_events(
                 },
             }
 
+    auto_review_summary: Dict[str, Any] = {}
     if auto_review and selected_questions:
         review_step_id = "auto_review"
         yield {
@@ -1288,6 +1390,7 @@ async def compose_paper_events(
         except Exception as exc:
             logger.warning("paper_compose_auto_review_step_failed", extra={"task_id": task_id}, exc_info=True)
             review_summary = {"passed": 0, "failed": 0, "skipped": len(selected_questions), "error": str(exc)}
+        auto_review_summary = dict(review_summary) if isinstance(review_summary, dict) else {}
         yield {
             "type": "step",
             "step": {
@@ -1300,6 +1403,48 @@ async def compose_paper_events(
                 "output": review_summary,
             },
         }
+
+    q_dicts = _build_save_question_dicts(selected_questions, subject=subject)
+
+    if require_human_review:
+        compose_draft = {
+            "paperName": paper_name,
+            "subject": subject,
+            "topic": topic,
+            "mode": mode,
+            "paperId": existing_paper_id if mode == "fill_shortfalls" else None,
+            "questions": q_dicts,
+            "reviewSummary": auto_review_summary,
+            "slotMapping": [
+                {
+                    "slotIndex": _slot_index,
+                    "questionIds": [
+                        str(q.get("question_id") or "").strip()
+                        for q in (sr.get("selected") or [])
+                        if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+                    ],
+                }
+                for sr in slot_results
+                for _slot_index in [int(getattr(sr.get("slot"), "index", 0) or 0)]
+            ],
+        }
+        yield {
+            "type": "step",
+            "step": {
+                "id": "human_review",
+                "title": "等待人工审核",
+                "status": "pending_review",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "compose-review",
+                "output": {
+                    "questionCount": len(q_dicts),
+                    "reviewSummary": auto_review_summary,
+                },
+            },
+        }
+        yield {"type": "pending_review", "taskId": task_id, "composeDraft": compose_draft}
+        return
 
     save_title = "保存试卷" if mode != "fill_shortfalls" else "补齐试卷（追加题目）"
     save_tool = "create_paper" if mode != "fill_shortfalls" else "update_paper"
@@ -1318,44 +1463,6 @@ async def compose_paper_events(
             "input": save_input,
         },
     }
-
-    q_dicts: List[dict] = []
-    for q in selected_questions:
-        qid = str(q.get("question_id") or "").strip()
-        if not qid:
-            continue
-        kps = q.get("knowledge_points")
-        kp_badge = _format_kps_for_badge(kps)
-        try:
-            kps_json = json.dumps(kps, ensure_ascii=False) if isinstance(kps, list) else ""
-        except (TypeError, ValueError):
-            kps_json = ""
-
-        q_dicts.append(
-            {
-                "subject": subject,
-                "question_id": qid,
-                "type": str(q.get("type") or "").strip(),
-                "difficulty": str(q.get("difficulty") or "").strip(),
-                "difficulty_value": q.get("difficulty_value"),
-                "knowledge_point": kp_badge,
-                "knowledge_points_json": kps_json,
-                "source_url": str(q.get("source_url") or "").strip(),
-                "source": str(q.get("source") or "").strip(),
-                "date": str(q.get("date") or "").strip(),
-                "stem": str(q.get("stem") or "").strip(),
-                "stem_fingerprint": _stem_fingerprint(str(q.get("stem") or "")),
-                "quality_score": int(q.get("quality_score") or 0),
-                "quality_flags": q.get("quality_flags") or [],
-                "answer": str(q.get("answer") or "").strip(),
-                "analysis": str(q.get("analysis") or "").strip(),
-                "answer_source": str(q.get("answer_source") or "").strip(),
-                "review_status": str(q.get("review_status") or "").strip(),
-                "review_action": str(q.get("review_action") or "").strip(),
-                "review_score": q.get("review_score"),
-                "review_summary": str(q.get("review_summary") or "").strip(),
-            }
-        )
 
     if mode == "fill_shortfalls":
         await add_questions_to_paper(user_id=user_id, paper_id=existing_paper_id, questions=q_dicts)

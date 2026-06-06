@@ -21,7 +21,19 @@ function streamEventType(value: BackendChatStreamEvent): string {
 
 function streamEventContent(value: BackendChatStreamEvent, fallback: string): string {
   const content = recordValue(value, 'content')
-  return typeof content === 'string' ? content : fallback
+  if (typeof content === 'string' && content.trim()) return content
+
+  const error = recordValue(value, 'error')
+  if (typeof error === 'string' && error.trim()) return error
+
+  const data = recordValue(value, 'data')
+  const dataError = recordValue(data, 'error')
+  if (typeof dataError === 'string' && dataError.trim()) return dataError
+
+  const dataMessage = recordValue(data, 'message')
+  if (typeof dataMessage === 'string' && dataMessage.trim()) return dataMessage
+
+  return fallback
 }
 
 export function normalizeChatStreamEvent(data: unknown): ChatStreamEvent {

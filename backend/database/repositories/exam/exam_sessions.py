@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
 from backend.database.repositories.question.papers import get_paper
+from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.schema import ExamResult, ExamSession, StudentAnswer
 
 
@@ -248,7 +249,21 @@ async def get_exam_session(
         return None
     await _expire_if_needed(row, session=session)
     paper = await get_paper(user_id=uid, paper_id=int(row.paper_id), session=session)
-    paper_questions = [q for q in (paper or {}).get("questions") or [] if isinstance(q, dict)]
+    raw_questions = [q for q in (paper or {}).get("questions") or [] if isinstance(q, dict)]
+    qids = [str(q.get("question_id") or "").strip() for q in raw_questions if str(q.get("question_id") or "").strip()]
+    cache = await get_question_cache(question_ids=qids, session=session) if qids else {}
+    paper_questions: list[dict] = []
+    for q in raw_questions:
+        qid = str(q.get("question_id") or "").strip()
+        cached = cache.get(qid) if qid else None
+        if not isinstance(cached, dict):
+            paper_questions.append(q)
+            continue
+        merged = dict(q)
+        for key in ("stem", "answer", "analysis", "source_url"):
+            if not str(merged.get(key) or "").strip() and str(cached.get(key) or "").strip():
+                merged[key] = str(cached.get(key) or "").strip()
+        paper_questions.append(merged)
     question_details = {str(q.get("question_id") or "").strip(): q for q in paper_questions}
     questions = [_question_to_exam(q) for q in paper_questions]
     answers = {_answer_to_dict(a)["question_id"]: _answer_to_dict(a) for a in row.answers}

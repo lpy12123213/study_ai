@@ -16,26 +16,15 @@ from backend.llm.client import chat_completion
 
 from .helpers import _resolve_cli_mcp_search_model, logger
 from .render import _format_tool_call_log, _format_tool_result_log
-
-
-def _mcp_web_search_tool_spec() -> Dict[str, Any]:
-    """Backwards-compatible alias for the public tool spec helper.
-
-    The schema lives in :mod:`backend.cli.tool_specs` so the CLI module stays
-    focused on the agent loop; new code should import from there directly.
-    """
-
-    from backend.cli.tool_specs import mcp_web_search_tool_spec
-
-    return mcp_web_search_tool_spec()
-
-
-def _python_scientific_compute_tool_spec() -> Dict[str, Any]:
-    """Backwards-compatible alias; see :mod:`backend.cli.tool_specs`."""
-
-    from backend.cli.tool_specs import python_scientific_compute_tool_spec
-
-    return python_scientific_compute_tool_spec()
+from .tool_aliases import (
+    _exec_python_scientific_compute_tool,
+    _fallback_material_markdown,
+    _mcp_web_search_tool_spec,
+    _python_scientific_compute_tool_spec,
+)
+from .tool_aliases import (
+    _fallback_search_markdown as _fallback_search_markdown,
+)
 
 
 async def _exec_mcp_web_search_tool(
@@ -238,37 +227,6 @@ async def _exec_mcp_web_search_tool(
     }
 
 
-async def _exec_python_scientific_compute_tool(
-    *,
-    code: str,
-    purpose: str,
-    timeout_seconds: int,
-) -> Dict[str, Any]:
-    from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
-
-    return await python_scientific_compute(
-        code=str(code or "").strip(),
-        purpose=str(purpose or "").strip(),
-        timeout_seconds=int(timeout_seconds or 5),
-    )
-
-
-def _fallback_search_markdown(*, query: str, tool_result: Dict[str, Any]) -> str:
-    """Backwards-compatible alias; see :mod:`backend.cli.fallback_markdown`."""
-
-    from backend.cli.fallback_markdown import fallback_search_markdown
-
-    return fallback_search_markdown(query=query, tool_result=tool_result)
-
-
-def _fallback_material_markdown(*, query: str, tool_results: List[Dict[str, Any]]) -> str:
-    """Backwards-compatible alias; see :mod:`backend.cli.fallback_markdown`."""
-
-    from backend.cli.fallback_markdown import fallback_material_markdown
-
-    return fallback_material_markdown(query=query, tool_results=tool_results)
-
-
 async def _ai_search_materials_via_mcp(
     *,
     subject: str,
@@ -293,7 +251,7 @@ async def _ai_search_materials_via_mcp(
         if callable(ui_log_tool):
             try:
                 ui_log_tool(msg)
-            except Exception:
+            except Exception:  # noqa: BLE001 - UI log callback is external best-effort plumbing.
                 logger.warning("question_generate_ui_log_failed", exc_info=True)
                 return
 

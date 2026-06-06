@@ -84,7 +84,7 @@ export function RichTextarea({
             if (
               shouldSubmitRichTextareaEvent(event, {
                 submitOnEnter,
-                viewComposing: Boolean(controller.editor?.view.composing),
+                viewComposing: Boolean(controller.editor && !controller.editor.isDestroyed && controller.editor.view?.composing),
               })
             ) {
               event.preventDefault()

@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { ChevronDown, Loader2, Send, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -19,12 +19,14 @@ import type { Message } from '@/types'
 export default function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const targetMid = String(searchParams.get('mid') || '').trim()
   const [highlightMid, setHighlightMid] = useState<string>('')
   const [input, setInput] = useState('')
   const hydratedConversationIdRef = useRef<string | null>(null)
   const lastConversationIdRef = useRef<string | undefined>(conversationId)
+  const autoSentInitialMessageRef = useRef<string>('')
   const [isCreatingConversation, setIsCreatingConversation] = useState(false)
   const [createError, setCreateError] = useState<unknown>(null)
   const stick = useStickToBottom({ thresholdPx: 120 })
@@ -46,10 +48,14 @@ export default function ChatPage() {
     sendMessage,
     cancelStream,
   } = useChatStream()
-  const shouldVirtualize = messages.length >= 500
+  const routeMessages = useMemo(
+    () => (conversationId && hydratedConversationIdRef.current === conversationId ? messages : []),
+    [conversationId, messages]
+  )
+  const shouldVirtualize = routeMessages.length >= 500
   const virtual = useVirtualMessages({
     enabled: shouldVirtualize,
-    messages,
+    messages: routeMessages,
     containerRef: stick.containerRef,
     estimatePx: 220,
     overscan: 12,
@@ -64,15 +70,15 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!targetMid) return
-    const exists = messages.some((m) => String(m.id) === targetMid)
+    const exists = routeMessages.some((m) => String(m.id) === targetMid)
     if (exists) return
     if (!hasNextPage || isFetchingNextPage) return
     fetchNextPage()
-  }, [targetMid, messages, hasNextPage, isFetchingNextPage, fetchNextPage])
+  }, [targetMid, routeMessages, hasNextPage, isFetchingNextPage, fetchNextPage])
 
   useEffect(() => {
     if (!targetMid) return
-    const exists = messages.some((m) => String(m.id) === targetMid)
+    const exists = routeMessages.some((m) => String(m.id) === targetMid)
     if (!exists) return
     stick.setShouldStick(false)
     window.setTimeout(() => {
@@ -83,7 +89,7 @@ export default function ChatPage() {
       const el = document.getElementById(`msg-${targetMid}`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 50)
-  }, [targetMid, messages, shouldVirtualize, stick, virtual.scrollToId])
+  }, [targetMid, routeMessages, shouldVirtualize, stick, virtual])
 
   useEffect(() => {
     if (!conversationId) return
@@ -128,7 +134,32 @@ export default function ChatPage() {
 
   useEffect(() => {
     stick.maybeStick()
-  }, [messages, streamingText, stick.maybeStick])
+  }, [routeMessages, streamingText, stick])
+
+  useEffect(() => {
+    if (!conversationId || isStreaming) return
+    const state = location.state as { initialMessage?: unknown; autoSendKey?: unknown } | null
+    const initialMessage = typeof state?.initialMessage === 'string' ? state.initialMessage.trim() : ''
+    if (!initialMessage) return
+
+    const autoSendKey = String(state?.autoSendKey || `${conversationId}:${initialMessage}`)
+    if (autoSentInitialMessageRef.current === autoSendKey) return
+    autoSentInitialMessageRef.current = autoSendKey
+    hydratedConversationIdRef.current = conversationId
+    sendMessage(conversationId, initialMessage)
+    try {
+      const historyState: unknown = window.history.state
+      if (historyState && typeof historyState === 'object' && 'usr' in historyState) {
+        window.history.replaceState(
+          { ...(historyState as Record<string, unknown>), usr: null },
+          '',
+          window.location.href
+        )
+      }
+    } catch {
+      // Clearing navigation state is best-effort; the ref above prevents duplicate sends in this mount.
+    }
+  }, [conversationId, isStreaming, location.state, navigate, sendMessage])
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -140,6 +171,7 @@ export default function ChatPage() {
     stick.setShouldStick(true)
 
     if (conversationId) {
+      hydratedConversationIdRef.current = conversationId
       sendMessage(conversationId, text)
       return
     }
@@ -149,9 +181,10 @@ export default function ChatPage() {
       .createConversation({ title: '新对话' })
       .then((conv) => {
         const newId = conv.id
-        hydratedConversationIdRef.current = newId
-        navigate(`/chat/${newId}`, { replace: true })
-        sendMessage(newId, text)
+        navigate(`/chat/${newId}`, {
+          replace: true,
+          state: { initialMessage: text, autoSendKey: `${newId}:${Date.now()}` },
+        })
       })
       .catch((err) => {
         setCreateError(err)
@@ -163,7 +196,7 @@ export default function ChatPage() {
 
   return (
     <div className="h-full flex flex-col relative">
-      {messages.length === 0 ? (
+      {routeMessages.length === 0 ? (
         conversationId ? (
           <div className="flex-1 flex items-center justify-center p-8">
             {isHistoryLoading ? (
@@ -204,7 +237,7 @@ export default function ChatPage() {
 
             {shouldVirtualize ? (
               <div ref={virtual.listRef} className="relative" style={{ height: virtual.totalHeight }}>
-                {messages.slice(virtual.range.start, virtual.range.end).map((message, i) => {
+                {routeMessages.slice(virtual.range.start, virtual.range.end).map((message, i) => {
                   const index = virtual.range.start + i
                   const mid = String(message.id)
                   const top = virtual.offsets[index] ?? 0
@@ -230,7 +263,7 @@ export default function ChatPage() {
               </div>
             ) : (
               <AnimatePresence mode="popLayout">
-                {messages.map((message) => (
+                {routeMessages.map((message) => (
                   <div
                     key={message.id}
                     id={`msg-${String(message.id)}`}
@@ -244,7 +277,7 @@ export default function ChatPage() {
               </AnimatePresence>
             )}
 
-            {isStreaming && !streamingText && messages[messages.length - 1]?.content === '' && (
+            {isStreaming && !streamingText && routeMessages[routeMessages.length - 1]?.content === '' && (
               <div className="flex gap-3 mb-4 max-w-3xl">
                 <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
@@ -262,7 +295,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {!stick.isNearBottom && messages.length > 0 && (
+      {!stick.isNearBottom && routeMessages.length > 0 && (
         <Button
           type="button"
           size="icon"

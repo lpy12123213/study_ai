@@ -1,17 +1,15 @@
-"""Live-UI state and the async generation runner.
+"""Async generation runner for the question-generation CLI.
 
-Holds the ``rich.Live`` dashboard (with a no-op fallback) and the
-``_run_generation`` coroutine that drives the question_library generation
-pipeline while streaming stage/reasoning events into the UI and persisting
-snapshots to the preview store.
+Drives the question_library generation pipeline while streaming
+stage/reasoning events into the live UI and persisting snapshots to the preview
+store.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from backend.generation.question_library.generation import (
     analyze_reference_questions,
@@ -24,220 +22,17 @@ from backend.generation.question_library.preview_store import load_session, save
 from backend.llm.client import is_llm_configured
 
 from .args import RunParams
-from .helpers import _console, _rich_available, logger
+from .helpers import _console, logger
+from .live_ui import _append_reasoning_entry, _run_live, _set_stage, _tui_update
 from .mcp_tools import _ai_search_materials_via_mcp
-from .render import _append_tail, _tail_display
+from .run_state import _prepare_generation_state
 from .session import (
     _append_reasoning_block,
-    _draft_identity,
-    _ensure_session,
     _materialize_draft,
     _merge_drafts,
     _normalize_draft_questions,
     _save_preview_for_session,
 )
-
-
-@dataclass
-class _UiState:
-    session_id: str
-    stage_id: str = ""
-    stage_label: str = ""
-    overall_progress: float = 0.0
-    stage_progress: float = 0.0
-    stats: Dict[str, Any] = None  # type: ignore[assignment]
-    accepted: int = 0
-    draft_count: int = 0
-    batch_index: int = 0
-    raw_tail: str = ""
-    trace_tail: str = ""
-
-    def __post_init__(self) -> None:
-        if self.stats is None:
-            self.stats = {}
-
-
-class _NullLive:
-    def __init__(self, console):  # noqa: ANN001
-        self.console = console
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
-        _ = (exc_type, exc, tb)
-        return False
-
-    def update(self, renderable) -> None:  # noqa: ANN001
-        _ = renderable
-
-    def refresh(self) -> None:
-        return
-
-
-def _append_reasoning_entry(state: "_UiState", addition: str, *, max_lines: int = 240, max_chars: int = 24000) -> None:
-    # In the TUI we treat "reasoning" as a unified console:
-    # - raw_tail: streamed model reasoning (best-effort)
-    # - trace_tail: stage switches + tool calls + fallback traces
-    state.trace_tail = _append_tail(
-        state.trace_tail,
-        addition,
-        max_lines=max_lines,
-        max_chars=max_chars,
-    )
-
-
-def _run_live(console, state: _UiState):  # noqa: ANN001
-    if not _rich_available():
-        return _NullLive(console)
-
-    from rich.console import Group
-    from rich.layout import Layout
-    from rich.live import Live
-    from rich.panel import Panel
-    from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-    from rich.table import Table
-    from rich.text import Text
-
-    progress = Progress(
-        TextColumn("{task.description}"),
-        BarColumn(bar_width=40),
-        TextColumn("{task.percentage:>5.1f}%"),
-        TimeElapsedColumn(),
-        expand=True,
-    )
-    overall_task = progress.add_task("总进度", total=100.0, completed=0.0)
-    stage_task = progress.add_task("阶段", total=100.0, completed=0.0)
-
-    # Render-time helpers (stable across refreshes).
-    try:
-        from backend.core.settings import settings as _settings
-
-        llm_label = f"{str(_settings.chat_provider or '').strip()}/{str(_settings.main_model or '').strip()}".strip("/")
-        llm_base_url = str(getattr(_settings, "chat_base_url", "") or "").strip()
-    except (ImportError, AttributeError):
-        llm_label = ""
-        llm_base_url = ""
-
-    def render():
-        # Keep a stable fixed-layout "board" so the terminal doesn't scroll.
-        size = getattr(console, "size", None)
-        width = int(getattr(size, "width", 100) or 100)
-        height = int(getattr(size, "height", 30) or 30)
-
-        # Outer Panel has borders; keep a little safety margin.
-        inner_width = max(20, width - 4)
-        inner_height = max(12, height - 2)
-
-        # Make top/middle sections shrink on small terminals so bottom remains usable.
-        header_size = 8
-        status_size = 9
-        min_bottom = 8
-        if inner_height - header_size - status_size < min_bottom:
-            need = min_bottom - (inner_height - header_size - status_size)
-            status_reducible = max(0, status_size - 4)
-            dec = min(need, status_reducible)
-            status_size -= dec
-            need -= dec
-            header_reducible = max(0, header_size - 4)
-            dec = min(need, header_reducible)
-            header_size -= dec
-
-        bottom_height = max(6, inner_height - header_size - status_size)
-        bottom_lines = max(6, bottom_height - 2)
-
-        progress.update(overall_task, completed=float(state.overall_progress or 0.0))
-        progress.update(
-            stage_task,
-            completed=float(state.stage_progress or 0.0),
-            description=f"阶段: {state.stage_label or '-'}",
-        )
-
-        status_table = Table.grid(padding=(0, 2), expand=True)
-        status_table.add_column(justify="right", style="bold cyan", no_wrap=True)
-        status_table.add_column(ratio=1)
-        status_table.add_row("session", state.session_id)
-        status_table.add_row("batch", str(state.batch_index or 0))
-        status_table.add_row("stage", f"{state.stage_id or '-'} / {state.stage_label or '-'}")
-        if llm_label:
-            status_table.add_row("llm", llm_label)
-        if llm_base_url:
-            status_table.add_row("base_url", llm_base_url)
-        status_table.add_row("accepted", str(state.accepted))
-        status_table.add_row("drafts", str(state.draft_count))
-        if state.stats:
-            keys = ["kept_specs", "draft_count", "evaluated", "accepted", "final_count", "pass_rate"]
-            shown = {k: state.stats.get(k) for k in keys if k in state.stats}
-            if shown:
-                status_table.add_row("stats", json.dumps(shown, ensure_ascii=False))
-
-        tips = Text()
-        tips.append("Ctrl+C: 终止生成并保存会话\n", style="bold")
-        tips.append("Utilities:\n", style="bold")
-        tips.append("  python -m backend.cli.question_generate sessions\n")
-        tips.append("  python -m backend.cli.question_generate review  --session-id <id>\n")
-        tips.append("  python -m backend.cli.question_generate commit  --session-id <id>\n")
-        tips.append("  python -m backend.cli.question_generate export  --session-id <id>\n")
-        header_table = Table.grid(padding=(0, 2), expand=True)
-        header_table.add_column(ratio=2)
-        header_table.add_column(ratio=1)
-        header_table.add_row(progress, tips)
-
-        raw_text = str(state.raw_tail or "").strip()
-        trace_text = str(state.trace_tail or "").strip()
-        if raw_text and trace_text:
-            col_width = max(20, (inner_width - 3) // 2)
-            raw_body = _tail_display(raw_text or "(Reasoning 空)", max_lines=bottom_lines, width=col_width)
-            trace_body = _tail_display(trace_text or "(Tools 空)", max_lines=bottom_lines, width=col_width)
-
-            left = Text()
-            left.append("Reasoning\n", style="bold")
-            left.append(raw_body if raw_body else "(Reasoning 空)")
-
-            right = Text()
-            right.append("Tools / Trace\n", style="bold")
-            right.append(trace_body if trace_body else "(Tools 空)")
-
-            lanes = Table.grid(padding=(0, 1), expand=True)
-            lanes.add_column(ratio=1)
-            lanes.add_column(ratio=1)
-            lanes.add_row(left, right)
-            bottom_table = Group(lanes)
-        else:
-            console_text = trace_text or raw_text
-            console_body = _tail_display(console_text or "(console 空)", max_lines=bottom_lines, width=inner_width)
-            console_block = Text()
-            console_block.append("Console\n", style="bold")
-            console_block.append(console_body if console_body else "(console 空)")
-            bottom_table = Group(console_block)
-
-        layout = Layout()
-        layout.split_column(
-            Layout(name="header", size=header_size),
-            Layout(name="status", size=status_size),
-            Layout(name="bottom", ratio=1),
-        )
-        layout["header"].update(header_table)
-        layout["status"].update(status_table)
-        layout["bottom"].update(bottom_table)
-
-        title = f"AI 出题 · session={state.session_id}"
-        board = Panel(layout, title=title, border_style="cyan", padding=(0, 1))
-        return board
-
-    live = Live(render(), console=console, refresh_per_second=8, transient=False)
-
-    def update_live() -> None:
-        live.update(render())
-
-    live._tui_update = update_live  # type: ignore[attr-defined]
-    return live
-
-
-def _tui_update(live) -> None:  # noqa: ANN001
-    update_fn = getattr(live, "_tui_update", None)
-    if callable(update_fn):
-        update_fn()
 
 
 async def _run_generation(params: RunParams) -> dict:
@@ -247,43 +42,7 @@ async def _run_generation(params: RunParams) -> dict:
         console.print("错误: 未配置 LLM（请检查 .env / config/model.json）。")
         raise SystemExit(2)
 
-    session = _ensure_session(
-        session_id=params.session_id,
-        user_id=params.user_id,
-        preview_id=params.preview_id,
-        subject=params.subject,
-        topic=params.topic,
-        difficulty=params.difficulty,
-        question_type=params.question_type,
-        mode=params.mode,
-        count=params.count,
-        use_reference_questions=params.use_reference_questions,
-        reference_source=params.reference_source,
-        reference_year_range=params.reference_year_range,
-        stream_reasoning=params.stream_reasoning,
-        use_mcp_search=params.use_mcp_search,
-        mcp_search_provider=params.mcp_search_provider,
-        mcp_search_mode=params.mcp_search_mode,
-        mcp_search_recency_days=params.mcp_search_recency_days,
-        mcp_search_limit=params.mcp_search_limit,
-        mcp_search_query=params.mcp_search_query,
-    )
-    session["status"] = "running"
-    session = save_session(session)
-    _save_preview_for_session(session, preview_status="running")
-
-    ui_state = _UiState(session_id=params.session_id)
-    ui_state.batch_index = 0
-    ui_state.draft_count = len(_normalize_draft_questions(session.get("draft_questions")))
-
-    # Seed identity map so regenerated drafts keep stable IDs.
-    progress_drafts = _normalize_draft_questions(session.get("draft_questions"))
-    draft_key_to_id: Dict[str, str] = {}
-    for draft in progress_drafts:
-        qid = str((draft or {}).get("question_id") or "").strip()
-        key = _draft_identity(draft)
-        if qid and key:
-            draft_key_to_id[key] = qid
+    session, ui_state, progress_drafts, draft_key_to_id = _prepare_generation_state(params)
 
     stop_requested = False
 
@@ -335,10 +94,7 @@ async def _run_generation(params: RunParams) -> dict:
 
     async def run_one_batch(*, batch_index: int) -> List[dict]:
         ui_state.batch_index = batch_index
-        ui_state.stage_id = ""
-        ui_state.stage_label = ""
-        ui_state.stage_progress = 0.0
-        ui_state.overall_progress = 0.0
+        _set_stage(ui_state, "", "", 0.0)
         ui_state.stats = {}
         _tui_update(live)
 
@@ -440,20 +196,14 @@ async def _run_generation(params: RunParams) -> dict:
                 await persist_snapshot(status="running", drafts=[item_with_meta])
 
         # Build source_pack and optional reference enrichment (mirrors API behavior).
-        ui_state.stage_id = "source_pack"
-        ui_state.stage_label = "素材整理"
-        ui_state.stage_progress = 5.0
-        ui_state.overall_progress = 5.0
+        _set_stage(ui_state, "source_pack", "素材整理", 5.0)
         _append_reasoning_entry(ui_state, "[tool] build_source_pack")
         _tui_update(live)
 
         study_markdown = ""
         if params.use_mcp_search:
             # Optional: let the LLM call MCP web search (tool calling) and turn results into study_markdown.
-            ui_state.stage_id = "mcp_search"
-            ui_state.stage_label = "MCP 搜索"
-            ui_state.stage_progress = 3.0
-            ui_state.overall_progress = 3.0
+            _set_stage(ui_state, "mcp_search", "MCP 搜索", 3.0)
             _append_reasoning_entry(ui_state, "[tool] ai_mcp_search_materials (tool calling)")
             _tui_update(live)
 
@@ -474,7 +224,7 @@ async def _run_generation(params: RunParams) -> dict:
                     limit=int(params.mcp_search_limit or 5),
                     ui_log_tool=_log_tool,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - MCP material search is optional; fall back to empty materials.
                 logger.warning("question_generate_mcp_search_materials_failed", exc_info=True)
                 search_out = {"success": False, "error": str(exc)}
 
@@ -502,10 +252,7 @@ async def _run_generation(params: RunParams) -> dict:
                 save_session(current)
 
             # Restore stage label for source pack.
-            ui_state.stage_id = "source_pack"
-            ui_state.stage_label = "素材整理"
-            ui_state.stage_progress = 5.0
-            ui_state.overall_progress = 5.0
+            _set_stage(ui_state, "source_pack", "素材整理", 5.0)
             _tui_update(live)
 
         source_pack = await build_source_pack(
@@ -536,10 +283,7 @@ async def _run_generation(params: RunParams) -> dict:
 
         if params.use_reference_questions:
             _append_reasoning_entry(ui_state, "[tool] collect_reference_questions (reference_crawl)")
-            ui_state.stage_id = "reference_crawl"
-            ui_state.stage_label = "参考题爬取"
-            ui_state.stage_progress = 10.0
-            ui_state.overall_progress = 10.0
+            _set_stage(ui_state, "reference_crawl", "参考题爬取", 10.0)
             _tui_update(live)
 
             ref_result = await collect_reference_questions(
@@ -570,10 +314,7 @@ async def _run_generation(params: RunParams) -> dict:
             _tui_update(live)
 
             _append_reasoning_entry(ui_state, "[tool] analyze_reference_questions (reference_analysis)")
-            ui_state.stage_id = "reference_analysis"
-            ui_state.stage_label = "参考题分析"
-            ui_state.stage_progress = 16.0
-            ui_state.overall_progress = 16.0
+            _set_stage(ui_state, "reference_analysis", "参考题分析", 16.0)
             _tui_update(live)
 
             if reference_questions:
@@ -607,10 +348,7 @@ async def _run_generation(params: RunParams) -> dict:
                 current["reference_analysis"] = reference_analysis if isinstance(reference_analysis, dict) else {}
                 save_session(current)
 
-        ui_state.stage_id = "spec_search"
-        ui_state.stage_label = "规格搜索"
-        ui_state.stage_progress = 20.0
-        ui_state.overall_progress = 20.0
+        _set_stage(ui_state, "spec_search", "规格搜索", 20.0)
         _append_reasoning_entry(ui_state, "[tool] generate_questions")
         _tui_update(live)
 

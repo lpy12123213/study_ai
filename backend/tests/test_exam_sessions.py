@@ -104,6 +104,7 @@ class ExamSessionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["paper_name"], "函数小测")
         self.assertEqual(session["status"], "in_progress")
         self.assertEqual(len(session["questions"]), 2)
+        self.assertEqual(session["questions"][0]["stem"], "1+1=?")
         self.assertNotIn("answer", session["questions"][0])
         self.assertIsNotNone(session["expires_at"])
 

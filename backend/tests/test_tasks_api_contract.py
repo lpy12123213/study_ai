@@ -110,6 +110,21 @@ class TestTasksApiContract(unittest.TestCase):
         # Auth will block; we only assert that it is not a missing route.
         self.assertNotEqual(resp.status_code, 404)
 
+    def test_export_paper_task_preserves_split_bundle_flag(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        dummy_task = SimpleNamespace(task_id="task-1")
+
+        with patch("backend.api.tasks.submit_export_paper_task", new=AsyncMock(return_value=dummy_task)) as submit:
+            resp = client.post("/api/tasks/export/papers/1", json={"format": "markdown", "splitBundle": True})
+
+        self.assertEqual(resp.status_code, 200)
+        submit.assert_awaited_once()
+        self.assertTrue(submit.await_args.kwargs["request"]["split_bundle"])
+        app.dependency_overrides.clear()
+
     def test_get_task_status_can_include_persisted_events(self) -> None:
         app = create_app()
         self._override_auth(app)
@@ -213,6 +228,88 @@ class TestTasksApiContract(unittest.TestCase):
         self.assertIn('"source": "db"', text)
         self.assertNotIn("runtime_only", text)
         list_events.assert_awaited()
+
+        app.dependency_overrides.clear()
+
+    def test_compose_review_saves_pending_review_draft(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        pending_task = {
+            "id": "task-review",
+            "user_id": "u-1",
+            "task_type": "paper_compose",
+            "title": "待审卷",
+            "status": "pending_review",
+            "events": [
+                {
+                    "taskId": "task-review",
+                    "seq": 3,
+                    "type": "pending_review",
+                    "data": {
+                        "composeDraft": {
+                            "paperName": "待审卷",
+                            "mode": "",
+                            "questions": [
+                                {
+                                    "subject": "高中数学",
+                                    "question_id": "q-review",
+                                    "type": "解答题",
+                                    "difficulty": "中等",
+                                    "knowledge_point": "函数",
+                                    "stem": "待人工审核题干",
+                                    "answer": "1",
+                                    "analysis": "解析。",
+                                    "quality_score": 90,
+                                    "source": "zujuan",
+                                }
+                            ],
+                        }
+                    },
+                }
+            ],
+        }
+        saved_paper = {
+            "paper_id": 88,
+            "paper_name": "待审卷",
+            "source_mode": "zujuan",
+            "created_at": "2026-06-05T00:00:00Z",
+            "questions": [
+                {
+                    "question_id": "q-review",
+                    "order": 1,
+                    "type": "解答题",
+                    "difficulty": "中等",
+                    "knowledge_point": "函数",
+                    "source_url": "",
+                    "stem": "待人工审核题干",
+                }
+            ],
+        }
+
+        with (
+            patch("backend.api.tasks.db_get_task", new=AsyncMock(return_value=pending_task)) as get_task,
+            patch("backend.api.tasks.save_paper", new=AsyncMock(return_value=88)) as save,
+            patch("backend.api.tasks.get_paper", new=AsyncMock(return_value=saved_paper)),
+            patch("backend.api.tasks.db_append_task_event", new=AsyncMock(return_value=4)) as append_event,
+            patch("backend.api.tasks.db_update_task_status", new=AsyncMock(return_value=True)) as update_status,
+        ):
+            resp = client.post(
+                "/api/tasks/task-review/compose-review",
+                json={"questions": [{"questionId": "q-review", "status": "approved"}]},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["paper"]["id"], 88)
+        save.assert_awaited_once()
+        self.assertEqual(save.await_args.kwargs["questions"][0]["question_id"], "q-review")
+        update_status.assert_awaited_once()
+        self.assertEqual(update_status.await_args.kwargs["status"], "completed")
+        self.assertGreaterEqual(append_event.await_count, 2)
+        get_task.assert_awaited_once()
 
         app.dependency_overrides.clear()
 

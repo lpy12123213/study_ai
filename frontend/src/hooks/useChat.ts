@@ -26,6 +26,35 @@ function inferToolResultStatus(result: unknown): { ok: boolean; error: string | 
   return { ok: true, error: null }
 }
 
+function recordValue(value: unknown, key: string): unknown {
+  return isRecord(value) ? value[key] : undefined
+}
+
+function streamContent(raw: unknown): string {
+  if (!isRecord(raw)) return ''
+  const content = raw.content
+  return typeof content === 'string' ? content.trim() : ''
+}
+
+function streamIterationMessage(raw: unknown): string {
+  if (!isRecord(raw)) return ''
+  const message = raw.message
+  if (typeof message === 'string' && message.trim()) return message.trim()
+
+  const round = Number(raw.round ?? raw.iteration)
+  if (Number.isFinite(round) && round > 0) {
+    return `AI 正在进行第 ${round} 轮操作...`
+  }
+  return ''
+}
+
+function commitOrDropAssistantPlaceholder(prev: Message[], messageId: string, content: string): Message[] {
+  if (!content.trim()) {
+    return prev.filter((m) => m.id !== messageId)
+  }
+  return prev.map((m) => (m.id === messageId ? { ...m, content } : m))
+}
+
 export function useConversations() {
   return useQuery({
     queryKey: ['conversations'],
@@ -103,6 +132,9 @@ export function useChatStream() {
   const taskIdRef = useRef<string | null>(null)
   const streamingTextRef = useRef('')
   const streamingMessageIdRef = useRef('')
+  const streamingTextIsProgressRef = useRef(false)
+  const cancelStreamRef = useRef<(reason?: string) => void>(() => {})
+  const unmountCancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const cancelStream = useCallback(
     (reason = 'cancelled') => {
@@ -119,8 +151,15 @@ export function useChatStream() {
         taskIdRef.current = null
       }
 
+      const committedId = streamingMessageIdRef.current
+      if (committedId) {
+        const committedText = streamingTextIsProgressRef.current ? '' : streamingTextRef.current
+        setMessages((prev) => commitOrDropAssistantPlaceholder(prev, committedId, committedText))
+      }
+
       streamingTextRef.current = ''
       streamingMessageIdRef.current = ''
+      streamingTextIsProgressRef.current = false
       setStreamingText('')
       setStreamingMessageId('')
       setIsStreaming(false)
@@ -129,10 +168,22 @@ export function useChatStream() {
   )
 
   useEffect(() => {
-    return () => {
-      cancelStream('unmounted')
-    }
+    cancelStreamRef.current = cancelStream
   }, [cancelStream])
+
+  useEffect(() => {
+    if (unmountCancelTimerRef.current !== null) {
+      clearTimeout(unmountCancelTimerRef.current)
+      unmountCancelTimerRef.current = null
+    }
+
+    return () => {
+      unmountCancelTimerRef.current = setTimeout(() => {
+        unmountCancelTimerRef.current = null
+        cancelStreamRef.current('unmounted')
+      }, 0)
+    }
+  }, [])
 
   const sendMessage = useCallback(
     (conversationId: string, content: string) => {
@@ -169,6 +220,7 @@ export function useChatStream() {
       }
       streamingTextRef.current = ''
       streamingMessageIdRef.current = assistantMessage.id
+      streamingTextIsProgressRef.current = false
       setStreamingText('')
       setStreamingMessageId(assistantMessage.id)
       setMessages((prev) => [...prev, assistantMessage])
@@ -184,6 +236,10 @@ export function useChatStream() {
         if (!deltaBuffer) return
         const chunk = deltaBuffer
         deltaBuffer = ''
+        if (streamingTextIsProgressRef.current) {
+          streamingTextRef.current = ''
+          streamingTextIsProgressRef.current = false
+        }
         streamingTextRef.current += chunk
         setStreamingText(streamingTextRef.current)
       }
@@ -196,6 +252,15 @@ export function useChatStream() {
         })
       }
 
+      const setAssistantProgressText = (text: string) => {
+        const progressText = text.trim()
+        if (!progressText) return
+        if (!streamingTextIsProgressRef.current && streamingTextRef.current) return
+        streamingTextIsProgressRef.current = true
+        streamingTextRef.current = progressText
+        setStreamingText(progressText)
+      }
+
       chatApi.sendMessageStream(
         { conversationId, content },
         (event) => {
@@ -206,6 +271,31 @@ export function useChatStream() {
             if (!delta) return
             deltaBuffer += delta
             scheduleFlush()
+            return
+          }
+
+          if (event.type === 'stream_start') {
+            const iteration = Number(recordValue(event.raw, 'iteration'))
+            setAssistantProgressText(
+              Number.isFinite(iteration) && iteration > 0
+                ? `第 ${iteration} 轮：正在规划回答...`
+                : '正在思考...'
+            )
+            return
+          }
+
+          if (event.type === 'thinking_delta') {
+            setAssistantProgressText('正在梳理思路...')
+            return
+          }
+
+          if (event.type === 'iteration') {
+            setAssistantProgressText(streamIterationMessage(event.raw))
+            return
+          }
+
+          if (event.type === 'assistant') {
+            setAssistantProgressText(streamContent(event.raw))
             return
           }
 
@@ -289,6 +379,7 @@ export function useChatStream() {
               deltaRaf = null
             }
             if (streamingTextRef.current !== finalText) {
+              streamingTextIsProgressRef.current = false
               streamingTextRef.current = finalText
               setStreamingText(finalText)
             }
@@ -312,14 +403,13 @@ export function useChatStream() {
             flushDeltas()
           }
           if (streamingMessageIdRef.current) {
-            const committedText = streamingTextRef.current
+            const committedText = streamingTextIsProgressRef.current ? '' : streamingTextRef.current
             const committedId = streamingMessageIdRef.current
-            setMessages((prev) =>
-              prev.map((m) => (m.id === committedId ? { ...m, content: committedText } : m))
-            )
+            setMessages((prev) => commitOrDropAssistantPlaceholder(prev, committedId, committedText))
           }
           streamingTextRef.current = ''
           streamingMessageIdRef.current = ''
+          streamingTextIsProgressRef.current = false
           setStreamingText('')
           setStreamingMessageId('')
           setIsStreaming(false)
@@ -334,15 +424,14 @@ export function useChatStream() {
             deltaRaf = null
             flushDeltas()
           }
-          const committedText = streamingTextRef.current
+          const committedText = streamingTextIsProgressRef.current ? '' : streamingTextRef.current
           const committedId = streamingMessageIdRef.current
           if (committedId) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === committedId ? { ...m, content: committedText } : m))
-            )
+            setMessages((prev) => commitOrDropAssistantPlaceholder(prev, committedId, committedText))
           }
           streamingTextRef.current = ''
           streamingMessageIdRef.current = ''
+          streamingTextIsProgressRef.current = false
           setStreamingText('')
           setStreamingMessageId('')
           completeTask(taskId)
@@ -351,6 +440,7 @@ export function useChatStream() {
           streamKeyRef.current = null
           taskIdRef.current = null
           // Refresh sidebar ordering/title (e.g. backend sets title on first message)
+          queryClient.invalidateQueries({ queryKey: ['conversations'] })
           queryClient.invalidateQueries({ queryKey: ['chatConversations'] })
         },
         { signal: controller.signal }

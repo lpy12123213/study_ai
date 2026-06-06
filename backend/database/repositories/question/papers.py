@@ -95,8 +95,10 @@ async def save_paper(
 
     cache_items: List[QuestionCache] = []
     store_stem, store_answer, store_analysis = _paper_storage_flags()
-    if source_mode in {"hybrid", "local"}:
-        store_stem = store_answer = store_analysis = True
+    force_cache_content = source_mode in {"hybrid", "local"}
+    cache_store_stem = store_stem or force_cache_content
+    cache_store_answer = store_answer or force_cache_content
+    cache_store_analysis = store_analysis or force_cache_content
 
     for i, q_data in enumerate(questions or []):
         payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
@@ -118,6 +120,16 @@ async def save_paper(
 
         answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
         analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
+        cache_stem = str(payload.get("stem") or "").strip() if cache_store_stem else ""
+        cache_stem_fp = (
+            str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if cache_store_stem else ""
+        )
+        cache_answer = (
+            str(payload.get("answer") or payload.get("solution") or "").strip() if cache_store_answer else ""
+        )
+        cache_analysis = (
+            str(payload.get("analysis") or payload.get("explanation") or "").strip() if cache_store_analysis else ""
+        )
 
         pq = PaperQuestion(
             user_id=uid,
@@ -150,10 +162,10 @@ async def save_paper(
                     difficulty=q_diff,
                     knowledge_point=q_knowledge,
                     source_url=q_source_url,
-                    stem=stem,
-                    stem_fingerprint=stem_fp,
-                    answer=answer,
-                    analysis=analysis,
+                    stem=cache_stem,
+                    stem_fingerprint=cache_stem_fp,
+                    answer=cache_answer,
+                    analysis=cache_analysis,
                     difficulty_value=difficulty_value,
                     quality_score=quality_score,
                     quality_flags=_to_json_str(quality_flags),
@@ -241,8 +253,10 @@ async def add_questions_to_paper(
     cache_items: List[QuestionCache] = []
     appended = 0
     store_stem, store_answer, store_analysis = _paper_storage_flags()
-    if combined_mode in {"hybrid", "local"} or existing_mode == "local" or incoming_mode == "local":
-        store_stem = store_answer = store_analysis = True
+    force_cache_content = combined_mode in {"hybrid", "local"} or existing_mode == "local" or incoming_mode == "local"
+    cache_store_stem = store_stem or force_cache_content
+    cache_store_answer = store_answer or force_cache_content
+    cache_store_analysis = store_analysis or force_cache_content
 
     for q_data in entries:
         payload = {"question_id": q_data} if isinstance(q_data, str) else dict(q_data or {})
@@ -267,6 +281,16 @@ async def add_questions_to_paper(
 
         answer = str(payload.get("answer") or payload.get("solution") or "").strip() if store_answer else ""
         analysis = str(payload.get("analysis") or payload.get("explanation") or "").strip() if store_analysis else ""
+        cache_stem = str(payload.get("stem") or "").strip() if cache_store_stem else ""
+        cache_stem_fp = (
+            str(payload.get("stem_fingerprint") or payload.get("stem_fp") or "").strip() if cache_store_stem else ""
+        )
+        cache_answer = (
+            str(payload.get("answer") or payload.get("solution") or "").strip() if cache_store_answer else ""
+        )
+        cache_analysis = (
+            str(payload.get("analysis") or payload.get("explanation") or "").strip() if cache_store_analysis else ""
+        )
 
         pq = PaperQuestion(
             user_id=uid,
@@ -299,10 +323,10 @@ async def add_questions_to_paper(
                 difficulty=q_diff,
                 knowledge_point=q_knowledge,
                 source_url=q_source_url,
-                stem=stem,
-                stem_fingerprint=stem_fp,
-                answer=answer,
-                analysis=analysis,
+                stem=cache_stem,
+                stem_fingerprint=cache_stem_fp,
+                answer=cache_answer,
+                analysis=cache_analysis,
                 difficulty_value=difficulty_value,
                 quality_score=quality_score,
                 quality_flags=_to_json_str(quality_flags),

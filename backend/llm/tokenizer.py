@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 from typing import Any, Dict, List
 
@@ -10,26 +11,43 @@ logger = get_logger(__name__)
 
 _tiktoken_lock = threading.Lock()
 _tiktoken_encoder = None
+_tiktoken_unavailable = False
 _tiktoken_encode_failed_logged = False
 _tiktoken_import_failed_logged = False
 
 
+def _tiktoken_enabled() -> bool:
+    value = str(os.getenv("STUDY_AI_ENABLE_TIKTOKEN") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def _get_tiktoken_encoder():
-    global _tiktoken_encoder, _tiktoken_import_failed_logged
+    global _tiktoken_encoder, _tiktoken_import_failed_logged, _tiktoken_unavailable
+    if not _tiktoken_enabled():
+        return None
+    if _tiktoken_unavailable:
+        return None
     if _tiktoken_encoder is not None:
         return _tiktoken_encoder
     with _tiktoken_lock:
+        if _tiktoken_unavailable:
+            return None
         if _tiktoken_encoder is not None:
             return _tiktoken_encoder
         try:
             import tiktoken  # type: ignore
 
             _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
-        except (ImportError, LookupError, ValueError):
+        except Exception:  # noqa: BLE001 - tiktoken may lazily fetch encoding data; any runtime failure should fall back
             _tiktoken_encoder = None
+            _tiktoken_unavailable = True
             if not _tiktoken_import_failed_logged:
                 _tiktoken_import_failed_logged = True
-                logger.info("tiktoken_unavailable_using_heuristic_tokenizer", extra={"advice": "pip install tiktoken"})
+                logger.warning(
+                    "tiktoken_unavailable_using_heuristic_tokenizer",
+                    extra={"advice": "Ensure tiktoken encoding data is available locally, or rely on heuristic mode."},
+                    exc_info=True,
+                )
         return _tiktoken_encoder
 
 

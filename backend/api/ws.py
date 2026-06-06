@@ -17,6 +17,8 @@ from backend.api.auth import validate_ws_token
 from backend.core.logging_utils import get_logger
 from backend.database.repositories.system.tasks import (
     get_task as db_get_task,
+)
+from backend.database.repositories.system.tasks import (
     list_task_events as db_list_task_events,
 )
 from backend.shared.tasks import task_runtime
@@ -245,11 +247,15 @@ async def ws_chat_stream(
                     await websocket.send_json({"type": "error", "data": {"error": "missing_fields"}})
                     continue
 
-                from backend.workspace.chat.service import get_chat_service
-                from backend.database.repositories.content.conversations import (
-                    get_conversation, get_messages, add_message, update_conversation_title
-                )
                 import json as _json
+
+                from backend.database.repositories.content.conversations import (
+                    add_message,
+                    get_conversation,
+                    get_messages,
+                )
+                from backend.workspace.chat.service import get_chat_service
+                from backend.workspace.chat.titles import update_title_for_first_user_message
 
                 service = get_chat_service()
                 conv_id = int(conversation_id)
@@ -263,6 +269,15 @@ async def ws_chat_stream(
 
                 try:
                     await add_message(user_id=user_id, conv_id=conv_id, role="user", content=content)
+                    try:
+                        await update_title_for_first_user_message(
+                            user_id=user_id,
+                            conv_id=conv_id,
+                            user_message=content,
+                            history_count=len(history),
+                        )
+                    except Exception:  # noqa: BLE001 - title is cosmetic; never fail the chat stream over it
+                        logger.debug("ws_chat_update_title_failed", exc_info=True)
                 except Exception:
                     logger.exception("ws_chat_persist_user_message_failed")
 
@@ -314,13 +329,6 @@ async def ws_chat_stream(
                             except Exception:
                                 logger.exception("ws_chat_persist_final_failed")
 
-                            if len(history) == 0:
-                                title = content[:30]
-                                try:
-                                    await update_conversation_title(user_id=user_id, conv_id=conv_id, title=title)
-                                except Exception:  # noqa: BLE001 - title is cosmetic; never fail the chat stream over it
-                                    logger.debug("ws_chat_update_title_failed", exc_info=True)
-
                         try:
                             await websocket.send_json(chunk)
                         except (WebSocketDisconnect, RuntimeError):
@@ -333,6 +341,7 @@ async def ws_chat_stream(
                         await websocket.send_json({"type": "error", "data": {"error": str(exc)}})
                     except Exception:  # noqa: BLE001 - terminal error-notify; socket may already be closing, nothing more to do
                         logger.debug("ws_chat_error_notify_failed", exc_info=True)
+                    return
                 continue
 
             await websocket.send_json({"type": "error", "data": {"error": f"unknown_type: {msg_type}"}})

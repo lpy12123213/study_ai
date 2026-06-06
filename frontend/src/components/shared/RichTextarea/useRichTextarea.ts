@@ -40,6 +40,14 @@ function nodeLatex(node: ProseMirrorNode): string {
   return typeof node.attrs?.latex === 'string' ? node.attrs.latex : ''
 }
 
+function isEditorDestroyed(editor: Editor): boolean {
+  return Boolean((editor as Editor & { isDestroyed?: boolean }).isDestroyed)
+}
+
+function isUsableEditor(editor: Editor | null): editor is Editor {
+  return Boolean(editor && !isEditorDestroyed(editor))
+}
+
 export function useRichTextarea({
   value,
   onChange,
@@ -101,6 +109,7 @@ export function useRichTextarea({
       onUpdate: ({ editor: activeEditor }) => {
         clearChangeTimer()
         const emitChange = () => {
+          if (isEditorDestroyed(activeEditor)) return
           const next = editorMarkdownToStorageMarkdown(activeEditor.getMarkdown())
           lastSerializedFromEditorRef.current = next
           onChangeRef.current(next)
@@ -116,12 +125,12 @@ export function useRichTextarea({
   )
 
   useEffect(() => {
-    if (!editor) return
+    if (!isUsableEditor(editor)) return
     editor.setEditable(!disabled)
   }, [disabled, editor])
 
   useEffect(() => {
-    if (!editor) return
+    if (!isUsableEditor(editor)) return
     if (value === lastSerializedFromEditorRef.current) return
 
     const current = editorMarkdownToStorageMarkdown(editor.getMarkdown())
@@ -147,7 +156,7 @@ export function useRichTextarea({
   const insertOrUpdateMath = useCallback(
     (latex: string) => {
       const cleaned = latex.trim()
-      if (!cleaned || !editor) return
+      if (!cleaned || !isUsableEditor(editor)) return
 
       if (!mathSelection) {
         editor.chain().focus().insertInlineMath({ latex: cleaned }).run()

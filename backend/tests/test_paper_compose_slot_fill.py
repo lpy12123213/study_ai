@@ -589,6 +589,183 @@ class PaperComposeSlotFillTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(saved_questions[0]["review_status"], "passed")
 
+    async def test_compose_workflow_balance_correction_replaces_difficulty_mismatch(self) -> None:
+        from backend.generation.paper_compose import workflow
+
+        class ImbalancedCrawler:
+            async def get_available_filters(self) -> dict:
+                return {"question_types": [{"name": "解答题"}]}
+
+            async def search_by_keyword(self, **_kwargs) -> dict:
+                return {
+                    "success": True,
+                    "questions": [
+                        {
+                            "question_id": "q-easy",
+                            "subject": "高中数学",
+                            "type": "解答题",
+                            "question_type": "解答题",
+                            "difficulty": "简单",
+                            "knowledge_points": ["函数"],
+                            "stem": "高质量但难度偏低的题干",
+                            "answer": "1",
+                            "analysis": "偏简单。",
+                            "quality_score": 100,
+                            "source": "zujuan",
+                        },
+                        {
+                            "question_id": "q-medium",
+                            "subject": "高中数学",
+                            "type": "解答题",
+                            "question_type": "解答题",
+                            "difficulty": "中等",
+                            "knowledge_points": ["函数"],
+                            "stem": "符合目标难度的题干",
+                            "answer": "2",
+                            "analysis": "难度匹配。",
+                            "quality_score": 70,
+                            "source": "zujuan",
+                        },
+                    ],
+                }
+
+        saved_questions = []
+
+        async def fake_save_paper(**kwargs) -> int:
+            saved_questions.extend(kwargs["questions"])
+            return 103
+
+        async def fake_get_paper(**_kwargs) -> dict:
+            return {
+                "paper_id": 103,
+                "paper_name": "测试卷",
+                "source_mode": "zujuan",
+                "created_at": "2026-06-05T00:00:00",
+                "questions": [
+                    {
+                        "question_id": q["question_id"],
+                        "order": idx,
+                        "type": q["type"],
+                        "difficulty": q["difficulty"],
+                        "knowledge_point": q["knowledge_point"],
+                        "stem": q["stem"],
+                    }
+                    for idx, q in enumerate(saved_questions, start=1)
+                ],
+            }
+
+        request = {
+            "taskId": "task-balance",
+            "subject": "高中数学",
+            "topic": "函数",
+            "paperName": "测试卷",
+            "slots": [{"questionType": "解答题", "count": 1, "difficulty": "medium"}],
+            "options": {"sourceStrategy": "bank_only", "fetchDetails": False, "autoReview": False, "minQualityScore": 0},
+        }
+
+        with patch.object(workflow, "get_crawler", new=AsyncMock(return_value=ImbalancedCrawler())), patch.object(
+            workflow,
+            "fetch_local_candidates",
+            new=AsyncMock(return_value=[]),
+        ), patch.object(
+            workflow,
+            "get_question_cache",
+            new=AsyncMock(return_value={}),
+        ), patch.object(
+            workflow,
+            "save_paper",
+            new=fake_save_paper,
+        ), patch.object(
+            workflow,
+            "get_paper",
+            new=fake_get_paper,
+        ), patch.object(
+            workflow,
+            "mark_used_questions",
+            new=AsyncMock(return_value=1),
+        ):
+            events = [event async for event in workflow.compose_paper_events(request, user_id="user-a")]
+
+        self.assertEqual(saved_questions[0]["question_id"], "q-medium")
+        correction_steps = [
+            event["step"]
+            for event in events
+            if event.get("type") == "step"
+            and isinstance(event.get("step"), dict)
+            and event["step"].get("id") == "paper_balance_correction"
+            and event["step"].get("status") == "completed"
+        ]
+        self.assertEqual(len(correction_steps), 1)
+        self.assertEqual(correction_steps[0]["output"]["totalReplaced"], 1)
+
+    async def test_compose_workflow_pending_review_emits_draft_without_saving(self) -> None:
+        from backend.generation.paper_compose import workflow
+
+        class OneQuestionCrawler:
+            async def get_available_filters(self) -> dict:
+                return {"question_types": [{"name": "解答题"}]}
+
+            async def search_by_keyword(self, **_kwargs) -> dict:
+                return {
+                    "success": True,
+                    "questions": [
+                        {
+                            "question_id": "q-review",
+                            "subject": "高中数学",
+                            "type": "解答题",
+                            "question_type": "解答题",
+                            "difficulty": "中等",
+                            "knowledge_points": ["函数"],
+                            "stem": "待人工审核题干",
+                            "answer": "1",
+                            "analysis": "解析。",
+                            "quality_score": 90,
+                            "source": "zujuan",
+                        }
+                    ],
+                }
+
+        request = {
+            "taskId": "task-review",
+            "subject": "高中数学",
+            "topic": "函数",
+            "paperName": "待审卷",
+            "slots": [{"questionType": "解答题", "count": 1, "difficulty": "medium"}],
+            "options": {
+                "sourceStrategy": "bank_only",
+                "fetchDetails": False,
+                "autoReview": False,
+                "requireHumanReview": True,
+            },
+        }
+
+        save_mock = AsyncMock(return_value=104)
+        with patch.object(workflow, "get_crawler", new=AsyncMock(return_value=OneQuestionCrawler())), patch.object(
+            workflow,
+            "fetch_local_candidates",
+            new=AsyncMock(return_value=[]),
+        ), patch.object(
+            workflow,
+            "get_question_cache",
+            new=AsyncMock(return_value={}),
+        ), patch.object(
+            workflow,
+            "_load_used_question_ids",
+            new=AsyncMock(return_value=set()),
+        ), patch.object(
+            workflow,
+            "save_paper",
+            new=save_mock,
+        ):
+            events = [event async for event in workflow.compose_paper_events(request, user_id="user-a")]
+
+        pending = [event for event in events if event.get("type") == "pending_review"]
+        self.assertEqual(len(pending), 1)
+        draft = pending[0]["composeDraft"]
+        self.assertEqual(draft["paperName"], "待审卷")
+        self.assertEqual(draft["questions"][0]["question_id"], "q-review")
+        save_mock.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

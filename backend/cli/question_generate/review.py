@@ -91,7 +91,7 @@ def _review_session(*, user_id: str, session_id: str) -> dict:
                         model="",
                     )
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - manual review stays usable if AI review fails.
                 logger.warning("question_generate_review_failed", exc_info=True)
                 review = {"error": str(exc)}
             q["keep"] = True
@@ -121,7 +121,7 @@ def _review_session(*, user_id: str, session_id: str) -> dict:
                             model="",
                         )
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - batch review records per-item failure and continues.
                     logger.warning("question_generate_review_failed", exc_info=True)
                     review = {"error": str(exc)}
                 item["keep"] = True

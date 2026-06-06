@@ -44,6 +44,7 @@ from backend.database.repositories.system.tasks import (
 from backend.database.repositories.system.tasks import (
     update_task_status as db_update_task_status,
 )
+from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
 from backend.shared.tasks import task_runtime
 from backend.tasks import (
@@ -72,6 +73,135 @@ def _sse_headers() -> dict:
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _payload_bool(payload: dict, *keys: str, default: bool = False) -> bool:
+    if not isinstance(payload, dict):
+        return bool(default)
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+        raw = str(value).strip().lower()
+        if raw in {"", "0", "false", "no", "n", "off"}:
+            return False
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        return bool(value)
+    return bool(default)
+
+
+def _latest_compose_draft(task: dict) -> dict:
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    draft = result.get("composeDraft") if isinstance(result, dict) else None
+    if isinstance(draft, dict):
+        return draft
+
+    events = task.get("events") if isinstance(task.get("events"), list) else []
+    for evt in reversed(events):
+        data = evt.get("data") if isinstance(evt, dict) and isinstance(evt.get("data"), dict) else {}
+        draft = data.get("composeDraft") or data.get("compose_draft")
+        if isinstance(draft, dict):
+            return draft
+    return {}
+
+
+def _review_item_id(item: dict) -> str:
+    return str(item.get("questionId") or item.get("question_id") or "").strip()
+
+
+def _status_rejects_question(value: object) -> bool:
+    raw = str(value or "").strip().lower()
+    return raw in {"reject", "rejected", "remove", "removed", "delete", "deleted"}
+
+
+def _reviewed_questions_from_draft(draft: dict, payload: dict) -> list[dict]:
+    questions = draft.get("questions") if isinstance(draft.get("questions"), list) else []
+    review_items = payload.get("questions") if isinstance(payload.get("questions"), list) else []
+    edits = {_review_item_id(item): item for item in review_items if isinstance(item, dict) and _review_item_id(item)}
+
+    reviewed: list[dict] = []
+    editable_keys = {
+        "type",
+        "difficulty",
+        "difficulty_value",
+        "knowledge_point",
+        "knowledge_points_json",
+        "source_url",
+        "source",
+        "date",
+        "stem",
+        "stem_fingerprint",
+        "quality_score",
+        "quality_flags",
+        "answer",
+        "analysis",
+        "answer_source",
+        "review_status",
+        "review_action",
+        "review_score",
+        "review_summary",
+    }
+    aliases = {
+        "questionType": "type",
+        "knowledgePoint": "knowledge_point",
+        "sourceUrl": "source_url",
+        "answerSource": "answer_source",
+        "reviewStatus": "review_status",
+        "reviewAction": "review_action",
+        "reviewScore": "review_score",
+        "reviewSummary": "review_summary",
+    }
+
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+        qid = str(question.get("question_id") or question.get("questionId") or "").strip()
+        if not qid:
+            continue
+        edit = edits.get(qid) or {}
+        if _status_rejects_question(edit.get("status") or edit.get("reviewStatus") or edit.get("action")):
+            continue
+
+        merged = dict(question)
+        merged["question_id"] = qid
+        for key, value in edit.items():
+            target_key = aliases.get(str(key), str(key))
+            if target_key in editable_keys:
+                merged[target_key] = value
+        if edit:
+            merged["review_status"] = str(merged.get("review_status") or "approved").strip() or "approved"
+        reviewed.append(merged)
+
+    return reviewed
+
+
+def _paper_result_payload(paper: dict, *, paper_id: int, fallback_name: str) -> dict:
+    return {
+        "id": int(paper.get("paper_id") or paper_id),
+        "name": str(paper.get("paper_name") or fallback_name),
+        "createdAt": str(paper.get("created_at") or ""),
+        "sourceMode": str(paper.get("source_mode") or ""),
+        "questions": [
+            {
+                "questionId": str(q.get("question_id") or ""),
+                "order": q.get("order"),
+                "type": q.get("type"),
+                "difficulty": q.get("difficulty"),
+                "knowledgePoint": q.get("knowledge_point"),
+                "sourceUrl": q.get("source_url"),
+                "stem": q.get("stem") or "",
+            }
+            for q in (paper.get("questions") or [])
+            if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+        ],
+    }
 
 
 @router.get("", response_model=dict)
@@ -497,6 +627,91 @@ async def resume_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     raise HTTPException(status_code=400, detail="task_not_resumable")
 
 
+@router.post("/{task_id}/compose-review", response_model=dict)
+async def review_composed_paper(task_id: str, payload: Optional[dict] = None, user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    task = await db_get_task(
+        user_id=user_id,
+        task_id=task_id,
+        include_events=True,
+        events_limit=5000,
+        events_after_seq=0,
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    if str(task.get("task_type") or "") != "paper_compose":
+        raise HTTPException(status_code=400, detail="task_type_not_supported")
+    if str(task.get("status") or "").strip() != "pending_review":
+        raise HTTPException(status_code=400, detail="task_not_pending_review")
+
+    draft = _latest_compose_draft(task)
+    if not draft:
+        raise HTTPException(status_code=400, detail="compose_draft_not_found")
+
+    body = payload if isinstance(payload, dict) else {}
+    questions = _reviewed_questions_from_draft(draft, body)
+    if not questions:
+        raise HTTPException(status_code=400, detail="no_questions_approved")
+
+    paper_name = str(body.get("paperName") or body.get("paper_name") or draft.get("paperName") or "组卷任务").strip()
+    mode = str(draft.get("mode") or "").strip().lower()
+    try:
+        existing_paper_id = int(body.get("paperId") or body.get("paper_id") or draft.get("paperId") or 0)
+    except (TypeError, ValueError):
+        existing_paper_id = 0
+
+    if mode == "fill_shortfalls":
+        if existing_paper_id <= 0:
+            raise HTTPException(status_code=400, detail="missing_paper_id")
+        await add_questions_to_paper(user_id=user_id, paper_id=existing_paper_id, questions=questions)
+        paper_id = existing_paper_id
+    else:
+        paper_id = await save_paper(user_id=user_id, paper_name=paper_name, questions=questions)
+
+    paper = await get_paper(user_id=user_id, paper_id=paper_id)
+    if not paper:
+        raise HTTPException(status_code=500, detail="paper_save_failed")
+
+    result = _paper_result_payload(paper, paper_id=paper_id, fallback_name=paper_name)
+    await db_append_task_event(
+        user_id=user_id,
+        task_id=task_id,
+        event_type="step",
+        payload={
+            "step": {
+                "id": "compose_review",
+                "title": "人工审核完成",
+                "status": "completed",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "compose-review",
+                "output": {"paperId": paper_id, "approved": len(questions)},
+            }
+        },
+        progress=95.0,
+    )
+    await db_append_task_event(
+        user_id=user_id,
+        task_id=task_id,
+        event_type="result",
+        payload={"result": result},
+        progress=100.0,
+    )
+    await db_update_task_status(
+        user_id=user_id,
+        task_id=task_id,
+        status="completed",
+        progress=100.0,
+        result=result,
+        error={},
+        ended_at=utcnow_naive(),
+    )
+    return {"success": True, "taskId": task_id, "paper": result}
+
+
 @router.post("/{task_id}/cancel", response_model=dict)
 async def cancel_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
@@ -600,13 +815,10 @@ async def export_paper_task(paper_id: int, payload: Optional[dict] = None, user:
     req = {
         "paper_id": int(paper_id),
         "format": fmt,
-        "include_stem": bool(body.get("includeStem")) if "includeStem" in body else bool(body.get("include_stem")),
-        "include_answer": bool(body.get("includeAnswer"))
-        if "includeAnswer" in body
-        else bool(body.get("include_answer")),
-        "include_analysis": bool(body.get("includeAnalysis"))
-        if "includeAnalysis" in body
-        else bool(body.get("include_analysis")),
+        "include_stem": _payload_bool(body, "includeStem", "include_stem"),
+        "include_answer": _payload_bool(body, "includeAnswer", "include_answer"),
+        "include_analysis": _payload_bool(body, "includeAnalysis", "include_analysis"),
+        "split_bundle": _payload_bool(body, "splitBundle", "split_bundle", "split"),
     }
 
     task = await submit_export_paper_task(user_id=user_id, request=req)

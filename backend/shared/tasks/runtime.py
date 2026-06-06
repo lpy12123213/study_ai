@@ -42,7 +42,7 @@ class RuntimeTask:
 
     created_at_s: float = field(default_factory=_now_s)
     updated_at_s: float = field(default_factory=_now_s)
-    status: str = "running"  # running|paused|completed|failed|canceled
+    status: str = "running"  # running|paused|pending_review|completed|failed|canceled
     error: Optional[str] = None
     progress: float = 0.0
 
@@ -457,6 +457,34 @@ class TaskRuntime:
         except Exception:
             logger.exception(
                 "task_runtime_complete_write_failed",
+                extra={"task_id": task.task_id, "user_id": task.user_id, "task_type": task.task_type},
+            )
+        async with task.cond:
+            task.cond.notify_all()
+
+    async def defer_task(
+        self,
+        task: RuntimeTask,
+        *,
+        status: str,
+        result: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        next_status = str(status or "").strip() or "pending_review"
+        task.status = next_status
+        task.updated_at_s = _now_s()
+        await self.flush_task_events(task)
+        try:
+            await self._store.update_task_status(
+                user_id=task.user_id,
+                task_id=task.task_id,
+                status=next_status,
+                progress=float(task.progress or 0.0),
+                result=result or {},
+                error={},
+            )
+        except Exception:
+            logger.exception(
+                "task_runtime_defer_write_failed",
                 extra={"task_id": task.task_id, "user_id": task.user_id, "task_type": task.task_type},
             )
         async with task.cond:

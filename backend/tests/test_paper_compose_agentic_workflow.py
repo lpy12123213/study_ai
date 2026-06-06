@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -84,6 +84,83 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.step_id, "author_questions")
         self.assertEqual(decision.arguments["count"], 2)
         llm_call.assert_called_once()
+
+    async def test_paper_compose_runner_uses_legacy_blueprint_by_default(self) -> None:
+        from backend.shared.tasks import RuntimeTask
+        from backend.tasks import runners
+
+        async def fake_legacy_events(*_args, **_kwargs):
+            yield {"type": "result", "result": {"paper_id": 21, "paper_name": "legacy"}}
+
+        task = RuntimeTask(
+            task_id="compose-legacy",
+            user_id="u-1",
+            task_type="paper_compose",
+            title="legacy",
+            request={"subject": "高中数学", "paperName": "测试卷"},
+        )
+
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            runners,
+            "compose_paper_events",
+            side_effect=fake_legacy_events,
+        ) as legacy_run, patch.object(
+            runners,
+            "run_agentic_blueprint_paper_events",
+            side_effect=AssertionError("agentic blueprint should not run by default"),
+        ), patch.object(
+            runners.task_runtime,
+            "append_event",
+            new=AsyncMock(),
+        ), patch.object(
+            runners.task_runtime,
+            "complete_task",
+            new=AsyncMock(),
+        ) as complete:
+            await runners.run_paper_compose_task(task, user_id="u-1")
+
+        legacy_run.assert_called_once()
+        complete.assert_awaited_once()
+        self.assertEqual(complete.await_args.kwargs["result"]["paper_id"], 21)
+
+    async def test_paper_compose_runner_uses_agentic_blueprint_when_enabled(self) -> None:
+        from backend.shared.tasks import RuntimeTask
+        from backend.tasks import runners
+
+        async def fake_agentic_events(*_args, **_kwargs):
+            yield {"type": "agent_decision", "data": {"name": "compose_paper_blueprint"}}
+            yield {"type": "result", "result": {"paper_id": 22, "paper_name": "agentic-blueprint"}}
+
+        task = RuntimeTask(
+            task_id="compose-agentic",
+            user_id="u-1",
+            task_type="paper_compose",
+            title="agentic",
+            request={"subject": "高中数学", "paperName": "测试卷"},
+        )
+
+        with patch.dict(os.environ, {"PAPER_COMPOSE_AGENTIC_BLUEPRINT": "1"}, clear=False), patch.object(
+            runners,
+            "run_agentic_blueprint_paper_events",
+            side_effect=fake_agentic_events,
+        ) as agentic_run, patch.object(
+            runners,
+            "compose_paper_events",
+            side_effect=AssertionError("legacy blueprint should not run"),
+        ), patch.object(
+            runners.task_runtime,
+            "append_event",
+            new=AsyncMock(),
+        ), patch.object(
+            runners.task_runtime,
+            "complete_task",
+            new=AsyncMock(),
+        ) as complete:
+            await runners.run_paper_compose_task(task, user_id="u-1")
+
+        agentic_run.assert_called_once()
+        complete.assert_awaited_once()
+        self.assertEqual(complete.await_args.kwargs["result"]["paper_id"], 22)
 
 
 if __name__ == "__main__":

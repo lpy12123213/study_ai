@@ -18,10 +18,31 @@ function recordNumber(value: unknown, key: string): number | undefined {
   return typeof item === 'number' ? item : undefined
 }
 
+function recordBoolean(value: unknown, key: string): boolean | undefined {
+  if (!isRecord(value)) return undefined
+  const item = value[key]
+  return typeof item === 'boolean' ? item : undefined
+}
+
 function recordStringArray(value: unknown, key: string): string[] | undefined {
   if (!isRecord(value)) return undefined
   const item = value[key]
   return Array.isArray(item) ? item.filter((entry): entry is string => typeof entry === 'string') : undefined
+}
+
+function recordExportPart(value: unknown): PaperExportPart | undefined {
+  if (!isRecord(value)) return undefined
+  return {
+    format: recordString(value, 'format'),
+    url: recordString(value, 'url'),
+    filename: recordString(value, 'filename'),
+    pdfUrl: recordString(value, 'pdf_url'),
+    pdfFilename: recordString(value, 'pdf_filename'),
+    texUrl: recordString(value, 'tex_url'),
+    texFilename: recordString(value, 'tex_filename'),
+    error: recordString(value, 'error'),
+    log: recordString(value, 'log'),
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -62,10 +83,10 @@ export interface PaperExportRequest {
   includeStem?: boolean
   includeAnswer?: boolean
   includeAnalysis?: boolean
+  splitBundle?: boolean
 }
 
-export interface PaperExportResponse {
-  success: boolean
+export interface PaperExportPart {
   format?: string
   url?: string
   filename?: string
@@ -76,6 +97,21 @@ export interface PaperExportResponse {
   texFilename?: string
   error?: string
   log?: string
+}
+
+export interface PaperExportResponse extends PaperExportPart {
+  success: boolean
+  splitBundle?: boolean
+  examPaper?: PaperExportPart
+  answerKey?: PaperExportPart
+  examPaperUrl?: string
+  examPaperFilename?: string
+  examPaperTexUrl?: string
+  examPaperTexFilename?: string
+  answerKeyUrl?: string
+  answerKeyFilename?: string
+  answerKeyTexUrl?: string
+  answerKeyTexFilename?: string
 }
 
 export interface GenerateFullPaperRequest {
@@ -324,11 +360,13 @@ export async function exportPaper(
     includeStem: Boolean(req.includeStem),
     includeAnswer: Boolean(req.includeAnswer),
     includeAnalysis: Boolean(req.includeAnalysis),
+    splitBundle: Boolean(req.splitBundle),
   })
   const data = isRecord(response.data) ? response.data : {}
 
   return {
     success: Boolean(data.success),
+    splitBundle: recordBoolean(data, 'splitBundle') ?? recordBoolean(data, 'split_bundle'),
     format: recordString(data, 'format'),
     url: recordString(data, 'url'),
     filename: recordString(data, 'filename'),
@@ -338,6 +376,16 @@ export async function exportPaper(
     texFilename: recordString(data, 'tex_filename'),
     error: recordString(data, 'error'),
     log: recordString(data, 'log'),
+    examPaper: recordExportPart(data.examPaper) || recordExportPart(data.exam_paper),
+    answerKey: recordExportPart(data.answerKey) || recordExportPart(data.answer_key),
+    examPaperUrl: recordString(data, 'examPaperUrl') || recordString(data, 'exam_paper_url'),
+    examPaperFilename: recordString(data, 'examPaperFilename') || recordString(data, 'exam_paper_filename'),
+    examPaperTexUrl: recordString(data, 'examPaperTexUrl') || recordString(data, 'exam_paper_tex_url'),
+    examPaperTexFilename: recordString(data, 'examPaperTexFilename') || recordString(data, 'exam_paper_tex_filename'),
+    answerKeyUrl: recordString(data, 'answerKeyUrl') || recordString(data, 'answer_key_url'),
+    answerKeyFilename: recordString(data, 'answerKeyFilename') || recordString(data, 'answer_key_filename'),
+    answerKeyTexUrl: recordString(data, 'answerKeyTexUrl') || recordString(data, 'answer_key_tex_url'),
+    answerKeyTexFilename: recordString(data, 'answerKeyTexFilename') || recordString(data, 'answer_key_tex_filename'),
   }
 }
 

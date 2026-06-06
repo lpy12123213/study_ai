@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -20,7 +21,7 @@ from backend.api import media as media_api
 from backend.api import papers as papers_api
 from backend.api import subjects as subjects_api
 from backend.database.repositories.question import papers as papers_repo
-from backend.database.schema import Base
+from backend.database.schema import Base, QuestionCache
 from backend.generation.study_materials import orchestrator as task_manager
 
 
@@ -257,6 +258,36 @@ class TestPaperContentStorageConfig(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(question["stem"], "")
         self.assertEqual(question["answer"], "")
         self.assertEqual(question["analysis"], "")
+
+    async def test_save_paper_caches_local_content_for_export_without_paper_row_storage(self) -> None:
+        paper_id = await papers_repo.save_paper(
+            user_id="user-a",
+            paper_name="Local Export",
+            questions=[
+                {
+                    "question_id": "local-q-1",
+                    "stem": "题干内容",
+                    "answer": "答案",
+                    "analysis": "解析",
+                }
+            ],
+        )
+
+        stored = await papers_repo.get_paper(user_id="user-a", paper_id=paper_id)
+        question = stored["questions"][0]
+        self.assertEqual(question["stem"], "")
+        self.assertEqual(question["answer"], "")
+        self.assertEqual(question["analysis"], "")
+
+        async with self.session_maker() as session:
+            result = await session.execute(
+                select(QuestionCache).where(QuestionCache.question_id == "local-q-1")
+            )
+            cache = result.scalar_one()
+
+        self.assertEqual(cache.stem, "题干内容")
+        self.assertEqual(cache.answer, "答案")
+        self.assertEqual(cache.analysis, "解析")
 
     async def test_save_paper_can_opt_in_question_content_storage(self) -> None:
         with patch.dict(

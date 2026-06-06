@@ -13,6 +13,45 @@ from backend.generation.paper_compose.exporters.latex import compile_latex_to_pd
 from backend.generation.paper_compose.exporters.markdown import render_paper_markdown
 
 
+def _canonical_export_format(fmt: str) -> str:
+    fmt_norm = (fmt or "").strip().lower()
+    if fmt_norm in {"md", "markdown"}:
+        return "markdown"
+    if fmt_norm in {"tex", "latex"}:
+        return "latex"
+    if fmt_norm in {"pdf", "docx", "word"}:
+        return "docx" if fmt_norm == "word" else fmt_norm
+    return fmt_norm or "markdown"
+
+
+def _part_primary_url(part: Dict[str, Any]) -> str:
+    return str(part.get("pdf_url") or part.get("url") or part.get("tex_url") or "").strip()
+
+
+def _part_primary_filename(part: Dict[str, Any]) -> str:
+    return str(part.get("pdf_filename") or part.get("filename") or part.get("tex_filename") or "").strip()
+
+
+def _add_part_aliases(out: Dict[str, Any], *, camel_prefix: str, snake_prefix: str, part: Dict[str, Any]) -> None:
+    url = _part_primary_url(part)
+    filename = _part_primary_filename(part)
+    if url:
+        out[f"{camel_prefix}Url"] = url
+        out[f"{snake_prefix}_url"] = url
+    if filename:
+        out[f"{camel_prefix}Filename"] = filename
+        out[f"{snake_prefix}_filename"] = filename
+
+    tex_url = str(part.get("tex_url") or "").strip()
+    tex_filename = str(part.get("tex_filename") or "").strip()
+    if tex_url:
+        out[f"{camel_prefix}TexUrl"] = tex_url
+        out[f"{snake_prefix}_tex_url"] = tex_url
+    if tex_filename:
+        out[f"{camel_prefix}TexFilename"] = tex_filename
+        out[f"{snake_prefix}_tex_filename"] = tex_filename
+
+
 async def export_paper(
     paper: dict,
     *,
@@ -146,3 +185,48 @@ async def export_paper(
         return {"format": "docx", "success": True, **out}
 
     raise ValueError("unsupported_format")
+
+
+async def export_paper_bundle(
+    paper: dict,
+    *,
+    user_id: str,
+    fmt: str,
+    split_bundle: bool = True,
+) -> Dict[str, Any]:
+    """Export a student exam paper and a separate answer key for the same paper."""
+
+    exam_out = await export_paper(
+        paper,
+        user_id=user_id,
+        fmt=fmt,
+        include_stem=True,
+        include_answer=False,
+        include_analysis=False,
+    )
+    answer_out = await export_paper(
+        paper,
+        user_id=user_id,
+        fmt=fmt,
+        include_stem=True,
+        include_answer=True,
+        include_analysis=True,
+    )
+
+    exam_ok = not (isinstance(exam_out, dict) and exam_out.get("success") is False)
+    answer_ok = not (isinstance(answer_out, dict) and answer_out.get("success") is False)
+    result: Dict[str, Any] = {
+        "format": str(exam_out.get("format") or answer_out.get("format") or _canonical_export_format(fmt)),
+        "success": bool(exam_ok and answer_ok),
+        "splitBundle": bool(split_bundle),
+        "split_bundle": bool(split_bundle),
+        "examPaper": dict(exam_out),
+        "exam_paper": dict(exam_out),
+        "answerKey": dict(answer_out),
+        "answer_key": dict(answer_out),
+    }
+    _add_part_aliases(result, camel_prefix="examPaper", snake_prefix="exam_paper", part=exam_out)
+    _add_part_aliases(result, camel_prefix="answerKey", snake_prefix="answer_key", part=answer_out)
+    if not result["success"]:
+        result["error"] = "split_export_failed"
+    return result

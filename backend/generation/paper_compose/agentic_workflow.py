@@ -313,13 +313,14 @@ def _result_from_context(executor: PaperComposeToolExecutor, request: Dict[str, 
     }
 
 
-async def run_agentic_full_paper_events(
+async def _run_agentic_paper_events(
     request: Dict[str, Any],
     *,
     user_id: str,
+    task_type: str,
 ) -> AsyncIterator[Dict[str, Any]]:
     req = dict(request or {})
-    spec = build_agent_run_spec_for_task(task_type="paper_generate_full", request=req)
+    spec = build_agent_run_spec_for_task(task_type=task_type, request=req)
     if spec is None:
         yield {"type": "error", "error": "agent_spec_missing"}
         return
@@ -341,3 +342,21 @@ async def run_agentic_full_paper_events(
             yield {"type": "progress", "progress": 100.0, "stage": "agentic_done"}
             yield {"type": "result", "result": _result_from_context(executor, req)}
             return
+
+
+async def run_agentic_full_paper_events(
+    request: Dict[str, Any],
+    *,
+    user_id: str,
+) -> AsyncIterator[Dict[str, Any]]:
+    async for event in _run_agentic_paper_events(request, user_id=user_id, task_type="paper_generate_full"):
+        yield event
+
+
+async def run_agentic_blueprint_paper_events(
+    request: Dict[str, Any],
+    *,
+    user_id: str,
+) -> AsyncIterator[Dict[str, Any]]:
+    async for event in _run_agentic_paper_events(request, user_id=user_id, task_type="paper_compose"):
+        yield event

@@ -116,9 +116,9 @@ class PaperMixedSourcesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(appended, 1)
         self.assertIsNotNone(paper)
         self.assertEqual(paper.get("source_mode"), "hybrid")
-        self.assertEqual(paper["questions"][1]["stem"], "AI 追加题干")
-        self.assertEqual(paper["questions"][1]["answer"], "42")
-        self.assertEqual(paper["questions"][1]["analysis"], "构造函数求解。")
+        self.assertEqual(paper["questions"][1]["stem"], "")
+        self.assertEqual(paper["questions"][1]["answer"], "")
+        self.assertEqual(paper["questions"][1]["analysis"], "")
 
         cache = await cache_repo.get_question_cache(question_ids=["ai_append_1"])
         self.assertEqual(cache["ai_append_1"]["stem"], "AI 追加题干")

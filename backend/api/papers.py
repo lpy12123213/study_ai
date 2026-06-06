@@ -17,6 +17,7 @@ from backend.database.repositories.question.papers import delete_paper, get_pape
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.generation.paper_compose.analysis import analyze_paper
 from backend.generation.paper_compose.export import export_paper as export_paper_doc
+from backend.generation.paper_compose.export import export_paper_bundle
 from backend.shared.tasks import task_runtime
 from backend.tasks import submit_generate_full_paper_task, submit_paper_compose_task
 
@@ -32,6 +33,28 @@ _PAPER_DOWNLOAD_LINK_LIMITER = SlidingWindowRateLimiter(
 
 def clear_paper_analysis_cache() -> None:
     _PAPER_ANALYSIS_CACHE.clear()
+
+
+def _payload_bool(payload: dict, *keys: str, default: bool = False) -> bool:
+    if not isinstance(payload, dict):
+        return bool(default)
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+        raw = str(value).strip().lower()
+        if raw in {"", "0", "false", "no", "n", "off"}:
+            return False
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        return bool(value)
+    return bool(default)
 
 
 def _infer_paper_source_mode(question_ids: list[str]) -> str:
@@ -216,21 +239,23 @@ async def export_paper(paper_id: int, payload: Optional[dict] = None, user: dict
     body = payload if isinstance(payload, dict) else {}
     fmt = str(body.get("format") or body.get("fmt") or "markdown").strip().lower()
 
-    include_stem = bool(body.get("includeStem")) if "includeStem" in body else bool(body.get("include_stem"))
-    include_answer = bool(body.get("includeAnswer")) if "includeAnswer" in body else bool(body.get("include_answer"))
-    include_analysis = (
-        bool(body.get("includeAnalysis")) if "includeAnalysis" in body else bool(body.get("include_analysis"))
-    )
+    include_stem = _payload_bool(body, "includeStem", "include_stem")
+    include_answer = _payload_bool(body, "includeAnswer", "include_answer")
+    include_analysis = _payload_bool(body, "includeAnalysis", "include_analysis")
+    split_bundle = _payload_bool(body, "splitBundle", "split_bundle", "split")
 
     try:
-        out = await export_paper_doc(
-            paper,
-            user_id=user_id,
-            fmt=fmt,
-            include_stem=include_stem,
-            include_answer=include_answer,
-            include_analysis=include_analysis,
-        )
+        if split_bundle:
+            out = await export_paper_bundle(paper, user_id=user_id, fmt=fmt, split_bundle=True)
+        else:
+            out = await export_paper_doc(
+                paper,
+                user_id=user_id,
+                fmt=fmt,
+                include_stem=include_stem,
+                include_answer=include_answer,
+                include_analysis=include_analysis,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # pragma: no cover
@@ -248,6 +273,7 @@ async def export_paper(paper_id: int, payload: Optional[dict] = None, user: dict
             "include_stem": include_stem,
             "include_answer": include_answer,
             "include_analysis": include_analysis,
+            "split_bundle": split_bundle,
         },
     )
     return {"success": True, **(out if isinstance(out, dict) else {})}

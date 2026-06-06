@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -12,6 +13,8 @@ from backend.generation.knowledge_video.service import run_knowledge_video_task 
 from backend.generation.lesson_plan.service import generate_lesson_plan_stream
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 from backend.generation.paper_compose.export import export_paper as export_paper_doc
+from backend.generation.paper_compose.export import export_paper_bundle
+from backend.generation.paper_compose.agentic_workflow import run_agentic_blueprint_paper_events
 from backend.generation.paper_compose.full_paper_workflow import generate_full_paper_events
 from backend.generation.paper_compose.workflow import compose_paper_events
 from backend.shared.tasks import RuntimeTask, task_runtime
@@ -19,11 +22,40 @@ from backend.shared.tasks import RuntimeTask, task_runtime
 logger = get_logger(__name__)
 
 
+def _truthy(value, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _request_bool(request: dict, *keys: str, default: bool = False) -> bool:
+    if not isinstance(request, dict):
+        return bool(default)
+    for key in keys:
+        if key in request:
+            return _truthy(request.get(key), default=default)
+    return bool(default)
+
+
+def _use_agentic_blueprint(request: dict) -> bool:
+    req = request if isinstance(request, dict) else {}
+    for key in ("agenticBlueprint", "agentic_blueprint", "agentic"):
+        if key in req:
+            return _truthy(req.get(key), default=False)
+    return _truthy(os.getenv("PAPER_COMPOSE_AGENTIC_BLUEPRINT"), default=False)
+
+
 async def run_paper_compose_task(task: RuntimeTask, *, user_id: str) -> None:
     """Run the paper-compose workflow and emit events into the shared task runtime."""
 
     try:
-        async for evt in compose_paper_events(task.request, user_id=user_id):
+        event_source = run_agentic_blueprint_paper_events if _use_agentic_blueprint(task.request) else compose_paper_events
+        async for evt in event_source(task.request, user_id=user_id):
             if task.status != "running":
                 break
 
@@ -33,6 +65,10 @@ async def run_paper_compose_task(task: RuntimeTask, *, user_id: str) -> None:
             if kind == "result":
                 result = evt.get("result") if isinstance(evt.get("result"), dict) else {"result": evt.get("result")}
                 await task_runtime.complete_task(task, result=result)
+                return
+            if kind == "pending_review":
+                draft = evt.get("composeDraft") if isinstance(evt.get("composeDraft"), dict) else {}
+                await task_runtime.defer_task(task, status="pending_review", result={"composeDraft": draft})
                 return
             if kind == "error":
                 msg = str(evt.get("error") or "compose_failed").strip() or "compose_failed"
@@ -110,9 +146,10 @@ async def run_export_paper_task(task: RuntimeTask, *, user_id: str) -> None:
     except (TypeError, ValueError):
         paper_id = 0
     fmt = str(request.get("format") or request.get("fmt") or "markdown").strip().lower()
-    include_stem = bool(request.get("include_stem") or request.get("includeStem"))
-    include_answer = bool(request.get("include_answer") or request.get("includeAnswer"))
-    include_analysis = bool(request.get("include_analysis") or request.get("includeAnalysis"))
+    include_stem = _request_bool(request, "include_stem", "includeStem")
+    include_answer = _request_bool(request, "include_answer", "includeAnswer")
+    include_analysis = _request_bool(request, "include_analysis", "includeAnalysis")
+    split_bundle = _request_bool(request, "split_bundle", "splitBundle", "split")
 
     paper = None
     if paper_id > 0:
@@ -132,14 +169,17 @@ async def run_export_paper_task(task: RuntimeTask, *, user_id: str) -> None:
     await task_runtime.append_event(task, {"type": "progress", "progress": 10.0})
 
     try:
-        out = await export_paper_doc(
-            paper,
-            user_id=user_id,
-            fmt=fmt,
-            include_stem=include_stem,
-            include_answer=include_answer,
-            include_analysis=include_analysis,
-        )
+        if split_bundle:
+            out = await export_paper_bundle(paper, user_id=user_id, fmt=fmt, split_bundle=True)
+        else:
+            out = await export_paper_doc(
+                paper,
+                user_id=user_id,
+                fmt=fmt,
+                include_stem=include_stem,
+                include_answer=include_answer,
+                include_analysis=include_analysis,
+            )
     except asyncio.CancelledError:
         if task.status != "running":
             async with task.cond:

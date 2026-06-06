@@ -405,7 +405,7 @@ class Task(Base):
     title = Column(String(200), nullable=False, default="")
     status = Column(
         String(20), nullable=False, index=True, default="running"
-    )  # running|paused|completed|failed|canceled
+    )  # running|paused|pending_review|completed|failed|canceled
     progress = Column(Float, default=0.0)
     last_seq = Column(Integer, default=0)
 

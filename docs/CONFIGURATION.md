@@ -225,6 +225,10 @@ python scripts/check_config.py --strict
 - `TOT_PRUNE_THRESHOLD`
 - `TOT_TIMEOUT`
 
+## AI 组卷
+
+- `PAPER_COMPOSE_AGENTIC_BLUEPRINT`: 默认 `0`。设为 `1` 时，蓝图组卷 `/api/tasks/papers/compose` 默认走 Agentic 编排；单次请求可用 `agenticBlueprint` / `agentic_blueprint` / `agentic` 覆盖。
+
 ## 试卷导出
 
 - `PAPER_EXPORT_LATEX_BACKEND`: `auto` / `docker` / `host`

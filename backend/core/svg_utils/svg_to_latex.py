@@ -30,13 +30,46 @@ from typing import Dict, List, Optional, Set, Tuple
 from backend.core.cache import TTLCache
 from backend.core.logging_utils import get_logger
 from backend.core.svg_utils.glyph_types import (
-    LARGE_OPERATORS as _LARGE_OPERATORS_BASE,
     SUBSCRIPT_ONLY_OPERATORS,
     CasesRegion,
-    FormulaStructure,
     FractionBar,
     Glyph,
     SqrtRegion,
+)
+from backend.core.svg_utils.glyph_types import (
+    FormulaStructure as FormulaStructure,
+)
+from backend.core.svg_utils.signatures import (
+    AMBIGUOUS_SIGNATURES,
+    GLYPH_SIGNATURES,
+    LARGE_OPERATORS,
+    add_signature,
+    load_signatures,
+    resolve_ambiguous_char,
+)
+from backend.core.svg_utils.signatures import (
+    LARGE_OP_SIGNATURES as LARGE_OP_SIGNATURES,
+)
+from backend.core.svg_utils.signatures import (
+    OPERAND_CHARS as OPERAND_CHARS,
+)
+from backend.core.svg_utils.signatures import (
+    OPERATOR_CHARS as OPERATOR_CHARS,
+)
+from backend.core.svg_utils.signatures import (
+    SIGNATURES_FILE as SIGNATURES_FILE,
+)
+from backend.core.svg_utils.signatures import (
+    add_signatures_batch as add_signatures_batch,
+)
+from backend.core.svg_utils.signatures import (
+    is_operand_char as is_operand_char,
+)
+from backend.core.svg_utils.signatures import (
+    save_signatures as save_signatures,
+)
+from backend.core.svg_utils.signatures import (
+    update_large_op_signatures as update_large_op_signatures,
 )
 
 try:
@@ -62,222 +95,6 @@ def _svg_latex_cache_get(svg_url: str, use_advanced: bool) -> Optional[Tuple[str
 def _svg_latex_cache_set(svg_url: str, use_advanced: bool, latex: str, unknown: List[str]) -> None:
     key = (svg_url, use_advanced)
     _SVG_LATEX_CACHE.set(key, (str(latex or ""), tuple(unknown or [])))
-
-
-# Dataclass + operator constants are defined in
-# :mod:`backend.core.svg_utils.glyph_types` and re-exported via the imports
-# above so callers that historically imported ``svg_to_latex.Glyph`` keep
-# working without code changes. ``LARGE_OPERATORS`` is materialised as a
-# mutable set because some learning code paths in this module add extra
-# operators at runtime.
-LARGE_OPERATORS: Set[str] = set(_LARGE_OPERATORS_BASE)
-
-
-def update_large_op_signatures():
-    """从签名映射中更新大型运算符签名集合"""
-    global LARGE_OP_SIGNATURES
-    LARGE_OP_SIGNATURES = set()
-    for sig, char in GLYPH_SIGNATURES.items():
-        if char in LARGE_OPERATORS:
-            LARGE_OP_SIGNATURES.add(sig)
-
-
-# 大型运算符的 LaTeX 签名映射（用于识别这些符号）
-LARGE_OP_SIGNATURES: Set[str] = set()
-
-# ============================================================================
-# 模糊签名映射（可能有歧义的字符）
-# 某些签名在不同上下文中可能表示不同字符
-# ============================================================================
-AMBIGUOUS_SIGNATURES: Dict[str, Dict[str, str]] = {
-    # D签名问题：在运算符上下文中可能是减号
-    # "c36b3f1d": {
-    #     "default": "D",
-    #     "operator_context": "-",
-    # },
-}
-
-# 可以作为操作数的字符（用于上下文判断）
-OPERAND_CHARS = set("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-OPERAND_CHARS.update({"\\pi", "\\alpha", "\\beta", "\\gamma", "\\theta", "\\phi"})
-
-# 运算符字符
-OPERATOR_CHARS = set("+-*/=<>")
-OPERATOR_CHARS.update({"\\times", "\\div", "\\cdot", "\\pm", "\\mp", "\\leq", "\\geq", "\\neq"})
-
-
-# ============================================================================
-# 字形签名映射表（path MD5前8位 -> LaTeX字符）
-# 通过分析组卷网SVG公式收集
-# 注意：此处仅为默认值，实际签名从 glyph_signatures.json 加载
-# ============================================================================
-GLYPH_SIGNATURES: Dict[str, str] = {
-    # === 数字 ===
-    "b9716cb9": "2",
-    "5f32a7e2": "4",
-    "3b2fdd74": "1",
-    "b673824f": "0",
-    "0896fac2": "3",
-    "5a9f14b0": "5",
-    "71e8b9a1": "6",
-    "96aeade1": "1",
-    # === 小写字母 ===
-    "cf58f988": "x",
-    "6cb4ef65": "y",
-    "2aa7df06": "o",
-    "9fe3b8c9": "0",
-    "f9e514d2": "c",
-    "56274f04": "a",
-    "34f7c565": ",",
-    "803c545f": "h",
-    "d3af06b5": "i",
-    "ee57931a": "j",
-    "099c8924": "b",
-    "2273560c": "l",
-    "b65ef479": "m",
-    "e1096052": "m",
-    "396a708d": "p",
-    "9b58691c": "q",
-    "7dd54be2": "r",
-    "cd4e58fc": "s",
-    "97e16f2e": "t",
-    "cc0ab61a": "u",
-    "1d0fc683": "v",
-    "2fd59755": "w",
-    "b1fb51b4": "z",
-    # === 大写字母 ===
-    "ee8570c5": "P",
-    "d7198a8e": "O",
-    "fd61fc79": "A",
-    "c5232a6d": "B",
-    "db65bd2f": "C",
-    "c36b3f1d": "D",
-    "da16791e": "E",
-    "8637303d": "F",
-    "7c7bb518": "G",
-    "9315853a": "H",
-    "10fb4c81": "I",
-    "d45c14ff": "J",
-    "e407c344": "K",
-    # === 运算符 ===
-    "7cbdeebe": "-",
-    "e113c1a7": "+",
-    "a1040187": "=",
-    "aecc1ab6": "<",
-    "3a890ca6": ">",
-    # === 特殊符号 ===
-    "8c6104df": ":",
-    "cadf428a": "\\sqrt",
-    "dfeccf59": "\\perp",
-    "b6caebbe": "\\angle",
-}
-
-# 签名数据文件路径
-SIGNATURES_FILE = os.path.join(os.path.dirname(__file__), "glyph_signatures.json")
-
-# 全局缓存
-_signatures_loaded = False
-
-
-def load_signatures() -> Dict[str, str]:
-    """加载保存的签名映射"""
-    global _signatures_loaded
-    if _signatures_loaded:
-        return GLYPH_SIGNATURES
-
-    if os.path.exists(SIGNATURES_FILE):
-        try:
-            with open(SIGNATURES_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                # 过滤掉注释项（以_comment开头的键）
-                for key, value in saved.items():
-                    if not key.startswith("_comment"):
-                        GLYPH_SIGNATURES[key] = value
-        except Exception:
-            logger.warning("svg_signatures_load_failed", extra={"path": SIGNATURES_FILE}, exc_info=True)
-
-    # 更新大型运算符签名集合
-    update_large_op_signatures()
-
-    _signatures_loaded = True
-    return GLYPH_SIGNATURES
-
-
-def save_signatures():
-    """保存签名映射到文件"""
-    try:
-        with open(SIGNATURES_FILE, "w", encoding="utf-8") as f:
-            json.dump(GLYPH_SIGNATURES, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning("failed to save glyph signatures", extra={"error": str(e)}, exc_info=True)
-
-
-def add_signature(signature: str, latex_char: str):
-    """添加新的签名映射"""
-    GLYPH_SIGNATURES[signature] = latex_char
-    save_signatures()
-
-
-def add_signatures_batch(mappings: Dict[str, str]):
-    """批量添加签名映射"""
-    GLYPH_SIGNATURES.update(mappings)
-    save_signatures()
-
-
-def is_operand_char(char: Optional[str]) -> bool:
-    """检查字符是否为操作数（数字、字母、常量等）"""
-    if not char:
-        return False
-    # 去除未知签名标记
-    if char.startswith("[?") and char.endswith("]"):
-        return False
-    return char in OPERAND_CHARS or char.isalnum()
-
-
-def resolve_ambiguous_char(
-    glyph: "Glyph", prev_glyph: Optional["Glyph"] = None, next_glyph: Optional["Glyph"] = None
-) -> str:
-    """
-    根据上下文解析可能有歧义的字符
-
-    用于解决如 D 签名在某些上下文中可能是减号的问题
-
-    Args:
-        glyph: 当前字形
-        prev_glyph: 前一个字形
-        next_glyph: 后一个字形
-
-    Returns:
-        解析后的字符
-    """
-    sig = glyph.signature
-
-    # 如果没有在模糊签名表中，直接返回原字符
-    if sig not in AMBIGUOUS_SIGNATURES:
-        return glyph.char
-
-    ambig = AMBIGUOUS_SIGNATURES[sig]
-    default_char = ambig.get("default", glyph.char)
-
-    # 检查是否在运算符上下文中
-    # 规则：如果前后都是操作数，则可能是运算符
-    prev_is_operand = prev_glyph and is_operand_char(prev_glyph.char)
-    next_is_operand = next_glyph and is_operand_char(next_glyph.char)
-
-    if prev_is_operand and next_is_operand:
-        # 在操作数之间，可能是运算符
-        return ambig.get("operator_context", default_char)
-
-    # 检查位置关系：如果字符很窄且在两个操作数之间居中，更可能是运算符
-    if prev_glyph and next_glyph:
-        gap_to_prev = glyph.x - (prev_glyph.x + prev_glyph.width)
-        gap_to_next = next_glyph.x - (glyph.x + glyph.width)
-
-        # 如果前后间隙相近，说明在中间位置，可能是运算符
-        if abs(gap_to_prev - gap_to_next) < 5 and glyph.width < 10:
-            return ambig.get("operator_context", default_char)
-
-    return default_char
 
 
 # ============================================================================

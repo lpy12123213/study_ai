@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Tuple
 
-from backend.core.plot.charts import _to_png_bytes
+from backend.core.plot.charts import _default_plot_format, _to_png_bytes, _to_svg_bytes
 from backend.core.plot.geometry import _schematic_auto_ranges
 from backend.core.plot.parsers import _as_str, _clamp_float, _clamp_int, _iter_list, _parse_range
 from backend.core.plot.schematic_elements import draw_schematic_elements
@@ -174,4 +174,41 @@ def render_schematic(spec: Dict[str, Any]) -> bytes:
     if not rendered_any:
         raise ValueError("no_renderable_elements")
 
+    fmt = spec.get("image_format")
+    fmt = fmt.strip().lower() if isinstance(fmt, str) else "png"
+    if fmt == "svg":
+        return _to_svg_bytes(fig)
     return _to_png_bytes(fig, dpi=dpi)
+
+
+def render_schematic_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Format-aware wrapper around render_schematic."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.figure import Figure  # noqa: F401  (warm up backend cache before render_schematic)
+
+    fmt = (
+        (spec.get("image_format") or _default_plot_format()).strip().lower()
+        if isinstance(spec.get("image_format"), str)
+        else _default_plot_format()
+    )
+    spec_for_render = dict(spec or {})
+    spec_for_render["image_format"] = "png" if fmt == "png" else "svg"
+    bytes_out = render_schematic(spec_for_render)
+    if fmt == "png":
+        return {
+            "success": True,
+            "image_bytes": bytes_out,
+            "image_format": "png",
+            "image_ext": ".png",
+            "image_mime": "image/png",
+        }
+    return {
+        "success": True,
+        "image_bytes": bytes_out,
+        "image_format": "svg",
+        "image_ext": ".svg",
+        "image_mime": "image/svg+xml",
+    }

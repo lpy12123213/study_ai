@@ -58,7 +58,7 @@ function normalizeToolArgs(rawArgs: unknown): unknown {
   return rawArgs
 }
 
-function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
+export function normalizeMessagesWithSteps(raw: BackendMessage[]): Message[] {
   const out: Message[] = []
 
   // Tool trace reconstruction:
@@ -67,6 +67,7 @@ function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
   // - assistant(final)      => attach steps to this assistant message
   const stepsById: Record<string, TaskStep> = {}
   let currentSteps: TaskStep[] = []
+  let pendingToolAssistant: Message | null = null
 
   const commitAssistantSteps = (msg: Message) => {
     if (msg.role !== 'assistant') return msg
@@ -79,11 +80,23 @@ function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
     return msg
   }
 
+  const flushPendingToolAssistant = () => {
+    if (!pendingToolAssistant) return
+    pendingToolAssistant.steps = currentSteps.length > 0 ? [...currentSteps] : pendingToolAssistant.steps
+    out.push(pendingToolAssistant)
+    pendingToolAssistant = null
+    currentSteps = []
+    for (const key of Object.keys(stepsById)) {
+      delete stepsById[key]
+    }
+  }
+
   for (const m of raw || []) {
     const role = String(m.role || '').toLowerCase()
     const createdAt = m.created_at
 
     if (role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      const assistantContent = String(m.content || '')
       for (const tc of m.tool_calls) {
         const { id: toolCallId, name: toolName, args: rawArgs } = toolCallParts(tc)
 
@@ -98,6 +111,13 @@ function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
 
         stepsById[toolCallId] = step
         currentSteps.push(step)
+      }
+      pendingToolAssistant = {
+        id: String(m.id),
+        role: 'assistant',
+        content: assistantContent,
+        createdAt,
+        steps: [...currentSteps],
       }
       continue
     }
@@ -132,11 +152,18 @@ function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
       } else if (meta) {
         step.output = meta
       }
+      if (pendingToolAssistant) {
+        pendingToolAssistant.steps = [...currentSteps]
+      }
 
       continue
     }
 
     if (role !== 'user' && role !== 'assistant') continue
+
+    if (role === 'user') {
+      flushPendingToolAssistant()
+    }
 
     const msg: Message = {
       id: String(m.id),
@@ -146,7 +173,11 @@ function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
     }
 
     if (role === 'assistant') {
+      pendingToolAssistant = null
       commitAssistantSteps(msg)
+      if (!msg.content.trim() && !(msg.steps && msg.steps.length > 0)) {
+        continue
+      }
     } else {
       // New user turn: drop any dangling steps to avoid leaking across turns.
       currentSteps = []
@@ -158,7 +189,9 @@ function toMessagesWithSteps(raw: BackendMessage[]): Message[] {
     out.push(msg)
   }
 
-  // If the last message isn't assistant_final (e.g. interrupted), attach what we have.
+  flushPendingToolAssistant()
+
+  // If the last message isn't assistant_final (e.g. interrupted legacy shape), attach what we have.
   if (currentSteps.length > 0 && out.length > 0) {
     const last = out[out.length - 1]
     if (last.role === 'assistant') {
@@ -228,7 +261,7 @@ export async function getMessages(
   const raw = response.data.messages || []
   const nextBeforeId = Number(response.data.paging?.next_before_id ?? raw[0]?.id ?? 0) || 0
   return {
-    messages: toMessagesWithSteps(raw),
+    messages: normalizeMessagesWithSteps(raw),
     nextBeforeId,
     hasMore: raw.length >= limit && nextBeforeId > 0,
   }

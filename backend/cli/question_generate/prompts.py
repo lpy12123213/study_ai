@@ -141,7 +141,7 @@ def _print_welcome_banner(console) -> None:  # noqa: ANN001
 def _pick_recent_session(console, *, user_id: str) -> str:  # noqa: ANN001
     try:
         sessions = list_saved_sessions(user_id, include_archived=True, limit=5)
-    except Exception:
+    except Exception:  # noqa: BLE001 - session listing is optional prompt sugar.
         logger.warning("question_generate_list_sessions_failed", extra={"user_id": user_id}, exc_info=True)
         sessions = []
 

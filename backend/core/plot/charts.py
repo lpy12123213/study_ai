@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from typing import Any, Dict, List
 
 from backend.core.helpers import get_logger
@@ -13,6 +14,36 @@ def _to_png_bytes(fig: Any, *, dpi: int) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
     return buf.getvalue()
+
+
+def _to_svg_bytes(fig: Any) -> bytes:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="svg", bbox_inches="tight")
+    return buf.getvalue()
+
+
+def _default_plot_format() -> str:
+    raw = (os.getenv("STUDY_AI_PLOT_FORMAT") or "").strip().lower()
+    if raw in {"svg", "png"}:
+        return raw
+    return "svg"
+
+
+def _to_image_bytes(fig: Any, *, dpi: int, fmt: str) -> Dict[str, Any]:
+    chosen = (fmt or _default_plot_format()).strip().lower()
+    if chosen == "png":
+        return {
+            "bytes": _to_png_bytes(fig, dpi=dpi),
+            "format": "png",
+            "ext": ".png",
+            "mime": "image/png",
+        }
+    return {
+        "bytes": _to_svg_bytes(fig),
+        "format": "svg",
+        "ext": ".svg",
+        "mime": "image/svg+xml",
+    }
 
 
 def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,13 +236,27 @@ def render_2d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
     if aspect_equal:
         ax.set_aspect("equal", adjustable="box")
 
-    if any(_as_str(c.get("label") or "") for c in curves):
+    if rendered_any and any(_as_str(c.get("label") or "") for c in curves):
         ax.legend(loc="best")
 
     if not rendered_any:
         return {"success": False, "error": "no_renderable_curves", "warnings": warnings, "png_bytes": b""}
 
-    return {"success": True, "png_bytes": _to_png_bytes(fig, dpi=dpi), "warnings": warnings}
+    fmt = (
+        (spec.get("image_format") or _default_plot_format()).strip().lower()
+        if isinstance(spec.get("image_format"), str)
+        else _default_plot_format()
+    )
+    img = _to_image_bytes(fig, dpi=dpi, fmt=fmt)
+    return {
+        "success": True,
+        "png_bytes": img["bytes"] if img["format"] == "png" else _to_png_bytes(fig, dpi=dpi),
+        "image_bytes": img["bytes"],
+        "image_format": img["format"],
+        "image_ext": img["ext"],
+        "image_mime": img["mime"],
+        "warnings": warnings,
+    }
 
 
 def render_2d_plot(spec: Dict[str, Any]) -> bytes:
@@ -254,7 +299,7 @@ def render_3d_plot(spec: Dict[str, Any]) -> bytes:
     try:
         Z = _safe_eval_expr(expr, variables={"x": X, "y": Y})
         Z = np.asarray(Z, dtype=float)
-    except Exception as exc:
+    except _PLOT_EVAL_EXCEPTIONS as exc:
         raise ValueError("eval_failed") from exc
 
     cmap = _as_str(spec.get("colormap") or "viridis")
@@ -272,3 +317,69 @@ def render_3d_plot(spec: Dict[str, Any]) -> bytes:
         logger.warning("plot_view_init_failed", exc_info=True)
 
     return _to_png_bytes(fig, dpi=dpi)
+
+
+def render_3d_plot_with_meta(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """SVG/PNG-aware variant. Returns image bytes plus format metadata."""
+
+    import numpy as np
+
+    width = _clamp_int(spec.get("width"), default=860, min_value=420, max_value=1800)
+    height = _clamp_int(spec.get("height"), default=620, min_value=320, max_value=1400)
+    dpi = _clamp_int(spec.get("dpi"), default=150, min_value=72, max_value=240)
+
+    x_min, x_max = _parse_range(spec.get("x_range"), default=(-5.0, 5.0))
+    y_min, y_max = _parse_range(spec.get("y_range"), default=(-5.0, 5.0))
+
+    expr = _as_str(spec.get("expr") or "")
+    if not expr:
+        return {"success": False, "error": "missing_expr"}
+
+    n = _clamp_int(spec.get("resolution"), default=80, min_value=25, max_value=220)
+    xs = np.linspace(float(x_min), float(x_max), int(n))
+    ys = np.linspace(float(y_min), float(y_max), int(n))
+    X, Y = np.meshgrid(xs, ys)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=(width / dpi, height / dpi), dpi=dpi)
+    FigureCanvas(fig)
+    ax = fig.add_subplot(111, projection="3d")
+
+    try:
+        Z = _safe_eval_expr(expr, variables={"x": X, "y": Y})
+        Z = np.asarray(Z, dtype=float)
+    except _PLOT_EVAL_EXCEPTIONS as exc:
+        return {"success": False, "error": f"eval_failed: {exc}"}
+
+    cmap = _as_str(spec.get("colormap") or "viridis")
+    ax.plot_surface(X, Y, Z, cmap=cmap, linewidth=0.0, antialiased=True)
+
+    title = _as_str(spec.get("title") or "")
+    if title:
+        ax.set_title(title)
+
+    elev = _clamp_float(spec.get("view_elev"), default=28.0, min_value=-89.0, max_value=89.0)
+    azim = _clamp_float(spec.get("view_azim"), default=-55.0, min_value=-360.0, max_value=360.0)
+    try:
+        ax.view_init(elev=float(elev), azim=float(azim))
+    except (TypeError, ValueError, RuntimeError):
+        logger.warning("plot_view_init_failed", exc_info=True)
+
+    fmt = (
+        (spec.get("image_format") or _default_plot_format()).strip().lower()
+        if isinstance(spec.get("image_format"), str)
+        else _default_plot_format()
+    )
+    img = _to_image_bytes(fig, dpi=dpi, fmt=fmt)
+    return {
+        "success": True,
+        "image_bytes": img["bytes"],
+        "image_format": img["format"],
+        "image_ext": img["ext"],
+        "image_mime": img["mime"],
+    }

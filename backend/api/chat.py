@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -11,35 +10,17 @@ from fastapi.responses import StreamingResponse
 from backend.api.auth import require_auth
 from backend.api.schemas import ChatRequest
 from backend.api.sse_utils import is_sse_client_disconnected
-from backend.workspace.chat.service import ChatService, get_chat_service
 from backend.database.repositories.content.conversations import (
     add_message,
     get_conversation,
     get_messages,
-    update_conversation_title,
 )
+from backend.workspace.chat.service import ChatService, get_chat_service
+from backend.workspace.chat.titles import update_title_for_first_user_message
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
 logger = logging.getLogger(__name__)
-
-
-def _truncate_display_width(text: str, max_width: int) -> str:
-    s = str(text or "").strip()
-    if not s or max_width <= 0:
-        return ""
-    width = 0
-    out = []
-    for ch in s:
-        ch_w = 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
-        if width + ch_w > max_width:
-            break
-        out.append(ch)
-        width += ch_w
-    clipped = "".join(out).strip()
-    if clipped and len(clipped) < len(s):
-        return clipped + "..."
-    return clipped or s[: max(0, max_width)]
 
 
 @router.post("/chat")
@@ -78,6 +59,15 @@ async def chat_endpoint(
 
     try:
         await add_message(user_id=user_id, conv_id=conv_id, role="user", content=user_message)
+        try:
+            await update_title_for_first_user_message(
+                user_id=user_id,
+                conv_id=conv_id,
+                user_message=user_message,
+                history_count=len(history),
+            )
+        except Exception:
+            logger.exception("Failed to update conversation title")
     except Exception:
         logger.exception("Failed to persist user message")
 
@@ -143,13 +133,6 @@ async def chat_endpoint(
                     await add_message(user_id=user_id, conv_id=conv_id, role="assistant", content=final_content)
                 except Exception:
                     logger.exception("Failed to persist assistant final message")
-
-                if len(history) == 0:
-                    title = _truncate_display_width(user_message, 30)
-                    try:
-                        await update_conversation_title(user_id=user_id, conv_id=conv_id, title=title)
-                    except Exception:
-                        logger.exception("Failed to update conversation title")
 
                 if await is_sse_client_disconnected(http_request):
                     return
