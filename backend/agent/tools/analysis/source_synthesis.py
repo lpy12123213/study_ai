@@ -8,6 +8,11 @@ from backend.agent.types import CompressedContext
 from backend.agent.tools.utils.text_utils import credibility_for_url
 from backend.core.text_utils import clip_text as _clip_text
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
+
+
+def _source_synthesis_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.tool.source_synthesis.v1").content
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -245,7 +250,7 @@ class SourceSynthesisToolsMixin:
 
             raw = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "You are a rigorous source synthesis assistant. Output JSON only."},
+                    {"role": "system", "content": _source_synthesis_system_prompt()},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

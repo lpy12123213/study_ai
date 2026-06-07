@@ -13,6 +13,7 @@ from backend.generation.question_library.gen_llm import _chat_json_with_reasonin
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.subject_knowledge import infer_subject_family
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 _BASELINES: Dict[str, Dict[str, Any]] = {
     "math": {
@@ -186,19 +187,10 @@ def enrich_source_pack_with_curriculum(source_pack: dict, curriculum: dict) -> d
 
 def _build_curriculum_system_prompt() -> str:
     article = get_curriculum_reference_article()
-    return (
-        "<role>你是熟悉普通高中新课标（2017年版2020年修订）的学科教研员，负责为 AI 出题补充课标对齐上下文。</role>\n"
-        "<task>根据下方参考文章、学科、任务主题、选定知识点和学段信息，输出可直接用于约束 AI 出题的结构化课标上下文。</task>\n"
-        f"<curriculum_reference_article>\n{article}\n</curriculum_reference_article>\n"
-        "<principles>\n"
-        "  <standard>严格以参考文章中的高中课标为准，勿混用 2022 版义务教育课标。</standard>\n"
-        "  <scope>知识范围须具体可执行：in_scope 写应考内容，out_of_scope 写常见超纲/偏题点。</scope>\n"
-        "  <prerequisites>前置知识写学生应已掌握的概念、公式、方法，便于控制难度与设问梯度。</prerequisites>\n"
-        "  <actionable>每条要求应能直接用于审题，避免空泛口号。</actionable>\n"
-        "  <language>输出中文，JSON 字段名保持不变。</language>\n"
-        "</principles>\n"
-        "<output_format>仅输出严格 JSON 对象，不要输出 Markdown 或解释。</output_format>"
-    )
+    return create_default_prompt_registry().render(
+        "question.curriculum_context.v1",
+        curriculum_reference_article=article,
+    ).content
 
 
 async def build_curriculum_context(

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 from backend.generation.study_materials.orchestrator import StudyMaterialsTaskManager
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -24,6 +25,11 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("web_search_knowledge", spec.tool_policy.allowed_tools)
         self.assertTrue(any(role.name == "planner" for role in spec.roles))
         self.assertTrue(any(role.name == "writer" for role in spec.roles))
+
+        registry = create_default_prompt_registry()
+        for role in spec.roles:
+            with self.subTest(role=role.name):
+                self.assertIsNotNone(registry.get(role.prompt_id))
 
     async def test_create_task_persists_agent_run_spec_in_meta(self) -> None:
         manager = StudyMaterialsTaskManager()

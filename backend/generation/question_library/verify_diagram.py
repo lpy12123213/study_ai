@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.runner import run_json
 
 logger = get_logger(__name__)
@@ -84,19 +85,7 @@ def _mime_for_suffix(suffix: str) -> str:
 
 
 def _system_prompt() -> str:
-    return (
-        "<role>You are a strict diagram-quality reviewer for K-12 / college-entrance exam content.</role>\n"
-        "<task>Compare the rendered diagram against the intended description (题干/要点)."
-        " Decide whether the diagram faithfully represents what the description requires.</task>\n"
-        "<focus>\n"
-        "  <item>Geometric relations (perpendicular, parallel, congruence) must match the description.</item>\n"
-        "  <item>Labels for points, axes, magnitudes must be present and unambiguous.</item>\n"
-        "  <item>Quantities (lengths, angles, directions) should be consistent if specified.</item>\n"
-        "  <item>Reject decorative content, extraneous elements, missing labels.</item>\n"
-        "  <item>Don't penalize minor cosmetic issues unless strictness is high.</item>\n"
-        "</focus>\n"
-        "<output>Strict JSON only. Schema: {ok: bool, issues: string[], repair_hint: string, confidence: number(0-1)}.</output>"
-    )
+    return create_default_prompt_registry().render("question.diagram.verify.v1").content
 
 
 def _strictness_guidance(strictness: int) -> str:

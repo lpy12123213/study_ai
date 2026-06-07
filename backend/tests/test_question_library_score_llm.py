@@ -6,6 +6,7 @@ from backend.generation.question_library.scoring import (
     score_question_batch_with_thinking_depth,
     score_stem_with_llm,
 )
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class TestQuestionLibraryScoreLlm(unittest.IsolatedAsyncioTestCase):
@@ -18,8 +19,19 @@ class TestQuestionLibraryScoreLlm(unittest.IsolatedAsyncioTestCase):
             "issues": [],
             "summary": "good",
         }
-        with patch("backend.generation.question_library.scoring.run_json", new=AsyncMock(return_value=fake)):
+        captured = {}
+
+        async def fake_run_json(**kwargs):  # type: ignore[no-untyped-def]
+            captured["messages"] = kwargs["messages"]
+            return fake
+
+        with patch("backend.generation.question_library.scoring.run_json", new=AsyncMock(side_effect=fake_run_json)):
             out = await score_stem_with_llm(subject="高中数学", stem="题干", model="dummy")
+
+        self.assertEqual(
+            captured["messages"][0]["content"],
+            create_default_prompt_registry().render("question.score.single_quality.v1").content,
+        )
         self.assertEqual(out["overall_score"], 85)
         self.assertEqual(out["verdict"], "好题")
 
@@ -61,6 +73,10 @@ class TestQuestionLibraryScoreLlm(unittest.IsolatedAsyncioTestCase):
 
         prompt_text = str(captured["messages"])
         self.assertIn("常规代入", prompt_text)
+        self.assertEqual(
+            captured["messages"][0]["content"],
+            create_default_prompt_registry().render("question.score.thinking_depth_batch.v1").content,
+        )
         self.assertEqual(out["items"][0]["thinking_depth_score"], 9)
         self.assertEqual(out["items"][0]["method_family"], "构造辅助圆")
         self.assertEqual(out["method_summary"][0]["count"], 2)

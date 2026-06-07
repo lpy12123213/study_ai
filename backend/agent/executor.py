@@ -24,6 +24,7 @@ from backend.core.settings import (
 )
 from backend.llm.client import ChatCompletionResult, chat_completion
 from backend.llm.json_utils import extract_first_json_object
+from backend.llm.prompts import create_default_prompt_registry
 
 _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]]] = ContextVar(
     "agent_emit_event",
@@ -31,6 +32,10 @@ _emit_event_var: ContextVar[Optional[Callable[[Dict[str, Any]], Awaitable[None]]
 )
 
 logger = get_logger(__name__)
+
+
+def _markdown_continuation_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.executor.markdown_continuation.v1").content
 
 
 class _ToolBox(
@@ -477,7 +482,7 @@ class Executor:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a rigorous Markdown continuation assistant. Output only content to append and do not repeat previous content.",
+                        "content": _markdown_continuation_system_prompt(),
                     },
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],

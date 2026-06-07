@@ -7,8 +7,13 @@ from backend.agent.config import AgentConfig
 from backend.agent.types import ActionResults, CompressedContext, ExecutionPlan, ReflectionResult
 from backend.core.logging_utils import get_logger
 from backend.llm.client import chat_completion_text
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _reflector_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.reflector.study_materials.v1").content
 
 
 class Reflector:
@@ -110,7 +115,7 @@ class Reflector:
         try:
             content = await chat_completion_text(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous reviewer. Output JSON only."},
+                    {"role": "system", "content": _reflector_system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
                 model=normalized_model,

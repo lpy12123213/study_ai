@@ -1,9 +1,41 @@
 import asyncio
 import os
 import unittest
+from unittest.mock import patch
 
 
 class TestAgentSubagentContext(unittest.TestCase):
+    def test_context_compressor_prompt_uses_registry(self) -> None:
+        from backend.agent.config import AgentConfig
+        from backend.agent.context import ContextManager
+        from backend.llm.prompts import create_default_prompt_registry
+
+        captured = {}
+
+        async def fake_chat_completion_text(**kwargs):  # type: ignore[no-untyped-def]
+            captured["messages"] = kwargs["messages"]
+            return "用户要生成导数资料；已完成检索。"
+
+        manager = ContextManager(config=AgentConfig(summarizer_model="dummy-model"))
+
+        with patch("backend.agent.context.chat_completion_text", new=fake_chat_completion_text):
+            text = asyncio.run(manager._summarize_messages([{"role": "user", "content": "生成导数资料"}]))
+
+        self.assertIn("导数", text)
+        self.assertEqual(
+            captured["messages"][0]["content"],
+            create_default_prompt_registry().render("agent.context.compress.v1").content,
+        )
+
+    def test_reflector_prompt_uses_registry(self) -> None:
+        from backend.agent import reflector
+        from backend.llm.prompts import create_default_prompt_registry
+
+        self.assertEqual(
+            reflector._reflector_system_prompt(),
+            create_default_prompt_registry().render("agent.reflector.study_materials.v1").content,
+        )
+
     def test_collect_completed_overview(self) -> None:
         from backend.agent.tools.knowledge import study_material_generation as smg
         from backend.agent.types import CompressedContext, UserProfile

@@ -3,9 +3,11 @@ from __future__ import annotations
 # ruff: noqa: E402,I001
 
 # ---- from backend/tests/test_mcp_tavily.py ----
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.integrations.mcp.search import tavily
 from backend.integrations.mcp.search._base import FunctionSearchProvider, list_search_providers
 from backend.integrations.mcp.search.registry import PROVIDERS
@@ -97,6 +99,29 @@ class TestTavilySearch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hits[0]["provider"], "fake")
         self.assertEqual(hits[0]["snippet"], "summary")
         self.assertEqual(hits[0]["score"], 0.5)
+
+    async def test_bigmodel_mcp_search_uses_registry_user_prompt(self) -> None:
+        from backend.integrations.mcp.search import bigmodel
+
+        captured: dict = {}
+
+        async def fake_chat_completion(**kwargs):  # type: ignore[no-untyped-def]
+            captured["messages"] = kwargs["messages"]
+            return SimpleNamespace(content='{"results":[]}', tool_calls=[])
+
+        with patch.object(bigmodel, "ZHIPU_API_KEY", "zhipu-key"):
+            with patch.object(bigmodel, "chat_completion", new=fake_chat_completion):
+                result = await bigmodel.web_search_with_bigmodel_mcp(query="导数", limit=3)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            captured["messages"][0]["content"],
+            create_default_prompt_registry().render(
+                "mcp.bigmodel.mcp_web_search_prompt.v1",
+                query="导数",
+                limit=3,
+            ).content,
+        )
 
 
 if __name__ == "__main__":

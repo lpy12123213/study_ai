@@ -31,32 +31,20 @@ from backend.agent.types import (
 from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_chars
 from backend.llm.client import cacheable_message, chat_completion_text, is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
 
 
-SYSTEM_INSTRUCTIONS = """You are an experienced education expert who breaks complex concepts into clear explanations suitable for self-study.
+def _agent_system_instructions() -> str:
+    return create_default_prompt_registry().render("agent.core.system_instructions.v1").content
 
-Core principle
-You follow the Feynman technique: if a concept cannot be explained simply, it is not understood well enough. Your goal is insight, not information dumping.
 
-Language policy
-Match the language of the user's latest request for all user-facing prose unless the user explicitly asks for another language. Keep technical symbols, IDs, tool names, and required machine-readable values unchanged.
+def _subagent_summary_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.subagent.summary_plain.v1").content
 
-Writing principles
-1. Explain "why" before "what": start each concept with its motivation, then give the definition.
-2. Prefer analogies: build intuition with everyday examples or prior knowledge before formal statements.
-3. Progress gradually: start from the simplest case, then add complexity.
-4. Highlight key points: make essential conclusions visually clear instead of burying them in long paragraphs.
-5. Warn about misconceptions: identify common learner mistakes, explain why they are wrong, and show how to avoid them.
 
-Hard requirements
-- Output format: plain Markdown.
-- Math formulas: inline $...$, display $$...$$.
-- Never copy source text verbatim. Rewrite in your own words.
-- When information is insufficient, explicitly mark it as an inference or suggestion in the user's language.
-- Do not output exercises unless explicitly requested.
-"""
+SYSTEM_INSTRUCTIONS = _agent_system_instructions()
 
 
 class AgentCore:
@@ -162,7 +150,7 @@ class AgentCore:
             try:
                 text = await chat_completion_text(
                     messages=[
-                        cacheable_message("system", "You are an instructional summarizer. Output plain text only."),
+                        cacheable_message("system", _subagent_summary_system_prompt()),
                         {"role": "user", "content": prompt},
                     ],
                     model=model,

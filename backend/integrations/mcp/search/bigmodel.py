@@ -14,8 +14,13 @@ from backend.core.settings import (
 )
 from backend.llm.client import chat_completion
 from backend.llm.json_utils import extract_json_value
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _prompt(prompt_id: str, **values: Any) -> str:
+    return create_default_prompt_registry().render(prompt_id, **values).content
 
 
 async def bigmodel_web_search(
@@ -56,7 +61,12 @@ async def bigmodel_web_search(
             messages=[
                 {
                     "role": "user",
-                    "content": f"Search the web for: {query}. Provide the top {max_results} results with titles, URLs, and brief descriptions. Search type: {search_type}.",
+                    "content": _prompt(
+                        "mcp.bigmodel.web_search_prompt.v1",
+                        query=query,
+                        max_results=max_results,
+                        search_type=search_type,
+                    ),
                 }
             ],
             model=str(ZHIPU_MODEL or "").strip(),
@@ -126,7 +136,7 @@ async def bigmodel_summarize_url(url: str) -> Dict[str, Any]:
             messages=[
                 {
                     "role": "user",
-                    "content": f"Please read and summarize the content from this URL: {url}. Provide a concise summary of the main points.",
+                    "content": _prompt("mcp.bigmodel.summarize_url_prompt.v1", url=url),
                 }
             ],
             model=str(ZHIPU_MODEL or "").strip(),
@@ -202,24 +212,7 @@ async def web_search_with_bigmodel_mcp(
     timeout_seconds = int(ZHIPU_TIMEOUT or DEFAULT_TIMEOUT_SECONDS)
     model_name = (model or ZHIPU_MODEL or DEFAULT_ZHIPU_MODEL).strip() or DEFAULT_ZHIPU_MODEL
 
-    prompt = f"""你是一个联网搜索助手，请使用 web-search 工具检索互联网信息。
-
-搜索查询：{query}
-
-要求：
-1) 返回前 {limit} 条结果
-2) 仅输出 JSON，不要输出 Markdown，不要输出任何解释文本
-3) JSON 格式固定为：
-{{
-  "results": [
-    {{
-      "title": "...",
-      "url": "...",
-      "snippet": "..."
-    }}
-  ]
-}}
-"""
+    prompt = _prompt("mcp.bigmodel.mcp_web_search_prompt.v1", query=query, limit=limit)
 
     tools = [
         {

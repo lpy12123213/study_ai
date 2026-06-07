@@ -6,10 +6,19 @@ import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.tools.utils.text_utils import _clip_text, _postprocess_web_search_result
+from backend.llm.prompts import create_default_prompt_registry
 
 CallLLMText = Callable[..., Awaitable[str]]
 ExtractJsonObj = Callable[[str], Dict[str, Any]]
 SearchFunc = Callable[[str, int], Awaitable[Dict[str, Any]]]
+
+
+def _search_strategy_system_prompt() -> str:
+    return create_default_prompt_registry().render("search.deep_research.strategy.v1").content
+
+
+def _learning_extraction_system_prompt() -> str:
+    return create_default_prompt_registry().render("search.deep_research.learning_extraction.v1").content
 
 
 def _dedup_strings(items: List[str], *, keep: int) -> List[str]:
@@ -140,7 +149,7 @@ async def _generate_serp_queries(
     async with llm_sem:
         text = await call_llm_text(
             messages=[
-                {"role": "system", "content": "You are a rigorous search strategist. Output JSON only."},
+                {"role": "system", "content": _search_strategy_system_prompt()},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=llm_model,
@@ -249,7 +258,7 @@ async def _extract_learnings(
     async with llm_sem:
         text = await call_llm_text(
             messages=[
-                {"role": "system", "content": "You are a rigorous research assistant. Output JSON only."},
+                {"role": "system", "content": _learning_extraction_system_prompt()},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             model=llm_model,

@@ -5,9 +5,14 @@ from typing import List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.gen_common import _clip_unique
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
+
+
+def _reference_analysis_system_prompt() -> str:
+    return create_default_prompt_registry().render("question.reference.analyze.v1").content
 
 
 def _normalize_reference_example(item: dict) -> Optional[dict]:
@@ -174,23 +179,7 @@ async def analyze_reference_questions(
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "<role>You are a college-entrance-exam research expert responsible for extracting reusable question-writing patterns from real and mock exam questions.</role>\n"
-                    "<analysis_focus>\n"
-                    "  <aspect>设问顺序与递进逻辑</aspect>\n"
-                    "  <aspect>条件与结论的组合方式</aspect>\n"
-                    "  <aspect>解题关键步骤分布</aspect>\n"
-                    "  <aspect>答案格式规范</aspect>\n"
-                    "</analysis_focus>\n"
-                    "<field_guidelines>\n"
-                    "  <field name='question_patterns'>题目设计规律，具体到设问结构，如【先求参数再讨论范围】</field>\n"
-                    "  <field name='difficulty_markers'>难度来源，如【条件需要分类导致运算量增大】</field>\n"
-                    "  <field name='innovative_angles'>创新切入点，可复用的新约束、新情境组合方式</field>\n"
-                    "  <field name='format_conventions'>答案/解析格式规范，如【先给结论再写推导】</field>\n"
-                    "  <field name='representative_examples'>最具代表性的2-3道题，含选题理由</field>\n"
-                    "</field_guidelines>\n"
-                    "<output_format>Output a strict JSON object only. Do not output explanations or Markdown.</output_format>"
-                ),
+                "content": _reference_analysis_system_prompt(),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],

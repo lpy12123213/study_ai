@@ -4,8 +4,13 @@ import json
 
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
+
+
+def _source_pack_system_prompt() -> str:
+    return create_default_prompt_registry().render("question.source_pack.extract.v1").content
 
 
 async def build_source_pack(
@@ -60,17 +65,7 @@ async def build_source_pack(
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "<role>You are a high-school curriculum research expert responsible for extracting structured elements directly usable for question generation from study materials.</role>\n"
-                    "<field_guidelines>\n"
-                    "  <field name='facts'>核心公式/定理/结论，每条可独立成为考点，≤20条</field>\n"
-                    "  <field name='skills'>能力考查点，如参数讨论、换元化简、分类讨论、反证法、数形结合、极限思想、归纳推理、构造法、待定系数、逆向思维、特殊化策略，≤20条，注重多样性</field>\n"
-                    "  <field name='common_mistakes'>学生常见误区，具体可操作。≤10条</field>\n"
-                    "  <field name='forbidden_patterns'>模板化/低质量套路特征。≤10条</field>\n"
-                    "</field_guidelines>\n"
-                    "<requirement>The extracted results must be specific and actionable. Avoid vague summaries.</requirement>\n"
-                    "<output_format>Output a strict JSON object only.</output_format>"
-                ),
+                "content": _source_pack_system_prompt(),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],

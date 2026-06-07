@@ -8,16 +8,20 @@ extraction) that don't require the LLM, so they run quickly inside
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from backend.generation.essay_evaluation.essay_parser import parse_essay
 from backend.generation.essay_evaluation.essay_schemas import EssayScore
 from backend.generation.essay_evaluation.service import (
+    evaluate_essay,
     _normalize_paragraph_feedback,
     _normalize_scores,
     _safe_extract_json,
     _scale_to_total,
     _select_rubric,
 )
+from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class EssayParserTests(unittest.TestCase):
@@ -96,6 +100,61 @@ class ScoringHelperTests(unittest.TestCase):
         )
         self.assertEqual(len(feedback), 1)
         self.assertEqual(feedback[0].index, 0)
+
+
+class EssayEvaluationPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_evaluate_essay_system_prompt_uses_registry(self) -> None:
+        from backend.generation.essay_evaluation import service
+
+        captured = {}
+        rubric = service._select_rubric("zh")
+        scores = [
+            {
+                "name": item["name"],
+                "score": 8,
+                "max_score": item["max_score"],
+                "weight": item["weight"],
+                "comment": "较好",
+            }
+            for item in rubric
+        ]
+
+        async def fake_chat_completion_text(**kwargs):  # type: ignore[no-untyped-def]
+            captured["messages"] = kwargs["messages"]
+            return service.json.dumps(
+                {
+                    "scores": scores,
+                    "score_total": 48,
+                    "summary": "结构完整，论证较清楚。",
+                    "grade": "良好",
+                    "strengths": ["结构清晰"],
+                    "weaknesses": ["例证略少"],
+                    "suggestions": ["补充具体例子"],
+                    "paragraph_feedback": [],
+                    "rewrite": "",
+                },
+                ensure_ascii=False,
+            )
+
+        request = EssayEvaluationRequest(
+            text="第一段提出观点，说明学习需要坚持。\n\n第二段结合例子展开论证，并给出总结。",
+            subject="语文",
+            topic="坚持",
+        )
+
+        with patch.object(service, "is_llm_configured", return_value=True), patch.object(
+            service,
+            "chat_completion_text",
+            new=fake_chat_completion_text,
+        ):
+            result = await evaluate_essay(request, model="dummy-model")
+
+        self.assertEqual(
+            captured["messages"][0]["content"],
+            create_default_prompt_registry().render("essay.evaluate.system.v1").content,
+        )
+        self.assertEqual(result.grade, "良好")
+        self.assertGreater(result.score_total, 0)
 
 
 if __name__ == "__main__":

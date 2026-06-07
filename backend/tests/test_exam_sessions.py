@@ -13,6 +13,7 @@ from backend.database.repositories.question import papers as papers_repo
 from backend.database.schema import Base
 from backend.generation.exam_grading.objective import grade_objective_answer
 from backend.generation.exam_grading.orchestrator import grade_exam_session
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class ObjectiveGradingTests(unittest.TestCase):
@@ -42,6 +43,35 @@ class ObjectiveGradingTests(unittest.TestCase):
         self.assertTrue(multi["is_correct"])
         self.assertEqual(fill["score"], 4)
         self.assertTrue(fill["is_correct"])
+
+
+class SubjectiveGradingPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_subjective_grading_system_prompt_uses_registry(self) -> None:
+        from backend.generation.exam_grading import subjective
+
+        captured = {}
+
+        async def fake_chat_completion_text(**kwargs):  # type: ignore[no-untyped-def]
+            captured["messages"] = kwargs["messages"]
+            return '{"score":3,"max_score":5,"reasoning":"步骤基本正确","strengths":["有思路"],"weaknesses":["缺少结论"]}'
+
+        with patch.object(subjective, "is_llm_configured", return_value=True), patch.object(
+            subjective,
+            "LESSON_PLAN_MODEL",
+            "dummy-model",
+        ), patch.object(subjective, "chat_completion_text", new=fake_chat_completion_text):
+            result = await subjective.grade_subjective_answer(
+                question={"stem": "证明函数单调性", "answer": "略", "analysis": "略"},
+                answer_data={"text_answer": "先求导再判断符号。"},
+                max_score=5,
+            )
+
+        self.assertEqual(
+            captured["messages"][0]["content"],
+            create_default_prompt_registry().render("exam.subjective.grade.v1").content,
+        )
+        self.assertEqual(result["score"], 3.0)
+        self.assertEqual(result["grading_json"]["mode"], "llm")
 
 
 class ExamSessionRepositoryTests(unittest.IsolatedAsyncioTestCase):

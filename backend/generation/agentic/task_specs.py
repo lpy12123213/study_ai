@@ -149,14 +149,14 @@ def build_agent_run_spec_for_task(
             user_requirements=_text(req.get("requirements") or req.get("prompt") or req.get("description")),
             input_payload=dict(req),
             roles=[
-                AgentRoleSpec(name="planner", prompt_id="chat.paper_compose.system.v1"),
-                AgentRoleSpec(name="searcher", prompt_id="chat.paper_compose.system.v1"),
-                AgentRoleSpec(name="author", prompt_id="chat.paper_compose.system.v1"),
+                AgentRoleSpec(name="planner", prompt_id="paper_compose.planner.v1"),
+                AgentRoleSpec(name="searcher", prompt_id="paper_compose.searcher.v1"),
+                AgentRoleSpec(name="author", prompt_id="paper_compose.author.v1"),
                 AgentRoleSpec(name="solver", prompt_id="question.solve.independent.v1"),
-                AgentRoleSpec(name="composer", prompt_id="chat.paper_compose.system.v1"),
-                AgentRoleSpec(name="compiler", prompt_id="chat.paper_compose.system.v1"),
-                AgentRoleSpec(name="repairer", prompt_id="lesson_plan.latex_repair.v1", required=False),
-                AgentRoleSpec(name="reviewer", prompt_id="question.judge.quality.v1", required=False),
+                AgentRoleSpec(name="composer", prompt_id="paper_compose.composer.v1"),
+                AgentRoleSpec(name="compiler", prompt_id="paper_compose.compiler.v1"),
+                AgentRoleSpec(name="repairer", prompt_id="paper_compose.repairer.v1", required=False),
+                AgentRoleSpec(name="reviewer", prompt_id="paper_compose.reviewer.v1", required=False),
             ],
             tool_policy=AgentToolPolicy(
                 allowed_tools=[

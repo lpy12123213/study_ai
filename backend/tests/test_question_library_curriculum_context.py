@@ -1,6 +1,7 @@
 import unittest
 
 from backend.generation.question_library.curriculum_context import (
+    _build_curriculum_system_prompt,
     curriculum_context_for_prompt,
     enrich_source_pack_with_curriculum,
     get_static_curriculum_baseline,
@@ -10,6 +11,7 @@ from backend.generation.question_library.curriculum_reference import (
     CURRICULUM_STANDARD,
     get_curriculum_reference_article,
 )
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class TestQuestionLibraryCurriculumContext(unittest.TestCase):
@@ -23,6 +25,16 @@ class TestQuestionLibraryCurriculumContext(unittest.TestCase):
         self.assertIn("选择性必修", article)
         self.assertIn("知识范围", article)
         self.assertIn("前置知识", article)
+
+    def test_curriculum_system_prompt_renders_from_registry(self) -> None:
+        registered = create_default_prompt_registry().render(
+            "question.curriculum_context.v1",
+            curriculum_reference_article=CURRICULUM_REFERENCE_ARTICLE,
+        ).content
+
+        self.assertEqual(_build_curriculum_system_prompt(), registered)
+        self.assertIn(CURRICULUM_REFERENCE_ARTICLE, registered)
+        self.assertIn("2017年版2020年修订", registered)
 
     def test_curriculum_standard_name(self) -> None:
         self.assertIn("2017年版2020年修订", CURRICULUM_STANDARD)

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.diagram_utils import (
     render_asy_to_url,
     render_matplotlib_2d_to_url,
@@ -21,6 +22,14 @@ from backend.generation.question_library.verify_diagram import verify_diagram_wi
 from backend.shared.diagrams.static_render import check_asy_tools, check_tikz_tools
 
 logger = get_logger(__name__)
+
+
+def _diagram_need_system_prompt() -> str:
+    return create_default_prompt_registry().render("question.diagram.need.v1").content
+
+
+def _diagram_spec_system_prompt() -> str:
+    return create_default_prompt_registry().render("question.diagram.spec.v1").content
 
 
 _FUNCTION_GRAPH_KEYWORDS = (
@@ -94,22 +103,9 @@ async def assess_diagram_need(
         },
     }
 
-    system_content = (
-        "<role>You are a curriculum question reviewer responsible for deciding whether a question needs a diagram.</role>\n"
-        "<rules>\n"
-        "  <rule>Set need_diagram=true only when missing a diagram would clearly increase ambiguity or reading difficulty.</rule>\n"
-        "  <rule>Choose the most appropriate backend from available_kinds:\n"
-        "    - matplotlib_2d for plotting explicit/implicit function curves (y=f(x), parametric, etc.)\n"
-        "    - tikz/PGF for static geometric figures, schematics, physical setups\n"
-        "    - asy as fallback when TikZ is unsuitable or unavailable.</rule>\n"
-        "  <rule>kind must be selected from available_kinds; when need_diagram=false, kind=none.</rule>\n"
-        "</rules>\n"
-        "<output_format>Output a strict JSON object only.</output_format>"
-    )
-
     text = await _chat_json_with_reasoning(
         messages=[
-            {"role": "system", "content": system_content},
+            {"role": "system", "content": _diagram_need_system_prompt()},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
@@ -184,26 +180,9 @@ async def generate_question_diagram(
         },
     }
 
-    system_content = (
-        "<role>You are a question-bank diagram engineer responsible for generating high-quality diagrams for questions.</role>\n"
-        "<rules>\n"
-        "  <rule>选择最合适的后端：\n"
-        "    - matplotlib_2d 用于函数图象（y=f(x)、参数曲线等），提供 x_range/y_range/curves 即可，准确度高。\n"
-        "    - TikZ/PGF（首选）用于几何图、物理示意图、电路图等静态矢量图。\n"
-        "    - Asymptote（次选）当 TikZ 不适用或不可用。</rule>\n"
-        "  <rule>kind must be selected from available_kinds.</rule>\n"
-        "</rules>\n"
-        "<constraints>\n"
-        "  <rule>The diagram must serve the question meaning: label key points, directions, and quantities. Do not draw decorative content.</rule>\n"
-        "  <rule>若题目不需要图，need_diagram=false 并 kind=none。</rule>\n"
-        "  <rule>All coordinates and labels must be explicit. Do not rely on implicit conventions.</rule>\n"
-        "</constraints>\n"
-        "<output_format>Output a strict JSON object only.</output_format>"
-    )
-
     text = await _chat_json_with_reasoning(
         messages=[
-            {"role": "system", "content": system_content},
+            {"role": "system", "content": _diagram_spec_system_prompt()},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",

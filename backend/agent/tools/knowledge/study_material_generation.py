@@ -13,8 +13,29 @@ from backend.agent.types import CompressedContext
 from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
 from backend.core.text_utils import clip_text as _clip_text
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+.*?$", flags=re.M)
+
+
+def _registered_prompt(prompt_id: str) -> str:
+    return create_default_prompt_registry().render(prompt_id).content
+
+
+def _outline_system_prompt() -> str:
+    return _registered_prompt("study.material.outline.v1")
+
+
+def _section_writer_system_prompt() -> str:
+    return _registered_prompt("study.material.section_writer.v1")
+
+
+def _section_reviewer_system_prompt() -> str:
+    return _registered_prompt("study.material.section_reviewer.v1")
+
+
+def _section_revision_system_prompt() -> str:
+    return _registered_prompt("study.material.section_revision.v1")
 
 
 def _strip_markdown_headings(text: str) -> str:
@@ -497,7 +518,7 @@ class StudyMaterialGenerationToolsMixin:
 
             raw = await self._call_llm_text(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous instructional-structure design assistant. Output JSON only."},
+                    {"role": "system", "content": _outline_system_prompt()},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,
@@ -808,14 +829,7 @@ class StudyMaterialGenerationToolsMixin:
                 async with sem:
                     res = await self._call_llm_markdown_with_continuation(
                         messages=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "You are a rigorous self-study material writer. All explanations must be original rewriting and synthesis. "
-                                    "Do not directly copy or paste source text. Use the completed-content overview to avoid repetition across knowledge points, "
-                                    "and establish connections when needed. Output Markdown only."
-                                ),
-                            },
+                            {"role": "system", "content": _section_writer_system_prompt()},
                             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                         ],
                         model=writer_model,
@@ -926,7 +940,7 @@ class StudyMaterialGenerationToolsMixin:
                 }
                 raw = await self._call_llm_text(
                     messages=[
-                        {"role": "system", "content": "You are a rigorous knowledge-point writing reviewer agent. Output JSON only."},
+                        {"role": "system", "content": _section_reviewer_system_prompt()},
                         {"role": "user", "content": json.dumps(review_payload, ensure_ascii=False)},
                     ],
                     model=writer_model,
@@ -980,7 +994,7 @@ class StudyMaterialGenerationToolsMixin:
                 }
                 revised = await self._call_llm_text(
                     messages=[
-                        {"role": "system", "content": "You are a rigorous Markdown revision agent. Output only the revised Markdown."},
+                        {"role": "system", "content": _section_revision_system_prompt()},
                         {"role": "user", "content": json.dumps(revise_payload, ensure_ascii=False)},
                     ],
                     model=writer_model,

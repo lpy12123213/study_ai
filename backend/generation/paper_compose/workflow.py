@@ -15,6 +15,7 @@ from backend.database.repositories.question.question_cache import (
     upsert_question_cache,
 )
 from backend.llm.runner import run_json
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.paper_compose.answer_synthesis import synthesize_missing_answers
 from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
 from backend.generation.paper_compose.auto_review import review_questions
@@ -42,6 +43,10 @@ from backend.generation.paper_compose.workflow_support import (
 )
 
 logger = get_logger(__name__)
+
+
+def _question_match_reviewer_system_prompt() -> str:
+    return create_default_prompt_registry().render("paper_compose.question_match_reviewer.v1").content
 
 
 def _build_save_question_dicts(selected_questions: List[Dict[str, Any]], *, subject: str) -> List[dict]:
@@ -928,7 +933,7 @@ async def compose_paper_events(
 
                 obj = await run_json(
                     messages=[
-                        {"role": "system", "content": "你是严格但保守的题目匹配审查员。只输出 JSON。"},
+                        {"role": "system", "content": _question_match_reviewer_system_prompt()},
                         {"role": "user", "content": json.dumps(slot_prompt, ensure_ascii=False)},
                     ],
                     model=review_model,

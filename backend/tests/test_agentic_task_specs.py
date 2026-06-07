@@ -82,6 +82,16 @@ class AgenticTaskSpecTests(unittest.TestCase):
             "compile_latex_sandbox",
             "repair_latex",
         }
+        expected_role_prompts = {
+            "planner": "paper_compose.planner.v1",
+            "searcher": "paper_compose.searcher.v1",
+            "author": "paper_compose.author.v1",
+            "solver": "question.solve.independent.v1",
+            "composer": "paper_compose.composer.v1",
+            "compiler": "paper_compose.compiler.v1",
+            "repairer": "paper_compose.repairer.v1",
+            "reviewer": "paper_compose.reviewer.v1",
+        }
 
         for task_type in ["paper_compose", "paper_generate_full"]:
             with self.subTest(task_type=task_type):
@@ -93,6 +103,7 @@ class AgenticTaskSpecTests(unittest.TestCase):
                 self.assertIsNotNone(spec)
                 roles = {role.name: role for role in spec.roles}
                 self.assertEqual(set(roles), expected_roles)
+                self.assertEqual({name: role.prompt_id for name, role in roles.items()}, expected_role_prompts)
                 self.assertFalse(roles["repairer"].required)
                 self.assertFalse(roles["reviewer"].required)
                 self.assertTrue(expected_tools.issubset(set(spec.tool_policy.allowed_tools)))

@@ -7,6 +7,11 @@ from typing import Any, Dict, List
 
 from backend.generation.knowledge_video.models import GeneratedVideoPackage, KnowledgeVideoRequest
 from backend.llm.client import chat_completion_text
+from backend.llm.prompts import create_default_prompt_registry
+
+
+def _manim_code_system_prompt() -> str:
+    return create_default_prompt_registry().render("knowledge_video.manim_code.v1").content
 
 
 def _json_from_text(text: str) -> Dict[str, Any]:
@@ -72,13 +77,7 @@ async def generate_manim_package(
     messages: List[Dict[str, str]] = [
         {
             "role": "system",
-            "content": (
-                "You are a Manim Community code generator. Return only a JSON object, not Markdown."
-                "JSON fields must include code, scene_name, subtitles, metadata."
-                "code must be complete Python source that directly uses Manim to generate a single-scene knowledge explanation animation."
-                "代码会在无网络、非 root、资源受限的 Docker 沙盒中运行；可自由使用 Manim 和 Python 表达教学内容。"
-                "默认 scene_name 使用 KnowledgeVideoScene。字幕 subtitles 为数组，每项包含 start/end/text 秒级时间。"
-            ),
+            "content": _manim_code_system_prompt(),
         },
         {
             "role": "user",

@@ -271,6 +271,24 @@ def create_default_prompt_registry() -> PromptRegistry:
                 "Output fields: rationale, steps."
             ),
         ),
+        _json_template(
+            prompt_id="agent.planner.execution_plan.v1",
+            role="system",
+            input_keys=(),
+            body=(
+                "You are the planner for a self-study material generation system. Output an executable plan JSON.\n"
+                "Match the language of the user's latest request for user-facing title/thought fields unless "
+                "explicitly instructed otherwise. Keep tool names and JSON field names unchanged.\n"
+                "Output schema:\n"
+                "{{\n  \"rationale\": \"string\",\n  \"steps\": [\n"
+                "    {{\"id\": \"optional\", \"title\": \"string\", \"tool\": \"string\", \"arguments\": {{}}, "
+                "\"parallel_group\": \"string\", \"thought\": \"string\", \"foreach_knowledge_point\": false, "
+                "\"foreach_limit\": 0}}\n"
+                "  ]\n}}\n"
+                "Strict requirement: output JSON only.\n"
+                "Output fields: rationale, steps."
+            ),
+        ),
         _markdown_template(
             prompt_id="study.material.writer.v1",
             role="system",
@@ -337,6 +355,22 @@ def create_default_prompt_registry() -> PromptRegistry:
                 "duration_minutes, content, activities, resources."
             ),
         ),
+        _json_template(
+            prompt_id="question.curriculum_context.v1",
+            role="system",
+            input_keys=("curriculum_reference_article",),
+            body=(
+                "你是熟悉普通高中新课标（2017年版2020年修订）的学科教研员，负责为 AI 出题补充课标对齐上下文。\n"
+                "根据参考文章、学科、任务主题、选定知识点和学段信息，输出可直接用于约束 AI 出题的结构化课标上下文。\n"
+                "<curriculum_reference_article>\n{curriculum_reference_article}\n</curriculum_reference_article>\n"
+                "严格以参考文章中的高中课标为准，勿混用 2022 版义务教育课标。\n"
+                "知识范围须具体可执行：in_scope 写应考内容，out_of_scope 写常见超纲/偏题点。\n"
+                "前置知识写学生应已掌握的概念、公式、方法，便于控制难度与设问梯度。\n"
+                "每条要求应能直接用于审题，避免空泛口号。\n"
+                "输出中文，JSON 字段名保持不变。\n"
+                "Output fields: curriculum_standard, question_requirements, core_competencies, knowledge_scope, prerequisites."
+            ),
+        ),
         PromptTemplate(
             id="chat.paper_compose.system.v1",
             role="system",
@@ -384,9 +418,72 @@ def create_default_prompt_registry() -> PromptRegistry:
 
     json_specs = [
         (
+            "agent.tool.content_review.v1",
+            "You are a rigorous educational content reviewer. Review self-study Markdown for structure, logic, "
+            "factual accuracy, depth fit, dimension coverage, and consistency with provided high-confidence "
+            "facts. Be specific about location and repair intent; do not invent missing facts. Output fields: "
+            "passed, issues, suggestions.",
+        ),
+        (
+            "agent.tool.source_synthesis.v1",
+            "You are a rigorous source synthesis assistant for self-study material generation. Denoise mixed "
+            "sources into a compact writer-ready brief, preserve uncertainty, prefer higher-credibility sources "
+            "when inputs conflict, and never copy source text verbatim. Output fields: knowledge_point, brief, "
+            "facts, missing.",
+        ),
+        (
+            "agent.tool.draft_critique.v1",
+            "You are a strict educational manuscript reviewer. Score a generated knowledge-point draft across "
+            "accuracy, clarity, completeness, originality, and depth_match. Issues must be concrete and revision "
+            "instructions must be directly executable by a writing model. Output fields: score, dimensions, "
+            "issues, revision_instructions.",
+        ),
+        (
+            "agent.core.system_instructions.v1",
+            "You are an experienced education expert who breaks complex concepts into clear explanations suitable "
+            "for self-study.\n\n"
+            "Core principle\n"
+            "You follow the Feynman technique: if a concept cannot be explained simply, it is not understood well "
+            "enough. Your goal is insight, not information dumping.\n\n"
+            "Language policy\n"
+            "Match the language of the user's latest request for all user-facing prose unless the user explicitly "
+            "asks for another language. Keep technical symbols, IDs, tool names, and required machine-readable "
+            "values unchanged.\n\n"
+            "Writing principles\n"
+            "1. Explain \"why\" before \"what\": start each concept with its motivation, then give the definition.\n"
+            "2. Prefer analogies: build intuition with everyday examples or prior knowledge before formal statements.\n"
+            "3. Progress gradually: start from the simplest case, then add complexity.\n"
+            "4. Highlight key points: make essential conclusions visually clear instead of burying them in long paragraphs.\n"
+            "5. Warn about misconceptions: identify common learner mistakes, explain why they are wrong, and show how to avoid them.\n\n"
+            "Hard requirements\n"
+            "- Output format: plain Markdown.\n"
+            "- Math formulas: inline $...$, display $$...$$.\n"
+            "- Never copy source text verbatim. Rewrite in your own words.\n"
+            "- When information is insufficient, explicitly mark it as an inference or suggestion in the user's language.\n"
+            "- Do not output exercises unless explicitly requested.",
+        ),
+        (
+            "agent.subagent.summary_plain.v1",
+            "You are an instructional summarizer. Output plain text only. Summarize the core definition, key "
+            "conclusions, common misconceptions, or solution framework without Markdown, bullets, numbering, or "
+            "headings.",
+        ),
+        (
+            "agent.executor.markdown_continuation.v1",
+            "You are a rigorous Markdown continuation assistant. Output only content to append, continue from the "
+            "provided tail, close unfinished syntax when needed, and do not repeat previous content.",
+        ),
+        (
             "agent.reflector.study_materials.v1",
             "You are a rigorous self-study material reviewer. Check structure, coverage, factual consistency, "
             "source constraints, and self-study usability. Output fields: passed, issues, suggestions.",
+        ),
+        (
+            "agent.exporter.study_materials.v1",
+            "You are the exporter for self-study materials. Convert approved Markdown into requested export "
+            "formats while preserving formulas, headings, source-grounding notes, and asset references. When an "
+            "export or compile step fails, report concise error evidence and the next repair action. Output "
+            "fields: exported, formats, artifacts, errors, next_action.",
         ),
         (
             "study.kp.split.v1",
@@ -398,6 +495,37 @@ def create_default_prompt_registry() -> PromptRegistry:
             "study.kp.review.v1",
             "You are a knowledge-point review assistant. Check whether the split is too broad, too narrow, "
             "duplicated, or missing prerequisites. Output fields: passed, issues, knowledge_points.",
+        ),
+        (
+            "study.knowledge_type.detect.v1",
+            "You are a knowledge-type classification assistant. Classify the closest type among definition, "
+            "theorem, algorithm, concept, history, and experiment, then return writing focus and recommended "
+            "sections. Output fields: knowledge_type, confidence, focus, recommended_sections.",
+        ),
+        (
+            "study.knowledge.retrieve.v1",
+            "You are a rigorous subject teacher. Generate factual notes for one knowledge point that can support "
+            "self-study material writing. Keep claims concise and exam-usable. Output fields: definition, "
+            "key_points, prerequisites, common_mistakes, methods.",
+        ),
+        (
+            "study.knowledge.retrieve.user.v1",
+            "user",
+            ("topic", "subject", "difficulty"),
+            "Generate factual notes for the knowledge point \"{topic}\" in \"{subject}\" that can be used in "
+            "self-study materials.\n\n"
+            "Requirements:\n"
+            "- Output strict JSON only. Do not output Markdown or code fences.\n"
+            "- Fields: definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[]).\n"
+            "- Match the language of the subject/topic unless explicitly required otherwise.\n"
+            "- Difficulty reference: {difficulty}\n"
+            "Output fields: definition, key_points, prerequisites, common_mistakes, methods.",
+        ),
+        (
+            "study.diagram.plan.v1",
+            "You are a teaching diagram planner. Plan only diagrams that clarify the knowledge point, avoid "
+            "decorative content, respect available rendering backends, and keep generated specs simple and "
+            "verifiable. Output fields: diagrams.",
         ),
         (
             "study.sources.synthesize.v1",
@@ -419,6 +547,18 @@ def create_default_prompt_registry() -> PromptRegistry:
             "search.query.decompose.v1",
             "You are a research search-planning assistant. Decompose the learning topic into search questions "
             "about definitions, boundaries, proofs, applications, and misconceptions. Output fields: queries.",
+        ),
+        (
+            "search.web_subquestion.decompose.v1",
+            "You are a rigorous knowledge exploration assistant for self-study material. Privately decide how "
+            "to split a broad knowledge point into askable web sub-questions, then return only the JSON result. "
+            "Output fields: sub_questions.",
+        ),
+        (
+            "search.deep_research.strategy.v1",
+            "You are a rigorous search strategist. Generate non-duplicate web search queries that cover "
+            "definitions, intuition, conditions, proofs, applications, and misconceptions without repeating "
+            "previous queries. Output fields: queries.",
         ),
         (
             "search.deep_research.learning_extraction.v1",
@@ -479,6 +619,149 @@ def create_default_prompt_registry() -> PromptRegistry:
             "Output fields: overall_score, verdict, dimensions, summary.",
         ),
         (
+            "question.score.thinking_depth_batch.v1",
+            "You are a senior high-school curriculum researcher. Score a batch of up to 50 questions by comparing "
+            "solution-method rarity and intellectual depth. First identify each question's core solving method, "
+            "group same-origin method families within the batch, compare them with prior_method_context from "
+            "earlier batches, and then assign thinking_depth_score from 1 to 10. Use prior_method_context as "
+            "compact carryover memory and return method_summary so the caller can carry method-family counts into "
+            "the next batch. Do not reward long wording, tedious calculation, or ordinary difficulty alone. "
+            "Output fields: items, method_summary.",
+        ),
+        (
+            "question.score.single_quality.v1",
+            "You are a senior high-school curriculum researcher. Evaluate one question by exam-quality standards "
+            "and score objectively. Judge the actual educational quality, correctness, clarity, answer quality, "
+            "analysis rigor, and any extra user requirements; do not let wording length or tedious calculation "
+            "inflate the score. Output fields: verdict, overall_score, dimensions, highlights, issues, summary.",
+        ),
+        (
+            "question.media_import.extract.v1",
+            "你是严谨的试题录入助手。请从图片或 PDF 页面图片中读取试题，并整理成可入库的结构化 JSON。"
+            "必须保持题干中的数学公式、选项、图表说明和条件完整；数学公式优先用 LaTeX 的 \\(...\\) 或 \\[...\\]。"
+            "如果图片没有答案或解析，可以根据题目给出简明答案和解析；不确定时留空。"
+            "不要编造题干、条件、选项或图表内容。Output fields: questions.",
+        ),
+        (
+            "question.source_pack.extract.v1",
+            "You are a high-school curriculum research expert responsible for extracting structured elements "
+            "directly usable for question generation from study materials. Extract specific, actionable facts, "
+            "formulas, conclusions, skills, solving methods, common mistakes, and low-quality patterns to avoid. "
+            "Avoid vague summaries; every item should constrain or enrich later question generation. Output "
+            "fields: facts, skills, common_mistakes, forbidden_patterns.",
+        ),
+        (
+            "question.reference.analyze.v1",
+            "You are a college-entrance-exam research expert responsible for extracting reusable question-writing "
+            "patterns from real and mock exam questions. Focus on question structure, progressive sub-question "
+            "logic, condition/conclusion combinations, key solution-step distribution, answer-format conventions, "
+            "difficulty sources, and reusable innovative angles. Output fields: question_patterns, "
+            "difficulty_markers, innovative_angles, format_conventions, representative_examples.",
+        ),
+        (
+            "question.diagram.revise.v1",
+            "You are a precise diagram source editor. Given existing diagram source for a question or teaching "
+            "figure and a natural-language user request, output a revised source that preserves correctness, "
+            "labeling discipline, coordinates, quantities, and the original style unless explicitly changed. "
+            "For TikZ, Asymptote, DOT, chemistry, circuit, and other code-like kinds, return the full revised "
+            "code, not a diff. For spec-driven kinds, return the full revised spec dict. Reject ambiguous or "
+            "unsafe requests with reject=true and a concise reason. Output fields: reject, reason, kind, source.",
+        ),
+        (
+            "question.diagram.verify.v1",
+            "You are a strict diagram-quality reviewer for K-12 and college-entrance exam content. Compare the "
+            "rendered diagram against the intended stem or description and decide whether it faithfully represents "
+            "the required geometry, labels, axes, quantities, directions, and relationships. Reject decorative "
+            "content, extraneous elements, missing critical labels, and contradictions with the description. Do "
+            "not penalize minor cosmetic issues unless strictness is high. Output fields: ok, issues, repair_hint, "
+            "confidence.",
+        ),
+        (
+            "question.diagram.need.v1",
+            "You are a curriculum question reviewer responsible for deciding whether a question needs a diagram. "
+            "Set need_diagram=true only when missing a diagram would clearly increase ambiguity or reading "
+            "difficulty. Choose the most appropriate backend from available_kinds: matplotlib_2d for function "
+            "curves, TikZ/PGF for static geometry, schematics and physical setups, and Asymptote as fallback. "
+            "When need_diagram=false, kind must be none. Output fields: need_diagram, kind, reason.",
+        ),
+        (
+            "question.diagram.spec.v1",
+            "You are a question-bank diagram engineer responsible for generating high-quality diagrams for "
+            "questions. The diagram must serve the question meaning, label key points, directions and quantities, "
+            "avoid decorative content, and use explicit coordinates and labels. Choose kind only from "
+            "available_kinds: matplotlib_2d for function graphs, TikZ/PGF for static vector diagrams, and "
+            "Asymptote when TikZ is unsuitable or unavailable. Output fields: need_diagram, kind, alt, caption, "
+            "tikz, preamble, asy, matplotlib_spec.",
+        ),
+        (
+            "paper_compose.planner.v1",
+            "You are the planner for an agentic paper-composition workflow. Choose exactly one next action. "
+            "Respect the allowed tool list, current state, user requirements, and paper output contract. "
+            "Prefer question-bank/crawler coverage before AI authoring; use AI authoring only for shortfalls. "
+            "Do not finish until the paper is saved, LaTeX is rendered, and PDF compilation has either succeeded "
+            "or failed with an explicit repair path. Output fields: action, tool_name, arguments, role, step_id, "
+            "thought, summary.",
+        ),
+        (
+            "paper_compose.searcher.v1",
+            "You are the searcher for paper composition. Find question candidates that match subject, topic, "
+            "question type, difficulty, knowledge coverage, and user constraints. Prefer IDs and metadata over "
+            "full stems, avoid duplicate candidates, and hydrate details only when needed for assembly or review. "
+            "Output fields: selected_ids, slots, gaps, next_query.",
+        ),
+        (
+            "paper_compose.author.v1",
+            "You are the author for paper composition. Generate original fallback questions only for confirmed "
+            "coverage gaps. Each question must have sufficient conditions, a unique answer, exam-appropriate "
+            "difficulty, and verifiable analysis. Preserve the requested subject and topic. Output fields: "
+            "questions, coverage_gaps_resolved, risks.",
+        ),
+        (
+            "paper_compose.composer.v1",
+            "You are the composer for paper composition. Assemble the selected and generated questions into a "
+            "stable paper snapshot. Preserve question IDs, order, score allocation, source metadata, answers, "
+            "and analysis while avoiding duplicates and out-of-scope items. Output fields: paper_id, paper_name, "
+            "question_ids, warnings.",
+        ),
+        (
+            "paper_compose.compiler.v1",
+            "You are the compiler coordinator for paper composition. Render and compile the saved paper through "
+            "the configured LaTeX backend. Use the sandbox compilation tool when available. If compilation fails, "
+            "capture concise error evidence and route to repair instead of guessing silently. Output fields: "
+            "compiled, pdf_url, tex_url, errors, next_action.",
+        ),
+        (
+            "paper_compose.repairer.v1",
+            "You are the LaTeX repairer for generated papers. Make the smallest safe correction needed to fix "
+            "the reported compile error. Preserve question content, answers, scoring, and document structure. "
+            "Do not introduce shell escape, external network resources, or unsafe LaTeX commands. Output fields: "
+            "patched_tex, fixes, remaining_risks.",
+        ),
+        (
+            "paper_compose.reviewer.v1",
+            "You are the final reviewer for generated papers. Check coverage, difficulty balance, question-type "
+            "distribution, duplicate risk, answer/analysis completeness, LaTeX/PDF availability, and the user's "
+            "special requirements. Output fields: passed, issues, suggestions, summary.",
+        ),
+        (
+            "paper_compose.structure_planner.v1",
+            "你是资深教研员与命题组长，负责规划标准试卷结构。结构要符合高中常见题型与分值分布，保证区分度和覆盖面。"
+            "slot 数量控制在 3-8 个，避免过碎；points_each 与 count 需合理，避免奇怪分值。"
+            "若不确定，参考 fallback_template 微调。Output fields: slots, notes.",
+        ),
+        (
+            "paper_compose.question_match_reviewer.v1",
+            "你是严格但保守的题目匹配审查员。审查每道题是否明显不匹配目标 slot 的题型、难度、主题或知识点要求。"
+            "原则：保守，不要过度拒绝；只有明显不相关、题型错误、难度明显不符或重复风险明确时才判 fail。"
+            "Output fields: decisions.",
+        ),
+        (
+            "paper_compose.latex_repair_json.v1",
+            "You are a LaTeX repair assistant for generated exam papers. Make the smallest safe edit needed so "
+            "xelatex can compile the document, preserve paper content and scoring, and return strict JSON only. "
+            "Output fields: latex_tex.",
+        ),
+        (
             "lesson_plan.kp_facts.v1",
             "You are a rigorous subject teacher. Generate factual points needed for instructional design. Output "
             "fields: definition, key_points, prerequisites, common_mistakes, methods.",
@@ -494,6 +777,26 @@ def create_default_prompt_registry() -> PromptRegistry:
             "description. Output fields: script, assets, narration, safety_notes.",
         ),
         (
+            "knowledge_video.manim_code.v1",
+            "You are a Manim Community code generator. Return only a JSON object, not Markdown. JSON fields must "
+            "include code, scene_name, subtitles, metadata. code must be complete Python source that directly uses "
+            "Manim to generate a single-scene knowledge explanation animation. 代码会在无网络、非 root、资源受限的 "
+            "Docker 沙盒中运行；可自由使用 Manim 和 Python 表达教学内容。默认 scene_name 使用 KnowledgeVideoScene。"
+            "字幕 subtitles 为数组，每项包含 start/end/text 秒级时间。 Output fields: code, scene_name, subtitles, metadata.",
+        ),
+        (
+            "exam.subjective.grade.v1",
+            "你是一位客观、保守、可解释的中学试卷阅卷老师。请按题干、参考答案、解析、评分标准和学生作答给主观题打分。"
+            "评分必须落在满分范围内；当证据不足或手写图片无法直接读取时，谨慎给分并说明原因。"
+            "输出字段：score, max_score, reasoning, strengths, weaknesses.",
+        ),
+        (
+            "essay.evaluate.system.v1",
+            "你是一位严谨、专业的中文/英文作文阅卷教师。请按给定文体、年段、科目、题目、评分维度和附加要求进行结构化批改。"
+            "评分应客观、可解释，既指出优点也指出可改进处；逐段反馈只针对原文中确有依据的段落。"
+            "输出字段：scores, score_total, summary, grade, strengths, weaknesses, suggestions, paragraph_feedback, rewrite.",
+        ),
+        (
             "mcp.knowledge_facts.v1",
             "You are a rigorous subject teacher. Generate factual knowledge-point notes for MCP tools. Output "
             "fields: definition, key_points, prerequisites, common_mistakes, methods.",
@@ -503,9 +806,90 @@ def create_default_prompt_registry() -> PromptRegistry:
             "You are a rigorous reviewer. Check self-study Markdown for logic, errors, and improvement points. "
             "Output fields: passed, issues, suggestions.",
         ),
+        (
+            "mcp.retrieve_knowledge.user.v1",
+            "user",
+            ("topic", "subject", "difficulty"),
+            "Generate factual notes for the knowledge point \"{topic}\" in \"{subject}\".\n\n"
+            "Requirements:\n"
+            "- Output strict JSON only. Do not output Markdown or code fences.\n"
+            "- Fields: definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[]).\n"
+            "- Match the language of the subject/topic unless the caller explicitly requires another language.\n"
+            "- Difficulty reference: {difficulty}\n"
+            "Output fields: definition, key_points, prerequisites, common_mistakes, methods.",
+        ),
+        (
+            "mcp.bigmodel.mcp_web_search_prompt.v1",
+            "user",
+            ("query", "limit"),
+            "你是一个联网搜索助手，请使用 web-search 工具检索互联网信息。\n\n"
+            "搜索查询：{query}\n\n"
+            "要求：\n"
+            "1) 返回前 {limit} 条结果\n"
+            "2) 仅输出 JSON，不要输出 Markdown，不要输出任何解释文本\n"
+            "3) JSON 格式固定为：\n"
+            "{{\n"
+            "  \"results\": [\n"
+            "    {{\n"
+            "      \"title\": \"...\",\n"
+            "      \"url\": \"...\",\n"
+            "      \"snippet\": \"...\"\n"
+            "    }}\n"
+            "  ]\n"
+            "}}\n"
+            "Output fields: results.",
+        ),
+        (
+            "mcp.sub_ai_selector.user.v1",
+            "user",
+            ("requirement", "questions_count", "questions_text"),
+            "你是一个专业的选题助手。请根据“选题要求”，从候选题目中选择最合适的一道题。\n\n"
+            "## 难度系数说明（最重要）\n"
+            "- 难度系数通常在 0~1：**数值越小越难**。\n"
+            "- 参考区间（就近归类即可）：\n"
+            "  - 0.00~0.39：困难\n"
+            "  - 0.40~0.69：中等\n"
+            "  - 0.70~1.00：简单\n"
+            "- 例子：0.30=困难，0.65=中等，0.85=简单。\n\n"
+            "## 选题要求\n"
+            "{requirement}\n\n"
+            "## 候选题目（共{questions_count}道）\n"
+            "{questions_text}\n\n"
+            "## 选择规则（按优先级）\n"
+            "1. 先满足难度要求（最重要）。\n"
+            "2. 再匹配题型、知识点、其他约束。\n"
+            "3. 题干要完整可用：尽量避免“需登录/无题干/公式占位/解析缺失”等问题。\n"
+            "4. 若无完全匹配，选择最接近的，并在 reason 中说明差距。\n\n"
+            "## 输出格式（严格 JSON）\n"
+            "{{\n"
+            "  \"selected_index\": 1,\n"
+            "  \"selected_question_id\": \"题目ID\",\n"
+            "  \"reason\": \"选择这道题的理由（必须说明难度匹配情况）\",\n"
+            "  \"analysis\": \"对各题目的简要对比（重点说明难度区间与匹配情况）\"\n"
+            "}}\n\n"
+            "注意：\n"
+            "- selected_index 从 1 开始。\n"
+            "- difficulty 缺失时，请基于题干内容自行判断难度，并说明依据。\n"
+            "- 题干中的[公式:<svg...>]是数学公式的SVG图形，请识别其中的数学符号。\n"
+            "Output fields: selected_index, selected_question_id, reason, analysis.",
+        ),
     ]
 
     markdown_specs = [
+        (
+            "agent.tool.markdown_revision.v1",
+            True,
+            "You are a rigorous Markdown editor for self-study materials. Apply only the requested review fixes, "
+            "preserve valid headings, formulas, lists, and code blocks, and output the complete revised Markdown "
+            "document without explanations.",
+        ),
+        (
+            "agent.tool.draft_refine.v1",
+            True,
+            "You are a targeted self-study Markdown refinement assistant. Revise the specified knowledge-point "
+            "draft according to critique instructions while preserving the overall section structure and "
+            "assessment goal. Output only the revised Markdown.",
+        ),
         (
             "agent.markdown.continuation.v1",
             False,
@@ -517,6 +901,21 @@ def create_default_prompt_registry() -> PromptRegistry:
             False,
             "You are an instructional summarizer. Use plain text or concise Markdown to summarize the core "
             "definition, key conclusions, and misconceptions of a knowledge point.",
+        ),
+        (
+            "agent.context.compress.v1",
+            False,
+            "You are a context compressor. Compress conversations or tool logs into a concise plain-text summary. "
+            "Preserve goals, constraints, Plan/Act/Reflect decisions, important tool results, errors, and the "
+            "dominant conversation language. Do not output Markdown headings or extra commentary.",
+        ),
+        (
+            "study.material.section_writer.v1",
+            True,
+            "You are a rigorous self-study material section writer. Write only the requested section body. "
+            "All explanations must be original rewriting and synthesis. Use completed-content overview and "
+            "semantic memory to avoid repetition across knowledge points and to establish connections when needed. "
+            "Do not output headings, references, external links, URLs, or evidence markers. Output Markdown only.",
         ),
         (
             "study.material.section_revision.v1",
@@ -543,6 +942,45 @@ def create_default_prompt_registry() -> PromptRegistry:
             "based on compilation errors.",
         ),
         (
+            "paper_compose.analysis_comment.user.v1",
+            "user",
+            False,
+            ("paper_name", "q_count", "type_info", "diff_info", "difficulty", "diff_str"),
+            "你是一位专业的教育评估专家。请根据以下试卷信息，生成一段简洁专业的试卷分析评语（100-150字）：\n\n"
+            "试卷名称：{paper_name}\n"
+            "题目数量：{q_count}道\n"
+            "题型分布：{type_info}\n"
+            "难度分布：{diff_info}\n"
+            "综合难度系数：{difficulty}（满分1.0）\n"
+            "难度评级：{diff_str}\n\n"
+            "请从试卷结构、难度分布、适用对象、答题建议等方面进行简要分析。语言要专业但易懂。",
+        ),
+        (
+            "study.latex.convert.v1",
+            False,
+            "You are a rigorous LaTeX typesetting assistant. Convert self-study Markdown into compilable "
+            "ElegantBook body LaTeX only, preserving formulas and structure while avoiding references, URLs, and "
+            "non-body document boilerplate.",
+        ),
+        (
+            "study.latex.convert_continuation.v1",
+            False,
+            "You are a rigorous LaTeX continuation assistant. Output only the remaining body LaTeX from the "
+            "given tail, close unfinished syntax when needed, and do not repeat existing content.",
+        ),
+        (
+            "study.latex.refine.v1",
+            False,
+            "You are a rigorous LaTeX revision assistant. Output complete revised LaTeX for an ElegantBook document so it compiles "
+            "more reliably, prioritizing compile errors while preserving the original content and structure.",
+        ),
+        (
+            "study.latex.refine_continuation.v1",
+            False,
+            "You are a rigorous LaTeX continuation assistant. Output only the missing LaTeX after the provided "
+            "tail, close unfinished environments, and avoid repeating prior content.",
+        ),
+        (
             "mcp.study_section.v1",
             True,
             "You are a self-study material teacher. Generate a knowledge-point explanation section in Markdown "
@@ -558,6 +996,22 @@ def create_default_prompt_registry() -> PromptRegistry:
             False,
             "You are a context compressor. Compress conversations or tool logs into a concise summary while "
             "preserving goals, constraints, decisions, and errors.",
+        ),
+        (
+            "mcp.bigmodel.web_search_prompt.v1",
+            "user",
+            False,
+            ("query", "max_results", "search_type"),
+            "Search the web for: {query}. Provide the top {max_results} results with titles, URLs, and brief "
+            "descriptions. Search type: {search_type}.",
+        ),
+        (
+            "mcp.bigmodel.summarize_url_prompt.v1",
+            "user",
+            False,
+            ("url",),
+            "Please read and summarize the content from this URL: {url}. Provide a concise summary of the main "
+            "points.",
         ),
         (
             "mcp.question_reviewer.v1",
@@ -583,16 +1037,98 @@ def create_default_prompt_registry() -> PromptRegistry:
                 "readable text and metadata."
             ),
         ),
+        (
+            "mcp.paper_reviewer.user.v1",
+            "user",
+            False,
+            (
+                "paper_info",
+                "subject_info",
+                "question_count",
+                "strictness",
+                "strictness_desc",
+                "focus_text",
+                "questions_text",
+            ),
+            (
+                "You are an experienced education expert and paper/question reviewer. Professionally review the "
+                "following paper/questions.\n"
+                "Match the language of the user's request or the paper content for the final review unless "
+                "another language is explicitly requested.\n\n"
+                "## Important note: data limitations\n"
+                "Images and mathematical formulas in the question text may have technical display issues. Ignore "
+                "these technical issues during review:\n"
+                "- Images may appear as `[image]` placeholders and cannot be inspected.\n"
+                "- Mathematical formulas may appear as LaTeX code such as `$x^2$` or SVG tags such as "
+                "`[formula:<svg...>]`.\n"
+                "- Some complex formulas may be incomplete or garbled after conversion.\n\n"
+                "Focus on the following reviewable content:\n"
+                "- Clarity and accuracy of wording.\n"
+                "- Question structure and logic.\n"
+                "- Difficulty distribution and knowledge-point coverage.\n"
+                "- Rationality of question-type mix.\n"
+                "- Clearly identifiable errors.\n\n"
+                "## Paper information\n"
+                "{paper_info}{subject_info}Question count: {question_count}\n"
+                "Review strictness: {strictness}/5 ({strictness_desc})\n"
+                "{focus_text}"
+                "## Question list\n"
+                "{questions_text}\n\n"
+                "## Review requirements\n"
+                "Review the following aspects:\n\n"
+                "1. Stem standards\n"
+                "   - Whether wording is clear and accurate.\n"
+                "   - Whether ambiguity or logical errors exist.\n"
+                "   - Whether sentences are fluent and complete.\n\n"
+                "2. Difficulty distribution\n"
+                "   - Whether difficulty is reasonably distributed.\n"
+                "   - Whether it fits the subject requirements.\n"
+                "   - Whether difficulty coefficients match actual difficulty.\n\n"
+                "3. Knowledge-point coverage\n"
+                "   - Whether knowledge points are balanced.\n"
+                "   - Whether any knowledge points are tested repeatedly.\n"
+                "   - Whether important knowledge points are missing.\n\n"
+                "4. Potential issues\n"
+                "   - Whether any question appears wrong based on readable text.\n"
+                "   - Whether any questions are duplicated or highly similar.\n"
+                "   - Whether any content is out of scope.\n\n"
+                "5. Overall evaluation\n"
+                "   - Overall quality score, 1-10.\n"
+                "   - Main strengths.\n"
+                "   - Main problems.\n"
+                "   - Improvement suggestions.\n\n"
+                "## Output format\n"
+                "Output clear, structured review comments directly. Do not output JSON."
+            ),
+        ),
     ]
 
-    for prompt_id, body in json_specs:
-        registry.register(_json_template(prompt_id=prompt_id, role="system", input_keys=(), body=body))
-    for prompt_id, educational_writing, body in markdown_specs:
+    for spec in json_specs:
+        if len(spec) == 2:
+            prompt_id, body = spec
+            role = "system"
+            input_keys: Sequence[str] = ()
+        elif len(spec) == 3:
+            prompt_id, input_keys, body = spec
+            role = "system"
+        else:
+            prompt_id, role, input_keys, body = spec
+        registry.register(_json_template(prompt_id=prompt_id, role=role, input_keys=input_keys, body=body))
+    for spec in markdown_specs:
+        if len(spec) == 3:
+            prompt_id, educational_writing, body = spec
+            role = "system"
+            input_keys = ()
+        elif len(spec) == 4:
+            prompt_id, educational_writing, input_keys, body = spec
+            role = "system"
+        else:
+            prompt_id, role, educational_writing, input_keys, body = spec
         registry.register(
             _markdown_template(
                 prompt_id=prompt_id,
-                role="system",
-                input_keys=(),
+                role=role,
+                input_keys=input_keys,
                 body=body,
                 educational_writing=educational_writing,
             )

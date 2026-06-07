@@ -19,9 +19,18 @@ from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.core.settings import STUDY_MATERIALS_WRITER_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 
 logger = get_logger(__name__)
+
+
+def _latex_convert_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.latex.convert.v1").content
+
+
+def _latex_convert_continuation_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.latex.convert_continuation.v1").content
 
 
 class LatexConvertMixin:
@@ -141,7 +150,7 @@ class LatexConvertMixin:
             p["markdown"] = md
             res = await self._call_llm_response(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous LaTeX typesetting assistant. Output compilable LaTeX only."},
+                    {"role": "system", "content": _latex_convert_system_prompt()},
                     {"role": "user", "content": json.dumps(p, ensure_ascii=False)},
                 ],
                 model=model,
@@ -197,7 +206,7 @@ class LatexConvertMixin:
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are a rigorous LaTeX continuation assistant. Output only body LaTeX to append and do not repeat previous content.",
+                            "content": _latex_convert_continuation_system_prompt(),
                         },
                         {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
                         {"role": "assistant", "content": tail},

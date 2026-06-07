@@ -9,8 +9,13 @@ from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _draft_refine_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.tool.draft_refine.v1").content
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -153,7 +158,7 @@ class RefineDraftToolsMixin:
 
             revised = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "You are a rigorous Markdown editor. Output only the revised Markdown."},
+                    {"role": "system", "content": _draft_refine_system_prompt()},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

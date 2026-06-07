@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.core.subjects import resolve_subject
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.subject_knowledge import infer_subject_family
@@ -82,6 +83,10 @@ def get_default_paper_structure(subject: str) -> dict:
     }
 
 
+def _structure_planner_system_prompt() -> str:
+    return create_default_prompt_registry().render("paper_compose.structure_planner.v1").content
+
+
 async def plan_exam_structure(
     *,
     subject: str,
@@ -128,20 +133,9 @@ async def plan_exam_structure(
         },
     }
 
-    system_content = (
-        "<role>你是资深教研员与命题组长，负责规划标准试卷结构。</role>\n"
-        "<requirements>\n"
-        "  <rule>结构要符合高中常见题型与分值分布，保证区分度和覆盖面。</rule>\n"
-        "  <rule>slot 数量控制在 3-8 个，避免过碎。</rule>\n"
-        "  <rule>points_each 与 count 需合理（避免出现奇怪分值）。</rule>\n"
-        "  <rule>若不确定，参考 fallback_template 微调。</rule>\n"
-        "</requirements>\n"
-        "<output_format>严格输出 JSON object，不要解释。</output_format>"
-    )
-
     text = await _chat_json_with_reasoning(
         messages=[
-            {"role": "system", "content": system_content},
+            {"role": "system", "content": _structure_planner_system_prompt()},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",

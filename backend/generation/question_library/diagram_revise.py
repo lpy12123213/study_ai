@@ -28,27 +28,14 @@ from backend.generation.question_library.diagram_utils import (
     render_tikz_to_url,
 )
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.runner import run_json
 from backend.media.diagram_source import read_source_sidecar
 
 logger = get_logger(__name__)
 
 
-_REVISE_SYSTEM_PROMPT = (
-    "<role>You are a precise diagram source editor.</role>\n"
-    "<task>Given the existing diagram source for a question/教材 figure and a natural-language user request, "
-    "output a revised source that preserves correctness, labeling discipline, and the original style.</task>\n"
-    "<rules>\n"
-    "  <rule>Output STRICT JSON only — no Markdown, no prose around it.</rule>\n"
-    "  <rule>For TikZ/Asymptote/DOT/circuit kinds: return the full revised code, not a diff.</rule>\n"
-    "  <rule>For spec-driven kinds (matplotlib_2d/matplotlib_3d/svg/schematic): return the full revised spec dict.</rule>\n"
-    "  <rule>Preserve labels, coordinates, and quantities that the user did not ask to change.</rule>\n"
-    "  <rule>If the request is ambiguous or unsafe (e.g. removes all geometry), output reject=true with a brief reason.</rule>\n"
-    "</rules>\n"
-    "<output_schema>"
-    "{\"reject\": false, \"reason\": \"\", \"kind\": \"<same kind>\", \"source\": <revised source matching the kind>}"
-    "</output_schema>"
-)
+_REVISE_SYSTEM_PROMPT = create_default_prompt_registry().render("question.diagram.revise.v1").content
 
 
 def _build_user_payload(*, kind: str, existing_source: Any, user_request: str) -> str:

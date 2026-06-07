@@ -9,8 +9,17 @@ from typing import Any, Dict, List
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _kp_split_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.kp.split.v1").content
+
+
+def _kp_review_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.kp.review.v1").content
 
 
 class KnowledgePointsToolsMixin:
@@ -185,7 +194,7 @@ class KnowledgePointsToolsMixin:
                 text = await asyncio.wait_for(
                     self._call_llm_text(
                         messages=[
-                            {"role": "system", "content": "You are a rigorous subject teacher. Output JSON only."},
+                            {"role": "system", "content": _kp_split_system_prompt()},
                             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                         ],
                         model=model,
@@ -325,7 +334,7 @@ class KnowledgePointsToolsMixin:
                     text = await asyncio.wait_for(
                         self._call_llm_text(
                             messages=[
-                                {"role": "system", "content": "You are a rigorous curriculum researcher. Output JSON only."},
+                                {"role": "system", "content": _kp_review_system_prompt()},
                                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                             ],
                             model=model,

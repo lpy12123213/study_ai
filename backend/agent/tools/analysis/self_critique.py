@@ -7,8 +7,13 @@ from typing import Any, Dict, List, Optional
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _draft_critique_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.tool.draft_critique.v1").content
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -168,7 +173,7 @@ class SelfCritiqueToolsMixin:
 
             raw = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "You are a strict educational manuscript reviewer. Output JSON only."},
+                    {"role": "system", "content": _draft_critique_system_prompt()},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

@@ -57,7 +57,7 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
         from backend.generation.agentic.prompts import create_default_prompt_registry
         from backend.integrations.mcp.tools.stdio_handlers import handle_tool_call
 
-        captured: list[str] = []
+        captured: list[tuple[str, str]] = []
         returns = [
             '{"definition":"d","key_points":[],"prerequisites":[],"common_mistakes":[],"methods":[]}',
             '{"outline":["o"],"confusions":[],"teaching_order":[]}',
@@ -68,7 +68,7 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
         ]
 
         async def fake_call_llm_text(*, messages, **_kwargs):  # type: ignore[no-untyped-def]
-            captured.append(str(messages[0]["content"]))
+            captured.append((str(messages[0]["content"]), str(messages[1]["content"])))
             return returns.pop(0)
 
         server = SimpleNamespace(current_subject="高中数学", crawler=None)
@@ -84,7 +84,7 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
                 await handle_tool_call(server, "compress_context", {"messages": [{"role": "user", "content": "hi"}]})
 
         self.assertEqual(
-            captured,
+            [system_prompt for system_prompt, _user_prompt in captured],
             [
                 registry.render("mcp.knowledge_facts.v1").content,
                 registry.render("lesson_plan.activity_planner.v1").content,
@@ -93,6 +93,15 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
                 registry.render("mcp.review_study_material.v1").content,
                 registry.render("mcp.context_summarize.v1").content,
             ],
+        )
+        self.assertEqual(
+            captured[0][1],
+            registry.render(
+                "mcp.retrieve_knowledge.user.v1",
+                topic="导数",
+                subject="高中数学",
+                difficulty="中等",
+            ).content,
         )
 
 

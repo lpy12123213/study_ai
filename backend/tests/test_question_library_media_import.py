@@ -31,6 +31,7 @@ class TestQuestionLibraryMediaImport(unittest.TestCase):
 
     def test_build_media_import_messages_attaches_all_images(self) -> None:
         from backend.generation.question_library.media_import import ImagePage, build_media_import_messages
+        from backend.llm.prompts import create_default_prompt_registry
 
         pages = [
             ImagePage(source_filename="a.png", page_number=1, mime="image/png", data=b"png-a"),
@@ -47,6 +48,10 @@ class TestQuestionLibraryMediaImport(unittest.TestCase):
         )
 
         self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(
+            messages[0]["content"],
+            create_default_prompt_registry().render("question.media_import.extract.v1").content,
+        )
         user_content = messages[1]["content"]
         self.assertIsInstance(user_content, list)
         image_blocks = [

@@ -6,6 +6,11 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
+
+
+def _knowledge_type_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.knowledge_type.detect.v1").content
 
 
 def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
@@ -131,7 +136,7 @@ class KnowledgeTypeDetectionToolsMixin:
 
             raw = await self._call_llm_text(  # type: ignore[attr-defined]
                 messages=[
-                    {"role": "system", "content": "You are a knowledge-type classification assistant. Output JSON only."},
+                    {"role": "system", "content": _knowledge_type_system_prompt()},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 model=model,

@@ -7,6 +7,7 @@ from typing import Any, Dict
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.llm.client import chat_completion_text, is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
 
@@ -91,7 +92,10 @@ async def grade_subjective_answer(
     try:
         text = await chat_completion_text(
             messages=[
-                {"role": "system", "content": "你是一位客观、保守、可解释的试卷阅卷老师。"},
+                {
+                    "role": "system",
+                    "content": create_default_prompt_registry().render("exam.subjective.grade.v1").content,
+                },
                 {"role": "user", "content": prompt},
             ],
             model=model,

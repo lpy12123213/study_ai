@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 from backend.database.repositories.question.question_library import set_hidden, upsert_question_library_items
 from backend.llm.runner import run_json
+from backend.llm.prompts import create_default_prompt_registry
 from backend.shared.question_thinking import (
     extract_thinking_depth,
     merge_method_context,
@@ -200,17 +201,7 @@ async def score_question_batch_with_thinking_depth(
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "<role>You are a senior high-school curriculum researcher. Score a batch of questions by comparing "
-                    "their solution-method rarity and intellectual depth.</role>\n"
-                    "<batch_policy>Process up to 50 questions together. First identify the core solving method of each "
-                    "question, group same-origin methods, compare against prior_method_context, then score each "
-                    "question's thinking_depth_score from 1 to 10.</batch_policy>\n"
-                    "<carryover>Use prior_method_context as compact memory from earlier batches. Return method_summary so "
-                    "the caller can carry method-family counts into the next batch.</carryover>\n"
-                    "<avoid>Do not reward long wording, tedious calculation, or ordinary difficulty alone.</avoid>\n"
-                    "<output_format>Output a strict JSON object only.</output_format>"
-                ),
+                "content": create_default_prompt_registry().render("question.score.thinking_depth_batch.v1").content,
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
@@ -276,12 +267,10 @@ async def score_stem_with_llm(*, subject: str, stem: str, model: str, requiremen
     }
     obj = await run_json(
         messages=[
-            {"role": "system", "content": (
-                "<role>You are a senior high-school curriculum researcher. Evaluate question quality by college-entrance-exam standards and score objectively.</role>\n"
-                "<scoring_principle>只看题目实际质量，不受题目长短影响。</scoring_principle>\n"
-                "<extra_requirement>If the requirements field is non-empty, prioritize evaluation according to those requirements.</extra_requirement>\n"
-                "<output_format>Output a strict JSON object only.</output_format>"
-            )},
+            {
+                "role": "system",
+                "content": create_default_prompt_registry().render("question.score.single_quality.v1").content,
+            },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         model=model,

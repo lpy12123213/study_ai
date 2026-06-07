@@ -12,9 +12,14 @@ from backend.agent.config import AgentConfig
 from backend.agent.types import CompressedContext, PlanStep, ReflectionResult, StepResult, UserProfile
 from backend.core.logging_utils import get_logger
 from backend.llm.client import chat_completion_text
+from backend.llm.prompts import create_default_prompt_registry
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 logger = get_logger(__name__)
+
+
+def _context_compressor_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.context.compress.v1").content
 
 
 class ContextManager:
@@ -329,7 +334,7 @@ class ContextManager:
             try:
                 text = await chat_completion_text(
                     messages=[
-                        {"role": "system", "content": "You are a context compressor. Output a plain-text summary only."},
+                        {"role": "system", "content": _context_compressor_system_prompt()},
                         {"role": "user", "content": prompt},
                     ],
                     model=normalized_model,

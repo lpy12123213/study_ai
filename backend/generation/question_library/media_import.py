@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, List, Optional, Sequence
 
 from backend.core.settings import LESSON_PLAN_MODEL, settings
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.runner import run_json
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 from backend.shared.project_paths import resolve_repo_local_dir
@@ -368,12 +369,7 @@ def build_media_import_messages(
     pages: Sequence[ImagePage],
 ) -> List[dict]:
     limit = max(1, min(int(max_questions or DEFAULT_MAX_QUESTIONS), DEFAULT_MAX_QUESTIONS))
-    system = (
-        "你是严谨的试题录入助手。请从图片中读取试题，并整理成可入库的结构化 JSON。"
-        "必须保持题干中的数学公式、选项、图表说明和条件完整；数学公式优先用 LaTeX 的 \\(...\\) 或 \\[...\\]。"
-        "如果图片没有答案或解析，可以根据题目给出简明答案和解析；不确定时留空，不要编造题干。"
-        "只输出 JSON，不要输出 Markdown。"
-    )
+    system = create_default_prompt_registry().render("question.media_import.extract.v1").content
     page_notes = "\n".join(
         f"- image {idx + 1}: {page.source_filename} page {page.page_number}" for idx, page in enumerate(pages)
     )

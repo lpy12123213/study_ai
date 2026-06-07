@@ -20,8 +20,13 @@ from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.core.settings import STUDY_MATERIALS_THINKING_MODEL
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _web_subquestion_system_prompt() -> str:
+    return create_default_prompt_registry().render("search.web_subquestion.decompose.v1").content
 
 
 class WebSearchKnowledgeToolsMixin:
@@ -231,12 +236,7 @@ class WebSearchKnowledgeToolsMixin:
             for attempt in range(3):
                 text = await self._call_llm_text(
                     messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a rigorous knowledge exploration assistant for self-study material. Think privately about how to split the problem, then output JSON only."
-                            ),
-                        },
+                        {"role": "system", "content": _web_subquestion_system_prompt()},
                         {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                     ],
                     model=thinking_model,

@@ -13,6 +13,7 @@ from backend.generation.paper_compose.auto_planner import plan_exam_structure
 from backend.generation.paper_compose.exporters.latex import compile_latex_to_pdf_async, render_paper_latex
 from backend.integrations.crawler.manager import get_crawler
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
 
 logger = get_logger(__name__)
@@ -56,6 +57,10 @@ def _extract_tex_from_response(text: str, fallback: str) -> str:
     if fenced:
         return fenced.group(1).strip()
     return raw if "\\documentclass" in raw else fallback
+
+
+def _paper_latex_repair_system_prompt() -> str:
+    return create_default_prompt_registry().render("paper_compose.latex_repair_json.v1").content
 
 
 class PaperComposeToolsMixin:
@@ -371,7 +376,7 @@ class PaperComposeToolsMixin:
         }
         repaired_text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "You repair LaTeX documents. Output strict JSON only."},
+                {"role": "system", "content": _paper_latex_repair_system_prompt()},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=self.config.summarizer_model,

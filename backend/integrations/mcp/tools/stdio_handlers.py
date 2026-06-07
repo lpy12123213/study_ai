@@ -48,6 +48,10 @@ def _prompt(prompt_id: str) -> str:
     return create_default_prompt_registry().render(prompt_id).content
 
 
+def _render_prompt(prompt_id: str, **values: Any) -> str:
+    return create_default_prompt_registry().render(prompt_id, **values).content
+
+
 async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[TextContent]:
     """处理工具调用"""
 
@@ -553,7 +557,12 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     "note": "未配置 LESSON_PLAN_API_KEY，返回为空。",
                 }
             else:
-                prompt = f"""Generate factual notes for the knowledge point "{topic}" in "{subject_input or server.current_subject}".\n\nRequirements:\n- Output strict JSON only. Do not output Markdown or code fences.\n- Fields: definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[]).\n- Match the language of the subject/topic unless the caller explicitly requires another language.\n- Difficulty reference: {difficulty}\n"""
+                prompt = _render_prompt(
+                    "mcp.retrieve_knowledge.user.v1",
+                    topic=topic,
+                    subject=subject_input or server.current_subject,
+                    difficulty=difficulty,
+                )
                 text = await call_llm_text(
                     messages=[
                         {"role": "system", "content": _prompt("mcp.knowledge_facts.v1")},

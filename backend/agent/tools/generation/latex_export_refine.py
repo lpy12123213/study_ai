@@ -14,7 +14,16 @@ from backend.agent.tools.generation.latex_export_utils import (
 from backend.agent.tools.utils.text_utils import _trim_overlap
 from backend.agent.types import CompressedContext
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
+
+
+def _latex_refine_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.latex.refine.v1").content
+
+
+def _latex_refine_continuation_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.latex.refine_continuation.v1").content
 
 
 class LatexRefineMixin:
@@ -97,7 +106,7 @@ class LatexRefineMixin:
         )
         res = await self._call_llm_response(
             messages=[
-                {"role": "system", "content": "You are a rigorous LaTeX revision assistant. Output must be compilable."},
+                {"role": "system", "content": _latex_refine_system_prompt()},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=model,
@@ -152,7 +161,7 @@ class LatexRefineMixin:
             }
             cont_res = await self._call_llm_response(
                 messages=[
-                    {"role": "system", "content": "You are a rigorous LaTeX continuation assistant. Output only content to append and do not repeat previous content."},
+                    {"role": "system", "content": _latex_refine_continuation_system_prompt()},
                     {"role": "user", "content": json.dumps(cont_prompt, ensure_ascii=False)},
                     {"role": "assistant", "content": tail},
                     {"role": "user", "content": "Continue. Output only LaTeX that must be appended, and do not repeat existing_latex_tail."},

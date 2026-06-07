@@ -5,9 +5,30 @@ from typing import Any, Dict, List
 from backend.core.logging_utils import get_logger
 from backend.core.settings import settings
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.runner import run_text
 
 logger = get_logger(__name__)
+
+
+def _analysis_comment_user_prompt(
+    *,
+    paper_name: str,
+    q_count: int,
+    type_info: str,
+    diff_info: str,
+    difficulty: float,
+    diff_str: str,
+) -> str:
+    return create_default_prompt_registry().render(
+        "paper_compose.analysis_comment.user.v1",
+        paper_name=paper_name,
+        q_count=q_count,
+        type_info=type_info or "未知",
+        diff_info=diff_info,
+        difficulty=difficulty,
+        diff_str=diff_str,
+    ).content
 
 
 def calculate_difficulty_score(questions: List[Dict[str, Any]]) -> float:
@@ -73,16 +94,14 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
     if not is_llm_configured(scope="chat"):
         return _fallback_comment(paper_name, q_count, diff_str, type_info)
 
-    prompt = f"""你是一位专业的教育评估专家。请根据以下试卷信息，生成一段简洁专业的试卷分析评语（100-150字）：
-
-试卷名称：{paper_name}
-题目数量：{q_count}道
-题型分布：{type_info or "未知"}
-难度分布：{diff_info}
-综合难度系数：{difficulty}（满分1.0）
-难度评级：{diff_str}
-
-请从试卷结构、难度分布、适用对象、答题建议等方面进行简要分析。语言要专业但易懂。"""
+    prompt = _analysis_comment_user_prompt(
+        paper_name=paper_name,
+        q_count=q_count,
+        type_info=type_info,
+        diff_info=diff_info,
+        difficulty=difficulty,
+        diff_str=diff_str,
+    )
 
     async def _call_llm() -> str:
         return await run_text(

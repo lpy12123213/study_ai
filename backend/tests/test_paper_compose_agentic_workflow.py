@@ -63,6 +63,7 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_paper_compose_planner_uses_llm_decision_when_configured(self) -> None:
         from backend.generation.agentic.task_specs import build_agent_run_spec_for_task
+        from backend.generation.agentic.prompts import create_default_prompt_registry
         from backend.generation.paper_compose import agentic_workflow
 
         spec = build_agent_run_spec_for_task(
@@ -84,6 +85,10 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.step_id, "author_questions")
         self.assertEqual(decision.arguments["count"], 2)
         llm_call.assert_called_once()
+        self.assertEqual(
+            llm_call.call_args.kwargs["messages"][0]["content"],
+            create_default_prompt_registry().render("paper_compose.planner.v1").content,
+        )
 
     async def test_paper_compose_runner_uses_legacy_blueprint_by_default(self) -> None:
         from backend.shared.tasks import RuntimeTask

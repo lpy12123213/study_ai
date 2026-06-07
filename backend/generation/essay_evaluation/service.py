@@ -22,6 +22,7 @@ from backend.generation.essay_evaluation.essay_schemas import (
     EssayScore,
 )
 from backend.llm.client import chat_completion_text, is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
 
@@ -287,7 +288,10 @@ async def evaluate_essay(
 
     text = await chat_completion_text(
         messages=[
-            {"role": "system", "content": "你是一位严谨、专业的中文/英文作文阅卷教师。"},
+            {
+                "role": "system",
+                "content": create_default_prompt_registry().render("essay.evaluate.system.v1").content,
+            },
             {"role": "user", "content": prompt},
         ],
         model=chosen_model,

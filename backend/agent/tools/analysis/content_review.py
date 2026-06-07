@@ -6,6 +6,15 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
+
+
+def _content_review_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.tool.content_review.v1").content
+
+
+def _markdown_revision_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.tool.markdown_revision.v1").content
 
 
 class ContentReviewToolsMixin:
@@ -238,7 +247,7 @@ class ContentReviewToolsMixin:
         }
         text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "You are a rigorous content reviewer. Output JSON only."},
+                {"role": "system", "content": _content_review_system_prompt()},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=self.config.reflector_model,
@@ -284,7 +293,7 @@ class ContentReviewToolsMixin:
         }
         text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "You are a rigorous Markdown editor. Output only the final Markdown."},
+                {"role": "system", "content": _markdown_revision_system_prompt()},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
             model=self.config.planner_model,

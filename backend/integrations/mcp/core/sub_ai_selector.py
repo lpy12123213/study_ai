@@ -16,8 +16,13 @@ from backend.core.settings import (
     SUB_MODEL_TEMPERATURE,
 )
 from backend.llm.client import chat_completion, is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _prompt(prompt_id: str, **values: Any) -> str:
+    return create_default_prompt_registry().render(prompt_id, **values).content
 
 
 async def select_best_question(
@@ -69,43 +74,12 @@ async def select_best_question(
 """
 
     # Build a short, strict prompt to reduce format drift.
-    prompt = f"""你是一个专业的选题助手。请根据“选题要求”，从候选题目中选择最合适的一道题。
-
-## 难度系数说明（最重要）
-- 难度系数通常在 0~1：**数值越小越难**。
-- 参考区间（就近归类即可）：
-  - 0.00~0.39：困难
-  - 0.40~0.69：中等
-  - 0.70~1.00：简单
-- 例子：0.30=困难，0.65=中等，0.85=简单。
-
-## 选题要求
-{requirement}
-
-## 候选题目（共{len(questions)}道）
-{questions_text}
-
-## 选择规则（按优先级）
-1. 先满足难度要求（最重要）。
-2. 再匹配题型、知识点、其他约束。
-3. 题干要完整可用：尽量避免“需登录/无题干/公式占位/解析缺失”等问题。
-4. 若无完全匹配，选择最接近的，并在 reason 中说明差距。
-
-## 输出格式（严格 JSON）
-```json
-{{
-  "selected_index": 1,
-  "selected_question_id": "题目ID",
-  "reason": "选择这道题的理由（必须说明难度匹配情况）",
-  "analysis": "对各题目的简要对比（重点说明难度区间与匹配情况）"
-}}
-```
-
-注意：
-- selected_index 从 1 开始。
-- difficulty 缺失时，请基于题干内容自行判断难度，并说明依据。
-- 题干中的[公式:<svg...>]是数学公式的SVG图形，请识别其中的数学符号。
-"""
+    prompt = _prompt(
+        "mcp.sub_ai_selector.user.v1",
+        requirement=requirement,
+        questions_count=len(questions),
+        questions_text=questions_text,
+    )
 
     try:
         res = await chat_completion(

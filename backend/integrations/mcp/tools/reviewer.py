@@ -27,6 +27,10 @@ def _prompt(prompt_id: str) -> str:
     return create_default_prompt_registry().render(prompt_id).content
 
 
+def _render_prompt(prompt_id: str, **values: Any) -> str:
+    return create_default_prompt_registry().render(prompt_id, **values).content
+
+
 REVIEW_SYSTEM_PROMPT = _prompt("mcp.question_reviewer.v1")
 
 
@@ -273,61 +277,16 @@ Focus on the user requirements above during the review and respond to them first
     paper_info = f"Paper name: {paper_name}\n" if (paper_name or "").strip() else ""
     subject_info = f"Subject: {subject}\n" if (subject or "").strip() else ""
 
-    prompt = f"""You are an experienced education expert and paper/question reviewer. Professionally review the following paper/questions.
-Match the language of the user's request or the paper content for the final review unless another language is explicitly requested.
-
-## Important note: data limitations
-Images and mathematical formulas in the question text may have technical display issues. Ignore these technical issues during review:
-- Images may appear as `[image]` placeholders and cannot be inspected.
-- Mathematical formulas may appear as LaTeX code such as `$x^2$` or SVG tags such as `[formula:<svg...>]`.
-- Some complex formulas may be incomplete or garbled after conversion.
-
-Focus on the following reviewable content:
-- Clarity and accuracy of wording.
-- Question structure and logic.
-- Difficulty distribution and knowledge-point coverage.
-- Rationality of question-type mix.
-- Clearly identifiable errors.
-
-## Paper information
-{paper_info}{subject_info}Question count: {len(questions)}
-Review strictness: {int(strictness or 3)}/5 ({strictness_desc})
-{focus_text}
-## Question list
-{questions_text}
-
-## Review requirements
-Review the following aspects:
-
-1. Stem standards
-   - Whether wording is clear and accurate.
-   - Whether ambiguity or logical errors exist.
-   - Whether sentences are fluent and complete.
-
-2. Difficulty distribution
-   - Whether difficulty is reasonably distributed.
-   - Whether it fits the subject requirements.
-   - Whether difficulty coefficients match actual difficulty.
-
-3. Knowledge-point coverage
-   - Whether knowledge points are balanced.
-   - Whether any knowledge points are tested repeatedly.
-   - Whether important knowledge points are missing.
-
-4. Potential issues
-   - Whether any question appears wrong based on readable text.
-   - Whether any questions are duplicated or highly similar.
-   - Whether any content is out of scope.
-
-5. Overall evaluation
-   - Overall quality score, 1-10.
-   - Main strengths.
-   - Main problems.
-   - Improvement suggestions.
-
-## Output format
-Output clear, structured review comments directly. Do not output JSON.
-"""
+    prompt = _render_prompt(
+        "mcp.paper_reviewer.user.v1",
+        paper_info=paper_info,
+        subject_info=subject_info,
+        question_count=len(questions),
+        strictness=int(strictness or 3),
+        strictness_desc=strictness_desc,
+        focus_text=focus_text,
+        questions_text=questions_text,
+    )
 
     try:
         res = await chat_completion(

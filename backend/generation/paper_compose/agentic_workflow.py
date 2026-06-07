@@ -12,6 +12,7 @@ from backend.generation.agentic.tooling import AgentDecision, ToolResult
 from backend.generation.agentic.types import AgentRunSpec, AgentTraceEvent
 from backend.llm.client import chat_completion_text, is_llm_configured
 from backend.llm.json_utils import extract_first_json_object
+from backend.llm.prompts import create_default_prompt_registry
 
 
 def _now_iso() -> str:
@@ -111,12 +112,10 @@ class PaperComposePlanner:
             ],
         }
         try:
+            system_prompt = create_default_prompt_registry().render("paper_compose.planner.v1").content
             text = await chat_completion_text(
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "You are the planner for an agentic paper composition workflow. Choose the next action as strict JSON.",
-                    },
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 temperature=0.1,

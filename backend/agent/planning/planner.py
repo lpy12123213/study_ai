@@ -26,8 +26,13 @@ from backend.core.settings import (
     LESSON_PLAN_TEMPERATURE,
 )
 from backend.llm.client import chat_completion_text, is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _execution_plan_system_prompt() -> str:
+    return create_default_prompt_registry().render("agent.planner.execution_plan.v1").content
 
 
 class Planner:
@@ -1057,16 +1062,7 @@ class Planner:
             "tool_descriptions": tool_desc,
         }
 
-        system = (
-            "You are the planner for a self-study material generation system. Output an executable plan JSON.\n"
-            "Match the language of the user's latest request for user-facing title/thought fields unless explicitly instructed otherwise. Keep tool names and JSON field names unchanged.\n"
-            "Output schema:\n"
-            '{\n  "rationale": "string",\n  "steps": [\n'
-            '    {"id": "optional", "title": "string", "tool": "string", "arguments": {}, '
-            '"parallel_group": "string", "thought": "string", "foreach_knowledge_point": false, "foreach_limit": 0}\n'
-            "  ]\n}\n"
-            "Strict requirement: output JSON only."
-        )
+        system = _execution_plan_system_prompt()
 
         degraded_reason = ""
         try:

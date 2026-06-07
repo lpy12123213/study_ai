@@ -8,8 +8,13 @@ from typing import Any, Dict, List
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _teaching_diagram_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.diagram.plan.v1").content
 
 
 def _has_tool(name: str) -> bool:
@@ -212,7 +217,7 @@ class DiagramPlanningToolsMixin:
             try:
                 raw = await self._call_llm_text(  # type: ignore[attr-defined]
                     messages=[
-                        {"role": "system", "content": "You are a teaching diagram helper. Output JSON only."},
+                        {"role": "system", "content": _teaching_diagram_system_prompt()},
                         {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                     ],
                     model=model,

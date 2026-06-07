@@ -6,8 +6,22 @@ from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.integrations.crawler.manager import get_crawler
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
+
+
+def _retrieve_knowledge_system_prompt() -> str:
+    return create_default_prompt_registry().render("study.knowledge.retrieve.v1").content
+
+
+def _retrieve_knowledge_user_prompt(*, topic: str, subject: str, difficulty: str) -> str:
+    return create_default_prompt_registry().render(
+        "study.knowledge.retrieve.user.v1",
+        topic=topic,
+        subject=subject,
+        difficulty=difficulty,
+    ).content
 
 
 class QuestionBankToolsMixin:
@@ -123,10 +137,10 @@ class QuestionBankToolsMixin:
                 "note": "未配置模型，知识检索返回为空。",
             }
 
-        prompt = f"""Generate factual notes for the knowledge point "{topic}" in "{subject}" that can be used in self-study materials.\n\nRequirements:\n- Output strict JSON only. Do not output Markdown or code fences.\n- Fields: definition(str), key_points(str[]), prerequisites(str[]), common_mistakes(str[]), methods(str[]).\n- Match the language of the subject/topic unless explicitly required otherwise.\n- Difficulty reference: {difficulty}\n"""
+        prompt = _retrieve_knowledge_user_prompt(topic=topic, subject=subject, difficulty=difficulty)
         text = await self._call_llm_text(
             messages=[
-                {"role": "system", "content": "You are a rigorous subject teacher. Output JSON only."},
+                {"role": "system", "content": _retrieve_knowledge_system_prompt()},
                 {"role": "user", "content": prompt},
             ],
             model=self.config.summarizer_model,
