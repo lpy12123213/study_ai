@@ -74,6 +74,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     "user_id": "u-1",
                     "subject": "高中数学",
                     "topic": "圆锥曲线",
+                    "difficulty": "困难",
+                    "question_type": "解答题",
+                    "use_study_archive": True,
                     "draft_questions": [{"question_id": "q-new", "stem": "s", "answer": "a", "analysis": "x"}],
                     "created_at_s": 200,
                 }
@@ -115,6 +118,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["preview"]["preview_id"], "pv-new")
         self.assertEqual(data["preview"]["topic"], "圆锥曲线")
+        self.assertEqual(data["preview"]["difficulty"], "困难")
+        self.assertEqual(data["preview"]["question_type"], "解答题")
+        self.assertTrue(data["preview"]["use_study_archive"])
 
     def test_generate_creates_persisted_session_and_discard_archives_it(self) -> None:
         app = create_app()

@@ -34,6 +34,17 @@ describe('QuestionContent', () => {
     expect(container.querySelector('.katex-display')).not.toBeNull()
   })
 
+  it('renders storage math delimiters without exposing raw markers', async () => {
+    const { container } = render(
+      <QuestionContent content={'已知 \\(x^2+1\\)，证明 \\[y=x^2\\]。'} />
+    )
+
+    await waitFor(() => expect(container.querySelector('.katex')).not.toBeNull())
+    await waitFor(() => expect(container.querySelector('.katex-display')).not.toBeNull())
+    expect(container.textContent || '').not.toContain('\\(')
+    expect(container.textContent || '').not.toContain('\\[')
+  })
+
   it('rescues obvious broken probability tables into display math', () => {
     const content = `已知随机变量的取值为非负整数，其分布列为：
 

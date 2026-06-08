@@ -66,4 +66,44 @@ describe('AnswerReview', () => {
     await waitFor(() => expect(image).toHaveAttribute('src', 'blob:handwriting-review'))
     expect(clientMocks.downloadObjectUrl).toHaveBeenCalledWith(imageUrl)
   })
+
+  it('renders review stems through the shared rich question renderer', async () => {
+    const imageUrl = `/api/media/generated/${'d'.repeat(64)}.png`
+    const formulaHash = '294f5ba74cdf695fc9a8a8e52f421328'
+    const questions: ExamQuestion[] = [
+      {
+        questionId: 'q-rich-review',
+        order: 1,
+        type: 'single_choice',
+        questionType: 'single_choice',
+        stem: `已知 \\(x^2+1\\)，观察 \\[y=x^2\\]，参考[图片:${imageUrl}]和[公式:${formulaHash}]。`,
+        maxScore: 5,
+      },
+    ]
+    const result: ExamResult = {
+      sessionId: 'session-001',
+      totalScore: 5,
+      maxScore: 5,
+      scoreRatio: 1,
+      objectiveCorrect: 1,
+      objectiveTotal: 1,
+      subjectiveScore: 0,
+      subjectiveMax: 0,
+      breakdown: [{ question_id: 'q-rich-review', score: 5, max_score: 5, is_correct: true }],
+      aiFeedback: {},
+    }
+
+    const { container } = render(<AnswerReview questions={questions} result={result} />)
+
+    expect(await screen.findByAltText('题目图片')).toBeInTheDocument()
+    expect(await screen.findByAltText('题目公式')).toBeInTheDocument()
+    await waitFor(() => expect(container.querySelector('.katex-display')).not.toBeNull())
+    await waitFor(() => expect(screen.getByAltText('题目图片')).toHaveAttribute('src', 'blob:handwriting-review'))
+
+    const renderedText = container.textContent || ''
+    expect(renderedText).not.toContain('\\(')
+    expect(renderedText).not.toContain('\\[')
+    expect(renderedText).not.toContain('[图片:')
+    expect(renderedText).not.toContain('[公式:')
+  })
 })

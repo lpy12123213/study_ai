@@ -18,12 +18,24 @@ const apiMocks = vi.hoisted(() => ({
   uploadHandwriting: vi.fn(),
 }))
 
+const clientMocks = vi.hoisted(() => ({
+  downloadObjectUrl: vi.fn(),
+  resolveApiResourceUrl: vi.fn((url: string) =>
+    /^https?:\/\//i.test(url) ? url : `https://example.test${url.startsWith('/') ? url : `/${url}`}`
+  ),
+}))
+
 const handwritingMocks = vi.hoisted(() => ({
   exportImage: vi.fn(),
   mountCount: 0,
 }))
 
 vi.mock('@/api/exam', () => apiMocks)
+
+vi.mock('@/api/client', () => ({
+  downloadObjectUrl: clientMocks.downloadObjectUrl,
+  resolveApiResourceUrl: clientMocks.resolveApiResourceUrl,
+}))
 
 vi.mock('@/features/exam/components/HandwritingBoard', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
@@ -121,6 +133,10 @@ describe('ExamPage', () => {
       path: 'user-1/session-001/q-001.jpg',
       url: '/api/media/exam-handwriting/session-001/q-001.jpg',
     })
+    clientMocks.downloadObjectUrl.mockResolvedValue({
+      objectUrl: 'blob:exam-stem-media',
+      revoke: vi.fn(),
+    })
   })
 
   it('loads the session with saved answers so interrupted exams can be restored', async () => {
@@ -177,6 +193,71 @@ describe('ExamPage', () => {
 
     await Promise.resolve()
     expect(setIntervalSpy.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(initialSaveIntervalCount)
+  })
+
+  it('auto-saves dirty answers after 30 seconds while the timed countdown ticks', async () => {
+    let nowMs = Date.parse('2026-06-05T10:00:00Z')
+    let nextIntervalId = 1
+    const intervals = new Map<number, { handler: TimerHandler; delay: number; elapsed: number }>()
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs)
+    vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler, delay?: number) => {
+      const id = nextIntervalId
+      nextIntervalId += 1
+      intervals.set(id, { handler, delay: Number(delay) || 0, elapsed: 0 })
+      return id as unknown as ReturnType<typeof window.setInterval>
+    })
+    vi.spyOn(window, 'clearInterval').mockImplementation((id) => {
+      intervals.delete(Number(id))
+    })
+    const advanceIntervals = async (ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 1000) {
+        const step = Math.min(1000, ms - elapsed)
+        nowMs += step
+        await act(async () => {
+          for (const [id, interval] of Array.from(intervals)) {
+            if (!intervals.has(id)) continue
+            interval.elapsed += step
+            while (interval.delay > 0 && interval.elapsed >= interval.delay && intervals.has(id)) {
+              interval.elapsed -= interval.delay
+              if (typeof interval.handler === 'function') interval.handler()
+            }
+          }
+          await Promise.resolve()
+        })
+      }
+    }
+    apiMocks.getExamSession.mockResolvedValue(
+      makeSession({
+        mode: 'timed',
+        expiresAt: '2026-06-05T10:30:00Z',
+      })
+    )
+    renderExamPage()
+
+    expect(await screen.findByText('函数综合测试')).toBeInTheDocument()
+
+    act(() => {
+      useExamStore.getState().updateAnswer('q-002', {
+        questionId: 'q-002',
+        questionType: 'single_choice',
+        selectedOptions: ['A'],
+      })
+    })
+
+    await advanceIntervals(29_000)
+    expect(apiMocks.batchSaveAnswers).not.toHaveBeenCalled()
+
+    await advanceIntervals(1_000)
+
+    await waitFor(() =>
+      expect(apiMocks.batchSaveAnswers).toHaveBeenCalledWith('session-001', [
+        {
+          questionId: 'q-002',
+          questionType: 'single_choice',
+          selectedOptions: ['A'],
+        },
+      ])
+    )
   })
 
   it('submits only once when a timed exam expires', async () => {
@@ -265,5 +346,36 @@ describe('ExamPage', () => {
 
     expect(await screen.findByAltText('题目公式')).toBeInTheDocument()
     await waitFor(() => expect(document.querySelector('.katex')).not.toBeNull())
+  })
+
+  it('renders exam stems through the shared rich question renderer', async () => {
+    const imageUrl = `/api/media/generated/${'b'.repeat(64)}.png`
+    const formulaHash = '294f5ba74cdf695fc9a8a8e52f421328'
+    apiMocks.getExamSession.mockResolvedValue(
+      makeSession({
+        questions: [
+          {
+            questionId: 'q-rich-stem',
+            order: 1,
+            type: 'single_choice',
+            questionType: 'single_choice',
+            stem: `已知 \\(x^2+1\\)，观察 \\[y=x^2\\]，参考[图片:${imageUrl}]和[公式:${formulaHash}]。A. 1 B. 2`,
+            maxScore: 5,
+          },
+        ],
+      })
+    )
+    renderExamPage()
+
+    expect(await screen.findByAltText('题目图片')).toBeInTheDocument()
+    expect(await screen.findByAltText('题目公式')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.katex-display')).not.toBeNull())
+    await waitFor(() => expect(screen.getByAltText('题目图片')).toHaveAttribute('src', 'blob:exam-stem-media'))
+
+    const renderedText = document.body.textContent || ''
+    expect(renderedText).not.toContain('\\(')
+    expect(renderedText).not.toContain('\\[')
+    expect(renderedText).not.toContain('[图片:')
+    expect(renderedText).not.toContain('[公式:')
   })
 })

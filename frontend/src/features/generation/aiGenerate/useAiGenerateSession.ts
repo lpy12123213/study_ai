@@ -110,6 +110,7 @@ function normalizeReasonBlocks(input: unknown): AiGenerateReasonBlock[] {
 }
 
 export function reduceTaskPreviewToSession(preview: QuestionLibraryDraftPreview): AiGenerateStudioSession {
+  const useStudyArchiveRaw = (preview as any).useStudyArchive ?? (preview as any).use_study_archive
   const confirmedIds = (preview.draftQuestions || [])
     .filter((item) => {
       const status = toReviewStatus(item.review_status)
@@ -130,7 +131,7 @@ export function reduceTaskPreviewToSession(preview: QuestionLibraryDraftPreview)
       count: Math.max(0, Number(preview.count || 0)),
       difficulty: String((preview as any).difficulty || '').trim(),
       questionType: String((preview as any).questionType || (preview as any).question_type || '').trim(),
-      useStudyArchive: Boolean((preview as any).useStudyArchive ?? (preview as any).use_study_archive),
+      useStudyArchive: useStudyArchiveRaw === undefined ? true : Boolean(useStudyArchiveRaw),
       useReferenceQuestions: preview.useReferenceQuestions !== false,
       referenceSource: String(preview.referenceSource || 'any').trim() || 'any',
       referenceYearRange: String(preview.referenceYearRange || 'all').trim() || 'all',

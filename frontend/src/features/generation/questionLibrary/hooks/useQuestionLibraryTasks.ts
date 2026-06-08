@@ -40,6 +40,9 @@ export interface QuestionLibraryDraftPreview {
   subject: string
   topic: string
   mode?: 'standard' | 'infinite' | string
+  difficulty?: string
+  questionType?: string
+  useStudyArchive?: boolean
   useReferenceQuestions?: boolean
   referenceSource?: 'any' | 'gaokao' | 'mock' | 'joint' | string
   referenceYearRange?: 'all' | '3' | '5' | string
@@ -315,6 +318,7 @@ export function useQuestionLibraryTasks(options: {
           if (drafts.length > 0) {
             const referenceSource = readString(payload, 'reference_source').trim() || 'any'
             const referenceYearRange = readString(payload, 'reference_year_range').trim() || 'all'
+            const useStudyArchiveRaw = payload.use_study_archive
             const useReferenceQuestionsRaw = payload.use_reference_questions
             const count = readNumber(payload, 'count', drafts.length)
 
@@ -324,6 +328,9 @@ export function useQuestionLibraryTasks(options: {
               subject: readString(payload, 'subject').trim(),
               topic: readString(payload, 'topic').trim(),
               mode: readString(payload, 'mode').trim() || 'standard',
+              difficulty: readString(payload, 'difficulty').trim(),
+              questionType: readString(payload, 'question_type').trim(),
+              useStudyArchive: useStudyArchiveRaw === undefined ? true : Boolean(useStudyArchiveRaw),
               useReferenceQuestions: useReferenceQuestionsRaw === undefined ? true : Boolean(useReferenceQuestionsRaw),
               referenceSource,
               referenceYearRange,
@@ -473,6 +480,7 @@ export function useQuestionLibraryTasks(options: {
 
         const taskId =
           readString(preview, 'task_id').trim() || `ql-preview-${readString(preview, 'preview_id')}`
+        const useStudyArchiveRaw = preview.use_study_archive
         const useReferenceQuestionsRaw = preview.use_reference_questions
         const count = readNumber(preview, 'count', drafts.length)
 
@@ -482,6 +490,9 @@ export function useQuestionLibraryTasks(options: {
           subject: readString(preview, 'subject').trim(),
           topic: readString(preview, 'topic').trim(),
           mode: readString(preview, 'mode').trim() || 'standard',
+          difficulty: readString(preview, 'difficulty').trim(),
+          questionType: readString(preview, 'question_type').trim(),
+          useStudyArchive: useStudyArchiveRaw === undefined ? true : Boolean(useStudyArchiveRaw),
           useReferenceQuestions: useReferenceQuestionsRaw === undefined ? true : Boolean(useReferenceQuestionsRaw),
           referenceSource: readString(preview, 'reference_source').trim() || 'any',
           referenceYearRange: readString(preview, 'reference_year_range').trim() || 'all',

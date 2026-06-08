@@ -154,6 +154,9 @@ export interface QuestionLibraryPreviewResponse {
   subject: string
   topic: string
   mode?: 'standard' | 'infinite'
+  difficulty?: string
+  question_type?: string
+  use_study_archive?: boolean
   use_reference_questions?: boolean
   reference_source?: 'any' | 'gaokao' | 'mock' | 'joint'
   reference_year_range?: 'all' | '3' | '5'

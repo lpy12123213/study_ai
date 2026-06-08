@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import { AuthImage } from '@/components/shared/AuthImage'
 import { cn } from '@/lib/utils'
 

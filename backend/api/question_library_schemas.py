@@ -122,6 +122,9 @@ class QuestionLibraryPreviewData(BaseModel):
     subject: str = ""
     topic: str = ""
     mode: Literal["standard", "infinite"] = "standard"
+    difficulty: str = ""
+    question_type: str = ""
+    use_study_archive: bool = True
     use_reference_questions: bool = True
     reference_source: Literal["any", "gaokao", "mock", "joint"] = "any"
     reference_year_range: Literal["all", "3", "5"] = "all"

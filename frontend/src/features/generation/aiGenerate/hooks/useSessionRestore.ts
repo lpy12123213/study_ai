@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 
@@ -36,19 +36,19 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const [missionText, setMissionText] = useState(DEFAULT_MISSION)
-  const [difficulty, setDifficulty] = useState('中等')
-  const [questionType, setQuestionType] = useState('')
-  const [count, setCount] = useState('5')
-  const [useStudyArchive, setUseStudyArchive] = useState(true)
-  const [useReferenceQuestions, setUseReferenceQuestions] = useState(true)
-  const [referenceSource, setReferenceSource] = useState<'any' | 'gaokao' | 'mock' | 'joint'>('any')
-  const [referenceYearRange, setReferenceYearRange] = useState<'all' | '3' | '5'>('all')
-  const [mode, setMode] = useState<AiGenerateSessionMode>('standard')
-  const [gradeId, setGradeId] = useState('')
-  const [textbookVersionId, setTextbookVersionId] = useState('')
-  const [selectedKnowledgePointIds, setSelectedKnowledgePointIds] = useState<string[]>([])
-  const [selectedKnowledgePointLabels, setSelectedKnowledgePointLabels] = useState<string[]>([])
+  const [missionText, setMissionTextState] = useState(DEFAULT_MISSION)
+  const [difficulty, setDifficultyState] = useState('中等')
+  const [questionType, setQuestionTypeState] = useState('')
+  const [count, setCountState] = useState('5')
+  const [useStudyArchive, setUseStudyArchiveState] = useState(true)
+  const [useReferenceQuestions, setUseReferenceQuestionsState] = useState(true)
+  const [referenceSource, setReferenceSourceState] = useState<'any' | 'gaokao' | 'mock' | 'joint'>('any')
+  const [referenceYearRange, setReferenceYearRangeState] = useState<'all' | '3' | '5'>('all')
+  const [mode, setModeState] = useState<AiGenerateSessionMode>('standard')
+  const [gradeId, setGradeIdState] = useState('')
+  const [textbookVersionId, setTextbookVersionIdState] = useState('')
+  const [selectedKnowledgePointIds, setSelectedKnowledgePointIdsState] = useState<string[]>([])
+  const [selectedKnowledgePointLabels, setSelectedKnowledgePointLabelsState] = useState<string[]>([])
   const [session, setSession] = useState<AiGenerateStudioSession | null>(null)
   const [historyOpen, setHistoryOpen] = useState(true)
   const [workflowOpen, setWorkflowOpen] = useState(true)
@@ -56,22 +56,116 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
   const activeSessionId = String(searchParams.get('session') || '').trim()
   const lastLoadedSessionSignatureRef = useRef('')
   const optimisticStopRequestedRef = useRef<boolean | null>(null)
+  const composerEditedRef = useRef(false)
+
+  const setComposerState = useCallback(<T,>(setter: Dispatch<SetStateAction<T>>, value: SetStateAction<T>) => {
+    setter((prev) => {
+      const next = typeof value === 'function' ? (value as (previous: T) => T)(prev) : value
+      if (!Object.is(next, prev)) {
+        composerEditedRef.current = true
+      }
+      return next
+    })
+  }, [])
+
+  const setMissionText = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setComposerState(setMissionTextState, value)
+    },
+    [setComposerState]
+  )
+  const setDifficulty = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setComposerState(setDifficultyState, value)
+    },
+    [setComposerState]
+  )
+  const setQuestionType = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setComposerState(setQuestionTypeState, value)
+    },
+    [setComposerState]
+  )
+  const setCount = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setComposerState(setCountState, value)
+    },
+    [setComposerState]
+  )
+  const setUseStudyArchive = useCallback<Dispatch<SetStateAction<boolean>>>(
+    (value) => {
+      setComposerState(setUseStudyArchiveState, value)
+    },
+    [setComposerState]
+  )
+  const setUseReferenceQuestions = useCallback<Dispatch<SetStateAction<boolean>>>(
+    (value) => {
+      setComposerState(setUseReferenceQuestionsState, value)
+    },
+    [setComposerState]
+  )
+  const setReferenceSource = useCallback<Dispatch<SetStateAction<'any' | 'gaokao' | 'mock' | 'joint'>>>(
+    (value) => {
+      setComposerState(setReferenceSourceState, value)
+    },
+    [setComposerState]
+  )
+  const setReferenceYearRange = useCallback<Dispatch<SetStateAction<'all' | '3' | '5'>>>(
+    (value) => {
+      setComposerState(setReferenceYearRangeState, value)
+    },
+    [setComposerState]
+  )
+  const setMode = useCallback<Dispatch<SetStateAction<AiGenerateSessionMode>>>(
+    (value) => {
+      setComposerState(setModeState, value)
+    },
+    [setComposerState]
+  )
+  const setGradeId = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setComposerState(setGradeIdState, value)
+    },
+    [setComposerState]
+  )
+  const setTextbookVersionId = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setComposerState(setTextbookVersionIdState, value)
+    },
+    [setComposerState]
+  )
+  const setSelectedKnowledgePointIds = useCallback<Dispatch<SetStateAction<string[]>>>(
+    (value) => {
+      setComposerState(setSelectedKnowledgePointIdsState, value)
+    },
+    [setComposerState]
+  )
+  const setSelectedKnowledgePointLabels = useCallback<Dispatch<SetStateAction<string[]>>>(
+    (value) => {
+      setComposerState(setSelectedKnowledgePointLabelsState, value)
+    },
+    [setComposerState]
+  )
 
   const hydrateComposerFromSession = useCallback(
-    (next: AiGenerateStudioSession) => {
-      setMissionText(next.mission.topic || DEFAULT_MISSION)
-      setDifficulty(next.mission.difficulty || '')
-      setQuestionType(next.mission.questionType || '')
-      setCount(String(next.mission.count || 5))
-      setUseStudyArchive(Boolean(next.mission.useStudyArchive))
-      setUseReferenceQuestions(next.mission.useReferenceQuestions !== false)
-      setReferenceSource((String(next.mission.referenceSource || 'any').trim() || 'any') as 'any' | 'gaokao' | 'mock' | 'joint')
-      setReferenceYearRange((String(next.mission.referenceYearRange || 'all').trim() || 'all') as 'all' | '3' | '5')
-      setMode(next.mode)
-      setGradeId(next.mission.gradeId || '')
-      setTextbookVersionId(next.mission.textbookVersionId || '')
-      setSelectedKnowledgePointIds([...(next.mission.knowledgePointIds || [])])
-      setSelectedKnowledgePointLabels([...(next.mission.knowledgePoints || [])])
+    (next: AiGenerateStudioSession, options?: { force?: boolean }) => {
+      if (composerEditedRef.current && !options?.force) {
+        return
+      }
+      setMissionTextState(next.mission.topic || DEFAULT_MISSION)
+      setDifficultyState(next.mission.difficulty || '')
+      setQuestionTypeState(next.mission.questionType || '')
+      setCountState(String(next.mission.count || 5))
+      setUseStudyArchiveState(Boolean(next.mission.useStudyArchive))
+      setUseReferenceQuestionsState(next.mission.useReferenceQuestions !== false)
+      setReferenceSourceState((String(next.mission.referenceSource || 'any').trim() || 'any') as 'any' | 'gaokao' | 'mock' | 'joint')
+      setReferenceYearRangeState((String(next.mission.referenceYearRange || 'all').trim() || 'all') as 'all' | '3' | '5')
+      setModeState(next.mode)
+      setGradeIdState(next.mission.gradeId || '')
+      setTextbookVersionIdState(next.mission.textbookVersionId || '')
+      setSelectedKnowledgePointIdsState([...(next.mission.knowledgePointIds || [])])
+      setSelectedKnowledgePointLabelsState([...(next.mission.knowledgePoints || [])])
+      composerEditedRef.current = false
 
       const nextSubject = String(next.mission.subject || '').trim()
       if (nextSubject && nextSubject !== currentSubject) {
@@ -82,7 +176,7 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
   )
 
   const syncSessionFromServer = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, options?: { forceHydrateComposer?: boolean }) => {
       const sid = String(sessionId || '').trim()
       if (!sid) return null
       const resp = await getQuestionLibrarySession(sid)
@@ -105,7 +199,7 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
       }
 
       setSession(next)
-      hydrateComposerFromSession(next)
+      hydrateComposerFromSession(next, { force: options?.forceHydrateComposer })
       await queryClient.invalidateQueries({ queryKey: ['questionLibrarySessions'] })
       return next
     },
@@ -189,12 +283,13 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
       if (!sid) return
       onBeforeRestore?.()
       tasks.clearDraftPreview()
+      composerEditedRef.current = false
       setSession(null)
       setSearchParams({ session: sid })
       lastLoadedSessionSignatureRef.current = ''
 
       try {
-        await syncSessionFromServer(sid)
+        await syncSessionFromServer(sid, { forceHydrateComposer: true })
       } catch {
         lastLoadedSessionSignatureRef.current = ''
       }
