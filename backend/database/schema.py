@@ -604,10 +604,19 @@ class WrongQuestion(Base):
     note = Column(Text, default="")
     tags_json = Column(Text, default="[]")
     source_ref_json = Column(Text, default="{}")
+    ease_factor = Column(Float, default=2.5)
+    interval_days = Column(Integer, default=0)
+    repetitions = Column(Integer, default=0)
+    next_review_at = Column(DateTime, default=_utcnow, index=True)
+    last_reviewed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow, index=True)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
-    __table_args__ = (UniqueConstraint("user_id", "question_id", name="ux_wrong_questions_user_question"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "question_id", name="ux_wrong_questions_user_question"),
+        Index("ix_wrong_questions_next_review", "next_review_at"),
+        Index("ix_wrong_questions_user_next_review", "user_id", "next_review_at"),
+    )
 
 
 class LessonPlanRecord(Base):

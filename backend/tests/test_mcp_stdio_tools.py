@@ -54,8 +54,8 @@ class TestMcpStdioHandlers(unittest.IsolatedAsyncioTestCase):
         tavily_search.assert_awaited_once()
 
     async def test_llm_helper_prompts_use_registry(self) -> None:
-        from backend.generation.agentic.prompts import create_default_prompt_registry
         from backend.integrations.mcp.tools.stdio_handlers import handle_tool_call
+        from backend.llm.prompts import create_default_prompt_registry
 
         captured: list[tuple[str, str]] = []
         returns = [

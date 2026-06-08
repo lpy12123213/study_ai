@@ -34,6 +34,12 @@ export default function TaskCenterPage() {
   const [timeFilter, setTimeFilter] = useState<string>(() => searchParams.get('time') || '30d')
   const [query, setQuery] = useState('')
 
+  useEffect(() => {
+    setStatusFilter(searchParams.get('status') || 'running')
+    setTypeFilter(searchParams.get('type') || '')
+    setTimeFilter(searchParams.get('time') || '30d')
+  }, [searchParams])
+
   const { data, refetch, isFetching } = useQuery({
     queryKey: ['tasks', statusFilter, typeFilter],
     queryFn: () =>
@@ -115,7 +121,6 @@ export default function TaskCenterPage() {
       tasks.find((t) => String(t.id) === selectedTaskId)
     )
   }, [selectedTaskId, selectedTaskSnapshot, filteredTasks, tasks])
-  const selectedSnapshotLastSeq = Number(selectedTaskSnapshot?.last_seq || 0)
   const selectedSnapshotStatus = String(selectedTaskSnapshot?.status || '')
   const selectedTaskStatus = String(selectedTask?.status || '')
 
@@ -139,14 +144,14 @@ export default function TaskCenterPage() {
     if (!selectedTaskId || !selectedTaskSnapshot) return
 
     const events = Array.isArray(selectedTaskSnapshot.events) ? selectedTaskSnapshot.events : []
-    let nextSteps: TaskStep[] = []
+    let snapshotSteps: TaskStep[] = []
     for (const evt of events) {
       const step = taskEventToStep(evt)
-      if (step) nextSteps = upsertTaskStep(nextSteps, step)
+      if (step) snapshotSteps = upsertTaskStep(snapshotSteps, step)
     }
-    setSteps(nextSteps)
+    setSteps((prev) => snapshotSteps.reduce((merged, step) => upsertTaskStep(merged, step), prev))
     setStreamError(null)
-    lastSeqRef.current = Math.max(0, Number(selectedTaskSnapshot.last_seq || 0))
+    lastSeqRef.current = Math.max(lastSeqRef.current, Number(selectedTaskSnapshot.last_seq || 0))
   }, [selectedTaskId, selectedTaskSnapshot])
 
   useEffect(() => {
@@ -159,7 +164,7 @@ export default function TaskCenterPage() {
 
     const controller = new AbortController()
     abortRef.current = controller
-    const afterSeq = Math.max(0, Number(selectedSnapshotLastSeq || lastSeqRef.current || 0))
+    const afterSeq = Math.max(0, Number(lastSeqRef.current || 0))
     lastSeqRef.current = afterSeq
 
     streamTask(
@@ -176,8 +181,11 @@ export default function TaskCenterPage() {
       { signal: controller.signal }
     )
 
-    return () => controller.abort()
-  }, [selectedSnapshotLastSeq, selectedSnapshotStatus, selectedTaskId, selectedTaskLoading, selectedTaskStatus])
+    return () => {
+      controller.abort()
+      if (abortRef.current === controller) abortRef.current = null
+    }
+  }, [selectedSnapshotStatus, selectedTaskId, selectedTaskLoading, selectedTaskStatus])
 
   const setUrlParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams)

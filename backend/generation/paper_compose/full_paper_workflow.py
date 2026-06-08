@@ -13,8 +13,8 @@ from backend.core.subjects import resolve_subject
 from backend.database.repositories.content.study_archives import get_latest_study_archive
 from backend.database.repositories.question.papers import save_paper
 from backend.database.repositories.question.question_cache import upsert_question_cache
-from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
 from backend.generation.paper_compose.agentic_workflow import run_agentic_full_paper_events
+from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
 from backend.generation.paper_compose.auto_planner import plan_exam_structure
 from backend.generation.question_library.gen_utils import ReasoningEventHandler
 
@@ -30,6 +30,41 @@ def _as_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalize_question_points(questions: List[dict], *, total_points: int) -> None:
+    target = float(total_points or 0)
+    if target <= 0 or not questions:
+        return
+
+    raw_points = [_as_float(q.get("points") or q.get("max_score") or q.get("score"), 0.0) for q in questions]
+    current = sum(p for p in raw_points if p > 0)
+    if current <= 0:
+        each = round(target / len(questions), 2)
+        for q in questions:
+            q["points"] = each
+        questions[-1]["points"] = round(target - each * (len(questions) - 1), 2)
+        return
+
+    if abs(current - target) <= 0.01:
+        return
+
+    assigned = 0.0
+    for idx, q in enumerate(questions):
+        if idx == len(questions) - 1:
+            q["points"] = round(target - assigned, 2)
+            break
+        base = raw_points[idx] if raw_points[idx] > 0 else current / len(questions)
+        points = round(base * target / current, 2)
+        q["points"] = points
+        assigned += points
 
 
 def _truthy(value: Any, *, default: bool = False) -> bool:
@@ -242,6 +277,8 @@ async def generate_full_paper_events(
     if not filled:
         yield {"type": "error", "error": "no_questions_generated", "taskId": task_id}
         return
+
+    _normalize_question_points(filled, total_points=total_points)
 
     # 4) Diagram enhancement (already embedded in question_library pipeline; keep as explicit stage).
     yield {

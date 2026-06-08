@@ -1027,30 +1027,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lesson-plans/generate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Plan
-         * @description Generate a lesson plan using AI with streaming response.
-         *
-         *     NOTE:
-         *     - `/api/tasks` is the canonical long-task API.
-         *     - This endpoint is kept as a thin compatibility wrapper for older clients.
-         */
-        post: operations["generate_plan_api_lesson_plans_generate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/lesson-plans/{plan_id}": {
         parameters: {
             query?: never;

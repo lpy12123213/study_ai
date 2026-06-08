@@ -163,6 +163,7 @@ def local_auth_user() -> dict:
         "user_id": "local-user",
         "username": "本地用户",
         "role": "admin",
+        "auth_source": "local",
     }
 
 
@@ -238,6 +239,7 @@ async def get_current_user(
         "user_id": payload.get("user_id"),
         "username": payload.get("username"),
         "role": payload.get("role"),
+        "auth_source": "token",
     }
 
 
@@ -270,6 +272,7 @@ async def require_auth(
         "role": payload.get("role"),
         "jti": payload.get("jti"),
         "exp": payload.get("exp"),
+        "auth_source": "token",
     }
 
 
@@ -295,12 +298,13 @@ def validate_ws_token(token: str) -> Optional[dict]:
         "user_id": user_id,
         "username": username,
         "role": payload.get("role"),
+        "auth_source": "token",
     }
 
 
 async def require_admin(user: dict = Depends(require_auth)) -> dict:
     """Require admin role."""
-    if user.get("role") != "admin":
+    if user.get("role") != "admin" or user.get("auth_source") == "local" or user.get("user_id") == "local-user":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",

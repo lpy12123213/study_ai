@@ -102,10 +102,10 @@ export function useApiSettings(): ApiSettingsHook {
     try {
       const res = await modelSettingsApi.getModelSettings()
       applyResponse(res)
+      setModelSettingsLoaded(true)
     } catch (error) {
       setModelSettingsMessage(errorMessage(error))
     } finally {
-      setModelSettingsLoaded(true)
       setIsModelLoading(false)
     }
   }, [applyResponse])

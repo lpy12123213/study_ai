@@ -38,11 +38,11 @@ def _fallback_grade(*, answer_data: Dict[str, Any], max_score: float) -> Dict[st
         score = 0.0
         reason = "未作答"
     elif text:
-        score = round(float(max_score or 0.0) * min(1.0, max(0.25, len(text) / 160.0)), 1)
-        reason = "未配置视觉/评分模型，按文本完整度给出临时分。"
+        score = 0.0
+        reason = "未配置视觉/评分模型，主观题需人工复核，暂不给分。"
     else:
-        score = round(float(max_score or 0.0) * 0.5, 1)
-        reason = "已提交手写图片，未配置视觉模型，给出待复核临时分。"
+        score = 0.0
+        reason = "已提交手写图片，未配置视觉模型，需人工复核，暂不给分。"
     return {
         "is_correct": None,
         "score": score,

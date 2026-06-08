@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,7 +21,15 @@ interface StartExamDialogProps {
 
 export function StartExamDialog({ open, isPending, onOpenChange, onStart }: StartExamDialogProps) {
   const [mode, setMode] = useState<'timed' | 'untimed'>('untimed')
-  const [timeLimitMinutes, setTimeLimitMinutes] = useState(90)
+  const [timeLimitText, setTimeLimitText] = useState('90')
+
+  useEffect(() => {
+    if (!open) return
+    setMode('untimed')
+    setTimeLimitText('90')
+  }, [open])
+
+  const timeLimitMinutes = Math.max(1, Math.min(1440, Number(timeLimitText) || 90))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -45,8 +53,9 @@ export function StartExamDialog({ open, isPending, onOpenChange, onStart }: Star
             type="number"
             min={1}
             max={1440}
-            value={timeLimitMinutes}
-            onChange={(event) => setTimeLimitMinutes(Number(event.target.value) || 90)}
+            value={timeLimitText}
+            onChange={(event) => setTimeLimitText(event.target.value)}
+            onBlur={() => setTimeLimitText(String(timeLimitMinutes))}
           />
         )}
         <DialogFooter>

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import * as blueprintApi from '@/api/blueprint'
 import { useTaskStore } from '@/stores/useTaskStore'
@@ -79,6 +79,7 @@ export function useComposePaper() {
   const [error, setError] = useState<string | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [lastSeq, setLastSeq] = useState(0)
+  const composeAbortRef = useRef<AbortController | null>(null)
 
   const {
     startTask,
@@ -127,6 +128,9 @@ export function useComposePaper() {
 
       const seenStepIds = new Set<string>()
       let endedWithResult = false
+      composeAbortRef.current?.abort()
+      const controller = new AbortController()
+      composeAbortRef.current = controller
 
       blueprintApi.composePaperStream(
         requestWithTaskId,
@@ -138,6 +142,7 @@ export function useComposePaper() {
 
           const { step, progress: progressValue, result: resultValue, errorText } = readBlueprintEvent(env.data)
 
+          if (controller.signal.aborted) return
           if (env.type === 'step' && step) {
             const stepId = step.id
             if (stepId && seenStepIds.has(stepId)) {
@@ -160,11 +165,13 @@ export function useComposePaper() {
           }
         },
         (err) => {
+          if (controller.signal.aborted) return
           setError(err.message)
           failTask(newTaskId, err.message)
           setIsComposing(false)
         },
         () => {
+          if (controller.signal.aborted) return
           setIsComposing(false)
           setProgress((p) => (p >= 99 ? 100 : p))
 
@@ -177,7 +184,8 @@ export function useComposePaper() {
           if (cp?.status === 'paused') return
           // Stream ended without a result: treat as failure so the user can retry/resume.
           failTask(newTaskId, 'Task ended unexpectedly')
-        }
+        },
+        { signal: controller.signal }
       )
     },
     [startTask, addStep, updateStep, completeTask, failTask, saveCheckpoint, getCheckpoint, queryClient]
@@ -186,6 +194,7 @@ export function useComposePaper() {
   const pause = useCallback(() => {
     if (taskId) {
       pauseTask(taskId)
+      composeAbortRef.current?.abort()
       blueprintApi.pauseComposeTask(taskId).catch(console.error)
       setIsComposing(false)
     }
@@ -251,6 +260,12 @@ export function useComposePaper() {
       }
     }
   }, [taskId, getCheckpoint, lastSeq, addStep, updateStep, completeTask, failTask, queryClient])
+
+  useEffect(() => {
+    return () => {
+      composeAbortRef.current?.abort()
+    }
+  }, [])
 
   return {
     compose,

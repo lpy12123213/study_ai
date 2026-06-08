@@ -24,6 +24,7 @@ from backend.tasks import submit_generate_full_paper_task, submit_paper_compose_
 router = APIRouter(dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
 _PAPER_ANALYSIS_CACHE: dict[tuple[int, str], dict] = {}
+_PAPER_ANALYSIS_CACHE_LOCK = asyncio.Lock()
 _PAPER_DOWNLOAD_LINK_LIMITER = SlidingWindowRateLimiter(
     max_requests=int(os.getenv("PAPER_DOWNLOAD_LINK_RATE_LIMIT_MAX") or "30"),
     window_s=float(os.getenv("PAPER_DOWNLOAD_LINK_RATE_LIMIT_WINDOW_S") or "60"),
@@ -69,17 +70,19 @@ def _infer_paper_source_mode(question_ids: list[str]) -> str:
 async def _get_cached_paper_analysis(*, paper_id: int, paper: dict) -> dict:
     version = str(paper.get("updated_at") or paper.get("created_at") or "").strip()
     key = (int(paper_id), version)
-    cached = _PAPER_ANALYSIS_CACHE.get(key)
-    if isinstance(cached, dict):
-        return dict(cached)
+    async with _PAPER_ANALYSIS_CACHE_LOCK:
+        cached = _PAPER_ANALYSIS_CACHE.get(key)
+        if isinstance(cached, dict):
+            return dict(cached)
 
     loop = asyncio.get_running_loop()
     analysis = await loop.run_in_executor(None, analyze_paper, paper)
-    if len(_PAPER_ANALYSIS_CACHE) >= 256:
-        oldest_key = next(iter(_PAPER_ANALYSIS_CACHE.keys()), None)
-        if oldest_key is not None:
-            _PAPER_ANALYSIS_CACHE.pop(oldest_key, None)
-    _PAPER_ANALYSIS_CACHE[key] = dict(analysis or {})
+    async with _PAPER_ANALYSIS_CACHE_LOCK:
+        if len(_PAPER_ANALYSIS_CACHE) >= 256:
+            oldest_key = next(iter(_PAPER_ANALYSIS_CACHE.keys()), None)
+            if oldest_key is not None:
+                _PAPER_ANALYSIS_CACHE.pop(oldest_key, None)
+        _PAPER_ANALYSIS_CACHE[key] = dict(analysis or {})
     return dict(analysis or {})
 
 
@@ -263,7 +266,7 @@ async def export_paper(paper_id: int, payload: Optional[dict] = None, user: dict
         raise HTTPException(status_code=500, detail="paper_export_failed") from exc
 
     if isinstance(out, dict) and out.get("success") is False:
-        return {"success": False, **out}
+        raise HTTPException(status_code=500, detail=str(out.get("error") or "paper_export_failed"))
     audit_logger.log(
         user_id=user_id,
         action=AuditAction.PAPER_EXPORT,

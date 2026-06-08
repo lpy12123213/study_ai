@@ -11,7 +11,6 @@ import sys
 import time
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 # Keep Playwright browser caches inside the repo so dev/doctor runs don't need to
@@ -45,7 +44,7 @@ def _content_fingerprint(paths: list[Path]) -> str:
 def _read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8").strip()
-    except Exception:
+    except (OSError, UnicodeError):
         return ""
 
 
@@ -108,12 +107,12 @@ def ensure_backend_deps(root: Path, vpy: Path) -> None:
     # Best-effort Playwright install. If this fails (e.g. offline sandbox), leave a hint.
     try:
         _run_checked([str(vpy), "-m", "playwright", "--version"], cwd=root)
-    except Exception:
+    except RuntimeError:
         _run_checked([str(vpy), "-m", "pip", "install", "playwright"], cwd=root)
 
     try:
         _run_checked([str(vpy), "-m", "playwright", "install", "chromium"], cwd=root)
-    except Exception as exc:
+    except RuntimeError as exc:
         # Playwright browser download can fail in restricted/offline environments.
         # The core app and unit tests do not require browsers, so treat as best-effort.
         print(f"[setup] WARN: Playwright browser install failed: {exc}")
@@ -220,13 +219,16 @@ def doctor(root: Path) -> None:
     # Best-effort Ruff; if not installed, skip without failing.
     try:
         print("[doctor] python -m ruff check backend (maintained paths)")
-        _run_checked([str(vpy), "-m", "ruff", "check", "backend/api", "backend/chat", "backend/core", "backend/tests"], cwd=root)
-    except Exception:
+        _run_checked(
+            [str(vpy), "-m", "ruff", "check", "backend/api", "backend/workspace/chat", "backend/core", "backend/tests"],
+            cwd=root,
+        )
+    except RuntimeError:
         print("[doctor] ruff not available; skip")
 
     try:
         npm = _resolve_npm_cmd()
-    except Exception:
+    except RuntimeError:
         print("[doctor] npm not found; skip frontend checks.")
         return
 
@@ -243,24 +245,47 @@ def _terminate_process(proc: subprocess.Popen, *, grace_s: float = 4.0) -> None:
         return
     try:
         if _is_windows():
-            proc.terminate()
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
         else:
             proc.send_signal(signal.SIGINT)
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         pass
     deadline = time.time() + max(0.0, grace_s)
     while time.time() < deadline:
         if proc.poll() is not None:
             return
         time.sleep(0.05)
+    if _is_windows():
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return
+        except (OSError, RuntimeError, ValueError):
+            pass
+    try:
+        proc.terminate()
+    except (OSError, RuntimeError, ValueError):
+        pass
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.05)
     try:
         proc.kill()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         pass
 
 
 def _spawn(cmd: list[str], *, cwd: Path) -> subprocess.Popen:
-    return subprocess.Popen(cmd, cwd=str(cwd))
+    kwargs: dict[str, object] = {"cwd": str(cwd)}
+    if _is_windows():
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    return subprocess.Popen(cmd, **kwargs)
 
 
 def run_dev(root: Path, *, include_mcp: bool) -> None:
@@ -317,12 +342,18 @@ def main(argv: list[str]) -> int:
   start.bat backend         (backend only)
   start.bat frontend        (frontend only)
   start.bat mcp             (mcp only)
+  start.bat menu            (打开 TUI 启动箱)
   start.bat setup           (install deps only)
   start.bat doctor          (run smoke checks)
 
 Linux/macOS: ./start.sh <command>
 """
         )
+        return 0
+
+    if cmd in {"menu", "launch", "tui"}:
+        vpy = ensure_venv(ROOT)
+        _run_checked([str(vpy), "-m", "backend.cli.launcher"], cwd=ROOT)
         return 0
 
     if cmd == "setup":

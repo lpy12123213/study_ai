@@ -19,8 +19,8 @@ from backend.api.question_evaluate_schemas import (
 from backend.core.settings import DEFAULT_SUBJECT, LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.core.subjects import resolve_subject
 from backend.integrations.crawler.manager import get_crawler
-from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion_text
+from backend.llm.prompts import create_default_prompt_registry
 from backend.shared.tasks.runtime import RuntimeTask
 from backend.tasks import submit_question_evaluate_task
 

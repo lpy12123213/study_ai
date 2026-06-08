@@ -19,6 +19,18 @@ def _has_llm_not_configured(result: Dict[str, Any]) -> bool:
     return isinstance(issues, list) and any(str(x) == "llm_not_configured" for x in issues)
 
 
+def _mark_needs_human(
+    question: Dict[str, Any],
+    *,
+    qid: str,
+    items: List[Dict[str, Any]],
+    mode: str,
+) -> None:
+    question["review_status"] = "needs_human"
+    question["review_action"] = "needs_human"
+    items.append({"question_id": qid, "action": "needs_human", "mode": mode})
+
+
 async def review_questions(
     questions: List[Dict[str, Any]],
     *,
@@ -82,10 +94,8 @@ async def review_questions(
                 {"subject": subject, "topic": topic, "proposed_answer": answer},
             )
             if _has_llm_not_configured(solve_result):
-                question["review_status"] = "skipped"
-                question["review_action"] = "pass"
-                skipped += 1
-                items.append({"question_id": qid, "action": "pass", "mode": "llm_not_configured"})
+                _mark_needs_human(question, qid=qid, items=items, mode="llm_not_configured")
+                failed += 1
                 continue
             if not bool(solve_result.get("match")):
                 question["review_status"] = "needs_answer"
@@ -96,10 +106,8 @@ async def review_questions(
 
             ambiguity = await check_ambiguity(question)
             if _has_llm_not_configured(ambiguity):
-                question["review_status"] = "skipped"
-                question["review_action"] = "pass"
-                skipped += 1
-                items.append({"question_id": qid, "action": "pass", "mode": "llm_not_configured"})
+                _mark_needs_human(question, qid=qid, items=items, mode="llm_not_configured")
+                failed += 1
                 continue
             if bool(ambiguity.get("ambiguous")):
                 question["review_status"] = "rejected"
@@ -119,10 +127,8 @@ async def review_questions(
                 source_pack={"subject": subject, "topic": topic},
             )
             if _has_llm_not_configured(judge):
-                question["review_status"] = "skipped"
-                question["review_action"] = "pass"
-                skipped += 1
-                items.append({"question_id": qid, "action": "pass", "mode": "llm_not_configured"})
+                _mark_needs_human(question, qid=qid, items=items, mode="llm_not_configured")
+                failed += 1
                 continue
 
             try:
@@ -143,9 +149,7 @@ async def review_questions(
                 items.append({"question_id": qid, "action": "reject", "score": score})
         except (RuntimeError, TypeError, ValueError):
             logger.warning("paper_compose_auto_review_question_failed", exc_info=True, extra={"question_id": qid})
-            question["review_status"] = "skipped"
-            question["review_action"] = "pass"
-            skipped += 1
-            items.append({"question_id": qid, "action": "pass", "mode": "review_error"})
+            _mark_needs_human(question, qid=qid, items=items, mode="review_error")
+            failed += 1
 
     return {"passed": passed, "failed": failed, "skipped": skipped, "replaced": 0, "items": items[:20]}

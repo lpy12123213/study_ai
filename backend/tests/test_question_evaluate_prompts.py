@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class QuestionEvaluatePromptTests(unittest.IsolatedAsyncioTestCase):
@@ -54,6 +54,38 @@ class QuestionEvaluatePromptTests(unittest.IsolatedAsyncioTestCase):
             captured["messages"][0]["content"],
             create_default_prompt_registry().render("question.judge.quality.v1").content,
         )
+
+    async def test_question_evaluate_batch_filters_failed_items(self) -> None:
+        from backend.api.question_evaluate_schemas import QuestionEvaluation, QuestionInput
+        from backend.generation.question_evaluate.service import evaluate_questions_batch
+
+        async def fake_evaluate_one_question(q, **kwargs):  # type: ignore[no-untyped-def]
+            _ = kwargs
+            if q.question_id == "bad":
+                raise RuntimeError("llm_parse_failed")
+            return QuestionEvaluation(
+                question_id=q.question_id,
+                verdict="好题",
+                overall_score=90 if q.question_id == "best" else 70,
+            )
+
+        questions = [
+            QuestionInput(question_id="ok", stem="1+1=?"),
+            QuestionInput(question_id="bad", stem="bad"),
+            QuestionInput(question_id="best", stem="2+2=?"),
+        ]
+        with patch(
+            "backend.generation.question_evaluate.service.evaluate_one_question",
+            new=fake_evaluate_one_question,
+        ):
+            results = await evaluate_questions_batch(
+                questions=questions,
+                subject="高中数学",
+                requirements="",
+                model="test-model",
+            )
+
+        self.assertEqual([item.question_id for item in results], ["best", "ok"])
 
 
 if __name__ == "__main__":

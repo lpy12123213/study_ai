@@ -81,8 +81,8 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
             <div className="rounded-lg border border-border bg-card p-4">
               <h3 className="mb-2 text-sm font-semibold text-emerald-700">亮点</h3>
               <ul className="list-disc space-y-1 pl-4 text-sm">
-                {result.strengths.map((item) => (
-                  <li key={item}>{item}</li>
+                {result.strengths.map((item, index) => (
+                  <li key={`${index}:${item}`}>{item}</li>
                 ))}
               </ul>
             </div>
@@ -91,8 +91,8 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
             <div className="rounded-lg border border-border bg-card p-4">
               <h3 className="mb-2 text-sm font-semibold text-rose-700">不足</h3>
               <ul className="list-disc space-y-1 pl-4 text-sm">
-                {result.weaknesses.map((item) => (
-                  <li key={item}>{item}</li>
+                {result.weaknesses.map((item, index) => (
+                  <li key={`${index}:${item}`}>{item}</li>
                 ))}
               </ul>
             </div>
@@ -101,8 +101,8 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
             <div className="rounded-lg border border-border bg-card p-4">
               <h3 className="mb-2 text-sm font-semibold">修改建议</h3>
               <ul className="list-disc space-y-1 pl-4 text-sm">
-                {result.suggestions.map((item) => (
-                  <li key={item}>{item}</li>
+                {result.suggestions.map((item, index) => (
+                  <li key={`${index}:${item}`}>{item}</li>
                 ))}
               </ul>
             </div>
@@ -122,8 +122,8 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
                   {source && <p className="mb-2 whitespace-pre-line text-sm text-foreground/80">{source}</p>}
                   {entry.issues.length > 0 && (
                     <ul className="list-disc space-y-0.5 pl-4 text-sm text-rose-700">
-                      {entry.issues.map((issue) => (
-                        <li key={issue}>{issue}</li>
+                      {entry.issues.map((issue, index) => (
+                        <li key={`${index}:${issue}`}>{issue}</li>
                       ))}
                     </ul>
                   )}

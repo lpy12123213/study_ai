@@ -1,6 +1,6 @@
 import { CheckCircle2, XCircle } from 'lucide-react'
-import { Markdown } from '@/components/shared/Markdown'
 import { AuthImage } from '@/components/shared/AuthImage'
+import { QuestionContent } from '@/components/shared/QuestionContent'
 import type { ExamQuestion, ExamResult } from '@/types/exam'
 
 interface AnswerReviewProps {
@@ -27,9 +27,7 @@ export function AnswerReview({ questions, result }: AnswerReviewProps) {
                 <span>{score}/{maxScore} 分</span>
               </div>
             </div>
-            <div className="prose prose-sm max-w-none dark:prose-invert">
-              <Markdown content={question.stem || ''} />
-            </div>
+            <QuestionContent content={question.stem || ''} />
             {question.studentAnswer?.handwritingImageUrl && (
               <AuthImage
                 src={question.studentAnswer.handwritingImageUrl}

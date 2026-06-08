@@ -42,6 +42,14 @@ const positionOptions: Array<{ value: SidebarPosition; label: string }> = [
   { value: 'right', label: 'Right' },
 ]
 
+const DEFAULT_UI_PREFERENCES = {
+  fontScale: 1,
+  lineHeight: 1.6,
+  density: 'comfortable' as const,
+  contrast: 'normal' as const,
+  reduceMotion: false,
+}
+
 export type AppearancePanelProps = {
   theme: ThemeMode
   setTheme: (next: ThemeMode) => void
@@ -87,6 +95,7 @@ export function AppearancePanel(props: AppearancePanelProps) {
     isSyncing,
     syncError,
     resetAppearance,
+    resetPreferences,
     updateAppearance,
     setPreferences,
     scheduleAccountSave,
@@ -131,6 +140,7 @@ export function AppearancePanel(props: AppearancePanelProps) {
             onClick={() => {
               setTheme('system')
               resetAppearance()
+              resetPreferences()
               scheduleAccountSave({
                 theme: { mode: 'system' },
                 appearance: {
@@ -139,6 +149,7 @@ export function AppearancePanel(props: AppearancePanelProps) {
                   contentLayout: 'default',
                   sidebarPosition: 'left',
                 },
+                ui: DEFAULT_UI_PREFERENCES,
               })
             }}
           >

@@ -6,7 +6,10 @@ import socket
 from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
 
+import httpcore
 import httpx
+from httpcore._backends.auto import AutoBackend
+from httpx._config import create_ssl_context
 
 from backend.core.helpers import get_logger
 
@@ -17,6 +20,60 @@ DEFAULT_ALLOWED_PORTS = {80, 443}
 
 _shared_http_client: Optional[httpx.AsyncClient] = None
 _shared_http_client_lock = asyncio.Lock()
+
+
+class _PublicOnlyAsyncNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Resolve and connect to the same public IP to reduce DNS rebinding risk."""
+
+    def __init__(self) -> None:
+        self._backend = AutoBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        host_value = host.decode("ascii", errors="ignore") if isinstance(host, bytes) else str(host or "")
+        ips = await resolve_host_ips(host_value)
+        if not ips:
+            raise ValueError("dns_resolution_failed")
+        if any(not is_public_ip(ip) for ip in ips):
+            raise ValueError("forbidden_ip")
+
+        return await self._backend.connect_tcp(
+            str(ips[0]),
+            int(port),
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        raise ValueError("forbidden_unix_socket")
+
+
+def _safe_fetch_transport() -> httpx.AsyncHTTPTransport:
+    limits = httpx.Limits(max_connections=80, max_keepalive_connections=30)
+    transport = httpx.AsyncHTTPTransport(trust_env=False, limits=limits)
+    transport._pool = httpcore.AsyncConnectionPool(  # type: ignore[attr-defined]
+        ssl_context=create_ssl_context(verify=True, cert=None, trust_env=False),
+        max_connections=limits.max_connections,
+        max_keepalive_connections=limits.max_keepalive_connections,
+        keepalive_expiry=limits.keepalive_expiry,
+        http1=True,
+        http2=False,
+        retries=0,
+        network_backend=_PublicOnlyAsyncNetworkBackend(),
+    )
+    return transport
 
 
 def _normalize_domain_items(items: Iterable[str] | None) -> list[str]:
@@ -129,8 +186,9 @@ async def get_shared_fetch_http_client() -> httpx.AsyncClient:
         _shared_http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0),
             follow_redirects=False,
+            transport=_safe_fetch_transport(),
             headers={"User-Agent": DEFAULT_FETCH_USER_AGENT},
-            limits=httpx.Limits(max_connections=80, max_keepalive_connections=30),
+            trust_env=False,
         )
         return _shared_http_client
 
@@ -162,6 +220,7 @@ async def safe_fetch_get(
     redirects = max(0, min(int(max_redirects or 0), 10))
 
     for _ in range(redirects + 1):
+        current = await normalize_public_http_url(current, allowed_domains=allowed_domains)
         response = await http_client.get(
             current,
             headers=headers,

@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.core.logging_utils import get_logger
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import Paper, PaperQuestion, QuestionCache
 
 logger = get_logger(__name__)
@@ -28,7 +29,7 @@ def _to_json_str(value: Any) -> str:
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:
@@ -60,6 +61,17 @@ def _infer_paper_source_mode(question_ids: list[str]) -> str:
     if has_digits and has_non_digits:
         return "hybrid"
     return "zujuan" if has_digits else "local"
+
+
+def _cache_item_has_content(item: QuestionCache) -> bool:
+    return any(
+        str(value or "").strip()
+        for value in (
+            getattr(item, "stem", ""),
+            getattr(item, "answer", ""),
+            getattr(item, "analysis", ""),
+        )
+    )
 
 
 async def save_paper(
@@ -176,6 +188,8 @@ async def save_paper(
             )
 
     for item in cache_items:
+        if not _cache_item_has_content(item):
+            continue
         try:
             await session.merge(item)
         except SQLAlchemyError:
@@ -337,6 +351,8 @@ async def add_questions_to_paper(
         )
 
     for item in cache_items:
+        if not _cache_item_has_content(item):
+            continue
         try:
             await session.merge(item)
         except SQLAlchemyError:

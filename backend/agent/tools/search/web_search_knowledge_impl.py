@@ -299,35 +299,37 @@ class WebSearchKnowledgeToolsMixin:
             cache_max_entries = 200
         cache_max_entries = max(0, min(cache_max_entries, 2000))
 
-        cache = ctx.working_memory.get("_web_search_cache")
-        if not isinstance(cache, dict):
-            cache = {}
-            ctx.working_memory["_web_search_cache"] = cache
+        async with ctx.working_memory_lock:
+            cache = ctx.working_memory.get("_web_search_cache")
+            if not isinstance(cache, dict):
+                cache = {}
+                ctx.working_memory["_web_search_cache"] = cache
 
         def _cache_key(payload: Dict[str, Any]) -> str:
             raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             return "ws1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-        def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+        async def _cache_get(key: str) -> Optional[Dict[str, Any]]:
             if not key:
                 return None
-            entry = cache.get(key)
-            if not isinstance(entry, dict):
-                return None
-            try:
-                ts = float(entry.get("ts_s") or 0.0)
-            except (TypeError, ValueError):
-                ts = 0.0
-            if cache_ttl_s and ts and (time.time() - ts) > float(cache_ttl_s):
+            async with ctx.working_memory_lock:
+                entry = cache.get(key)
+                if not isinstance(entry, dict):
+                    return None
                 try:
-                    cache.pop(key, None)
-                except Exception:
-                    logger.warning("web_search_cache_evict_failed", extra={"key": key}, exc_info=True)
-                return None
-            value = entry.get("value")
-            return dict(value) if isinstance(value, dict) else None
+                    ts = float(entry.get("ts_s") or 0.0)
+                except (TypeError, ValueError):
+                    ts = 0.0
+                if cache_ttl_s and ts and (time.time() - ts) > float(cache_ttl_s):
+                    try:
+                        cache.pop(key, None)
+                    except Exception:
+                        logger.warning("web_search_cache_evict_failed", extra={"key": key}, exc_info=True)
+                    return None
+                value = entry.get("value")
+                return dict(value) if isinstance(value, dict) else None
 
-        def _cache_put(key: str, value: Dict[str, Any]) -> None:
+        async def _cache_put(key: str, value: Dict[str, Any]) -> None:
             if not key:
                 return
             if not isinstance(value, dict):
@@ -340,23 +342,24 @@ class WebSearchKnowledgeToolsMixin:
             if not (isinstance(results, list) and results):
                 return
 
-            cache[key] = {"ts_s": time.time(), "value": value}
-            if cache_max_entries <= 0:
-                return
-            if len(cache) <= cache_max_entries:
-                return
-            try:
-                items = sorted(
-                    cache.items(),
-                    key=lambda kv: float(kv[1].get("ts_s") or 0.0) if isinstance(kv[1], dict) else 0.0,
-                )
-                drop_n = max(0, len(items) - cache_max_entries)
-                for k, _v in items[:drop_n]:
-                    cache.pop(k, None)
-            except Exception:
-                logger.warning("web_search_cache_prune_failed", exc_info=True)
-                for k in list(cache.keys())[: max(1, len(cache) - cache_max_entries)]:
-                    cache.pop(k, None)
+            async with ctx.working_memory_lock:
+                cache[key] = {"ts_s": time.time(), "value": value}
+                if cache_max_entries <= 0:
+                    return
+                if len(cache) <= cache_max_entries:
+                    return
+                try:
+                    items = sorted(
+                        cache.items(),
+                        key=lambda kv: float(kv[1].get("ts_s") or 0.0) if isinstance(kv[1], dict) else 0.0,
+                    )
+                    drop_n = max(0, len(items) - cache_max_entries)
+                    for k, _v in items[:drop_n]:
+                        cache.pop(k, None)
+                except Exception:
+                    logger.warning("web_search_cache_prune_failed", exc_info=True)
+                    for k in list(cache.keys())[: max(1, len(cache) - cache_max_entries)]:
+                        cache.pop(k, None)
 
         async def _search_one_uncached(point: str) -> Dict[str, Any]:
             base_query = f"{subject} {point}".strip() if subject and subject not in point else point
@@ -1049,7 +1052,7 @@ class WebSearchKnowledgeToolsMixin:
                     "text_max_length": text_max_length,
                 }
             )
-            cached = _cache_get(key)
+            cached = await _cache_get(key)
             if cached:
                 cached["knowledge_point"] = point
                 cached["base_query"] = base_query
@@ -1059,7 +1062,7 @@ class WebSearchKnowledgeToolsMixin:
 
             res = await _search_one_uncached(point)
             try:
-                _cache_put(key, res)
+                await _cache_put(key, res)
             except Exception:
                 logger.warning("web_search_cache_put_failed", extra={"key": key}, exc_info=True)
             return res

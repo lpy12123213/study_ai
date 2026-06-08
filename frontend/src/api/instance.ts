@@ -458,6 +458,22 @@ export async function downloadBlob(
   return downloadBlobInternal(resourceUrl, options, 0)
 }
 
+function parseContentDispositionFilename(disposition: string): string | undefined {
+  const m = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i)
+  if (!m) return undefined
+
+  const encodedFilename = m[1]
+  if (encodedFilename) {
+    try {
+      return decodeURIComponent(encodedFilename)
+    } catch {
+      return encodedFilename
+    }
+  }
+
+  return m[2] || undefined
+}
+
 async function downloadBlobInternal(
   resourceUrl: string,
   options: {
@@ -496,8 +512,7 @@ async function downloadBlobInternal(
 
     const contentType = String(response.headers.get('content-type') || '')
     const disp = String(response.headers.get('content-disposition') || '')
-    const m = disp.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i)
-    const filename = m ? decodeURIComponent(m[1] || m[2] || '') : undefined
+    const filename = parseContentDispositionFilename(disp)
 
     const blob = await response.blob()
     return { blob, contentType, filename: filename || undefined }

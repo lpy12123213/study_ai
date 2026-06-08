@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import List
 
 from backend.generation.question_library.gen_common import (
@@ -13,6 +14,11 @@ from backend.generation.question_library.gen_common import (
     get_surfaces,
     get_traps,
 )
+
+
+def _stable_child_id(value: str) -> str:
+    digest = hashlib.sha1(str(value or "").encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return digest or "empty"
 
 
 def _expand_field(
@@ -37,7 +43,7 @@ def _expand_field(
             child[field] = opt
             child["layer"] = layer
             parent_id = str(base.get("spec_id") or "").strip() or "spec"
-            child["spec_id"] = f"{parent_id}/{field}:{abs(hash(opt)) % 997}"
+            child["spec_id"] = f"{parent_id}/{field}:{_stable_child_id(opt)}"
             out.append(child)
             if len(out) >= max_total:
                 return out

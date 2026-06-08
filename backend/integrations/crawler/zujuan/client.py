@@ -99,6 +99,7 @@ class ZujuanCrawler:
         self._formula_inflight: Dict[str, "asyncio.Future[str]"] = {}
         self._formula_http_sem = asyncio.Semaphore(20)
         self._formula_pandoc_sem = asyncio.Semaphore(8)
+        self._subject_lock = asyncio.Lock()
 
         # Global crawler rate limiter (process-local). This limits outbound requests
         # to reduce anti-bot triggers when multiple tasks run concurrently.
@@ -379,7 +380,7 @@ class ZujuanCrawler:
             seen_ids.add(pid)
             provinces.append({"id": pid, "name": pname})
 
-            raw_key = re.sub(r"\\s+", "", pname)
+            raw_key = re.sub(r"\s+", "", pname)
             norm_key = _normalize_province_name(pname)
             if raw_key:
                 name_to_id[raw_key] = pid
@@ -423,7 +424,7 @@ class ZujuanCrawler:
         if not raw:
             return None
 
-        raw_compact = re.sub(r"\\s+", "", raw)
+        raw_compact = re.sub(r"\s+", "", raw)
         if raw_compact in PROVINCE_UNLIMITED_ALIASES:
             return -1
 
@@ -757,7 +758,8 @@ class ZujuanCrawler:
         if m_order:
             order_by = m_order.group(1)
 
-        params = payload.get("data", {}).get("params", {})
+        data_obj = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        params = data_obj.get("params", {}) if isinstance(data_obj.get("params"), dict) else {}
         bank_id = params.get("bank_id") or params.get("bankId") or 0
         course_id = params.get("course_id") or params.get("courseId") or 0
         target: Dict[str, Any] = {
@@ -1113,19 +1115,20 @@ class ZujuanCrawler:
         with_quality: bool = True,
         parse_content: bool = True,
     ) -> Dict[str, Any]:
-        from backend.integrations.crawler.zujuan.search import search_by_keyword as impl
+        async with self._subject_lock:
+            from backend.integrations.crawler.zujuan.search import search_by_keyword as impl
 
-        kwargs = dict(locals())
-        kwargs.pop("impl", None)
+            kwargs = dict(locals())
+            kwargs.pop("impl", None)
 
-        rr_req = self._record_replay_request("search_by_keyword", kwargs)
-        replayed = self._maybe_replay(rr_req)
-        if replayed is not None:
-            return replayed
+            rr_req = self._record_replay_request("search_by_keyword", kwargs)
+            replayed = self._maybe_replay(rr_req)
+            if replayed is not None:
+                return replayed
 
-        res = await impl(**kwargs)
-        self._maybe_record(rr_req, res)
-        return res
+            res = await impl(**kwargs)
+            self._maybe_record(rr_req, res)
+            return res
 
     async def search_by_knowledge(
         self,
@@ -1161,19 +1164,20 @@ class ZujuanCrawler:
         with_quality: bool = True,
         parse_content: bool = True,
     ) -> Dict[str, Any]:
-        from backend.integrations.crawler.zujuan.search import search_by_knowledge as impl
+        async with self._subject_lock:
+            from backend.integrations.crawler.zujuan.search import search_by_knowledge as impl
 
-        kwargs = dict(locals())
-        kwargs.pop("impl", None)
+            kwargs = dict(locals())
+            kwargs.pop("impl", None)
 
-        rr_req = self._record_replay_request("search_by_knowledge", kwargs)
-        replayed = self._maybe_replay(rr_req)
-        if replayed is not None:
-            return replayed
+            rr_req = self._record_replay_request("search_by_knowledge", kwargs)
+            replayed = self._maybe_replay(rr_req)
+            if replayed is not None:
+                return replayed
 
-        res = await impl(**kwargs)
-        self._maybe_record(rr_req, res)
-        return res
+            res = await impl(**kwargs)
+            self._maybe_record(rr_req, res)
+            return res
 
     async def get_available_filters(self) -> Dict[str, Any]:
         """

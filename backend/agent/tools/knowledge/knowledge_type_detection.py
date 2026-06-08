@@ -42,12 +42,8 @@ def _heuristic_type(kp: str) -> str:
     if any(x in s for x in ["历史", "发展", "人物", "年代", "起源", "背景", "里程碑"]):
         return "history"
 
-    if any(
-        x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]
-    ):
-        return "theorem"
-
-    # "algorithm" here means "procedure/method" (not only CS algorithms).
+    # "algorithm" here means "procedure/method" (not only CS algorithms). Check it
+    # before theorem so phrases like "一元二次方程解法" are not captured by "方程".
     if any(
         x in s
         for x in [
@@ -74,6 +70,11 @@ def _heuristic_type(kp: str) -> str:
         ]
     ) or any(x in s_lower for x in ["dp", "bfs", "dfs", "dijkstra"]):
         return "algorithm"
+
+    if any(
+        x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]
+    ):
+        return "theorem"
 
     if any(x in s for x in ["定义", "是什么", "含义", "概念", "记号", "符号", "术语"]):
         return "definition"

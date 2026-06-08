@@ -35,6 +35,24 @@ class TestQuestionLibraryScoreLlm(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["overall_score"], 85)
         self.assertEqual(out["verdict"], "好题")
 
+    async def test_score_stem_tolerates_non_integer_overall_score(self) -> None:
+        async def fake_run_json(**kwargs):  # type: ignore[no-untyped-def]
+            _ = kwargs
+            return {
+                "verdict": "普通题",
+                "overall_score": "85分",
+                "dimensions": [],
+                "highlights": [],
+                "issues": [],
+                "summary": "score text from model",
+            }
+
+        with patch("backend.generation.question_library.scoring.run_json", new=AsyncMock(side_effect=fake_run_json)):
+            out = await score_stem_with_llm(subject="高中数学", stem="题干", model="dummy")
+
+        self.assertEqual(out["overall_score"], 0)
+        self.assertEqual(out["verdict"], "普通题")
+
     async def test_batch_score_parses_thinking_depth_and_passes_method_context(self) -> None:
         captured = {}
 

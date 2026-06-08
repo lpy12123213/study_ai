@@ -5,12 +5,12 @@ import os
 from typing import Any
 
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.generation.agentic.prompts import create_default_prompt_registry
-from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
+from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.subject_knowledge import get_subject_bank, infer_subject_family
-from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
+from backend.llm.client import is_llm_configured
 
 
 def _prompt(prompt_id: str) -> str:
@@ -22,6 +22,13 @@ def _resolve_judge_model() -> str:
     if raw:
         return raw
     return str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 async def solve_draft(
@@ -291,14 +298,14 @@ async def judge_draft(
     return {
         "pass": bool(obj.get("pass")),
         "verdict": str(obj.get("verdict") or "").strip(),
-        "overall_score": int(obj.get("overall_score") or 0),
+        "overall_score": _coerce_int(obj.get("overall_score"), 0),
         "dimensions": list(dims or []) if isinstance(dims, list) else [],
         "highlights": list(obj.get("highlights") or []) if isinstance(obj.get("highlights"), list) else [],
         "issues": list(issues or []) if isinstance(issues, list) else [],
         "summary": str(obj.get("summary") or "").strip(),
         "difficulty_estimate": str(obj.get("difficulty_estimate") or "").strip(),
-        "novelty_score": int(obj.get("novelty_score") or 0),
-        "reasoning_depth": int(obj.get("reasoning_depth") or 0),
+        "novelty_score": _coerce_int(obj.get("novelty_score"), 0),
+        "reasoning_depth": _coerce_int(obj.get("reasoning_depth"), 0),
     }
 
 

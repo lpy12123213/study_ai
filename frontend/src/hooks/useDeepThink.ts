@@ -147,6 +147,7 @@ export function useDeepThink() {
           ? {
               ...existing,
               ...n,
+              status: existing.status,
               score: existing.score,
               evalReasoning: existing.evalReasoning,
               issues: existing.issues,

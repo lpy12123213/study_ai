@@ -228,6 +228,22 @@ python scripts/check_config.py --strict
 ## AI 组卷
 
 - `PAPER_COMPOSE_AGENTIC_BLUEPRINT`: 默认 `0`。设为 `1` 时，蓝图组卷 `/api/tasks/papers/compose` 默认走 Agentic 编排；单次请求可用 `agenticBlueprint` / `agentic_blueprint` / `agentic` 覆盖。
+- `COMPOSE_SANDBOX_DOCKER_IMAGE`: 默认 `study-ai/compose-sandbox:latest`。组卷工作台 Docker 会话镜像。
+- `COMPOSE_SANDBOX_ROOT`: 默认 `.local/compose-sandbox`。每个会话的宿主机工作区根目录。
+- `COMPOSE_SANDBOX_TIMEOUT_S`: 默认 `60`。单次白名单命令超时时间。
+- `COMPOSE_SANDBOX_TTL_S`: 默认 `900`。会话最长存活时间。
+- `COMPOSE_SANDBOX_MAX_WORKSPACE_BYTES`: 默认 `52428800`。单会话工作区大小上限。
+- `COMPOSE_SANDBOX_MEMORY` / `COMPOSE_SANDBOX_CPUS` / `COMPOSE_SANDBOX_PIDS_LIMIT` / `COMPOSE_SANDBOX_USER`: Docker 资源和运行用户限制。
+
+Compose sandbox 只暴露 `xelatex`、`python3`、`ls`、`cat` 白名单命令；容器使用 `--network none`，
+工作区路径限制在 `/workspace` 挂载内。Docker 或镜像不可用时，后端会返回 sandbox unavailable 错误，
+不会开放宿主任意 shell。
+
+构建默认组卷工作台镜像：
+
+```bash
+docker build -t study-ai/compose-sandbox:latest docker/compose-sandbox
+```
 
 ## 试卷导出
 

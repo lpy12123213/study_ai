@@ -191,7 +191,7 @@ async def get_question_detail(
                 if idx < 0:
                     return ""
                 ln = lines[idx]
-                m = re.search(r"(?:答案|参考答案|解析|解答)[:：]\\s*(.+)$", ln)
+                m = re.search(r"(?:答案|参考答案|解析|解答)[:：]\s*(.+)$", ln)
                 if m and m.group(1):
                     return m.group(1).strip()
                 return ""

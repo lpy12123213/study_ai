@@ -15,6 +15,7 @@ tests keep working without per-call refactors.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import threading
@@ -90,7 +91,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
     # Fallback: legacy SHA256 (64 hex chars).
     if len(password_hash) == 64:
-        return _legacy_sha256(password) == password_hash
+        return hmac.compare_digest(_legacy_sha256(password), password_hash)
 
     return False
 
@@ -273,7 +274,9 @@ def validate_access_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
     jti = str(payload.get("jti") or "").strip()
-    if jti and is_token_revoked(jti):
+    if not jti:
+        return None
+    if is_token_revoked(jti):
         return None
 
     return payload

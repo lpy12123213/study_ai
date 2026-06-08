@@ -4,14 +4,16 @@ import json
 from typing import List, Optional
 
 from sqlalchemy import and_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import UserItemMeta
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:
@@ -87,6 +89,33 @@ async def upsert_item_meta(
             await session.commit()
             return out
 
+    cleaned = [str(t).strip() for t in (tags or []) if str(t).strip()]
+    values = {
+        "user_id": uid,
+        "item_type": itype,
+        "item_id": iid,
+        "starred": 1 if starred else 0,
+        "pinned": 1 if pinned else 0,
+        "tags_json": _json_dumps(cleaned, default="[]"),
+    }
+    update_cols = {}
+    if starred is not None:
+        update_cols["starred"] = 1 if starred else 0
+    if pinned is not None:
+        update_cols["pinned"] = 1 if pinned else 0
+    if tags is not None:
+        update_cols["tags_json"] = values["tags_json"]
+
+    stmt = sqlite_insert(UserItemMeta).values(**values)
+    if update_cols:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["user_id", "item_type", "item_id"],
+            set_=update_cols,
+        )
+    else:
+        stmt = stmt.on_conflict_do_nothing(index_elements=["user_id", "item_type", "item_id"])
+    await session.execute(stmt)
+    await session.flush()
     res = await session.execute(
         select(UserItemMeta).where(
             UserItemMeta.user_id == uid,
@@ -94,32 +123,7 @@ async def upsert_item_meta(
             UserItemMeta.item_id == iid,
         )
     )
-    row = res.scalar_one_or_none()
-    if row:
-        if starred is not None:
-            row.starred = 1 if starred else 0
-        if pinned is not None:
-            row.pinned = 1 if pinned else 0
-        if tags is not None:
-            cleaned = [str(t).strip() for t in (tags or []) if str(t).strip()]
-            row.tags_json = _json_dumps(cleaned, default="[]")
-        session.add(row)
-        await session.flush()
-        await session.refresh(row)
-        return _row_to_dict(row)
-
-    cleaned = [str(t).strip() for t in (tags or []) if str(t).strip()]
-    row = UserItemMeta(
-        user_id=uid,
-        item_type=itype,
-        item_id=iid,
-        starred=1 if starred else 0,
-        pinned=1 if pinned else 0,
-        tags_json=_json_dumps(cleaned, default="[]"),
-    )
-    session.add(row)
-    await session.flush()
-    await session.refresh(row)
+    row = res.scalar_one()
     return _row_to_dict(row)
 
 

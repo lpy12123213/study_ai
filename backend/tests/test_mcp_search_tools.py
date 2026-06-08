@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.integrations.mcp.search import tavily
 from backend.integrations.mcp.search._base import FunctionSearchProvider, list_search_providers
 from backend.integrations.mcp.search.registry import PROVIDERS

@@ -4,7 +4,6 @@ import asyncio
 from typing import Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
-from backend.llm.client import is_llm_configured
 from backend.generation.question_library.beam_search import (
     beam_select,
     expand_reasoning_layer,
@@ -15,6 +14,10 @@ from backend.generation.question_library.beam_search import (
     seed_root_specs_from_brainstorm,
 )
 from backend.generation.question_library.brainstorm import brainstorm_creative_seeds
+from backend.generation.question_library.curriculum_context import (
+    build_curriculum_context,
+    enrich_source_pack_with_curriculum,
+)
 from backend.generation.question_library.diagram_integration import enrich_drafts_with_diagrams
 from backend.generation.question_library.draft_realization import (
     build_generation_messages,
@@ -37,15 +40,15 @@ from backend.generation.question_library.gen_utils import (
     build_ai_question_id,
 )
 from backend.generation.question_library.judging import check_ambiguity, judge_draft, refine_draft, solve_draft
-from backend.generation.question_library.reference_analysis import analyze_reference_questions, enrich_source_pack_with_reference
+from backend.generation.question_library.reference_analysis import (
+    analyze_reference_questions,
+    enrich_source_pack_with_reference,
+)
 from backend.generation.question_library.reference_crawl import collect_reference_questions
 from backend.generation.question_library.selection import select_final
 from backend.generation.question_library.source_pack import build_source_pack
-from backend.generation.question_library.curriculum_context import (
-    build_curriculum_context,
-    enrich_source_pack_with_curriculum,
-)
 from backend.generation.question_library.spec_scoring import score_spec
+from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)
 
@@ -286,8 +289,13 @@ async def generate_questions(
                 logger.warning("question_library_realize_drafts_unexpected_failed", exc_info=True)
                 return [], exc
 
-    realize_results = await asyncio.gather(*[_realize_spec(spec) for spec in specs]) if specs else []
-    for spec, (drafts, error) in zip(specs, realize_results):
+    realize_results = await asyncio.gather(*[_realize_spec(spec) for spec in specs], return_exceptions=True) if specs else []
+    for spec, result in zip(specs, realize_results):
+        if isinstance(result, BaseException):
+            drafts: list[dict] = []
+            error: Optional[BaseException] = result
+        else:
+            drafts, error = result
         if error is not None:
             realize_failures += 1
             logger.warning(

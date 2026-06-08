@@ -38,7 +38,7 @@ jobs:
         run: python -m compileall backend scripts -q
 
       - name: Ruff
-        run: python -m ruff check backend/api backend/chat backend/core backend/tests
+        run: python -m ruff check backend/api backend/core backend/tests
 
       - name: Mypy smoke
         run: python -m mypy backend/core backend/database --ignore-missing-imports --follow-imports=skip

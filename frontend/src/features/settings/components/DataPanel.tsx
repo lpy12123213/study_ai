@@ -135,10 +135,11 @@ export function DataPanel(props: DataPanelProps) {
   }
 
   const handleExportAll = () => {
+    const allowedKeys = new Set(['theme', 'appearance-preferences', 'ui-preferences', 'notifications'])
     const exportData: Record<string, unknown> = {}
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
-      if (!key) continue
+      if (!key || !allowedKeys.has(key)) continue
       try {
         exportData[key] = JSON.parse(localStorage.getItem(key) || '')
       } catch {
@@ -149,7 +150,7 @@ export function DataPanel(props: DataPanelProps) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `study-ai-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = `study-ai-local-preferences-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -220,9 +221,9 @@ export function DataPanel(props: DataPanelProps) {
 
         <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
           <div>
-            <h4 className="font-medium text-sm">导出所有数据</h4>
+            <h4 className="font-medium text-sm">导出本地界面配置</h4>
             <p className="text-xs text-muted-foreground mt-1">
-              将所有试卷和自学资料导出为 JSON 文件
+              将主题、外观、通知偏好导出为 JSON 文件
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={handleExportAll}>

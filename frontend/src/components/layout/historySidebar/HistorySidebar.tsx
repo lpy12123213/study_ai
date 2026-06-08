@@ -13,7 +13,7 @@ export function HistorySidebar() {
     <aside
       style={{ width: sidebar.isCollapsed ? sidebar.collapsedWidth : sidebar.expandedWidth }}
       className={cn(
-        'relative flex shrink-0 flex-col bg-sidebar-background transition-[width] duration-300 ease-in-out',
+        'aurora-layout-surface relative flex shrink-0 flex-col bg-sidebar-background transition-[width] duration-300 ease-in-out',
         sidebar.sidebarStyle === 'sidebar' &&
           (sidebar.sidebarPosition === 'right' ? 'border-l border-border' : 'border-r border-border'),
         sidebar.sidebarStyle === 'inset' && 'm-2 overflow-hidden rounded-lg border border-border shadow-none',

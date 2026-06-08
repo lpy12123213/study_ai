@@ -82,8 +82,20 @@ export function useQuestionLibraryTasks(options: {
 
   const seenStepIdsRef = useRef<Record<string, Record<string, boolean>>>({})
   const restoreAttemptedRef = useRef(false)
+  const taskAbortControllersRef = useRef<Record<string, AbortController>>({})
 
   const clearDraftPreview = useCallback(() => setDraftPreview(null), [])
+
+  const beginTaskStream = useCallback((taskId: string): AbortController => {
+    taskAbortControllersRef.current[taskId]?.abort()
+    const controller = new AbortController()
+    taskAbortControllersRef.current[taskId] = controller
+    return controller
+  }, [])
+
+  const forgetTaskStream = useCallback((taskId: string) => {
+    delete taskAbortControllersRef.current[taskId]
+  }, [])
 
   const getTaskEvents = useCallback(
     (taskId: string): SseEnvelope[] => {
@@ -175,6 +187,30 @@ export function useQuestionLibraryTasks(options: {
       return prev.map((t) => (t.taskId === meta.taskId ? { ...t, ...meta } : t))
     })
   }, [])
+
+  const finishTaskStream = useCallback(
+    (taskId: string, signal: AbortSignal) => {
+      forgetTaskStream(taskId)
+      if (signal.aborted) return
+      const steps = getTaskSteps(taskId)
+      const hasTerminal = steps.some((s) => s.status === 'failed') || steps.some((s) => s.status === 'completed')
+      if (!hasTerminal) {
+        failTask(taskId, 'Task ended unexpectedly')
+        upsertTask({ taskId, status: 'failed', error: 'Task ended unexpectedly' })
+      }
+    },
+    [failTask, forgetTaskStream, getTaskSteps, upsertTask]
+  )
+
+  const failTaskStream = useCallback(
+    (taskId: string, signal: AbortSignal, err: Error) => {
+      forgetTaskStream(taskId)
+      if (signal.aborted) return
+      upsertTask({ taskId, status: 'failed', error: err.message })
+      failTask(taskId, err.message)
+    },
+    [failTask, forgetTaskStream, upsertTask]
+  )
 
   const patchListOnItemSaved = useCallback(
     (item: unknown) => {
@@ -316,35 +352,27 @@ export function useQuestionLibraryTasks(options: {
   const runCrawl = useCallback(
     (payload: Omit<CrawlQuestionsPayload, 'task_id'> & { task_id?: string }) => {
       const taskId = String(payload.task_id || '').trim() || `ql-crawl-${generateId()}`
+      const controller = beginTaskStream(taskId)
       startTask(taskId)
       upsertTask({ taskId, kind: 'crawl', status: 'running', progress: 0, stage: '爬取入库', lastSeq: 0 })
 
       crawlQuestions(
         { ...payload, task_id: taskId },
         (env) => handleEnvelope(taskId, normalizeSseEnvelope(env)),
-        (err) => {
-          upsertTask({ taskId, status: 'failed', error: err.message })
-          failTask(taskId, err.message)
-        },
-        () => {
-          // If stream ended without a terminal event, mark as failed so the UI can retry.
-          const steps = getTaskSteps(taskId)
-          const hasTerminal = steps.some((s) => s.status === 'failed') || steps.some((s) => s.status === 'completed')
-          if (!hasTerminal) {
-            failTask(taskId, 'Task ended unexpectedly')
-            upsertTask({ taskId, status: 'failed', error: 'Task ended unexpectedly' })
-          }
-        }
+        (err) => failTaskStream(taskId, controller.signal, err),
+        () => finishTaskStream(taskId, controller.signal),
+        { signal: controller.signal }
       )
 
       return taskId
     },
-    [failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
+    [beginTaskStream, failTaskStream, finishTaskStream, handleEnvelope, startTask, upsertTask]
   )
 
   const runGenerate = useCallback(
     (payload: Omit<GenerateQuestionsPayload, 'task_id'> & { task_id?: string }) => {
       const taskId = String(payload.task_id || '').trim() || `ql-gen-${generateId()}`
+      const controller = beginTaskStream(taskId)
       clearDraftPreview()
       startTask(taskId)
       upsertTask({ taskId, kind: 'generate', status: 'running', progress: 0, stage: 'AI 出题', lastSeq: 0 })
@@ -352,28 +380,20 @@ export function useQuestionLibraryTasks(options: {
       generateQuestions(
         { ...payload, task_id: taskId },
         (env) => handleEnvelope(taskId, normalizeSseEnvelope(env)),
-        (err) => {
-          upsertTask({ taskId, status: 'failed', error: err.message })
-          failTask(taskId, err.message)
-        },
-        () => {
-          const steps = getTaskSteps(taskId)
-          const hasTerminal = steps.some((s) => s.status === 'failed') || steps.some((s) => s.status === 'completed')
-          if (!hasTerminal) {
-            failTask(taskId, 'Task ended unexpectedly')
-            upsertTask({ taskId, status: 'failed', error: 'Task ended unexpectedly' })
-          }
-        }
+        (err) => failTaskStream(taskId, controller.signal, err),
+        () => finishTaskStream(taskId, controller.signal),
+        { signal: controller.signal }
       )
 
       return taskId
     },
-    [clearDraftPreview, failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
+    [beginTaskStream, clearDraftPreview, failTaskStream, finishTaskStream, handleEnvelope, startTask, upsertTask]
   )
 
   const runMediaImport = useCallback(
     (payload: Omit<ImportMediaQuestionsPayload, 'task_id'> & { task_id?: string }) => {
       const taskId = String(payload.task_id || '').trim() || `ql-media-${generateId()}`
+      const controller = beginTaskStream(taskId)
       clearDraftPreview()
       startTask(taskId)
       upsertTask({ taskId, kind: 'media_import', status: 'running', progress: 0, stage: '图片/PDF 录入', lastSeq: 0 })
@@ -381,53 +401,38 @@ export function useQuestionLibraryTasks(options: {
       importMediaQuestions(
         { ...payload, task_id: taskId },
         (env) => handleEnvelope(taskId, normalizeSseEnvelope(env)),
-        (err) => {
-          upsertTask({ taskId, status: 'failed', error: err.message })
-          failTask(taskId, err.message)
-        },
-        () => {
-          const steps = getTaskSteps(taskId)
-          const hasTerminal = steps.some((s) => s.status === 'failed') || steps.some((s) => s.status === 'completed')
-          if (!hasTerminal) {
-            failTask(taskId, 'Task ended unexpectedly')
-            upsertTask({ taskId, status: 'failed', error: 'Task ended unexpectedly' })
-          }
-        }
+        (err) => failTaskStream(taskId, controller.signal, err),
+        () => finishTaskStream(taskId, controller.signal),
+        { signal: controller.signal }
       )
 
       return taskId
     },
-    [clearDraftPreview, failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
+    [beginTaskStream, clearDraftPreview, failTaskStream, finishTaskStream, handleEnvelope, startTask, upsertTask]
   )
 
   const runScore = useCallback(
     (payload: Omit<ScoreQuestionLibraryBatchPayload, 'task_id'> & { task_id?: string }) => {
       const taskId = String(payload.task_id || '').trim() || `ql-score-${generateId()}`
+      const controller = beginTaskStream(taskId)
       startTask(taskId)
       upsertTask({ taskId, kind: 'score', status: 'running', progress: 0, stage: '评分', lastSeq: 0 })
 
       apiClient
-        .post('/tasks/question-library/score', { ...payload, task_id: taskId })
+        .post('/tasks/question-library/score', { ...payload, task_id: taskId }, { signal: controller.signal })
         .then(() => {
           streamTask(
             taskId,
             0,
             (evt) => handleEnvelope(taskId, normalizeSseEnvelope(evt)),
-            (err) => {
-              upsertTask({ taskId, status: 'failed', error: err.message })
-              failTask(taskId, err.message)
-            },
-            () => {
-              const steps = getTaskSteps(taskId)
-              const hasTerminal = steps.some((s) => s.status === 'failed') || steps.some((s) => s.status === 'completed')
-              if (!hasTerminal) {
-                failTask(taskId, 'Task ended unexpectedly')
-                upsertTask({ taskId, status: 'failed', error: 'Task ended unexpectedly' })
-              }
-            }
+            (err) => failTaskStream(taskId, controller.signal, err),
+            () => finishTaskStream(taskId, controller.signal),
+            { signal: controller.signal }
           )
         })
         .catch((err: unknown) => {
+          forgetTaskStream(taskId)
+          if (controller.signal.aborted) return
           const message = err instanceof Error ? err.message : readString(err, 'message') || 'score_failed'
           upsertTask({ taskId, status: 'failed', error: message })
           failTask(taskId, message)
@@ -435,13 +440,22 @@ export function useQuestionLibraryTasks(options: {
 
       return taskId
     },
-    [failTask, getTaskSteps, handleEnvelope, startTask, upsertTask]
+    [beginTaskStream, failTask, failTaskStream, finishTaskStream, forgetTaskStream, handleEnvelope, startTask, upsertTask]
   )
 
   const preferredTask = useMemo(() => {
     const running = tasks.find((t) => t.status === 'running')
     return running || tasks[0] || null
   }, [tasks])
+
+  useEffect(() => {
+    return () => {
+      for (const controller of Object.values(taskAbortControllersRef.current)) {
+        controller.abort()
+      }
+      taskAbortControllersRef.current = {}
+    }
+  }, [])
 
   useEffect(() => {
     if (!restoreLatestPreview || draftPreview || restoreAttemptedRef.current) return

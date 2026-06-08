@@ -34,6 +34,9 @@ export function ResumeControl({ taskId, checkpoint }: ResumeControlProps) {
 
   const completedCount = checkpoint.checkpoint.completedSteps.length
   const totalCount = checkpoint.totalSteps
+  const progressPercent = totalCount > 0
+    ? Math.max(0, Math.min(100, (completedCount / totalCount) * 100))
+    : 0
 
   return (
     <motion.div
@@ -56,7 +59,7 @@ export function ResumeControl({ taskId, checkpoint }: ResumeControlProps) {
           <div className="mt-2 h-1.5 w-full bg-muted rounded-full overflow-hidden">
             <div
               className="h-full bg-foreground/70"
-              style={{ width: `${(completedCount / totalCount) * 100}%` }}
+              style={{ width: `${progressPercent}%` }}
             />
           </div>
           

@@ -6,7 +6,7 @@ from backend.generation.agentic.prompt_contracts import (
     JsonOutputContract,
     MarkdownOutputContract,
 )
-from backend.generation.agentic.prompts import (
+from backend.llm.prompts import (
     JSON_ONLY_GUARDRAIL,
     NO_MARKDOWN_FENCE_GUARDRAIL,
     ORIGINAL_REWRITE_GUARDRAIL,

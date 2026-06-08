@@ -2,56 +2,57 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-heading: "Outfit", "Plus Jakarta Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  --spacing: 4px;
   
-  /* Cursor-inspired warm editorial product system from design.md */
-  --color-background: #f7f7f4;
-  --color-foreground: #26251e;
-  --color-card: #ffffff;
-  --color-card-foreground: #26251e;
-  --color-popover: #ffffff;
-  --color-popover-foreground: #26251e;
-  --color-primary: #f54e00;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #ffffff;
-  --color-secondary-foreground: #26251e;
-  --color-muted: #efeee8;
-  --color-muted-foreground: #807d72;
-  --color-accent: #fafaf7;
-  --color-accent-foreground: #26251e;
-  --color-destructive: #cf2d56;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #e6e5e0;
-  --color-input: #cfcdc4;
-  --color-ring: #f54e00;
+  /* Aurora Glass default system from nextstep/aurora-glass-design-system-plan.md */
+  --color-background: var(--color-env-void);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--surface-200);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface-300);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent-brand-base);
+  --color-primary-foreground: var(--text-inverse);
+  --color-secondary: rgba(255, 255, 255, 0.045);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: rgba(255, 255, 255, 0.055);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: rgba(0, 240, 255, 0.12);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--semantic-danger-base);
+  --color-destructive-foreground: rgba(255, 255, 255, 0.92);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-input: rgba(255, 255, 255, 0.16);
+  --color-ring: var(--accent-brand-base);
   
   /* Brand Accent */
-  --color-brand: #f54e00;
-  --color-brand-foreground: #ffffff;
+  --color-brand: var(--accent-brand-base);
+  --color-brand-foreground: var(--text-inverse);
 
   /* Sidebar colors */
-  --color-sidebar-background: #ffffff;
-  --color-sidebar-foreground: #5a5852;
-  --color-sidebar-primary: #26251e;
-  --color-sidebar-primary-foreground: #f7f7f4;
-  --color-sidebar-accent: #fafaf7;
-  --color-sidebar-accent-foreground: #26251e;
-  --color-sidebar-border: #e6e5e0;
-  --color-sidebar-ring: #f54e00;
+  --color-sidebar-background: rgba(255, 255, 255, 0.025);
+  --color-sidebar-foreground: var(--text-secondary);
+  --color-sidebar-primary: var(--accent-brand-base);
+  --color-sidebar-primary-foreground: var(--text-inverse);
+  --color-sidebar-accent: rgba(255, 255, 255, 0.06);
+  --color-sidebar-accent-foreground: var(--text-primary);
+  --color-sidebar-border: rgba(255, 255, 255, 0.08);
+  --color-sidebar-ring: var(--accent-brand-base);
   
-  /* Radius scale from design.md */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
+  /* Radius scale */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
 
   /* Typography Scale */
-  --text-display: 32px;
   --text-title: 20px;
   --text-subtitle: 16px;
-  --text-body: 14px;
-  --text-caption: 12px;
+  --text-body: 15px;
+  --text-caption: 13px;
   
   --font-weight-display: 400;
   --font-weight-title: 500;
@@ -62,26 +63,157 @@
 
 /* UI preference tokens (runtime-toggled via `useUiPreferencesStore`) */
 :root {
-  --study-canvas: #f7f7f4;
-  --study-canvas-soft: #fafaf7;
-  --study-surface-card: #ffffff;
-  --study-surface-strong: #e6e5e0;
-  --study-hairline: #e6e5e0;
-  --study-hairline-soft: #efeee8;
-  --study-hairline-strong: #cfcdc4;
-  --study-ink: #26251e;
-  --study-body: #5a5852;
-  --study-muted: #807d72;
-  --study-primary: #f54e00;
-  --study-primary-active: #d04200;
-  --semantic-success: #1f8a65;
-  --semantic-error: #cf2d56;
+  --color-env-void: #05070A;
+  --color-env-glow-primary: rgba(0, 240, 255, 0.08);
+  --color-env-glow-ai: rgba(181, 52, 255, 0.06);
+
+  --surface-100: rgba(255, 255, 255, 0.015);
+  --surface-200: rgba(255, 255, 255, 0.03);
+  --surface-300: rgba(255, 255, 255, 0.06);
+  --surface-400: rgba(255, 255, 255, 0.12);
+  --surface-depth: rgba(0, 0, 0, 0.4);
+  --surface-blur-100: 12px;
+  --surface-blur-200: 24px;
+  --surface-blur-300: 32px;
+  --surface-blur-400: 48px;
+
+  --border-subtle: 1px solid rgba(255, 255, 255, 0.04);
+  --border-default: 1px solid rgba(255, 255, 255, 0.08);
+  --border-strong: 1px solid rgba(255, 255, 255, 0.16);
+  --border-glow-primary: 1px solid rgba(0, 240, 255, 0.4);
+  --border-subtle-color: rgba(255, 255, 255, 0.04);
+  --border-default-color: rgba(255, 255, 255, 0.08);
+  --border-strong-color: rgba(255, 255, 255, 0.16);
+  --border-glow-primary-color: rgba(0, 240, 255, 0.4);
+
+  --text-display: rgba(255, 255, 255, 1);
+  --text-primary: rgba(255, 255, 255, 0.85);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-tertiary: rgba(255, 255, 255, 0.35);
+  --text-inverse: rgba(0, 0, 0, 0.9);
+
+  --accent-brand-base: #00F0FF;
+  --accent-brand-hover: #4DFFFF;
+  --accent-brand-active: #00C4D1;
+  --accent-ai-base: #B534FF;
+  --accent-ai-gradient: linear-gradient(135deg, #00F0FF 0%, #B534FF 100%);
+  --semantic-success-base: #10B981;
+  --semantic-success-glow: rgba(16, 185, 129, 0.15);
+  --semantic-warning-base: #F59E0B;
+  --semantic-warning-glow: rgba(245, 158, 11, 0.15);
+  --semantic-danger-base: #E11D48;
+  --semantic-danger-glow: rgba(225, 29, 72, 0.15);
+
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --grid-mobile-columns: 4;
+  --grid-tablet-columns: 8;
+  --grid-desktop-columns: 12;
+  --grid-gutter-mobile: 16px;
+  --grid-gutter-desktop: 24px;
+  --grid-max-width: 1440px;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 9999px;
+
+  --font-heading: "Outfit", "Plus Jakarta Sans", sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  --type-display-1-size: 72px;
+  --type-display-2-size: 48px;
+  --type-heading-1-size: 32px;
+  --type-heading-2-size: 24px;
+  --type-heading-3-size: 18px;
+  --type-body-large-size: 16px;
+  --type-body-base-size: 15px;
+  --type-caption-size: 13px;
+  --text-mono-micro: 12px;
+
+  --shadow-glow-sm: 0 0 12px 0 rgba(0, 240, 255, 0.1);
+  --shadow-glow-md: 0 0 24px 0 rgba(0, 240, 255, 0.15);
+  --shadow-glow-lg: 0 0 48px 0 rgba(181, 52, 255, 0.2);
+  --shadow-elevation-high: 0 24px 48px -12px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+
+  --z-base: 0;
+  --z-elevated: 10;
+  --z-sticky: 30;
+  --z-dock: 40;
+  --z-overlay: 50;
+  --z-drawer: 60;
+  --z-modal: 70;
+  --z-toast: 100;
+
+  --dur-fast: 150ms;
+  --dur-base: 250ms;
+  --dur-slow: 400ms;
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --spring-snappy: 400 25;
+  --spring-smooth: 250 30;
+  --spring-gentle: 100 20;
+
+  --color-background: var(--color-env-void);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--surface-200);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface-300);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent-brand-base);
+  --color-primary-foreground: var(--text-inverse);
+  --color-secondary: rgba(255, 255, 255, 0.045);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: rgba(255, 255, 255, 0.055);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: rgba(0, 240, 255, 0.12);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--semantic-danger-base);
+  --color-destructive-foreground: rgba(255, 255, 255, 0.92);
+  --color-border: var(--border-default-color);
+  --color-input: var(--border-strong-color);
+  --color-ring: var(--accent-brand-base);
+  --color-brand: var(--accent-brand-base);
+  --color-brand-foreground: var(--text-inverse);
+
+  --color-sidebar-background: rgba(255, 255, 255, 0.025);
+  --color-sidebar-foreground: var(--text-secondary);
+  --color-sidebar-primary: var(--accent-brand-base);
+  --color-sidebar-primary-foreground: var(--text-inverse);
+  --color-sidebar-accent: rgba(255, 255, 255, 0.06);
+  --color-sidebar-accent-foreground: var(--text-primary);
+  --color-sidebar-border: var(--border-default-color);
+  --color-sidebar-ring: var(--accent-brand-base);
+
+  --study-canvas: var(--color-env-void);
+  --study-canvas-soft: rgba(255, 255, 255, 0.035);
+  --study-surface-card: var(--surface-200);
+  --study-surface-strong: var(--surface-300);
+  --study-hairline: var(--border-default-color);
+  --study-hairline-soft: var(--border-subtle-color);
+  --study-hairline-strong: var(--border-strong-color);
+  --study-ink: var(--text-primary);
+  --study-body: var(--text-secondary);
+  --study-muted: var(--text-tertiary);
+  --study-primary: var(--accent-brand-base);
+  --study-primary-active: var(--accent-brand-active);
+  --semantic-success: var(--semantic-success-base);
+  --semantic-error: var(--semantic-danger-base);
 
   --app-line-height: 1.6;
 
-  --control-h: 2.25rem;   /* 36px */
+  --control-h: 2.5rem;   /* 40px */
   --control-h-sm: 2rem;   /* 32px */
-  --control-h-lg: 2.5rem; /* 40px */
+  --control-h-lg: 2.75rem; /* 44px */
 
   --control-px: 1rem;
   --control-px-sm: 0.75rem;
@@ -136,39 +268,39 @@
   --color-popover: oklch(0.18 0.01 260);
 }
 
-/* Dark mode keeps the same warm ink/orange language without switching palettes. */
+/* Aurora is a dark-first system; dark mode keeps the same readable token map. */
 .dark {
-  --color-background: #171612;
-  --color-foreground: #f7f7f4;
-  --color-card: #211f1a;
-  --color-card-foreground: #f7f7f4;
-  --color-popover: #211f1a;
-  --color-popover-foreground: #f7f7f4;
-  --color-primary: #f54e00;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #2c2922;
-  --color-secondary-foreground: #f7f7f4;
-  --color-muted: #2c2922;
-  --color-muted-foreground: #c7c2b6;
-  --color-accent: #2c2922;
-  --color-accent-foreground: #f7f7f4;
-  --color-destructive: #cf2d56;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #3b372d;
-  --color-input: #4b463a;
-  --color-ring: #f54e00;
+  --color-background: var(--color-env-void);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--surface-200);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface-300);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent-brand-base);
+  --color-primary-foreground: var(--text-inverse);
+  --color-secondary: rgba(255, 255, 255, 0.045);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: rgba(255, 255, 255, 0.055);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: rgba(0, 240, 255, 0.12);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--semantic-danger-base);
+  --color-destructive-foreground: rgba(255, 255, 255, 0.92);
+  --color-border: var(--border-default-color);
+  --color-input: var(--border-strong-color);
+  --color-ring: var(--accent-brand-base);
   
-  --color-brand: #f54e00;
-  --color-brand-foreground: #ffffff;
+  --color-brand: var(--accent-brand-base);
+  --color-brand-foreground: var(--text-inverse);
   
-  --color-sidebar-background: #211f1a;
-  --color-sidebar-foreground: #d8d2c5;
-  --color-sidebar-primary: #f7f7f4;
-  --color-sidebar-primary-foreground: #171612;
-  --color-sidebar-accent: #2c2922;
-  --color-sidebar-accent-foreground: #f7f7f4;
-  --color-sidebar-border: #3b372d;
-  --color-sidebar-ring: #f54e00;
+  --color-sidebar-background: rgba(255, 255, 255, 0.025);
+  --color-sidebar-foreground: var(--text-secondary);
+  --color-sidebar-primary: var(--accent-brand-base);
+  --color-sidebar-primary-foreground: var(--text-inverse);
+  --color-sidebar-accent: rgba(255, 255, 255, 0.06);
+  --color-sidebar-accent-foreground: var(--text-primary);
+  --color-sidebar-border: var(--border-default-color);
+  --color-sidebar-ring: var(--accent-brand-base);
 }
 
 :root[data-design-style="linear"] {
@@ -442,5 +574,216 @@
   --study-muted: #64748b;
   --study-primary: #635bff;
   --study-primary-active: #4f46e5;
+}
+
+@keyframes aurora-border-flow {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes aurora-card-error {
+  0%, 100% {
+    border-color: rgba(225, 29, 72, 0.4);
+  }
+  35%, 70% {
+    border-color: rgba(225, 29, 72, 0.9);
+  }
+}
+
+@layer base {
+  html {
+    background: var(--color-env-void);
+  }
+
+  body {
+    background:
+      linear-gradient(135deg, var(--color-env-glow-primary), transparent 32%),
+      linear-gradient(315deg, var(--color-env-glow-ai), transparent 36%),
+      var(--color-env-void);
+  }
+
+  #root {
+    min-height: 100vh;
+    background: transparent;
+  }
+
+  ::selection {
+    background: rgba(0, 240, 255, 0.28);
+    color: var(--text-display);
+  }
+}
+
+@layer components {
+  .aurora-app-shell {
+    position: relative;
+    isolation: isolate;
+    background:
+      linear-gradient(135deg, var(--color-env-glow-primary), transparent 30%),
+      linear-gradient(315deg, var(--color-env-glow-ai), transparent 34%),
+      var(--color-env-void);
+    color: var(--text-primary);
+  }
+
+  .aurora-layout-surface {
+    background: var(--surface-200);
+    border: var(--border-default);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+    -webkit-backdrop-filter: blur(var(--surface-blur-200));
+    backdrop-filter: blur(var(--surface-blur-200));
+  }
+
+  .aurora-layout-chrome {
+    background: rgba(5, 7, 10, 0.76);
+    border-color: var(--border-default-color);
+    box-shadow: inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
+    -webkit-backdrop-filter: blur(var(--surface-blur-300));
+    backdrop-filter: blur(var(--surface-blur-300));
+  }
+
+  .aurora-chat-user {
+    background: var(--surface-300);
+    border: var(--border-default);
+    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
+    box-shadow: var(--shadow-glow-sm), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    -webkit-backdrop-filter: blur(var(--surface-blur-300));
+    backdrop-filter: blur(var(--surface-blur-300));
+  }
+
+  .aurora-chat-assistant {
+    color: var(--text-primary);
+  }
+
+  .aurora-chat-assistant .prose,
+  .aurora-chat-assistant [data-testid="markdown"] {
+    color: var(--text-primary);
+  }
+
+  .aurora-tool-card {
+    position: relative;
+    overflow: hidden;
+    border: var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--surface-100);
+    color: var(--text-secondary);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+    -webkit-backdrop-filter: blur(var(--surface-blur-100));
+    backdrop-filter: blur(var(--surface-blur-100));
+    transition:
+      border-color var(--dur-fast) var(--ease-in-out),
+      box-shadow var(--dur-fast) var(--ease-in-out),
+      background var(--dur-fast) var(--ease-in-out);
+  }
+
+  .aurora-tool-card:hover {
+    box-shadow: var(--shadow-glow-sm), inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  }
+
+  .aurora-tool-card[data-state="executing"] {
+    border-color: transparent;
+    color: var(--text-primary);
+  }
+
+  .aurora-tool-card[data-state="executing"]::before {
+    content: "";
+    position: absolute;
+    inset: -80%;
+    z-index: -1;
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      rgba(0, 240, 255, 0.48) 84deg,
+      rgba(181, 52, 255, 0.44) 132deg,
+      transparent 210deg
+    );
+    animation: aurora-border-flow 2.4s linear infinite;
+  }
+
+  .aurora-tool-card[data-state="executing"]::after {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    z-index: -1;
+    border-radius: calc(var(--radius-lg) - 1px);
+    background: rgba(5, 7, 10, 0.82);
+  }
+
+  .aurora-tool-card[data-state="success"] {
+    border-color: var(--border-subtle-color);
+    background: var(--surface-100);
+  }
+
+  .aurora-tool-card[data-state="error"] {
+    border-color: rgba(225, 29, 72, 0.4);
+    color: rgba(255, 185, 197, 0.92);
+    animation: aurora-card-error var(--dur-slow) var(--ease-in-out) 2;
+    box-shadow: 0 0 20px 0 rgba(225, 29, 72, 0.16);
+  }
+
+  .aurora-tool-line {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-mono-micro);
+    letter-spacing: 0;
+  }
+
+  .aurora-tool-payload {
+    margin-top: var(--space-3);
+    border: var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-depth);
+    color: rgba(255, 255, 255, 0.88);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .aurora-exam-canvas {
+    background-color: var(--color-env-void);
+    background-image:
+      radial-gradient(circle at center, rgba(255, 255, 255, 0.05) 1px, transparent 1.5px),
+      linear-gradient(135deg, rgba(0, 240, 255, 0.035), transparent 34%),
+      linear-gradient(315deg, rgba(181, 52, 255, 0.035), transparent 40%);
+    background-size: 24px 24px, 100% 100%, 100% 100%;
+  }
+
+  .aurora-exam-card {
+    border: var(--border-default);
+    border-radius: var(--radius-xl);
+    background: var(--surface-200);
+    box-shadow: var(--shadow-elevation-high);
+    color: var(--text-primary);
+    -webkit-backdrop-filter: blur(var(--surface-blur-200));
+    backdrop-filter: blur(var(--surface-blur-200));
+    transition:
+      border-color var(--dur-base) var(--ease-emphasized),
+      box-shadow var(--dur-base) var(--ease-emphasized),
+      opacity var(--dur-base) var(--ease-emphasized),
+      filter var(--dur-base) var(--ease-emphasized),
+      transform var(--dur-base) var(--ease-out-back);
+  }
+
+  .aurora-exam-card[data-focus="true"],
+  .aurora-exam-card:focus-within {
+    border: var(--border-glow-primary);
+    box-shadow: var(--shadow-glow-md), var(--shadow-elevation-high);
+    transform: scale(1.01);
+  }
+
+  .aurora-exam-card[data-focus="false"] {
+    opacity: 0.72;
+  }
+
+  .aurora-exam-focus {
+    outline: 0;
+    box-shadow: var(--shadow-glow-md), inset 0 0 0 1px rgba(0, 240, 255, 0.28);
+  }
+
+  .aurora-ink-energy {
+    text-shadow: 0 0 12px rgba(225, 29, 72, 0.4);
+  }
 }
 

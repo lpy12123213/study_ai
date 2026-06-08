@@ -20,7 +20,7 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.get("/conversations")
-async def get_conversations_list(limit: int = 50, user: dict = Depends(require_auth)) -> List[dict]:
+async def get_conversations_list(limit: int = Query(50, ge=1, le=200), user: dict = Depends(require_auth)) -> List[dict]:
     """获取对话列表"""
     user_id = str((user or {}).get("user_id") or "").strip()
     if not user_id:

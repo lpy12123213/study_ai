@@ -65,6 +65,12 @@ export function AiGenerateStudioPage() {
     return sr.selectedKnowledgePointIds.map((id) => knowledgeNodeMap[id]?.label || '').filter((item) => item.trim().length > 0)
   }, [knowledgeNodeMap, sr.selectedKnowledgePointIds, sr.selectedKnowledgePointLabels])
 
+  useEffect(() => {
+    if (lib.filters.subject) return
+    const firstSubject = (subjects || []).find((item) => String(item.code || '').trim())
+    if (firstSubject?.code) lib.setSubject(firstSubject.code)
+  }, [lib, lib.filters.subject, subjects])
+
   const activeTask = tasks.preferredTask
   const currentTaskId = String(activeTask?.taskId || sr.session?.taskId || '').trim()
   const taskStatus = String(activeTask?.status || '').trim()
@@ -73,7 +79,7 @@ export function AiGenerateStudioPage() {
   const effectiveTaskStatus = isSessionRunning ? 'running' : taskStatus || sessionStatus
   const isGenerating = effectiveTaskStatus === 'running'
   const currentTaskEvents = tasks.getTaskEvents(currentTaskId)
-  const questionWindowKey = String(sr.activeSessionId || sr.session?.sessionId || currentTaskId || 'default').trim()
+  const questionWindowKey = String(sr.activeSessionId || sr.session?.sessionId || 'current').trim()
   const questionWindowDismissed = questionWindowDismissedKey === questionWindowKey
   const questionWindowEffectiveOpen = questionWindowOpen && !questionWindowDismissed
 
@@ -166,11 +172,11 @@ export function AiGenerateStudioPage() {
   const handleToggleKnowledgePoint = (node: AiGenerateKnowledgeNode) => {
     sr.setSelectedKnowledgePointIds((prev) => {
       const exists = prev.includes(node.id)
-      return exists ? prev.filter((item) => item !== node.id) : [...prev, node.id]
-    })
-    sr.setSelectedKnowledgePointLabels((prev) => {
-      const exists = prev.includes(node.label)
-      return exists ? prev.filter((item) => item !== node.label) : [...prev, node.label]
+      const nextIds = exists ? prev.filter((item) => item !== node.id) : [...prev, node.id]
+      sr.setSelectedKnowledgePointLabels(
+        nextIds.map((id) => knowledgeNodeMap[id]?.label || '').filter((item) => item.trim().length > 0)
+      )
+      return nextIds
     })
   }
 

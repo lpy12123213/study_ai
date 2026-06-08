@@ -154,68 +154,71 @@ def render_tikz_to_svg_bytes(
     build_dir = (root / ".local" / "latex_build" / uuid.uuid4().hex[:12]).resolve()
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    tex = build_tikz_standalone_tex(tikz=code, preamble=preamble)
-    (build_dir / "main.tex").write_text(tex, encoding="utf-8")
-
-    timeout = _clamp_timeout_s(timeout_s, default=240.0)
-    cmd = ["xelatex", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "main.tex"]
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(build_dir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except FileNotFoundError as exc:
-        return {"success": False, "error": f"latex_engine_not_found: {exc}", "hint": tikz_tools_missing_hint()}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "latex_compile_timeout"}
+        tex = build_tikz_standalone_tex(tikz=code, preamble=preamble)
+        (build_dir / "main.tex").write_text(tex, encoding="utf-8")
 
-    if proc.returncode != 0:
-        stderr = (getattr(proc, "stderr", "") or "").strip()
-        stdout = (getattr(proc, "stdout", "") or "").strip()
-        msg = (stderr or stdout)[-2000:]
-        return {"success": False, "error": f"latex_compile_failed: {msg}"}
+        timeout = _clamp_timeout_s(timeout_s, default=240.0)
+        cmd = ["xelatex", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", "main.tex"]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(build_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            return {"success": False, "error": f"latex_engine_not_found: {exc}", "hint": tikz_tools_missing_hint()}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "latex_compile_timeout"}
 
-    pdf_path = build_dir / "main.pdf"
-    if not pdf_path.exists() or not pdf_path.is_file():
-        return {"success": False, "error": "pdf_missing"}
+        if proc.returncode != 0:
+            stderr = (getattr(proc, "stderr", "") or "").strip()
+            stdout = (getattr(proc, "stdout", "") or "").strip()
+            msg = (stderr or stdout)[-2000:]
+            return {"success": False, "error": f"latex_compile_failed: {msg}"}
 
-    svg_path = build_dir / "main.svg"
-    dvisvgm_cmd = [
-        "dvisvgm",
-        "--pdf",
-        "--no-fonts",
-        "--exact-bbox",
-        "-o",
-        str(svg_path.name),
-        str(pdf_path.name),
-    ]
-    try:
-        proc2 = subprocess.run(
-            dvisvgm_cmd,
-            cwd=str(build_dir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except FileNotFoundError as exc:
-        return {"success": False, "error": f"dvisvgm_not_found: {exc}", "hint": tikz_tools_missing_hint()}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "dvisvgm_timeout"}
+        pdf_path = build_dir / "main.pdf"
+        if not pdf_path.exists() or not pdf_path.is_file():
+            return {"success": False, "error": "pdf_missing"}
 
-    if proc2.returncode != 0 or not svg_path.exists() or not svg_path.is_file():
-        stderr = (getattr(proc2, "stderr", "") or "").strip()
-        stdout = (getattr(proc2, "stdout", "") or "").strip()
-        msg = (stderr or stdout)[-2000:]
-        return {"success": False, "error": f"dvisvgm_failed: {msg}"}
+        svg_path = build_dir / "main.svg"
+        dvisvgm_cmd = [
+            "dvisvgm",
+            "--pdf",
+            "--no-fonts",
+            "--exact-bbox",
+            "-o",
+            str(svg_path.name),
+            str(pdf_path.name),
+        ]
+        try:
+            proc2 = subprocess.run(
+                dvisvgm_cmd,
+                cwd=str(build_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            return {"success": False, "error": f"dvisvgm_not_found: {exc}", "hint": tikz_tools_missing_hint()}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "dvisvgm_timeout"}
 
-    return {"success": True, "svg_bytes": svg_path.read_bytes()}
+        if proc2.returncode != 0 or not svg_path.exists() or not svg_path.is_file():
+            stderr = (getattr(proc2, "stderr", "") or "").strip()
+            stdout = (getattr(proc2, "stdout", "") or "").strip()
+            msg = (stderr or stdout)[-2000:]
+            return {"success": False, "error": f"dvisvgm_failed: {msg}"}
+
+        return {"success": True, "svg_bytes": svg_path.read_bytes()}
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
 
 
 def render_asy_to_svg_bytes(
@@ -239,39 +242,42 @@ def render_asy_to_svg_bytes(
     build_dir.mkdir(parents=True, exist_ok=True)
 
     asy_path = build_dir / "main.asy"
-    asy_path.write_text(code, encoding="utf-8")
-
-    timeout = _clamp_timeout_s(timeout_s, default=240.0)
-    # Use a stable base name without extension; Asymptote will append the format suffix.
-    cmd = ["asy", "-f", "svg", "-o", "main", str(asy_path.name)]
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(build_dir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except FileNotFoundError as exc:
-        return {"success": False, "error": f"asy_not_found: {exc}", "hint": asy_tools_missing_hint()}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "asy_compile_timeout"}
+        asy_path.write_text(code, encoding="utf-8")
 
-    if proc.returncode != 0:
-        stderr = (getattr(proc, "stderr", "") or "").strip()
-        stdout = (getattr(proc, "stdout", "") or "").strip()
-        msg = (stderr or stdout)[-2000:]
-        return {"success": False, "error": f"asy_compile_failed: {msg}"}
+        timeout = _clamp_timeout_s(timeout_s, default=240.0)
+        # Use a stable base name without extension; Asymptote will append the format suffix.
+        cmd = ["asy", "-f", "svg", "-o", "main", str(asy_path.name)]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(build_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            return {"success": False, "error": f"asy_not_found: {exc}", "hint": asy_tools_missing_hint()}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "asy_compile_timeout"}
 
-    svg_path = build_dir / "main.svg"
-    if not svg_path.exists() or not svg_path.is_file():
-        # Some Asymptote versions may output a different basename; pick the newest SVG.
-        candidates = [p for p in build_dir.glob("*.svg") if p.is_file()]
-        if not candidates:
-            return {"success": False, "error": "svg_missing"}
-        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        svg_path = candidates[0]
+        if proc.returncode != 0:
+            stderr = (getattr(proc, "stderr", "") or "").strip()
+            stdout = (getattr(proc, "stdout", "") or "").strip()
+            msg = (stderr or stdout)[-2000:]
+            return {"success": False, "error": f"asy_compile_failed: {msg}"}
 
-    return {"success": True, "svg_bytes": svg_path.read_bytes()}
+        svg_path = build_dir / "main.svg"
+        if not svg_path.exists() or not svg_path.is_file():
+            # Some Asymptote versions may output a different basename; pick the newest SVG.
+            candidates = [p for p in build_dir.glob("*.svg") if p.is_file()]
+            if not candidates:
+                return {"success": False, "error": "svg_missing"}
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            svg_path = candidates[0]
+
+        return {"success": True, "svg_bytes": svg_path.read_bytes()}
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)

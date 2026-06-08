@@ -38,7 +38,7 @@ interface KnowledgeTreeNodeItemProps {
   depth: number
   selectedIds: Set<string>
   expandedMap: Record<string, boolean>
-  onToggleExpand: (id: string) => void
+  onToggleExpand: (id: string, defaultExpanded: boolean) => void
   onToggleKnowledgePoint: (node: AiGenerateKnowledgeNode) => void
 }
 
@@ -66,7 +66,7 @@ function KnowledgeTreeNodeItem(props: KnowledgeTreeNodeItemProps) {
           <button
             type="button"
             className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/85 text-muted-foreground"
-            onClick={() => onToggleExpand(node.id)}
+            onClick={() => onToggleExpand(node.id, depth < 1)}
             aria-label={expanded ? `折叠${node.label}` : `展开${node.label}`}
           >
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
@@ -82,7 +82,7 @@ function KnowledgeTreeNodeItem(props: KnowledgeTreeNodeItemProps) {
           }`}
           onClick={() => {
             if (selectable) onToggleKnowledgePoint(node)
-            else if (expandable) onToggleExpand(node.id)
+            else if (expandable) onToggleExpand(node.id, depth < 1)
           }}
         >
           <input
@@ -262,10 +262,10 @@ export function ContextRail(props: ContextRailProps) {
                     depth={0}
                     selectedIds={selectedIds}
                     expandedMap={expandedMap}
-                    onToggleExpand={(id) =>
+                    onToggleExpand={(id, defaultExpanded) =>
                       setExpandedMap((prev) => ({
                         ...prev,
-                        [id]: !(prev[id] ?? true),
+                        [id]: !(prev[id] ?? defaultExpanded),
                       }))
                     }
                     onToggleKnowledgePoint={onToggleKnowledgePoint}

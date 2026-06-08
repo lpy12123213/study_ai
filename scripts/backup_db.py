@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -35,8 +36,13 @@ def backup_database(*, db_path: Path, output_dir: Path, name: str = "") -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
     safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in (name or "").strip())
-    target_name = f"{safe_name + '-' if safe_name else ''}exam_papers-{stamp}.db"
+    target_name = f"{safe_name + '-' if safe_name else ''}exam_papers-{stamp}-{os.getpid()}.db"
     target = (output_dir / target_name).resolve()
+    counter = 1
+    while target.exists():
+        target_name = f"{safe_name + '-' if safe_name else ''}exam_papers-{stamp}-{os.getpid()}-{counter}.db"
+        target = (output_dir / target_name).resolve()
+        counter += 1
 
     conn = sqlite3.connect(str(source))
     try:

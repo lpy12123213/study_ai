@@ -19,8 +19,8 @@ if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from backend.api.integrations.openai_adapter import router as openai_adapter_router
-from backend.integrations.crawler.manager import close_crawler as close_subject_crawlers
 from backend.database.engine import init_db
+from backend.integrations.crawler.manager import close_crawler as close_subject_crawlers
 
 
 @asynccontextmanager

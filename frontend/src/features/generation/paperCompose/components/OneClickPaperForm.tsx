@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Layers } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -29,6 +30,31 @@ export function OneClickPaperForm({
   onUseArchiveChange,
   error,
 }: OneClickPaperFormProps) {
+  const [totalPointsText, setTotalPointsText] = useState(String(totalPoints || 150))
+  const [timeLimitText, setTimeLimitText] = useState(String(timeLimit || 120))
+
+  useEffect(() => {
+    setTotalPointsText(String(totalPoints || 150))
+  }, [totalPoints])
+
+  useEffect(() => {
+    setTimeLimitText(String(timeLimit || 120))
+  }, [timeLimit])
+
+  const commitTotalPoints = () => {
+    const parsed = Number.parseInt(totalPointsText, 10)
+    const next = Number.isFinite(parsed) ? Math.max(30, Math.min(300, parsed)) : totalPoints
+    setTotalPointsText(String(next))
+    if (next !== totalPoints) onTotalPointsChange(next)
+  }
+
+  const commitTimeLimit = () => {
+    const parsed = Number.parseInt(timeLimitText, 10)
+    const next = Number.isFinite(parsed) ? Math.max(30, Math.min(240, parsed)) : timeLimit
+    setTimeLimitText(String(next))
+    if (next !== timeLimit) onTimeLimitChange(next)
+  }
+
   return (
     <Card className="surface-raised">
       <CardHeader className="pb-3">
@@ -54,8 +80,9 @@ export function OneClickPaperForm({
               type="number"
               min={30}
               max={300}
-              value={totalPoints}
-              onChange={(e) => onTotalPointsChange(parseInt(e.target.value) || 150)}
+              value={totalPointsText}
+              onChange={(e) => setTotalPointsText(e.target.value)}
+              onBlur={commitTotalPoints}
             />
           </div>
           <div>
@@ -64,8 +91,9 @@ export function OneClickPaperForm({
               type="number"
               min={30}
               max={240}
-              value={timeLimit}
-              onChange={(e) => onTimeLimitChange(parseInt(e.target.value) || 120)}
+              value={timeLimitText}
+              onChange={(e) => setTimeLimitText(e.target.value)}
+              onBlur={commitTimeLimit}
             />
           </div>
         </div>

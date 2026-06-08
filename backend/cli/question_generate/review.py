@@ -273,6 +273,7 @@ async def _export_markdown(*, user_id: str, session_id: str, path: str) -> Path:
         lines.append(str(q.get("analysis") or "").strip() + "\n\n")
         lines.append("---\n\n")
 
+    resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text("".join(lines), encoding="utf-8")
     console.print(f"导出完成: {resolved} (count={len(drafts)})")
     return resolved

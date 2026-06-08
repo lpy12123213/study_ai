@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
 from backend.generation.paper_compose.exam_templates import format_answer_key_section, format_exam_header, get_exam_preamble
@@ -22,6 +22,54 @@ from backend.generation.paper_compose.latex_sandbox import (
 from backend.shared.project_paths import resolve_repo_root
 
 logger = get_logger(__name__)
+
+
+AI_SYNTHESIS_REVIEW_NOTE = "※ 本题答案由 AI 生成，请复核。"
+
+
+def _is_ai_synthesis(q: dict) -> bool:
+    return str(q.get("answer_source") or q.get("answerSource") or "").strip() == "ai_synthesis"
+
+
+def _option_texts(raw: Any) -> List[str]:
+    if isinstance(raw, dict):
+        items = []
+        for key in sorted(raw.keys()):
+            value = raw.get(key)
+            text = str(value or "").strip()
+            if text:
+                items.append(text)
+        return items[:12]
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            label = str(item.get("label") or item.get("key") or "").strip()
+            text = str(item.get("text") or item.get("value") or item.get("content") or "").strip()
+            combined = f"{label}. {text}".strip() if label and text else text or label
+        else:
+            combined = str(item or "").strip()
+        combined = re.sub(r"^[A-Za-zＡ-Ｚａ-ｚ][\.．、\s]+", "", combined).strip()
+        if combined:
+            out.append(combined)
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _stem_mentions_diagram(stem: str) -> bool:
+    return any(token in str(stem or "") for token in ("如图", "见图", "下图", "图中", "图示"))
+
+
+def _missing_diagram_block(caption: str = "") -> List[str]:
+    text = str(caption or "").strip() or "图示缺失"
+    return [
+        r"\begin{center}",
+        rf"\fbox{{\parbox{{0.68\linewidth}}{{\centering {_smart_tex_escape(text)}}}}}",
+        r"\end{center}",
+    ]
+
 
 def render_paper_latex(
     paper: dict,
@@ -96,7 +144,6 @@ def render_paper_latex(
             if not isinstance(q, dict):
                 continue
             qnum += 1
-            qid = str(q.get("question_id") or q.get("questionId") or "").strip()
             points = q.get("points") if q.get("points") is not None else q.get("score")
             points_text = ""
             try:
@@ -106,24 +153,26 @@ def render_paper_latex(
                 points_text = ""
 
             stem = str(q.get("stem") or "").strip()
-            if not include_stem and not stem:
-                stem_tex = rf"\textit{{题目ID：{_smart_tex_escape(qid) or 'unknown'}}}"
-            elif include_stem:
+            if include_stem and stem:
                 stem_tex = _smart_tex_escape(stem).replace("\n", r"\\")
+            elif include_stem:
+                stem_tex = r"\textit{题干暂缺，请联系教师补充。}"
             else:
-                # include_stem=false but stem exists: keep it out for safety.
-                stem_tex = rf"\textit{{题目ID：{_smart_tex_escape(qid) or 'unknown'}}}"
+                stem_tex = r"\textit{题干略。}"
 
             lines.append(rf"\textbf{{{qnum}.}} {stem_tex} {points_text}".rstrip())
 
             # Optional diagrams field: emit local includegraphics (compiler copies assets).
             diagrams = q.get("diagrams")
+            rendered_diagram = False
             if isinstance(diagrams, list) and diagrams:
                 for d in diagrams[:3]:
                     if not isinstance(d, dict):
                         continue
                     filename = str(d.get("filename") or "").strip() or _generated_filename_from_url(str(d.get("url") or ""))
                     if not filename:
+                        lines.extend(_missing_diagram_block(str(d.get("caption") or "")))
+                        rendered_diagram = True
                         continue
                     lines.append(r"\begin{center}")
                     lines.append(rf"\includegraphics[width=0.72\linewidth]{{{_smart_tex_escape(filename)}}}")
@@ -131,6 +180,16 @@ def render_paper_latex(
                     if cap:
                         lines.append(rf"\\[0.2em]{{\small {_smart_tex_escape(cap)}}}")
                     lines.append(r"\end{center}")
+                    rendered_diagram = True
+            if include_stem and not rendered_diagram and _stem_mentions_diagram(stem):
+                lines.extend(_missing_diagram_block())
+
+            options = _option_texts(q.get("options") or q.get("choices"))
+            if include_stem and options:
+                lines.append(r"\begin{enumerate}[label=\Alph*.]")
+                for opt in options:
+                    lines.append(rf"\item {_smart_tex_escape(opt)}")
+                lines.append(r"\end{enumerate}")
 
             lines.append("")
 
@@ -139,6 +198,9 @@ def render_paper_latex(
                 ana = str(q.get("analysis") or "").strip() if include_analysis else ""
                 answer_tex = _smart_tex_escape(ans).replace("\n", r"\\") if ans else ""
                 analysis_tex = _smart_tex_escape(ana).replace("\n", r"\\") if ana else ""
+                if _is_ai_synthesis(q):
+                    note_tex = _smart_tex_escape(AI_SYNTHESIS_REVIEW_NOTE)
+                    analysis_tex = f"{analysis_tex}\\\\{note_tex}" if analysis_tex else note_tex
                 if answer_tex or analysis_tex:
                     answers.append({"number": qnum, "answer_tex": answer_tex, "analysis_tex": analysis_tex})
 

@@ -26,6 +26,7 @@ from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, S
 from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_text
 from backend.core.time_utils import utcnow_naive
+from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.database.repositories.system.tasks import (
     append_task_event as db_append_task_event,
 )
@@ -44,7 +45,6 @@ from backend.database.repositories.system.tasks import (
 from backend.database.repositories.system.tasks import (
     update_task_status as db_update_task_status,
 )
-from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
 from backend.shared.tasks import task_runtime
 from backend.tasks import (

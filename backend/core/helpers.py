@@ -12,6 +12,7 @@ from datetime import datetime as _datetime
 from typing import Any, Dict, Optional
 
 from backend.core.secrets import SecretString
+from backend.core.text_utils import clip_text as clip_text  # noqa: F401
 
 _request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 _client_ip_var: ContextVar[str] = ContextVar("client_ip", default="")
@@ -234,19 +235,3 @@ def utcnow_iso_z() -> str:
 
     now = _datetime.now(UTC)
     return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
-
-
-def clip_text(text: Any, max_chars: int, ellipsis: str = "…") -> str:
-    """Return a stripped text preview capped to max_chars."""
-
-    if max_chars <= 0:
-        return ""
-    s = str(text or "").strip()
-    if not s:
-        return ""
-    if len(s) <= max_chars:
-        return s
-    marker = str(ellipsis or "")
-    if not marker:
-        return s[:max_chars].rstrip()
-    return s[: max(0, max_chars - len(marker))].rstrip() + marker

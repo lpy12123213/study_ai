@@ -1,5 +1,7 @@
 import { Separator } from '@/components/ui/separator'
 
+const buildTime = String(import.meta.env.VITE_BUILD_TIME || '').trim()
+
 export function AboutPanel() {
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -15,7 +17,9 @@ export function AboutPanel() {
         </div>
         <div className="flex justify-between py-2 border-b border-border/50">
           <span className="text-sm text-muted-foreground">构建时间</span>
-          <span className="text-sm font-medium">{new Date().toLocaleDateString('zh-CN')}</span>
+          <span className="text-sm font-medium">
+            {buildTime ? new Date(buildTime).toLocaleDateString('zh-CN') : '开发环境'}
+          </span>
         </div>
         <div className="flex justify-between py-2 border-b border-border/50">
           <span className="text-sm text-muted-foreground">开发者</span>

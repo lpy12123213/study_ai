@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
     async def test_chat_json_with_reasoning_executes_scientific_compute_tool_and_emits_logs(self) -> None:
-        from backend.llm.client import ChatCompletionResult
         from backend.generation.question_library import gen_llm
+        from backend.llm.client import ChatCompletionResult
 
         seen_messages: list[list[dict]] = []
         reasoning_events: list[dict] = []

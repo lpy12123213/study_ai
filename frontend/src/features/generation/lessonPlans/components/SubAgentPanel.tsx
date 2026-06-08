@@ -31,7 +31,7 @@ export function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }
 
       {activities.map((activity, i) => (
         <motion.div
-          key={activity.knowledgePoint}
+          key={`${i}:${activity.knowledgePoint}`}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: i * 0.05 }}

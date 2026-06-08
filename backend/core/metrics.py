@@ -94,7 +94,14 @@ def _route_template(request: Request) -> str:
         except (RuntimeError, AttributeError, KeyError, TypeError):
             logger.warning("prom_route_template_match_failed", exc_info=True)
 
-    return str(request.url.path or "")
+    return "<unmatched>"
+
+
+def _metric_path_label(request: Request, *, status_code: int) -> str:
+    template = _route_template(request) or "<unmatched>"
+    if int(status_code or 0) == 404 and template == "<unmatched>":
+        return "<not_found>"
+    return template
 
 
 def generate_metrics() -> Tuple[bytes, str]:
@@ -157,8 +164,6 @@ def instrument_app(app: FastAPI) -> None:
             return await call_next(request)
 
         method = str(request.method or "").upper() or "GET"
-        label_path = _route_template(request) or path
-
         t0 = time.perf_counter()
         in_progress.labels(method=method).inc()
         status_code = 500
@@ -168,6 +173,7 @@ def instrument_app(app: FastAPI) -> None:
             return response
         finally:
             elapsed = max(0.0, time.perf_counter() - t0)
+            label_path = _metric_path_label(request, status_code=status_code)
             try:
                 in_progress.labels(method=method).dec()
             except (RuntimeError, ValueError):

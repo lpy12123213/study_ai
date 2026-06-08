@@ -638,6 +638,79 @@ class ChatCompletionReasoningCompatTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_adaptive_retries_do_not_consume_retry_budget(self) -> None:
+        captured_urls: list[str] = []
+        captured_payloads: list[dict] = []
+        responses = [
+            httpx.Response(
+                200,
+                text="<html>not found</html>",
+                request=httpx.Request("POST", "https://example.test/chat/completions"),
+            ),
+            httpx.Response(
+                200,
+                text="not json",
+                request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+            ),
+            httpx.Response(
+                200,
+                json={"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]},
+                request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+            ),
+        ]
+
+        class _State:
+            idx = 0
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN001,ARG002
+                pass
+
+            async def __aenter__(self):  # noqa: ANN201
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001,ANN201
+                return False
+
+            async def post(self, url, headers=None, json=None):  # noqa: ANN001,ANN201
+                _ = headers
+                captured_urls.append(str(url))
+                captured_payloads.append(dict(json or {}))
+                resp = responses[_State.idx]
+                _State.idx += 1
+                return resp
+
+        with patch.object(llm_client.httpx, "AsyncClient", FakeAsyncClient):
+            res = await llm_client.chat_completion(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-5.2",
+                temperature=0.2,
+                max_tokens=50,
+                response_format={"type": "json_object"},
+                reasoning={"effort": "minimal", "exclude": True},
+                stream=False,
+                raise_on_fail=True,
+                retries=1,
+                req_id_prefix="test",
+                provider="custom",
+                base_url="https://example.test",
+                api_key="test-key",
+                moonshot_key="",
+                moonshot_base_url="",
+            )
+
+        self.assertEqual(res.content, "ok")
+        self.assertEqual(
+            captured_urls,
+            [
+                "https://example.test/chat/completions",
+                "https://example.test/v1/chat/completions",
+                "https://example.test/v1/chat/completions",
+            ],
+        )
+        self.assertIn("response_format", captured_payloads[0])
+        self.assertNotIn("response_format", captured_payloads[2])
+
     async def test_invalid_json_body_retries_without_optional_fields(self) -> None:
         captured_payloads: list[dict] = []
         req = httpx.Request("POST", "https://example.test/v1/chat/completions")

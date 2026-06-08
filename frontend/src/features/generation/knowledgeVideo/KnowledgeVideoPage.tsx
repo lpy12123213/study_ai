@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Download, Film, Loader2, Play, RotateCcw, ShieldCheck, Video } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -118,12 +118,13 @@ export default function KnowledgeVideoPage() {
 
   const canSubmit = useMemo(() => topic.trim().length > 0 && status !== 'running', [topic, status])
 
-  const finishFromTask = async (id: string) => {
+  const finishFromTask = useCallback(async (id: string) => {
     const task = await getTask(id)
     const nextStatus = String((task as any)?.status || '')
     if (nextStatus === 'completed') {
       setStatus('completed')
       setProgress(100)
+      setError('')
       setResult(((task as any)?.result || {}) as KnowledgeVideoTaskResult)
       return
     }
@@ -131,10 +132,13 @@ export default function KnowledgeVideoPage() {
       setStatus('failed')
       const err = (task as any)?.error
       setError(toStringValue((err as any)?.message) || toStringValue((err as any)?.error) || '生成失败')
+      return
     }
-  }
+    setStatus('running')
+    setError('任务仍在运行，正在等待下一次进度更新。')
+  }, [])
 
-  const startStream = (id: string) => {
+  const startStream = useCallback((id: string) => {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -144,6 +148,7 @@ export default function KnowledgeVideoPage() {
       0,
       (evt: TaskStreamEvent) => {
         if (evt.type === 'progress') {
+          setError('')
           const data = evt.data && typeof evt.data === 'object' ? evt.data : {}
           const p = Number((data as any).progress || 0)
           if (Number.isFinite(p)) setProgress(Math.max(0, Math.min(100, p)))
@@ -159,15 +164,29 @@ export default function KnowledgeVideoPage() {
         }
       },
       (err) => {
+        if (controller.signal.aborted) return
         setStatus('failed')
         setError(err.message || 'stream_error')
       },
       () => {
+        if (controller.signal.aborted || abortRef.current !== controller) return
         void finishFromTask(id)
       },
       { signal: controller.signal }
     )
-  }
+  }, [finishFromTask])
+
+  useEffect(() => {
+    const id = String(searchParams.get('task') || '').trim()
+    if (!id) return
+    if (taskId === id) return
+    setTaskId(id)
+    setStatus('running')
+    setProgress(0)
+    setError('')
+    setResult(null)
+    startStream(id)
+  }, [searchParams, startStream, taskId])
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -218,6 +237,9 @@ export default function KnowledgeVideoPage() {
     setScriptText('')
     setScriptError('')
     setTaskId('')
+    const next = new URLSearchParams(searchParams)
+    next.delete('task')
+    setSearchParams(next, { replace: true })
   }
 
   return (

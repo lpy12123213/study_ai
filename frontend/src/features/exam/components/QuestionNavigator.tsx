@@ -20,7 +20,7 @@ function isAnswered(question: ExamQuestion, answer?: SaveExamAnswerRequest): boo
 export function QuestionNavigator({ questions, currentIndex, answers, onSelect }: QuestionNavigatorProps) {
   const answered = questions.filter((q) => isAnswered(q, answers[q.questionId])).length
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col border-r bg-muted/20 md:w-56">
+    <aside className="aurora-layout-surface flex h-full min-h-0 w-full flex-col border-r bg-muted/20 md:w-56">
       <div className="border-b p-4">
         <div className="text-sm font-medium">题目导航</div>
         <div className="mt-1 text-xs text-muted-foreground">{answered}/{questions.length} 已答</div>
@@ -36,7 +36,7 @@ export function QuestionNavigator({ questions, currentIndex, answers, onSelect }
               className={cn(
                 'flex aspect-square items-center justify-center rounded-md border text-sm font-medium transition-colors',
                 done ? 'bg-primary text-primary-foreground' : 'bg-background',
-                active && 'ring-2 ring-ring ring-offset-2'
+                active && 'aurora-exam-focus ring-2 ring-ring ring-offset-2'
               )}
               onClick={() => onSelect(index)}
             >

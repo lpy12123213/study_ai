@@ -129,7 +129,7 @@ POST /api/tasks/question-library/score
 
 ## crawler provider 契约
 
-当前内部接口见 `backend/crawler/interface.py`，一个完整题源适配器至少需要覆盖：
+当前内部接口见 `backend/integrations/crawler/interface.py`，一个完整题源适配器至少需要覆盖：
 
 - 初始化与关闭。
 - 关键词搜索。

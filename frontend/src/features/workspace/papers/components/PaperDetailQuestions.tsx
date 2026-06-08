@@ -1,6 +1,7 @@
 import { BookmarkPlus, ExternalLink, MessageSquarePlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { QuestionContent } from '@/components/shared/QuestionContent'
 import { cn } from '@/lib/utils'
 import type { Question } from '@/types'
 
@@ -118,8 +119,8 @@ export function PaperDetailQuestions({
                       <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
                         查看题干
                       </summary>
-                      <div className="mt-2 max-h-60 overflow-auto rounded-md bg-muted/30 border border-border/60 p-3 text-sm whitespace-pre-wrap leading-6">
-                        {question.stem}
+                      <div className="mt-2 max-h-60 overflow-auto rounded-md bg-muted/30 border border-border/60 p-3">
+                        <QuestionContent content={question.stem} className="text-sm leading-6" />
                       </div>
                     </details>
                   )}

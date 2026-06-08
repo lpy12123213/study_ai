@@ -7,6 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { FeedbackDialog } from '@/components/shared/FeedbackDialog'
+import { formatDate } from '@/lib/utils'
 import * as feedbackApi from '@/api/feedback'
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -91,7 +92,7 @@ export default function FeedbackPage() {
                   <div className="min-w-0">
                     <div className="font-medium truncate">{f.title || `反馈 #${f.id}`}</div>
                     <div className="text-xs text-muted-foreground mt-1">
-                      #{f.id} · {status.label} · {String(f.created_at || '')}
+                      #{f.id} · {status.label} · {f.created_at ? formatDate(f.created_at) : '-'}
                     </div>
                   </div>
                   <div className="shrink-0">

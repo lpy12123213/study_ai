@@ -224,6 +224,7 @@ class ToolDispatcher:
             if tool_task in done:
                 if not queue_task.done():
                     queue_task.cancel()
+                    await asyncio.gather(queue_task, return_exceptions=True)
                 break
 
         # Drain remaining buffered events (best-effort).

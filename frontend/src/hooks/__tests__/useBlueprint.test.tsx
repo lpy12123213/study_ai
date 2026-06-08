@@ -5,13 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useComposePaper } from '@/hooks/useBlueprint'
 import { useTaskStore } from '@/stores/useTaskStore'
 
-const { composePaperStreamMock } = vi.hoisted(() => ({
+const { composePaperStreamMock, pauseComposeTaskMock } = vi.hoisted(() => ({
   composePaperStreamMock: vi.fn(),
+  pauseComposeTaskMock: vi.fn(),
 }))
 
 vi.mock('@/api/blueprint', () => ({
   composePaperStream: composePaperStreamMock,
-  pauseComposeTask: vi.fn(),
+  pauseComposeTask: pauseComposeTaskMock,
   resumeComposeTask: vi.fn(),
   streamComposeTask: vi.fn(),
   getBlueprints: vi.fn(),
@@ -45,6 +46,8 @@ describe('useComposePaper', () => {
   beforeEach(() => {
     resetTaskStore()
     composePaperStreamMock.mockReset()
+    pauseComposeTaskMock.mockReset()
+    pauseComposeTaskMock.mockResolvedValue(undefined)
   })
 
   it('deduplicates repeated stream steps and completes when a result arrives', async () => {
@@ -84,5 +87,30 @@ describe('useComposePaper', () => {
     expect(result.current.result).toMatchObject({ id: 101, title: '函数综合练习' })
     expect(result.current.error).toBeNull()
     expect(useTaskStore.getState().getTaskSteps(result.current.taskId || '')).toHaveLength(0)
+  })
+
+  it('aborts the active compose stream when paused', async () => {
+    let signal: AbortSignal | undefined
+    composePaperStreamMock.mockImplementation((_request, _onEvent, _onError, _onDone, options) => {
+      signal = options?.signal
+    })
+
+    const { result } = renderHook(() => useComposePaper(), { wrapper: createWrapper() })
+
+    await act(async () => {
+      result.current.compose({
+        subject: '高中数学',
+        topic: '函数',
+        slots: [],
+      } as any)
+    })
+
+    expect(signal?.aborted).toBe(false)
+
+    await act(async () => {
+      result.current.pause()
+    })
+
+    expect(signal?.aborted).toBe(true)
   })
 })

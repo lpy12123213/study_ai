@@ -68,9 +68,7 @@ export function TaskProgressHeader(props: {
     const controller = new AbortController()
     abortRef.current = controller
 
-    const lastSeq = Number(task?.last_seq || 0)
-    lastSeqRef.current = lastSeq
-    const afterSeq = Math.max(0, lastSeq - 50)
+    const afterSeq = Math.max(0, lastSeqRef.current)
 
     streamTask(
       String(taskId),
@@ -92,8 +90,7 @@ export function TaskProgressHeader(props: {
       controller.abort()
       if (abortRef.current === controller) abortRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId, task?.last_seq])
+  }, [taskId])
 
   const status = useMemo(() => formatStatus(String(task?.status || '')), [task?.status])
   const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)))

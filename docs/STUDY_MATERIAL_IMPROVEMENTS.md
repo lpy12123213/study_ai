@@ -169,4 +169,3 @@ METASO_API_KEY=
 
 - `USER_GUIDE.md`：用户如何使用自学资料页面。
 - `API.md`：任务接口和 SSE 续流。
-- `SVG_TO_LATEX.md`：LaTeX 转换和导出。

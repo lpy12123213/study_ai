@@ -48,6 +48,15 @@ def _is_present_secret(value: str) -> bool:
     return str(value or "").strip() not in _PLACEHOLDERS
 
 
+def _is_shared_deployment(env: Mapping[str, str]) -> bool:
+    return (
+        _is_truthy(_get(env, "STUDY_AI_SHARED_DEPLOYMENT"))
+        or _is_truthy(_get(env, "PUBLIC_DEPLOYMENT"))
+        or _get(env, "ENV").lower() in {"prod", "production"}
+        or _get(env, "APP_ENV").lower() in {"prod", "production"}
+    )
+
+
 def _positive_int(env: Mapping[str, str], *keys: str) -> tuple[str, int] | None:
     for key in keys:
         value = _get(env, key)
@@ -103,9 +112,10 @@ def check_config(env: Mapping[str, str] | None = None) -> dict:
 
     jwt_secret = _get(source, "JWT_SECRET")
     if not _is_present_secret(jwt_secret):
+        level = "missing" if _is_shared_deployment(source) else "recommended"
         issues.append(
             ConfigIssue(
-                level="recommended",
+                level=level,
                 key="JWT_SECRET",
                 message="JWT_SECRET is empty or uses the development placeholder",
                 action="Set a random long JWT_SECRET before shared or public deployment",

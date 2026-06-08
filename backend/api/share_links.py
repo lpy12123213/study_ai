@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.api.auth import require_auth
+from backend.api.middleware.rate_limit import SlidingWindowRateLimiter
 from backend.core.logging_utils import get_logger
 from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.content.templates import get_template as db_get_template
@@ -18,6 +19,7 @@ logger = get_logger(__name__)
 
 share_links_router = APIRouter(prefix="/share-links", tags=["share-links"], dependencies=[Depends(require_auth)])
 share_public_router = APIRouter(prefix="/share", tags=["share"])
+_SHARE_PASSWORD_LIMITER = SlidingWindowRateLimiter(max_requests=20, window_s=60.0, max_keys=20_000)
 
 
 def _is_expired(expires_at: str) -> bool:
@@ -42,6 +44,14 @@ def _public_meta(link: dict) -> dict:
         "created_at": str(link.get("created_at") or ""),
         "has_password": bool(link.get("has_password")),
     }
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = str(request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    if forwarded:
+        return forwarded[:80]
+    client = getattr(request, "client", None)
+    return str(getattr(client, "host", "") or "unknown")[:80]
 
 
 @share_links_router.post("", response_model=dict)
@@ -98,13 +108,15 @@ async def get_share_link_meta(token: str) -> dict:
 
 
 @share_public_router.post("/{token}/validate", response_model=dict)
-async def validate_share_link(token: str, payload: Optional[dict] = None) -> dict:
+async def validate_share_link(token: str, payload: Optional[dict] = None, request: Request = None) -> dict:
     tok = str(token or "").strip()
     if not tok:
         raise HTTPException(status_code=404, detail="share_link_not_found")
 
     body = payload if isinstance(payload, dict) else {}
     password = str(body.get("password") or "").strip()
+    if request is not None and not await _SHARE_PASSWORD_LIMITER.allow(f"{tok}:{_client_ip(request)}"):
+        raise HTTPException(status_code=429, detail="rate_limited")
 
     link = await db_validate_share_link(token=tok, password=password)
     if link:
@@ -119,13 +131,15 @@ async def validate_share_link(token: str, payload: Optional[dict] = None) -> dic
 
 
 @share_public_router.post("/{token}/content", response_model=dict)
-async def fetch_shared_content(token: str, payload: Optional[dict] = None) -> dict:
+async def fetch_shared_content(token: str, payload: Optional[dict] = None, request: Request = None) -> dict:
     tok = str(token or "").strip()
     if not tok:
         raise HTTPException(status_code=404, detail="share_link_not_found")
 
     body = payload if isinstance(payload, dict) else {}
     password = str(body.get("password") or "").strip()
+    if request is not None and not await _SHARE_PASSWORD_LIMITER.allow(f"{tok}:{_client_ip(request)}"):
+        raise HTTPException(status_code=429, detail="rate_limited")
 
     link = await db_validate_share_link(token=tok, password=password)
     if not link:

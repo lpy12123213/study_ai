@@ -53,7 +53,7 @@ export function Header({ notificationSlot }: HeaderProps) {
   const setLanguage = (nextLocale: Locale) => setLocale(nextLocale)
 
   return (
-    <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-background px-4 lg:px-6">
+    <header className="aurora-layout-chrome sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-background px-4 lg:px-6">
       {/* Logo */}
       <Link to="/dashboard" className="flex shrink-0 items-center gap-2">
         <BrandMark size={26} />
@@ -61,7 +61,7 @@ export function Header({ notificationSlot }: HeaderProps) {
       </Link>
 
       {/* Navigation */}
-      <nav className="hidden h-10 items-center gap-1 rounded-lg border border-border bg-card px-1 lg:flex">
+      <nav className="aurora-layout-surface hidden h-10 items-center gap-1 rounded-lg border border-border bg-card px-1 lg:flex">
         <TooltipProvider delayDuration={250}>
           {HEADER_NAV_ITEMS.map((item) => {
             const isActive =

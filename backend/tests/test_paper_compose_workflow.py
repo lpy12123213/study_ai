@@ -1,7 +1,6 @@
 import unittest
 
-from backend.generation.paper_compose import auto_planner
-from backend.generation.paper_compose import workflow
+from backend.generation.paper_compose import auto_planner, workflow
 from backend.llm.prompts import create_default_prompt_registry
 
 
@@ -35,6 +34,41 @@ class TestPaperComposeWorkflowUtils(unittest.TestCase):
             workflow._question_match_reviewer_system_prompt(),
             registry.render("paper_compose.question_match_reviewer.v1").content,
         )
+
+    def test_auto_review_rejected_questions_are_filtered_before_save(self):
+        slot_results = [
+            {
+                "selected": [
+                    {"question_id": "bad", "review_action": "reject", "stem": "bad"},
+                    {"question_id": "ok", "stem": "ok"},
+                ],
+                "candidates": [{"question_id": "replacement", "stem": "replacement"}],
+            }
+        ]
+
+        summary = workflow._filter_or_replace_rejected_questions(slot_results)
+
+        self.assertEqual(summary["rejected"], 1)
+        self.assertEqual(summary["replaced"], 1)
+        self.assertEqual([q["question_id"] for q in slot_results[0]["selected"]], ["replacement", "ok"])
+
+    def test_build_save_question_dicts_adds_text_lint_flags(self):
+        q_dicts = workflow._build_save_question_dicts(
+            [
+                {
+                    "question_id": "q1",
+                    "stem": "含未替换 {var}",
+                    "answer": "$x",
+                    "quality_flags": ["existing"],
+                }
+            ],
+            subject="高中数学",
+        )
+
+        flags = q_dicts[0]["quality_flags"]
+        self.assertIn("existing", flags)
+        self.assertIn("unresolved_placeholder", flags)
+        self.assertIn("unbalanced_inline_math", flags)
 
 
 if __name__ == "__main__":

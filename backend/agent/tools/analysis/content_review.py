@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.text_lint import lint_text
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -35,6 +36,18 @@ class ContentReviewToolsMixin:
         heuristic_issues: List[str] = []
         heuristic_suggestions: List[str] = []
         dimensions: Dict[str, Dict[str, Any]] = {}
+
+        empty_sections = ctx.working_memory.get("study_empty_sections")
+        if isinstance(empty_sections, list):
+            names = [str(x or "").strip() for x in empty_sections if str(x or "").strip()]
+            if names:
+                heuristic_issues.append(
+                    "以下知识点讲解为空或使用兜底内容，必须重写后再进入交付：" + "、".join(names[:8])
+                )
+
+        lint_flags = lint_text(markdown)
+        if lint_flags:
+            heuristic_issues.append("Markdown 存在生成残留或结构问题：" + ", ".join(lint_flags[:6]))
 
         aggregated = ctx.working_memory.get("aggregated") or ctx.working_memory.get("aggregate_knowledge")
         if isinstance(aggregated, dict) and isinstance(aggregated.get("items"), list):

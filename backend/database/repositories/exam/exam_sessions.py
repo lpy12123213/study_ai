@@ -14,11 +14,12 @@ from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
 from backend.database.repositories.question.papers import get_paper
 from backend.database.repositories.question.question_cache import get_question_cache
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import ExamResult, ExamSession, StudentAnswer
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:
@@ -460,10 +461,17 @@ async def update_answer_score(
             await session.commit()
             return out
 
-    result = await session.execute(select(StudentAnswer).where(StudentAnswer.id == int(answer_id), StudentAnswer.user_id == uid))
+    result = await session.execute(
+        select(StudentAnswer)
+        .options(selectinload(StudentAnswer.session))
+        .where(StudentAnswer.id == int(answer_id), StudentAnswer.user_id == uid)
+    )
     row = result.scalar_one_or_none()
     if not row:
         raise ValueError("answer_not_found")
+    parent = row.session
+    if not parent or str(parent.status or "").strip() != "in_progress":
+        raise ValueError("session_not_in_progress")
     if "is_correct" in score_data:
         value = score_data.get("is_correct")
         row.is_correct = None if value is None else int(bool(value))
@@ -500,6 +508,8 @@ async def submit_session(
     row = await _load_session_row(user_id=uid, session_id=session_id, session=session)
     if not row:
         raise ValueError("session_not_found")
+    if str(row.status or "").strip() != "in_progress":
+        raise ValueError("session_not_in_progress")
     row.status = "submitted"
     row.submitted_at = utcnow_naive()
     row.total_score = float(total_score or 0.0)

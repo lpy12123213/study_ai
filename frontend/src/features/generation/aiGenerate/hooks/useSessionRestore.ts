@@ -161,9 +161,13 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
       }
     }
 
+    const isSameSession = session?.sessionId === next.sessionId
+    const isPollingRunningSession = isSameSession && String(next.status || '').trim() === 'running'
     setSession(next)
-    hydrateComposerFromSession(next)
-  }, [activeSessionId, hydrateComposerFromSession, sessionDetailQuery.data])
+    if (!isPollingRunningSession) {
+      hydrateComposerFromSession(next)
+    }
+  }, [activeSessionId, hydrateComposerFromSession, session?.sessionId, sessionDetailQuery.data])
 
   useEffect(() => {
     if (!tasks.draftPreview) return

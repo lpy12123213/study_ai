@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence
 
@@ -26,10 +27,11 @@ def _difficulty_from_slot(value: str) -> str:
 
 
 def _stem_fingerprint(stem: str) -> str:
-    s = (stem or "").strip().lower()
+    s = unicodedata.normalize("NFKC", (stem or "").strip().lower())
     if not s:
         return ""
-    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"\d+(?:\.\d+)?", "0", s)
+    s = re.sub(r"[\W_]+", "", s, flags=re.UNICODE)
     s = s[:1500]
     return hashlib.md5(s.encode("utf-8", errors="ignore")).hexdigest()
 

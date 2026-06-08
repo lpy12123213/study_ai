@@ -379,6 +379,57 @@ TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "timeout_s": {"type": "number", "minimum": 5, "maximum": 3600},
         }
     ),
+    "compose_sandbox_open": _obj(
+        {
+            "session_id": {"type": "string"},
+            "task_id": {"type": "string"},
+            "paper": {"type": "object"},
+            "files": {"type": "object"},
+        }
+    ),
+    "compose_sandbox_write_file": _obj(
+        {
+            "session_id": {"type": "string"},
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        required=["path", "content"],
+    ),
+    "compose_sandbox_read_file": _obj(
+        {
+            "session_id": {"type": "string"},
+            "path": {"type": "string"},
+        },
+        required=["path"],
+    ),
+    "compose_sandbox_run": _obj(
+        {
+            "session_id": {"type": "string"},
+            "command": {"type": "string", "enum": ["xelatex", "python3", "ls", "cat"]},
+            "args": {"type": "array", "items": {"type": "string"}},
+            "timeout_s": {"type": "integer", "minimum": 1, "maximum": 3600},
+        },
+        required=["command"],
+    ),
+    "compose_sandbox_patch_question": _obj(
+        {
+            "session_id": {"type": "string"},
+            "question_id": {"type": "string"},
+            "patch": {"type": "object"},
+        },
+        required=["question_id", "patch"],
+    ),
+    "compose_sandbox_export": _obj(
+        {
+            "session_id": {"type": "string"},
+        }
+    ),
+    "compose_sandbox_close": _obj(
+        {
+            "session_id": {"type": "string"},
+            "delete_workspace": {"type": "boolean"},
+        }
+    ),
     "repair_latex": _obj(
         {
             "latex_tex": {"type": "string"},

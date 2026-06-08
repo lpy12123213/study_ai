@@ -8,8 +8,11 @@ export function cn(...inputs: ClassValue[]) {
 export function formatDate(date: string | Date): string {
   const d = new Date(date)
   const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  if (Number.isNaN(d.getTime())) return ''
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const dateDay = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diffDays = Math.floor((today.getTime() - dateDay.getTime()) / (1000 * 60 * 60 * 24))
   
   if (diffDays === 0) {
     return '今天'

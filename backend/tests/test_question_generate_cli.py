@@ -1,8 +1,11 @@
 import os
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from backend.cli import question_generate
+from backend.cli.question_generate import review as question_generate_review
 
 
 class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
@@ -86,6 +89,32 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["provider"], "tavily")
         self.assertEqual(result["results"][0]["url"], "https://example.com/t")
         tavily_search.assert_awaited_once()
+
+    async def test_export_markdown_creates_parent_directory_for_explicit_path(self) -> None:
+        session = {
+            "user_id": "u-1",
+            "session_id": "s-1",
+            "subject": "高中数学",
+            "topic": "导数",
+            "draft_questions": [
+                {
+                    "question_id": "q-1",
+                    "stem": "题干",
+                    "answer": "答案",
+                    "analysis": "解析",
+                    "review_status": "approved",
+                }
+            ],
+        }
+
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "nested" / "exports" / "questions.md"
+            with patch.object(question_generate_review, "load_session", return_value=session):
+                out = await question_generate_review._export_markdown(user_id="u-1", session_id="s-1", path=str(target))
+
+            self.assertEqual(out, target.resolve())
+            self.assertTrue(target.exists())
+            self.assertIn("q-1", target.read_text(encoding="utf-8"))
 
 
 class CliMcpSearchModelResolveTests(unittest.TestCase):

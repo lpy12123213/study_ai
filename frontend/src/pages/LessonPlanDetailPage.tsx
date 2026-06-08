@@ -1,4 +1,5 @@
 import { Link, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft,
   Clock,
@@ -14,13 +15,25 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useLessonPlanStore } from '@/stores/useLessonPlanStore'
+import { getLessonPlan } from '@/api/lessonPlans'
 import { formatDate } from '@/lib/utils'
 import { downloadObjectUrl } from '@/api/client'
 import { APP_BRAND_NAME } from '@/constants/branding'
 
 export default function LessonPlanDetailPage() {
   const { lessonPlanId } = useParams<{ lessonPlanId: string }>()
-  const plan = useLessonPlanStore((state) => state.getPlan(lessonPlanId ?? ''))
+  const localPlan = useLessonPlanStore((state) => state.getPlan(lessonPlanId ?? ''))
+  const savePlan = useLessonPlanStore((state) => state.savePlan)
+  const { data: remotePlan, isLoading } = useQuery({
+    queryKey: ['lessonPlan', lessonPlanId],
+    queryFn: async () => {
+      const plan = await getLessonPlan(lessonPlanId!)
+      savePlan(plan)
+      return plan
+    },
+    enabled: Boolean(lessonPlanId && !localPlan),
+  })
+  const plan = localPlan || remotePlan
 
   const openGeneratedFile = async (resourceUrl: string) => {
     const { objectUrl, revoke } = await downloadObjectUrl(resourceUrl)
@@ -44,8 +57,8 @@ export default function LessonPlanDetailPage() {
         <div className="h-16 w-16 bg-muted rounded-full flex items-center justify-center mb-4">
            <FileText className="h-8 w-8 text-muted-foreground" />
         </div>
-        <h3 className="text-lg font-medium mb-2">未找到教案</h3>
-        <p className="text-muted-foreground mb-6">该教案可能已被删除或不存在</p>
+        <h3 className="text-lg font-medium mb-2">{isLoading ? '正在加载教案' : '未找到教案'}</h3>
+        <p className="text-muted-foreground mb-6">{isLoading ? '正在从服务端拉取教案详情。' : '该教案可能已被删除或不存在'}</p>
         <Button asChild variant="outline">
           <Link to="/lesson-plans">返回列表</Link>
         </Button>

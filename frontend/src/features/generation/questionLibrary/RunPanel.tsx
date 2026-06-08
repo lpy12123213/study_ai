@@ -30,15 +30,19 @@ interface Props {
 export function RunPanel(props: Props) {
   const { task } = props
   const [expanded, setExpanded] = useState(false)
+  const [autoExpandedTaskId, setAutoExpandedTaskId] = useState('')
 
   const taskId = String(task?.taskId || '').trim()
   const showUnifiedHeader = Boolean(taskId && task?.kind === 'generate')
   const steps = useTaskStore((s) => (taskId ? s.getTaskSteps(taskId) : EMPTY_STEPS))
 
   useEffect(() => {
-    if (!task) return
-    if (task.status === 'running') setExpanded(true)
-  }, [task])
+    const id = String(task?.taskId || '').trim()
+    if (!id || task?.status !== 'running') return
+    if (autoExpandedTaskId === id) return
+    setAutoExpandedTaskId(id)
+    setExpanded(true)
+  }, [autoExpandedTaskId, task?.status, task?.taskId])
 
   const progress = Math.max(0, Math.min(100, Math.round(task?.progress || 0)))
 

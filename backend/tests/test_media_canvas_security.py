@@ -9,10 +9,8 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import backend.app as app_module
-from backend.api import media
-from backend.api import papers
+from backend.api import canvas, media, papers
 from backend.api.auth import require_auth
-from backend.api import canvas
 from backend.api.canvas import _sanitize_question_html
 from backend.app import create_app
 from backend.core.audit import AuditAction

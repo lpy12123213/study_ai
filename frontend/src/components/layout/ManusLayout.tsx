@@ -37,8 +37,8 @@ export function ManusLayout() {
 
   if (isFullScreenPage) {
     return (
-      <div className="h-screen w-screen overflow-hidden bg-background text-foreground">
-        <div className="fixed right-4 top-4 z-[60] rounded-md border border-border bg-background/90 shadow-sm backdrop-blur">
+      <div className="aurora-app-shell h-screen w-screen overflow-hidden bg-background text-foreground">
+        <div className="aurora-layout-surface fixed right-4 top-4 z-[60] rounded-md border border-border bg-background/90 shadow-sm backdrop-blur">
           <NotificationCenter />
         </div>
         <CommandPalette />
@@ -51,7 +51,7 @@ export function ManusLayout() {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="aurora-app-shell flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <a
         href="#main"
         className="sr-only z-[60] rounded-md bg-background px-3 py-2 text-sm font-medium text-foreground ring-1 ring-ring focus:not-sr-only focus:fixed focus:left-4 focus:top-4"

@@ -20,7 +20,7 @@ from backend.agent.tools.knowledge.study_archive import StudyArchiveToolsMixin
 from backend.agent.tools.knowledge.study_material_generation import StudyMaterialGenerationToolsMixin
 from backend.agent.tools.search.deep_research import deep_research
 from backend.agent.tools.search.web_search_knowledge import WebSearchKnowledgeToolsMixin
-from backend.agent.types import CompressedContext, UserProfile
+from backend.agent.types import ActionResults, CompressedContext, StepResult, UserProfile
 from backend.llm.prompts import create_default_prompt_registry
 
 
@@ -69,6 +69,39 @@ def _make_ctx(*, task: str = "导数", subject: str = "高中数学") -> Compres
         system_instructions="",
         current_task=task,
     )
+
+
+class TestStreamingArtifactCapture(unittest.TestCase):
+    def test_capture_markdown_from_current_study_archive_tool_output(self) -> None:
+        from backend.agent.streaming.events import maybe_capture_markdown_artifact
+
+        results = ActionResults()
+        step_result = StepResult(
+            step_id="s1",
+            tool="assemble_study_archive",
+            success=True,
+            output={"markdown": "# 导数\n\n导数刻画瞬时变化率。"},
+        )
+
+        maybe_capture_markdown_artifact(step_result=step_result, results=results)
+
+        self.assertEqual(results.artifacts["markdown"], "# 导数\n\n导数刻画瞬时变化率。")
+
+    def test_capture_export_artifact_refs_from_current_tool_output(self) -> None:
+        from backend.agent.streaming.events import maybe_capture_markdown_artifact
+
+        results = ActionResults()
+        step_result = StepResult(
+            step_id="s1",
+            tool="export_study_markdown",
+            success=True,
+            output={"url": "/api/media/generated/study.md", "filename": "study.md"},
+        )
+
+        maybe_capture_markdown_artifact(step_result=step_result, results=results)
+
+        self.assertEqual(results.artifacts["markdown_url"], "/api/media/generated/study.md")
+        self.assertEqual(results.artifacts["markdown_filename"], "study.md")
 
 
 class TestContentReviewMixin(unittest.IsolatedAsyncioTestCase):
@@ -407,6 +440,24 @@ class TestDeepResearchPrompts(unittest.IsolatedAsyncioTestCase):
 
 
 class TestKnowledgePromptMixins(unittest.IsolatedAsyncioTestCase):
+    async def test_split_knowledge_points_uses_generic_domain_templates_without_llm(self) -> None:
+        agent = _DummyAgent()
+        ctx = _make_ctx(task="函数模型", subject="高中数学")
+
+        with (
+            patch("backend.agent.tools.knowledge.knowledge_points.is_llm_configured", return_value=False),
+            patch(
+                "backend.integrations.mcp.search.wikipedia.wikipedia_search",
+                new=AsyncMock(return_value={"success": False}),
+            ),
+        ):
+            result = await agent._tool_split_knowledge_points({"min_points": 4, "max_points": 6}, ctx)
+
+        points = result["knowledge_points"]
+        self.assertIn("函数模型 定义域和值域", points)
+        self.assertIn("函数模型 图像与性质", points)
+        self.assertGreaterEqual(len(points), 4)
+
     async def test_knowledge_point_prompts_use_registry(self) -> None:
         class _Agent(_DummyAgent):
             def __init__(self) -> None:
@@ -784,6 +835,59 @@ class TestStudyMaterialGenerationMixin(unittest.IsolatedAsyncioTestCase):
             smg._section_revision_system_prompt(),
             registry.render("study.material.section_revision.v1").content,
         )
+
+    async def test_section_writer_payload_includes_grade_band_and_curriculum_context(self) -> None:
+        class _CurriculumAgent(_DummyAgent):
+            def __init__(self) -> None:
+                super().__init__()
+                self.markdown_messages = []
+                self.text_messages = []
+
+            async def _call_llm_markdown_with_continuation(self, **kwargs):
+                self.markdown_messages.append(kwargs.get("messages"))
+                return {"content": "函数模型要匹配高中阶段的定义域与值域要求。", "finish_reason": "stop"}
+
+            async def _call_llm_text(self, **kwargs):
+                self.text_messages.append(kwargs.get("messages"))
+                return json.dumps({"passed": True, "issues": [], "suggestions": []}, ensure_ascii=False)
+
+            def _extract_json_obj(self, text: str) -> dict:
+                return json.loads(text)
+
+        agent = _CurriculumAgent()
+        ctx = _make_ctx(task="函数模型", subject="高中数学")
+        ctx.working_memory.update(
+            {
+                "study_options": {
+                    "preset": "quick",
+                    "grade_band": "senior",
+                    "curriculum_context": {
+                        "question_requirements": ["围绕高中函数建模，不引入大学分析工具"],
+                        "knowledge_scope": {"out_of_scope": ["极限的严格定义"]},
+                        "prerequisites": ["一次函数", "二次函数"],
+                    },
+                },
+                "aggregate_knowledge": {
+                    "topic": "函数模型",
+                    "subject": "高中数学",
+                    "items": [{"knowledge_point": "函数建模"}],
+                },
+                "outlines": {"函数建模": {"sections": [{"title": "模型边界", "hints": [], "verify": []}]}},
+            }
+        )
+
+        with patch("backend.agent.tools.knowledge.study_material_generation.is_llm_configured", return_value=True):
+            await agent._tool_generate_study_material(
+                {"topic": "函数模型", "subject": "高中数学", "knowledge_points": ["函数建模"], "max_points": 1},
+                ctx,
+            )
+
+        payload = json.loads(agent.markdown_messages[0][1]["content"])
+        self.assertEqual(payload["grade_band"], "senior")
+        self.assertIn("curriculum_context", payload)
+        self.assertIn("围绕高中函数建模", "\n".join(payload["curriculum_context"]["question_requirements"]))
+        self.assertIn("极限的严格定义", "\n".join(payload["curriculum_context"]["knowledge_scope"]["out_of_scope"]))
+        self.assertTrue(any("curriculum_context" in item for item in payload["instructions"]))
 
     async def test_assemble_study_archive_treats_writer_agent_as_model_output(self) -> None:
         agent = _DummyAgent()

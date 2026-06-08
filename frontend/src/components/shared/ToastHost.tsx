@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CheckCircle2, XCircle, X } from 'lucide-react'
 import { useNotificationStore } from '@/stores/useNotificationStore'
@@ -9,16 +9,35 @@ const AUTO_DISMISS_MS = 6000
 export function ToastHost() {
   const navigate = useNavigate()
   const { toasts, removeToast } = useNotificationStore()
+  const timersRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
-    if (toasts.length === 0) return
-    const timers = toasts.map((t) =>
-      window.setTimeout(() => removeToast(t.id), AUTO_DISMISS_MS)
-    )
-    return () => {
-      timers.forEach((id) => window.clearTimeout(id))
+    const activeIds = new Set(toasts.map((t) => t.id))
+    for (const [id, timerId] of timersRef.current) {
+      if (!activeIds.has(id)) {
+        window.clearTimeout(timerId)
+        timersRef.current.delete(id)
+      }
+    }
+
+    for (const toast of toasts) {
+      if (timersRef.current.has(toast.id)) continue
+      const timerId = window.setTimeout(() => {
+        timersRef.current.delete(toast.id)
+        removeToast(toast.id)
+      }, AUTO_DISMISS_MS)
+      timersRef.current.set(toast.id, timerId)
     }
   }, [toasts, removeToast])
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of timersRef.current.values()) {
+        window.clearTimeout(timerId)
+      }
+      timersRef.current.clear()
+    }
+  }, [])
 
   if (toasts.length === 0) return null
 

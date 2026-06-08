@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, PanelsTopLeft, SquareArrowOutUpRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -117,6 +117,7 @@ interface StudioToolbarProps {
 export function StudioToolbar(props: StudioToolbarProps) {
   const activeTasks = useTaskStore((state) => state.activeTasks)
   const [activeTab, setActiveTab] = useState<'timeline' | 'reason'>('timeline')
+  const autoSwitchedToReasonRef = useRef(false)
   const activeTaskSteps = useMemo(
     () => (props.currentTaskId ? activeTasks.get(props.currentTaskId) || EMPTY_TASK_STEPS : EMPTY_TASK_STEPS),
     [activeTasks, props.currentTaskId]
@@ -154,7 +155,8 @@ export function StudioToolbar(props: StudioToolbarProps) {
   )
 
   useEffect(() => {
-    if (reasonEntries.length > 0) {
+    if (reasonEntries.length > 0 && !autoSwitchedToReasonRef.current) {
+      autoSwitchedToReasonRef.current = true
       setActiveTab('reason')
     }
   }, [reasonEntries.length])

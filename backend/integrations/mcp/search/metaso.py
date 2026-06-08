@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 import httpx
 
+from backend.core.http_fetch import normalize_public_http_url
 from backend.core.logging_utils import get_logger
 from backend.core.settings import METASO_API_KEY, METASO_BASE_URL, METASO_TIMEOUT
 
@@ -391,6 +392,10 @@ async def metaso_reader(*, url: str) -> Dict[str, Any]:
     url_value = _as_str(url)
     if not url_value:
         return {"success": False, "provider": "metaso", "error": "url 不能为空"}
+    try:
+        url_value = await normalize_public_http_url(url_value)
+    except ValueError:
+        return {"success": False, "provider": "metaso", "url": url_value, "error": "forbidden_url"}
 
     api_key = _as_str(METASO_API_KEY)
     if not api_key:

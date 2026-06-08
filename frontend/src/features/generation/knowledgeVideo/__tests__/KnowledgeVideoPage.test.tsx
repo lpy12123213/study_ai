@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import KnowledgeVideoPage from '@/features/generation/knowledgeVideo/KnowledgeVideoPage'
 import * as knowledgeVideosApi from '@/api/knowledgeVideos'
@@ -20,8 +20,14 @@ vi.mock('@/api/client', () => ({
   downloadText: vi.fn(async () => 'class KnowledgeVideoScene(Scene): pass'),
 }))
 
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location-search">{location.search}</div>
+}
+
 describe('KnowledgeVideoPage', () => {
   beforeEach(() => {
+    cleanup()
     vi.clearAllMocks()
     class MockResizeObserver {
       observe() {}
@@ -81,5 +87,49 @@ describe('KnowledgeVideoPage', () => {
       expect(screen.getByText('/api/media/generated/script.py')).toBeInTheDocument()
       expect(screen.getByText('class KnowledgeVideoScene(Scene): pass')).toBeInTheDocument()
     })
+  }, 15_000)
+
+  it('resumes a task from the task search param and clears it on reset', async () => {
+    vi.mocked(tasksApi.getTask).mockResolvedValue({
+      id: 'knowledge-video-resume',
+      task_type: 'knowledge_video',
+      title: '知识视频',
+      status: 'completed',
+      progress: 100,
+      last_seq: 0,
+      created_at: '2026-05-04T00:00:00.000Z',
+      updated_at: '2026-05-04T00:00:00.000Z',
+      result: {
+        video_url: '/api/media/generated/video.mp4',
+        script_url: '/api/media/generated/script.py',
+      },
+    })
+    vi.mocked(tasksApi.streamTask).mockImplementation((_taskId, _afterSeq, _onEvent, _onError, onComplete) => {
+      onComplete?.()
+    })
+
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter initialEntries={['/knowledge-video?task=knowledge-video-resume&topic=导数']}>
+        <KnowledgeVideoPage />
+        <LocationProbe />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(tasksApi.streamTask).toHaveBeenCalledWith(
+        'knowledge-video-resume',
+        0,
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
+      expect(screen.getByRole('button', { name: '下载视频' })).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('button', { name: '重置' }))
+
+    expect(screen.getByTestId('location-search')).not.toHaveTextContent('task=knowledge-video-resume')
   }, 15_000)
 })

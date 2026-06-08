@@ -83,6 +83,12 @@ export default function BlueprintPage() {
     setSlots(slots.filter((_, i) => i !== index))
   }
 
+  const handleSubjectChange = useCallback((nextSubject: string) => {
+    setSubject(nextSubject)
+    setGradeId('')
+    setTextbookVersionId('')
+  }, [])
+
   const handleCompose = () => {
     if (!subject || slots.length === 0) return
     compose({
@@ -198,7 +204,7 @@ export default function BlueprintPage() {
         onModeChange={setMode}
         subjects={subjects}
         subject={subject}
-        onSubjectChange={setSubject}
+        onSubjectChange={handleSubjectChange}
         topic={topic}
         onTopicChange={setTopic}
         filters={filters}

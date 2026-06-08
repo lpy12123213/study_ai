@@ -24,6 +24,10 @@ function errorMessage(error: unknown): string {
   return recordString(error, 'message') || 'request_failed'
 }
 
+type StreamOptions = {
+  signal?: AbortSignal
+}
+
 export function normalizeQuestionLibraryTaskEvent(input: unknown): SseEnvelope {
   return normalizeSseEnvelope(input)
 }
@@ -54,10 +58,11 @@ export function crawlQuestions(
   payload: CrawlQuestionsPayload,
   onEvent: (event: SseEnvelope) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: StreamOptions
 ): void {
   apiClient
-    .post('/tasks/question-library/crawl', payload)
+    .post('/tasks/question-library/crawl', payload, { signal: options?.signal })
     .then((res) => {
       const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
       if (!taskId) throw new Error('missing_task_id')
@@ -66,10 +71,12 @@ export function crawlQuestions(
         0,
         (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
         onError,
-        onComplete
+        onComplete,
+        { signal: options?.signal }
       )
     })
     .catch((err: unknown) => {
+      if (options?.signal?.aborted) return
       const message = errorMessage(err)
       onError?.(err instanceof Error ? err : new Error(message))
     })
@@ -79,10 +86,11 @@ export function generateQuestions(
   payload: GenerateQuestionsPayload,
   onEvent: (event: SseEnvelope) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: StreamOptions
 ): void {
   apiClient
-    .post('/tasks/question-library/generate', payload)
+    .post('/tasks/question-library/generate', payload, { signal: options?.signal })
     .then((res) => {
       const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
       if (!taskId) throw new Error('missing_task_id')
@@ -91,10 +99,12 @@ export function generateQuestions(
         0,
         (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
         onError,
-        onComplete
+        onComplete,
+        { signal: options?.signal }
       )
     })
     .catch((err: unknown) => {
+      if (options?.signal?.aborted) return
       const message = errorMessage(err)
       onError?.(err instanceof Error ? err : new Error(message))
     })
@@ -104,7 +114,8 @@ export function importMediaQuestions(
   payload: ImportMediaQuestionsPayload,
   onEvent: (event: SseEnvelope) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: StreamOptions
 ): void {
   const form = new FormData()
   form.set('subject', String(payload.subject || '').trim())
@@ -119,7 +130,7 @@ export function importMediaQuestions(
   }
 
   apiClient
-    .post('/tasks/question-library/import-media', form)
+    .post('/tasks/question-library/import-media', form, { signal: options?.signal })
     .then((res) => {
       const taskId = String(recordString(res.data, 'taskId') || payload.task_id || '').trim()
       if (!taskId) throw new Error('missing_task_id')
@@ -128,10 +139,12 @@ export function importMediaQuestions(
         0,
         (evt) => onEvent(normalizeQuestionLibraryTaskEvent(evt)),
         onError,
-        onComplete
+        onComplete,
+        { signal: options?.signal }
       )
     })
     .catch((err: unknown) => {
+      if (options?.signal?.aborted) return
       const message = errorMessage(err)
       onError?.(err instanceof Error ? err : new Error(message))
     })
@@ -142,13 +155,14 @@ export function streamQuestionLibraryTask(
   afterSeq: number,
   onEvent: (event: SseEnvelope) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: StreamOptions
 ): void {
   const id = String(taskId || '').trim()
   if (!id) throw new Error('missing_task_id')
   fetchSSERequest(
     `/question-library/tasks/${encodeURIComponent(id)}/stream?after_seq=${Math.max(0, afterSeq || 0)}`,
-    { method: 'GET' },
+    { method: 'GET', signal: options?.signal },
     (data) => onEvent(normalizeQuestionLibraryTaskEvent(data)),
     onError,
     onComplete

@@ -104,7 +104,7 @@ function LessonPlansView() {
     stream.reset()
     setInput('')
     setSubAgentActivities([])
-  }, [activeConversationId, stream])
+  }, [activeConversationId, stream.reset])
 
   const handleDrag = useCallback((deltaX: number) => {
     if (!containerRef.current) return

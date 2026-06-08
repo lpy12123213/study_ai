@@ -143,6 +143,7 @@ export function useStudyMaterialsDraftOptions(opts: {
           setMaxPoints('')
         }
       } finally {
+        if (!active) return
         const next = new URLSearchParams(searchParams)
         next.delete('reuse_task')
         setSearchParams(next, { replace: true })

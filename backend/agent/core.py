@@ -12,7 +12,7 @@ from backend.agent.config import AgentConfig
 from backend.agent.context import ContextManager
 from backend.agent.executor import Executor
 from backend.agent.memory import MemoryStore, SemanticStore
-from backend.agent.planner import Planner
+from backend.agent.planning.planner import Planner
 from backend.agent.policy import StudyMaterialsPolicy
 from backend.agent.react.loop import ReActLoop
 from backend.agent.reflector import Reflector

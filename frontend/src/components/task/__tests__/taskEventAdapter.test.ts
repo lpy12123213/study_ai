@@ -68,6 +68,36 @@ describe('taskEventAdapter', () => {
     expect(next[0].output).toEqual({ accepted: 2, rejected: 5 })
   })
 
+  it('keeps an existing step error when later stream updates omit error text', () => {
+    const failed: TaskStep[] = [
+      {
+        id: 'step-1',
+        title: '失败步骤',
+        status: 'failed',
+        error: '网络异常',
+      },
+    ]
+
+    const update = taskEventToStep({
+      taskId: 'task-1',
+      seq: 2,
+      type: 'step',
+      created_at: '2026-06-08T10:00:00Z',
+      data: {
+        step: {
+          id: 'step-1',
+          title: '失败步骤',
+          status: 'failed',
+        },
+      },
+    })
+
+    expect(update).not.toBeNull()
+    const next = upsertTaskStep(failed, update!)
+
+    expect(next[0].error).toBe('网络异常')
+  })
+
   it('labels reasoning deltas so raw reason and trace fallback stay distinguishable', () => {
     const raw = taskEventToStep({
       taskId: 'ql-gen-1',

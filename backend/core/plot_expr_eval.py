@@ -1,6 +1,6 @@
-"""Sandboxed expression evaluator used by ``plot_tools``.
+"""Sandboxed expression evaluator used by plotting helpers.
 
-Pulled out of the (long) ``plot_tools.py`` so the safety-critical AST
+Pulled out of the plotting modules so the safety-critical AST
 validation logic has a focused module + can be unit-tested without spinning
 up matplotlib. The validator only allows a small subset of Python operators
 and named functions (sin/cos/sqrt/...) — no attribute access beyond ``np.*``
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import ast
 from typing import Any, Dict, FrozenSet, Tuple, Type
-
 
 _ALLOWED_FUNCS: FrozenSet[str] = frozenset(
     {

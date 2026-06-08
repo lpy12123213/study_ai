@@ -40,13 +40,17 @@ export function useStudyMaterialsSubAgentPane(opts: {
     }
     if (allSteps.length === 0) return
 
-    // Find the split_knowledge_points result to get the full KP list
+    // Prefer the later reviewed KP list when present; realtime events do the same overwrite.
     let kpList: string[] = []
     for (const step of allSteps) {
-      if (step.toolName === 'split_knowledge_points' && step.output && typeof step.output === 'object') {
+      if (
+        (step.toolName === 'split_knowledge_points' || step.toolName === 'review_knowledge_points') &&
+        step.output &&
+        typeof step.output === 'object'
+      ) {
         const out = step.output as Record<string, unknown>
-        kpList = normalizeKnowledgePoints(out.knowledge_points)
-        if (kpList.length > 0) break
+        const next = normalizeKnowledgePoints(out.knowledge_points)
+        if (next.length > 0) kpList = next
       }
     }
     if (kpList.length === 0) return

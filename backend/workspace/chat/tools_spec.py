@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from backend.integrations.mcp.tools.python_scientific_compute import openai_tool_spec as scientific_compute_tool_spec
+
 TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -211,3 +213,82 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
 ]
+
+TOOLS.extend(
+    [
+        scientific_compute_tool_spec(),
+        {
+            "type": "function",
+            "function": {
+                "name": "plot_function",
+                "description": (
+                    "Draw a 2D function plot with Matplotlib and return a Markdown image. Use this for visualizing "
+                    "functions while explaining math."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expr": {
+                            "type": "string",
+                            "description": "Function expression with x as the variable, for example x**2 - 2*x.",
+                        },
+                        "x_range": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "x-axis range [xmin, xmax]. Defaults to [-5, 5].",
+                        },
+                        "y_range": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Optional y-axis range [ymin, ymax].",
+                        },
+                        "title": {"type": "string", "description": "Optional plot title.", "default": ""},
+                        "label": {"type": "string", "description": "Optional curve label.", "default": ""},
+                        "alt": {"type": "string", "description": "Markdown image alt text.", "default": "plot"},
+                    },
+                    "required": ["expr"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": (
+                    "Search the web and return Markdown links. Use when current or external information is needed. "
+                    "Gracefully reports a configuration error when no provider key is available."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query."},
+                        "limit": {"type": "integer", "description": "Number of results, 1-10.", "default": 5},
+                        "provider": {
+                            "type": "string",
+                            "enum": ["auto", "tavily", "exa", "bigmodel"],
+                            "description": "Search provider. auto prefers Tavily, then Exa, then BigModel.",
+                            "default": "auto",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["trending", "patterns"],
+                            "description": "trending filters recent material; patterns keeps broader results.",
+                            "default": "trending",
+                        },
+                        "recency_days": {
+                            "type": "integer",
+                            "description": "Recent-day window for trending mode.",
+                            "default": 180,
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Optional BigModel model name.",
+                            "default": "",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    ]
+)

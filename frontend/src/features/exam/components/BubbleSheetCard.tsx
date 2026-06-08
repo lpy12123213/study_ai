@@ -20,8 +20,8 @@ export function BubbleSheetCard({ mode, options = DEFAULT_OPTIONS, value, onChan
           <label
             key={option}
             className={cn(
-              'flex cursor-pointer items-center gap-3 rounded-md border p-4 text-sm transition-colors hover:bg-accent',
-              selected.has(option) && 'border-primary bg-primary/5'
+              'aurora-layout-surface flex cursor-pointer items-center gap-3 rounded-md border p-4 text-sm transition-colors hover:bg-accent',
+              selected.has(option) && 'aurora-exam-focus border-primary bg-primary/5'
             )}
           >
             <RadioGroupItem value={option} />
@@ -40,8 +40,8 @@ export function BubbleSheetCard({ mode, options = DEFAULT_OPTIONS, value, onChan
           <label
             key={option}
             className={cn(
-              'flex cursor-pointer items-center gap-3 rounded-md border p-4 text-sm transition-colors hover:bg-accent',
-              checked && 'border-primary bg-primary/5'
+              'aurora-layout-surface flex cursor-pointer items-center gap-3 rounded-md border p-4 text-sm transition-colors hover:bg-accent',
+              checked && 'aurora-exam-focus border-primary bg-primary/5'
             )}
           >
             <Checkbox

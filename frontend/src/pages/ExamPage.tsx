@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Send } from 'lucide-react'
-import { Markdown } from '@/components/shared/Markdown'
+import { QuestionContent } from '@/components/shared/QuestionContent'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -58,43 +58,21 @@ export default function ExamPage() {
   const submitExam = useSubmitExam()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const handwritingRef = useRef<HandwritingBoardHandle | null>(null)
+  const submitInFlightRef = useRef(false)
+  const saveDirtyRef = useRef<() => Promise<void>>(async () => undefined)
+  const handleSubmitRef = useRef<(fromTimer?: boolean) => Promise<void>>(async () => undefined)
 
-  const store = useExamStore()
-  const currentQuestion = session?.questions[store.currentQuestionIndex]
-
-  useEffect(() => {
-    if (!session || store.sessionId === session.sessionId) return
-    store.setSession(session.sessionId, session.questions, session.expiresAt)
-    for (const question of session.questions) {
-      const existing = answerFromStudent(question.studentAnswer)
-      if (existing) store.updateAnswer(question.questionId, existing)
-    }
-    store.markSaved(session.questions.map((q) => q.questionId))
-  }, [session, store])
-
-  useEffect(() => {
-    if (!session || session.mode !== 'timed' || session.status !== 'in_progress') return
-    const id = window.setInterval(() => {
-      const remaining = store.tick(session.expiresAt)
-      if (remaining === 0) {
-        handleSubmit(true)
-      }
-    }, 1000)
-    return () => window.clearInterval(id)
-  })
-
-  useEffect(() => {
-    if (!session || session.status !== 'in_progress') return
-    const id = window.setInterval(() => {
-      saveDirty()
-    }, 30_000)
-    return () => window.clearInterval(id)
-  })
-
-  const answeredCount = useMemo(() => {
-    if (!session) return 0
-    return session.questions.filter((q) => isAnswered(store.answers[q.questionId] || answerFromStudent(q.studentAnswer))).length
-  }, [session, store.answers])
+  const storeSessionId = useExamStore((state) => state.sessionId)
+  const currentQuestionIndex = useExamStore((state) => state.currentQuestionIndex)
+  const answers = useExamStore((state) => state.answers)
+  const remainingSeconds = useExamStore((state) => state.remainingSeconds)
+  const isSaving = useExamStore((state) => state.isSaving)
+  const lastSavedAt = useExamStore((state) => state.lastSavedAt)
+  const setSession = useExamStore((state) => state.setSession)
+  const updateAnswer = useExamStore((state) => state.updateAnswer)
+  const markSaved = useExamStore((state) => state.markSaved)
+  const setCurrentQuestionIndex = useExamStore((state) => state.setCurrentQuestionIndex)
+  const currentQuestion = session?.questions[currentQuestionIndex]
 
   const saveDirty = async () => {
     const state = useExamStore.getState()
@@ -118,17 +96,59 @@ export default function ExamPage() {
   const handleSelectQuestion = async (index: number) => {
     await saveCurrentHandwriting()
     await saveDirty()
-    store.setCurrentQuestionIndex(index)
+    setCurrentQuestionIndex(index)
   }
 
   const handleSubmit = async (fromTimer = false) => {
-    if (!sessionId) return
-    await saveCurrentHandwriting()
-    await saveDirty()
-    const result = await submitExam.mutateAsync(sessionId)
-    setConfirmOpen(false)
-    if (fromTimer || result.sessionId) navigate(`/exam/${sessionId}/result`)
+    if (!sessionId || submitInFlightRef.current) return
+    submitInFlightRef.current = true
+    try {
+      await saveCurrentHandwriting()
+      await saveDirty()
+      const result = await submitExam.mutateAsync(sessionId)
+      setConfirmOpen(false)
+      if (fromTimer || result.sessionId) navigate(`/exam/${sessionId}/result`)
+    } catch (err) {
+      submitInFlightRef.current = false
+      throw err
+    }
   }
+  saveDirtyRef.current = saveDirty
+  handleSubmitRef.current = handleSubmit
+
+  useEffect(() => {
+    if (!session || storeSessionId === session.sessionId) return
+    setSession(session.sessionId, session.questions, session.expiresAt)
+    for (const question of session.questions) {
+      const existing = answerFromStudent(question.studentAnswer)
+      if (existing) updateAnswer(question.questionId, existing)
+    }
+    markSaved(session.questions.map((q) => q.questionId))
+  }, [markSaved, session, setSession, storeSessionId, updateAnswer])
+
+  useEffect(() => {
+    if (!session || session.mode !== 'timed' || session.status !== 'in_progress') return
+    const id = window.setInterval(() => {
+      const remaining = useExamStore.getState().tick(session.expiresAt)
+      if (remaining === 0) {
+        void handleSubmitRef.current(true)
+      }
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [session?.expiresAt, session?.mode, session?.status])
+
+  useEffect(() => {
+    if (!session || session.status !== 'in_progress') return
+    const id = window.setInterval(() => {
+      void saveDirtyRef.current()
+    }, 30_000)
+    return () => window.clearInterval(id)
+  }, [session?.sessionId, session?.status])
+
+  const answeredCount = useMemo(() => {
+    if (!session) return 0
+    return session.questions.filter((q) => isAnswered(answers[q.questionId] || answerFromStudent(q.studentAnswer))).length
+  }, [answers, session])
 
   if (isLoading) {
     return (
@@ -160,12 +180,12 @@ export default function ExamPage() {
     )
   }
 
-  const answer = currentQuestion ? store.answers[currentQuestion.questionId] || answerFromStudent(currentQuestion.studentAnswer) : undefined
+  const answer = currentQuestion ? answers[currentQuestion.questionId] || answerFromStudent(currentQuestion.studentAnswer) : undefined
   const mode = currentQuestion ? questionMode(currentQuestion) : 'single'
 
   return (
-    <div className="flex h-screen flex-col bg-background">
-      <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
+    <div className="aurora-app-shell flex h-screen flex-col bg-background">
+      <header className="aurora-layout-chrome flex items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <Button asChild variant="ghost" size="icon">
             <Link to={`/papers/${session.paperId}`}>
@@ -178,7 +198,7 @@ export default function ExamPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {session.mode === 'timed' && <ExamTimer remainingSeconds={store.remainingSeconds} />}
+          {session.mode === 'timed' && <ExamTimer remainingSeconds={remainingSeconds} />}
           <Button type="button" onClick={() => setConfirmOpen(true)}>
             <Send className="h-4 w-4" />
             交卷
@@ -186,11 +206,11 @@ export default function ExamPage() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+      <div className="aurora-exam-canvas flex min-h-0 flex-1 flex-col md:flex-row">
         <QuestionNavigator
           questions={session.questions}
-          currentIndex={store.currentQuestionIndex}
-          answers={store.answers}
+          currentIndex={currentQuestionIndex}
+          answers={answers}
           onSelect={handleSelectQuestion}
         />
 
@@ -200,16 +220,16 @@ export default function ExamPage() {
               <div className="mx-auto max-w-3xl space-y-6">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">第 {store.currentQuestionIndex + 1} 题</div>
+                    <div className="text-sm font-medium">第 {currentQuestionIndex + 1} 题</div>
                     <div className="text-xs text-muted-foreground">{currentQuestion.questionType || currentQuestion.type} · {currentQuestion.maxScore} 分</div>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {store.isSaving ? '保存中...' : store.lastSavedAt ? `已保存 ${store.lastSavedAt}` : '未保存'}
+                    {isSaving ? '保存中...' : lastSavedAt ? `已保存 ${lastSavedAt}` : '未保存'}
                   </div>
                 </div>
 
-                <section className="rounded-md border bg-card p-5">
-                  <Markdown content={currentQuestion.stem || ''} />
+                <section className="aurora-exam-card p-5" data-focus="true">
+                  <QuestionContent content={currentQuestion.stem || ''} />
                 </section>
 
                 {mode === 'single' || mode === 'multi' ? (
@@ -218,7 +238,7 @@ export default function ExamPage() {
                     options={extractOptions(currentQuestion.stem)}
                     value={answer?.selectedOptions || []}
                     onChange={(selectedOptions) =>
-                      store.updateAnswer(currentQuestion.questionId, {
+                      updateAnswer(currentQuestion.questionId, {
                         questionId: currentQuestion.questionId,
                         questionType: currentQuestion.questionType,
                         selectedOptions,
@@ -229,7 +249,7 @@ export default function ExamPage() {
                   <Input
                     value={answer?.fillBlankText || ''}
                     onChange={(event) =>
-                      store.updateAnswer(currentQuestion.questionId, {
+                      updateAnswer(currentQuestion.questionId, {
                         questionId: currentQuestion.questionId,
                         questionType: currentQuestion.questionType,
                         fillBlankText: event.target.value,
@@ -240,11 +260,12 @@ export default function ExamPage() {
                 ) : (
                   <div className="space-y-3">
                     <HandwritingBoard
+                      key={currentQuestion.questionId}
                       ref={handwritingRef}
                       imageUrl={currentQuestion.studentAnswer?.handwritingImageUrl}
                       onImageFile={async (file) => {
                         const uploaded = await uploadHandwriting.mutateAsync({ questionId: currentQuestion.questionId, file })
-                        store.updateAnswer(currentQuestion.questionId, {
+                        updateAnswer(currentQuestion.questionId, {
                           questionId: currentQuestion.questionId,
                           questionType: currentQuestion.questionType,
                           handwritingImagePath: uploaded.path,
@@ -254,14 +275,14 @@ export default function ExamPage() {
                     <Textarea
                       value={answer?.textAnswer || ''}
                       onChange={(event) =>
-                        store.updateAnswer(currentQuestion.questionId, {
+                        updateAnswer(currentQuestion.questionId, {
                           questionId: currentQuestion.questionId,
                           questionType: currentQuestion.questionType,
                           textAnswer: event.target.value,
                         })
                       }
                       placeholder="可选文字补充"
-                      className="min-h-24"
+                      className="aurora-exam-card min-h-24"
                     />
                   </div>
                 )}
@@ -269,12 +290,12 @@ export default function ExamPage() {
             </div>
           )}
 
-          <footer className="flex items-center justify-between border-t p-3">
+          <footer className="aurora-layout-chrome flex items-center justify-between border-t p-3">
             <Button
               type="button"
               variant="outline"
-              disabled={store.currentQuestionIndex <= 0}
-              onClick={() => handleSelectQuestion(store.currentQuestionIndex - 1)}
+              disabled={currentQuestionIndex <= 0}
+              onClick={() => handleSelectQuestion(currentQuestionIndex - 1)}
             >
               <ChevronLeft className="h-4 w-4" />
               上一题
@@ -282,8 +303,8 @@ export default function ExamPage() {
             <Button
               type="button"
               variant="outline"
-              disabled={store.currentQuestionIndex >= session.questions.length - 1}
-              onClick={() => handleSelectQuestion(store.currentQuestionIndex + 1)}
+              disabled={currentQuestionIndex >= session.questions.length - 1}
+              onClick={() => handleSelectQuestion(currentQuestionIndex + 1)}
             >
               下一题
               <ChevronRight className="h-4 w-4" />

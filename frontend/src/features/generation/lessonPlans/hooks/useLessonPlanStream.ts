@@ -273,7 +273,9 @@ export function useLessonPlanStream(opts: {
             isRecord(out)
           ) {
             const kpRaw = out.knowledge_points
-            const kps = Array.isArray(kpRaw) ? kpRaw.filter((x): x is string => typeof x === 'string') : []
+            const kps = Array.from(
+              new Set(Array.isArray(kpRaw) ? kpRaw.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean) : []),
+            )
             if (kps.length > 0) {
               setSubAgentActivities(
                 kps.map((kp) => ({

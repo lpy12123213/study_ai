@@ -11,12 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.api.auth import require_auth
-from backend.api.middleware.rate_limit import SlidingWindowRateLimiter
 from backend.api.canvas_schemas import CanvasBoardCreate, CanvasBoardUpdate
+from backend.api.middleware.rate_limit import SlidingWindowRateLimiter
 from backend.core.audit import AuditAction, audit_logger
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.core.subjects import resolve_subject
-from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.system.canvas import (
     create_canvas_board,
     create_canvas_board_version,
@@ -26,6 +25,7 @@ from backend.database.repositories.system.canvas import (
     list_canvas_boards,
     update_canvas_board,
 )
+from backend.integrations.crawler.manager import get_crawler
 
 router = APIRouter(prefix="/canvas", dependencies=[Depends(require_auth)])
 _QUESTION_RENDER_LIMITER = SlidingWindowRateLimiter(

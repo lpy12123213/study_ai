@@ -25,11 +25,11 @@ from backend.core.logging_utils import get_logger
 from backend.database.repositories.generation.essay_evaluations import (
     delete_evaluation,
     get_evaluation,
+    insert_evaluation,
     list_evaluations,
 )
 from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest, EssayEvaluationResult
 from backend.generation.essay_evaluation.service import evaluate_essay
-from backend.database.repositories.generation.essay_evaluations import insert_evaluation
 
 router = APIRouter(prefix="/essay-evaluations", tags=["essay-evaluations"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)

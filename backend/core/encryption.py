@@ -61,15 +61,26 @@ def _load_or_create_root_key() -> bytes:
     key = os.urandom(_KEY_BYTES)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_b64_encode(key), encoding="ascii")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        fd = os.open(path, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(_b64_encode(key))
         try:
             os.chmod(path, 0o600)
         except OSError:
             pass
+    except FileExistsError:
+        try:
+            raw = path.read_text(encoding="ascii").strip()
+            data = _b64_decode(raw)
+            if len(data) >= _KEY_BYTES:
+                return data[:_KEY_BYTES]
+        except (OSError, UnicodeError, ValueError, binascii.Error):
+            pass
     except OSError:
-        # Fall back to a deterministic process-local key only when the key file cannot be written.
-        seed = f"{_repo_root()}:{os.getenv('JWT_SECRET') or ''}".encode("utf-8", errors="ignore")
-        key = hashlib.sha256(seed).digest()
+        # Last-resort process-local key. Avoid deriving reusable encryption keys
+        # from weak or placeholder JWT secrets.
+        key = os.urandom(_KEY_BYTES)
     return key
 
 

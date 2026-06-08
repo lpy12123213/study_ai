@@ -40,14 +40,14 @@
 | 当前位置 | 目标位置 | 优先级 | 处理方式 |
 | --- | --- | --- | --- |
 | `backend/generation/` | `backend/generation/` | P0 | 已是目标主路径；新增 agentic runtime、prompt registry、知识视频优先放这里。 |
-| `backend/study_materials/` | `backend/generation/study_materials/` | P1 | 先拆 coordinator/resume/snapshot，再移动；保留薄 forwarder 一个发布周期。 |
-| `backend/lesson_plan/` | `backend/generation/lesson_plan/` | P1 | 先稳定导出和任务 runner，再迁移。 |
-| `backend/question_library/` | `backend/generation/question_library/` | P1 | 先拆 session/scoring/generation 子模块，避免整目录搬迁造成冲突。 |
-| `backend/question_evaluate/` | `backend/generation/question_evaluate/` | P1 | 与 question library 共享题目评价类型。 |
-| `backend/deepthink/` | `backend/generation/deepthink/` | P1 | 保留当前 API 兼容，内部 runner 迁入 generation。 |
-| `backend/paper_compose/` | `backend/generation/paper_compose/` 或 `workspace/papers` | P1 | 组卷编排归 generation；试卷持久化和查询归 workspace。 |
-| `backend/chat/` | `backend/workspace/chat/` | P2 | 对话存储归 workspace；LLM 调用仍通过 `backend/llm/`。 |
-| `backend/crawler/`, `backend/mcp/` | `backend/integrations/` | P2 | 先建立 adapter 契约，再移动 provider 实现。 |
+| `backend/study_materials/` | `backend/generation/study_materials/` | 已完成 (2026-06) | 薄 forwarder 已删除；统一使用 canonical 路径。 |
+| `backend/lesson_plan/` | `backend/generation/lesson_plan/` | 已完成 (2026-06) | 薄 forwarder 已删除；统一使用 canonical 路径。 |
+| `backend/question_library/` | `backend/generation/question_library/` | 已完成 (2026-06) | 薄 forwarder 已删除；统一使用 canonical 路径。 |
+| `backend/question_evaluate/` | `backend/generation/question_evaluate/` | 已完成 (2026-06) | 薄 forwarder 已删除；统一使用 canonical 路径。 |
+| `backend/deepthink/` | `backend/generation/deepthink/` | 已完成 (2026-06) | 薄 forwarder 已删除；统一使用 canonical 路径。 |
+| `backend/paper_compose/` | `backend/generation/paper_compose/` 或 `workspace/papers` | 已完成 (2026-06) | 薄 forwarder 已删除；组卷编排使用 generation，持久化查询归 workspace。 |
+| `backend/chat/` | `backend/workspace/chat/` | 已完成 (2026-06) | 薄 forwarder 已删除；统一使用 canonical 路径。 |
+| `backend/crawler/`, `backend/mcp/` | `backend/integrations/` | P2 | `backend/crawler` forwarder 已删除；`backend/mcp/stdio_server.py` 作为外部 stdio 入口保留。 |
 | `backend/core/` | `backend/shared/` 或领域目录 | P2 | 只保留真正跨域基础设施；业务配置和适配器不得继续堆入 core。 |
 | `backend/database/repositories/` | 按 domain 分组 | P2 | 保持仓储层隔离，新增 repository 必须标注归属 domain。 |
 
@@ -121,7 +121,7 @@ python scripts/audit/structure_lint.py --strict
 
 批次 A-E 的主路径迁移已经完成（2026-05）。后续维护工作：
 
-- **Forwarder 删除窗口**：`backend/study_materials/`、`backend/lesson_plan/`、`backend/question_library/`、`backend/question_evaluate/`、`backend/deepthink/`、`backend/paper_compose/` 下的薄 forwarder 模块计划在 2026-09 之前清理；新代码不应导入这些路径。
+- **Forwarder 删除窗口**：`backend/study_materials/`、`backend/lesson_plan/`、`backend/question_library/`、`backend/question_evaluate/`、`backend/deepthink/`、`backend/paper_compose/`、`backend/chat/`、`backend/crawler/` 薄 forwarder 已在 2026-06 清理；`backend/mcp/stdio_server.py` 因外部客户端入口继续保留。
 - **结构 lint**：`scripts/audit/structure_lint.py --strict` 已纳入 CI，会阻止新增到已迁移的历史目录。
 - **新功能落地约束**：
   - 长任务必须走 `/api/tasks` + `TaskRuntime`；

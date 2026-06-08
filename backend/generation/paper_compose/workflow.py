@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import resolve_subject
+from backend.core.text_lint import lint_many
 from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.database.repositories.question.question_cache import (
@@ -20,6 +21,7 @@ from backend.generation.paper_compose.answer_synthesis import synthesize_missing
 from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
 from backend.generation.paper_compose.auto_review import review_questions
 from backend.generation.paper_compose.balance import apply_balance_corrections
+from backend.generation.paper_compose.numeric_verification import verify_numeric_answers
 from backend.generation.paper_compose.slot_fill import (
     allows_ai_backfill,
     allows_bank_lookup,
@@ -47,6 +49,42 @@ logger = get_logger(__name__)
 
 def _question_match_reviewer_system_prompt() -> str:
     return create_default_prompt_registry().render("paper_compose.question_match_reviewer.v1").content
+
+
+def _quality_flags_for_question(q: Dict[str, Any]) -> List[str]:
+    flags: List[str] = []
+    raw = q.get("quality_flags")
+    if isinstance(raw, list):
+        flags.extend(str(x).strip() for x in raw if str(x or "").strip())
+    elif isinstance(raw, str) and raw.strip():
+        flags.append(raw.strip())
+    flags.extend(lint_many(q.get("stem"), q.get("answer"), q.get("analysis")))
+    out: List[str] = []
+    seen: set[str] = set()
+    for flag in flags:
+        if flag in seen:
+            continue
+        seen.add(flag)
+        out.append(flag)
+    return out
+
+
+def _resolve_answer_synthesis_limit(options: Dict[str, Any], *, ai_question_limit: int) -> int:
+    opts = options if isinstance(options, dict) else {}
+    raw = (
+        opts.get("maxAnswerSynthesisItems")
+        if "maxAnswerSynthesisItems" in opts
+        else opts.get("max_answer_synthesis_items")
+        if "max_answer_synthesis_items" in opts
+        else os.getenv("PAPER_COMPOSE_MAX_ANSWER_SYNTHESIS_ITEMS")
+    )
+    if raw in (None, ""):
+        raw = max(50, int(ai_question_limit or 0))
+    try:
+        limit = int(raw or 0)
+    except (TypeError, ValueError):
+        limit = max(50, int(ai_question_limit or 0))
+    return max(0, min(limit, 100))
 
 
 def _build_save_question_dicts(selected_questions: List[Dict[str, Any]], *, subject: str) -> List[dict]:
@@ -77,7 +115,7 @@ def _build_save_question_dicts(selected_questions: List[Dict[str, Any]], *, subj
                 "stem": str(q.get("stem") or "").strip(),
                 "stem_fingerprint": _stem_fingerprint(str(q.get("stem") or "")),
                 "quality_score": int(q.get("quality_score") or 0),
-                "quality_flags": q.get("quality_flags") or [],
+                "quality_flags": _quality_flags_for_question(q),
                 "answer": str(q.get("answer") or "").strip(),
                 "analysis": str(q.get("analysis") or "").strip(),
                 "answer_source": str(q.get("answer_source") or "").strip(),
@@ -88,6 +126,72 @@ def _build_save_question_dicts(selected_questions: List[Dict[str, Any]], *, subj
             }
         )
     return q_dicts
+
+
+def _is_auto_rejected(q: Dict[str, Any]) -> bool:
+    action = str(q.get("review_action") or "").strip().lower()
+    status = str(q.get("review_status") or "").strip().lower()
+    return action == "reject" or status == "rejected"
+
+
+def _filter_or_replace_rejected_questions(slot_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    selected_ids = {
+        str(q.get("question_id") or "").strip()
+        for sr in slot_results
+        for q in (sr.get("selected") or [])
+        if isinstance(sr, dict) and isinstance(q, dict) and str(q.get("question_id") or "").strip()
+    }
+    summary: Dict[str, Any] = {"rejected": 0, "replaced": 0, "dropped": 0, "items": []}
+
+    for sr in slot_results:
+        selected = sr.get("selected") if isinstance(sr, dict) else None
+        candidates = sr.get("candidates") if isinstance(sr, dict) else None
+        if not isinstance(selected, list):
+            continue
+        candidates = candidates if isinstance(candidates, list) else []
+        kept: List[Dict[str, Any]] = []
+
+        for q in selected:
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("question_id") or "").strip()
+            if not _is_auto_rejected(q):
+                kept.append(q)
+                continue
+
+            summary["rejected"] = int(summary.get("rejected") or 0) + 1
+            replacement: Optional[Dict[str, Any]] = None
+            for cand in candidates:
+                if not isinstance(cand, dict):
+                    continue
+                cand_id = str(cand.get("question_id") or "").strip()
+                if not cand_id or cand_id == qid or cand_id in selected_ids:
+                    continue
+                if _is_auto_rejected(cand):
+                    continue
+                replacement = dict(cand)
+                replacement.pop("review_action", None)
+                replacement.setdefault("review_status", "replacement")
+                break
+
+            if replacement is not None:
+                if qid:
+                    selected_ids.discard(qid)
+                new_id = str(replacement.get("question_id") or "").strip()
+                if new_id:
+                    selected_ids.add(new_id)
+                kept.append(replacement)
+                summary["replaced"] = int(summary.get("replaced") or 0) + 1
+                summary["items"].append({"old": qid, "new": new_id})
+            else:
+                if qid:
+                    selected_ids.discard(qid)
+                summary["dropped"] = int(summary.get("dropped") or 0) + 1
+                summary["items"].append({"old": qid, "new": ""})
+
+        sr["selected"] = kept
+
+    return summary
 
 
 
@@ -177,6 +281,10 @@ async def compose_paper_events(
     auto_ai_backfill = _truthy(options.get("autoAiBackfill") if "autoAiBackfill" in options else "1")
     max_ai_questions_per_paper = int(options.get("maxAiQuestionsPerPaper") or 20)
     max_ai_questions_per_paper = max(0, min(max_ai_questions_per_paper, 100))
+    max_answer_synthesis_items = _resolve_answer_synthesis_limit(
+        options,
+        ai_question_limit=max_ai_questions_per_paper,
+    )
     ai_answer_synthesis = _truthy(
         options.get("aiAnswerSynthesis")
         if "aiAnswerSynthesis" in options
@@ -191,6 +299,23 @@ async def compose_paper_events(
         if "auto_review" in options
         else os.getenv("PAPER_COMPOSE_AUTO_REVIEW") or "1"
     )
+    numeric_verification = _truthy(
+        options.get("numericVerification")
+        if "numericVerification" in options
+        else options.get("numeric_verification")
+        if "numeric_verification" in options
+        else os.getenv("PAPER_COMPOSE_NUMERIC_VERIFICATION") or "0"
+    )
+    try:
+        max_numeric_verification_items = int(
+            options.get("maxNumericVerificationItems")
+            or options.get("max_numeric_verification_items")
+            or os.getenv("PAPER_COMPOSE_MAX_NUMERIC_VERIFICATION_ITEMS")
+            or "20"
+        )
+    except (TypeError, ValueError):
+        max_numeric_verification_items = 20
+    max_numeric_verification_items = max(0, min(max_numeric_verification_items, 100))
     paper_balance_correction = _truthy(
         options.get("paperBalanceCorrection")
         if "paperBalanceCorrection" in options
@@ -1340,7 +1465,7 @@ async def compose_paper_events(
                     selected_questions,
                     subject=subject,
                     topic=topic,
-                    max_items=max_ai_questions_per_paper,
+                    max_items=max_answer_synthesis_items,
                 )
             except Exception as exc:
                 logger.warning("paper_compose_answer_synthesis_step_failed", extra={"task_id": task_id}, exc_info=True)
@@ -1408,6 +1533,72 @@ async def compose_paper_events(
                 "output": review_summary,
             },
         }
+
+    if numeric_verification and selected_questions:
+        numeric_step_id = "numeric_verification"
+        yield {
+            "type": "step",
+            "step": {
+                "id": numeric_step_id,
+                "title": "数值验算答案",
+                "status": "running",
+                "startTime": _now_iso(),
+                "toolName": "python_scientific_compute",
+                "input": {"count": len(selected_questions), "maxItems": max_numeric_verification_items},
+            },
+        }
+        try:
+            numeric_summary = await verify_numeric_answers(
+                selected_questions,
+                enabled=True,
+                max_items=max_numeric_verification_items,
+            )
+        except (RuntimeError, TypeError, ValueError, OSError) as exc:
+            logger.warning("paper_compose_numeric_verification_step_failed", extra={"task_id": task_id}, exc_info=True)
+            numeric_summary = {
+                "enabled": True,
+                "checked": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": len(selected_questions),
+                "error": str(exc),
+            }
+        auto_review_summary["numericVerification"] = numeric_summary
+        yield {
+            "type": "step",
+            "step": {
+                "id": numeric_step_id,
+                "title": "数值验算答案",
+                "status": "completed",
+                "startTime": _now_iso(),
+                "endTime": _now_iso(),
+                "toolName": "python_scientific_compute",
+                "output": numeric_summary,
+            },
+        }
+
+    if not require_human_review and slot_results:
+        reject_filter_summary = _filter_or_replace_rejected_questions(slot_results)
+        if int(reject_filter_summary.get("rejected") or 0) > 0:
+            selected_questions = [
+                q
+                for sr in slot_results
+                for q in (sr.get("selected") or [])
+                if isinstance(q, dict) and str(q.get("question_id") or "").strip()
+            ]
+            auto_review_summary["rejectFilter"] = reject_filter_summary
+            yield {
+                "type": "step",
+                "step": {
+                    "id": "auto_review_filter",
+                    "title": "剔除自动审核拒绝题",
+                    "status": "completed",
+                    "startTime": _now_iso(),
+                    "endTime": _now_iso(),
+                    "toolName": "auto_review",
+                    "output": reject_filter_summary,
+                },
+            }
 
     q_dicts = _build_save_question_dicts(selected_questions, subject=subject)
 

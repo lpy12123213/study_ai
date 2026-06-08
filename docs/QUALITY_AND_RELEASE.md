@@ -34,7 +34,7 @@ Linux / macOS：
 
 ```bash
 python -m unittest discover -s backend/tests -p "test_*.py"
-python -m ruff check backend/api backend/chat backend/core backend/tests
+python -m ruff check backend/api backend/workspace/chat backend/core backend/tests
 ```
 
 前端定向检查：

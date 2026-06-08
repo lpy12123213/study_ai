@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -23,18 +23,41 @@ interface Props {
 }
 
 const DIFFICULTY_ANY = '__any__'
+const DEFAULT_LIMIT = '30'
+const DEFAULT_MAX_PAGES = '2'
+const DEFAULT_MIN_QUALITY = '0'
+
+function boundedIntegerOrDefault(value: string, fallback: number, min: number, max: number): number {
+  const text = value.trim()
+  if (!text) return fallback
+  const parsed = Number(text)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, Math.floor(parsed)))
+}
 
 export function CrawlDialog(props: Props) {
   const { open, onOpenChange, subject, onSubmit } = props
 
   const [query, setQuery] = useState('')
   const [difficulty, setDifficulty] = useState(DIFFICULTY_ANY)
-  const [limit, setLimit] = useState('30')
-  const [maxPages, setMaxPages] = useState('2')
-  const [minQuality, setMinQuality] = useState('0')
+  const [limit, setLimit] = useState(DEFAULT_LIMIT)
+  const [maxPages, setMaxPages] = useState(DEFAULT_MAX_PAGES)
+  const [minQuality, setMinQuality] = useState(DEFAULT_MIN_QUALITY)
   const [difficultyValueMin, setDifficultyValueMin] = useState('')
   const [difficultyValueMax, setDifficultyValueMax] = useState('')
   const [requireDifficultyValue, setRequireDifficultyValue] = useState(true)
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    setDifficulty(DIFFICULTY_ANY)
+    setLimit(DEFAULT_LIMIT)
+    setMaxPages(DEFAULT_MAX_PAGES)
+    setMinQuality(DEFAULT_MIN_QUALITY)
+    setDifficultyValueMin('')
+    setDifficultyValueMax('')
+    setRequireDifficultyValue(true)
+  }, [open])
 
   const canSubmit = useMemo(() => {
     const q = query.trim()
@@ -47,9 +70,6 @@ export function CrawlDialog(props: Props) {
     if (!canSubmit) return
     const q = query.trim()
 
-    const lim = Number(limit)
-    const mp = Number(maxPages)
-    const mq = Number(minQuality)
     const dvMinText = difficultyValueMin.trim()
     const dvMaxText = difficultyValueMax.trim()
     const dvMinRaw = dvMinText ? Number(dvMinText) : Number.NaN
@@ -70,9 +90,9 @@ export function CrawlDialog(props: Props) {
     onSubmit({
       query: q,
       difficulty: difficulty === DIFFICULTY_ANY ? '' : difficulty,
-      limit: Number.isFinite(lim) ? Math.max(1, Math.min(200, Math.floor(lim))) : 30,
-      max_pages: Number.isFinite(mp) ? Math.max(1, Math.min(50, Math.floor(mp))) : 2,
-      min_quality_score: Number.isFinite(mq) ? Math.max(0, Math.min(100, Math.floor(mq))) : 0,
+      limit: boundedIntegerOrDefault(limit, 30, 1, 200),
+      max_pages: boundedIntegerOrDefault(maxPages, 2, 1, 50),
+      min_quality_score: boundedIntegerOrDefault(minQuality, 0, 0, 100),
       difficulty_value_min: dvMin,
       difficulty_value_max: dvMax,
       require_difficulty_value: hasDvRange ? Boolean(requireDifficultyValue) : undefined,

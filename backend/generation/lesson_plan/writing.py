@@ -103,14 +103,17 @@ def lesson_plan_to_markdown(
     lines.append("## 教学目标")
     lines.append("")
     objectives = plan.get("objectives")
+    rendered_objectives = 0
     if isinstance(objectives, list) and objectives:
         for obj in objectives[:12]:
-            if not isinstance(obj, dict):
-                continue
-            desc = str(obj.get("description") or "").strip()
+            if isinstance(obj, dict):
+                desc = str(obj.get("description") or "").strip()
+            else:
+                desc = str(obj or "").strip()
             if desc:
                 lines.append(f"- {desc}")
-    else:
+                rendered_objectives += 1
+    if rendered_objectives == 0:
         lines.append("- （未生成教学目标）")
     lines.append("")
 

@@ -256,7 +256,8 @@ async def web_search_with_bigmodel_mcp(
     parsed = _extract_json(content)
     results: Any = []
     if isinstance(parsed, dict):
-        results = parsed.get("results", parsed)
+        maybe_results = parsed.get("results", [])
+        results = maybe_results if isinstance(maybe_results, list) else []
     elif isinstance(parsed, list):
         results = parsed
 

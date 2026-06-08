@@ -44,11 +44,19 @@ export default function SettingsView() {
 
   const syncTimerRef = useRef<number | null>(null)
 
+  const flushAccountSave = () => {
+    if (!syncTimerRef.current) return
+    window.clearTimeout(syncTimerRef.current)
+    syncTimerRef.current = null
+    void saveToServer()
+  }
+
   const scheduleAccountSave = (patch: Record<string, unknown>) => {
     if (!isAuthenticated) return
     patchLocal(patch)
     if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
     syncTimerRef.current = window.setTimeout(() => {
+      syncTimerRef.current = null
       void saveToServer()
     }, 800)
   }
@@ -60,10 +68,15 @@ export default function SettingsView() {
   }, [isAuthenticated, loadFromServer, userSettingsLoaded])
 
   useEffect(() => {
-    return () => {
-      if (syncTimerRef.current) window.clearTimeout(syncTimerRef.current)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushAccountSave()
     }
-  }, [])
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      flushAccountSave()
+    }
+  }, [saveToServer])
 
   const api = useApiSettings()
 

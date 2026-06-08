@@ -87,7 +87,7 @@ export const HandwritingBoard = forwardRef<HandwritingBoardHandle, HandwritingBo
   }
 
   return (
-    <div className="overflow-hidden rounded-md border bg-card">
+    <div className="aurora-exam-card overflow-hidden rounded-md border bg-card" data-focus="true">
       <HandwritingToolbar
         color={color}
         width={width}

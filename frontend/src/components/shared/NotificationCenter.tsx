@@ -50,7 +50,7 @@ export function NotificationCenter() {
     seenRef.current = loadSeenStatuses()
   }
 
-  const { data } = useRunningTasks({ enabled: isAuthenticated && Boolean(token), limit: 50 })
+  const { data } = useRunningTasks({ enabled: isAuthenticated && Boolean(token), limit: 50, status: 'all' })
 
   useEffect(() => {
     const tasks = (data?.tasks || []) as UnifiedTask[]

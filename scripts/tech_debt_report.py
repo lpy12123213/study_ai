@@ -9,8 +9,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 TAG_RE = re.compile(r"\b(TODO|FIXME|HACK)\b")
 ENV_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b")
@@ -488,10 +487,10 @@ def main() -> int:
     files = [p for p in _git_ls_files(cwd=root) if (root / p).resolve().exists()]
     baseline = _compute_baseline(repo_root=root, files=files)
 
-    need_todo = args.format != "md" or args.section in {"all", "todo"}
+    need_todo = bool(args.limit) or args.format != "md" or args.section in {"all", "todo"}
     items: List[DebtItem] = list(_iter_debt_items(cwd=root, files=files)) if need_todo else []
 
-    if args.limit and need_todo and len(items) > int(args.limit):
+    if args.limit and len(items) > int(args.limit):
         # Still emit output for visibility.
         pass
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class RegisterRequest(BaseModel):
 
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=6)
-    role: str = Field(default="user")
+    role: Literal["user", "admin"] = Field(default="user")
 
 
 class LoginRequest(BaseModel):

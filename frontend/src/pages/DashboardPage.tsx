@@ -14,6 +14,7 @@ import {
   Play,
   Sparkles,
   TimerReset,
+  TrendingUp,
   Video,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -21,6 +22,7 @@ import { Card } from '@/components/ui/card'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { downloadObjectUrl } from '@/api/client'
 import * as dashboardApi from '@/api/dashboard'
+import * as insightsApi from '@/api/insights'
 import { DASHBOARD_REFETCH_INTERVAL_MS, useRunningTasks } from '@/hooks/useRunningTasks'
 
 function pct(value?: number): string {
@@ -39,13 +41,20 @@ function sec(value?: number): string {
   return `${Math.round(minutes / 60)}h`
 }
 
-function sumTaskTypes(types: Record<string, number> | undefined, needles: string[]) {
+function sumTaskTypes(types: Record<string, number> | undefined, matches: Array<(taskType: string) => boolean>) {
   if (!types) return 0
   return Object.entries(types).reduce((sum, [key, value]) => {
     const normalized = key.toLowerCase()
-    return needles.some((needle) => normalized.includes(needle)) ? sum + Number(value || 0) : sum
+    return matches.some((match) => match(normalized)) ? sum + Number(value || 0) : sum
   }, 0)
 }
+
+const hasAny = (needles: string[]) => (taskType: string) => needles.some((needle) => taskType.includes(needle))
+const isAiGenerateTask = (taskType: string) =>
+  hasAny(['ai_generate', 'question_generate', 'generate_question', 'paper_generate'])(taskType) &&
+  !hasAny(['question_library', 'question_evaluate'])(taskType)
+const isStudyMaterialTask = hasAny(['study_material', 'lesson_plan', 'archive'])
+const isQuestionLibraryTask = hasAny(['question_library', 'library_crawl', 'crawl'])
 
 const timelineStages = [
   { label: '规划', color: 'var(--timeline-thinking)', text: '拆解任务意图与资料边界' },
@@ -64,6 +73,12 @@ export default function DashboardPage() {
     refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
   })
 
+  const { data: insights } = useQuery({
+    queryKey: ['insights', 'dashboard-preview', days],
+    queryFn: () => insightsApi.getInsightsOverview({ days }),
+    refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
+  })
+
   const { data: runningTasksData } = useRunningTasks()
 
   const runningTasks = (runningTasksData?.tasks ?? []).slice(0, 5)
@@ -71,6 +86,15 @@ export default function DashboardPage() {
   const statusRows = Object.entries(stats?.tasks_by_status ?? {})
     .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
     .slice(0, 5)
+  const latestExam = insights?.exams?.recent?.[0]
+  const weakPoint = insights?.wrongbook?.weak_points?.[0]
+  const plan = insights?.activity?.plan_completion
+  const insightRows = [
+    { label: '最新成绩', value: latestExam ? pct(latestExam.score_ratio) : '--' },
+    { label: '薄弱点', value: weakPoint ? `${weakPoint.knowledge_point} ${pct(weakPoint.avg_mastery)}` : '--' },
+    { label: '活跃', value: insights?.activity ? `${insights.activity.active_days}天 / 连续${insights.activity.current_streak}天` : '--' },
+    { label: '计划', value: plan && plan.total > 0 ? `${plan.completed}/${plan.total}` : '--' },
+  ]
 
   const featureCards = [
     {
@@ -78,7 +102,7 @@ export default function DashboardPage() {
       description: '从知识点、题库和蓝图生成可审查题目，保留推理与草稿痕迹。',
       path: '/ai-generate',
       icon: Sparkles,
-      meta: `${sumTaskTypes(typeCounts, ['generate', 'question']) || '--'} 次任务`,
+      meta: `${sumTaskTypes(typeCounts, [isAiGenerateTask]) || '--'} 次任务`,
       stage: '生成',
       color: 'var(--timeline-edit)',
     },
@@ -87,7 +111,7 @@ export default function DashboardPage() {
       description: '把章节、错题和外部资料整理成结构化讲义与复习路径。',
       path: '/study-materials',
       icon: BookOpen,
-      meta: `${sumTaskTypes(typeCounts, ['study', 'material']) || '--'} 次任务`,
+      meta: `${sumTaskTypes(typeCounts, [isStudyMaterialTask]) || '--'} 次任务`,
       stage: '阅读',
       color: 'var(--timeline-read)',
     },
@@ -96,7 +120,7 @@ export default function DashboardPage() {
       description: '集中管理题目、标签、来源与过滤条件，支撑后续生成流程。',
       path: '/question-library',
       icon: Library,
-      meta: `${sumTaskTypes(typeCounts, ['library', 'crawl', 'question']) || '--'} 条线索`,
+      meta: `${sumTaskTypes(typeCounts, [isQuestionLibraryTask]) || '--'} 条线索`,
       stage: '检索',
       color: 'var(--timeline-grep)',
     },
@@ -231,12 +255,24 @@ export default function DashboardPage() {
 
               <div className="grid min-h-[420px] bg-card lg:grid-cols-[210px_minmax(0,1fr)_250px]">
                 <div className="border-b border-border bg-accent p-4 lg:border-b-0 lg:border-r">
-                  <div className="mb-3 font-mono text-xs text-muted-foreground">资料来源</div>
-                  {['错题本 / 代数', '本地题库 / 函数', '学习档案 / 复习计划', '试卷导出 / 近30天'].map((item) => (
-                    <div key={item} className="mb-2 rounded-md border border-border bg-card px-3 py-2 font-mono text-xs text-muted-foreground">
-                      {item}
+                  <div className="mb-3 flex items-center justify-between gap-2 font-mono text-xs text-muted-foreground">
+                    <span>学情速览</span>
+                    <TrendingUp className="h-4 w-4" />
+                  </div>
+                  <Link to="/insights" className="group block rounded-md border border-border bg-card px-3 py-3 transition-colors hover:bg-background">
+                    <div className="space-y-2">
+                      {insightRows.map((item) => (
+                        <div key={item.label} className="flex items-start justify-between gap-3">
+                          <span className="text-xs text-muted-foreground">{item.label}</span>
+                          <span className="max-w-[130px] truncate text-right font-mono text-xs text-foreground">{item.value}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                    <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
+                      <span>打开学情分析</span>
+                      <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                    </div>
+                  </Link>
                 </div>
 
                 <div className="p-4">

@@ -107,7 +107,7 @@ export default function AnnotationsPage() {
                 加载中…
               </div>
             )}
-            {!isLoading && !error && items.length === 0 && (
+            {!isLoading && !error && filtered.length === 0 && (
               <Card className="p-6">
                 <div className="text-sm text-muted-foreground">暂无批注。</div>
               </Card>

@@ -369,4 +369,17 @@ async def wikipedia_search(
                 "provider": "wikipedia",
             }
 
-    return await _to_thread(_run)
+    timeout_s = min(max(float(API_TIMEOUT or 120), 0.05), 120.0)
+    try:
+        return await asyncio.wait_for(_to_thread(_run), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        logger.warning("wikipedia_sync_query_timeout", extra={"query": q, "timeout_s": timeout_s})
+        return {
+            "success": False,
+            "query": q,
+            "lang": (lang or "zh").strip() or "zh",
+            "error": f"Wikipedia 查询超时 timeout={timeout_s:g}s",
+            "search_hits": [],
+            "disambiguation_options": [],
+            "provider": "wikipedia",
+        }

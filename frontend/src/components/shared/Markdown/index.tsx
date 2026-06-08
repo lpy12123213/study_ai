@@ -24,6 +24,12 @@ function markdownContent(props: Pick<MarkdownProps, 'markdown' | 'content'>): st
   return props.markdown ?? props.content ?? ''
 }
 
+function normalizeMathDelimiters(markdown: string): string {
+  return String(markdown || '')
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, body: string) => `\n\n$$\n${body}\n$$\n\n`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_match, body: string) => `$${body}$`)
+}
+
 function isAbsoluteUrl(href: string): boolean {
   return /^https?:\/\//i.test(href)
 }
@@ -97,7 +103,7 @@ function MarkdownView(props: MarkdownProps) {
         rehypePlugins={REHYPE_PLUGINS}
         components={{ ...secureComponents, ...props.components }}
       >
-        {markdownContent(props)}
+        {normalizeMathDelimiters(markdownContent(props))}
       </ReactMarkdown>
     </div>
   )
@@ -107,7 +113,7 @@ function MarkdownUnsafeView(props: MarkdownProps) {
   return (
     <div className={cn(DEFAULT_MARKDOWN_CLASS, props.className)}>
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={props.components}>
-        {markdownContent(props)}
+        {normalizeMathDelimiters(markdownContent(props))}
       </ReactMarkdown>
     </div>
   )

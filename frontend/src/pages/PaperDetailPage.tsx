@@ -119,7 +119,11 @@ export default function PaperDetailPage() {
         window.setTimeout(revoke, 60_000)
       }
     } catch {
-      // Ignore: UI already shows export state; user can retry.
+      pushToast({
+        id: `export-failed-${paperId}-${Date.now()}`,
+        title: '导出任务创建失败',
+        status: 'failed',
+      })
     }
   }
 

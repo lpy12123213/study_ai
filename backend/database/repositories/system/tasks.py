@@ -5,12 +5,13 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.logging_utils import get_logger
 from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import Task, TaskDurationAggregate, TaskEvent
 
 logger = get_logger(__name__)
@@ -55,7 +56,7 @@ def _isoformat_utc_z(dt: Optional[datetime]) -> str:
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:
@@ -426,13 +427,7 @@ async def append_task_events(
             await session.commit()
             return next_seq
 
-    res = await session.execute(select(Task).where(Task.id == tid, Task.user_id == uid))
-    task = res.scalar_one_or_none()
-    if not task:
-        raise ValueError("task_not_found")
-
-    current_seq = int(task.last_seq or 0)
-    max_seq = current_seq
+    prepared: List[Dict[str, Any]] = []
     latest_progress: Optional[float] = None
 
     for write in writes:
@@ -448,28 +443,75 @@ async def append_task_events(
                 payload = {}
             progress = getattr(write, "progress", None)
             seq = getattr(write, "seq", None)
-        if seq is None:
-            seq = max_seq + 1
-        seq = int(seq or 0)
-        if seq <= 0:
-            seq = max_seq + 1
-        max_seq = max(max_seq, seq)
+        seq_value: Optional[int]
+        try:
+            seq_value = int(seq) if seq is not None else None
+        except (TypeError, ValueError):
+            seq_value = None
+        if seq_value is not None and seq_value <= 0:
+            seq_value = None
 
-        evt = TaskEvent(
-            task_id=tid,
-            seq=seq,
-            event_type=event_type,
-            payload_json=_json_dumps(payload, default="{}"),
+        prepared.append(
+            {
+                "event_type": event_type,
+                "payload": payload,
+                "progress": progress,
+                "seq": seq_value,
+            }
         )
-        session.add(evt)
         if progress is not None:
             latest_progress = float(progress or 0.0)
 
-    task.last_seq = max(int(task.last_seq or 0), max_seq)
-    if latest_progress is not None:
-        task.progress = latest_progress
-    task.updated_at = utcnow_naive()
-    session.add(task)
+    auto_seq = all(item["seq"] is None for item in prepared)
+    now = utcnow_naive()
+    max_seq = 0
+    if auto_seq:
+        values: Dict[str, Any] = {
+            "last_seq": Task.last_seq + len(prepared),
+            "updated_at": now,
+        }
+        if latest_progress is not None:
+            values["progress"] = latest_progress
+        reserve = (
+            update(Task)
+            .where(Task.id == tid, Task.user_id == uid)
+            .values(**values)
+            .returning(Task.last_seq)
+        )
+        res = await session.execute(reserve)
+        new_last_seq = res.scalar_one_or_none()
+        if new_last_seq is None:
+            raise ValueError("task_not_found")
+        start_seq = int(new_last_seq or 0) - len(prepared) + 1
+        for idx, item in enumerate(prepared):
+            item["seq"] = start_seq + idx
+        max_seq = int(new_last_seq or 0)
+    else:
+        res = await session.execute(select(Task).where(Task.id == tid, Task.user_id == uid))
+        task = res.scalar_one_or_none()
+        if not task:
+            raise ValueError("task_not_found")
+        current_seq = int(task.last_seq or 0)
+        max_seq = current_seq
+        for item in prepared:
+            if item["seq"] is None:
+                item["seq"] = max_seq + 1
+            max_seq = max(max_seq, int(item["seq"] or 0))
+        task.last_seq = max(int(task.last_seq or 0), max_seq)
+        if latest_progress is not None:
+            task.progress = latest_progress
+        task.updated_at = now
+        session.add(task)
+
+    for item in prepared:
+        session.add(
+            TaskEvent(
+                task_id=tid,
+                seq=int(item["seq"] or 0),
+                event_type=str(item["event_type"] or "event"),
+                payload_json=_json_dumps(item["payload"], default="{}"),
+            )
+        )
 
     await session.flush()
     return max_seq

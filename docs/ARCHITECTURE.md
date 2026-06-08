@@ -128,9 +128,9 @@ Study AI backend modules
 
 当前 crawler 主路径：
 
-- `backend/crawler/interface.py`
-- `backend/crawler/manager.py`
-- `backend/crawler/zujuan/`
+- `backend/integrations/crawler/interface.py`
+- `backend/integrations/crawler/manager.py`
+- `backend/integrations/crawler/zujuan/`
 
 当前实现仍以 ZujuanCrawler 为主。对外 API 里不要承诺任意 provider 已经可用；多题源属于后续扩展，需要单独设计 provider 契约、缓存、合规和导出行为。
 
@@ -140,11 +140,11 @@ Study AI backend modules
 
 - `backend/agent/`：通用 agent、工具调用、反思、规划。
 - `backend/generation/agentic/`：结构化 agentic runtime、prompt registry、任务适配。
-- `backend/study_materials/`：自学资料编排。
-- `backend/lesson_plan/`：教案生成与导出。
-- `backend/question_library/`：AI 出题、参考分析、评分、预览审核。
-- `backend/paper_compose/`：蓝图组卷、一键组卷、导出。
-- `backend/deepthink/`：深度解题。
+- `backend/generation/study_materials/`：自学资料编排。
+- `backend/generation/lesson_plan/`：教案生成与导出。
+- `backend/generation/question_library/`：AI 出题、参考分析、评分、预览审核。
+- `backend/generation/paper_compose/`：蓝图组卷、一键组卷、导出。
+- `backend/generation/deepthink/`：深度解题。
 - `backend/generation/knowledge_video/`：知识视频生成。
 
 prompt 应集中维护并有测试覆盖，避免在业务代码里分散硬编码。

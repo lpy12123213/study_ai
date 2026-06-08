@@ -121,7 +121,7 @@ export function useRichTextarea({
         changeTimerRef.current = window.setTimeout(emitChange, debounceMs)
       },
     },
-    [disabled, debounceMs, editorClassName, ariaLabel, spellCheck],
+    [debounceMs, editorClassName, ariaLabel, spellCheck],
   )
 
   useEffect(() => {

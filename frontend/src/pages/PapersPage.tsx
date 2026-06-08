@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ClipboardCheck, FileText, Search, Trash2, Loader2, Plus, Calendar, Star, Pin, Tag } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import { useStartExam } from '@/hooks/useExam'
 import { cn, formatDate } from '@/lib/utils'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as metaApi from '@/api/meta'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 
 export default function PapersPage() {
   const [search, setSearch] = useState('')
@@ -26,6 +27,7 @@ export default function PapersPage() {
   const [tagFilter, setTagFilter] = useState('')
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const addToast = useNotificationStore((s) => s.addToast)
 
   const { data: papers, isLoading } = usePapers({ limit: 200 })
   const { mutate: deletePaper, isPending: isDeleting } = useDeletePaper()
@@ -57,6 +59,10 @@ export default function PapersPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [paperMetaItems])
 
+  useEffect(() => {
+    if (tagFilter && !tagOptions.includes(tagFilter)) setTagFilter('')
+  }, [tagFilter, tagOptions])
+
   const updateMeta = useMutation({
     mutationFn: (args: { itemId: string; patch: { starred?: boolean; pinned?: boolean; tags?: string[] } }) =>
       metaApi.setMeta('paper', args.itemId, args.patch),
@@ -82,8 +88,12 @@ export default function PapersPage() {
   }
 
   const startUntimedExam = async (paperId: number) => {
-    const session = await startExam.mutateAsync({ paperId, mode: 'untimed' })
-    navigate(`/exam/${session.sessionId}`)
+    try {
+      const session = await startExam.mutateAsync({ paperId, mode: 'untimed' })
+      navigate(`/exam/${session.sessionId}`)
+    } catch {
+      addToast({ title: '开始答题失败', status: 'failed' })
+    }
   }
 
   const filtered = useMemo(() => {

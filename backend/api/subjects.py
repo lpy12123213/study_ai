@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 
@@ -14,6 +15,8 @@ router = APIRouter()
 logger = get_logger(__name__)
 _SUBJECT_FILTERS_CACHE: dict[str, tuple[float, dict]] = {}
 _KNOWLEDGE_TREE_CACHE: dict[str, tuple[float, dict]] = {}
+_SUBJECT_FILTERS_CACHE_LOCK = asyncio.Lock()
+_KNOWLEDGE_TREE_CACHE_LOCK = asyncio.Lock()
 
 _DEFAULT_KNOWLEDGE_TREE: dict[str, list[tuple[str, list[str]]]] = {
     "高中数学": [
@@ -146,16 +149,17 @@ async def get_subject_filters(subject_code: str, user: dict = Depends(require_au
         raise HTTPException(status_code=400, detail=str(exc))
 
     ttl_s = _subject_filters_cache_ttl_s()
-    cached = _SUBJECT_FILTERS_CACHE.get(subject)
-    if ttl_s > 0 and cached and (time.time() - cached[0]) <= ttl_s:
-        return dict(cached[1])
+    async with _SUBJECT_FILTERS_CACHE_LOCK:
+        cached = _SUBJECT_FILTERS_CACHE.get(subject)
+        if ttl_s > 0 and cached and (time.time() - cached[0]) <= ttl_s:
+            return dict(cached[1])
 
     crawler = await get_crawler(subject=subject, edu_level="", strict=True)
     result = await crawler.get_available_filters()
     if not isinstance(result, dict) or not result.get("success"):
         err = str((result or {}).get("error") or "").strip()
         logger.warning("subject_filters_failed", extra={"subject": subject, "error": err[:200]})
-        raise HTTPException(status_code=500, detail="filters_failed")
+        raise HTTPException(status_code=502, detail="filters_failed")
 
     grades = result.get("grades") or []
     textbook_versions = result.get("textbook_versions") or []
@@ -202,10 +206,11 @@ async def get_subject_filters(subject_code: str, user: dict = Depends(require_au
         "questionTypes": _keep_id_name_list(question_types),
     }
     if ttl_s > 0:
-        _SUBJECT_FILTERS_CACHE[subject] = (time.time(), dict(payload))
-        if len(_SUBJECT_FILTERS_CACHE) > 128:
-            oldest_key = min(_SUBJECT_FILTERS_CACHE, key=lambda key: _SUBJECT_FILTERS_CACHE[key][0])
-            _SUBJECT_FILTERS_CACHE.pop(oldest_key, None)
+        async with _SUBJECT_FILTERS_CACHE_LOCK:
+            _SUBJECT_FILTERS_CACHE[subject] = (time.time(), dict(payload))
+            if len(_SUBJECT_FILTERS_CACHE) > 128:
+                oldest_key = min(_SUBJECT_FILTERS_CACHE, key=lambda key: _SUBJECT_FILTERS_CACHE[key][0])
+                _SUBJECT_FILTERS_CACHE.pop(oldest_key, None)
     return payload
 
 
@@ -229,9 +234,10 @@ async def get_subject_knowledge_tree(
 
     cache_key = _knowledge_tree_cache_key(subject, str(grade_id or "").strip(), str(textbook_version_id or "").strip())
     ttl_s = _subject_filters_cache_ttl_s()
-    cached = _KNOWLEDGE_TREE_CACHE.get(cache_key)
-    if ttl_s > 0 and cached and (time.time() - cached[0]) <= ttl_s:
-        return dict(cached[1])
+    async with _KNOWLEDGE_TREE_CACHE_LOCK:
+        cached = _KNOWLEDGE_TREE_CACHE.get(cache_key)
+        if ttl_s > 0 and cached and (time.time() - cached[0]) <= ttl_s:
+            return dict(cached[1])
 
     crawler_nodes: list = []
     grade_name = ""
@@ -271,8 +277,9 @@ async def get_subject_knowledge_tree(
         "source": "zujuan" if crawler_nodes else "fallback",
     }
     if ttl_s > 0:
-        _KNOWLEDGE_TREE_CACHE[cache_key] = (time.time(), dict(payload))
-        if len(_KNOWLEDGE_TREE_CACHE) > 128:
-            oldest_key = min(_KNOWLEDGE_TREE_CACHE, key=lambda key: _KNOWLEDGE_TREE_CACHE[key][0])
-            _KNOWLEDGE_TREE_CACHE.pop(oldest_key, None)
+        async with _KNOWLEDGE_TREE_CACHE_LOCK:
+            _KNOWLEDGE_TREE_CACHE[cache_key] = (time.time(), dict(payload))
+            if len(_KNOWLEDGE_TREE_CACHE) > 128:
+                oldest_key = min(_KNOWLEDGE_TREE_CACHE, key=lambda key: _KNOWLEDGE_TREE_CACHE[key][0])
+                _KNOWLEDGE_TREE_CACHE.pop(oldest_key, None)
     return payload

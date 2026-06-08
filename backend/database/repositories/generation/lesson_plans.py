@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.time_utils import utcnow
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import LessonPlanRecord
 
 
@@ -27,7 +28,7 @@ from backend.database.schema import LessonPlanRecord
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:

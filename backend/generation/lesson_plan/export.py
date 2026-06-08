@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.lesson_plan.common import GENERATED_DIR, lesson_plan_infinite_max_tokens
 from backend.generation.lesson_plan.llm import call_llm_text
 from backend.media.generated import default_generated_media_ttl_s
@@ -21,6 +21,22 @@ logger = get_logger(__name__)
 
 def _prompt(prompt_id: str) -> str:
     return create_default_prompt_registry().render(prompt_id).content
+
+
+def _escape_latex_text(value: str) -> str:
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "{": r"\{",
+        "}": r"\}",
+        "$": r"\$",
+        "&": r"\&",
+        "%": r"\%",
+        "#": r"\#",
+        "_": r"\_",
+        "^": r"\textasciicircum{}",
+        "~": r"\textasciitilde{}",
+    }
+    return "".join(replacements.get(ch, ch) for ch in str(value or ""))
 
 
 async def publish_generated_bytes(
@@ -77,7 +93,7 @@ async def convert_markdown_to_latex(*, markdown: str, title: str, subject: str) 
         or LESSON_PLAN_MODEL
     )
 
-    safe_title = (title or "").replace("{", "\\{").replace("}", "\\}").strip() or "教案"
+    safe_title = _escape_latex_text(title).strip() or "教案"
     template = (
         r"\documentclass[lang=cn]{elegantbook}"
         "\n"

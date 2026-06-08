@@ -69,11 +69,16 @@ def _level_from_env() -> int:
     return logging.INFO
 
 
-_SENSITIVE_KEY_RE = re.compile(r"(?i)(api[_-]?key|authorization|token|secret|password|passwd|cookie|set-cookie)")
+_SENSITIVE_KEY_RE = re.compile(r"(?i)(api[_-]?key|authorization|token|secret|password|passwd|cookie|set-cookie|csrf|sessionid)")
 # Mask common auth header formats.
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_.-]{10,})")
 # Mask typical "api_key=..." / "token: ..." fragments that may show up in logs.
-_KV_SECRET_RE = re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*([^\s,;]+)")
+_KV_SECRET_RE = re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|csrf[_-]?token|sessionid|token|secret|password)\s*[:=]\s*([^\s,;]+)")
+_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&](?:api[_-]?key|access[_-]?token|csrf[_-]?token|sessionid|token|secret|password)=)([^&\s]+)"
+)
+_COOKIE_HEADER_RE = re.compile(r"(?i)\b(cookie|set-cookie)\s*:\s*([^\r\n]+)")
+_COOKIE_PAIR_RE = re.compile(r"(?i)\b([A-Za-z0-9_.-]*(?:session|csrf|token|auth|key|secret|password|cookie)[A-Za-z0-9_.-]*)=([^;\s]+)")
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -86,6 +91,9 @@ def _scrub_text(text: str) -> str:
         return ""
     raw = _BEARER_RE.sub("Bearer ****", raw)
     raw = _KV_SECRET_RE.sub(lambda m: f"{m.group(1)}=****", raw)
+    raw = _QUERY_SECRET_RE.sub(lambda m: f"{m.group(1)}****", raw)
+    raw = _COOKIE_HEADER_RE.sub(lambda m: f"{m.group(1)}: {_COOKIE_PAIR_RE.sub(lambda p: f'{p.group(1)}=****', m.group(2))}", raw)
+    raw = _COOKIE_PAIR_RE.sub(lambda m: f"{m.group(1)}=****", raw)
     return raw
 
 

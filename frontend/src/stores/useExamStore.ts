@@ -60,6 +60,8 @@ export const useExamStore = create<ExamState>((set, get) => ({
       dirtyQuestionIds: [],
       remainingSeconds: remaining,
       timerColor: timerColor(remaining),
+      lastSavedAt: '',
+      isSaving: false,
     })
   },
   setCurrentQuestionIndex: (index) => {

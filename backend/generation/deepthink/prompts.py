@@ -7,7 +7,7 @@ These templates are formatted with:
 
 from __future__ import annotations
 
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 
 
 def _template(prompt_id: str) -> str:

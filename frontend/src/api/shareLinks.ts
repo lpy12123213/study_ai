@@ -18,7 +18,7 @@ export type SharedContent = {
 export async function createShareLink(input: {
   itemType: string
   itemId: string | number
-  expiresInS?: number
+  expiresInS?: number | null
   password?: string
 }): Promise<ShareLinkMeta> {
   const res = await apiClient.post('/share-links', {

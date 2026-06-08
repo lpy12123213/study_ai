@@ -23,7 +23,6 @@ from backend.api.question_library_schemas import (
 from backend.api.sse_polling import next_poll_delay, wait_for_task_event_or_timeout
 from backend.api.sse_utils import is_sse_client_disconnected
 from backend.core.audit import AuditAction, audit_logger
-from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import (
     bulk_delete_question_library_items,
@@ -39,6 +38,7 @@ from backend.generation.question_library import session_service
 from backend.generation.question_library.preview_store import load_preview
 from backend.generation.question_library.runner import RunnerError
 from backend.generation.question_library.session_utils import serialize_session_preview
+from backend.integrations.crawler.manager import get_crawler
 from backend.shared.tasks import task_runtime
 
 router = APIRouter(prefix="/question-library", tags=["question-library"], dependencies=[Depends(require_auth)])

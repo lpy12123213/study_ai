@@ -201,6 +201,10 @@ async def export_to_basket(
                 details_map[str(detail["question_id"])] = detail
 
     for idx, qid in enumerate(question_ids):
+        try:
+            question_id_int = int(qid)
+        except (TypeError, ValueError):
+            return {"success": False, "error": "invalid_question_id", "question_id": str(qid or "")}
         detail = details_map.get(str(qid), {})
         type_name = detail.get("type", "解答题")
         ques_type_id = _resolve_export_question_type_id(type_name, type_id_map)
@@ -211,7 +215,7 @@ async def export_to_basket(
 
         basket_items.append(
             {
-                "questionId": int(qid),
+                "questionId": question_id_int,
                 "addTime": current_time + idx,
                 "childNum": 1,
                 "quesDiff": ques_diff,
@@ -468,14 +472,11 @@ async def login_via_subprocess(crawler: Any) -> Dict[str, Any]:
 
         try:
             from backend.core.subjects import SUBJECTS as valid_subjects
-
-            if crawler.subject not in valid_subjects:
-                return {"success": False, "error": f"非法学科名称: {crawler.subject}"}
         except ImportError:
-            import re as regex
+            return {"success": False, "error": "学科白名单不可用，已拒绝启动登录脚本"}
 
-            if not regex.match(r"^[\u4e00-\u9fff\w]+$", crawler.subject or ""):
-                return {"success": False, "error": f"学科名称包含非法字符: {crawler.subject}"}
+        if crawler.subject not in valid_subjects:
+            return {"success": False, "error": f"非法学科名称: {crawler.subject}"}
 
         project_root = Path(__file__).resolve().parents[3]
         paths = resolve_login_script_paths(project_root)

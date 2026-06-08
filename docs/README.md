@@ -39,7 +39,6 @@
 - `QUESTION_SOURCE_API.md`：题源、crawler、本地题库和 provider 边界。
 - `SEARCH_FILTERS_AND_BLUEPRINTS.md`：筛选项、严格学科约束和蓝图组卷。
 - `STUDY_MATERIAL_IMPROVEMENTS.md`：自学资料生成质量、续流、来源清洗和改进方向。
-- `SVG_TO_LATEX.md`：SVG、公式、LaTeX、PDF、DOCX 导出说明。
 
 ## 历史记录
 

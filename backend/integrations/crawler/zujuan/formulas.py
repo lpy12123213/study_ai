@@ -158,7 +158,7 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
     if cached is not None:
         return cached
 
-    # Persistent cache (DB): survives restarts so repeated crawls don't re-run pandoc/svg conversion.
+    # Persistent cache (DB): survives restarts so repeated crawls don't re-run pandoc conversion.
     try:
         from backend.database.repositories.system.formula_cache import get_formula_latex as db_get_formula_latex
     except ImportError:
@@ -190,27 +190,6 @@ async def get_formula_latex(crawler: Any, formula_hash: str) -> str:
         latex = ""
         if mathml:
             latex = (await mathml_to_latex_via_pandoc(crawler, mathml)).strip()
-        if not latex:
-            try:
-                from backend.core.svg_utils.svg_to_latex import svg_url_to_latex
-
-                svg_url = f"https://staticzujuan.xkw.com/quesimg/Upload/formula/{formula_hash}.svg"
-                async with crawler._formula_http_sem:
-                    svg_latex, unknown = await svg_url_to_latex(svg_url, client=crawler.client, use_advanced=True)
-                svg_latex = (svg_latex or "").strip()
-                if svg_latex:
-                    latex = f"\\({svg_latex}\\)"
-
-                if unknown:
-                    try:
-                        from backend.core.svg_utils.unknown_signatures import record_unknown_signatures
-
-                        record_unknown_signatures(unknown_sigs=unknown, source_url=svg_url, context=None)
-                    except Exception:
-                        logger.warning("zujuan_record_unknown_signatures_failed", exc_info=True)
-            except Exception:
-                logger.warning("zujuan_svg_formula_fallback_failed", extra={"hash": formula_hash}, exc_info=True)
-
         latex = _ensure_inline_math_wrapped(latex)
         formula_cache_set(crawler, formula_hash, latex)
         try:
@@ -305,28 +284,7 @@ async def replace_formulas_with_latex(crawler: Any, html: str) -> str:
         replaced, _hashes = await replace_formulas_with_latex_mml(crawler, html)
         return replaced
     except Exception:
-        logger.warning("zujuan_replace_formulas_mml_failed; fallback", exc_info=True)
-
-    try:
-        from backend.core.svg_utils.svg_to_latex import replace_formulas_with_latex as replace_svg_formulas
-
-        result, unknown_sigs = await replace_svg_formulas(html, concurrency=12, use_advanced=True)
-
-        if unknown_sigs:
-            try:
-                from backend.core.svg_utils.unknown_signatures import record_unknown_signatures
-
-                for svg_url, sigs in unknown_sigs.items():
-                    if sigs:
-                        record_unknown_signatures(unknown_sigs=sigs, source_url=svg_url, context=None)
-            except ImportError:
-                pass
-
-        return result
-    except ImportError:
-        return await replace_formulas_with_svg(crawler, html)
-    except Exception as exc:
-        logger.warning("mathml to latex failed; fallback to svg", extra={"error": str(exc)}, exc_info=True)
+        logger.warning("zujuan_replace_formulas_mml_failed; fallback_to_svg", exc_info=True)
         return await replace_formulas_with_svg(crawler, html)
 
 
@@ -390,6 +348,6 @@ async def replace_formulas_with_inline_svg(crawler: Any, html: str) -> str:
     for src, svg in svg_map.items():
         img_pattern = f'<img[^>]*src="{re.escape(src)}"[^>]*>'
         replacement = f'<span class="epa-formula" data-formula-src="{src}">{svg}</span>'
-        result = re.sub(img_pattern, replacement, result)
+        result = re.sub(img_pattern, lambda _m, value=replacement: value, result)
 
     return result

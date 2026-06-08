@@ -39,6 +39,20 @@ def _clip(text: str, *, max_chars: int) -> str:
     return s[:max_chars].rstrip()
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name) or str(default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name) or str(default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def parse_generated_package(text: str) -> GeneratedVideoPackage:
     obj = _json_from_text(text)
     code = str(obj.get("code") or "").strip()
@@ -62,8 +76,8 @@ async def generate_manim_package(
     render_error: str = "",
 ) -> GeneratedVideoPackage:
     model = str(os.getenv("KNOWLEDGE_VIDEO_MODEL") or os.getenv("STUDY_MATERIALS_WRITER_MODEL") or os.getenv("SUB_MODEL") or "").strip()
-    max_tokens = int(os.getenv("KNOWLEDGE_VIDEO_MAX_TOKENS") or "8000")
-    temp = float(os.getenv("KNOWLEDGE_VIDEO_TEMPERATURE") or "0.3")
+    max_tokens = _env_int("KNOWLEDGE_VIDEO_MAX_TOKENS", 8000)
+    temp = _env_float("KNOWLEDGE_VIDEO_TEMPERATURE", 0.3)
 
     repair = ""
     if previous_code or render_error:
@@ -101,7 +115,7 @@ async def generate_manim_package(
         response_format={"type": "json_object"},
         raise_on_fail=True,
         retries=3,
-        timeout_s=float(os.getenv("KNOWLEDGE_VIDEO_LLM_TIMEOUT_S") or "180"),
+        timeout_s=_env_float("KNOWLEDGE_VIDEO_LLM_TIMEOUT_S", 180.0),
         req_id_prefix="knowledge-video",
         scope="lesson_plan",
     )

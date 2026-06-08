@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class QuestionLibraryPromptUsageTests(unittest.IsolatedAsyncioTestCase):

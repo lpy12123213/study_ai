@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Circle, ListTodo, Loader2 } from 'lucide-react'
@@ -15,26 +15,45 @@ export default function LearningPlansTodoPage() {
   const [searchParams] = useSearchParams()
   const planIdParam = String(searchParams.get('planId') || '').trim()
   const planId = planIdParam ? Number(planIdParam) : null
+  const [pendingItemIds, setPendingItemIds] = useState<Record<number, boolean>>({})
+  const [mutationError, setMutationError] = useState<string | null>(null)
 
   const { data: plans = [], isLoading, error } = useQuery({
     queryKey: ['learningPlans'],
     queryFn: () => learningPlansApi.listLearningPlans({ include_archived: false, limit: 50 }),
   })
 
+  const fallbackPlanId = planId || plans[0]?.id || null
+
   const { data: planDetail, isFetching: isLoadingPlanDetail } = useQuery({
-    queryKey: ['learningPlan', planId],
-    queryFn: () => learningPlansApi.getLearningPlan(planId!),
-    enabled: Boolean(planId),
+    queryKey: ['learningPlan', fallbackPlanId],
+    queryFn: () => learningPlansApi.getLearningPlan(fallbackPlanId!),
+    enabled: Boolean(fallbackPlanId),
   })
 
-  const activePlan = planDetail || (planId ? plans.find((p) => p.id === planId) : plans[0]) || null
+  const activePlan = planDetail || (fallbackPlanId ? plans.find((p) => p.id === fallbackPlanId) : null) || null
 
   const setCompleted = useMutation({
     mutationFn: (input: { itemId: number; completed: boolean }) =>
       learningPlansApi.setLearningPlanItemCompleted(input.itemId, input.completed),
+    onMutate: (input) => {
+      setMutationError(null)
+      setPendingItemIds((prev) => ({ ...prev, [input.itemId]: true }))
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['learningPlans'] })
       if (activePlan?.id) queryClient.invalidateQueries({ queryKey: ['learningPlan', activePlan.id] })
+    },
+    onError: (err: any) => {
+      setMutationError(err?.message || '更新待办状态失败')
+    },
+    onSettled: (_data, _error, input) => {
+      if (!input) return
+      setPendingItemIds((prev) => {
+        const next = { ...prev }
+        delete next[input.itemId]
+        return next
+      })
     },
   })
 
@@ -128,6 +147,8 @@ export default function LearningPlansTodoPage() {
                     </Card>
                   )}
 
+                  {mutationError && <ErrorNotice error={mutationError} />}
+
                   <div className="space-y-2">
                     {items.map((it) => (
                       <Card key={it.id} className="p-4">
@@ -137,7 +158,7 @@ export default function LearningPlansTodoPage() {
                             className="mt-0.5"
                             aria-label={it.completed ? '标记为未完成' : '标记为已完成'}
                             onClick={() => setCompleted.mutate({ itemId: it.id, completed: !it.completed })}
-                            disabled={setCompleted.isPending}
+                            disabled={Boolean(pendingItemIds[it.id])}
                           >
                             {it.completed ? (
                               <CheckCircle2 className="h-5 w-5 text-primary" />

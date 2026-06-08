@@ -8,10 +8,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:
@@ -60,7 +61,7 @@ async def search_fulltext(
 
     want = {str(t or "").strip() for t in (types or []) if str(t or "").strip()}
     if not want:
-        want = {"conversation", "paper", "study_archive"}
+        want = {"conversation", "paper", "study_archive", "question"}
 
     match = _build_fts_match(q)
     if not match:
@@ -136,6 +137,26 @@ async def search_fulltext(
         )
         results.extend(rows)
 
+    if "question" in want:
+        rows = await try_query(
+            """
+            SELECT
+              'question' AS type,
+              question_id AS question_id,
+              COALESCE(NULLIF(knowledge_point,''), NULLIF(subject,''), question_id) AS title,
+              snippet(question_library_fts, 5, :hl_start, :hl_end, '…', 18) AS snippet,
+              bm25(question_library_fts) AS score
+            FROM question_library_fts
+            WHERE user_id = :user_id
+              AND COALESCE(hidden, 0) = 0
+              AND question_library_fts MATCH :match
+            ORDER BY score
+            LIMIT :limit
+            """,
+            {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
+        )
+        results.extend(rows)
+
     if results:
         # Merge across types by bm25 score (smaller is better).
         def score_key(r: dict) -> float:
@@ -179,7 +200,7 @@ async def search_fulltext(
               'paper' AS type,
               pq.paper_id AS paper_id,
               pq.question_id AS question_id,
-              p.name AS title,
+              p.paper_name AS title,
               substr(COALESCE(pq.knowledge_point,'') || char(10) || COALESCE(pq.stem,''), 1, 260) AS snippet,
               1000000.0 AS score
             FROM paper_questions pq
@@ -187,6 +208,37 @@ async def search_fulltext(
             WHERE p.user_id = :user_id
               AND (p.name LIKE :like OR pq.stem LIKE :like OR pq.knowledge_point LIKE :like)
             ORDER BY pq.id DESC
+            LIMIT :limit
+            """,
+            {"user_id": uid, "like": like, "limit": int(limit or 50)},
+        )
+        results.extend(rows)
+
+    if "question" in want:
+        rows = await try_query(
+            """
+            SELECT
+              'question' AS type,
+              ql.question_id AS question_id,
+              COALESCE(NULLIF(qc.knowledge_point,''), NULLIF(ql.subject,''), ql.question_id) AS title,
+              substr(
+                COALESCE(qc.stem,'') || char(10) || COALESCE(qc.answer,'') || char(10) || COALESCE(qc.analysis,''),
+                1,
+                260
+              ) AS snippet,
+              1000000.0 AS score
+            FROM question_library ql
+            JOIN question_cache qc ON qc.question_id = ql.question_id
+            WHERE ql.user_id = :user_id
+              AND COALESCE(ql.hidden, 0) = 0
+              AND (
+                ql.subject LIKE :like
+                OR qc.knowledge_point LIKE :like
+                OR qc.stem LIKE :like
+                OR qc.answer LIKE :like
+                OR qc.analysis LIKE :like
+              )
+            ORDER BY ql.updated_at DESC
             LIMIT :limit
             """,
             {"user_id": uid, "like": like, "limit": int(limit or 50)},

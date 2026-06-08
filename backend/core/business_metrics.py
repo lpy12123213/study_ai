@@ -102,12 +102,21 @@ def _usage_cost_usd(usage: Mapping[str, Any] | None) -> float:
     return 0.0
 
 
-def record_llm_usage(*, provider: str, model: str, usage: Mapping[str, Any] | None, tier: str = "default") -> None:
+def record_llm_usage(
+    *,
+    provider: str,
+    model: str,
+    usage: Mapping[str, Any] | None,
+    tier: str = "default",
+    status: str = "ok",
+    success: bool | None = None,
+) -> None:
     if not _ensure_metrics():
         return
     try:
         labels = (_label(provider, max_chars=60), _label(model, max_chars=120), _label(tier, max_chars=50))
-        _LLM_REQUESTS.labels(*labels, "ok").inc()
+        status_label = "ok" if success is True else "failed" if success is False else _label(status, max_chars=30)
+        _LLM_REQUESTS.labels(*labels, status_label).inc()
         tokens = _usage_total_tokens(usage)
         if tokens > 0:
             _LLM_TOKENS.labels(*labels).inc(tokens)

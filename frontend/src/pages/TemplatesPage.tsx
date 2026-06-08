@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { ShareLinkDialog } from '@/components/shared/ShareLinkDialog'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as templatesApi from '@/api/templates'
 
 function downloadJson(filename: string, payload: unknown) {
@@ -31,6 +32,7 @@ function toJsonText(value: unknown): string {
 
 export default function TemplatesPage() {
   const queryClient = useQueryClient()
+  const pushToast = useNotificationStore((s) => s.pushToast)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [typeFilter, setTypeFilter] = useState('study_materials')
 
@@ -88,9 +90,11 @@ export default function TemplatesPage() {
     let body: Record<string, unknown> = {}
     try {
       const parsed: unknown = JSON.parse(bodyText || '{}')
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        body = parsed as Record<string, unknown>
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        setEditError(new Error('模板内容必须是 JSON 对象'))
+        return
       }
+      body = parsed as Record<string, unknown>
     } catch (e) {
       setEditError(e)
       return
@@ -167,7 +171,19 @@ export default function TemplatesPage() {
               const f = e.target.files?.[0]
               if (!f) return
               try {
-                await importFromFile(f)
+                const created = await importFromFile(f)
+                await queryClient.invalidateQueries({ queryKey: ['templates'] })
+                pushToast({
+                  id: `templates-import-${Date.now()}`,
+                  title: `已导入 ${created.length} 个模板`,
+                  status: 'completed',
+                })
+              } catch (err) {
+                pushToast({
+                  id: `templates-import-failed-${Date.now()}`,
+                  title: err instanceof Error ? err.message : '导入失败',
+                  status: 'failed',
+                })
               } finally {
                 e.target.value = ''
               }

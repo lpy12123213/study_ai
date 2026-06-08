@@ -2,6 +2,17 @@
 from __future__ import annotations
 
 
+AI_SYNTHESIS_REVIEW_NOTE = "※ 本题答案由 AI 生成，请复核。"
+
+
+def _is_ai_synthesis(q: dict) -> bool:
+    return str(q.get("answer_source") or q.get("answerSource") or "").strip() == "ai_synthesis"
+
+
+def _table_cell(value: object) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
 def render_paper_markdown(
     paper: dict,
     *,
@@ -30,11 +41,11 @@ def render_paper_markdown(
         if not isinstance(q, dict):
             continue
         order = q.get("order") or q.get("question_order") or ""
-        qtype = str(q.get("type") or q.get("question_type") or "").strip()
-        diff = str(q.get("difficulty") or "").strip()
-        kp = str(q.get("knowledge_point") or q.get("knowledgePoint") or "").strip()
-        qid = str(q.get("question_id") or q.get("questionId") or "").strip()
-        src = str(q.get("source_url") or q.get("sourceUrl") or "").strip()
+        qtype = _table_cell(q.get("type") or q.get("question_type") or "")
+        diff = _table_cell(q.get("difficulty") or "")
+        kp = _table_cell(q.get("knowledge_point") or q.get("knowledgePoint") or "")
+        qid = _table_cell(q.get("question_id") or q.get("questionId") or "")
+        src = _table_cell(q.get("source_url") or q.get("sourceUrl") or "")
         lines.append(f"| {order} | {qtype} | {diff} | {kp} | {qid} | {src} |")
 
     if include_stem or include_answer or include_analysis:
@@ -66,6 +77,9 @@ def render_paper_markdown(
                     lines.append("**答案：**")
                     lines.append("")
                     lines.append(ans)
+                    if _is_ai_synthesis(q):
+                        lines.append("")
+                        lines.append(f"> {AI_SYNTHESIS_REVIEW_NOTE}")
                     lines.append("")
 
             if include_analysis:

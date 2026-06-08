@@ -8,6 +8,7 @@ from backend.api.chat import router as chat_router
 from backend.api.conversations import router as conversations_router
 from backend.api.exam import router as exam_router
 from backend.api.feedback import router as feedback_router
+from backend.api.insights import router as insights_router
 from backend.api.item_meta import router as item_meta_router
 from backend.api.media import router as media_router
 from backend.api.papers import router as papers_router
@@ -33,3 +34,4 @@ router.include_router(templates_router)
 router.include_router(annotations_router)
 router.include_router(feedback_router)
 router.include_router(wrongbook_router)
+router.include_router(insights_router)

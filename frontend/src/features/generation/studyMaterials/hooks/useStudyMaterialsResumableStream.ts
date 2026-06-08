@@ -42,6 +42,7 @@ export function useStudyMaterialsResumableStream(opts: {
             activeStream: undefined,
             resumable: false,
           })
+          setError('该任务已结束，请重新生成或开启新的续写。')
           return
         }
       } catch {
@@ -62,6 +63,7 @@ export function useStudyMaterialsResumableStream(opts: {
         },
         initialTaskId: taskId,
         initialSeq: afterSeq,
+        localTaskId: taskId,
         streamKey: `${conversationId}:${taskId}`,
       })
     },

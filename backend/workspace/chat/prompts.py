@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 
 PLAN_TAG_OPEN = "<EXAM_PAPER_PLAN>"
 PLAN_TAG_CLOSE = "</EXAM_PAPER_PLAN>"

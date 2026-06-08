@@ -54,13 +54,10 @@ npm run dev
 - `backend/database/`：schema、迁移、仓库层。
 - `backend/shared/`：跨域共享能力。
 - `backend/tasks/`：长任务提交和 runner。
-- `backend/generation/`：生成 runtime 和知识视频。
-- `backend/question_library/`：题库和 AI 出题。
-- `backend/study_materials/`：自学资料。
-- `backend/lesson_plan/`：教案。
-- `backend/paper_compose/`：组卷和导出。
-- `backend/crawler/`：题源适配。
-- `backend/mcp/`：MCP 工具服务。
+- `backend/generation/`：生成 runtime、题库 AI 出题、自学资料、教案、组卷和知识视频。
+- `backend/integrations/crawler/`：题源适配。
+- `backend/integrations/mcp/`：MCP 工具实现。
+- `backend/mcp/stdio_server.py`：外部 MCP stdio 入口。
 
 前端：
 

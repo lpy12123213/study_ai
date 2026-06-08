@@ -10,6 +10,11 @@ export type ToastItem = {
   createdAt: number
 }
 
+type ToastInput = Omit<ToastItem, 'id' | 'createdAt'> & {
+  id?: string
+  createdAt?: number
+}
+
 export type TaskNotification = {
   id: string
   taskId: string
@@ -25,7 +30,7 @@ interface NotificationState {
   toasts: ToastItem[]
 
   addNotification: (n: Omit<TaskNotification, 'read'>) => void
-  addToast: (t: Omit<ToastItem, 'createdAt'> & { createdAt?: number }) => void
+  addToast: (t: ToastInput) => void
   dismiss: (id: string) => void
 
   // Notification-specific helpers.
@@ -42,11 +47,17 @@ interface NotificationState {
   push: (n: Omit<TaskNotification, 'read'>) => void
   remove: (id: string) => void
   clear: () => void
-  pushToast: (t: Omit<ToastItem, 'createdAt'> & { createdAt?: number }) => void
+  pushToast: (t: ToastInput) => void
 }
 
 const MAX_NOTIFICATIONS = 200
 const MAX_TOASTS = 5
+let toastSequence = 0
+
+function nextToastId(): string {
+  toastSequence = (toastSequence + 1) % Number.MAX_SAFE_INTEGER
+  return `toast-${Date.now()}-${toastSequence}`
+}
 
 export const useNotificationStore = create<NotificationState>()(
   persist(
@@ -64,7 +75,7 @@ export const useNotificationStore = create<NotificationState>()(
       },
       addToast: (t) => {
         set((state) => {
-          const id = String(t.id || `toast-${Date.now()}`)
+          const id = String(t.id || nextToastId())
           const next: ToastItem = { ...t, id, createdAt: t.createdAt ?? Date.now() }
           const deduped = state.toasts.filter((x) => x.id !== id)
           return { toasts: [next, ...deduped].slice(0, MAX_TOASTS) }

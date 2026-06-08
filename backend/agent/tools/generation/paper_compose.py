@@ -64,6 +64,25 @@ def _paper_latex_repair_system_prompt() -> str:
 
 
 class PaperComposeToolsMixin:
+    def _compose_sandbox_manager(self):
+        from backend.generation.paper_compose.compose_sandbox import ComposeSandboxManager
+
+        manager = getattr(self, "_compose_sandbox_manager_cache", None)
+        if isinstance(manager, ComposeSandboxManager):
+            return manager
+        manager = ComposeSandboxManager()
+        setattr(self, "_compose_sandbox_manager_cache", manager)
+        return manager
+
+    def _compose_sandbox_session_id(self, args: Dict[str, Any], ctx: CompressedContext) -> str:
+        return _text(
+            args.get("session_id")
+            or args.get("sessionId")
+            or args.get("task_id")
+            or args.get("taskId")
+            or ctx.working_memory.get("compose_sandbox_session_id")
+        )
+
     async def _paper_crawler(self, args: Dict[str, Any], ctx: CompressedContext):
         subject_input = _text(args.get("subject") or ctx.user_profile.preferences.get("subject") or ctx.current_task)
         edu_level = _text(args.get("edu_level"))
@@ -358,6 +377,102 @@ class PaperComposeToolsMixin:
         }
         ctx.working_memory["pdf_url"] = result["pdf_url"]
         return result
+
+    async def _tool_compose_sandbox_open(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """打开组卷 Docker 沙盒会话。"""
+
+        from backend.generation.paper_compose.compose_sandbox import SandboxUnavailableError
+
+        paper = args.get("paper") if isinstance(args.get("paper"), dict) else ctx.working_memory.get("paper")
+        files = args.get("files") if isinstance(args.get("files"), dict) else None
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        try:
+            session = await self._compose_sandbox_manager().open(session_id=session_id or None, paper=paper, files=files)
+        except SandboxUnavailableError as exc:
+            return {"success": False, "error": "sandbox_unavailable", "message": str(exc)}
+        ctx.working_memory["compose_sandbox_session_id"] = session.session_id
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "workspace": str(session.workspace),
+            "expires_at": session.expires_at,
+        }
+
+    async def _tool_compose_sandbox_write_file(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """向组卷沙盒工作区写入文件。"""
+
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        if not session_id:
+            raise ValueError("compose_sandbox_session_missing")
+        path = _text(args.get("path"))
+        content = str(args.get("content") if args.get("content") is not None else "")
+        result = await self._compose_sandbox_manager().write(session_id, path, content)
+        return {"success": True, **result}
+
+    async def _tool_compose_sandbox_read_file(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """读取组卷沙盒工作区文件。"""
+
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        if not session_id:
+            raise ValueError("compose_sandbox_session_missing")
+        path = _text(args.get("path"))
+        content = await self._compose_sandbox_manager().read(session_id, path)
+        return {"success": True, "session_id": session_id, "path": path, "content": content}
+
+    async def _tool_compose_sandbox_run(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """运行组卷沙盒白名单命令。"""
+
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        if not session_id:
+            raise ValueError("compose_sandbox_session_missing")
+        result = await self._compose_sandbox_manager().run(
+            session_id,
+            _text(args.get("command")),
+            [str(x) for x in _as_list(args.get("args"))],
+            timeout_s=_as_int(args.get("timeout_s"), 0, min_v=0, max_v=3600) or None,
+        )
+        return {
+            "success": result.returncode == 0,
+            "session_id": session_id,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
+    async def _tool_compose_sandbox_patch_question(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """按 question_id 修改沙盒 paper.json 中的单题。"""
+
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        if not session_id:
+            raise ValueError("compose_sandbox_session_missing")
+        patch_data = args.get("patch") if isinstance(args.get("patch"), dict) else {}
+        result = await self._compose_sandbox_manager().patch_question(
+            session_id,
+            _text(args.get("question_id") or args.get("questionId")),
+            patch_data,
+        )
+        return {"success": True, **result}
+
+    async def _tool_compose_sandbox_export(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """列出组卷沙盒导出产物。"""
+
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        if not session_id:
+            raise ValueError("compose_sandbox_session_missing")
+        result = await self._compose_sandbox_manager().export(session_id)
+        return {"success": True, **result}
+
+    async def _tool_compose_sandbox_close(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
+        """关闭组卷 Docker 沙盒会话。"""
+
+        session_id = self._compose_sandbox_session_id(args, ctx)
+        if not session_id:
+            raise ValueError("compose_sandbox_session_missing")
+        delete_workspace = bool(args.get("delete_workspace", True))
+        result = await self._compose_sandbox_manager().close(session_id, delete_workspace=delete_workspace)
+        if ctx.working_memory.get("compose_sandbox_session_id") == session_id:
+            ctx.working_memory.pop("compose_sandbox_session_id", None)
+        return {"success": True, **result}
 
     async def _tool_repair_latex(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """根据编译日志回修 LaTeX，供 compiler 重试。"""

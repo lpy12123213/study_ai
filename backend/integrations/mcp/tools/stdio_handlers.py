@@ -6,13 +6,10 @@ Split out of `backend/mcp/stdio_server.py` to keep the stdio entrypoint small an
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
-
-from mcp.types import TextContent
 
 from backend.agent.memory import MemoryStore
 from backend.core.logging_utils import get_logger
@@ -32,14 +29,15 @@ from backend.core.subjects import (
     normalize_difficulty,
     resolve_subject,
 )
+from backend.llm.prompts import create_default_prompt_registry
 from backend.integrations.crawler.interface import CrawlerInterface
 from backend.integrations.crawler.manager import get_crawler
-from backend.generation.agentic.prompts import create_default_prompt_registry
 from backend.integrations.mcp.core.sub_ai_selector import select_best_question
-from backend.integrations.mcp.search.bigmodel import web_search_with_bigmodel_mcp
+from backend.integrations.mcp.search.service import run_web_search
 from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
 from backend.integrations.mcp.tools.reviewer import review_questions_with_openrouter
 from backend.integrations.mcp.tools.stdio_llm import call_llm_text, extract_json_obj, pick_questions
+from mcp.types import TextContent
 
 logger = get_logger(__name__)
 
@@ -52,6 +50,20 @@ def _render_prompt(prompt_id: str, **values: Any) -> str:
     return create_default_prompt_registry().render(prompt_id, **values).content
 
 
+def _required(arguments: Dict[str, Any], key: str) -> str:
+    value = str(arguments.get(key) or "").strip()
+    if not value:
+        raise ValueError(f"missing_required_argument:{key}")
+    return value
+
+
+def _required_list(arguments: Dict[str, Any], key: str, *, max_items: int = 0) -> List[Any]:
+    value = arguments.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"missing_required_argument:{key}")
+    return value[:max_items] if max_items > 0 else value
+
+
 async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[TextContent]:
     """处理工具调用"""
 
@@ -62,6 +74,8 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             server.current_subject = subj
             server.crawler = await get_crawler(subject=subj, edu_level=edu_level_clean, strict=True)
         return server.crawler
+
+    arguments = arguments if isinstance(arguments, dict) else {}
 
     try:
         if name == "search_questions_by_keyword":
@@ -91,7 +105,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
 
             result = await server.crawler.search_by_keyword(
-                keyword=arguments["keyword"],
+                keyword=_required(arguments, "keyword"),
                 subject=resolved_subject,
                 edu_level=edu_level,
                 limit=arguments.get("limit", 10),
@@ -155,7 +169,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
 
             result = await server.crawler.search_by_knowledge(
-                knowledge_point=arguments["knowledge_point"],
+                knowledge_point=_required(arguments, "knowledge_point"),
                 subject=resolved_subject,
                 edu_level=edu_level,
                 limit=arguments.get("limit", 10),
@@ -195,7 +209,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
         elif name == "filter_questions":
             await ensure_crawler_initialized()
             result = await server.crawler.filter_questions(
-                question_ids=arguments["question_ids"],
+                question_ids=_required_list(arguments, "question_ids"),
                 difficulty=arguments.get("difficulty", ""),
                 question_type=arguments.get("question_type", ""),
                 limit=arguments.get("limit", 10),
@@ -203,34 +217,34 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
 
         elif name == "get_question_info":
             await ensure_crawler_initialized()
-            result = await server.crawler.get_question_info(question_id=arguments["question_id"])
+            result = await server.crawler.get_question_info(question_id=_required(arguments, "question_id"))
 
         elif name == "create_paper":
             from backend.database.repositories.question.papers import save_paper
 
             paper_id = await save_paper(
                 user_id="1",
-                paper_name=arguments["paper_name"],
-                questions=arguments["question_ids"],
+                paper_name=_required(arguments, "paper_name"),
+                questions=_required_list(arguments, "question_ids"),
             )
             result = {
                 "success": True,
                 "paper_id": paper_id,
-                "message": f"试卷 '{arguments['paper_name']}' 创建成功",
+                "message": f"试卷 '{_required(arguments, 'paper_name')}' 创建成功",
             }
 
         elif name == "get_question_details":
             await ensure_crawler_initialized()
             # 批量获取题目详情
-            question_ids = arguments["question_ids"][:10]  # 限制最多10个
+            question_ids = _required_list(arguments, "question_ids", max_items=10)  # 限制最多10个
             details = await server.crawler.batch_get_question_details(question_ids)
             result = details
 
         elif name == "select_best_question":
             await ensure_crawler_initialized()
             # 子AI选题功能
-            question_ids = arguments["question_ids"][:5]  # 限制最多5个候选
-            requirement = arguments["requirement"]
+            question_ids = _required_list(arguments, "question_ids", max_items=5)  # 限制最多5个候选
+            requirement = _required(arguments, "requirement")
 
             # 先获取题目详情
             details_result = await server.crawler.batch_get_question_details(question_ids)
@@ -249,7 +263,7 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
         elif name == "export_to_zujuan":
             await ensure_crawler_initialized()
             # 导出到组卷网题篮
-            question_ids = arguments["question_ids"]
+            question_ids = _required_list(arguments, "question_ids")
             paper_name = arguments.get("paper_name", "AI组卷")
             export_subject = (arguments.get("subject") or "").strip()
 
@@ -823,156 +837,15 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
             if mode_in not in {"trending", "patterns"}:
                 mode_in = "trending"
             recency_days = max(1, min(int(arguments.get("recency_days", 180) or 180), 3650))
-
-            if provider_in == "auto":
-                has_tavily = False
-                has_exa = False
-                try:
-                    from backend.integrations.mcp.search.tavily import TAVILY_API_KEY as _TAVILY_API_KEY
-
-                    has_tavily = bool(str(_TAVILY_API_KEY or "").strip())
-                except ImportError:
-                    has_tavily = False
-                try:
-                    from backend.integrations.mcp.search.exa import EXA_API_KEY as _EXA_API_KEY
-
-                    has_exa = bool(str(_EXA_API_KEY or "").strip())
-                except ImportError:
-                    has_exa = False
-                provider_in = "tavily" if has_tavily else "exa" if has_exa else "bigmodel"
-
-            if provider_in == "tavily":
-                try:
-                    from backend.integrations.mcp.search.tavily import tavily_search
-
-                    res = await tavily_search(
-                        query=query,
-                        max_results=limit,
-                        search_depth="basic",
-                        include_answer=False,
-                        include_raw_content=False,
-                        topic="news" if mode_in == "trending" else "general",
-                        days=recency_days if mode_in == "trending" else None,
-                    )
-                except Exception as exc:
-                    logger.warning("stdio_tavily_search_failed", extra={"tool": name}, exc_info=True)
-                    result = {
-                        "success": False,
-                        "provider": "tavily",
-                        "query": query,
-                        "error": f"tavily_search_failed: {exc}",
-                        "results": [],
-                    }
-                else:
-                    if not isinstance(res, dict) or not res.get("success"):
-                        result = {
-                            "success": False,
-                            "provider": str((res or {}).get("provider") or "tavily"),
-                            "query": query,
-                            "error": str((res or {}).get("error") or "tavily_search_failed"),
-                            "results": [],
-                        }
-                    else:
-                        results_in = res.get("results") if isinstance(res.get("results"), list) else []
-                        results_out: List[Dict[str, Any]] = []
-                        for item in results_in[:limit]:
-                            if not isinstance(item, dict):
-                                continue
-                            snippet = str(item.get("snippet") or item.get("text") or "").strip()
-                            if len(snippet) > 900:
-                                snippet = snippet[:900].rstrip() + "…"
-                            results_out.append(
-                                {
-                                    "title": str(item.get("title") or "").strip(),
-                                    "url": str(item.get("url") or "").strip(),
-                                    "snippet": snippet,
-                                    "published_date": str(item.get("published_date") or "").strip(),
-                                }
-                            )
-                        result = {
-                            "success": True,
-                            "provider": "tavily",
-                            "query": query,
-                            "mode": mode_in,
-                            "recency_days": recency_days,
-                            "results": results_out,
-                        }
-            elif provider_in == "exa":
-                try:
-                    from datetime import datetime, timedelta
-
-                    from backend.integrations.mcp.search.exa import exa_search
-
-                    category: Optional[str] = None
-                    start_published_date: Optional[str] = None
-                    end_published_date: Optional[str] = None
-                    if mode_in == "trending":
-                        category = "news"
-                        today = datetime.now().date()
-                        end_published_date = today.isoformat()
-                        start_published_date = (today - timedelta(days=recency_days)).isoformat()
-
-                    res = await exa_search(
-                        query=query,
-                        num_results=limit,
-                        category=category,
-                        start_published_date=start_published_date,
-                        end_published_date=end_published_date,
-                        include_text=False,
-                        include_summary=True,
-                        include_highlights=True,
-                    )
-                except Exception as exc:
-                    logger.warning("stdio_exa_search_failed", extra={"tool": name}, exc_info=True)
-                    result = {"success": False, "provider": "exa", "query": query, "error": f"exa_search_failed: {exc}", "results": []}
-                else:
-                    if not isinstance(res, dict) or not res.get("success"):
-                        result = {
-                            "success": False,
-                            "provider": str((res or {}).get("provider") or "exa"),
-                            "query": query,
-                            "error": str((res or {}).get("error") or "exa_search_failed"),
-                            "results": [],
-                        }
-                    else:
-                        results_in = res.get("results") if isinstance(res.get("results"), list) else []
-                        results_out: List[Dict[str, Any]] = []
-                        for item in results_in[:limit]:
-                            if not isinstance(item, dict):
-                                continue
-                            title = str(item.get("title") or "").strip()
-                            url = str(item.get("url") or "").strip()
-                            published = str(item.get("published_date") or "").strip()
-                            snippet = str(item.get("summary") or "").strip()
-                            if not snippet:
-                                highlights = item.get("highlights") if isinstance(item.get("highlights"), list) else []
-                                snippet = str(highlights[0] if highlights else "").strip()
-                            if len(snippet) > 900:
-                                snippet = snippet[:900].rstrip() + "…"
-                            results_out.append(
-                                {"title": title, "url": url, "snippet": snippet, "published_date": published}
-                            )
-                        result = {
-                            "success": True,
-                            "provider": "exa",
-                            "query": query,
-                            "mode": mode_in,
-                            "recency_days": recency_days,
-                            "results": results_out,
-                        }
-            else:
-                model = (arguments.get("model") or "").strip()
-                result = await web_search_with_bigmodel_mcp(
-                    query=query,
-                    limit=limit,
-                    model=model,
-                )
-                if isinstance(result, dict):
-                    result = {
-                        **result,
-                        "mode": str(result.get("mode") or mode_in),
-                        "recency_days": int(result.get("recency_days") or recency_days),
-                    }
+            model = (arguments.get("model") or "").strip()
+            result = await run_web_search(
+                query=query,
+                limit=limit,
+                provider=provider_in,
+                mode=mode_in,
+                recency_days=recency_days,
+                model=model,
+            )
 
         elif name == "python_scientific_compute":
             code = (arguments.get("code") or "").strip()

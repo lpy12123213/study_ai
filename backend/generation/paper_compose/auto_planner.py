@@ -12,6 +12,85 @@ from backend.generation.question_library.gen_utils import ReasoningEventHandler,
 from backend.generation.question_library.subject_knowledge import infer_subject_family
 
 
+def _slot_points_total(slots: List[dict]) -> int:
+    total = 0
+    for slot in slots:
+        if not isinstance(slot, dict):
+            continue
+        try:
+            count = int(slot.get("count") or 0)
+            points_each = int(slot.get("points_each") or slot.get("points") or 0)
+        except (TypeError, ValueError):
+            continue
+        if count > 0 and points_each > 0:
+            total += count * points_each
+    return total
+
+
+def _normalize_slot_points(slots: List[dict], *, total_points: int) -> tuple[List[dict], List[str]]:
+    target = int(total_points or 0)
+    normalized = [dict(slot) for slot in slots if isinstance(slot, dict)]
+    if target <= 0 or not normalized:
+        return normalized, []
+
+    current_total = _slot_points_total(normalized)
+    if current_total <= 0:
+        for slot in normalized:
+            try:
+                count = max(1, int(slot.get("count") or 0))
+            except (TypeError, ValueError):
+                count = 1
+            slot["points_each"] = max(1, min(60, round(target / max(1, len(normalized) * count))))
+    elif current_total != target:
+        scale = target / max(1, current_total)
+        for slot in normalized:
+            try:
+                pts = int(slot.get("points_each") or slot.get("points") or 0)
+            except (TypeError, ValueError):
+                pts = 0
+            slot["points_each"] = max(1, min(60, int(round(pts * scale)) or 1))
+
+    def _adjust_once(diff: int) -> bool:
+        candidates: list[tuple[int, int]] = []
+        for idx, slot in enumerate(normalized):
+            try:
+                count = int(slot.get("count") or 0)
+                pts = int(slot.get("points_each") or 0)
+            except (TypeError, ValueError):
+                continue
+            if count <= 0:
+                continue
+            if diff > 0 and pts < 60 and count <= diff:
+                candidates.append((count, idx))
+            elif diff < 0 and pts > 1 and count <= abs(diff):
+                candidates.append((count, idx))
+        if not candidates:
+            return False
+        _count, idx = max(candidates)
+        slot = normalized[idx]
+        slot["points_each"] = int(slot.get("points_each") or 0) + (1 if diff > 0 else -1)
+        return True
+
+    for _ in range(1000):
+        diff = target - _slot_points_total(normalized)
+        if diff == 0:
+            break
+        if not _adjust_once(diff):
+            break
+
+    final_total = _slot_points_total(normalized)
+    if final_total == target:
+        return normalized, [f"score_total_normalized:{current_total}->{target}"] if current_total != target else []
+    return normalized, [f"score_total_mismatch:{final_total}!={target}"]
+
+
+def _finalize_structure(structure: dict, *, total_points: int) -> dict:
+    slots = structure.get("slots") if isinstance(structure.get("slots"), list) else []
+    normalized_slots, point_notes = _normalize_slot_points(slots, total_points=total_points)
+    notes = [str(x).strip() for x in (structure.get("notes") or []) if str(x or "").strip()]
+    return {"slots": normalized_slots, "notes": [*notes, *point_notes][:12]}
+
+
 def get_default_paper_structure(subject: str) -> dict:
     """Fallback paper structure for 6 subject families.
 
@@ -101,7 +180,7 @@ async def plan_exam_structure(
 
     subj_input = str(subject or "").strip()
     if not subj_input:
-        return get_default_paper_structure("高中数学")
+        return _finalize_structure(get_default_paper_structure("高中数学"), total_points=total_points)
 
     try:
         resolved_subject = resolve_subject(subj_input, strict=True)
@@ -109,7 +188,7 @@ async def plan_exam_structure(
         resolved_subject = subj_input
 
     if not is_llm_configured():
-        return get_default_paper_structure(resolved_subject)
+        return _finalize_structure(get_default_paper_structure(resolved_subject), total_points=total_points)
 
     payload: Dict[str, Any] = {
         "subject": resolved_subject,
@@ -152,7 +231,7 @@ async def plan_exam_structure(
     obj = _extract_json_obj(text)
     slots = obj.get("slots") if isinstance(obj.get("slots"), list) else None
     if not isinstance(slots, list) or not slots:
-        return get_default_paper_structure(resolved_subject)
+        return _finalize_structure(get_default_paper_structure(resolved_subject), total_points=total_points)
 
     normalized_slots: List[dict] = []
     for s in slots:
@@ -190,6 +269,9 @@ async def plan_exam_structure(
             break
 
     if not normalized_slots:
-        return get_default_paper_structure(resolved_subject)
+        return _finalize_structure(get_default_paper_structure(resolved_subject), total_points=total_points)
 
-    return {"slots": normalized_slots, "notes": [str(x).strip() for x in (obj.get("notes") or []) if str(x or "").strip()][:8]}
+    return _finalize_structure(
+        {"slots": normalized_slots, "notes": [str(x).strip() for x in (obj.get("notes") or []) if str(x or "").strip()][:8]},
+        total_points=total_points,
+    )

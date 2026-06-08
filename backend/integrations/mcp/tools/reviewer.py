@@ -17,7 +17,7 @@ from backend.core.settings import (
     REVIEW_PROVIDER,
     REVIEW_TIMEOUT,
 )
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion
 
 logger = get_logger(__name__)
@@ -151,17 +151,26 @@ def _parse_review(review_text: str) -> Dict[str, Any]:
     elif "reject" in lines:
         result["verdict"] = "REJECT"
 
-    # Extract numerical scores (simple heuristic)
     import re
 
-    score_pattern = r"(\d+)\s*/\s*10"
-    scores = re.findall(score_pattern, review_text)
-    if scores:
-        result["overall_score"] = int(scores[0])
-        if len(scores) > 1:
-            result["clarity_score"] = int(scores[1])
-        if len(scores) > 2:
-            result["accuracy_score"] = int(scores[2])
+    label_map = {
+        "overall": "overall_score",
+        "overall_score": "overall_score",
+        "总分": "overall_score",
+        "总体": "overall_score",
+        "clarity": "clarity_score",
+        "clarity_score": "clarity_score",
+        "清晰": "clarity_score",
+        "表达": "clarity_score",
+        "accuracy": "accuracy_score",
+        "accuracy_score": "accuracy_score",
+        "准确": "accuracy_score",
+        "正确": "accuracy_score",
+    }
+    for raw_label, raw_score in re.findall(r"([A-Za-z_]+|[\u4e00-\u9fff]{2,6})\s*[:：]\s*(\d+)\s*/\s*10", review_text):
+        key = label_map.get(str(raw_label or "").strip().lower())
+        if key:
+            result[key] = int(raw_score)
 
     return result
 

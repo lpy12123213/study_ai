@@ -63,8 +63,8 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_paper_compose_planner_uses_llm_decision_when_configured(self) -> None:
         from backend.generation.agentic.task_specs import build_agent_run_spec_for_task
-        from backend.generation.agentic.prompts import create_default_prompt_registry
         from backend.generation.paper_compose import agentic_workflow
+        from backend.llm.prompts import create_default_prompt_registry
 
         spec = build_agent_run_spec_for_task(
             task_type="paper_generate_full",

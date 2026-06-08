@@ -34,12 +34,27 @@ def _option_tokens(value: Any) -> list[str]:
     return [x.strip().upper() for x in tokens if x.strip()]
 
 
-def _fill_tokens(value: Any) -> list[str]:
+def _fill_slots(value: Any) -> list[str]:
     raw = str(value or "").strip()
     if not raw:
         return []
-    tokens = [x for x in re.split(r"[;；|/、]|(?:\s+或\s+)|(?:\s+or\s+)", raw, flags=re.IGNORECASE) if x]
+    tokens = [x for x in re.split(r"[;；|、]+", raw) if x]
+    return [x for x in tokens if str(x or "").strip()]
+
+
+def _fill_alternatives(value: Any) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    tokens = [x for x in re.split(r"(?:\s+或\s+)|(?:\s+or\s+)", raw, flags=re.IGNORECASE) if x]
     return [_normalize_fill(x) for x in tokens if _normalize_fill(x)]
+
+
+def _fill_tokens(value: Any) -> list[str]:
+    out: list[str] = []
+    for slot in _fill_slots(value):
+        out.extend(_fill_alternatives(slot))
+    return out
 
 
 def _normalize_fill(value: Any) -> str:
@@ -86,17 +101,32 @@ def grade_objective_answer(
         submitted = answer_data.get("fill_blank_text")
         if submitted is None:
             submitted = answer_data.get("fillBlankText")
-        accepted = set(_fill_tokens(expected))
-        normalized = _normalize_fill(submitted)
-        is_correct = bool(accepted) and normalized in accepted
+        expected_slots = _fill_slots(expected)
+        submitted_slots = _fill_slots(submitted)
+        if len(expected_slots) > 1 or len(submitted_slots) > 1:
+            is_correct = bool(expected_slots) and len(expected_slots) == len(submitted_slots)
+            if is_correct:
+                for expected_slot, submitted_slot in zip(expected_slots, submitted_slots):
+                    accepted_slot = set(_fill_alternatives(expected_slot))
+                    if _normalize_fill(submitted_slot) not in accepted_slot:
+                        is_correct = False
+                        break
+            expected_detail = [sorted(set(_fill_alternatives(slot))) for slot in expected_slots]
+            submitted_detail: Any = [_normalize_fill(slot) for slot in submitted_slots]
+        else:
+            accepted = set(_fill_tokens(expected))
+            normalized = _normalize_fill(submitted)
+            is_correct = bool(accepted) and normalized in accepted
+            expected_detail = sorted(accepted)
+            submitted_detail = normalized
         return {
             "is_correct": is_correct,
             "score": _score(is_correct, max_score),
             "max_score": float(max_score or 0.0),
             "grading_json": {
                 "mode": qtype,
-                "expected": sorted(accepted),
-                "submitted": normalized,
+                "expected": expected_detail,
+                "submitted": submitted_detail,
             },
         }
 

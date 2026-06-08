@@ -3,14 +3,27 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from backend.workspace.chat.tool_registry import ChatToolRegistry
-from backend.workspace.chat.tools_spec import TOOLS
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
 from backend.database.repositories.question.papers import list_papers, save_paper
 from backend.database.repositories.question.question_cache import upsert_question_cache
+from backend.workspace.chat.extra_tools import (
+    handle_plot_function,
+    handle_python_scientific_compute,
+    handle_web_search,
+)
+from backend.workspace.chat.tool_registry import ChatToolRegistry
+from backend.workspace.chat.tools_spec import TOOLS
 
 logger = get_logger(__name__)
+
+BASE_VISIBLE_CHAT_TOOLS = [
+    "get_available_filters",
+    "search_questions",
+    "python_scientific_compute",
+    "plot_function",
+    "web_search",
+]
 
 
 class ChatToolsMixin:
@@ -32,6 +45,9 @@ class ChatToolsMixin:
             "get_question_detail": self._handle_get_question_detail,
             "batch_get_question_details": self._handle_batch_get_question_details,
             "select_best_question": self._handle_select_best_question,
+            "python_scientific_compute": handle_python_scientific_compute,
+            "plot_function": handle_plot_function,
+            "web_search": handle_web_search,
         }
         for name, handler in handlers.items():
             registry.register_handler(name, handler)
@@ -45,7 +61,7 @@ class ChatToolsMixin:
         plan = self._extract_last_plan_from_history(history)  # type: ignore[attr-defined]
         if plan is not None and self._is_confirmation_message(user_message):  # type: ignore[attr-defined]
             return TOOLS
-        return self._tools_by_names(["get_available_filters", "search_questions"])
+        return self._tools_by_names(BASE_VISIBLE_CHAT_TOOLS)
 
     async def _get_crawler(self, subject: Optional[str] = None, *, edu_level: str = ""):
         from backend.integrations.crawler.manager import get_crawler

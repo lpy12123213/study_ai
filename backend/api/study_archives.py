@@ -68,7 +68,9 @@ async def create_archive(payload: Dict[str, Any], user: dict = Depends(require_a
     )
 
     row = await get_study_archive(user_id=user_id, archive_id=int(out.get("id") or 0))
-    return {"success": True, "archive": row or out}
+    if not row:
+        raise HTTPException(status_code=500, detail="archive_create_not_persisted")
+    return {"success": True, "archive": row}
 
 
 @router.post("/{archive_id}/clone", response_model=dict)
@@ -97,4 +99,6 @@ async def clone_archive(archive_id: int, payload: Optional[dict] = None, user: d
     )
 
     row = await get_study_archive(user_id=user_id, archive_id=int(out.get("id") or 0))
-    return {"success": True, "archive": row or out}
+    if not row:
+        raise HTTPException(status_code=500, detail="archive_clone_not_persisted")
+    return {"success": True, "archive": row}

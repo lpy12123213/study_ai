@@ -4,7 +4,7 @@ import re
 import unittest
 from pathlib import Path
 
-from backend.generation.agentic.prompts import (
+from backend.llm.prompts import (
     PROMPT_INVENTORY_ALLOWLIST,
     PROMPT_INVENTORY_TARGETS,
 )

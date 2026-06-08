@@ -151,12 +151,21 @@ export function FeedbackDialog(props: {
 
         <div className="space-y-4">
           <div className="grid gap-2">
-            <label className="text-sm font-medium">标题</label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：导出 PDF 失败" />
+            <label className="text-sm font-medium" htmlFor="feedback-title">
+              标题
+            </label>
+            <Input
+              id="feedback-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="例如：导出 PDF 失败"
+            />
           </div>
 
           <div className="grid gap-2">
-            <label className="text-sm font-medium">描述</label>
+            <label className="text-sm font-medium" id="feedback-description-label">
+              描述
+            </label>
             <RichTextarea
               value={description}
               onChange={setDescription}

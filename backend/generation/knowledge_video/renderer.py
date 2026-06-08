@@ -27,14 +27,21 @@ class DockerRenderConfig:
     docker_bin: str = "docker"
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name) or str(default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def default_docker_render_config(*, quality: str = "") -> DockerRenderConfig:
     return DockerRenderConfig(
         image=(os.getenv("KNOWLEDGE_VIDEO_DOCKER_IMAGE") or "study-ai/manim-sandbox:latest").strip(),
         quality=str(quality or os.getenv("KNOWLEDGE_VIDEO_QUALITY") or "low").strip() or "low",
-        timeout_s=int(os.getenv("KNOWLEDGE_VIDEO_RENDER_TIMEOUT_S") or "180"),
+        timeout_s=_env_int("KNOWLEDGE_VIDEO_RENDER_TIMEOUT_S", 180),
         memory=(os.getenv("KNOWLEDGE_VIDEO_DOCKER_MEMORY") or "1g").strip() or "1g",
         cpus=(os.getenv("KNOWLEDGE_VIDEO_DOCKER_CPUS") or "2").strip() or "2",
-        pids_limit=int(os.getenv("KNOWLEDGE_VIDEO_DOCKER_PIDS_LIMIT") or "128"),
+        pids_limit=_env_int("KNOWLEDGE_VIDEO_DOCKER_PIDS_LIMIT", 128),
         user=(os.getenv("KNOWLEDGE_VIDEO_DOCKER_USER") or "1000:1000").strip() or "1000:1000",
         docker_bin=(os.getenv("DOCKER_BIN") or "docker").strip() or "docker",
     )

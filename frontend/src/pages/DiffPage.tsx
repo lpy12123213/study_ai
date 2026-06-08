@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
+import { useNotificationStore } from '@/stores/useNotificationStore'
 import * as papersApi from '@/api/papers'
 import * as studyArchivesApi from '@/api/studyArchives'
 import { isRecord, readStringFrom, readNumber } from '@/lib/record'
@@ -35,6 +36,7 @@ export default function DiffPage() {
   const [type, setType] = useState<DiffType>(initialType)
   const [aId, setAId] = useState(String(searchParams.get('a') || '').trim())
   const [bId, setBId] = useState(String(searchParams.get('b') || '').trim())
+  const addToast = useNotificationStore((s) => s.addToast)
 
   const canCompare = Boolean(type && aId && bId)
 
@@ -60,15 +62,19 @@ export default function DiffPage() {
     const bIds = questionIdsFromPaper(b)
     const setA = new Set(aIds)
     const setB = new Set(bIds)
-    const removed = aIds.filter((id) => !setB.has(id))
-    const added = bIds.filter((id) => !setA.has(id))
+    const removedAll = aIds.filter((id) => !setB.has(id))
+    const addedAll = bIds.filter((id) => !setA.has(id))
     const replaced: Array<{ order: number; from: string; to: string }> = []
     const max = Math.max(aIds.length, bIds.length)
     for (let i = 0; i < max; i++) {
       const from = aIds[i]
       const to = bIds[i]
-      if (from && to && from !== to) replaced.push({ order: i + 1, from, to })
+      if (from && to && from !== to && !setB.has(from) && !setA.has(to)) replaced.push({ order: i + 1, from, to })
     }
+    const replacedFrom = new Set(replaced.map((item) => item.from))
+    const replacedTo = new Set(replaced.map((item) => item.to))
+    const removed = removedAll.filter((id) => !replacedFrom.has(id))
+    const added = addedAll.filter((id) => !replacedTo.has(id))
     return { a, b, removed, added, replaced, aIds, bIds }
   }, [data, type])
 
@@ -87,9 +93,11 @@ export default function DiffPage() {
       return await papersApi.createPaper({ name, questionIds: qids })
     },
     onSuccess: (res) => {
-      const pid = Number(res?.paperId || 0)
+      const pid = Number(res?.paperId || (res as any)?.id || 0)
       if (pid > 0) navigate(`/papers/${pid}`)
+      else addToast({ title: '复制试卷失败：缺少新试卷 ID', status: 'failed' })
     },
+    onError: () => addToast({ title: '复制试卷失败', status: 'failed' }),
   })
 
   const cloneArchive = useMutation({
@@ -110,7 +118,9 @@ export default function DiffPage() {
     onSuccess: (res) => {
       const id = readNumber(isRecord(res) ? res : {}, 'id', 0)
       if (id > 0) navigate(`/study-archives/${id}`)
+      else addToast({ title: '复制资料失败：缺少新资料 ID', status: 'failed' })
     },
+    onError: () => addToast({ title: '复制资料失败', status: 'failed' }),
   })
 
   const applyParams = () => {

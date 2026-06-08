@@ -43,6 +43,12 @@ def convert_records(source: Path, output: Path, *, copy_unknown: bool = False) -
     copied = 0
     skipped = 0
 
+    def _copy_if_distinct(src: Path, dst: Path) -> bool:
+        if src.resolve() == dst.resolve():
+            return False
+        shutil.copy2(src, dst)
+        return True
+
     for path in sorted(list(source.rglob("*.json"))):
         obj = _read_json(path)
         if not obj:
@@ -54,14 +60,15 @@ def convert_records(source: Path, output: Path, *, copy_unknown: bool = False) -
         if isinstance(request, dict) and isinstance(response, dict):
             key = store.save(request=request, response=response, meta=obj.get("meta") if isinstance(obj.get("meta"), dict) else {})
             converted += 1
-            if path.resolve() != (output / f"{key}.json").resolve() and copy_unknown:
-                shutil.copy2(path, output / path.name)
+            if path.resolve() != (output / f"{key}.json").resolve() and copy_unknown and _copy_if_distinct(path, output / path.name):
                 copied += 1
             continue
 
         if copy_unknown:
-            shutil.copy2(path, output / path.name)
-            copied += 1
+            if _copy_if_distinct(path, output / path.name):
+                copied += 1
+            else:
+                skipped += 1
         else:
             skipped += 1
 

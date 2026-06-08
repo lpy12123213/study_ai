@@ -49,6 +49,9 @@ _ALLOWED_NODES = (
     ast.Attribute,
 )
 
+_MAX_CONSTANT_ABS = 1_000_000
+_MAX_POW_EXPONENT = 12
+
 
 class _ExprValidator(ast.NodeVisitor):
     def visit(self, node: ast.AST):
@@ -83,6 +86,28 @@ class _ExprValidator(ast.NodeVisitor):
 
         for a in node.args:
             self.visit(a)
+        return None
+
+    def visit_Constant(self, node: ast.Constant):
+        if isinstance(node.value, (int, float)) and abs(float(node.value)) > _MAX_CONSTANT_ABS:
+            raise ValueError("constant_too_large")
+        return None
+
+    def visit_BinOp(self, node: ast.BinOp):
+        if isinstance(node.op, ast.Pow):
+            if isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Pow):
+                raise ValueError("nested_power")
+            if isinstance(node.right, ast.BinOp) and isinstance(node.right.op, ast.Pow):
+                raise ValueError("nested_power")
+            if isinstance(node.right, ast.Constant) and isinstance(node.right.value, (int, float)):
+                if abs(float(node.right.value)) > _MAX_POW_EXPONENT:
+                    raise ValueError("power_too_large")
+            if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+                if isinstance(node.left.value, (int, float)) and isinstance(node.right.value, (int, float)):
+                    if abs(float(node.left.value)) > 100 or abs(float(node.right.value)) > _MAX_POW_EXPONENT:
+                        raise ValueError("power_too_large")
+        self.visit(node.left)
+        self.visit(node.right)
         return None
 
 

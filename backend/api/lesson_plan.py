@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-import json
-
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import require_auth
 from backend.api.lesson_plan_schemas import (
     LessonPlanCreateRequest,
     LessonPlanExportRequest,
     LessonPlanExportResponse,
-    LessonPlanGenerateRequest,
     LessonPlanListResponse,
     LessonPlanResponse,
 )
-from backend.api.sse_utils import is_sse_client_disconnected
 from backend.core.logging_utils import get_logger
 from backend.generation.lesson_plan.store import (
     create_lesson_plan,
@@ -25,8 +20,6 @@ from backend.generation.lesson_plan.store import (
     get_lesson_plan,
     list_lesson_plans,
 )
-from backend.shared.tasks import task_runtime
-from backend.tasks import submit_lesson_plan_task
 
 router = APIRouter(prefix="/lesson-plans", tags=["lesson-plans"], dependencies=[Depends(require_auth)])
 logger = get_logger(__name__)
@@ -84,40 +77,6 @@ async def delete_plan(plan_id: str, user: dict = Depends(require_auth)):
     if not success:
         raise HTTPException(status_code=404, detail="Lesson plan not found")
     return {"message": "Lesson plan deleted"}
-
-
-@router.post("/generate")
-async def generate_plan(
-    request: LessonPlanGenerateRequest,
-    http_request: Request,
-    user: dict = Depends(require_auth),
-):
-    """Generate a lesson plan using AI with streaming response.
-
-    NOTE:
-    - `/api/tasks` is the canonical long-task API.
-    - This endpoint is kept as a thin compatibility wrapper for older clients.
-    """
-    user_id = _require_user_id(user)
-
-    task = await submit_lesson_plan_task(user_id=user_id, request=request.model_dump())
-
-    async def event_generator():
-        async for event in task_runtime.stream(task.task_id, after_seq=0, heartbeat_s=4.0):
-            if await is_sse_client_disconnected(http_request):
-                return
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-            "X-Deprecated": "use /api/tasks/lesson-plans/generate",
-        },
-    )
 
 
 @router.post("/export", response_model=LessonPlanExportResponse)

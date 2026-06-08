@@ -111,6 +111,7 @@ export function QuestionLibraryCard(props: Props) {
   const [inlineLoading, setInlineLoading] = useState(false)
   const [inlineAnswer, setInlineAnswer] = useState<string>('')
   const [inlineAnalysis, setInlineAnalysis] = useState<string>('')
+  const [inlineFetched, setInlineFetched] = useState(false)
 
   const qid = String(item.question_id || '').trim()
   const stem = String(item.stem || '').trim()
@@ -179,7 +180,7 @@ export function QuestionLibraryCard(props: Props) {
     setActionError(null)
     setInlineOpen((v) => !v)
     if (inlineOpen) return
-    if (inlineAnswer || inlineAnalysis) return
+    if (inlineFetched) return
 
     setInlineLoading(true)
     try {
@@ -189,6 +190,7 @@ export function QuestionLibraryCard(props: Props) {
       const analysis = String(cache?.analysis || '').trim()
       setInlineAnswer(answer)
       setInlineAnalysis(analysis)
+      setInlineFetched(true)
       if (!answer && !analysis) {
         setInlineOpen(false)
       }

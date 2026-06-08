@@ -105,7 +105,7 @@ python -m playwright install chromium
 
 - 当前机器是否能访问目标题源。
 - 是否触发目标站点反爬或登录要求。
-- crawler 代码路径是否是 `backend/crawler/`，不要使用旧路径。
+- crawler 代码路径是否是 `backend/integrations/crawler/`，不要使用旧路径。
 - 短时间内不要高并发重复抓取。
 
 ## 筛选项或知识树加载慢

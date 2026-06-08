@@ -1,52 +1,75 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, Save, Plus } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Loader2, Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { useCanvasBoards, useCreateCanvasBoard } from '@/features/canvas/hooks'
+import { formatDate } from '@/lib/utils'
 
 export default function CanvasPage() {
-  const [boardName, setBoardName] = useState('未命名画布')
+  const navigate = useNavigate()
+  const [query, setQuery] = useState('')
+  const boardsQuery = useCanvasBoards({ q: query || undefined, limit: 50 })
+  const createBoard = useCreateCanvasBoard()
+
+  const handleCreate = async () => {
+    const board = await createBoard.mutateAsync({
+      title: '未命名画布',
+      snapshot: { version: 1, nodes: [] },
+    })
+    navigate(`/canvas/${board.id}`)
+  }
 
   return (
-    <div className="h-full flex flex-col bg-zinc-100 dark:bg-zinc-900">
-      <div className="h-12 border-b border-border bg-background/80 backdrop-blur flex items-center justify-between px-4 z-10">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link to="/chat">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
-          <Input
-            value={boardName}
-            onChange={(e) => setBoardName(e.target.value)}
-            className="h-8 w-48 bg-transparent border-none focus-visible:ring-0"
-          />
+    <main className="flex h-full flex-col bg-background">
+      <header className="flex items-center justify-between gap-3 border-b px-5 py-4">
+        <div>
+          <h1 className="text-lg font-semibold">学习画布</h1>
+          <p className="text-sm text-muted-foreground">题卡、便签与版本快照</p>
+        </div>
+        <Button type="button" onClick={() => void handleCreate()} disabled={createBoard.isPending}>
+          {createBoard.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+          新建
+        </Button>
+      </header>
+
+      <section className="flex min-h-0 flex-1 flex-col p-5">
+        <div className="relative mb-4 max-w-sm">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索看板" className="pl-9" />
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled title="学习画布正在开发中，暂不支持保存">
-            <Save className="h-4 w-4 mr-2" />
-            保存（开发中）
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex-1 relative">
-        <div className="h-full flex items-center justify-center">
-          <div className="text-center px-6">
-            <div className="h-20 w-20 rounded-2xl bg-muted ring-1 ring-border/60 flex items-center justify-center mx-auto mb-4">
-              <Plus className="h-10 w-10 text-muted-foreground" />
-            </div>
-            <h3 className="text-lg font-medium mb-2">学习画布（开发中）</h3>
-            <p className="text-muted-foreground text-sm max-w-md mx-auto">
-              该功能正在开发中：未来会支持自由组织题目、笔记与思维导图，并提供保存/恢复。
-            </p>
-            <p className="text-xs text-muted-foreground mt-4">
-              现在你仍可以使用「对话 / 深度解题 / 自学资料」完成主要学习流程。
-            </p>
+        {boardsQuery.isLoading ? (
+          <div className="flex flex-1 items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        </div>
-      </div>
-    </div>
+        ) : boardsQuery.data?.length ? (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {boardsQuery.data.map((board) => (
+              <Link key={board.id} to={`/canvas/${board.id}`} className="block">
+                <Card className="h-full rounded-md transition hover:border-primary/50">
+                  <CardHeader className="p-4">
+                    <CardTitle className="truncate text-base">{board.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 p-4 pt-0 text-sm text-muted-foreground">
+                    <div>{board.subject || '未设置学科'}</div>
+                    <div>Revision {board.revision}</div>
+                    <div>{formatDate(board.updatedAt || board.createdAt)}</div>
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-1 items-center justify-center rounded-md border border-dashed">
+            <Button type="button" variant="outline" onClick={() => void handleCreate()} disabled={createBoard.isPending}>
+              <Plus className="h-4 w-4" />
+              新建第一个看板
+            </Button>
+          </div>
+        )}
+      </section>
+    </main>
   )
 }

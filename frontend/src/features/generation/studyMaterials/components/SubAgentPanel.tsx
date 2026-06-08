@@ -20,6 +20,8 @@ export function SubAgentPanel({
 
   const selectedKP = activeTab || activities[0]?.knowledgePoint || null
   const selectedActivity = activities.find((a) => a.knowledgePoint === selectedKP)
+  const selectedActivityIndex = selectedActivity ? activities.indexOf(selectedActivity) : -1
+  const activityKey = (activity: SubAgentActivity, index: number) => `${index}:${activity.knowledgePoint}`
 
   useEffect(() => {
     if (!selectedKP) return
@@ -53,7 +55,7 @@ export function SubAgentPanel({
           const isActive = activity.knowledgePoint === selectedKP
           return (
             <motion.button
-              key={activity.knowledgePoint}
+              key={activityKey(activity, activities.indexOf(activity))}
               onClick={() => {
                 const el = scrollContainerRef.current
                 if (el && selectedKP) {
@@ -86,7 +88,7 @@ export function SubAgentPanel({
         <AnimatePresence mode="popLayout">
           {selectedActivity ? (
             <motion.div
-              key={selectedKP}
+              key={selectedActivity ? activityKey(selectedActivity, selectedActivityIndex) : selectedKP}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}

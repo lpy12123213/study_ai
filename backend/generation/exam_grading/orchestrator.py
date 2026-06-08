@@ -76,7 +76,7 @@ async def grade_exam_session(*, user_id: str, session_id: str) -> Dict[str, Any]
             }
         )
 
-    score_ratio = round(total_score / max(max_score, 1.0), 4)
+    score_ratio = round(total_score / max_score, 4) if max_score > 0 else 0.0
     result_data = {
         "total_score": round(total_score, 2),
         "max_score": round(max_score, 2),

@@ -1,9 +1,4 @@
-"""Execution plan builder for the study-materials agent.
-
-The public entrypoint remains `backend.agent.planner.Planner`, but the
-implementation now lives under `backend.agent.planning` to keep files smaller
-and responsibilities clearer.
-"""
+"""Execution plan builder for the study-materials agent."""
 
 from __future__ import annotations
 

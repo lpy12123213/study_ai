@@ -101,7 +101,7 @@ def _parse_province_list_json(text: str) -> Optional[List[Dict[str, Any]]]:
 
 def _normalize_province_name(name: str) -> str:
     """Normalize province names for matching (e.g. 北京市 -> 北京)."""
-    s = re.sub(r"\\s+", "", (name or "").strip())
+    s = re.sub(r"\s+", "", (name or "").strip())
     if not s:
         return ""
     if s in PROVINCE_UNLIMITED_ALIASES:

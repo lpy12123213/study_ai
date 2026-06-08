@@ -60,7 +60,7 @@ async def upsert_generated_file(
             created_at=_now_utc(),
             expires_at=expires_at,
         )
-        await session.merge(row)
+        session.add(row)
         return
 
     existing.user_id = uid

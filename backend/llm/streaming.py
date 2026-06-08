@@ -78,7 +78,7 @@ async def read_stream_response(
             merge_tool_call_chunks(tool_call_chunks, tc_raw)
         finish_reason = str(choice0.get("finish_reason") or finish_reason)
         if isinstance(obj.get("usage"), dict):
-            usage = dict(obj.get("usage") or {})
+            usage.update(dict(obj.get("usage") or {}))
     if reasoning_buf:
         await _emit(reasoning_buf, on_reasoning_delta)
         llm_console.log_delta(req_id=req_id, channel="reasoning", text=reasoning_buf)

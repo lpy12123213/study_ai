@@ -175,6 +175,7 @@ class StudyArchiveToolsMixin:
             lines.append(f"- {topic}")
         lines.append("")
 
+        empty_sections: List[str] = []
         for idx, sec in enumerate([s for s in sections if isinstance(s, dict)], start=1):
             kp = str(sec.get("knowledge_point") or "").strip()
             if not kp:
@@ -230,9 +231,11 @@ class StudyArchiveToolsMixin:
                 lines.append("")
 
             explanation = str(sec.get("explanation_markdown") or "").strip()
-            lines.append(explanation or "（讲解为空：可能是模型调用失败或资料不足，建议重试或提供更具体的范围。）")
             explanation_source = str(sec.get("explanation_source") or "").strip()
             explanation_source_l = explanation_source.lower()
+            if not explanation or explanation_source_l in {"fallback", "empty", "invalid_json_fallback"}:
+                empty_sections.append(kp)
+            lines.append(explanation or "（讲解为空：可能是模型调用失败或资料不足，建议重试或提供更具体的范围。）")
             source_is_model_output = (
                 explanation_source == "llm"
                 or explanation_source_l.startswith("llm")
@@ -303,9 +306,11 @@ class StudyArchiveToolsMixin:
 
         markdown = "\n".join(lines).strip() + "\n"
         ctx.working_memory["markdown"] = markdown
+        ctx.working_memory["study_empty_sections"] = empty_sections[:20]
         return {
             "topic": topic,
             "subject": subject,
             "knowledge_points": kp_list[:20] if kp_list else ([topic] if topic else []),
             "markdown_chars": len(markdown),
+            "empty_sections": empty_sections[:20],
         }

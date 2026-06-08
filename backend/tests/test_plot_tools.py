@@ -5,7 +5,10 @@ import unittest
 
 from PIL import Image
 
-from backend.core import plot_tools
+from backend.core.plot.charts import render_2d_plot_with_meta
+from backend.core.plot.expression import _safe_eval_expr
+from backend.core.plot.geometry import _component_layout, _magnetic_field_points
+from backend.core.plot.schematic import render_schematic
 
 
 class TestPlotTools(unittest.TestCase):
@@ -20,10 +23,10 @@ class TestPlotTools(unittest.TestCase):
 
     def test_safe_eval_rejects_unsupported_attribute_access(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported_attr"):
-            plot_tools._safe_eval_expr("np.__dict__", variables={"x": 1})
+            _safe_eval_expr("np.__dict__", variables={"x": 1})
 
     def test_render_2d_plot_with_meta_reports_invalid_curve_warnings(self) -> None:
-        result = plot_tools.render_2d_plot_with_meta(
+        result = render_2d_plot_with_meta(
             {
                 "curves": [
                     {"expr": "x**2", "label": "good"},
@@ -40,7 +43,7 @@ class TestPlotTools(unittest.TestCase):
         self.assertEqual(result["warnings"][0]["reason"], "unsupported_attr")
 
     def test_render_2d_plot_with_meta_returns_error_when_nothing_can_be_rendered(self) -> None:
-        result = plot_tools.render_2d_plot_with_meta(
+        result = render_2d_plot_with_meta(
             {
                 "curves": [
                     {"expr": "np.__dict__", "label": "bad"},
@@ -52,7 +55,7 @@ class TestPlotTools(unittest.TestCase):
         self.assertEqual(result["error"], "no_renderable_curves")
 
     def test_render_schematic_supports_element_schema_with_pixel_coordinates(self) -> None:
-        png_bytes = plot_tools.render_schematic(
+        png_bytes = render_schematic(
             {
                 "width": 800,
                 "height": 600,
@@ -71,7 +74,7 @@ class TestPlotTools(unittest.TestCase):
         self._assert_non_blank_png(png_bytes)
 
     def test_magnetic_field_points_generates_grid_from_region(self) -> None:
-        points, marker = plot_tools._magnetic_field_points(
+        points, marker = _magnetic_field_points(
             {
                 "type": "magnetic_field",
                 "x": 100,
@@ -90,14 +93,14 @@ class TestPlotTools(unittest.TestCase):
         self.assertEqual(points[-1], (253.0, 250.0))
 
     def test_component_layout_prefers_vertical_terminals_for_tall_symbols(self) -> None:
-        layout = plot_tools._component_layout(center=(300.0, 220.0), size=(36.0, 120.0), orientation="")
+        layout = _component_layout(center=(300.0, 220.0), size=(36.0, 120.0), orientation="")
 
         self.assertEqual(layout["orientation"], "vertical")
         self.assertEqual(layout["lead_start"], (300.0, 160.0))
         self.assertEqual(layout["lead_end"], (300.0, 280.0))
 
     def test_render_schematic_supports_magnetic_field_regions(self) -> None:
-        png_bytes = plot_tools.render_schematic(
+        png_bytes = render_schematic(
             {
                 "width": 500,
                 "height": 360,
@@ -113,4 +116,4 @@ class TestPlotTools(unittest.TestCase):
 
     def test_render_schematic_raises_when_nothing_can_be_rendered(self) -> None:
         with self.assertRaisesRegex(ValueError, "no_renderable_elements"):
-            plot_tools.render_schematic({})
+            render_schematic({})

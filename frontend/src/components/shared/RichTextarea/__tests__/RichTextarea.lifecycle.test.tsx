@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const editorState = vi.hoisted(() => ({
   editor: null as unknown,
@@ -25,8 +25,13 @@ vi.mock('@tiptap/starter-kit', () => ({
 }))
 
 import { RichTextarea } from '../RichTextarea'
+import { useEditor } from '@tiptap/react'
 
 describe('RichTextarea lifecycle', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('does not sync controlled content into a destroyed editor', () => {
     const setContent = vi.fn()
     editorState.editor = {
@@ -42,5 +47,25 @@ describe('RichTextarea lifecycle', () => {
       rerender(<RichTextarea value="updated" onChange={vi.fn()} />)
     }).not.toThrow()
     expect(setContent).not.toHaveBeenCalled()
+  })
+
+  it('updates disabled state without changing editor creation dependencies', () => {
+    const setEditable = vi.fn()
+    editorState.editor = {
+      isDestroyed: false,
+      setEditable,
+      getMarkdown: vi.fn(() => ''),
+      commands: { setContent: vi.fn() },
+    }
+    const useEditorMock = vi.mocked(useEditor)
+
+    const { rerender } = render(<RichTextarea value="" onChange={vi.fn()} disabled={false} />)
+    const firstDeps = useEditorMock.mock.calls[useEditorMock.mock.calls.length - 1]?.[1]
+
+    rerender(<RichTextarea value="" onChange={vi.fn()} disabled />)
+    const secondDeps = useEditorMock.mock.calls[useEditorMock.mock.calls.length - 1]?.[1]
+
+    expect(secondDeps).toEqual(firstDeps)
+    expect(setEditable).toHaveBeenLastCalledWith(false)
   })
 })

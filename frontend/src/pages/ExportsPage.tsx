@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, Loader2, Package, RotateCcw, X, FolderDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -65,10 +65,24 @@ export default function ExportsPage() {
 
   const zipFiles = useMutation({
     mutationFn: (filenames: string[]) => exportsApi.zipGeneratedFiles(filenames),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['generatedFiles'] }),
+    onSuccess: () => {
+      setSelectedFiles({})
+      queryClient.invalidateQueries({ queryKey: ['generatedFiles'] })
+    },
   })
 
-  const selectedList = useMemo(() => Object.entries(selectedFiles).filter(([, v]) => v).map(([k]) => k), [selectedFiles])
+  const currentFilenameSet = useMemo(() => new Set(files.map((f) => f.filename)), [files])
+  const selectedList = useMemo(
+    () => Object.entries(selectedFiles).filter(([k, v]) => v && currentFilenameSet.has(k)).map(([k]) => k),
+    [currentFilenameSet, selectedFiles],
+  )
+
+  useEffect(() => {
+    setSelectedFiles((prev) => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([k, v]) => v && currentFilenameSet.has(k)))
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next
+    })
+  }, [currentFilenameSet])
 
   const toggleFile = (fn: string) => {
     setSelectedFiles((prev) => ({ ...prev, [fn]: !prev[fn] }))
@@ -76,7 +90,7 @@ export default function ExportsPage() {
 
   const doZipDownload = async () => {
     if (selectedList.length === 0) return
-    const res = await zipFiles.mutateAsync(selectedList)
+    const res = await zipFiles.mutateAsync(selectedList.filter((filename) => currentFilenameSet.has(filename)))
     const url = String(res?.url || '')
     if (url) await downloadByUrl(url)
   }
@@ -253,7 +267,7 @@ export default function ExportsPage() {
                           {f.file_type} · {Math.round((f.bytes || 0) / 1024)} KB · {formatDate(f.created_at || '')}
                         </div>
                         {f.expires_at && (
-                          <div className="text-xs text-muted-foreground mt-1">过期：{f.expires_at}</div>
+                          <div className="text-xs text-muted-foreground mt-1">过期：{formatDate(f.expires_at)}</div>
                         )}
                       </div>
                     </label>

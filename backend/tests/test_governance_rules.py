@@ -48,6 +48,21 @@ class TestGovernanceRules(unittest.TestCase):
         # `nextstep.csv` is the governance checklist; it should stay visible/tracked.
         self.assertNotIn("\nnextstep.csv\n", "\n" + gitignore.replace("\r\n", "\n") + "\n")
 
+    def test_data_migration_sunset_paths_remain_guarded(self) -> None:
+        """Do not delete compatibility read paths until a zero-residue migration check exists."""
+
+        checks = {
+            "backend/core/encryption.py": ["_ENC_V1_PREFIX", "def _decrypt_v1", "def _derive_v1_key"],
+            "backend/core/auth.py": ["def _legacy_sha256", "Auto-upgrade legacy SHA256 hash to bcrypt"],
+            "backend/agent/types.py": ["def load_legacy", 'working_memory.pop("_study_policy", None)'],
+        }
+
+        for rel, needles in checks.items():
+            text = (self.root / rel).read_text(encoding="utf-8")
+            for needle in needles:
+                with self.subTest(path=rel, needle=needle):
+                    self.assertIn(needle, text)
+
 
 if __name__ == "__main__":
     unittest.main()

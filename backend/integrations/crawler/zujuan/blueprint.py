@@ -13,6 +13,21 @@ from backend.integrations.crawler.zujuan.utils import (
 from backend.generation.paper_compose.slot_selection import select_slot_with_relax
 
 
+def _split_kps(value: Any) -> List[str]:
+    if isinstance(value, list):
+        out: List[str] = []
+        for x in value:
+            s = str(x or "").strip()
+            if s:
+                out.append(s)
+        return out
+    s = str(value or "").strip()
+    if not s:
+        return []
+    parts = re.split(r"[,，;；|、/\n\r\t]+", s)
+    return [p.strip() for p in parts if p.strip()]
+
+
 async def compose_paper_blueprint(
     self,
     blueprint: List[Dict[str, Any]],
@@ -115,20 +130,6 @@ async def compose_paper_blueprint(
             "sections": [],
             "questions_preview": [],
         }
-
-    def _split_kps(value: Any) -> List[str]:
-        if isinstance(value, list):
-            out: List[str] = []
-            for x in value:
-                s = str(x or "").strip()
-                if s:
-                    out.append(s)
-            return out
-        s = str(value or "").strip()
-        if not s:
-            return []
-        parts = re.split(r"[,，;；|、/\\n\\r\\t]+", s)
-        return [p.strip() for p in parts if p.strip()]
 
     def _required_kps(slot_item: Dict[str, Any]) -> List[str]:
         raw = str(slot_item.get("knowledge_point") or slot_item.get("knowledge_contains") or "").strip()

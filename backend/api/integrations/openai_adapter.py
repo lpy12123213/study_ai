@@ -8,19 +8,27 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.api.auth import require_auth
 from backend.api.crawler_schemas import AvailableFiltersRequest, ComposeBlueprintRequest
 from backend.core.logging_utils import get_logger
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.core.subjects import DEFAULT_DIFFICULTY, normalize_difficulty, resolve_subject
+from backend.database.repositories.question.papers import get_paper, list_papers, save_paper
 from backend.integrations.crawler.interface import CrawlerInterface
 from backend.integrations.crawler.manager import get_crawler as get_subject_crawler
-from backend.database.repositories.question.papers import get_paper, list_papers, save_paper
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["openai-adapter"])
+router = APIRouter(tags=["openai-adapter"], dependencies=[Depends(require_auth)])
+
+
+def _authenticated_user_id(user: dict) -> str:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    return user_id
 
 
 async def get_crawler(subject: str = "", edu_level: str = "") -> CrawlerInterface:
@@ -215,14 +223,15 @@ async def get_question_info(question_id: str) -> Dict[str, Any]:
 
 
 @router.post("/create-paper")
-async def create_paper(request: CreatePaperRequest) -> Dict[str, Any]:
+async def create_paper(request: CreatePaperRequest, user: dict = Depends(require_auth)) -> Dict[str, Any]:
     """Create a paper from question IDs."""
+    user_id = _authenticated_user_id(user)
     try:
         questions = [{"question_id": qid} for qid in request.question_ids]
-        paper_id = await save_paper(user_id="1", paper_name=request.paper_name, questions=questions)
+        paper_id = await save_paper(user_id=user_id, paper_name=request.paper_name, questions=questions)
         return {"success": True, "paper_id": paper_id, "message": f"试卷 '{request.paper_name}' 创建成功"}
     except Exception as exc:
-        logger.exception("openai_adapter_create_paper_failed")
+        logger.exception("openai_adapter_create_paper_failed", extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail="create_paper_failed") from exc
 
 
@@ -285,15 +294,15 @@ async def compose_blueprint(request: ComposeBlueprintRequest) -> Dict[str, Any]:
 
 
 @router.get("/papers")
-async def get_papers(limit: int = 50) -> List[dict]:
-    """List papers for the adapter compatibility user."""
-    return await list_papers(user_id="1", limit=limit)
+async def get_papers(limit: int = 50, user: dict = Depends(require_auth)) -> List[dict]:
+    """List papers for the authenticated adapter user."""
+    return await list_papers(user_id=_authenticated_user_id(user), limit=limit)
 
 
 @router.get("/papers/{paper_id}")
-async def get_paper_detail(paper_id: int) -> dict:
-    """Get paper details for the adapter compatibility user."""
-    paper = await get_paper(user_id="1", paper_id=paper_id)
+async def get_paper_detail(paper_id: int, user: dict = Depends(require_auth)) -> dict:
+    """Get paper details for the authenticated adapter user."""
+    paper = await get_paper(user_id=_authenticated_user_id(user), paper_id=paper_id)
     if not paper:
         raise HTTPException(status_code=404, detail="试卷不存在")
     return paper

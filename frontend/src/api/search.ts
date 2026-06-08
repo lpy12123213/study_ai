@@ -24,6 +24,13 @@ export type SearchResult =
       archive_id: number
       score?: number
     }
+  | {
+      type: 'question'
+      title: string
+      snippet: string
+      question_id: string
+      score?: number
+    }
   | ({
       type: string
       title?: string

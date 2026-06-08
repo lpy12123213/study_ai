@@ -21,6 +21,7 @@ import {
   Settings,
   Sparkles,
   Tag,
+  TrendingUp,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -74,6 +75,7 @@ export const ROUTE_CONFIG: RouteConfig[] = [
   defineRoute({ id: 'exam-session', path: '/exam/:sessionId', label: '在线答题', icon: ClipboardCheck, layout: 'fullscreen', sidebar: false, navGroup: 'hidden', command: false }),
   defineRoute({ id: 'exam-result', path: '/exam/:sessionId/result', label: '考试成绩', icon: ClipboardCheck, layout: 'standard', sidebar: true, navGroup: 'hidden', command: false, parentId: 'papers' }),
   defineRoute({ id: 'canvas', path: '/canvas', label: '学习画布', icon: PenTool, layout: 'fullscreen', sidebar: false, navGroup: 'main', command: true }),
+  defineRoute({ id: 'canvas-detail', path: '/canvas/:boardId', label: '学习画布', icon: PenTool, layout: 'fullscreen', sidebar: false, navGroup: 'hidden', command: false, parentId: 'canvas' }),
   defineRoute({ id: 'lesson-plans', path: '/lesson-plans', label: '教案生成', icon: BookOpen, layout: 'wide', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'lesson-plan-detail', path: '/lesson-plans/:lessonPlanId', label: '教案详情', icon: BookOpen, layout: 'wide', sidebar: true, navGroup: 'hidden', command: false, parentId: 'lesson-plans' }),
   defineRoute({ id: 'search', path: '/search', label: '全文搜索', icon: Search, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
@@ -86,6 +88,7 @@ export const ROUTE_CONFIG: RouteConfig[] = [
   defineRoute({ id: 'annotations', path: '/annotations', label: '批注', icon: Tag, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'feedback', path: '/feedback', label: '反馈', icon: Bug, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'dashboard', path: '/dashboard', label: '仪表盘', icon: BarChart3, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
+  defineRoute({ id: 'insights', path: '/insights', label: '学情分析', icon: TrendingUp, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'diff', path: '/diff', label: '内容对比', icon: Files, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'settings', path: '/settings', label: '设置', icon: Settings, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'dev-rich-textarea', path: '/dev/rich-textarea', label: 'RichTextarea', icon: Bug, layout: 'wide', sidebar: false, navGroup: 'hidden', command: false, requireAuth: false }),

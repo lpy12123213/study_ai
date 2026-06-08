@@ -26,6 +26,10 @@ from backend.shared.tasks import task_runtime
 router = APIRouter(tags=["websocket"])
 logger = get_logger(__name__)
 
+_TASK_STREAM_HEARTBEAT_SECONDS = 10.0
+_TASK_STREAM_POLL_SECONDS = 0.5
+_TASK_STREAM_MAX_SECONDS = 60.0 * 60.0 * 2.0
+
 
 async def _send_event(websocket: WebSocket, event: dict) -> bool:
     """Send a JSON event. Returns False if the connection is dead."""
@@ -54,12 +58,33 @@ async def _stream_task_events(
 
     last_sent = max(0, int(after_seq or 0))
     last_ping_at = 0.0
-    heartbeat_s = 10.0
+    started_at = time.monotonic()
+    heartbeat_s = float(_TASK_STREAM_HEARTBEAT_SECONDS)
+    if heartbeat_s <= 0:
+        heartbeat_s = 10.0
+    poll_s = float(_TASK_STREAM_POLL_SECONDS)
+    if poll_s <= 0:
+        poll_s = 0.5
+    max_stream_s = float(_TASK_STREAM_MAX_SECONDS)
+    if max_stream_s <= 0:
+        max_stream_s = 60.0 * 60.0 * 2.0
 
     while True:
         # Allow client to send messages in parallel (e.g. cancel). We use a
         # non-blocking receive to detect disconnects quickly.
         if websocket.client_state != WebSocketState.CONNECTED:
+            return
+
+        if time.monotonic() - started_at >= max_stream_s:
+            await _send_event(
+                websocket,
+                {
+                    "taskId": task_id,
+                    "seq": last_sent,
+                    "type": "error",
+                    "data": {"error": "stream_timeout", "last_seq": last_sent},
+                },
+            )
             return
 
         task = await db_get_task(user_id=user_id, task_id=task_id, include_events=False)
@@ -113,7 +138,7 @@ async def _stream_task_events(
             ):
                 return
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(poll_s)
 
 
 @router.websocket("/ws/tasks/{task_id}")
@@ -148,6 +173,7 @@ async def ws_task_stream(
     # Start a background task to drain incoming client messages (ping/cancel)
     # so the connection stays responsive and we detect disconnects fast.
     receive_task: asyncio.Task | None = None
+    stream_task: asyncio.Task | None = None
 
     async def _drain_client_messages() -> None:
         try:
@@ -170,7 +196,10 @@ async def ws_task_stream(
 
     try:
         receive_task = asyncio.create_task(_drain_client_messages())
-        await _stream_task_events(websocket, task_id=task_id, user_id=user_id, after_seq=after_seq)
+        stream_task = asyncio.create_task(_stream_task_events(websocket, task_id=task_id, user_id=user_id, after_seq=after_seq))
+        done, _pending = await asyncio.wait({receive_task, stream_task}, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            await task
     except WebSocketDisconnect:
         pass
     except asyncio.CancelledError:
@@ -182,12 +211,13 @@ async def ws_task_stream(
         except Exception:  # noqa: BLE001 - terminal error-notify; socket may already be closing, nothing more to do
             logger.debug("ws_task_stream_error_notify_failed", exc_info=True)
     finally:
-        if receive_task is not None and not receive_task.done():
-            receive_task.cancel()
-            try:
-                await receive_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - cleanup join of cancelled reader task; swallow to guarantee close
-                pass
+        for task in (receive_task, stream_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001 - cleanup join of cancelled task; swallow to guarantee close
+                    pass
         try:
             await websocket.close()
         except Exception:  # noqa: BLE001 - terminal cleanup, swallow to guarantee socket close
@@ -258,7 +288,11 @@ async def ws_chat_stream(
                 from backend.workspace.chat.titles import update_title_for_first_user_message
 
                 service = get_chat_service()
-                conv_id = int(conversation_id)
+                try:
+                    conv_id = int(conversation_id)
+                except (TypeError, ValueError):
+                    await websocket.send_json({"type": "error", "data": {"error": "invalid_conversation_id"}})
+                    continue
 
                 conv = await get_conversation(user_id=user_id, conv_id=conv_id)
                 if not conv:

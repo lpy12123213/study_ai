@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from backend.api.question_evaluate_schemas import QuestionEvaluation, QuestionInput
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.core.subjects import resolve_subject
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion_text
 
 ProgressCallback = Callable[[int, int, QuestionEvaluation], Awaitable[None]]
@@ -202,5 +202,6 @@ async def evaluate_questions_batch(
             await on_progress(completed, len(questions), result)
         return result
 
-    results = await asyncio.gather(*[_run(q) for q in questions[:50]])
+    gathered = await asyncio.gather(*[_run(q) for q in questions[:50]], return_exceptions=True)
+    results = [item for item in gathered if isinstance(item, QuestionEvaluation)]
     return sorted(results, key=lambda item: int(getattr(item, "overall_score", 0) or 0), reverse=True)

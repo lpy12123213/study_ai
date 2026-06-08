@@ -27,6 +27,7 @@ interface UserSettingsState {
   loaded: boolean
   isLoading: boolean
   isSaving: boolean
+  pendingSave: boolean
   error: string | null
   settings: Record<string, unknown>
   loadFromServer: () => Promise<void>
@@ -42,6 +43,7 @@ export const useUserSettingsStore = create<UserSettingsState>()((set, get) => ({
   loaded: false,
   isLoading: false,
   isSaving: false,
+  pendingSave: false,
   error: null,
   settings: {},
 
@@ -65,17 +67,29 @@ export const useUserSettingsStore = create<UserSettingsState>()((set, get) => ({
   },
 
   saveToServer: async () => {
-    if (get().isSaving) return
+    if (get().isSaving) {
+      set({ pendingSave: true })
+      return
+    }
     set({ isSaving: true, error: null })
     try {
-      const saved = await userSettingsApi.putUserSettings(get().settings)
+      const payload = get().settings
+      const saved = await userSettingsApi.putUserSettings(payload)
       const next = isPlainObject(saved.settings) ? saved.settings : {}
-      set({ settings: next, loaded: true })
+      const current = get().settings
+      set({
+        settings: current === payload ? next : deepMerge(next, current),
+        loaded: true,
+      })
     } catch (e) {
       set({ error: getErrorMessage(e) ?? 'save_failed' })
       throw e
     } finally {
       set({ isSaving: false })
+      if (get().pendingSave) {
+        set({ pendingSave: false })
+        await get().saveToServer()
+      }
     }
   },
 

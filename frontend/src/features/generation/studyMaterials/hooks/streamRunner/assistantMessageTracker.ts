@@ -124,8 +124,11 @@ export function createAssistantMessageTracker({ conversationId, assistantMessage
   }
 
   const writeErrorContent = (msg: string) => {
+    flushAssistant()
+    const suffix = `\n\n出错：${msg}`
+    assistantText = assistantText.trim() ? `${assistantText}${suffix}` : `出错：${msg}`
     useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
-      content: `出错：${msg}`,
+      content: assistantText,
       steps: assistantSteps,
     })
   }

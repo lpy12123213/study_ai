@@ -21,6 +21,7 @@ import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
+from backend.core.http_fetch import normalize_public_http_url, safe_fetch_get
 from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -270,6 +271,10 @@ class ZhihuFetcher:
         target_url = (url or "").strip()
         if not target_url:
             return ZhihuFetchResult(success=False, type="unknown", url=url or "", error="missing_url")
+        try:
+            target_url = await normalize_public_http_url(target_url)
+        except ValueError:
+            return ZhihuFetchResult(success=False, type="unknown", url=target_url, error="forbidden_url")
 
         parsed = urlparse(target_url)
         path = parsed.path or ""
@@ -304,11 +309,9 @@ class ZhihuFetcher:
     async def _get_html(self, url: str, *, cookies: str = "") -> str:
         ck = (cookies or "").strip() or self._cookies
         headers = self._build_headers(ck)
-        timeout = httpx.Timeout(self._timeout_seconds)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return resp.text
+        resp = await safe_fetch_get(url, headers=headers, timeout_s=float(self._timeout_seconds or 30))
+        resp.raise_for_status()
+        return resp.text
 
     async def _fetch_article(self, url: str, *, cookies: str = "") -> ZhihuFetchResult:
         html = await self._get_html(url, cookies=cookies)

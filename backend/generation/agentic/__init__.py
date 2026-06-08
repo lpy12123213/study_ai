@@ -16,7 +16,7 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in {"PromptRegistry", "PromptTemplate", "create_default_prompt_registry"}:
-        from backend.generation.agentic import prompts
+        from backend.llm import prompts
 
         return getattr(prompts, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

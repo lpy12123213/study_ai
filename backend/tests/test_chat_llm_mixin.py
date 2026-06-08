@@ -5,9 +5,9 @@ import os
 import unittest
 from unittest.mock import patch
 
+from backend.llm.client import _estimate_messages_tokens
 from backend.workspace.chat.llm_mixin import ChatLLMMixin
 from backend.workspace.chat.prompts import get_system_prompt
-from backend.llm.client import _estimate_messages_tokens
 
 
 class TestChatLLMMixinStreamingCleanup(unittest.TestCase):

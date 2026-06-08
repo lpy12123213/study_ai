@@ -165,6 +165,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms))
 }
 
+function abortError(): DOMException {
+  return new DOMException('The operation was aborted.', 'AbortError')
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError()
+}
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return sleep(ms)
+  throwIfAborted(signal)
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(resolve, ms)
+    const onAbort = () => {
+      globalThis.clearTimeout(timer)
+      reject(abortError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export async function searchQuestions(
   req: QuestionEvaluateSearchRequest,
 ): Promise<QuestionEvaluateSearchResponse> {
@@ -195,7 +216,9 @@ export async function searchQuestions(
 
 export async function evaluateQuestions(
   req: QuestionEvaluateRequest,
+  options?: { signal?: AbortSignal; pollIntervalMs?: number },
 ): Promise<QuestionEvaluateResponse> {
+  throwIfAborted(options?.signal)
   const response = await apiClient.post<unknown>('/tasks/question-evaluate/evaluate', {
     subject: req.subject,
     requirements: req.requirements,
@@ -219,7 +242,9 @@ export async function evaluateQuestions(
   if (!taskId) throw new Error('missing_task_id')
 
   for (;;) {
+    throwIfAborted(options?.signal)
     const task = await getTask(taskId, { includeEvents: true, eventsLimit: 200 })
+    throwIfAborted(options?.signal)
     const status = String(task.status || '')
 
     if (status === 'completed') {
@@ -241,6 +266,6 @@ export async function evaluateQuestions(
       throw new Error(message)
     }
 
-    await sleep(800)
+    await sleepWithAbort(options?.pollIntervalMs ?? 800, options?.signal)
   }
 }

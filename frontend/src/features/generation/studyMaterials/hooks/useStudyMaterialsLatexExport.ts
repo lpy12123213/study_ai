@@ -183,6 +183,7 @@ export function useStudyMaterialsLatexExport(opts: {
 
     try {
       let donePayload: Record<string, unknown> = {}
+      let streamErrorMessage = ''
 
       await fetchSSERequest(
         '/study-materials/convert-markdown-to-latex/stream',
@@ -223,6 +224,7 @@ export function useStudyMaterialsLatexExport(opts: {
 
           if (kind === 'error') {
             const msg = formatStudyMaterialsError(toText(payload.message) || '转换失败')
+            streamErrorMessage = msg
             setLatexError(msg)
             return
           }
@@ -237,7 +239,7 @@ export function useStudyMaterialsLatexExport(opts: {
       const filename = readString(donePayload, 'filename')
 
       if (!texUrl) {
-        throw new Error('转换失败')
+        throw new Error(streamErrorMessage || '转换失败')
       }
 
       setLatexTexUrl(texUrl)

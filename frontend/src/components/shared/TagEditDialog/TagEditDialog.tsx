@@ -42,7 +42,7 @@ export function TagEditDialog({
 
   const setTags = (tags: string[]) => {
     onValueChange(
-      Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean))).slice(0, 20).join(', '),
+      Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean))).slice(-20).join(', '),
     )
   }
 

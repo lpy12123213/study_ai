@@ -137,7 +137,7 @@ async def render_schematic_to_url(
 ) -> Dict[str, Any]:
     """Render a Matplotlib schematic spec to a published SVG (default) or PNG URL."""
 
-    from backend.core.plot_tools import render_schematic_with_meta
+    from backend.core.plot import render_schematic_with_meta
 
     uid = str(user_id or "").strip() or "anonymous"
     spec_clean = spec if isinstance(spec, dict) else {}
@@ -172,7 +172,7 @@ async def render_matplotlib_2d_to_url(
 ) -> Dict[str, Any]:
     """Render a 2D Matplotlib plot (functions / curves) to a published URL."""
 
-    from backend.core.plot_tools import render_2d_plot_with_meta
+    from backend.core.plot import render_2d_plot_with_meta
 
     uid = str(user_id or "").strip() or "anonymous"
     spec_clean = spec if isinstance(spec, dict) else {}
@@ -208,7 +208,7 @@ async def render_matplotlib_3d_to_url(
 ) -> Dict[str, Any]:
     """Render a 3D Matplotlib surface plot to a published URL."""
 
-    from backend.core.plot_tools import render_3d_plot_with_meta
+    from backend.core.plot import render_3d_plot_with_meta
 
     uid = str(user_id or "").strip() or "anonymous"
     spec_clean = spec if isinstance(spec, dict) else {}

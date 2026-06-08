@@ -130,9 +130,14 @@ class KnowledgePointsToolsMixin:
             t = topic
             cands: List[str] = []
 
+            def _add(items: List[str]) -> None:
+                for item in items:
+                    if item:
+                        cands.append(item)
+
             # Projective geometry (射影几何 / 射影)
             if "射影" in t:
-                cands.extend(
+                _add(
                     [
                         "射影空间",
                         "齐次坐标",
@@ -146,9 +151,26 @@ class KnowledgePointsToolsMixin:
                     ]
                 )
 
-            # Generic math fallbacks (still searchable)
+            if "函数" in t:
+                _add([f"{t} 定义域和值域", f"{t} 图像与性质", f"{t} 单调性", f"{t} 最值与零点", f"{t} 应用题"])
+            if "方程" in t or "不等式" in t:
+                _add([f"{t} 基本解法", f"{t} 等价变形", f"{t} 参数讨论", f"{t} 实际应用"])
+            if "几何" in t or "三角形" in t or "圆" in t:
+                _add([f"{t} 基本概念", f"{t} 性质定理", f"{t} 作图与证明", f"{t} 典型模型"])
+            if "力" in t or "运动" in t or "动量" in t or "能量" in t:
+                _add([f"{t} 概念与受力分析", f"{t} 基本规律", f"{t} 典型模型", f"{t} 实验与误差"])
+            if "电" in t or "磁" in t or "电路" in t:
+                _add([f"{t} 基本概念", f"{t} 规律与公式", f"{t} 电路/场景模型", f"{t} 实验探究"])
+            if "化学" in subject or any(key in t for key in ("反应", "溶液", "元素", "有机")):
+                _add([f"{t} 核心概念", f"{t} 反应规律", f"{t} 实验现象", f"{t} 计算与应用"])
+            if "语文" in subject or any(key in t for key in ("阅读", "写作", "作文", "古诗", "文言")):
+                _add([f"{t} 文本理解", f"{t} 表达手法", f"{t} 答题思路", f"{t} 迁移应用"])
+            if "英语" in subject or any(key in t.lower() for key in ("grammar", "reading", "writing")):
+                _add([f"{t} vocabulary", f"{t} grammar patterns", f"{t} reading strategies", f"{t} writing practice"])
+
+            # Generic fallbacks remain last so domain-specific points win.
             if ("数学" in subject) or ("几何" in t) or ("代数" in t) or ("函数" in t):
-                cands.extend(
+                _add(
                     [
                         f"{t} 基本概念",
                         f"{t} 典型性质",

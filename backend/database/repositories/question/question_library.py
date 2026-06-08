@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import QuestionCache, QuestionLibraryItem
 from backend.shared.question_thinking import extract_thinking_depth
 
@@ -13,7 +15,7 @@ HiddenFilter = Literal["0", "1", "all"]
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:
@@ -65,38 +67,58 @@ async def upsert_question_library_items(
         if not qid:
             continue
 
-        result = await session.execute(
-            select(QuestionLibraryItem).where(
-                QuestionLibraryItem.user_id == uid,
-                QuestionLibraryItem.question_id == qid,
-            )
-        )
-        row = result.scalar_one_or_none() or QuestionLibraryItem(user_id=uid, question_id=qid)
-
+        values: Dict[str, Any] = {
+            "user_id": uid,
+            "question_id": qid,
+            "subject": "",
+            "origin": "crawled",
+            "hidden": 0,
+            "starred": 0,
+            "ai_verdict": "",
+            "ai_dimensions_json": "",
+            "ai_summary": "",
+        }
+        update_cols: Dict[str, Any] = {}
         subj = str(it.get("subject") or "").strip()
         if subj:
-            row.subject = subj
+            values["subject"] = subj
+            update_cols["subject"] = subj
         origin = str(it.get("origin") or "").strip()
         if origin:
-            row.origin = origin
+            values["origin"] = origin
+            update_cols["origin"] = origin
         if "hidden" in it:
-            row.hidden = 1 if bool(it.get("hidden")) else 0
+            values["hidden"] = 1 if bool(it.get("hidden")) else 0
+            update_cols["hidden"] = values["hidden"]
         if "starred" in it:
-            row.starred = 1 if bool(it.get("starred")) else 0
+            values["starred"] = 1 if bool(it.get("starred")) else 0
+            update_cols["starred"] = values["starred"]
 
         if "ai_score" in it:
             try:
-                row.ai_score = int(it.get("ai_score")) if it.get("ai_score") is not None else None
+                values["ai_score"] = int(it.get("ai_score")) if it.get("ai_score") is not None else None
             except (TypeError, ValueError):
-                row.ai_score = None
+                values["ai_score"] = None
+            update_cols["ai_score"] = values["ai_score"]
         if "ai_verdict" in it:
-            row.ai_verdict = str(it.get("ai_verdict") or "").strip()
+            values["ai_verdict"] = str(it.get("ai_verdict") or "").strip()
+            update_cols["ai_verdict"] = values["ai_verdict"]
         if "ai_dimensions_json" in it:
-            row.ai_dimensions_json = str(it.get("ai_dimensions_json") or "").strip()
+            values["ai_dimensions_json"] = str(it.get("ai_dimensions_json") or "").strip()
+            update_cols["ai_dimensions_json"] = values["ai_dimensions_json"]
         if "ai_summary" in it:
-            row.ai_summary = str(it.get("ai_summary") or "").strip()
+            values["ai_summary"] = str(it.get("ai_summary") or "").strip()
+            update_cols["ai_summary"] = values["ai_summary"]
 
-        session.add(row)
+        stmt = sqlite_insert(QuestionLibraryItem).values(**values)
+        if update_cols:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["user_id", "question_id"],
+                set_=update_cols,
+            )
+        else:
+            stmt = stmt.on_conflict_do_nothing(index_elements=["user_id", "question_id"])
+        await session.execute(stmt)
         n += 1
 
     await session.flush()

@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { TaskTimeline } from '@/components/task/TaskTimeline'
 import { BrandMark } from '@/components/shared/BrandMark'
+import { Markdown } from '@/components/shared/Markdown'
 import { APP_ASSISTANT_NAME } from '@/constants/branding'
 import type { Message } from '@/types'
 
@@ -16,7 +17,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
     if (disableMotion) {
       return (
         <div className="flex justify-end mb-6">
-          <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+          <div className="aurora-chat-user max-w-[85%] sm:max-w-[75%] px-5 py-3 text-sm leading-6 text-foreground">
             <div className="whitespace-pre-wrap">{message.content}</div>
           </div>
         </div>
@@ -28,7 +29,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
         animate={{ opacity: 1, y: 0 }}
         className="flex justify-end mb-6"
       >
-        <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+        <div className="aurora-chat-user max-w-[85%] sm:max-w-[75%] px-5 py-3 text-sm leading-6 text-foreground">
           <div className="whitespace-pre-wrap">{message.content}</div>
         </div>
       </motion.div>
@@ -37,7 +38,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
 
   if (disableMotion) {
     return (
-      <div className="flex flex-col gap-2 mb-8 max-w-3xl w-full">
+      <div className="aurora-chat-assistant flex flex-col gap-2 mb-8 max-w-3xl w-full">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
           <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
             <BrandMark size={12} />
@@ -45,9 +46,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
           <span>{APP_ASSISTANT_NAME}</span>
         </div>
 
-        <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        </div>
+        <Markdown content={message.content} className="text-foreground leading-7" />
 
         {message.steps && message.steps.length > 0 && (
           <div className="mt-3">
@@ -63,8 +62,8 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
             </Button>
 
             {showSteps && (
-              <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
-                <div className="p-4 bg-muted/30">
+              <div className="aurora-tool-card mt-3 overflow-hidden rounded-lg border border-border bg-card" data-state="success">
+                <div className="p-4">
                   <TaskTimeline steps={message.steps} />
                 </div>
               </div>
@@ -79,7 +78,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
+      className="aurora-chat-assistant flex flex-col gap-2 mb-8 max-w-3xl w-full"
     >
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
         <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
@@ -88,9 +87,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
         <span>{APP_ASSISTANT_NAME}</span>
       </div>
       
-      <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
-        <div className="whitespace-pre-wrap">{message.content}</div>
-      </div>
+      <Markdown content={message.content} className="text-foreground leading-7" />
 
       {message.steps && message.steps.length > 0 && (
         <div className="mt-3">
@@ -111,9 +108,10 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
+                className="aurora-tool-card mt-3 overflow-hidden rounded-lg border border-border bg-card"
+                data-state="success"
               >
-                <div className="p-4 bg-muted/30">
+                <div className="p-4">
                    <TaskTimeline steps={message.steps} />
                 </div>
               </motion.div>

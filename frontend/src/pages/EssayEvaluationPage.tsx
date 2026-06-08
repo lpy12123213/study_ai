@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNotificationStore } from '@/stores/useNotificationStore'
 import { EssayHistory, EssayInput, EssayResult, useEssayEvaluation } from '@/features/generation/essayEvaluation'
 
@@ -16,20 +16,36 @@ import { EssayHistory, EssayInput, EssayResult, useEssayEvaluation } from '@/fea
  */
 export default function EssayEvaluationPage() {
   const pushToast = useNotificationStore((s) => s.pushToast)
-  const { loading, error, result, evaluate } = useEssayEvaluation()
+  const { loading, error, result, evaluationId, essayText, evaluate, loadEvaluation } = useEssayEvaluation()
+  const [selectedId, setSelectedId] = useState<number | null>(null)
 
   const paragraphs = useMemo(() => {
-    if (!result) return undefined
-    // The original essay text isn't echoed back from the API to keep the
-    // payload light; if the user still has it on screen we could show it
-    // here. Leaving as ``undefined`` falls back to "issue + suggestion only".
-    return undefined
-  }, [result])
+    if (!result || !essayText.trim()) return undefined
+    return essayText
+      .split(/\n\s*\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }, [essayText, result])
 
   return (
     <div className="grid h-full grid-cols-1 gap-4 p-4 md:grid-cols-[260px_minmax(0,1fr)_minmax(0,1fr)]">
       <aside className="h-full overflow-hidden rounded-lg border border-border bg-card">
-        <EssayHistory />
+        <EssayHistory
+          selectedId={selectedId ?? evaluationId}
+          onSelect={async (record) => {
+            setSelectedId(record.id)
+            try {
+              await loadEvaluation(record.id)
+            } catch (caught) {
+              const message = caught instanceof Error ? caught.message : 'evaluation_load_failed'
+              pushToast({
+                id: `essay-eval-load-error-${Date.now()}`,
+                title: `加载批改记录失败：${message}`,
+                status: 'failed',
+              })
+            }
+          }}
+        />
       </aside>
 
       <section className="h-full overflow-y-auto rounded-lg border border-border bg-card p-4">
@@ -41,7 +57,8 @@ export default function EssayEvaluationPage() {
           loading={loading}
           onSubmit={async (payload) => {
             try {
-              await evaluate(payload)
+              const response = await evaluate(payload)
+              setSelectedId(response.evaluation_id)
             } catch (caught) {
               const message = caught instanceof Error ? caught.message : 'evaluation_failed'
               pushToast({

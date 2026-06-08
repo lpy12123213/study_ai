@@ -97,14 +97,15 @@ export function composePaperStream(
   request: ComposeRequest,
   onEvent: (event: ComposeStreamEvent) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: { signal?: AbortSignal }
 ): void {
   apiClient
     .post('/tasks/papers/compose', request, { timeout: LONG_TASK_CREATE_TIMEOUT_MS })
     .then((res) => {
       const taskId = String(recordString(res.data, 'taskId') || request.taskId || '').trim()
       if (!taskId) throw new Error('missing_task_id')
-      streamComposeTask(taskId, 0, onEvent, onError, onComplete)
+      streamComposeTask(taskId, 0, onEvent, onError, onComplete, options)
     })
     .catch((err: unknown) => {
       const message = errorMessage(err)
@@ -117,12 +118,13 @@ export function streamComposeTask(
   afterSeq: number,
   onEvent: (event: ComposeStreamEvent) => void,
   onError?: (error: Error) => void,
-  onComplete?: () => void
+  onComplete?: () => void,
+  options?: { signal?: AbortSignal }
 ): void {
   const encodedId = encodeURIComponent(taskId)
   fetchSSERequest(
     `/tasks/${encodedId}/stream?after_seq=${Math.max(0, afterSeq || 0)}`,
-    { method: 'GET' },
+    { method: 'GET', signal: options?.signal },
     (data) => onEvent(data as ComposeStreamEvent),
     onError,
     onComplete

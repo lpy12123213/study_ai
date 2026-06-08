@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Search, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -45,6 +45,13 @@ export default function QuestionEvaluatePage() {
   const [isEvaluating, setIsEvaluating] = useState(false)
   const [evalError, setEvalError] = useState<string | null>(null)
   const [evalResults, setEvalResults] = useState<questionEvaluateApi.QuestionEvaluateResult[]>([])
+  const evaluateAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => {
+      evaluateAbortRef.current?.abort()
+    }
+  }, [])
 
   const selectedQuestions = useMemo(() => {
     const set = new Set(Object.entries(selectedIds).filter(([, v]) => v).map(([k]) => k))
@@ -107,18 +114,26 @@ export default function QuestionEvaluatePage() {
 
     setIsEvaluating(true)
     setEvalError(null)
+    evaluateAbortRef.current?.abort()
+    const controller = new AbortController()
+    evaluateAbortRef.current = controller
     try {
       const res = await questionEvaluateApi.evaluateQuestions({
         subject,
         requirements,
         questions: selectedQuestions,
-      })
+      }, { signal: controller.signal })
+      if (controller.signal.aborted) return
       setEvalResults(res.results)
     } catch (err: any) {
+      if (err?.name === 'AbortError') return
       setEvalError(err?.message || '鉴别失败')
       setEvalResults([])
     } finally {
-      setIsEvaluating(false)
+      if (evaluateAbortRef.current === controller) {
+        evaluateAbortRef.current = null
+        setIsEvaluating(false)
+      }
     }
   }
 

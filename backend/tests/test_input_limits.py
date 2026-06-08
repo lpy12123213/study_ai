@@ -17,7 +17,6 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-
 _RELOAD_MODULES = [
     "backend.app",
     "backend.api.auth",

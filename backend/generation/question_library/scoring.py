@@ -4,8 +4,8 @@ import json
 from typing import Any, Dict, List
 
 from backend.database.repositories.question.question_library import set_hidden, upsert_question_library_items
-from backend.llm.runner import run_json
 from backend.llm.prompts import create_default_prompt_registry
+from backend.llm.runner import run_json
 from backend.shared.question_thinking import (
     extract_thinking_depth,
     merge_method_context,
@@ -285,7 +285,7 @@ async def score_stem_with_llm(*, subject: str, stem: str, model: str, requiremen
     obj = obj if isinstance(obj, dict) else {}
     return {
         "verdict": str(obj.get("verdict") or "").strip(),
-        "overall_score": int(obj.get("overall_score") or 0),
+        "overall_score": _as_int(obj.get("overall_score"), 0),
         "dimensions": list(obj.get("dimensions") or []),
         "highlights": list(obj.get("highlights") or []),
         "issues": list(obj.get("issues") or []),

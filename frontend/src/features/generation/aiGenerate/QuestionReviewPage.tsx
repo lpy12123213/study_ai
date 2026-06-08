@@ -197,6 +197,7 @@ export function QuestionReviewPage() {
     const controller = new AbortController()
     controllerRef.current = controller
     setRegenerating(sectionKey)
+    let appliedDonePayload = false
 
     regenerateQuestionLibrarySection(
       previewId,
@@ -207,6 +208,7 @@ export function QuestionReviewPage() {
       (event) => {
         if (event.type !== 'done') return
         const content = String(event.data?.content || '').trim()
+        appliedDonePayload = true
         setQuestion((prev) => {
           if (!prev) return prev
           return {
@@ -224,7 +226,9 @@ export function QuestionReviewPage() {
       },
       async () => {
         setRegenerating('')
-        await refreshQuestion()
+        if (!appliedDonePayload) {
+          await refreshQuestion()
+        }
       },
       { signal: controller.signal }
     )

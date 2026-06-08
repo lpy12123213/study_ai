@@ -75,6 +75,7 @@ function normalizeStreamStep(step: Record<string, unknown>, createdAt?: string):
   const id = toOptionalString(step.id)
   if (!id) return null
 
+  const error = toOptionalString(step.error)
   const normalized: TaskStep = {
     id,
     title: sanitizeDisplayText(toOptionalString(step.title) || '步骤'),
@@ -84,7 +85,7 @@ function normalizeStreamStep(step: Record<string, unknown>, createdAt?: string):
     output: step.output,
     startTime: toOptionalString(step.startTime) || createdAt,
     endTime: toOptionalString(step.endTime),
-    error: sanitizeDisplayText(toOptionalString(step.error) || ''),
+    ...(error ? { error: sanitizeDisplayText(error) } : {}),
   }
   return normalized
 }

@@ -14,6 +14,13 @@ from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+AI_SYNTHESIS_REVIEW_NOTE = "※ 本题答案由 AI 生成，请复核。"
+
+
+def _is_ai_synthesis(q: dict) -> bool:
+    return str(q.get("answer_source") or q.get("answerSource") or "").strip() == "ai_synthesis"
+
+
 try:
     from docx import Document  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover
@@ -102,6 +109,8 @@ def render_paper_docx_bytes(
                         answer_lines.append(f"#### {qnum}.")
                         if ans:
                             answer_lines.append(f"**答案：** {ans}")
+                            if _is_ai_synthesis(q):
+                                answer_lines.append(f"> {AI_SYNTHESIS_REVIEW_NOTE}")
                         if ana:
                             answer_lines.append(f"**解析：** {ana}")
                         answer_lines.append("")
@@ -326,6 +335,8 @@ def render_paper_docx_bytes(
                 if ans:
                     doc.add_paragraph("答案：")
                     _add_paragraph_lines(ans)
+                    if _is_ai_synthesis(q):
+                        doc.add_paragraph(AI_SYNTHESIS_REVIEW_NOTE)
 
             if include_analysis:
                 ana = str(q.get("analysis") or "").strip()

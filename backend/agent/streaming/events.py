@@ -88,6 +88,27 @@ def maybe_capture_markdown_artifact(*, step_result: StepResult, results: ActionR
         and step_result.output.strip()
     ):
         results.artifacts["markdown"] = step_result.output.strip()
+        return
+
+    if not (step_result.success and isinstance(step_result.output, dict)):
+        return
+
+    output = step_result.output
+    if step_result.tool in {"assemble_study_archive", "assemble_markdown", "revise_markdown"}:
+        markdown = str(output.get("markdown") or output.get("content") or "").strip()
+        if markdown:
+            results.artifacts["markdown"] = markdown
+
+    if step_result.tool in {"save_markdown_file", "export_study_markdown"}:
+        path = str(output.get("path") or "").strip()
+        url = str(output.get("url") or output.get("download_url") or "").strip()
+        filename = str(output.get("filename") or "").strip()
+        if path:
+            results.artifacts["markdown_path"] = path
+        if url:
+            results.artifacts["markdown_url"] = url
+        if filename:
+            results.artifacts["markdown_filename"] = filename
 
 
 async def maybe_handle_step_failure(

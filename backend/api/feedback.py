@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, Dict
 
@@ -56,5 +57,5 @@ async def create_user_feedback(payload: Dict[str, Any], user: dict = Depends(req
         logger.exception("create_feedback_failed", extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail="create_feedback_failed")
 
-    await _try_send_webhook({"feedback": out})
+    asyncio.create_task(_try_send_webhook({"feedback": out}))
     return {"success": True, "feedback": out}

@@ -119,8 +119,8 @@ async def health_check() -> dict:
 
 
 @router.get("/metrics")
-async def metrics() -> Response:
-    """Prometheus metrics endpoint (authenticated under `/api/metrics`).
+async def metrics(_: dict = Depends(require_admin)) -> Response:
+    """Prometheus metrics endpoint (admin-only under `/api/metrics`).
 
     Note: the app also exposes an unauthenticated `/metrics` at the root for
     Prometheus scraping (see `backend.core.metrics.instrument_app`).
@@ -253,7 +253,7 @@ async def record_search_history(data: SearchHistoryCreate, user: dict = Depends(
 @router.get("/search")
 async def search(
     q: str = Query("", min_length=0, max_length=200),
-    types: Optional[str] = Query(None, description="comma-separated: conversation,paper,study_archive"),
+    types: Optional[str] = Query(None, description="comma-separated: conversation,paper,study_archive,question"),
     limit: int = Query(50, ge=1, le=50),
     user: dict = Depends(require_auth),
 ) -> dict:

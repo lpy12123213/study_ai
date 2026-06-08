@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
-from backend.core.logging_utils import get_client_ip, get_logger, get_request_id
+from backend.core.logging_utils import _sanitize_value, get_client_ip, get_logger, get_request_id
 
 logger = get_logger(__name__)
 
@@ -98,7 +98,7 @@ class AuditLogger:
             "action": act,
             "resource": res,
             "ip": ip_str,
-            "details": dict(details or {}),
+            "details": _sanitize_value(dict(details or {})),
         }
         if rid:
             payload["request_id"] = rid

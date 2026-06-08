@@ -6,8 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
+from backend.core.srs import RATING_QUALITY
+from backend.database.repositories.content.wrongbook import aggregate_mastery_by_knowledge_point as db_aggregate_mastery
+from backend.database.repositories.content.wrongbook import count_due_reviews as db_count_due_reviews
 from backend.database.repositories.content.wrongbook import delete_wrong_question as db_delete_wrong_question
+from backend.database.repositories.content.wrongbook import list_due_reviews as db_list_due_reviews
 from backend.database.repositories.content.wrongbook import list_wrong_questions as db_list_wrong_questions
+from backend.database.repositories.content.wrongbook import record_review as db_record_review
 from backend.database.repositories.content.wrongbook import upsert_wrong_question as db_upsert_wrong_question
 from backend.database.repositories.question.papers import save_paper as db_save_paper
 
@@ -68,6 +73,48 @@ async def upsert_wrongbook_item(payload: Dict[str, Any], user: dict = Depends(re
         raise HTTPException(status_code=500, detail="upsert_wrong_question_failed")
 
     return {"success": True, "item": out}
+
+
+@router.get("/review/queue", response_model=dict)
+async def get_review_queue(
+    subject: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(require_auth),
+) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    items = await db_list_due_reviews(user_id=user_id, subject=subject, limit=limit)
+    due_count = await db_count_due_reviews(user_id=user_id, subject=subject)
+    return {"items": items, "due_count": due_count, "total": due_count}
+
+
+@router.post("/review/{question_id}", response_model=dict)
+async def record_wrongbook_review(question_id: str, payload: Dict[str, Any], user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    rating = str(payload.get("rating") or "").strip()
+    if rating not in RATING_QUALITY:
+        raise HTTPException(status_code=400, detail="invalid_review_rating")
+    try:
+        item = await db_record_review(user_id=user_id, question_id=str(question_id or "").strip(), rating=rating)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        logger.exception("wrongbook_review_failed", extra={"user_id": user_id, "question_id": question_id})
+        raise HTTPException(status_code=500, detail="wrongbook_review_failed")
+    if item is None:
+        raise HTTPException(status_code=404, detail="wrong_question_not_found")
+    return {"success": True, "item": item, "next_review_at": item.get("next_review_at") or ""}
+
+
+@router.get("/mastery", response_model=dict)
+async def get_wrongbook_mastery(subject: Optional[str] = Query(None), user: dict = Depends(require_auth)) -> dict:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+    return await db_aggregate_mastery(user_id=user_id, subject=subject)
 
 
 @router.delete("/{question_id}", response_model=dict)

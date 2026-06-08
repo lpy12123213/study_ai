@@ -18,7 +18,7 @@ import type { DeepThinkChatMessage } from '@/features/generation/deepThink/types
 
 export default function DeepThinkPage() {
   const { data: subjects } = useSubjects()
-  const [subject, setSubject] = useState<string>('高中数学')
+  const [subject, setSubject] = useState<string>('')
   const [imageUrl, setImageUrl] = useState<string>('')
 
   const [input, setInput] = useState('')

@@ -197,7 +197,7 @@ def apply_balance_corrections(
         fp for fp in (_stem_fp(question, stem_fingerprint) for question in selected) if fp
     )
     kp_counts: Counter[str] = Counter(kp for kp in (_primary_kp(question) for question in selected) if kp)
-    kp_repeat_threshold = max(2, (len(selected) + 1) // 2)
+    kp_repeat_threshold = max(2, (len(selected) + 3) // 4)
     repeated_kps = {kp for kp, count in kp_counts.items() if count > kp_repeat_threshold}
 
     seen_fps: set[str] = set()

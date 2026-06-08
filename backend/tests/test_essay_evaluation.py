@@ -11,16 +11,15 @@ import unittest
 from unittest.mock import patch
 
 from backend.generation.essay_evaluation.essay_parser import parse_essay
-from backend.generation.essay_evaluation.essay_schemas import EssayScore
+from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest, EssayScore
 from backend.generation.essay_evaluation.service import (
-    evaluate_essay,
     _normalize_paragraph_feedback,
     _normalize_scores,
     _safe_extract_json,
     _scale_to_total,
     _select_rubric,
+    evaluate_essay,
 )
-from backend.generation.essay_evaluation.essay_schemas import EssayEvaluationRequest
 from backend.llm.prompts import create_default_prompt_registry
 
 

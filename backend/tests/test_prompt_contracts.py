@@ -8,7 +8,7 @@ from backend.generation.agentic.prompt_contracts import (
     JsonOutputContract,
     MarkdownOutputContract,
 )
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 
 
 class PromptContractTests(unittest.TestCase):

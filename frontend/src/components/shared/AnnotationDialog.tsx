@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Tag } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -30,6 +30,13 @@ export function AnnotationDialog(props: {
   const [error, setError] = useState<unknown>(null)
 
   const tags = useMemo(() => parseTags(tagsText), [tagsText])
+
+  useEffect(() => {
+    if (!open) return
+    setContent('')
+    setTagsText('')
+    setError(null)
+  }, [open, anchor, itemId, itemType])
 
   const save = async () => {
     setIsSaving(true)

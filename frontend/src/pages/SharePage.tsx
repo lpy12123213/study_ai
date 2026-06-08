@@ -9,6 +9,7 @@ import { Markdown } from '@/components/shared/Markdown'
 import { QrCode } from '@/components/shared/QrCode'
 import { isApiError } from '@/api/client'
 import * as shareApi from '@/api/shareLinks'
+import { formatDate } from '@/lib/utils'
 import { isRecord, readString, readStringFrom } from '@/lib/record'
 
 function copyText(text: string): Promise<boolean> {
@@ -127,7 +128,7 @@ export default function SharePage() {
             </div>
             {meta?.expires_at && (
               <div className="mt-3 text-xs text-muted-foreground">
-                过期时间：{meta.expires_at}
+                过期时间：{formatDate(meta.expires_at)}
               </div>
             )}
           </Card>

@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List
 
 from backend.core.settings import LESSON_PLAN_MODEL, SUB_MODEL
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.lesson_plan.common import clean_points, extract_json_obj
 from backend.generation.lesson_plan.llm import call_llm_text
 

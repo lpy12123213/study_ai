@@ -589,16 +589,16 @@ class ReActLoop:
 
         retry_budget_per_tool = int(getattr(self.config, "react_retry_budget_per_tool", 2) or 2)
         retry_budget_per_tool = max(0, min(retry_budget_per_tool, 10))
-        retry_tracker: Dict[Tuple[str, str], int] = {}
+        attempt_tracker: Dict[Tuple[str, str], int] = {}
         injected_checkpoints: set[str] = set()
 
         def _retry_exceeded_system_note() -> str:
             if retry_budget_per_tool <= 0:
                 return ""
             exceeded = [
-                (tool_name, kp, n)
-                for (tool_name, kp), n in retry_tracker.items()
-                if tool_name and kp and n > retry_budget_per_tool
+                (tool_name, kp, max(0, attempts - 1))
+                for (tool_name, kp), attempts in attempt_tracker.items()
+                if tool_name and kp and max(0, attempts - 1) >= retry_budget_per_tool
             ]
             if not exceeded:
                 return ""
@@ -715,13 +715,7 @@ class ReActLoop:
             if retry_note:
                 messages.insert(1, {"role": "system", "content": retry_note})
 
-            will_use_llm = (
-                self._decide_next is None
-                and bool(str(self.config.planner_model or "").strip())
-                and is_llm_configured()
-            )
-            if will_use_llm:
-                llm_calls += 1
+            llm_calls += 1
             decision = await self._decide(messages)
 
             if decision.thought:
@@ -880,7 +874,7 @@ class ReActLoop:
                             if not kp:
                                 continue
                             key = (action, kp)
-                            retry_tracker[key] = int(retry_tracker.get(key) or 0) + 1
+                            attempt_tracker[key] = int(attempt_tracker.get(key) or 0) + 1
 
                     scratch.append(
                         {
@@ -925,7 +919,7 @@ class ReActLoop:
                 kp = _extract_primary_kp(step.arguments)
                 if kp:
                     key = (action, kp)
-                    retry_tracker[key] = int(retry_tracker.get(key) or 0) + 1
+                    attempt_tracker[key] = int(attempt_tracker.get(key) or 0) + 1
 
             scratch.append(
                 {

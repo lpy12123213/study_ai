@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
 from backend.generation.question_library.gen_common import (
     DEFAULT_SEARCH_CONFIG,

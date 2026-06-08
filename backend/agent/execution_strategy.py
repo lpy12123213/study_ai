@@ -102,18 +102,24 @@ class ParallelStrategy(SequentialStrategy):
 
         tasks = [asyncio.create_task(_run_one(step)) for step in steps]
         finished = 0
-        while finished < len(tasks):
-            item = await queue.get()
-            if item is None:
-                finished += 1
-                continue
-            yield item
-
-        for task in tasks:
-            try:
-                await task
-            except Exception:
-                logger.exception("agent_parallel_task_join_failed")
+        try:
+            while finished < len(tasks):
+                item = await queue.get()
+                if item is None:
+                    finished += 1
+                    continue
+                yield item
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("agent_parallel_task_join_failed")
 
     async def execute_step_block(
         self,
@@ -254,15 +260,21 @@ class PerKnowledgePointStrategy(ParallelStrategy):
             for kp in kps
         ]
         finished = 0
-        while finished < len(tasks):
-            item = await queue.get()
-            if item is None:
-                finished += 1
-                continue
-            yield item
-
-        for task in tasks:
-            try:
-                await task
-            except Exception:
-                logger.exception("agent_parallel_task_join_failed")
+        try:
+            while finished < len(tasks):
+                item = await queue.get()
+                if item is None:
+                    finished += 1
+                    continue
+                yield item
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("agent_parallel_task_join_failed")

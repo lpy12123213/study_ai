@@ -44,12 +44,13 @@ class LessonPlanIsolationTests(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        loop = asyncio.get_event_loop_policy().new_event_loop()
         try:
-            loop = asyncio.get_event_loop_policy().new_event_loop()
             loop.run_until_complete(cls._engine_mod.engine.dispose())
-            loop.close()
-        except Exception:
+        except (OSError, RuntimeError):
             pass
+        finally:
+            loop.close()
 
         for name in _RELOAD_MODULES:
             sys.modules.pop(name, None)

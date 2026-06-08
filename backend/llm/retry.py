@@ -125,8 +125,12 @@ async def chat_completion(
     emit_interval_s = max(0.05, min(float(reasoning_emit_interval_s or 0.25), 2.0))
     request_base_url = str(resolved_base_url or "").strip().rstrip("/")
 
-    for attempt in range(max_retries):
-        req_id, url = f"{req_id_base}-{attempt + 1}", f"{request_base_url}/chat/completions"
+    attempt = 0
+    request_count = 0
+    adaptive_retries_left = 5
+    while attempt < max_retries and request_count < max_retries + 5:
+        request_count += 1
+        req_id, url = f"{req_id_base}-{request_count}", f"{request_base_url}/chat/completions"
         start_ts = llm_console.log_start(
             req_id=req_id, provider=resolved_provider, model=resolved_model, stream=bool(payload.get("stream")),
             temperature=float(payload.get("temperature") or 0.0), max_tokens=int(payload.get("max_tokens") or 0),
@@ -143,6 +147,7 @@ async def chat_completion(
                     on_content_delta=on_content_delta,
                 )
                 if result is None:
+                    attempt += 1
                     continue
                 if record_enabled():
                     rr_store.save(request=rr_request, response=record_payload(result))
@@ -155,26 +160,30 @@ async def chat_completion(
                 last_error = f"http_status_{resp.status_code}"
                 llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
                 await asyncio.sleep(retry_after(resp, attempt))
+                attempt += 1
                 continue
             resp.raise_for_status()
             data, decode_error = decode_chat_response_payload(resp)
             if data is None:
                 last_error = decode_error or "invalid_json_response"
                 v1_url = maybe_append_v1_base_url(request_base_url)
-                if v1_url and not retried_with_v1 and v1_url != request_base_url and last_error in {"empty_response_body", "html_response_body", "Expecting value: line 1 column 1 (char 0)"}:
+                if v1_url and adaptive_retries_left > 0 and not retried_with_v1 and v1_url != request_base_url and last_error in {"empty_response_body", "html_response_body", "Expecting value: line 1 column 1 (char 0)"}:
                     logger.warning("llm_retry_with_v1_base_url", extra={"req_id": req_id, "model": resolved_model, "provider": resolved_provider, "base_url": request_base_url, "retry_base_url": v1_url, "error": last_error})
                     request_base_url, retried_with_v1 = v1_url, True
+                    adaptive_retries_left -= 1
                     llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(0.2)
                     continue
                 dropped_response_format, dropped_reasoning, dropped = drop_optional_fields(payload, dropped_response_format, dropped_reasoning)
-                if dropped and attempt < max_retries - 1:
+                if dropped and adaptive_retries_left > 0:
+                    adaptive_retries_left -= 1
                     llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(0.2)
                     continue
                 if attempt < max_retries - 1:
                     llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
                     await asyncio.sleep(min(3.0, 0.4 + random.random() * 0.8))
+                    attempt += 1
                     continue
                 if raise_on_fail:
                     raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error}")
@@ -185,8 +194,14 @@ async def chat_completion(
                 dropped_reasoning, last_error = True, "empty_content_drop_reasoning"
                 logger.warning("llm_empty_content_drop_reasoning", extra={"req_id": req_id, "model": resolved_model, "provider": resolved_provider, "base_url": request_base_url})
                 llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
-                await asyncio.sleep(0.2)
-                continue
+                if adaptive_retries_left > 0 and request_count < max_retries + 5:
+                    adaptive_retries_left -= 1
+                    await asyncio.sleep(0.2)
+                    continue
+                if raise_on_fail:
+                    raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error}")
+                circuit_record_failure(cb_key)
+                return empty_llm_result(last_error)
             if result.content:
                 llm_console.log_delta(req_id=req_id, channel="content", text=result.content)
             llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), finish_reason=result.finish_reason, usage=result.usage, content_chars=len(result.content))
@@ -206,6 +221,10 @@ async def chat_completion(
                 retry_statuses=retry_statuses,
             )
             if handled["retry"]:
+                if int(getattr(exc.response, "status_code", 0) or 0) in retry_statuses:
+                    attempt += 1
+                elif adaptive_retries_left > 0:
+                    adaptive_retries_left -= 1
                 request_base_url = handled.get("request_base_url", request_base_url)
                 retried_with_v1 = bool(handled.get("retried_with_v1", retried_with_v1))
                 dropped_response_format = bool(handled.get("dropped_response_format", dropped_response_format))
@@ -220,6 +239,7 @@ async def chat_completion(
             llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
             if attempt < max_retries - 1:
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                attempt += 1
                 continue
             if raise_on_fail:
                 raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error}")
@@ -230,6 +250,7 @@ async def chat_completion(
             llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=last_error)
             if attempt < max_retries - 1:
                 await asyncio.sleep(min(8.0, (2**attempt) * 0.9 + random.random() * 0.6))
+                attempt += 1
                 continue
             if raise_on_fail:
                 raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error}")

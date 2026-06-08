@@ -69,7 +69,7 @@ def record_llm_call(
     finish_reason: str = "",
     request_id: str = "",
 ) -> None:
-    business_metrics.record_llm_usage(provider=provider, model=model, usage=usage, tier=tier)
+    business_metrics.record_llm_usage(provider=provider, model=model, usage=usage, tier=tier, status=status)
 
     item = {
         "ts_s": time.time(),
@@ -110,14 +110,21 @@ def recent_llm_calls(limit: int = 50) -> Dict[str, Any]:
         usage = call.get("usage") if isinstance(call.get("usage"), dict) else {}
         model_key = f"{call.get('provider') or 'unknown'}:{call.get('model') or 'unknown'}"
         bucket = by_model.setdefault(
-            model_key, {"requests": 0, "total_tokens": 0, "cached_tokens": 0, "cost_usd": 0.0}
+            model_key,
+            {
+                "requests": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cached_tokens": 0,
+                "cost_usd": 0.0,
+            },
         )
         bucket["requests"] += 1
         for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"):
             value = int(usage.get(key) or 0)
             totals[key] += value
-            if key in {"total_tokens", "cached_tokens"}:
-                bucket[key] += value
+            bucket[key] += value
         cost = float(usage.get("cost_usd") or 0)
         totals["cost_usd"] = round(float(totals["cost_usd"]) + cost, 8)
         bucket["cost_usd"] = round(float(bucket["cost_usd"]) + cost, 8)

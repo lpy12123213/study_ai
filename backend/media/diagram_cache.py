@@ -87,7 +87,7 @@ async def lookup(spec_hash: str) -> Optional[Dict[str, Any]]:
     if not spec_hash:
         return None
     async with _LOCK:
-        data = _read_cache_sync()
+        data = await asyncio.to_thread(_read_cache_sync)
         entry = data.get(spec_hash)
         if not isinstance(entry, dict):
             return None
@@ -97,7 +97,7 @@ async def lookup(spec_hash: str) -> Optional[Dict[str, Any]]:
         # Verify the on-disk file is still there; otherwise drop the entry.
         if not _file_for(filename).exists():
             data.pop(spec_hash, None)
-            _write_cache_sync(data)
+            await asyncio.to_thread(_write_cache_sync, data)
             return None
         return dict(entry)
 
@@ -114,7 +114,7 @@ async def record(
     if not spec_hash or not filename:
         return
     async with _LOCK:
-        data = _read_cache_sync()
+        data = await asyncio.to_thread(_read_cache_sync)
         data[spec_hash] = {
             "filename": filename,
             "url": url,
@@ -128,13 +128,13 @@ async def record(
         if len(data) > max_entries:
             keep = sorted(data.items(), key=lambda kv: kv[1].get("created_at") or "", reverse=True)[:max_entries]
             data = dict(keep)
-        _write_cache_sync(data)
+        await asyncio.to_thread(_write_cache_sync, data)
 
 
 async def invalidate(spec_hash: str) -> None:
     if not spec_hash:
         return
     async with _LOCK:
-        data = _read_cache_sync()
+        data = await asyncio.to_thread(_read_cache_sync)
         if data.pop(spec_hash, None) is not None:
-            _write_cache_sync(data)
+            await asyncio.to_thread(_write_cache_sync, data)

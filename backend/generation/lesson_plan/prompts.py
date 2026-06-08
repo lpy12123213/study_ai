@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 
 
 def get_system_prompt() -> str:

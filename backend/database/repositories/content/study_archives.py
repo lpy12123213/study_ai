@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.logging_utils import get_logger
 from backend.database.engine import async_session_maker
+from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import StudyArchive
 
 logger = get_logger(__name__)
@@ -31,7 +32,7 @@ def build_study_archive_fingerprint(*, subject: str, topic: str, requirements: s
 
 
 def _normalize_user_id(user_id: str) -> str:
-    return str(user_id or "").strip()[:64]
+    return normalize_user_id(user_id)
 
 
 def _require_user_id(user_id: str) -> str:

@@ -162,8 +162,8 @@ export function LlmDebugPanel({ isActive }: Props) {
             读取失败
           </div>
         ) : null}
-        {(payload?.calls || []).map((call) => (
-          <CallRow key={`${call.request_id}-${call.ts_s}`} call={call} />
+        {(payload?.calls || []).map((call, index) => (
+          <CallRow key={`${call.request_id || 'request'}-${call.ts_s}-${index}`} call={call} />
         ))}
         {!query.isFetching && (payload?.calls || []).length === 0 ? (
           <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">

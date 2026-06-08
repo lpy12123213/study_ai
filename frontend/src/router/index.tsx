@@ -18,6 +18,7 @@ const PaperDetailPage = lazy(() => import('@/pages/PaperDetailPage'))
 const ExamPage = lazy(() => import('@/pages/ExamPage'))
 const ExamResultPage = lazy(() => import('@/pages/ExamResultPage'))
 const CanvasPage = lazy(() => import('@/pages/CanvasPage'))
+const CanvasBoardPage = lazy(() => import('@/pages/CanvasBoardPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const QuestionEvaluatePage = lazy(() => import('@/pages/QuestionEvaluatePage'))
 const EssayEvaluationPage = lazy(() => import('@/pages/EssayEvaluationPage'))
@@ -34,6 +35,7 @@ const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
 const LearningPlansTodoPage = lazy(() => import('@/pages/LearningPlansTodoPage'))
 const WrongbookPage = lazy(() => import('@/pages/WrongbookPage'))
 const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
+const InsightsPage = lazy(() => import('@/pages/InsightsPage'))
 const AnnotationsPage = lazy(() => import('@/pages/AnnotationsPage'))
 const DiffPage = lazy(() => import('@/pages/DiffPage'))
 const FeedbackPage = lazy(() => import('@/pages/FeedbackPage'))
@@ -126,6 +128,7 @@ export const router = createBrowserRouter([
               { path: 'exam/:sessionId', element: load(ExamPage), handle: handle('exam-session') },
               { path: 'exam/:sessionId/result', element: load(ExamResultPage), handle: handle('exam-result') },
               { path: 'canvas', element: load(CanvasPage), handle: handle('canvas') },
+              { path: 'canvas/:boardId', element: load(CanvasBoardPage), handle: handle('canvas-detail') },
               { path: 'settings', element: load(SettingsPage), handle: handle('settings') },
               { path: 'tasks', element: load(TaskCenterPage), handle: handle('tasks') },
               { path: 'search', element: load(SearchPage), handle: handle('search') },
@@ -146,6 +149,7 @@ export const router = createBrowserRouter([
               { path: 'learning-plans', element: load(LearningPlansTodoPage), handle: handle('learning-plans') },
               { path: 'wrongbook', element: load(WrongbookPage), handle: handle('wrongbook') },
               { path: 'dashboard', element: load(DashboardPage), handle: handle('dashboard') },
+              { path: 'insights', element: load(InsightsPage), handle: handle('insights') },
               { path: 'annotations', element: load(AnnotationsPage), handle: handle('annotations') },
               { path: 'diff', element: load(DiffPage), handle: handle('diff') },
               { path: 'feedback', element: load(FeedbackPage), handle: handle('feedback') },

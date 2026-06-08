@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -33,6 +34,42 @@ class TestZujuanSubjectRequestDefaults(unittest.TestCase):
         crawler._load_bank_meta_from_base()
 
         self.assertEqual(crawler.course_id_py, "gzsx")
+
+
+class TestZujuanSubjectSearchIsolation(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_subject_overrides_do_not_pollute_active_search(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        crawler = ZujuanCrawler(subject="高中数学")
+        first_entered = asyncio.Event()
+        observations: list[tuple[str, str]] = []
+
+        async def fake_search_impl(**kwargs):  # type: ignore[no-untyped-def]
+            inst = kwargs["self"]
+            subject = str(kwargs.get("subject") or "")
+            resolved, _difficulty = inst._apply_search_constraints(
+                subject=subject,
+                edu_level=str(kwargs.get("edu_level") or ""),
+                difficulty=str(kwargs.get("difficulty") or ""),
+                require_difficulty=bool(kwargs.get("require_difficulty")),
+                strict_subject=bool(kwargs.get("strict_subject", True)),
+            )
+            if subject == "高中物理":
+                first_entered.set()
+                await asyncio.sleep(0.05)
+            else:
+                await first_entered.wait()
+            observations.append((resolved, inst.subject))
+            return {"success": True, "questions": []}
+
+        with patch("backend.integrations.crawler.zujuan.search.search_by_keyword", new=fake_search_impl):
+            first = asyncio.create_task(crawler.search_by_keyword("函数", subject="高中物理", limit=1))
+            await first_entered.wait()
+            second = asyncio.create_task(crawler.search_by_keyword("化学平衡", subject="高中化学", limit=1))
+            await asyncio.gather(first, second)
+
+        self.assertIn(("高中物理", "高中物理"), observations)
+        self.assertIn(("高中化学", "高中化学"), observations)
 
 
 class FakeResponse:
@@ -180,6 +217,37 @@ class TestZujuanQuestionDetailRequest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(crawler.client.gets[0]["headers"]["Referer"], "https://zujuan.xkw.com/")
         self.assertIn("text/html", crawler.client.gets[0]["headers"]["Accept"])
         self.assertEqual(crawler.client.gets[0]["timeout"], 30.0)
+
+    async def test_get_question_detail_extracts_inline_answer_and_analysis(self) -> None:
+        from backend.integrations.crawler.zujuan.detail import get_question_detail
+
+        html = (
+            '<span class="info-item">题型：填空题</span>'
+            '<span class="info-item">难度：普通</span>'
+            '<div class="quest-cnt ">测试题干</div><div class="quest-exam">'
+            '<section>答案： 42</section><section>解析： 代入计算即可</section>'
+            + ("x" * 10050)
+        )
+        crawler = DetailFakeCrawler(html)
+
+        result = await get_question_detail(crawler, "456")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["answer"], "42")
+        self.assertEqual(result["analysis"], "代入计算即可")
+
+
+class TestZujuanRegexHelpers(unittest.TestCase):
+    def test_normalize_province_name_removes_actual_whitespace(self) -> None:
+        from backend.integrations.crawler.zujuan.utils import _normalize_province_name
+
+        self.assertEqual(_normalize_province_name(" 北 京 市 "), "北京")
+        self.assertEqual(_normalize_province_name("内 蒙 古自治区"), "内蒙古")
+
+    def test_blueprint_split_kps_splits_actual_newlines_and_tabs(self) -> None:
+        from backend.integrations.crawler.zujuan.blueprint import _split_kps
+
+        self.assertEqual(_split_kps("函数\n导数\t极值/应用"), ["函数", "导数", "极值", "应用"])
 
 
 class SearchFakeCrawler:

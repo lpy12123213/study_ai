@@ -12,10 +12,12 @@ from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
 from backend.core.text_utils import clip_text as _clip_text
+from backend.generation.question_library.curriculum_context import normalize_curriculum_context
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+.*?$", flags=re.M)
+_KNOWLEDGE_TYPE_VALUES = {"definition", "theorem", "algorithm", "concept", "history", "experiment"}
 
 
 def _registered_prompt(prompt_id: str) -> str:
@@ -36,6 +38,39 @@ def _section_reviewer_system_prompt() -> str:
 
 def _section_revision_system_prompt() -> str:
     return _registered_prompt("study.material.section_revision.v1")
+
+
+def _study_option_value(study_opts: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in study_opts:
+            return study_opts.get(key)
+    return None
+
+
+def _grade_band_for_study(study_opts: Dict[str, Any]) -> str:
+    raw = _study_option_value(study_opts, "grade_band", "gradeBand", "grade", "grade_id", "gradeId")
+    return _clip_text(str(raw or "").strip(), 48) if str(raw or "").strip() else ""
+
+
+def _curriculum_context_for_study(
+    *,
+    subject: str,
+    knowledge_points: List[str],
+    study_opts: Dict[str, Any],
+) -> Dict[str, Any]:
+    raw = _study_option_value(study_opts, "curriculum_context", "curriculumContext")
+    ctx = normalize_curriculum_context(raw if isinstance(raw, dict) else {}, subject=subject)
+    scope = dict(ctx.get("knowledge_scope") or {})
+    in_scope = [str(x or "").strip() for x in (scope.get("in_scope") or []) if str(x or "").strip()]
+    out_of_scope = [str(x or "").strip() for x in (scope.get("out_of_scope") or []) if str(x or "").strip()]
+    seen = set(in_scope)
+    for kp in knowledge_points or []:
+        item = str(kp or "").strip()
+        if item and item not in seen:
+            seen.add(item)
+            in_scope.append(item)
+    ctx["knowledge_scope"] = {"in_scope": in_scope[:20], "out_of_scope": out_of_scope[:16]}
+    return ctx
 
 
 def _strip_markdown_headings(text: str) -> str:
@@ -135,11 +170,8 @@ def _heuristic_knowledge_type(kp: str) -> str:
     if any(x in s for x in ["历史", "发展", "人物", "年代", "起源", "背景", "里程碑"]):
         return "history"
 
-    if any(
-        x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]
-    ):
-        return "theorem"
-
+    # Prefer procedure/method wording before theorem keywords so "方程解法" is
+    # treated as a solution method rather than a theorem-like statement.
     if any(
         x in s
         for x in [
@@ -167,6 +199,11 @@ def _heuristic_knowledge_type(kp: str) -> str:
     ) or any(x in s_lower for x in ["dp", "bfs", "dfs", "dijkstra"]):
         return "algorithm"
 
+    if any(
+        x in s for x in ["定理", "命题", "引理", "推论", "结论", "定律", "法则", "公式", "恒等式", "不等式", "方程"]
+    ):
+        return "theorem"
+
     if any(x in s for x in ["定义", "是什么", "含义", "概念", "记号", "符号", "术语"]):
         return "definition"
     return "concept"
@@ -179,7 +216,7 @@ def _default_outline_sections(knowledge_type: str, preset: str) -> List[Dict[str
     """
 
     kt = (knowledge_type or "").strip().lower()
-    if kt not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
+    if kt not in _KNOWLEDGE_TYPE_VALUES:
         kt = "concept"
 
     deep = preset in {"deep", "research"}
@@ -429,6 +466,12 @@ class StudyMaterialGenerationToolsMixin:
             requirements = requirements[:599].rstrip() + "…"
 
         points = _extract_points(args, ctx)
+        grade_band = _grade_band_for_study(study_opts)
+        curriculum_context = _curriculum_context_for_study(
+            subject=subject,
+            knowledge_points=points,
+            study_opts=study_opts,
+        )
 
         source_briefs = ctx.working_memory.get("source_briefs")
         source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
@@ -461,7 +504,7 @@ class StudyMaterialGenerationToolsMixin:
         async def _outline_one(kp: str) -> Dict[str, Any]:
             kt_obj = knowledge_types.get(kp) if isinstance(knowledge_types.get(kp), dict) else {}
             knowledge_type = str(kt_obj.get("knowledge_type") or "").strip().lower()
-            if knowledge_type not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
+            if knowledge_type not in _KNOWLEDGE_TYPE_VALUES:
                 knowledge_type = _heuristic_knowledge_type(kp)
 
             brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
@@ -498,6 +541,8 @@ class StudyMaterialGenerationToolsMixin:
                 "knowledge_point": kp,
                 "preset": preset,
                 "knowledge_type": knowledge_type,
+                "grade_band": grade_band,
+                "curriculum_context": curriculum_context,
                 "ability_level": str(ctx.user_profile.ability_level or "unknown"),
                 "ability_score": float(ctx.user_profile.ability_score or 0.5),
                 "requirements": requirements,
@@ -511,6 +556,7 @@ class StudyMaterialGenerationToolsMixin:
                     "hints 每节 1~4 条，短提示即可。",
                     "verify 为该节写完后的『验证标准』，每节 2~5 条，越可操作越好。",
                     "Try to cover definitions/statements, intuition, key conclusions or properties/conditions, common misconceptions, applications/solution framework, or summary. Merging/splitting is allowed; omit inapplicable items only when verify reflects the coverage intent or explains the omission/substitute.",
+                    "Respect curriculum_context and grade_band: keep knowledge boundaries, prerequisites, and depth aligned with the stated school stage.",
                     "If source_facts are provided, include 1-2 verify checks that the section is consistent with key facts. Low-confidence facts must be framed as inferences.",
                     "Do not output examples/exercises, URLs, or Markdown.",
                 ],
@@ -599,6 +645,17 @@ class StudyMaterialGenerationToolsMixin:
         max_web_pages = max(0, min(int(args.get("max_web_pages") or 2), 8))
         max_page_chars = max(500, min(int(args.get("max_page_chars") or 3200), 8000))
         with_questions = bool(args.get("with_questions", False))
+        selected_kps_for_context = [
+            str(item.get("knowledge_point") or "").strip()
+            for item in items_in[:max_points]
+            if isinstance(item, dict) and str(item.get("knowledge_point") or "").strip()
+        ]
+        grade_band = _grade_band_for_study(study_opts)
+        curriculum_context = _curriculum_context_for_study(
+            subject=subject,
+            knowledge_points=selected_kps_for_context,
+            study_opts=study_opts,
+        )
 
         section_conc_raw = args.get("section_concurrency") or os.getenv("STUDY_MATERIALS_SECTION_CONCURRENCY") or "3"
         try:
@@ -692,7 +749,7 @@ class StudyMaterialGenerationToolsMixin:
 
             kt_obj = knowledge_types.get(kp) if isinstance(knowledge_types.get(kp), dict) else {}
             knowledge_type = str(kt_obj.get("knowledge_type") or "").strip().lower()
-            if knowledge_type not in {"definition", "theorem", "algorithm", "concept", "history", "experiment"}:
+            if knowledge_type not in _KNOWLEDGE_TYPE_VALUES:
                 knowledge_type = _heuristic_knowledge_type(kp)
 
             brief = source_briefs.get(kp) if isinstance(source_briefs.get(kp), dict) else {}
@@ -803,6 +860,8 @@ class StudyMaterialGenerationToolsMixin:
                     "subject": subject,
                     "knowledge_point": kp,
                     "knowledge_type": knowledge_type,
+                    "grade_band": grade_band,
+                    "curriculum_context": curriculum_context,
                     "preset": preset,
                     "ability_level": str(ctx.user_profile.ability_level or "unknown"),
                     "ability_score": float(ctx.user_profile.ability_score or 0.5),
@@ -821,6 +880,10 @@ class StudyMaterialGenerationToolsMixin:
                         "All wording must be original synthesis and rewriting. Do not copy or paste source_brief or other source text.",
                         "If source_facts contain low-confidence facts (confidence < 0.6), frame the corresponding statements as inference/possible/suggested in the user's language instead of strong assertions.",
                         "If information is insufficient, explicitly mark it as inference or suggestion in the user's language.",
+                        "Mathematical expressions must use LaTeX delimiters: inline `$...$` and display `$$...$$`; never leave half-written formulas.",
+                        "Adapt the structure to knowledge_type: algorithm/procedure sections must give ordered steps; theorem/definition sections must state conditions, conclusion, and at least one minimal example; application sections must include a worked mini-example.",
+                        "Respect curriculum_context and grade_band: keep explanations within in_scope, avoid out_of_scope content, assume prerequisites rather than reteaching them, and match depth to the stated school stage.",
+                        "Do not leave unresolved placeholders such as `{variable}`, dangling Markdown tables, or unclosed code fences.",
                         "If completed_overview is non-empty, treat it as an overview of already explained content. Avoid repeating covered definitions/properties; if review is needed, use one sentence to connect with the prior explanation.",
                         "If semantic_memory is non-empty, it contains historical generated-content fragments. Use it to maintain terminology, symbols, or narrative rhythm and avoid cross-task repetition; when necessary, state the connection or difference in one sentence.",
                     ],
@@ -926,6 +989,8 @@ class StudyMaterialGenerationToolsMixin:
                     "preset": preset,
                     "requirements": requirements,
                     "knowledge_type": knowledge_type,
+                    "grade_band": grade_band,
+                    "curriculum_context": curriculum_context,
                     "outline_sections": outline_sections,
                     "source_brief": brief,
                     "source_facts": facts,
@@ -934,6 +999,7 @@ class StudyMaterialGenerationToolsMixin:
                         "You are the reviewer agent for this knowledge-point writing stage.",
                         "Review only this knowledge point body, not the whole document.",
                         "重点检查：是否满足 outline_sections 的 verify 意图；定义/条件/边界/误区/应用是否与知识类型匹配；是否与 source_facts 矛盾；是否存在空泛重复。",
+                        "Check that the draft respects curriculum_context and grade_band boundaries.",
                         "passed=true means the section can enter assembly. passed=false means you must provide specific executable issues.",
                         'Output strict JSON: {"passed": bool, "issues": [string], "suggestions": [string]}.',
                     ],
@@ -976,6 +1042,8 @@ class StudyMaterialGenerationToolsMixin:
                     "knowledge_point": kp,
                     "preset": preset,
                     "requirements": requirements,
+                    "grade_band": grade_band,
+                    "curriculum_context": curriculum_context,
                     "outline_sections": outline_sections,
                     "source_brief": brief,
                     "source_facts": facts,
@@ -989,6 +1057,7 @@ class StudyMaterialGenerationToolsMixin:
                         "Revise only this knowledge point body and directly output the complete revised Markdown.",
                         "保留并修正原有 #### 小节结构；如需要，可补充短段落或列表。",
                         "Modify only according to review.issues. Do not introduce a new references section, URLs, or whole-document title.",
+                        "Keep the revision aligned with curriculum_context and grade_band; do not add out_of_scope content.",
                         "The revision must be more specific than the original, especially by filling in flagged conditions, boundaries, misconceptions, or applications.",
                     ],
                 }

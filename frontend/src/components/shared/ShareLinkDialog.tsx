@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Copy, Loader2, QrCode as QrIcon, Link as LinkIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -8,11 +8,12 @@ import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { QrCode } from '@/components/shared/QrCode'
 import * as shareApi from '@/api/shareLinks'
 
-function secondsForPreset(preset: string): number | undefined {
+export function secondsForPreset(preset: string): number | undefined {
   if (preset === '1h') return 3600
   if (preset === '1d') return 24 * 3600
   if (preset === '7d') return 7 * 24 * 3600
   if (preset === '30d') return 30 * 24 * 3600
+  if (preset === 'never') return 0
   return undefined
 }
 
@@ -39,6 +40,15 @@ export function ShareLinkDialog(props: {
   const [error, setError] = useState<unknown>(null)
   const [meta, setMeta] = useState<any>(null)
   const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setPreset('7d')
+    setPassword('')
+    setError(null)
+    setMeta(null)
+    setCopied(false)
+  }, [open, itemId, itemType])
 
   const shareUrl = useMemo(() => {
     const tok = String(meta?.token || '').trim()
@@ -143,7 +153,7 @@ export function ShareLinkDialog(props: {
               </div>
               {meta?.expires_at && (
                 <div className="text-xs text-muted-foreground">
-                  过期时间：{String(meta.expires_at)}
+                  过期时间：{new Date(String(meta.expires_at)).toLocaleString('zh-CN')}
                 </div>
               )}
             </div>

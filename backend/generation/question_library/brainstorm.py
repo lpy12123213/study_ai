@@ -4,7 +4,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.generation.agentic.prompts import create_default_prompt_registry
+from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.client import is_llm_configured
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip

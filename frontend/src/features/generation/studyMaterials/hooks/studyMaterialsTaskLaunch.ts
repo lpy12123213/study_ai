@@ -126,9 +126,10 @@ export function launchStudyMaterialsTask({
     })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : fallbackErrorMessage
-      setError(formatStudyMaterialsError(msg))
+      const display = formatStudyMaterialsError(msg)
+      setError(display)
       useConversationStore.getState().updateMessage(conversationId, assistantMessageId, {
-        content: `出错：${msg}`,
+        content: `出错：${display}`,
         steps: [],
       })
       updateConversation(conversationId, { updatedAt: new Date().toISOString(), status: 'active' })

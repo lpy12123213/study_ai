@@ -221,6 +221,8 @@ class TaskRuntime:
             }
         await self.append_event(task, starter)
 
+        if task.status != "running":
+            return task
         task.runner = asyncio.create_task(self._run_task(task))
         return task
 

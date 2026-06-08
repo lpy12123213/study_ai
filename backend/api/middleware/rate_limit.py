@@ -218,7 +218,7 @@ def register_rate_limit_middleware(app: FastAPI, *, client_ip: ClientIpGetter) -
         if not path.startswith("/api/"):
             return await call_next(request)
 
-        auth_path = path in {"/api/auth/register"}
+        auth_path = path in {"/api/auth/register", "/api/auth/login"}
         host = client_ip(request)
         auth_key = f"auth_fail:ip:{host}"
         if auth_path and await auth_fail_limiter.is_limited(auth_key):

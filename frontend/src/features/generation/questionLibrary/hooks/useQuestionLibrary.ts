@@ -25,7 +25,7 @@ export function useQuestionLibrary(options?: {
   const [filters, setFilters] = useState<QuestionLibraryFilters>(() => {
     const initial = (options?.initialFilters || {}) as Partial<QuestionLibraryFilters>
     return {
-      subject: typeof initial.subject === 'string' ? initial.subject : '高中数学',
+      subject: typeof initial.subject === 'string' ? initial.subject : '',
       origin: initial.origin ?? 'all',
       hidden: initial.hidden ?? '0',
       q: typeof initial.q === 'string' ? initial.q : '',

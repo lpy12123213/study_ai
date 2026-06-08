@@ -1,8 +1,8 @@
 """MCP stdio server entrypoint.
 
 This file is intentionally kept small. Tool definitions and handlers live in:
-- `backend/mcp/stdio_tools.py`
-- `backend/mcp/stdio_handlers.py`
+- `backend/integrations/mcp/tools/stdio_tools.py`
+- `backend/integrations/mcp/tools/stdio_handlers.py`
 
 Run:
 - `python -m backend.mcp.stdio_server`
@@ -21,8 +21,8 @@ from mcp.types import TextContent, Tool
 
 if __package__ is None or __package__ == "":
     # Allow running as a script.
-    # NOTE: this file lives under `backend/mcp/tools/`, so repo root is 3 levels up.
-    sys.path.append(str(Path(__file__).resolve().parents[3]))
+    # NOTE: this file lives under `backend/integrations/mcp/tools/`, so repo root is 4 levels up.
+    sys.path.append(str(Path(__file__).resolve().parents[4]))
 
 from backend.core.settings import DEFAULT_SUBJECT
 from backend.integrations.mcp.tools.stdio_handlers import handle_tool_call

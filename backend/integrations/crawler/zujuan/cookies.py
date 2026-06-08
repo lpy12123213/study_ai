@@ -149,6 +149,10 @@ def _save_cookie_cache(path: str, *, cookies: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"cookies": cookie_str, "ts": time.time()}, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
     except Exception:
         logger.warning("zujuan_cookie_cache_save_failed", extra={"path": path}, exc_info=True)
         return

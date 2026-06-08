@@ -20,8 +20,6 @@ from backend.database.repositories.content.study_archives import (
 from backend.database.repositories.system.tasks import get_task as db_get_task
 from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
-from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
-from backend.shared.tasks import RuntimeTask, task_runtime
 from backend.generation.study_materials.resume import (
     _derive_resume_state,
     _prune_resume_working_memory,
@@ -31,6 +29,8 @@ from backend.generation.study_materials.resume import (
 from backend.generation.study_materials.resume import (
     _infer_stage_from_tool as _infer_stage_from_tool,
 )
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
+from backend.shared.tasks import RuntimeTask, task_runtime
 
 logger = get_logger(__name__)
 
@@ -193,7 +193,7 @@ class StudyMaterialsTaskManager:
                 return 0
             now = _now_s()
             deleted = 0
-            for path in list(_TASK_SNAPSHOTS_DIR.glob("*.json"))[:2000]:
+            for path in _TASK_SNAPSHOTS_DIR.glob("*.json"):
                 try:
                     raw = path.read_text(encoding="utf-8")
                     obj = json.loads(raw) if raw.strip() else {}

@@ -52,13 +52,23 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
   const [essayType, setEssayType] = useState<EssayType>('argumentative')
   const [gradeBand, setGradeBand] = useState<GradeBand>('senior')
   const [rubricMaxScore, setRubricMaxScore] = useState(60)
+  const [rubricMaxScoreText, setRubricMaxScoreText] = useState('60')
   const [requirements, setRequirements] = useState('')
+
+  const commitRubricMaxScore = () => {
+    const parsed = Number.parseInt(rubricMaxScoreText, 10)
+    const next = Number.isFinite(parsed) ? Math.max(10, Math.min(150, parsed)) : rubricMaxScore
+    setRubricMaxScore(next)
+    setRubricMaxScoreText(String(next))
+    return next
+  }
 
   const handleSubmit = () => {
     const cleaned = text.trim()
     if (cleaned.length < 10) {
       return
     }
+    const maxScore = commitRubricMaxScore()
     onSubmit({
       text: cleaned,
       subject: subject.trim() || '语文',
@@ -66,7 +76,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
       language,
       essay_type: essayType,
       grade_band: gradeBand,
-      rubric_max_score: rubricMaxScore,
+      rubric_max_score: maxScore,
       requirements: requirements.trim(),
     })
   }
@@ -178,8 +188,9 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
             type="number"
             min={10}
             max={150}
-            value={rubricMaxScore}
-            onChange={(event) => setRubricMaxScore(Number(event.target.value) || 60)}
+            value={rubricMaxScoreText}
+            onChange={(event) => setRubricMaxScoreText(event.target.value)}
+            onBlur={commitRubricMaxScore}
           />
         </div>
         <div className="space-y-1 md:col-span-2">

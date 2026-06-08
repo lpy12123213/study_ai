@@ -1185,7 +1185,7 @@ def get_stdio_tools() -> List[Tool]:
             name="render_matplotlib_3d",
             description="""【3D 曲面图】用 Matplotlib 绘制 3D 曲面/参数面，返回 SVG。
 - spec 形如 {"surface": {"expr": "sin(x)*cos(y)", "x_range": [-3,3], "y_range": [-3,3]}, "title": "..."}
-- 也支持参数曲面 / 散点。详见 backend.core.plot_tools.render_3d_plot_with_meta。
+- 也支持参数曲面 / 散点。详见 backend.core.plot.render_3d_plot_with_meta。
 - 输出 SVG 矢量。""",
             inputSchema={
                 "type": "object",
@@ -1219,7 +1219,7 @@ def get_stdio_tools() -> List[Tool]:
         Tool(
             name="render_schematic",
             description="""【示意图】用 Matplotlib schematic 规范渲染示意图（含箭头/方框/标注）。
-- spec 是 backend.core.plot_tools.render_schematic_with_meta 接受的 schematic dict。
+- spec 是 backend.core.plot.render_schematic_with_meta 接受的 schematic dict。
 - 适合流程示意、物理过程图、化学装置示意（非精确几何）。""",
             inputSchema={
                 "type": "object",

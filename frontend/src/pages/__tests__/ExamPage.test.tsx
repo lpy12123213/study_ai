@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,6 +20,7 @@ const apiMocks = vi.hoisted(() => ({
 
 const handwritingMocks = vi.hoisted(() => ({
   exportImage: vi.fn(),
+  mountCount: 0,
 }))
 
 vi.mock('@/api/exam', () => apiMocks)
@@ -29,6 +30,10 @@ vi.mock('@/features/exam/components/HandwritingBoard', async () => {
 
   return {
     HandwritingBoard: React.forwardRef((props: any, ref: any) => {
+      const [mountId] = React.useState(() => {
+        handwritingMocks.mountCount += 1
+        return handwritingMocks.mountCount
+      })
       React.useImperativeHandle(
         ref,
         () => ({
@@ -39,7 +44,7 @@ vi.mock('@/features/exam/components/HandwritingBoard', async () => {
         }),
         [props]
       )
-      return React.createElement('div', { 'data-testid': 'handwriting-board' }, 'mock handwriting board')
+      return React.createElement('div', { 'data-testid': 'handwriting-board' }, `mock handwriting board ${mountId}`)
     }),
   }
 })
@@ -102,10 +107,13 @@ function renderExamPage() {
 describe('ExamPage', () => {
   afterEach(() => {
     cleanup()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
   beforeEach(() => {
     vi.clearAllMocks()
+    handwritingMocks.mountCount = 0
     useExamStore.getState().reset()
     apiMocks.getExamSession.mockResolvedValue(makeSession())
     apiMocks.batchSaveAnswers.mockResolvedValue([])
@@ -142,5 +150,120 @@ describe('ExamPage', () => {
         },
       ])
     )
+  })
+
+  it('does not recreate save intervals on answer edits or timer ticks', async () => {
+    const setIntervalSpy = vi.spyOn(window, 'setInterval')
+    apiMocks.getExamSession.mockResolvedValue(
+      makeSession({
+        mode: 'timed',
+        expiresAt: '2026-06-05T10:30:00',
+      })
+    )
+    renderExamPage()
+
+    expect(await screen.findByText('函数综合测试')).toBeInTheDocument()
+    await waitFor(() => expect(setIntervalSpy.mock.calls.some((call) => call[1] === 30_000)).toBe(true))
+    const initialSaveIntervalCount = setIntervalSpy.mock.calls.filter((call) => call[1] === 30_000).length
+
+    act(() => {
+      useExamStore.getState().updateAnswer('q-002', {
+        questionId: 'q-002',
+        questionType: 'single_choice',
+        selectedOptions: ['A'],
+      })
+      useExamStore.getState().tick('2026-06-05T10:30:00')
+    })
+
+    await Promise.resolve()
+    expect(setIntervalSpy.mock.calls.filter((call) => call[1] === 30_000)).toHaveLength(initialSaveIntervalCount)
+  })
+
+  it('submits only once when a timed exam expires', async () => {
+    const intervals: Array<{ handler: TimerHandler; delay?: number }> = []
+    vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler, delay?: number) => {
+      intervals.push({ handler, delay })
+      return intervals.length as unknown as ReturnType<typeof window.setInterval>
+    })
+    vi.spyOn(window, 'clearInterval').mockImplementation(() => undefined)
+    let resolveSubmit: (value: unknown) => void = () => undefined
+    apiMocks.getExamSession.mockResolvedValue(
+      makeSession({
+        mode: 'timed',
+        expiresAt: '2026-06-05T09:59:59',
+      })
+    )
+    apiMocks.submitExam.mockReturnValue(new Promise((resolve) => {
+      resolveSubmit = resolve
+    }))
+    renderExamPage()
+
+    expect(await screen.findByText('函数综合测试')).toBeInTheDocument()
+    const tick = intervals.find((item) => item.delay === 1000)?.handler
+    expect(tick).toBeTypeOf('function')
+
+    await act(async () => {
+      if (typeof tick === 'function') {
+        tick()
+        tick()
+      }
+      await Promise.resolve()
+    })
+
+    expect(apiMocks.submitExam).toHaveBeenCalledTimes(1)
+    resolveSubmit({ sessionId: 'session-001' })
+  })
+
+  it('remounts handwriting board when moving between handwriting questions', async () => {
+    const user = userEvent.setup()
+    apiMocks.getExamSession.mockResolvedValue(
+      makeSession({
+        questions: [
+          {
+            questionId: 'q-001',
+            order: 1,
+            type: 'calculation',
+            questionType: 'calculation',
+            stem: '第一道计算题。',
+            maxScore: 10,
+          },
+          {
+            questionId: 'q-002',
+            order: 2,
+            type: 'calculation',
+            questionType: 'calculation',
+            stem: '第二道计算题。',
+            maxScore: 10,
+          },
+        ],
+      })
+    )
+    renderExamPage()
+
+    expect(await screen.findByText('mock handwriting board 1')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /下一题/ }))
+
+    expect(await screen.findByText('mock handwriting board 2')).toBeInTheDocument()
+  })
+
+  it('renders exam stems with question formula tokens', async () => {
+    apiMocks.getExamSession.mockResolvedValue(
+      makeSession({
+        questions: [
+          {
+            questionId: 'q-formula',
+            order: 1,
+            type: 'single_choice',
+            questionType: 'single_choice',
+            stem: `已知 \\(x^2+1\\)，并参考[公式:${'a'.repeat(32)}]。A. 1 B. 2`,
+            maxScore: 5,
+          },
+        ],
+      })
+    )
+    renderExamPage()
+
+    expect(await screen.findByAltText('题目公式')).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.katex')).not.toBeNull())
   })
 })

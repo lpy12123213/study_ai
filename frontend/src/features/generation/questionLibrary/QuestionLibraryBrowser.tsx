@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -13,8 +13,14 @@ import { useQuestionLibrary } from '@/features/generation/questionLibrary/hooks/
 import { useQuestionLibraryTasks } from '@/features/generation/questionLibrary/hooks/useQuestionLibraryTasks'
 import { bulkDeleteQuestionLibraryItems } from '@/api/questionLibrary'
 
-export function QuestionLibraryBrowser() {
+interface Props {
+  focusQuestionId?: string
+}
+
+export function QuestionLibraryBrowser(props: Props = {}) {
+  const { focusQuestionId = '' } = props
   const { data: subjects } = useSubjects()
+  const appliedFocusRef = useRef('')
 
   const lib = useQuestionLibrary({
     initialFilters: {
@@ -24,6 +30,7 @@ export function QuestionLibraryBrowser() {
       order: 'desc',
     },
   })
+  const setSelectedId = lib.setSelectedId
 
   const tasks = useQuestionLibraryTasks({
     filters: lib.filters,
@@ -40,9 +47,43 @@ export function QuestionLibraryBrowser() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const [bulkError, setBulkError] = useState<string | null>(null)
 
+  useEffect(() => {
+    const qid = String(focusQuestionId || '').trim()
+    if (!qid) {
+      appliedFocusRef.current = ''
+      return
+    }
+    if (appliedFocusRef.current === qid) return
+    appliedFocusRef.current = qid
+    setSelectedId(qid)
+    setDetailOpen(true)
+  }, [focusQuestionId, setSelectedId])
+
+  useEffect(() => {
+    if (lib.filters.subject) return
+    const firstSubject = (subjects || []).find((item) => String(item.code || '').trim())
+    if (firstSubject?.code) lib.setSubject(firstSubject.code)
+  }, [lib, lib.filters.subject, subjects])
+
   const selectedCount = useMemo(() => {
     return Object.values(selectedIds).filter(Boolean).length
   }, [selectedIds])
+
+  useEffect(() => {
+    const visibleIds = new Set(lib.items.map((item) => String(item.question_id || '').trim()).filter(Boolean))
+    setSelectedIds((prev) => {
+      let changed = false
+      const next: Record<string, boolean> = {}
+      for (const [id, selected] of Object.entries(prev)) {
+        if (selected && visibleIds.has(id)) {
+          next[id] = true
+        } else if (selected) {
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [lib.items])
 
   const openDetail = (qid: string) => {
     lib.setSelectedId(qid)
@@ -86,9 +127,11 @@ export function QuestionLibraryBrowser() {
 
   const deleteSelected = async () => {
     if (isBulkDeleting) return
+    const visibleIds = new Set(lib.items.map((item) => String(item.question_id || '').trim()).filter(Boolean))
     const ids = Object.entries(selectedIds)
       .filter(([, v]) => v)
       .map(([k]) => k)
+      .filter((id) => visibleIds.has(id))
     if (ids.length === 0) return
 
     const ok = confirm(`确定要删除选中的 ${ids.length} 道题吗？此操作不可恢复。`)

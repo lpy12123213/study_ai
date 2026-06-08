@@ -12,6 +12,19 @@ import { cn } from '@/lib/utils'
 const HL_START = '\u0001'
 const HL_END = '\u0002'
 
+function toKeyPart(value: unknown, fallback: number): string | number {
+  return typeof value === 'string' || typeof value === 'number' ? value : fallback
+}
+
+function resultKey(result: SearchResult, index: number): string {
+  let id: string | number = index
+  if (result.type === 'conversation') id = toKeyPart(result.message_id || result.conversation_id, index)
+  else if (result.type === 'paper') id = toKeyPart(result.question_id || result.paper_id, index)
+  else if (result.type === 'question') id = toKeyPart(result.question_id, index)
+  else if (result.type === 'study_archive') id = toKeyPart(result.archive_id, index)
+  return `${result.type}-${id}`
+}
+
 function HighlightedSnippet({ text }: { text: string }) {
   const nodes: ReactNode[] = []
   let i = 0
@@ -42,6 +55,7 @@ function HighlightedSnippet({ text }: { text: string }) {
 function typeLabel(t: SearchResult['type']): { label: string; icon: typeof Search; tone: 'default' | 'secondary' } {
   if (t === 'conversation') return { label: '对话', icon: MessageSquareText, tone: 'secondary' }
   if (t === 'paper') return { label: '试卷', icon: FileText, tone: 'secondary' }
+  if (t === 'question') return { label: '题目', icon: BookOpen, tone: 'secondary' }
   if (t === 'study_archive') return { label: '自学资料', icon: BookOpen, tone: 'secondary' }
   return { label: String(t), icon: Search, tone: 'default' }
 }
@@ -91,6 +105,11 @@ export default function SearchPage() {
       else navigate(`/papers/${encodeURIComponent(paperId)}`)
       return
     }
+    if (r.type === 'question') {
+      const qid = String(r.question_id || '').trim()
+      if (qid) navigate(`/question-library?focus=${encodeURIComponent(qid)}`)
+      return
+    }
     if (r.type === 'study_archive') {
       navigate(`/study-archives/${encodeURIComponent(String(r.archive_id))}?q=${encodeURIComponent(qParam)}`)
       return
@@ -116,7 +135,7 @@ export default function SearchPage() {
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="搜索对话、试卷题干、自学资料…"
+              placeholder="搜索对话、试卷题干、题库、自学资料…"
               className="pl-9"
             />
           </div>
@@ -139,7 +158,7 @@ export default function SearchPage() {
               const snippet = String(r.snippet || '')
               return (
                 <button
-                  key={`${r.type}-${idx}-${title}`}
+                  key={resultKey(r, idx)}
                   type="button"
                   onClick={() => openResult(r)}
                   className={cn(

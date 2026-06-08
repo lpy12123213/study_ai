@@ -86,6 +86,9 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
             # Only strip real tags like "<div ...>" not math comparisons like "x<y".
             s = _HTML_TAG_RE.sub("", s)
 
+        if _DANGEROUS_HTML_RE.search(s) or _DANGEROUS_PROTO_RE.search(s):
+            raise ValueError("dangerous_html")
+
         if self._limits.max_string_length > 0 and len(s) > self._limits.max_string_length:
             s = s[: self._limits.max_string_length]
         return s

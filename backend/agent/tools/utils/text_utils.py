@@ -260,7 +260,8 @@ def _sanitize_explanation_markdown(markdown: str, *, knowledge_point: str) -> st
 
     # Replace markdown links with titles, then drop remaining raw URLs.
     text = re.sub(r"\[([^\]]+)\]\(https?://[^\)]+\)", r"\1", text)
-    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"https?://[^\s)）]+", "", text)
+    text = re.sub(r"[（(]\s*[)）]", "", text)
 
     raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 

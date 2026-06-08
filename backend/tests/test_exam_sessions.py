@@ -32,7 +32,7 @@ class ObjectiveGradingTests(unittest.TestCase):
         )
         fill = grade_objective_answer(
             question_type="fill_blank",
-            expected_answer="牛顿; Newton",
+            expected_answer="牛顿 或 Newton",
             answer_data={"fill_blank_text": " newton "},
             max_score=4,
         )
@@ -43,6 +43,33 @@ class ObjectiveGradingTests(unittest.TestCase):
         self.assertTrue(multi["is_correct"])
         self.assertEqual(fill["score"], 4)
         self.assertTrue(fill["is_correct"])
+
+    def test_fill_blank_repeated_slots_require_each_submitted_slot(self) -> None:
+        full = grade_objective_answer(
+            question_type="fill_blank",
+            expected_answer="2；2",
+            answer_data={"fill_blank_text": "2；2"},
+            max_score=4,
+        )
+        partial = grade_objective_answer(
+            question_type="fill_blank",
+            expected_answer="2；2",
+            answer_data={"fill_blank_text": "2"},
+            max_score=4,
+        )
+        wrong_short = grade_objective_answer(
+            question_type="fill_blank",
+            expected_answer="2；3",
+            answer_data={"fill_blank_text": "2"},
+            max_score=4,
+        )
+
+        self.assertTrue(full["is_correct"])
+        self.assertEqual(full["score"], 4)
+        self.assertFalse(partial["is_correct"])
+        self.assertEqual(partial["score"], 0)
+        self.assertFalse(wrong_short["is_correct"])
+        self.assertEqual(wrong_short["score"], 0)
 
 
 class SubjectiveGradingPromptTests(unittest.IsolatedAsyncioTestCase):
@@ -106,7 +133,7 @@ class ExamSessionRepositoryTests(unittest.IsolatedAsyncioTestCase):
                     "question_id": "q-fill",
                     "type": "fill_blank",
                     "stem": "力的单位是?",
-                    "answer": "N; 牛顿",
+                    "answer": "N 或 牛顿",
                     "analysis": "国际单位制。",
                 },
             ],

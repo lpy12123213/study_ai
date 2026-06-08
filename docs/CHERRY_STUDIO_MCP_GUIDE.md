@@ -42,8 +42,6 @@ Windows 也可以通过启动器：
 start.bat mcp
 ```
 
-`mcp_server/server.py` 只作为旧路径兼容存在，新配置不要依赖它。
-
 ## Cherry Studio 配置
 
 在 Cherry Studio 的 MCP 服务器设置中添加：
@@ -109,7 +107,7 @@ Windows 示例，推荐使用虚拟环境 Python：
 
 - `diagnose_export`
 
-工具列表以 `backend/mcp/tools/stdio_tools.py` 为准。
+工具列表以 `backend/integrations/mcp/tools/stdio_tools.py` 为准。
 
 ## 使用示例
 
@@ -149,7 +147,7 @@ MCP 无法连接时：
 
 ## 维护口径
 
-- MCP 工具清单以 `backend/mcp/tools/stdio_tools.py` 为准。
-- 工具实现以 `backend/mcp/tools/stdio_handlers.py` 为准。
+- MCP 工具清单以 `backend/integrations/mcp/tools/stdio_tools.py` 为准。
+- 工具实现以 `backend/integrations/mcp/tools/stdio_handlers.py` 为准。
 - 新 MCP 工具需要补充说明、输入 schema 和失败返回。
 - 不要在 MCP 文档中承诺 HTTP API 尚未支持的 provider 切换能力。

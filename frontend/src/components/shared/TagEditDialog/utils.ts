@@ -10,7 +10,6 @@ export function parseTagsInput(raw: string): string[] {
     .split(/[,，\n]/)
     .map((tag) => tag.trim())
     .filter(Boolean)
-    .slice(0, 20)
 
-  return Array.from(new Set(tags))
+  return Array.from(new Set(tags)).slice(0, 20)
 }

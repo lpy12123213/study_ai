@@ -163,6 +163,25 @@ def sync_migrate_db_schema(conn) -> None:
         except Exception:
             logger.warning("legacy_migration_question_library_unscored_index_failed", exc_info=True)
 
+    # Wrongbook SRS scheduling additions.
+    wq_cols = _table_cols(conn, "wrong_questions")
+    if wq_cols:
+        for name, ddl in (
+            ("ease_factor", "FLOAT NOT NULL DEFAULT 2.5"),
+            ("interval_days", "INTEGER NOT NULL DEFAULT 0"),
+            ("repetitions", "INTEGER NOT NULL DEFAULT 0"),
+            ("next_review_at", "DATETIME"),
+            ("last_reviewed_at", "DATETIME"),
+        ):
+            _add_col(conn, table="wrong_questions", name=name, ddl=ddl, existing_cols=wq_cols)
+        _ensure_index(conn, name="ix_wrong_questions_next_review", table="wrong_questions", columns="next_review_at")
+        _ensure_index(
+            conn,
+            name="ix_wrong_questions_user_next_review",
+            table="wrong_questions",
+            columns="user_id, next_review_at",
+        )
+
     # Unified tasks additions (best-effort forward-compat).
     tasks_cols = _table_cols(conn, "tasks")
     if tasks_cols:
@@ -278,6 +297,17 @@ def sync_migrate_db_schema(conn) -> None:
             "tokenize='unicode61 remove_diacritics 2'"
             ")"
         )
+        conn.exec_driver_sql(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS question_library_fts USING fts5("
+            "user_id UNINDEXED,"
+            "question_id UNINDEXED,"
+            "subject UNINDEXED,"
+            "knowledge_point UNINDEXED,"
+            "hidden UNINDEXED,"
+            "content,"
+            "tokenize='unicode61 remove_diacritics 2'"
+            ")"
+        )
 
         # messages → messages_fts (exclude tool messages by default)
         conn.exec_driver_sql(
@@ -327,7 +357,7 @@ def sync_migrate_db_schema(conn) -> None:
             "(SELECT user_id FROM papers WHERE id=NEW.paper_id),"
             "NEW.paper_id,"
             "NEW.question_id,"
-            "(SELECT name FROM papers WHERE id=NEW.paper_id),"
+            "(SELECT paper_name FROM papers WHERE id=NEW.paper_id),"
             "NEW.knowledge_point,"
             "COALESCE(NEW.knowledge_point,'') || char(10) || COALESCE(NEW.stem,'') || char(10) || COALESCE(NEW.analysis,'')"
             "); "
@@ -349,7 +379,7 @@ def sync_migrate_db_schema(conn) -> None:
             "(SELECT user_id FROM papers WHERE id=NEW.paper_id),"
             "NEW.paper_id,"
             "NEW.question_id,"
-            "(SELECT name FROM papers WHERE id=NEW.paper_id),"
+            "(SELECT paper_name FROM papers WHERE id=NEW.paper_id),"
             "NEW.knowledge_point,"
             "COALESCE(NEW.knowledge_point,'') || char(10) || COALESCE(NEW.stem,'') || char(10) || COALESCE(NEW.analysis,'')"
             "); "
@@ -362,6 +392,58 @@ def sync_migrate_db_schema(conn) -> None:
             "BEGIN "
             "INSERT INTO study_archives_fts(rowid,user_id,archive_id,subject,topic,requirements,markdown) "
             "VALUES(NEW.id, NEW.user_id, NEW.id, NEW.subject, NEW.topic, NEW.requirements, NEW.markdown); "
+            "END;"
+        )
+
+        # question_library + question_cache → question_library_fts
+        conn.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS question_library_ai AFTER INSERT ON question_library "
+            "BEGIN "
+            "INSERT INTO question_library_fts(user_id,question_id,subject,knowledge_point,hidden,content) "
+            "SELECT "
+            "NEW.user_id,"
+            "NEW.question_id,"
+            "COALESCE(NULLIF(NEW.subject,''), NULLIF(qc.subject,''), ''),"
+            "COALESCE(qc.knowledge_point,''),"
+            "COALESCE(NEW.hidden,0),"
+            "COALESCE(qc.stem,'') || char(10) || COALESCE(qc.answer,'') || char(10) || COALESCE(qc.analysis,'') "
+            "FROM question_cache qc WHERE qc.question_id = NEW.question_id; "
+            "END;"
+        )
+        conn.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS question_library_ad AFTER DELETE ON question_library "
+            "BEGIN "
+            "DELETE FROM question_library_fts WHERE user_id=OLD.user_id AND question_id=OLD.question_id; "
+            "END;"
+        )
+        conn.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS question_library_au AFTER UPDATE ON question_library "
+            "BEGIN "
+            "DELETE FROM question_library_fts WHERE user_id=OLD.user_id AND question_id=OLD.question_id; "
+            "INSERT INTO question_library_fts(user_id,question_id,subject,knowledge_point,hidden,content) "
+            "SELECT "
+            "NEW.user_id,"
+            "NEW.question_id,"
+            "COALESCE(NULLIF(NEW.subject,''), NULLIF(qc.subject,''), ''),"
+            "COALESCE(qc.knowledge_point,''),"
+            "COALESCE(NEW.hidden,0),"
+            "COALESCE(qc.stem,'') || char(10) || COALESCE(qc.answer,'') || char(10) || COALESCE(qc.analysis,'') "
+            "FROM question_cache qc WHERE qc.question_id = NEW.question_id; "
+            "END;"
+        )
+        conn.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS question_cache_au_question_library_fts AFTER UPDATE ON question_cache "
+            "BEGIN "
+            "DELETE FROM question_library_fts WHERE question_id=OLD.question_id; "
+            "INSERT INTO question_library_fts(user_id,question_id,subject,knowledge_point,hidden,content) "
+            "SELECT "
+            "ql.user_id,"
+            "ql.question_id,"
+            "COALESCE(NULLIF(ql.subject,''), NULLIF(NEW.subject,''), ''),"
+            "COALESCE(NEW.knowledge_point,''),"
+            "COALESCE(ql.hidden,0),"
+            "COALESCE(NEW.stem,'') || char(10) || COALESCE(NEW.answer,'') || char(10) || COALESCE(NEW.analysis,'') "
+            "FROM question_library ql WHERE ql.question_id = NEW.question_id; "
             "END;"
         )
         conn.exec_driver_sql(
@@ -395,10 +477,22 @@ def sync_migrate_db_schema(conn) -> None:
                 "FROM messages m JOIN conversations c ON c.id=m.conversation_id "
                 "WHERE m.role <> 'tool'"
             )
+        if not _fts_has_any("question_library_fts"):
+            conn.exec_driver_sql(
+                "INSERT INTO question_library_fts(user_id,question_id,subject,knowledge_point,hidden,content) "
+                "SELECT "
+                "ql.user_id,"
+                "ql.question_id,"
+                "COALESCE(NULLIF(ql.subject,''), NULLIF(qc.subject,''), ''),"
+                "COALESCE(qc.knowledge_point,''),"
+                "COALESCE(ql.hidden,0),"
+                "COALESCE(qc.stem,'') || char(10) || COALESCE(qc.answer,'') || char(10) || COALESCE(qc.analysis,'') "
+                "FROM question_library ql JOIN question_cache qc ON qc.question_id=ql.question_id"
+            )
         if not _fts_has_any("paper_questions_fts"):
             conn.exec_driver_sql(
                 "INSERT OR REPLACE INTO paper_questions_fts(rowid,user_id,paper_id,question_id,paper_name,knowledge_point,content) "
-                "SELECT pq.id, p.user_id, pq.paper_id, pq.question_id, p.name, pq.knowledge_point, "
+                "SELECT pq.id, p.user_id, pq.paper_id, pq.question_id, p.paper_name, pq.knowledge_point, "
                 "COALESCE(pq.knowledge_point,'') || char(10) || COALESCE(pq.stem,'') || char(10) || COALESCE(pq.analysis,'') "
                 "FROM paper_questions pq JOIN papers p ON p.id=pq.paper_id"
             )

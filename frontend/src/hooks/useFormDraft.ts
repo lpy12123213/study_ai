@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 type DraftEnvelope<T> = {
   v: number
@@ -54,14 +54,14 @@ export function useFormDraft<T>(options: {
   const timerRef = useRef<number | null>(null)
   const restoredRef = useRef(false)
 
-  const clearDraft = () => {
+  const clearDraft = useCallback(() => {
     if (!key) return
     try {
       window.localStorage.removeItem(key)
     } catch {
       // ignore
     }
-  }
+  }, [key])
 
   useEffect(() => {
     if (!enabled) return

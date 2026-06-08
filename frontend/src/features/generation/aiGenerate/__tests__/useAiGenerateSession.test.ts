@@ -13,13 +13,16 @@ import {
 
 describe('reduceTaskPreviewToSession', () => {
   it('maps preview drafts into ordered studio cards', () => {
-    const preview: QuestionLibraryDraftPreview = {
+    const preview = {
       previewId: 'preview-001',
       sessionId: 'session-001',
       subject: '高中数学',
       topic: '函数单调性',
       count: 2,
       taskId: 'task-001',
+      difficulty: '困难',
+      questionType: '解答题',
+      useStudyArchive: true,
       draftQuestions: [
         {
           question_id: 'q-001',
@@ -42,6 +45,9 @@ describe('reduceTaskPreviewToSession', () => {
 
     expect(session.previewId).toBe('preview-001')
     expect(session.mission.subject).toBe('高中数学')
+    expect(session.mission.difficulty).toBe('困难')
+    expect(session.mission.questionType).toBe('解答题')
+    expect(session.mission.useStudyArchive).toBe(true)
     expect(session.drafts).toHaveLength(2)
     expect(session.drafts[0].title).toBe('题目 01')
     expect(session.drafts[0].sections.stem.content).toBe('已知函数 f(x)，判断其单调区间。')

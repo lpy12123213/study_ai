@@ -180,7 +180,7 @@ class DiagramPlanningToolsMixin:
                     ]
                     + (
                         [
-                            "draw_diagram: provide `spec` compatible with backend.core.plot_tools.render_schematic.",
+                            "draw_diagram: provide `spec` compatible with backend.core.plot.render_schematic.",
                             "  - spec supports: title, objects[{id,shape,pos,label,size,color,fill}], wires[[[x,y],[x,y]]], forces[{object,direction,length,label}], annotations[{text,x,y,arrow_to}]",
                             "  - Keep it simple; do not overfit; no URLs.",
                         ]
