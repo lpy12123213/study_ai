@@ -87,7 +87,7 @@ export const HandwritingBoard = forwardRef<HandwritingBoardHandle, HandwritingBo
   }
 
   return (
-    <div className="aurora-exam-card overflow-hidden rounded-md border bg-card" data-focus="true">
+    <div className="aurora-exam-handwriting aurora-exam-card overflow-hidden rounded-md" data-focus="true">
       <HandwritingToolbar
         color={color}
         width={width}
@@ -137,7 +137,7 @@ export const HandwritingBoard = forwardRef<HandwritingBoardHandle, HandwritingBo
         }}
         onPointerCancel={() => setDrawing(false)}
       />
-      <div className="flex items-center justify-between border-t p-2">
+      <div className="aurora-exam-handwriting-foot flex items-center justify-between border-t p-2">
         {imageUrl ? (
           <a className="text-xs text-muted-foreground underline" href={imageUrl} target="_blank" rel="noreferrer">
             已上传手写图

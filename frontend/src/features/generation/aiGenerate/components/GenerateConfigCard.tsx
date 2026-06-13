@@ -46,8 +46,9 @@ export function GenerateConfigCard({
   onRun,
 }: GenerateConfigCardProps) {
   return (
-    <Card>
+    <Card className="aurora-ai-card overflow-hidden">
       <CardHeader>
+        <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">Prompt control</div>
         <CardTitle className="text-base">生成配置</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -55,7 +56,7 @@ export function GenerateConfigCard({
           <div className="md:col-span-3">
             <div className="text-xs text-muted-foreground mb-2">学科</div>
             <Select value={subject} onValueChange={onSubjectChange}>
-              <SelectTrigger className="h-9">
+              <SelectTrigger className="h-9 bg-background/45">
                 <SelectValue placeholder="选择学科" />
               </SelectTrigger>
               <SelectContent>
@@ -69,12 +70,12 @@ export function GenerateConfigCard({
           </div>
           <div className="md:col-span-5">
             <div className="text-xs text-muted-foreground mb-2">主题 / 知识点</div>
-            <Input value={topic} onChange={(e) => onTopicChange(e.target.value)} placeholder="例如：函数 单调性" className="h-9" />
+            <Input value={topic} onChange={(e) => onTopicChange(e.target.value)} placeholder="例如：函数 单调性" className="h-9 bg-background/45" />
           </div>
           <div className="md:col-span-2">
             <div className="text-xs text-muted-foreground mb-2">难度</div>
             <Select value={difficulty} onValueChange={onDifficultyChange}>
-              <SelectTrigger className="h-9">
+              <SelectTrigger className="h-9 bg-background/45">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -87,7 +88,7 @@ export function GenerateConfigCard({
           </div>
           <div className="md:col-span-2">
             <div className="text-xs text-muted-foreground mb-2">数量</div>
-            <Input value={count} onChange={(e) => onCountChange(e.target.value)} placeholder="5" className="h-9" />
+            <Input value={count} onChange={(e) => onCountChange(e.target.value)} placeholder="5" className="h-9 bg-background/45" />
           </div>
         </div>
 
@@ -98,11 +99,11 @@ export function GenerateConfigCard({
               value={questionType}
               onChange={(e) => onQuestionTypeChange(e.target.value)}
               placeholder="例如：选择题 / 填空题 / 解答题"
-              className="h-9"
+              className="h-9 bg-background/45"
             />
           </div>
           <div className="md:col-span-4">
-            <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+            <div className="aurora-ai-probe flex items-center justify-between gap-3 p-3">
               <div className="min-w-0">
                 <div className="text-sm font-medium">使用自学资料</div>
                 <div className="text-xs text-muted-foreground">从 StudyArchive 提取上下文，提高生成质量</div>
@@ -118,7 +119,7 @@ export function GenerateConfigCard({
             开始生成
           </Button>
           {isRunning && (
-            <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               生成中…
             </div>

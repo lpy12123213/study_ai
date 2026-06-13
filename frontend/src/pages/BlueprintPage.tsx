@@ -197,7 +197,7 @@ export default function BlueprintPage() {
   })
 
   return (
-    <div className="h-full grid grid-cols-12 overflow-hidden">
+    <div className="aurora-blueprint-screen h-full grid grid-cols-12 overflow-hidden">
       {/* Left Panel: Configuration */}
       <BlueprintConfigPanel
         mode={mode}
@@ -246,17 +246,19 @@ export default function BlueprintPage() {
       />
 
       {/* Right Panel: Preview & Timeline */}
-      <BlueprintPreviewPanel
-        mode={mode}
-        isComposing={isComposing}
-        taskId={taskId ?? undefined}
-        progressPct={progressPct}
-        result={result}
-        taskSteps={taskSteps}
-        slotShortfalls={slotShortfalls}
-        onFillShortfalls={handleFillShortfalls}
-        oneClick={oneClick}
-      />
+      <div className="aurora-blueprint-preview-shell col-span-5 h-full min-h-0">
+        <BlueprintPreviewPanel
+          mode={mode}
+          isComposing={isComposing}
+          taskId={taskId ?? undefined}
+          progressPct={progressPct}
+          result={result}
+          taskSteps={taskSteps}
+          slotShortfalls={slotShortfalls}
+          onFillShortfalls={handleFillShortfalls}
+          oneClick={oneClick}
+        />
+      </div>
     </div>
   )
 }

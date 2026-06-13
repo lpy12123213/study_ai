@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Check,
   X,
   Loader2,
-  Clock,
-  Pause,
   ChevronRight,
+  Code2,
   Globe,
   BookOpen,
   Search,
@@ -24,79 +22,48 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { StepDetail } from './StepDetail'
-import { cn, formatDuration } from '@/lib/utils'
-import type { TaskStep as TaskStepType, StepStatus } from '@/types'
+import { cn } from '@/lib/utils'
+import type { TaskStep as TaskStepType } from '@/types'
 
 interface TaskStepProps {
   step: TaskStepType
   isLast: boolean
 }
 
-const statusConfig: Record<
-  StepStatus,
-  { icon: typeof Check; color: string; bgColor: string }
-> = {
-  pending: {
-    icon: Clock,
-    color: 'text-muted-foreground',
-    bgColor: 'bg-muted',
-  },
-  running: {
-    icon: Loader2,
-    color: 'text-foreground',
-    bgColor: 'bg-foreground/10',
-  },
-  completed: {
-    icon: Check,
-    color: 'text-foreground',
-    bgColor: 'bg-foreground/5',
-  },
-  failed: {
-    icon: X,
-    color: 'text-destructive',
-    bgColor: 'bg-destructive/10',
-  },
-  paused: {
-    icon: Pause,
-    color: 'text-muted-foreground',
-    bgColor: 'bg-muted',
-  },
-}
-
-/** Map tool names to human-readable titles + icons */
-const TOOL_DISPLAY: Record<string, { label: string; icon: typeof Globe }> = {
-  thinking:                     { label: '思考',               icon: Cpu },
-  get_user_profile:              { label: '读取用户画像',       icon: User },
-  split_knowledge_points:        { label: '拆分知识点',         icon: Layers },
-  review_knowledge_points:       { label: '审核知识点',         icon: Layers },
-  web_search_knowledge:          { label: '联网搜索资料',       icon: Globe },
-  browse_web_pages:              { label: '浏览网页正文',       icon: Globe },
-  wikipedia_search:              { label: '搜索维基百科',       icon: BookOpen },
-  mediawiki_search:              { label: '检索开放知识库',     icon: BookOpen },
-  stackexchange_search:          { label: '检索问答资料',       icon: Search },
-  github_search:                 { label: '检索公开资料库',     icon: Search },
-  search_questions_by_knowledge: { label: '题库检索相关题目',   icon: Search },
-  search_questions:              { label: '搜索题目',           icon: Search },
-  aggregate_knowledge:           { label: '聚合知识资料',       icon: Database },
-  synthesize_sources:            { label: '综合源简报',         icon: Database },
-  detect_knowledge_type:         { label: '检测知识类型',       icon: Cpu },
-  generate_outline:              { label: '生成写作大纲',       icon: FileText },
-  generate_study_material:       { label: '生成自学资料',       icon: Sparkles },
-  critique_draft:                { label: '自我批判',           icon: Cpu },
-  refine_draft:                  { label: '精炼修订',           icon: FileText },
-  generate_diagrams:             { label: '生成教学配图',       icon: Sparkles },
-  generate_lesson_plan:         { label: '生成教案',           icon: Sparkles },
-  assemble_study_archive:        { label: '组装学习档案',       icon: FileText },
-  revise_markdown:               { label: '修订文档',           icon: FileText },
-  save_markdown_file:            { label: '保存文档',           icon: FileText },
-  export_study_markdown:         { label: '导出文档',           icon: FileText },
-  convert_markdown_to_latex:     { label: '生成排版稿',         icon: FileText },
-  refine_latex:                  { label: '修订排版稿',         icon: FileText },
-  compile_latex_to_pdf:          { label: '生成 PDF',           icon: FileText },
-  compose_paper:                 { label: '组合试卷',           icon: FileText },
-  create_paper:                  { label: '创建试卷',           icon: FileText },
-  analyze_paper:                 { label: '分析试卷难度',       icon: Cpu },
-  research_knowledge_point:      { label: '研究知识点',         icon: Search },
+/** Map tool names to human-readable titles + thought */
+const TOOL_DISPLAY: Record<string, { label: string; thought?: string; icon: typeof Globe }> = {
+  thinking:                     { label: '推理并分析问题',                     thought: '整理思路',             icon: Cpu },
+  get_user_profile:              { label: '读取用户画像并获取偏好',             thought: '匹配个性化设置',       icon: User },
+  split_knowledge_points:        { label: '拆分并识别核心知识点',               thought: '确定知识范围',         icon: Layers },
+  review_knowledge_points:       { label: '审核知识点覆盖及合理性',             thought: '验证知识拆分',         icon: Layers },
+  web_search_knowledge:          { label: '联网搜索相关学习资料',               thought: '收集多源信息',         icon: Globe },
+  browse_web_pages:              { label: '浏览网页并提取正文内容',             thought: '获取详细资料',         icon: Globe },
+  wikipedia_search:              { label: '检索维基百科相关条目',               thought: '补充权威知识',         icon: BookOpen },
+  mediawiki_search:              { label: '检索开放知识库及百科内容',           thought: '扩展知识来源',         icon: BookOpen },
+  stackexchange_search:          { label: '检索问答社区相关讨论',               thought: '收集实践经验',         icon: Search },
+  github_search:                 { label: '检索公开代码及技术资料',             thought: '参考开源方案',         icon: Search },
+  search_questions_by_knowledge: { label: '从题库检索关联题目',                 thought: '匹配相关练习',         icon: Search },
+  search_questions:              { label: '搜索题目并筛选结果',                 thought: '定位目标题目',         icon: Search },
+  aggregate_knowledge:           { label: '聚合多源资料并按知识点整理',         thought: '统一素材结构',         icon: Database },
+  synthesize_sources:            { label: '综合多源信息生成简报',               thought: '提炼关键事实',         icon: Database },
+  detect_knowledge_type:         { label: '检测知识类型及结构特征',             thought: '判断最佳表达方式',     icon: Cpu },
+  generate_outline:              { label: '生成自适应写作大纲',                 thought: '规划内容结构',         icon: FileText },
+  generate_study_material:       { label: '生成概念讲解及学习内容',             thought: '撰写核心知识',         icon: Sparkles },
+  critique_draft:                { label: '多维度审查并自我批判',               thought: '发现改进空间',         icon: Cpu },
+  refine_draft:                  { label: '根据批判意见精炼修订',               thought: '定向优化内容',         icon: FileText },
+  generate_diagrams:             { label: '生成教学示意图及配图',               thought: '辅助直观理解',         icon: Sparkles },
+  generate_lesson_plan:         { label: '生成完整教案内容',                   thought: '组织教学流程',         icon: Sparkles },
+  assemble_study_archive:        { label: '组装结构化学习档案',                 thought: '整理最终文档',         icon: FileText },
+  revise_markdown:               { label: '根据审查结果修订文档',               thought: '提升内容质量',         icon: FileText },
+  save_markdown_file:            { label: '保存文档到本地文件',                 thought: '持久化存储',           icon: FileText },
+  export_study_markdown:         { label: '导出文档并生成下载链接',             thought: '发布可下载文件',       icon: FileText },
+  convert_markdown_to_latex:     { label: '读取文档并生成LaTeX/PDF',            thought: '考虑LaTeX排版',       icon: FileText },
+  refine_latex:                  { label: '检查并转换DOCX文件及相关内容',       thought: '处理公式图像大小',     icon: FileText },
+  compile_latex_to_pdf:          { label: '提取图像尺寸并处理文档格式及渲染',   thought: '编译生成最终PDF',     icon: FileText },
+  compose_paper:                 { label: '组合试卷题目及结构',                 thought: '编排题目顺序',         icon: FileText },
+  create_paper:                  { label: '创建试卷并初始化配置',               thought: '设置试卷参数',         icon: FileText },
+  analyze_paper:                 { label: '分析试卷难度及知识覆盖',             thought: '评估试卷质量',         icon: Cpu },
+  research_knowledge_point:      { label: '深入研究知识点细节',                 thought: '获取专业理解',         icon: Search },
 }
 
 /** Extract the current knowledge-point context from step input */
@@ -150,47 +117,37 @@ function extractContext(step: TaskStepType): string | null {
 }
 
 /** Build a human-readable title for a step */
-function getDisplayTitle(step: TaskStepType): { title: string; ToolIcon: typeof Globe | null } {
-  // If the step has a tool name, use its mapped label
+function getDisplayTitle(step: TaskStepType): { title: string; thought: string | null; ToolIcon: typeof Globe | null } {
   if (step.toolName) {
     const display = TOOL_DISPLAY[step.toolName]
     if (display) {
       if (step.toolName === 'thinking') {
         const raw = (step.title || '').trim()
         const title = raw ? (raw.startsWith('思考') ? raw : `思考：${raw}`) : display.label
-        return { title, ToolIcon: display.icon }
+        return { title, thought: display.thought || null, ToolIcon: display.icon }
       }
       const ctx = extractContext(step)
       const label = ctx ? `${display.label}：${ctx}` : display.label
-      return { title: label, ToolIcon: display.icon }
+      const thought = (step as TaskStepType & { thought?: string }).thought || display.thought || null
+      return { title: label, thought, ToolIcon: display.icon }
     }
-    // Fallback: strip "调用工具：" prefix and show tool name naturally
-    return { title: step.toolName.replace(/_/g, ' '), ToolIcon: Wrench }
+    return { title: step.toolName.replace(/_/g, ' '), thought: null, ToolIcon: Wrench }
   }
 
-  // Non-tool step: strip "调用工具：" if present in the original title
   const raw = (step.title || '').replace(/^调用工具[：:]\s*/i, '').trim()
-  return { title: raw || step.title, ToolIcon: null }
+  return { title: raw || step.title, thought: null, ToolIcon: null }
 }
 
 export function TaskStep({ step, isLast }: TaskStepProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const prevStatusRef = useRef(step.status)
-  const config = statusConfig[step.status]
-  const StatusIcon = config.icon
-
-  // Calculate duration
-  const duration =
-    step.startTime && step.endTime
-      ? new Date(step.endTime).getTime() - new Date(step.startTime).getTime()
-      : null
 
   const hasDetails =
     (step.input !== undefined && step.input !== null) ||
     (step.output !== undefined && step.output !== null) ||
     !!step.error
 
-  const { title, ToolIcon } = getDisplayTitle(step)
+  const { title, thought } = getDisplayTitle(step)
 
   // Auto-expand thinking while it's running, then auto-collapse once it finishes.
   useEffect(() => {
@@ -209,43 +166,43 @@ export function TaskStep({ step, isLast }: TaskStepProps) {
 
   return (
     <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-      <div className={cn(isLast ? '' : 'pb-1')}>
+      <div className={cn(isLast ? '' : 'pb-1.5')}>
         <CollapsibleTrigger asChild>
           <div
             className={cn(
-              "group flex items-center gap-2 rounded-md px-2 py-1 cursor-pointer select-none",
-              "border border-transparent hover:border-border/60 hover:bg-muted/30",
-              step.status === 'failed' && "border-destructive/20 bg-destructive/5 hover:border-destructive/30 hover:bg-destructive/5"
+              "group flex flex-col gap-0.5 rounded-md px-2 py-1.5 cursor-pointer select-none",
+              "hover:bg-muted/30",
+              step.status === 'failed' && "bg-destructive/5 hover:bg-destructive/5"
             )}
           >
-            <StatusIcon
-              className={cn(
-                "h-3.5 w-3.5 shrink-0",
-                config.color,
-                step.status === 'running' && "animate-spin"
+            <div className="flex items-center gap-2">
+              {step.status === 'running' ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 text-foreground animate-spin" />
+              ) : step.status === 'failed' ? (
+                <X className="h-3.5 w-3.5 shrink-0 text-destructive" />
+              ) : (
+                <Code2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               )}
-            />
 
-            {ToolIcon && (
-              <ToolIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            )}
+              <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5">
+                {title}
+              </span>
 
-            <span className="min-w-0 flex-1 truncate text-sm font-medium leading-5">
-              {title}
-            </span>
+              {hasDetails && (
+                <motion.div
+                  animate={{ rotate: isExpanded ? 90 : 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </motion.div>
+              )}
+            </div>
 
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
-              {duration !== null ? formatDuration(duration) : step.status === 'running' ? '…' : ''}
-            </span>
-
-            {hasDetails && (
-              <motion.div
-                animate={{ rotate: isExpanded ? 90 : 0 }}
-                transition={{ duration: 0.15 }}
-                className="shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground"
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </motion.div>
+            {thought && (
+              <span className="pl-[22px] text-xs text-muted-foreground leading-4 truncate">
+                {thought}
+              </span>
             )}
           </div>
         </CollapsibleTrigger>

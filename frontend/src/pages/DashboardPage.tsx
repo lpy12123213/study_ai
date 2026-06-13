@@ -23,6 +23,7 @@ import { ErrorNotice } from '@/components/shared/ErrorNotice'
 import { downloadObjectUrl } from '@/api/client'
 import * as dashboardApi from '@/api/dashboard'
 import * as insightsApi from '@/api/insights'
+import * as wrongbookApi from '@/api/wrongbook'
 import { DASHBOARD_REFETCH_INTERVAL_MS, useRunningTasks } from '@/hooks/useRunningTasks'
 
 function pct(value?: number): string {
@@ -79,6 +80,12 @@ export default function DashboardPage() {
     refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
   })
 
+  const { data: reviewQueue } = useQuery({
+    queryKey: ['wrongbook', 'dashboard-review-queue'],
+    queryFn: () => wrongbookApi.getReviewQueue({ limit: 1 }),
+    refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
+  })
+
   const { data: runningTasksData } = useRunningTasks()
 
   const runningTasks = (runningTasksData?.tasks ?? []).slice(0, 5)
@@ -89,6 +96,7 @@ export default function DashboardPage() {
   const latestExam = insights?.exams?.recent?.[0]
   const weakPoint = insights?.wrongbook?.weak_points?.[0]
   const plan = insights?.activity?.plan_completion
+  const reviewDueCount = Number(reviewQueue?.due_count || 0)
   const insightRows = [
     { label: '最新成绩', value: latestExam ? pct(latestExam.score_ratio) : '--' },
     { label: '薄弱点', value: weakPoint ? `${weakPoint.knowledge_point} ${pct(weakPoint.avg_mastery)}` : '--' },
@@ -144,23 +152,21 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-full bg-background px-4 py-8 md:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1200px] space-y-6">
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+    <div className="aurora-dashboard-screen min-h-full px-4 py-6 md:px-6 lg:px-8">
+      <div className="mx-auto max-w-[1440px] space-y-6">
+        <section className="aurora-dashboard-hero grid gap-6 p-5 md:p-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div className="max-w-3xl">
-            <div className="mb-4 inline-flex rounded-full border border-border bg-card px-3 py-1 font-mono text-[11px] font-semibold text-muted-foreground">
+            <div className="mb-4 inline-flex rounded-full border border-border bg-card/70 px-3 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
               学习工作台
             </div>
-            <h1 className="app-display text-3xl text-foreground md:text-5xl">
-              把学习任务交给可检查的 AI 流程
-            </h1>
+            <h1 className="app-display text-4xl text-foreground md:text-6xl">AI 学习任务指挥舱</h1>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
               从检索、生成、审查到导出，所有长任务都沿着可复查的时间线推进。界面保留足够留白，
               也保留关键中间产物。
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="aurora-dashboard-launcher flex flex-wrap items-center gap-2 p-3">
             <Button asChild className="h-10">
               <Link to="/chat">
                 <Play className="h-4 w-4" />
@@ -176,7 +182,7 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-y border-border py-3">
+        <div className="aurora-dashboard-filter flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
             数据窗口：{stats?.from || '--'} → {stats?.to || '--'}
@@ -188,7 +194,7 @@ export default function DashboardPage() {
                 type="button"
                 size="sm"
                 variant="outline"
-                className={days === d ? 'bg-foreground text-background hover:bg-foreground/90' : undefined}
+                className={days === d ? 'aurora-dashboard-tab-active' : 'aurora-dashboard-tab'}
                 onClick={() => setDays(d)}
               >
                 近{d}天
@@ -205,10 +211,10 @@ export default function DashboardPage() {
 
         <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           {summaryCards.map(({ label, value, icon: Icon, hint }) => (
-            <Card key={label} className="p-4">
+            <Card key={label} className="aurora-dashboard-stat p-4">
               <div className="flex items-center justify-between gap-3 text-muted-foreground">
                 <span className="text-xs">{label}</span>
-                <Icon className="h-4 w-4" />
+                <Icon className="h-4 w-4 text-[var(--accent-brand-base)]" />
               </div>
               <div className="mt-3 font-mono text-3xl text-foreground">{value}</div>
               <div className="mt-2 text-xs text-muted-foreground">{hint}</div>
@@ -220,9 +226,9 @@ export default function DashboardPage() {
           <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-3">
               {featureCards.map(({ title, description, path, icon: Icon, meta, stage, color }) => (
-                <Link key={path} to={path} className="group app-hairline-card block p-5 transition-colors hover:bg-accent">
+                <Link key={path} to={path} className="aurora-dashboard-feature group block p-5">
                   <div className="flex items-start justify-between gap-4">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-accent">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-accent/60">
                       <Icon className="h-5 w-5 text-foreground" />
                     </span>
                     <span
@@ -242,10 +248,10 @@ export default function DashboardPage() {
               ))}
             </div>
 
-            <Card className="overflow-hidden">
+            <Card className="aurora-dashboard-workflow overflow-hidden">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
                 <div>
-                  <div className="font-mono text-xs text-muted-foreground">任务时间线</div>
+                  <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">任务时间线</div>
                   <h2 className="mt-1 text-xl font-medium">可复查的 AI 工作流</h2>
                 </div>
                 <Button asChild variant="outline" size="sm">
@@ -253,13 +259,13 @@ export default function DashboardPage() {
                 </Button>
               </div>
 
-              <div className="grid min-h-[420px] bg-card lg:grid-cols-[210px_minmax(0,1fr)_250px]">
-                <div className="border-b border-border bg-accent p-4 lg:border-b-0 lg:border-r">
+              <div className="grid min-h-[420px] lg:grid-cols-[220px_minmax(0,1fr)_260px]">
+                <div className="aurora-dashboard-pane border-b border-border p-4 lg:border-b-0 lg:border-r">
                   <div className="mb-3 flex items-center justify-between gap-2 font-mono text-xs text-muted-foreground">
                     <span>学情速览</span>
-                    <TrendingUp className="h-4 w-4" />
+                    <TrendingUp className="h-4 w-4 text-[var(--accent-brand-base)]" />
                   </div>
-                  <Link to="/insights" className="group block rounded-md border border-border bg-card px-3 py-3 transition-colors hover:bg-background">
+                  <Link to="/insights" className="aurora-dashboard-link group block px-3 py-3">
                     <div className="space-y-2">
                       {insightRows.map((item) => (
                         <div key={item.label} className="flex items-start justify-between gap-3">
@@ -278,13 +284,13 @@ export default function DashboardPage() {
                 <div className="p-4">
                   <div className="space-y-3">
                     {timelineStages.map((stage, index) => (
-                      <div key={stage.label} className="rounded-lg border border-border bg-background p-3">
+                      <div key={stage.label} className="aurora-dashboard-stage p-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span
                             className="rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold"
                             style={{
                               backgroundColor: stage.color,
-                              color: stage.label === '完成' ? '#ffffff' : 'var(--study-ink)',
+                              color: stage.label === '完成' ? 'var(--text-display)' : 'var(--study-ink)',
                             }}
                           >
                             {stage.label}
@@ -297,21 +303,21 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <div className="border-t border-border bg-accent p-4 lg:border-l lg:border-t-0">
-                  <div className="mb-3 font-mono text-xs text-muted-foreground">过程检查</div>
+                <div className="aurora-dashboard-pane border-t border-border p-4 lg:border-l lg:border-t-0">
+                  <div className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">过程检查</div>
                   <div className="space-y-3 text-sm">
-                    <div className="rounded-lg border border-border bg-card p-3">
+                    <div className="aurora-dashboard-probe p-3">
                       <div className="text-xs text-muted-foreground">执行策略</div>
                       <div className="mt-1 font-medium">半自动，可暂停</div>
                     </div>
-                    <div className="rounded-lg border border-border bg-card p-3">
+                    <div className="aurora-dashboard-probe p-3">
                       <div className="text-xs text-muted-foreground">运行环境</div>
                       <div className="mt-1 flex items-center gap-2">
                         <span className="h-2 w-2 rounded-full bg-[var(--semantic-success)]" />
                         仅启用安全能力
                       </div>
                     </div>
-                    <div className="rounded-lg border border-border bg-card p-3">
+                    <div className="aurora-dashboard-probe p-3">
                       <div className="text-xs text-muted-foreground">输出物</div>
                       <div className="mt-1 flex items-center gap-2">
                         <Video className="h-4 w-4 text-muted-foreground" />
@@ -325,7 +331,23 @@ export default function DashboardPage() {
           </div>
 
           <aside className="space-y-4">
-            <Card className="p-4">
+            <Card className="aurora-dashboard-card p-4">
+              <Link to="/wrongbook?tab=review" className="group block">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">今日待复习</div>
+                    <div className="mt-2 font-mono text-3xl text-foreground">{reviewDueCount}</div>
+                  </div>
+                  <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
+                  <span>打开错题复习</span>
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </div>
+              </Link>
+            </Card>
+
+            <Card className="aurora-dashboard-card p-4">
               <div className="flex items-center justify-between">
                 <h2 className="font-medium">运行中</h2>
                 <span className="rounded-full bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
@@ -342,7 +364,7 @@ export default function DashboardPage() {
                   <Link
                     key={task.id}
                     to={`/tasks?id=${encodeURIComponent(task.id)}`}
-                    className="block rounded-lg border border-border bg-background p-3 transition-colors hover:bg-accent"
+                    className="aurora-dashboard-link block p-3"
                   >
                     <div className="truncate text-sm font-medium">{task.title}</div>
                     <div className="mt-2 flex items-center justify-between gap-3 font-mono text-xs text-muted-foreground">
@@ -354,7 +376,7 @@ export default function DashboardPage() {
               </div>
             </Card>
 
-            <Card className="p-4">
+            <Card className="aurora-dashboard-card p-4">
               <h2 className="font-medium">任务状态</h2>
               <div className="mt-4 space-y-2">
                 {statusRows.length === 0 && <div className="text-sm text-muted-foreground">暂无状态数据</div>}
@@ -367,12 +389,12 @@ export default function DashboardPage() {
               </div>
             </Card>
 
-            <Card className="p-4">
+            <Card className="aurora-dashboard-card p-4">
               <h2 className="font-medium">常用学科</h2>
               <div className="mt-4 space-y-2">
                 {(stats?.top_subjects || []).length === 0 && <div className="text-sm text-muted-foreground">暂无学科数据</div>}
                 {(stats?.top_subjects || []).slice(0, 5).map((subject) => (
-                  <div key={subject.subject} className="flex items-center justify-between gap-3 rounded-md bg-accent px-3 py-2">
+                  <div key={subject.subject} className="aurora-dashboard-probe flex items-center justify-between gap-3 px-3 py-2">
                     <span className="text-sm">{subject.subject}</span>
                     <span className="font-mono text-xs text-muted-foreground">{subject.count}</span>
                   </div>

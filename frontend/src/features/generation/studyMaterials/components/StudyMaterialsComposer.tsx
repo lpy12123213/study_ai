@@ -43,7 +43,7 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
 
   return (
     <div
-      className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10 pointer-events-none"
+      className="aurora-materials-composer-shell absolute bottom-0 left-0 right-0 p-4 pt-10 pointer-events-none"
       style={showSplitPane ? { width: `${leftRatio * 100}%` } : undefined}
     >
       <div className="max-w-3xl mx-auto pointer-events-auto">
@@ -76,7 +76,7 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
           </div>
 
           <CollapsibleContent>
-            <div className="mb-3 rounded-2xl border border-border bg-card/80 backdrop-blur p-3 shadow-sm">
+            <div className="aurora-materials-options mb-3 rounded-2xl p-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <div className="text-xs font-medium text-muted-foreground">学科（可选）</div>
@@ -203,7 +203,7 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
         </Collapsible>
 
         <form onSubmit={handleSubmit} className="relative group">
-          <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
+          <div className="aurora-materials-command relative flex items-end gap-2 p-2 rounded-2xl transition-all">
             <Button
               type="button"
               variant="ghost"
@@ -259,7 +259,7 @@ export function StudyMaterialsComposer({ controller }: { controller: StudyMateri
           </div>
         </form>
 
-        <div className="text-center mt-2 text-[10px] text-muted-foreground/50">内容由 AI 生成，仅供参考。</div>
+        <div className="text-center mt-2 text-[10px] text-muted-foreground/60">内容由 AI 生成，仅供参考。</div>
       </div>
     </div>
   )

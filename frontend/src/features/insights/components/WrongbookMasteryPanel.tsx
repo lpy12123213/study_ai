@@ -12,14 +12,14 @@ export function WrongbookMasteryPanel({ data }: { data?: WrongbookInsights }) {
   const maxBucket = Math.max(1, ...distribution.map((row) => Number(row.count || 0)))
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="aurora-insights-card overflow-hidden">
       <CardHeader className="border-b border-border pb-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="font-mono text-xs text-muted-foreground">错题掌握度</div>
+            <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">错题掌握度</div>
             <CardTitle className="mt-1 text-xl">薄弱知识点</CardTitle>
           </div>
-          <BookX className="h-5 w-5 text-muted-foreground" />
+          <BookX className="h-5 w-5 text-[var(--accent-ai-base)]" />
         </div>
       </CardHeader>
       <CardContent className="space-y-5 p-5">
@@ -42,7 +42,7 @@ export function WrongbookMasteryPanel({ data }: { data?: WrongbookInsights }) {
                 <Link
                   key={point.knowledge_point}
                   to={`/wrongbook?knowledge_point=${encodeURIComponent(point.knowledge_point)}`}
-                  className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 transition-colors hover:bg-accent"
+                  className="aurora-insights-link flex items-center justify-between gap-3 px-3 py-2"
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{point.knowledge_point}</div>

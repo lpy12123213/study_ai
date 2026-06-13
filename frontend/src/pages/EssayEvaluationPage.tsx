@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Sparkles } from 'lucide-react'
 import { useNotificationStore } from '@/stores/useNotificationStore'
 import { EssayHistory, EssayInput, EssayResult, useEssayEvaluation } from '@/features/generation/essayEvaluation'
 
@@ -26,10 +27,38 @@ export default function EssayEvaluationPage() {
       .map((item) => item.trim())
       .filter(Boolean)
   }, [essayText, result])
+  const essayStats = [
+    { label: '状态', value: loading ? '批改中' : result ? '已出报告' : '待提交' },
+    { label: '文本长度', value: essayText.trim() ? `${essayText.trim().length} 字符` : '未输入' },
+    { label: '段落', value: paragraphs ? `${paragraphs.length} 段` : '待分析' },
+    { label: '当前记录', value: selectedId ?? evaluationId ? `#${selectedId ?? evaluationId}` : '新批改' },
+  ]
 
   return (
-    <div className="grid h-full grid-cols-1 gap-4 p-4 md:grid-cols-[260px_minmax(0,1fr)_minmax(0,1fr)]">
-      <aside className="h-full overflow-hidden rounded-lg border border-border bg-card">
+    <div className="aurora-essay-screen flex h-full min-h-0 flex-col gap-4 p-4">
+      <header className="aurora-essay-hero">
+        <div>
+          <div className="aurora-kicker">
+            <Sparkles className="h-3.5 w-3.5" />
+            Essay Evaluation Spectrum
+          </div>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight">作文评价光谱舱</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            以维度评分、亮点诊断、问题定位和逐段批注组成完整反馈闭环，帮助学生把一次作文变成可执行的修改计划。
+          </p>
+        </div>
+        <div className="aurora-essay-hero-grid">
+          {essayStats.map((item) => (
+            <div key={item.label} className="aurora-essay-stat">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      </header>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-[270px_minmax(0,1fr)_minmax(0,1fr)]">
+      <aside className="aurora-essay-panel h-full overflow-hidden rounded-lg">
         <EssayHistory
           selectedId={selectedId ?? evaluationId}
           onSelect={async (record) => {
@@ -48,9 +77,12 @@ export default function EssayEvaluationPage() {
         />
       </aside>
 
-      <section className="h-full overflow-y-auto rounded-lg border border-border bg-card p-4">
-        <h2 className="mb-3 text-lg font-semibold">作文批改</h2>
-        <p className="mb-4 text-xs text-muted-foreground">
+      <section className="aurora-essay-panel h-full overflow-y-auto rounded-lg p-4">
+        <div className="mb-4">
+          <div className="aurora-kicker">Scoring input</div>
+          <h2 className="mt-2 text-xl font-semibold">作文批改</h2>
+        </div>
+        <p className="mb-4 text-xs leading-5 text-muted-foreground">
           AI 按维度对作文进行结构化评分，给出亮点 / 不足 / 修改建议与逐段批注。
         </p>
         <EssayInput
@@ -76,15 +108,20 @@ export default function EssayEvaluationPage() {
         )}
       </section>
 
-      <section className="h-full overflow-y-auto rounded-lg border border-border bg-background p-4">
+      <section className="aurora-essay-panel h-full overflow-y-auto rounded-lg p-4">
         {result ? (
           <EssayResult result={result} paragraphs={paragraphs} />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            提交作文后将在此查看评分与批注。
+          <div className="aurora-essay-empty flex h-full items-center justify-center text-sm text-muted-foreground">
+            <div className="max-w-xs text-center">
+              <div className="mx-auto mb-4 h-14 w-14 rounded-2xl border border-border/70 bg-background/70" />
+              <div className="font-medium text-foreground">等待评分报告</div>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">提交作文后将在此查看总分、维度拆解、亮点不足和逐段批注。</p>
+            </div>
           </div>
         )}
       </section>
+      </div>
     </div>
   )
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from backend.generation.agentic.codex_runtime import codex_runtime_metadata_defaults
 from backend.generation.agentic.types import (
     AgentBudget,
     AgentRoleSpec,
@@ -92,5 +93,10 @@ def build_study_materials_agent_spec(
         budget=_preset_budget(preset),
         output_contract={"kind": "study_archive", "formats": ["markdown", "latex", "pdf"]},
         resume_state=dict(resume_state or {}),
-        metadata={"adapter": "backend.agent.AgentCore", "migration_phase": "native_agentic", "native_agentic": True},
+        metadata={
+            **codex_runtime_metadata_defaults(),
+            "adapter": "backend.generation.agentic.codex_runtime",
+            "migration_phase": "codex_runtime",
+            "native_agentic": True,
+        },
     )

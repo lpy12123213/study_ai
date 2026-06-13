@@ -54,6 +54,7 @@ describe('Aurora design tokens', () => {
     const requiredClasses = [
       '.aurora-app-shell',
       '.aurora-layout-surface',
+      '.aurora-kicker',
       '.aurora-chat-user',
       '.aurora-chat-assistant',
       '.aurora-tool-card',
@@ -68,5 +69,23 @@ describe('Aurora design tokens', () => {
     }
 
     expect(tokensCss).not.toMatch(/aurora-(blob|orb)/i)
+  })
+
+  it('keeps the high-frequency TaskCenter chrome responsive', () => {
+    const requiredClasses = [
+      '.aurora-task-hero',
+      '.aurora-task-actions',
+      '.aurora-task-body',
+      '.aurora-task-list',
+      '.aurora-task-detail',
+      '.aurora-task-stat-grid',
+    ]
+
+    for (const className of requiredClasses) {
+      expect(tokensCss, `${className} is missing`).toContain(className)
+    }
+
+    expect(tokensCss).toContain('@media (max-width: 860px)')
+    expect(tokensCss).toMatch(/\.aurora-task-body\s*\{[\s\S]*flex-direction:\s*column/)
   })
 })

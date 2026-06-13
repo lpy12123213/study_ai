@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { BrainCircuit, Database, FileImage, Sparkles } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useSubjects } from '@/hooks/useSubjects'
 import { useQuestionLibrary } from '@/features/generation/questionLibrary/hooks/useQuestionLibrary'
@@ -95,22 +96,48 @@ export function AiGenerateWorkspace() {
     await lib.refreshDetail()
   }
 
+  const engineStats = [
+    { label: 'AI 题库', value: lib.total, icon: Database },
+    { label: '草稿队列', value: preview.draftQuestions.length, icon: Sparkles },
+    { label: '媒体录入', value: lib.filters.origin === 'media' ? 'Active' : 'Ready', icon: FileImage },
+    { label: '运行态', value: tasks.preferredTask?.status === 'running' ? 'Running' : 'Idle', icon: BrainCircuit },
+  ]
+
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden">
-      <div className="px-6 py-4 border-b bg-background">
+    <div className="aurora-ai-screen flex h-full w-full flex-col overflow-hidden">
+      <div className="aurora-ai-header px-6 py-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="text-lg font-semibold tracking-tight">AI 出题</div>
-            <div className="text-xs text-muted-foreground">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-3 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-[var(--accent-brand-base)]" />
+              Generation engine
+            </div>
+            <div className="app-display text-3xl text-foreground md:text-4xl">AI 出题引擎舱</div>
+            <div className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
               根据学科与知识点生成题目（含答案与解析）；生成后进入预览审核，通过后再入库。
             </div>
           </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {engineStats.map((stat) => {
+            const Icon = stat.icon
+            return (
+              <div key={stat.label} className="aurora-ai-stat p-4">
+                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>{stat.label}</span>
+                  <Icon className="h-4 w-4 text-[var(--accent-brand-base)]" />
+                </div>
+                <div className="mt-2 font-mono text-2xl text-foreground">{stat.value}</div>
+              </div>
+            )
+          })}
         </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full">
-          <div className="p-6 space-y-6">
+          <div className="space-y-6 p-6">
             <GenerateConfigCard
               subjects={subjects}
               subject={lib.filters.subject}

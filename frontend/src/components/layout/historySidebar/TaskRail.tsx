@@ -24,9 +24,15 @@ export function TaskRail({
   if (!isAuthenticated) return null
 
   return (
-    <div className="mb-4">
+    <div className="aurora-history-task-rail mb-4">
       {!isCollapsed && (
-        <Button type="button" variant="ghost" size="sm" className="w-full justify-start gap-2" onClick={onOpenTaskCenter}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="aurora-history-task-center w-full justify-start gap-2"
+          onClick={onOpenTaskCenter}
+        >
           <ListChecks className="h-4 w-4" />
           {t('history.taskCenter')}
           {runningTasks.length > 0 && (
@@ -42,7 +48,7 @@ export function TaskRail({
           type="button"
           variant="ghost"
           size="icon"
-          className="mx-auto h-8 w-8 relative"
+          className="aurora-history-task-center mx-auto h-8 w-8 relative"
           onClick={onOpenTaskCenter}
           aria-label={t('history.taskCenter')}
           title={t('history.taskCenter')}
@@ -54,13 +60,13 @@ export function TaskRail({
 
       {!isCollapsed && runningTasks.length > 0 && (
         <div className="mt-2 space-y-1">
-          <div className="px-2 text-xs font-medium text-muted-foreground/70">{t('history.running')}</div>
+          <div className="aurora-history-group-label px-2 text-xs font-medium text-muted-foreground/70">{t('history.running')}</div>
           {runningTasks.map((task) => (
             <button
               key={task.id}
               type="button"
               onClick={() => onOpenTask(task.id)}
-              className="w-full flex items-center justify-between gap-2 px-2 py-1 rounded-md text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+              className="aurora-history-running-task w-full flex items-center justify-between gap-2 px-2 py-1 rounded-md text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
               title={task.title}
               aria-label={t('history.openTask', { title: task.title })}
             >

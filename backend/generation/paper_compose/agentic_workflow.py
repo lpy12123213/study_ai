@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.executor import Executor
 from backend.agent.types import CompressedContext, UserProfile
+from backend.generation.agentic.codex_runtime import (
+    is_codex_runtime_agent_runtime,
+    legacy_agent_fallback_enabled,
+    run_codex_runtime_agent_events,
+)
 from backend.generation.agentic.runtime import AgentRuntime
 from backend.generation.agentic.task_specs import build_agent_run_spec_for_task
 from backend.generation.agentic.tooling import AgentDecision, ToolResult
@@ -271,6 +276,7 @@ def _tool_call_step(event: AgentTraceEvent) -> Dict[str, Any]:
         "step": {
             "id": event.step_id or name,
             "title": name or "agent_tool",
+            "thought": _text(data.get("thought")),
             "status": "running",
             "startTime": _now_iso(),
             "toolName": name,
@@ -323,6 +329,39 @@ async def _run_agentic_paper_events(
     if spec is None:
         yield {"type": "error", "error": "agent_spec_missing"}
         return
+
+    if is_codex_runtime_agent_runtime():
+        codex_failed = False
+        last_error_event: Optional[Dict[str, Any]] = None
+        async for event in run_codex_runtime_agent_events(
+            task_type=task_type,
+            request=req,
+            user_id=user_id,
+            task_id=str(req.get("taskId") or req.get("task_id") or ""),
+            spec=spec,
+            final_event_type="result",
+        ):
+            if event.get("type") == "error":
+                codex_failed = True
+                last_error_event = event
+                # If fallback is enabled we swallow the error and try legacy;
+                # otherwise propagate it so the caller can fail the task.
+                if legacy_agent_fallback_enabled():
+                    continue
+            yield event
+        if not codex_failed:
+            return
+        if not legacy_agent_fallback_enabled():
+            # Codex emitted error events that we already forwarded; nothing more to do.
+            return
+        # Fall through to legacy AgentRuntime path; record why we fell back.
+        if isinstance(last_error_event, dict):
+            yield {
+                "type": "progress",
+                "progress": 1.0,
+                "stage": "codex_runtime_fallback",
+                "data": last_error_event.get("data") or {},
+            }
 
     executor = PaperComposeToolExecutor(user_id=user_id, request=req)
     runtime = AgentRuntime(planner=PaperComposePlanner(), tool_executor=executor)

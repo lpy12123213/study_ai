@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Send } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Send, Sparkles } from 'lucide-react'
 import { QuestionContent } from '@/components/shared/QuestionContent'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -182,10 +182,17 @@ export default function ExamPage() {
 
   const answer = currentQuestion ? answers[currentQuestion.questionId] || answerFromStudent(currentQuestion.studentAnswer) : undefined
   const mode = currentQuestion ? questionMode(currentQuestion) : 'single'
+  const progressPercent = session.questions.length > 0 ? Math.round((answeredCount / session.questions.length) * 100) : 0
+  const examStats = [
+    { label: '进度', value: `${answeredCount}/${session.questions.length}` },
+    { label: '完成率', value: `${progressPercent}%` },
+    { label: '当前题型', value: currentQuestion?.questionType || currentQuestion?.type || mode },
+    { label: '本题分值', value: currentQuestion ? `${currentQuestion.maxScore} 分` : '-' },
+  ]
 
   return (
-    <div className="aurora-app-shell flex h-screen flex-col bg-background">
-      <header className="aurora-layout-chrome flex items-center justify-between gap-3 border-b px-4 py-3">
+    <div className="aurora-exam-screen flex h-screen flex-col">
+      <header className="aurora-exam-topbar flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <Button asChild variant="ghost" size="icon">
             <Link to={`/papers/${session.paperId}`}>
@@ -218,7 +225,28 @@ export default function ExamPage() {
           {currentQuestion && (
             <div className="flex-1 overflow-auto p-5 md:p-8">
               <div className="mx-auto max-w-3xl space-y-6">
-                <div className="flex items-center justify-between gap-3">
+                <section className="aurora-exam-hero">
+                  <div>
+                    <div className="aurora-kicker">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Exam Cockpit
+                    </div>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-tight">在线考试驾驶舱</h2>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      当前作答会自动保存，切题前同步手写内容，计时考试将在倒计时结束后自动交卷。
+                    </p>
+                  </div>
+                  <div className="aurora-exam-stat-grid">
+                    {examStats.map((item) => (
+                      <div key={item.label} className="aurora-exam-stat">
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <div className="aurora-exam-question-head flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium">第 {currentQuestionIndex + 1} 题</div>
                     <div className="text-xs text-muted-foreground">{currentQuestion.questionType || currentQuestion.type} · {currentQuestion.maxScore} 分</div>
@@ -247,6 +275,7 @@ export default function ExamPage() {
                   />
                 ) : mode === 'fill' ? (
                   <Input
+                    className="aurora-exam-input"
                     value={answer?.fillBlankText || ''}
                     onChange={(event) =>
                       updateAnswer(currentQuestion.questionId, {
@@ -290,7 +319,7 @@ export default function ExamPage() {
             </div>
           )}
 
-          <footer className="aurora-layout-chrome flex items-center justify-between border-t p-3">
+          <footer className="aurora-exam-footer flex items-center justify-between p-3">
             <Button
               type="button"
               variant="outline"

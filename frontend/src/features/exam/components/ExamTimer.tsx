@@ -19,9 +19,9 @@ export function ExamTimer({ remainingSeconds }: ExamTimerProps) {
   return (
     <div
       className={cn(
-        'inline-flex min-w-32 items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-sm',
-        warning && 'border-amber-300 bg-amber-50 text-amber-700',
-        danger && 'animate-pulse border-red-300 bg-red-50 text-red-700'
+        'aurora-exam-timer inline-flex min-w-32 items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-sm',
+        warning && 'is-warning',
+        danger && 'is-danger animate-pulse'
       )}
     >
       <Clock className="h-4 w-4" />

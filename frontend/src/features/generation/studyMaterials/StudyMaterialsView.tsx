@@ -9,7 +9,7 @@ export default function StudyMaterialsPage() {
   const showWelcome = controller.messages.length === 0 && !controller.hasSubAgentPane
 
   return (
-    <div ref={controller.containerRef} className="h-full flex flex-col relative overflow-hidden min-h-0">
+    <div ref={controller.containerRef} className="aurora-materials-screen h-full flex flex-col relative overflow-hidden min-h-0">
       {showWelcome ? (
         <WelcomeScreen subject={controller.subject} onExampleClick={(text) => controller.setInput(text)} />
       ) : (

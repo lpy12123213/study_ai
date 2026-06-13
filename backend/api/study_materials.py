@@ -315,6 +315,19 @@ async def get_study_materials_task(task_id: str, user: dict = Depends(require_au
         except (TypeError, ValueError):
             first_seq = 1
 
+    wm = getattr(task, "resume_working_memory", None)
+    wm_dict = wm if isinstance(wm, dict) else {}
+    # A task is only truly resumable when there is markdown content to extend
+    # or re-export. Mirrors continue_task's own resume contract.
+    resumable = bool(
+        wm_dict
+        and str(task.status or "").lower() != "running"
+        and (
+            str(wm_dict.get("markdown") or "").strip()
+            or str(wm_dict.get("assemble_study_archive") or "").strip()
+        )
+    )
+
     return {
         "task_id": task.task_id,
         "query": task.query,
@@ -325,6 +338,7 @@ async def get_study_materials_task(task_id: str, user: dict = Depends(require_au
         "updated_at_s": task.updated_at_s,
         "first_seq": first_seq,
         "last_seq": task.last_seq,
+        "resumable": resumable,
         "last_success_step": task.last_success_step,
         "last_failed_step": task.last_failed_step,
         "last_success_stage": task.last_success_stage,

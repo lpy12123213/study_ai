@@ -77,7 +77,7 @@ export default function CanvasBoardPage() {
 
   if (boardQuery.isLoading) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="aurora-canvas-workbench flex h-full items-center justify-center">
         <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
       </div>
     )
@@ -85,7 +85,7 @@ export default function CanvasBoardPage() {
 
   if (boardQuery.error || !boardQuery.data) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
+      <div className="aurora-canvas-workbench flex h-full flex-col items-center justify-center gap-3">
         <div className="text-sm text-muted-foreground">看板不存在</div>
         <Button asChild variant="outline">
           <Link to="/canvas">返回列表</Link>
@@ -95,7 +95,7 @@ export default function CanvasBoardPage() {
   }
 
   return (
-    <main className="flex h-screen flex-col bg-background">
+    <main className="aurora-canvas-workbench flex h-screen flex-col overflow-hidden">
       <BoardToolbar
         title={boardState.title}
         subject={boardState.subject}

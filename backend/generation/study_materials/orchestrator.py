@@ -19,7 +19,13 @@ from backend.database.repositories.content.study_archives import (
 )
 from backend.database.repositories.system.tasks import get_task as db_get_task
 from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
+from backend.generation.agentic.codex_runtime import (
+    is_codex_runtime_agent_runtime,
+    legacy_agent_fallback_enabled,
+    run_codex_runtime_agent_events,
+)
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
+from backend.generation.agentic.types import AgentRunSpec
 from backend.generation.study_materials.resume import (
     _derive_resume_state,
     _prune_resume_working_memory,
@@ -59,6 +65,226 @@ async def _export_markdown_to_media(*, markdown: str, user_id: str) -> Dict[str,
         "bytes": int(published.get("bytes") or 0),
         "expires_at": published.get("expires_at") or "",
     }
+
+
+def _dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _parse_codex_tool_content(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        merged: Dict[str, Any] = {}
+        text_parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                item_type = str(item.get("type") or "").strip()
+                text = str(item.get("text") or item.get("content") or "").strip()
+                if item_type == "text" and text:
+                    text_parts.append(text)
+                    continue
+                merged.update(item)
+            elif item is not None:
+                text_parts.append(str(item))
+        if merged:
+            if text_parts and "content" not in merged:
+                merged["content"] = "\n".join(text_parts).strip()
+            return merged
+        text = "\n".join([part for part in text_parts if part]).strip()
+        return {"content": text} if text else {}
+
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return dict(parsed)
+    return {"content": text}
+
+
+def _first_text(source: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, (dict, list)):
+            continue
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _update_codex_stream_resume_state(
+    *,
+    meta: Dict[str, Any],
+    tool_name: str,
+    event_data: Dict[str, Any],
+    query: str,
+    subject: str,
+    options: Dict[str, Any],
+) -> bool:
+    tool = str(tool_name or "").strip()
+    if not tool:
+        return False
+
+    payload = _parse_codex_tool_content(event_data.get("content"))
+    is_error = bool(event_data.get("is_error")) or payload.get("success") is False or payload.get("ok") is False
+    error = _first_text(payload, "error", "message") or _first_text(event_data, "error", "message")
+    step_id = _first_text(event_data, "step_id", "id", "tool_use_id") or f"{tool}-{len(payload)}"
+
+    existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+    wm = dict(existing)
+    step_results = wm.get("step_results") if isinstance(wm.get("step_results"), list) else []
+    wm["step_results"] = [
+        *[dict(item) for item in step_results if isinstance(item, dict)],
+        {"step_id": step_id, "tool": tool, "success": not is_error, "error": error or None},
+    ]
+
+    if payload:
+        wm[tool] = payload
+
+    markdown = ""
+    if tool in {
+        "assemble_study_archive",
+        "export_study_markdown",
+        "save_markdown_file",
+        "revise_markdown",
+        "refine_draft",
+    }:
+        markdown = _first_text(payload, "markdown", "assemble_study_archive", "content", "text", "output", "md")
+    if tool == "generate_study_material" and isinstance(payload.get("markdown"), str):
+        markdown = str(payload.get("markdown") or "").strip()
+
+    if markdown:
+        wm["assemble_study_archive"] = markdown
+        wm["markdown"] = markdown
+        material = wm.get("generate_study_material") if isinstance(wm.get("generate_study_material"), dict) else {}
+        if not material:
+            wm["generate_study_material"] = {
+                "topic": query,
+                "subject": subject,
+                "preset": str(options.get("preset") or "standard").strip().lower() or "standard",
+                "requirements": str(options.get("requirements") or "").strip(),
+                "sections": [],
+            }
+
+    for key in ("md_url", "md_filename", "tex_url", "tex_filename", "pdf_url", "pdf_filename"):
+        value = _first_text(payload, key)
+        if value:
+            wm[key] = value
+
+    if "study_options" not in wm:
+        wm["study_options"] = {
+            "preset": str(options.get("preset") or "standard").strip().lower() or "standard",
+            "requirements": str(options.get("requirements") or "").strip(),
+        }
+
+    meta["resume_working_memory"] = wm
+    _refresh_resume_meta(meta=meta)
+    return True
+
+
+def _merge_resume_working_memory(
+    existing: Dict[str, Any],
+    incoming: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge a final ``done``/``error`` resume snapshot into the streamed one.
+
+    The streamed resume_working_memory (built tool-by-tool during execution) often
+    carries metadata the final payload lacks: ``md_url``/``tex_url`` exports,
+    ``step_results`` history, intermediate tool outputs. Replacing the whole dict
+    on ``done`` would discard those and break ``fix_export``/``improve``
+    continuations. We therefore prefer incoming values for the canonical content
+    fields (``markdown`` / ``assemble_study_archive`` / ``generate_study_material``)
+    while preserving any streamed metadata not present in the final payload.
+    """
+
+    if not isinstance(existing, dict) or not existing:
+        return dict(incoming) if isinstance(incoming, dict) else {}
+    if not isinstance(incoming, dict) or not incoming:
+        return dict(existing)
+
+    merged: Dict[str, Any] = dict(existing)
+    for key, value in incoming.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        if key == "step_results" and isinstance(value, list):
+            prior = merged.get("step_results") if isinstance(merged.get("step_results"), list) else []
+            seen = {id(item) for item in prior}
+            merged["step_results"] = [
+                *prior,
+                *[item for item in value if isinstance(item, dict) and id(item) not in seen],
+            ]
+            continue
+        if key == "generate_study_material" and isinstance(value, dict):
+            prior = merged.get("generate_study_material") if isinstance(merged.get("generate_study_material"), dict) else {}
+            merged["generate_study_material"] = {**prior, **value}
+            continue
+        merged[key] = value
+    return merged
+
+
+def _codex_resume_working_memory(
+    data: Dict[str, Any],
+    *,
+    query: str,
+    subject: str,
+    options: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Best-effort resume_working_memory from a codex-runtime final done/error payload.
+
+    Keeps codex-runtime tasks resumable (improve/fix_export/skip_export/...) with the
+    same snapshot shape the legacy AgentCore path persists.
+    """
+
+    result = _dict(data.get("result"))
+    for source in (data, result):
+        wm = source.get("resume_working_memory")
+        if isinstance(wm, dict) and wm:
+            return dict(wm)
+
+    material = _dict(data.get("material")) or _dict(result.get("material"))
+    markdown = ""
+    for source in (material, result, data):
+        markdown = str(source.get("markdown") or source.get("assemble_study_archive") or "").strip()
+        if markdown:
+            break
+    if not markdown:
+        return {}
+
+    preset = str(options.get("preset") or material.get("preset") or "standard").strip().lower() or "standard"
+    requirements = str(options.get("requirements") or material.get("requirements") or "").strip()
+    sections = material.get("sections") if isinstance(material.get("sections"), list) else []
+    wm: Dict[str, Any] = {
+        "study_options": {"preset": preset, "requirements": requirements},
+        "assemble_study_archive": markdown,
+        "markdown": markdown,
+        "generate_study_material": {
+            "topic": str(material.get("topic") or query or "").strip(),
+            "subject": str(material.get("subject") or subject or "").strip(),
+            "preset": preset,
+            "requirements": requirements,
+            "sections": [x for x in sections if isinstance(x, dict)],
+        },
+    }
+    step_results = next(
+        (source.get("step_results") for source in (data, result) if isinstance(source.get("step_results"), list)),
+        None,
+    )
+    if step_results:
+        wm["step_results"] = [x for x in step_results if isinstance(x, dict)]
+    for key in ("md_url", "md_filename", "tex_url", "tex_filename", "pdf_url", "pdf_filename"):
+        value = str(material.get(key) or result.get(key) or data.get(key) or "").strip()
+        if value:
+            wm[key] = value
+    return wm
 
 
 @dataclass
@@ -499,6 +725,41 @@ class StudyMaterialsTaskManager:
 
             await asyncio.sleep(0.5)
 
+    async def _upsert_archive_from_resume_state(
+        self,
+        task: RuntimeTask,
+        *,
+        meta: Dict[str, Any],
+        query: str,
+        subject: str,
+        options: Dict[str, Any],
+    ) -> None:
+        try:
+            wm = _dict(meta.get("resume_working_memory"))
+            markdown = str(wm.get("assemble_study_archive") or wm.get("markdown") or "").strip()
+            material = _dict(wm.get("generate_study_material"))
+            sections = material.get("sections") if isinstance(material.get("sections"), list) else []
+            preset = str(options.get("preset") or "").strip() or str(material.get("preset") or "")
+            requirements = str(options.get("requirements") or "").strip() or str(material.get("requirements") or "")
+            topic = str(material.get("topic") or query or "").strip()
+            subj = str(material.get("subject") or subject or "").strip()
+            if markdown and topic and subj:
+                await upsert_study_archive(
+                    user_id=task.user_id,
+                    subject=subj,
+                    topic=topic,
+                    preset=preset,
+                    requirements=requirements,
+                    markdown=markdown,
+                    sections=[x for x in sections if isinstance(x, dict)],
+                )
+        except Exception:
+            logger.warning(
+                "study_materials_archive_upsert_failed",
+                extra={"task_id": task.task_id},
+                exc_info=True,
+            )
+
     async def _run_task(self, task: RuntimeTask) -> None:
         meta = task.meta if isinstance(task.meta, dict) else {}
         req = task.request if isinstance(task.request, dict) else {}
@@ -512,9 +773,13 @@ class StudyMaterialsTaskManager:
         iteration_offset = int(meta.get("iteration_offset") or 0)
         max_iterations = meta.get("max_iterations")
 
-        agent = AgentCore()
+        agent: Optional[AgentCore] = None
 
         def _capture_resume_snapshot(*, force: bool) -> None:
+            if agent is None:
+                if force:
+                    self._persist_snapshot(task, force=True)
+                return
             try:
                 ctx = getattr(agent, "last_context", None)
                 wm = getattr(ctx, "working_memory", None) if ctx is not None else None
@@ -634,6 +899,93 @@ class StudyMaterialsTaskManager:
             if await _maybe_reuse_local_archive():
                 return
 
+            if is_codex_runtime_agent_runtime():
+                spec = None
+                raw_spec = meta.get("agent_run_spec") if isinstance(meta.get("agent_run_spec"), dict) else None
+                if isinstance(raw_spec, dict):
+                    try:
+                        spec = AgentRunSpec.from_dict(raw_spec)
+                    except (TypeError, ValueError):
+                        spec = None
+
+                codex_tool_names_by_id: Dict[str, str] = {}
+                async for evt in run_codex_runtime_agent_events(
+                    task_type="study_materials",
+                    request=req,
+                    user_id=task.user_id,
+                    task_id=task.task_id,
+                    spec=spec,
+                    final_event_type="done",
+                ):
+                    if task.status != "running":
+                        break
+
+                    await task_runtime.append_event(task, evt)
+                    kind = str(evt.get("event") or evt.get("type") or "")
+                    if kind == "tool_call":
+                        data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
+                        call_id = str(data.get("id") or data.get("step_id") or "").strip()
+                        tool_name = str(data.get("name") or data.get("tool") or "").strip()
+                        if call_id and tool_name:
+                            codex_tool_names_by_id[call_id] = tool_name
+                        continue
+                    if kind == "tool_result":
+                        data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
+                        call_id = str(data.get("id") or data.get("tool_use_id") or data.get("step_id") or "").strip()
+                        tool_name = str(
+                            data.get("name") or data.get("tool") or codex_tool_names_by_id.get(call_id) or ""
+                        ).strip()
+                        if _update_codex_stream_resume_state(
+                            meta=meta,
+                            tool_name=tool_name,
+                            event_data=data,
+                            query=query,
+                            subject=subject,
+                            options=options,
+                        ):
+                            self._persist_snapshot(task, force=False)
+                        continue
+                    if kind == "done":
+                        data = evt.get("data")
+                        payload = _dict(data)
+                        wm = _codex_resume_working_memory(payload, query=query, subject=subject, options=options)
+                        if wm:
+                            existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+                            meta["resume_working_memory"] = _merge_resume_working_memory(existing, wm)
+                            _refresh_resume_meta(meta=meta)
+                        material = _dict(payload.get("material")) or _dict(_dict(payload.get("result")).get("material"))
+                        try:
+                            iterations_done = int(material.get("iteration") or 0)
+                        except (TypeError, ValueError):
+                            iterations_done = 0
+                        meta["iterations_done"] = iterations_done or (iteration_offset + 1)
+                        await self._upsert_archive_from_resume_state(
+                            task, meta=meta, query=query, subject=subject, options=options
+                        )
+                        self._persist_snapshot(task, force=True)
+                        await task_runtime.complete_task(task, result=data if isinstance(data, dict) else {"result": data})
+                        return
+                    if kind == "error":
+                        data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
+                        wm = _codex_resume_working_memory(data, query=query, subject=subject, options=options)
+                        if wm:
+                            existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+                            meta["resume_working_memory"] = _merge_resume_working_memory(existing, wm)
+                            _refresh_resume_meta(meta=meta)
+                            self._persist_snapshot(task, force=True)
+                        msg = str(data.get("message") or data.get("error") or data.get("code") or "").strip()
+                        await task_runtime.fail_task(
+                            task,
+                            msg or "Generation failed",
+                            error={"message": msg or "Generation failed", **data},
+                            emit_event=False,
+                        )
+                        return
+
+                if not legacy_agent_fallback_enabled():
+                    return
+
+            agent = AgentCore()
             preferences: Dict[str, Any] = {}
             if subject:
                 preferences["subject"] = subject
@@ -666,31 +1018,9 @@ class StudyMaterialsTaskManager:
                             except (TypeError, ValueError):
                                 pass
 
-                    try:
-                        wm = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
-                        markdown = str(wm.get("assemble_study_archive") or wm.get("markdown") or "").strip()
-                        material = wm.get("generate_study_material") if isinstance(wm.get("generate_study_material"), dict) else {}
-                        sections = material.get("sections") if isinstance(material.get("sections"), list) else []
-                        preset = str(options.get("preset") or "").strip() or str(material.get("preset") or "")
-                        requirements = str(options.get("requirements") or "").strip() or str(material.get("requirements") or "")
-                        topic = str(material.get("topic") or query or "").strip()
-                        subj = str(material.get("subject") or subject or "").strip()
-                        if markdown and topic and subj:
-                            await upsert_study_archive(
-                                user_id=task.user_id,
-                                subject=subj,
-                                topic=topic,
-                                preset=preset,
-                                requirements=requirements,
-                                markdown=markdown,
-                                sections=[x for x in sections if isinstance(x, dict)],
-                            )
-                    except Exception:
-                        logger.warning(
-                            "study_materials_archive_upsert_failed",
-                            extra={"task_id": task.task_id},
-                            exc_info=True,
-                        )
+                    await self._upsert_archive_from_resume_state(
+                        task, meta=meta, query=query, subject=subject, options=options
+                    )
 
                     await task_runtime.complete_task(task, result=data if isinstance(data, dict) else {"result": data})
                     return

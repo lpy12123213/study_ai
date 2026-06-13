@@ -8,6 +8,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.core.logging_utils import get_logger
 from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.question.papers import get_paper as db_get_paper
+from backend.generation.agentic.codex_runtime import (
+    is_codex_runtime_agent_runtime,
+    legacy_agent_fallback_enabled,
+    run_codex_runtime_task,
+)
 from backend.generation.deepthink.service import deepthink_service
 from backend.generation.knowledge_video.service import run_knowledge_video_task as run_knowledge_video_generation_task
 from backend.generation.lesson_plan.service import generate_lesson_plan_stream
@@ -43,6 +48,8 @@ def _request_bool(request: dict, *keys: str, default: bool = False) -> bool:
 
 
 def _use_agentic_blueprint(request: dict) -> bool:
+    if is_codex_runtime_agent_runtime():
+        return True
     req = request if isinstance(request, dict) else {}
     for key in ("agenticBlueprint", "agentic_blueprint", "agentic"):
         if key in req:
@@ -138,6 +145,7 @@ async def run_export_paper_task(task: RuntimeTask, *, user_id: str) -> None:
 
     uid = str(user_id or "").strip()
     if not uid:
+        await task_runtime.fail_task(task, "missing_user_id", error={"message": "missing_user_id"})
         return
 
     request = task.request if isinstance(task.request, dict) else {}
@@ -223,6 +231,7 @@ async def run_export_study_archive_task(task: RuntimeTask, *, user_id: str) -> N
 
     uid = str(user_id or "").strip()
     if not uid:
+        await task_runtime.fail_task(task, "missing_user_id", error={"message": "missing_user_id"})
         return
 
     request = task.request if isinstance(task.request, dict) else {}
@@ -289,7 +298,13 @@ async def run_export_study_archive_task(task: RuntimeTask, *, user_id: str) -> N
 async def run_deepthink_task(task: RuntimeTask, *, user_id: str) -> None:
     uid = str(user_id or "").strip()
     if not uid:
+        await task_runtime.fail_task(task, "missing_user_id", error={"message": "missing_user_id"})
         return
+
+    if is_codex_runtime_agent_runtime():
+        handled = await run_codex_runtime_task(task, user_id=uid, task_type="deepthink", final_event_type="done")
+        if handled or not legacy_agent_fallback_enabled():
+            return
 
     req = task.request if isinstance(task.request, dict) else {}
     question = str((req or {}).get("question") or "").strip()
@@ -331,7 +346,13 @@ async def run_deepthink_task(task: RuntimeTask, *, user_id: str) -> None:
 async def run_lesson_plan_task(task: RuntimeTask, *, user_id: str) -> None:
     uid = str(user_id or "").strip()
     if not uid:
+        await task_runtime.fail_task(task, "missing_user_id", error={"message": "missing_user_id"})
         return
+
+    if is_codex_runtime_agent_runtime():
+        handled = await run_codex_runtime_task(task, user_id=uid, task_type="lesson_plan", final_event_type="done")
+        if handled or not legacy_agent_fallback_enabled():
+            return
 
     request = task.request if isinstance(task.request, dict) else {}
 
@@ -384,5 +405,10 @@ async def run_lesson_plan_task(task: RuntimeTask, *, user_id: str) -> None:
 
 async def run_knowledge_video_task(task: RuntimeTask, *, user_id: str) -> None:
     """Run AI-generated Manim knowledge-video rendering under the shared task runtime."""
+
+    if is_codex_runtime_agent_runtime():
+        handled = await run_codex_runtime_task(task, user_id=user_id, task_type="knowledge_video", final_event_type="done")
+        if handled or not legacy_agent_fallback_enabled():
+            return
 
     await run_knowledge_video_generation_task(task, user_id=user_id)

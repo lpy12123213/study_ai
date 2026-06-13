@@ -89,8 +89,8 @@ export default function SharePage() {
 
   if (!tokenValue) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
-        <Card className="w-full max-w-lg p-6">
+      <div className="aurora-share-screen min-h-screen flex items-center justify-center text-foreground p-6">
+        <Card className="aurora-share-card w-full max-w-lg p-6">
           <div className="text-lg font-semibold">分享链接无效</div>
           <div className="text-sm text-muted-foreground mt-2">缺少 token。</div>
         </Card>
@@ -99,19 +99,23 @@ export default function SharePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-6">
-      <div className="max-w-4xl mx-auto space-y-4">
-        <div className="flex items-start justify-between gap-3">
+    <div className="aurora-share-screen min-h-screen text-foreground p-6">
+      <div className="max-w-5xl mx-auto space-y-4">
+        <div className="aurora-share-hero flex items-start justify-between gap-3 p-5">
           <div className="min-w-0">
-            <div className="text-xl font-semibold tracking-tight">只读分享</div>
-            <div className="text-sm text-muted-foreground break-all">{shareUrl}</div>
+            <div className="aurora-share-kicker">
+              <Lock className="h-4 w-4" />
+              <span>Read-only Share</span>
+            </div>
+            <div className="aurora-share-title">只读分享</div>
+            <div className="aurora-share-url break-all">{shareUrl}</div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Button type="button" variant="outline" size="sm" onClick={handleCopyLink}>
+            <Button type="button" className="aurora-share-button" variant="outline" size="sm" onClick={handleCopyLink}>
               <Copy className="h-4 w-4 mr-2" />
               {copied ? '已复制' : '复制链接'}
             </Button>
-            <Button type="button" variant="outline" size="sm" asChild>
+            <Button type="button" className="aurora-share-button" variant="outline" size="sm" asChild>
               <a href={shareUrl} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="h-4 w-4 mr-2" />
                 新窗口
@@ -121,21 +125,21 @@ export default function SharePage() {
         </div>
 
         <div className="flex flex-col md:flex-row gap-4">
-          <Card className="p-4 md:w-[240px] shrink-0">
-            <div className="text-sm font-medium mb-3">二维码</div>
-            <div className="flex items-center justify-center">
-              <QrCode text={shareUrl} size={180} className="rounded-md border" />
+          <Card className="aurora-share-card p-4 md:w-[240px] shrink-0">
+            <div className="aurora-share-section-title mb-3">二维码</div>
+            <div className="aurora-share-qr-frame flex items-center justify-center">
+              <QrCode text={shareUrl} size={180} className="rounded-md" />
             </div>
             {meta?.expires_at && (
-              <div className="mt-3 text-xs text-muted-foreground">
+              <div className="aurora-share-meta mt-3">
                 过期时间：{formatDate(meta.expires_at)}
               </div>
             )}
           </Card>
 
-          <Card className="p-4 flex-1 min-w-0">
+          <Card className="aurora-share-card p-4 flex-1 min-w-0">
             {isLoading && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="aurora-share-loading flex items-center gap-2 text-sm">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 加载中…
               </div>
@@ -145,7 +149,7 @@ export default function SharePage() {
 
             {!isLoading && meta?.has_password && !content && (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm font-medium">
+                <div className="aurora-share-section-title flex items-center gap-2">
                   <Lock className="h-4 w-4" />
                   需要密码
                 </div>
@@ -155,10 +159,11 @@ export default function SharePage() {
                     placeholder="请输入访问密码"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="flex-1"
+                    className="aurora-share-input flex-1"
                   />
                   <Button
                     type="button"
+                    className="aurora-share-primary"
                     onClick={() => loadContent(password)}
                     disabled={isFetchingContent}
                   >
@@ -169,7 +174,7 @@ export default function SharePage() {
             )}
 
             {isFetchingContent && (
-              <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="aurora-share-loading mt-4 flex items-center gap-2 text-sm">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 正在加载内容…
               </div>
@@ -184,17 +189,17 @@ export default function SharePage() {
             {content?.item_type === 'paper' && (
               <div className="space-y-4">
                 <div>
-                  <div className="text-lg font-semibold">
+                  <div className="aurora-share-content-title">
                     {readStringFrom(content.paper, ['paper_name', 'name']) || '试卷'}
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">
+                  <div className="aurora-share-meta mt-1">
                     试卷 ID：{readStringFrom(content.paper, ['paper_id', 'id'])}
                   </div>
                 </div>
 
-                <div className="overflow-auto border rounded-md">
+                <div className="aurora-share-table-wrap overflow-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-muted/50">
+                    <thead>
                       <tr>
                         <th className="text-left px-3 py-2 whitespace-nowrap">题号</th>
                         <th className="text-left px-3 py-2 whitespace-nowrap">题型</th>
@@ -246,12 +251,12 @@ export default function SharePage() {
             {content?.item_type === 'template' && (
               <div className="space-y-4">
                 <div>
-                  <div className="text-lg font-semibold">{readString(content.template, 'name') || '模板'}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
+                  <div className="aurora-share-content-title">{readString(content.template, 'name') || '模板'}</div>
+                  <div className="aurora-share-meta mt-1">
                     模板 ID：{readString(content.template, 'id')} · 类型：{readString(content.template, 'template_type')}
                   </div>
                 </div>
-                <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-5">
+                <pre className="aurora-share-pre max-h-[70vh] overflow-auto p-3 text-xs leading-5">
                   {JSON.stringify(isRecord(content.template) ? content.template.body ?? {} : {}, null, 2)}
                 </pre>
               </div>

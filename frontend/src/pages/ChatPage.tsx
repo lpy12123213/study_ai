@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
-import { ChevronDown, Loader2, Send, Square } from 'lucide-react'
+import { ChevronDown, Loader2, Send, Sparkles, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RichTextarea } from '@/components/shared/RichTextarea'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
@@ -193,12 +193,18 @@ export default function ChatPage() {
         setIsCreatingConversation(false)
       })
   }
+  const chatStats = [
+    { label: '消息数', value: `${routeMessages.length}` },
+    { label: '历史分页', value: hasNextPage ? '可加载' : '已就绪' },
+    { label: '生成状态', value: isStreaming ? '响应中' : '待命' },
+    { label: '会话', value: conversationId ? '已打开' : '新对话' },
+  ]
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="aurora-chat-screen h-full flex flex-col relative">
       {routeMessages.length === 0 ? (
         conversationId ? (
-          <div className="flex-1 flex items-center justify-center p-8">
+          <div className="aurora-chat-empty flex-1 flex items-center justify-center p-8">
             {isHistoryLoading ? (
               <LoadingSpinner size="lg" />
             ) : (
@@ -218,6 +224,26 @@ export default function ChatPage() {
       ) : (
         <div ref={stick.containerRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={stick.onScroll}>
           <div className="max-w-3xl mx-auto py-6">
+            <section className="aurora-chat-ops mb-5">
+              <div>
+                <div className="aurora-kicker">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  AI Conversation Core
+                </div>
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight">AI 对话中枢</h1>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  汇集问答、任务步骤、搜索定位和历史消息，支持流式回复、取消生成与高亮回跳。
+                </p>
+              </div>
+              <div className="aurora-chat-stat-grid">
+                {chatStats.map((item) => (
+                  <div key={item.label} className="aurora-chat-stat">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
             {(hasNextPage || isFetchingNextPage) && (
               <div className="flex justify-center mb-4">
                 <Button
@@ -278,8 +304,8 @@ export default function ChatPage() {
             )}
 
             {isStreaming && !streamingText && routeMessages[routeMessages.length - 1]?.content === '' && (
-              <div className="flex gap-3 mb-4 max-w-3xl">
-                <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+              <div className="aurora-chat-streaming flex gap-3 mb-4 max-w-3xl">
+                <div className="aurora-chat-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
                 </div>
                 <div className="text-sm text-muted-foreground pt-0.5">
@@ -300,7 +326,7 @@ export default function ChatPage() {
           type="button"
           size="icon"
           variant="secondary"
-          className="absolute right-6 bottom-28 z-20 h-10 w-10 rounded-full shadow"
+          className="aurora-chat-float-button absolute right-6 bottom-28 z-20 h-10 w-10 rounded-full"
           onClick={() => {
             stick.scrollToBottom('smooth')
             stick.setShouldStick(true)
@@ -311,10 +337,10 @@ export default function ChatPage() {
         </Button>
       )}
 
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
+      <div className="aurora-chat-composer-shell absolute bottom-0 left-0 right-0 p-4 pt-10">
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="relative group">
-            <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
+            <div className="aurora-chat-command relative flex items-end gap-2 p-2 rounded-2xl transition-all">
               <RichTextarea
                 value={input}
                 onChange={setInput}

@@ -85,7 +85,7 @@ export function AuthImage(props: AuthImageProps) {
         role="img"
         aria-label={props.alt || 'image failed to load'}
         className={[
-          'inline-flex flex-col items-center justify-center gap-1 px-3 py-4',
+          'aurora-auth-image-fallback inline-flex flex-col items-center justify-center gap-1 px-3 py-4',
           'border border-dashed border-border/60 bg-muted/40 text-muted-foreground text-xs rounded',
           props.className || '',
         ]
@@ -104,7 +104,7 @@ export function AuthImage(props: AuthImageProps) {
             setState('loading')
             setRetryNonce((n) => n + 1)
           }}
-          className="mt-1 inline-flex items-center gap-1 text-foreground/70 hover:text-foreground"
+          className="aurora-auth-image-retry mt-1 inline-flex items-center gap-1 text-foreground/70 hover:text-foreground"
         >
           <RefreshCw className="h-3 w-3" aria-hidden="true" />
           重试
@@ -117,7 +117,7 @@ export function AuthImage(props: AuthImageProps) {
     <img
       src={src}
       alt={props.alt || ''}
-      className={props.className}
+      className={['aurora-auth-image', props.className || ''].filter(Boolean).join(' ')}
       loading="lazy"
       onLoad={() => setState('loaded')}
       onError={() => setState('error')}

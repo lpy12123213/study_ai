@@ -8,12 +8,17 @@ import type { Message, TaskStep } from '@/types'
 
 export function MessageBubble({ message, disableMotion }: { message: Message; disableMotion: boolean }) {
   const isUser = message.role === 'user'
+  const userBubbleClass =
+    'aurora-materials-user-bubble max-w-[85%] sm:max-w-[75%] rounded-2xl px-5 py-3 text-sm leading-6 text-foreground'
+  const assistantWrapClass = 'aurora-materials-assistant flex flex-col gap-2 mb-8 max-w-3xl w-full'
+  const assistantMarkClass = 'h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center'
+  const timelineClass = 'aurora-materials-timeline mt-3 overflow-hidden rounded-lg'
 
   if (isUser) {
     if (disableMotion) {
       return (
         <div className="flex justify-end mb-6">
-          <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+          <div className={userBubbleClass}>
             <div className="whitespace-pre-wrap">{message.content}</div>
           </div>
         </div>
@@ -25,7 +30,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
         animate={{ opacity: 1, y: 0 }}
         className="flex justify-end mb-6"
       >
-        <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+        <div className={userBubbleClass}>
           <div className="whitespace-pre-wrap">{message.content}</div>
         </div>
       </motion.div>
@@ -34,9 +39,9 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
 
   if (disableMotion) {
     return (
-      <div className="flex flex-col gap-2 mb-8 max-w-3xl w-full">
+      <div className={assistantWrapClass}>
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-          <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+          <div className={assistantMarkClass}>
             <BrandMark size={12} />
           </div>
           <span>{APP_ASSISTANT_NAME}</span>
@@ -59,7 +64,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
             if (globalSteps.length === 0) return null
 
             return (
-              <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
+              <div className={timelineClass}>
                 <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between">
                   <span>主流程步骤</span>
                   <span className="tabular-nums">{globalSteps.length} 步</span>
@@ -79,10 +84,10 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
+      className={assistantWrapClass}
     >
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-        <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+        <div className={assistantMarkClass}>
           <BrandMark size={12} />
         </div>
         <span>{APP_ASSISTANT_NAME}</span>
@@ -110,7 +115,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
           if (globalSteps.length === 0) return null
 
           return (
-            <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
+            <div className={timelineClass}>
               <div className="px-4 py-2 text-xs text-muted-foreground flex items-center justify-between">
                 <span>主流程步骤</span>
                 <span className="tabular-nums">{globalSteps.length} 步</span>

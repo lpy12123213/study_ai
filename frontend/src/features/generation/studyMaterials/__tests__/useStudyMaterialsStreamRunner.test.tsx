@@ -131,18 +131,82 @@ describe('useStudyMaterialsStreamRunner', () => {
     expect(runningConversation?.activeStream?.taskId).toBe('server-task-1')
 
     act(() => {
-      onMessage({ type: 'done', data: {}, seq: 3 })
+      onMessage({
+        type: 'done',
+        data: { material: { error: { tool: 'compile_latex_to_pdf', error: 'compile boom' } } },
+        seq: 3,
+      })
     })
 
     const finishedConversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId)
     expect(finishedConversation?.resumable).toBe(false)
     expect(finishedConversation?.activeStream).toBeUndefined()
+    expect(finishedConversation?.status).toBe('completed')
+    expect(finishedConversation?.lastTask).toMatchObject({
+      taskType: 'study_materials',
+      taskId: 'server-task-1',
+      materialError: { tool: 'compile_latex_to_pdf', error: 'compile boom' },
+    })
 
     expect(useTaskStore.getState().activeTasks.has(localTaskId)).toBe(false)
 
     expect(setIsGeneratingLocal).toHaveBeenCalledWith(true)
     expect(setIsGeneratingLocal).toHaveBeenCalledWith(false)
     expect(setError).toHaveBeenCalledWith(null)
+  })
+
+  it('marks the conversation failed with lastTask metadata on stream error events', () => {
+    const now = new Date().toISOString()
+    const conversationId = 'conv-err'
+    const assistantMessageId = 'msg-err'
+
+    useConversationStore.getState().addConversation({
+      id: conversationId,
+      title: '新自学资料',
+      type: 'study_materials',
+      createdAt: now,
+      updatedAt: now,
+      status: 'active',
+      resumable: false,
+    })
+    useConversationStore.getState().setCurrentConversation(conversationId, 'study_materials')
+    useConversationStore
+      .getState()
+      .setMessages(conversationId, [{ id: assistantMessageId, role: 'assistant', content: '', createdAt: now }])
+
+    const setIsGeneratingLocal = vi.fn()
+    const setError = vi.fn()
+
+    const { result } = renderHook(() =>
+      useStudyMaterialsStreamRunner({
+        setIsGeneratingLocal,
+        setError,
+        setSubAgentActivities: vi.fn(),
+        setActiveSubAgentTab: vi.fn(),
+      })
+    )
+
+    act(() => {
+      result.current.runStudyMaterialsStream({
+        conversationId,
+        assistantMessageId,
+        request: { url: '/study-materials/generate/stream', method: 'POST', body: { topic: 'test' } },
+      })
+    })
+
+    const onMessage = fetchSSERequestMock.mock.calls[0]?.[2] as (data: unknown) => void
+
+    act(() => {
+      onMessage({ type: 'task_started', data: { taskId: 'server-task-9' }, seq: 1 })
+      onMessage({ type: 'error', data: { message: 'codex runtime failed' }, seq: 2 })
+    })
+
+    const conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId)
+    expect(conversation?.status).toBe('failed')
+    expect(conversation?.resumable).toBe(false)
+    expect(conversation?.activeStream).toBeUndefined()
+    expect(conversation?.lastTask).toMatchObject({ taskType: 'study_materials', taskId: 'server-task-9' })
+    expect(setError).toHaveBeenCalledWith(expect.stringContaining('codex runtime failed'))
   })
 
   it('populates SubAgent activities from canonical task stream events', () => {

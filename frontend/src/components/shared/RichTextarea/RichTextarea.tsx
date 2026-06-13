@@ -63,7 +63,7 @@ export function RichTextarea({
   return (
     <div
       className={cn(
-        'relative flex w-full rounded-md border border-input bg-card shadow-none',
+        'aurora-rich-textarea relative flex w-full rounded-md border border-input bg-card shadow-none',
         'focus-within:ring-1 focus-within:ring-ring',
         disabled && 'cursor-not-allowed opacity-50',
         className,
@@ -71,9 +71,9 @@ export function RichTextarea({
       data-rich-textarea-root
       style={{ minHeight, maxHeight, ...style }}
     >
-      <div className="relative min-w-0 flex-1 overflow-y-auto" style={{ maxHeight }}>
+      <div className="aurora-rich-textarea-scroll relative min-w-0 flex-1 overflow-y-auto" style={{ maxHeight }}>
         {placeholder && empty && (
-          <div className="pointer-events-none absolute left-3 top-2 text-sm text-muted-foreground">
+          <div className="aurora-rich-textarea-placeholder pointer-events-none absolute left-3 top-2 text-sm text-muted-foreground">
             {placeholder}
           </div>
         )}
@@ -98,7 +98,7 @@ export function RichTextarea({
         type="button"
         size="icon"
         variant="ghost"
-        className="m-1 h-8 w-8 shrink-0 rounded-md"
+        className="aurora-rich-textarea-formula-button m-1 h-8 w-8 shrink-0 rounded-md"
         onClick={controller.openInsertDialog}
         disabled={disabled}
         title="插入公式"

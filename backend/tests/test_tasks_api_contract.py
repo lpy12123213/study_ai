@@ -187,6 +187,80 @@ class TestTasksApiContract(unittest.TestCase):
 
         app.dependency_overrides.clear()
 
+    def test_resume_db_only_paused_task_rejects_when_runner_unavailable(self) -> None:
+        """A paused task whose in-memory runner is gone (e.g. after a server
+        restart) must not be silently flipped to running with no real runner.
+        The endpoint should return ``task_runner_unavailable`` so the client
+        can fall back to retry/continue flows instead of getting stuck.
+        """
+
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        get_task = AsyncMock(
+            return_value={
+                "id": "task-paused",
+                "user_id": "u-1",
+                "task_type": "study_materials",
+                "title": "暂停任务",
+                "status": "paused",
+                "progress": 40,
+            }
+        )
+        update_status = AsyncMock(return_value=True)
+        append_event = AsyncMock(return_value={"seq": 3})
+
+        with (
+            patch("backend.api.tasks.task_runtime.resume_task", new=AsyncMock(return_value=False)),
+            patch("backend.api.tasks.db_get_task", new=get_task),
+            patch("backend.api.tasks.db_update_task_status", new=update_status),
+            patch("backend.api.tasks.db_append_task_event", new=append_event),
+        ):
+            resp = client.post("/api/tasks/task-paused/resume")
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json().get("detail"), "task_runner_unavailable")
+        update_status.assert_not_awaited()
+        append_event.assert_not_awaited()
+
+        app.dependency_overrides.clear()
+
+    def test_resume_running_db_task_returns_success_without_db_writes(self) -> None:
+        """Resuming a task already in ``running`` status should be a no-op success."""
+
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        get_task = AsyncMock(
+            return_value={
+                "id": "task-running",
+                "user_id": "u-1",
+                "task_type": "study_materials",
+                "title": "运行中",
+                "status": "running",
+                "progress": 20,
+            }
+        )
+        update_status = AsyncMock(return_value=True)
+        append_event = AsyncMock(return_value={"seq": 3})
+
+        with (
+            patch("backend.api.tasks.task_runtime.resume_task", new=AsyncMock(return_value=False)),
+            patch("backend.api.tasks.db_get_task", new=get_task),
+            patch("backend.api.tasks.db_update_task_status", new=update_status),
+            patch("backend.api.tasks.db_append_task_event", new=append_event),
+        ):
+            resp = client.post("/api/tasks/task-running/resume")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"success": True})
+        update_status.assert_not_awaited()
+        append_event.assert_not_awaited()
+
+        app.dependency_overrides.clear()
+
     def test_stream_replays_persisted_events_even_when_runtime_task_exists(self) -> None:
         app = create_app()
         self._override_auth(app)
@@ -231,6 +305,38 @@ class TestTasksApiContract(unittest.TestCase):
 
         app.dependency_overrides.clear()
 
+    def test_retry_supports_each_question_library_task_type(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        cases = [
+            ("question_library_crawl", "backend.generation.question_library.runner.create_crawl_task"),
+            ("question_library_generate", "backend.generation.question_library.runner.create_generate_task"),
+            ("question_library_score", "backend.generation.question_library.runner.create_score_task"),
+            ("question_library_media_import", "backend.generation.question_library.runner.create_media_import_task"),
+        ]
+
+        for task_type, creator_path in cases:
+            with self.subTest(task_type=task_type):
+                stored_task = {
+                    "id": f"orig-{task_type}",
+                    "user_id": "u-1",
+                    "task_type": task_type,
+                    "request": {"subject": "高中数学"},
+                }
+                created = SimpleNamespace(task_id=f"retry-{task_type}")
+                with (
+                    patch("backend.api.tasks.db_get_task", new=AsyncMock(return_value=stored_task)),
+                    patch(creator_path, new=AsyncMock(return_value=created)) as creator,
+                ):
+                    resp = client.post(f"/api/tasks/{stored_task['id']}/retry")
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.json(), {"success": True, "taskId": created.task_id})
+                creator.assert_awaited_once()
+
+        app.dependency_overrides.clear()
+
     def test_compose_review_saves_pending_review_draft(self) -> None:
         app = create_app()
         self._override_auth(app)
@@ -263,6 +369,18 @@ class TestTasksApiContract(unittest.TestCase):
                                     "analysis": "解析。",
                                     "quality_score": 90,
                                     "source": "zujuan",
+                                },
+                                {
+                                    "subject": "高中数学",
+                                    "question_id": "q-reject",
+                                    "type": "选择题",
+                                    "difficulty": "容易",
+                                    "knowledge_point": "函数",
+                                    "stem": "应剔除题干",
+                                    "answer": "A",
+                                    "analysis": "解析。",
+                                    "quality_score": 20,
+                                    "source": "ai",
                                 }
                             ],
                         }
@@ -297,7 +415,12 @@ class TestTasksApiContract(unittest.TestCase):
         ):
             resp = client.post(
                 "/api/tasks/task-review/compose-review",
-                json={"questions": [{"questionId": "q-review", "status": "approved"}]},
+                json={
+                    "questions": [
+                        {"questionId": "q-review", "status": "approved"},
+                        {"questionId": "q-reject", "status": "rejected"},
+                    ]
+                },
             )
 
         self.assertEqual(resp.status_code, 200)
@@ -305,10 +428,16 @@ class TestTasksApiContract(unittest.TestCase):
         self.assertTrue(body["success"])
         self.assertEqual(body["paper"]["id"], 88)
         save.assert_awaited_once()
-        self.assertEqual(save.await_args.kwargs["questions"][0]["question_id"], "q-review")
+        saved_questions = save.await_args.kwargs["questions"]
+        self.assertEqual([q["question_id"] for q in saved_questions], ["q-review"])
         update_status.assert_awaited_once()
         self.assertEqual(update_status.await_args.kwargs["status"], "completed")
+        self.assertEqual(update_status.await_args.kwargs["result"]["id"], 88)
         self.assertGreaterEqual(append_event.await_count, 2)
+        step_event = append_event.await_args_list[0].kwargs
+        self.assertEqual(step_event["event_type"], "step")
+        self.assertEqual(step_event["payload"]["step"]["output"]["approved"], 1)
+        self.assertEqual(step_event["payload"]["step"]["output"]["rejected"], 1)
         get_task.assert_awaited_once()
 
         app.dependency_overrides.clear()

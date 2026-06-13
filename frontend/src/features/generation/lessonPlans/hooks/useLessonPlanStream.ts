@@ -197,11 +197,13 @@ export function useLessonPlanStream(opts: {
 
           const stepId = toText(payload.step_id) || generateId()
           const stepTitle = toText(payload.title)
+          const stepThought = toText(payload.thought) || undefined
           const t = new Date().toISOString()
 
           const step: TaskStep = sanitizeTaskStep({
             id: stepId,
             title: stepTitle || `调用工具：${name}`,
+            thought: stepThought,
             status: 'running',
             startTime: t,
             toolName: name,

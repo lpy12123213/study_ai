@@ -128,20 +128,25 @@ export default function DiffPage() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-background">
-      <div className="border-b border-border p-4 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-10">
-        <div className="flex items-center gap-2 font-semibold">
-          <ArrowRightLeft className="h-4 w-4 text-primary" />
-          对比与差异
+    <div className="aurora-diff-screen h-full flex flex-col overflow-hidden">
+      <div className="aurora-diff-hero p-5 flex items-center justify-between sticky top-0 z-10">
+        <div>
+          <div className="aurora-diff-kicker">
+            <ArrowRightLeft className="h-4 w-4" />
+            <span>Version Diff Lab</span>
+          </div>
+          <h1>对比与差异</h1>
+          <p>比较试卷题目变更或自学资料正文差异，并从任一版本快速复制新资产。</p>
         </div>
+        <div className="aurora-diff-pill">Paper / Archive</div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto p-6">
+      <div className="aurora-diff-content flex-1 min-h-0 overflow-auto p-6">
         <div className="max-w-5xl mx-auto space-y-4">
-          <Card className="p-4">
+          <Card className="aurora-diff-control-card p-4">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <Select value={type} onValueChange={(v) => setType(v as DiffType)}>
-                <SelectTrigger>
+                <SelectTrigger className="aurora-diff-input">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -149,9 +154,9 @@ export default function DiffPage() {
                   <SelectItem value="study_archive">自学资料</SelectItem>
                 </SelectContent>
               </Select>
-              <Input value={aId} onChange={(e) => setAId(e.target.value)} placeholder="版本 A 的 ID" />
-              <Input value={bId} onChange={(e) => setBId(e.target.value)} placeholder="版本 B 的 ID" />
-              <Button type="button" onClick={applyParams} disabled={!canCompare}>
+              <Input className="aurora-diff-input" value={aId} onChange={(e) => setAId(e.target.value)} placeholder="版本 A 的 ID" />
+              <Input className="aurora-diff-input" value={bId} onChange={(e) => setBId(e.target.value)} placeholder="版本 B 的 ID" />
+              <Button type="button" className="aurora-diff-primary-action" onClick={applyParams} disabled={!canCompare}>
                 开始对比
               </Button>
             </div>
@@ -159,7 +164,7 @@ export default function DiffPage() {
 
           {error && <ErrorNotice error={error} />}
           {isLoading && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="aurora-diff-loading flex items-center gap-2 text-sm">
               <Loader2 className="h-4 w-4 animate-spin" />
               加载中…
             </div>
@@ -167,21 +172,21 @@ export default function DiffPage() {
 
           {paperDiff && (
             <>
-              <Card className="p-4">
-                <div className="font-medium">试卷差异</div>
-                <div className="text-xs text-muted-foreground mt-1">
+              <Card className="aurora-diff-result-card p-4">
+                <div className="aurora-diff-section-title">试卷差异</div>
+                <div className="aurora-diff-subtitle mt-1">
                   A: #{aId} · B: #{bId}
                 </div>
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <Card className="p-3">
+                  <Card className="aurora-diff-change-card aurora-diff-change-card-added p-3">
                     <div className="text-xs text-muted-foreground">新增</div>
                     <div className="mt-2 text-sm font-mono whitespace-pre-wrap break-words">{paperDiff.added.join('\n') || '-'}</div>
                   </Card>
-                  <Card className="p-3">
+                  <Card className="aurora-diff-change-card aurora-diff-change-card-removed p-3">
                     <div className="text-xs text-muted-foreground">删除</div>
                     <div className="mt-2 text-sm font-mono whitespace-pre-wrap break-words">{paperDiff.removed.join('\n') || '-'}</div>
                   </Card>
-                  <Card className="p-3">
+                  <Card className="aurora-diff-change-card aurora-diff-change-card-replaced p-3">
                     <div className="text-xs text-muted-foreground">替换（按题号）</div>
                     <div className="mt-2 text-sm font-mono whitespace-pre-wrap break-words">
                       {paperDiff.replaced.length === 0
@@ -192,17 +197,17 @@ export default function DiffPage() {
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={() => navigate(`/papers/${aId}`)}>
+                  <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => navigate(`/papers/${aId}`)}>
                     打开 A
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => navigate(`/papers/${bId}`)}>
+                  <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => navigate(`/papers/${bId}`)}>
                     打开 B
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => clonePaper.mutate(paperDiff.a)} disabled={clonePaper.isPending}>
+                  <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => clonePaper.mutate(paperDiff.a)} disabled={clonePaper.isPending}>
                     {clonePaper.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PlusSquare className="h-4 w-4 mr-2" />}
                     复制为新试卷（A）
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => clonePaper.mutate(paperDiff.b)} disabled={clonePaper.isPending}>
+                  <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => clonePaper.mutate(paperDiff.b)} disabled={clonePaper.isPending}>
                     {clonePaper.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PlusSquare className="h-4 w-4 mr-2" />}
                     复制为新试卷（B）
                   </Button>
@@ -212,12 +217,12 @@ export default function DiffPage() {
           )}
 
           {textDiff && (
-            <Card className="p-4">
-              <div className="font-medium">自学资料差异（按行）</div>
-              <div className="text-xs text-muted-foreground mt-1">
+            <Card className="aurora-diff-result-card p-4">
+              <div className="aurora-diff-section-title">自学资料差异（按行）</div>
+              <div className="aurora-diff-subtitle mt-1">
                 A: #{aId} · B: #{bId}
               </div>
-              <pre className="mt-4 max-h-[70vh] overflow-auto rounded-md border bg-muted/20 p-3 text-xs leading-5">
+              <pre className="aurora-diff-pre mt-4 max-h-[70vh] overflow-auto p-3 text-xs leading-5">
                 {textDiff.parts.map((p, idx) => {
                   const cls = p.added
                     ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
@@ -232,17 +237,17 @@ export default function DiffPage() {
                 })}
               </pre>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={() => navigate(`/study-archives/${aId}`)}>
+                <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => navigate(`/study-archives/${aId}`)}>
                   打开 A
                 </Button>
-                <Button type="button" variant="outline" onClick={() => navigate(`/study-archives/${bId}`)}>
+                <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => navigate(`/study-archives/${bId}`)}>
                   打开 B
                 </Button>
-                <Button type="button" variant="outline" onClick={() => cloneArchive.mutate(textDiff.a)} disabled={cloneArchive.isPending}>
+                <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => cloneArchive.mutate(textDiff.a)} disabled={cloneArchive.isPending}>
                   {cloneArchive.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PlusSquare className="h-4 w-4 mr-2" />}
                   复制为新资料（A）
                 </Button>
-                <Button type="button" variant="outline" onClick={() => cloneArchive.mutate(textDiff.b)} disabled={cloneArchive.isPending}>
+                <Button type="button" className="aurora-diff-secondary-action" variant="outline" onClick={() => cloneArchive.mutate(textDiff.b)} disabled={cloneArchive.isPending}>
                   {cloneArchive.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PlusSquare className="h-4 w-4 mr-2" />}
                   复制为新资料（B）
                 </Button>

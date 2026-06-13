@@ -8,29 +8,29 @@ export function ActivityPanel({ data }: { data?: ActivityInsights }) {
   const plan = data?.plan_completion
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="aurora-insights-card overflow-hidden">
       <CardHeader className="border-b border-border pb-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="font-mono text-xs text-muted-foreground">学习活跃度</div>
+            <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">学习活跃度</div>
             <CardTitle className="mt-1 text-xl">计划与连续学习</CardTitle>
           </div>
-          <Flame className="h-5 w-5 text-muted-foreground" />
+          <Flame className="h-5 w-5 text-[var(--semantic-warning-base)]" />
         </div>
       </CardHeader>
       <CardContent className="space-y-4 p-5">
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-md border border-border bg-background p-4">
+          <div className="aurora-insights-metric p-4">
             <div className="text-xs text-muted-foreground">活跃天数</div>
             <div className="mt-2 font-mono text-3xl">{data?.active_days ?? 0}</div>
           </div>
-          <div className="rounded-md border border-border bg-background p-4">
+          <div className="aurora-insights-metric p-4">
             <div className="text-xs text-muted-foreground">连续天数</div>
             <div className="mt-2 font-mono text-3xl">{data?.current_streak ?? 0}</div>
           </div>
         </div>
 
-        <div className="rounded-md border border-border bg-background p-4">
+        <div className="aurora-insights-metric p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <ListTodo className="h-4 w-4 text-muted-foreground" />

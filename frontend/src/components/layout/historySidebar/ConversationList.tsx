@@ -51,9 +51,9 @@ function ConversationListItem({
         type="button"
         onClick={() => onOpen(item)}
         className={cn(
-          'mb-1 flex cursor-pointer justify-center rounded-md py-2 transition-colors',
+          'aurora-history-collapsed-item mb-1 flex cursor-pointer justify-center rounded-md py-2 transition-colors',
           isActive
-            ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+            ? 'aurora-history-item-active bg-sidebar-primary text-sidebar-primary-foreground'
             : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
         )}
         title={item.title}
@@ -67,9 +67,9 @@ function ConversationListItem({
   return (
     <div
       className={cn(
-        'group mb-0.5 flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm transition-colors',
+        'aurora-history-conversation-item group mb-0.5 flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm transition-colors',
         isActive
-          ? 'border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+          ? 'aurora-history-item-active border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground font-medium'
           : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
       )}
     >
@@ -83,7 +83,7 @@ function ConversationListItem({
         {isStarred && <Star className="h-3.5 w-3.5 shrink-0 opacity-70" />}
         <span className="truncate flex-1">{item.title}</span>
         {tags.slice(0, 2).map((tag) => (
-          <span key={tag} className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          <span key={tag} className="aurora-history-tag-pill shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {tag}
           </span>
         ))}
@@ -94,13 +94,13 @@ function ConversationListItem({
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="aurora-history-more h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
             aria-label={t('history.moreActions')}
           >
             <MoreHorizontal className="h-3 w-3" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="aurora-history-item-menu">
           <DropdownMenuItem onClick={() => onToggleStar(item)}>
             <Star className="mr-2 h-3 w-3" />
             {isStarred ? t('history.unfavorite') : t('history.favorite')}
@@ -187,20 +187,20 @@ export function ConversationList({
     <>
       {pinnedConversations.length > 0 && (
         <div className="mb-4">
-          {!isCollapsed && <div className="px-2 mb-1 text-xs font-medium text-muted-foreground/70">{t('history.pinned')}</div>}
+          {!isCollapsed && <div className="aurora-history-group-label px-2 mb-1 text-xs font-medium text-muted-foreground/70">{t('history.pinned')}</div>}
           <div className="space-y-0.5">{pinnedConversations.map(renderItem)}</div>
         </div>
       )}
 
       {Array.from(groupedConversations.entries()).map(([group, items]) => (
         <div key={group} className="mb-4">
-          {!isCollapsed && <h3 className="px-2 mb-1 text-xs font-medium text-muted-foreground/70">{groupLabel(group)}</h3>}
+          {!isCollapsed && <h3 className="aurora-history-group-label px-2 mb-1 text-xs font-medium text-muted-foreground/70">{groupLabel(group)}</h3>}
           <div className="space-y-0.5">{items.map(renderItem)}</div>
         </div>
       ))}
 
       {filteredConversations.length === 0 && !isCollapsed && (
-        <div className="text-center text-muted-foreground text-xs py-8">{t('history.empty')}</div>
+        <div className="aurora-history-empty text-center text-muted-foreground text-xs py-8">{t('history.empty')}</div>
       )}
     </>
   )

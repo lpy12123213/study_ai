@@ -201,6 +201,26 @@ class TaskDurationAggregateRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(study_row.duration_sum_seconds, 60.0)
         self.assertEqual(study_row.last_duration_seconds, 40.0)
 
+    async def test_average_duration_seconds_uses_only_requesting_users_history(self) -> None:
+        started_at = datetime(2026, 1, 1, 12, 0, 0)
+
+        await tasks_repo.upsert_task(
+            user_id="user-a",
+            task_id="task-a1",
+            task_type="study_materials",
+            title="User A task",
+            status="running",
+            started_at=started_at,
+        )
+        await tasks_repo.update_task_status(
+            user_id="user-a",
+            task_id="task-a1",
+            status="completed",
+            ended_at=started_at + timedelta(seconds=600),
+        )
+
+        self.assertIsNone(await tasks_repo.average_duration_seconds(user_id="user-b", task_type="study_materials"))
+
 
 class TaskDurationAggregateMigrationTests(unittest.TestCase):
     def setUp(self) -> None:

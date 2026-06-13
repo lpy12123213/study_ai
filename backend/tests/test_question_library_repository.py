@@ -1,14 +1,16 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.database.repositories.question import question_cache as cache_repo
 from backend.database.repositories.question import question_library as lib_repo
-from backend.database.schema import Base
+from backend.database.schema import Base, QuestionLibraryItem
 
 
 class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
@@ -135,6 +137,129 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         detail = await lib_repo.get_question_library_item(user_id="user-a", question_id="q1")
         self.assertIsNotNone(detail)
         self.assertEqual(detail.get("thinking_depth_score"), 8)
+
+    async def test_list_filters_by_local_question_metadata(self) -> None:
+        await cache_repo.upsert_question_cache(
+            [
+                {
+                    "question_id": "q1",
+                    "subject": "高中数学",
+                    "stem": "这是一道需要分类讨论考法的函数题。",
+                    "question_type": "单项选择题",
+                    "difficulty": "简单",
+                    "knowledge_point": "函数新文化题",
+                    "source": "2024年北京市高三期末真题",
+                    "date": "2024/01",
+                },
+                {
+                    "question_id": "q2",
+                    "subject": "高中数学",
+                    "stem": "这是一道常规计算题。",
+                    "question_type": "解答题",
+                    "difficulty": "困难",
+                    "knowledge_point": "数列典型题",
+                    "source": "2023年上海市高一期中模拟",
+                    "date": "2023/11",
+                },
+            ]
+        )
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[
+                {"question_id": "q1", "subject": "高中数学", "origin": "crawled"},
+                {"question_id": "q2", "subject": "高中数学", "origin": "crawled"},
+            ],
+        )
+
+        rows = await lib_repo.list_question_library_items(
+            user_id="user-a",
+            subject="高中数学",
+            hidden="all",
+            exam_scene="期末",
+            question_type="单选题",
+            difficulty="容易",
+            category="新文化题",
+            year="2024",
+            region="北京",
+            grade="高三",
+            semester="期末",
+            method="分类讨论",
+            limit=10,
+        )
+
+        self.assertEqual([it["question_id"] for it in rows["items"]], ["q1"])
+        self.assertEqual(rows["total"], 1)
+
+    async def test_single_choice_filter_does_not_match_multiple_choice(self) -> None:
+        await cache_repo.upsert_question_cache(
+            [
+                {
+                    "question_id": "single",
+                    "subject": "高中数学",
+                    "stem": "单选题干",
+                    "question_type": "单项选择题",
+                },
+                {
+                    "question_id": "multi",
+                    "subject": "高中数学",
+                    "stem": "多选题干",
+                    "question_type": "多项选择题",
+                },
+            ]
+        )
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[
+                {"question_id": "single", "subject": "高中数学", "origin": "crawled"},
+                {"question_id": "multi", "subject": "高中数学", "origin": "crawled"},
+            ],
+        )
+
+        rows = await lib_repo.list_question_library_items(
+            user_id="user-a",
+            subject="高中数学",
+            hidden="all",
+            question_type="单选题",
+            limit=10,
+        )
+
+        self.assertEqual([it["question_id"] for it in rows["items"]], ["single"])
+        self.assertEqual(rows["total"], 1)
+
+    async def test_list_only_new_filters_recent_library_updates(self) -> None:
+        await cache_repo.upsert_question_cache(
+            [
+                {"question_id": "recent", "subject": "高中数学", "stem": "recent stem"},
+                {"question_id": "old", "subject": "高中数学", "stem": "old stem"},
+            ]
+        )
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[
+                {"question_id": "recent", "subject": "高中数学", "origin": "crawled"},
+                {"question_id": "old", "subject": "高中数学", "origin": "crawled"},
+            ],
+        )
+
+        old_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=45)
+        async with self.session_maker() as session:
+            await session.execute(
+                update(QuestionLibraryItem)
+                .where(QuestionLibraryItem.user_id == "user-a", QuestionLibraryItem.question_id == "old")
+                .values(created_at=old_time, updated_at=old_time)
+            )
+            await session.commit()
+
+        rows = await lib_repo.list_question_library_items(
+            user_id="user-a",
+            subject="高中数学",
+            hidden="all",
+            only_new=True,
+            limit=10,
+        )
+
+        self.assertEqual([it["question_id"] for it in rows["items"]], ["recent"])
+        self.assertEqual(rows["total"], 1)
 
     async def test_method_stats_come_from_existing_thinking_depth_dimensions(self) -> None:
         dims = [

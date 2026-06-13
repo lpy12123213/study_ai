@@ -29,7 +29,7 @@ export function SubmitConfirmDialog({
   const unanswered = Math.max(0, totalCount - answeredCount)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="aurora-exam-submit-dialog">
         <DialogHeader>
           <DialogTitle>确认交卷</DialogTitle>
           <DialogDescription>
@@ -37,7 +37,7 @@ export function SubmitConfirmDialog({
           </DialogDescription>
         </DialogHeader>
         {unanswered > 0 && (
-          <div className="flex items-start gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="aurora-exam-submit-warning flex items-start gap-3 rounded-md p-3 text-sm text-red-700">
             <AlertTriangle className="mt-0.5 h-4 w-4" />
             还有 {unanswered} 题未作答。
           </div>

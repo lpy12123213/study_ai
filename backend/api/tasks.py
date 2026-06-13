@@ -182,6 +182,26 @@ def _reviewed_questions_from_draft(draft: dict, payload: dict) -> list[dict]:
     return reviewed
 
 
+def _compose_review_rejected_count(draft: dict, payload: dict) -> int:
+    questions = draft.get("questions") if isinstance(draft.get("questions"), list) else []
+    known_ids = {
+        str(question.get("question_id") or question.get("questionId") or "").strip()
+        for question in questions
+        if isinstance(question, dict)
+    }
+    review_items = payload.get("questions") if isinstance(payload.get("questions"), list) else []
+    rejected = 0
+    for item in review_items:
+        if not isinstance(item, dict):
+            continue
+        qid = _review_item_id(item)
+        if not qid or qid not in known_ids:
+            continue
+        if _status_rejects_question(item.get("status") or item.get("reviewStatus") or item.get("action")):
+            rejected += 1
+    return rejected
+
+
 def _paper_result_payload(paper: dict, *, paper_id: int, fallback_name: str) -> dict:
     return {
         "id": int(paper.get("paper_id") or paper_id),
@@ -624,7 +644,11 @@ async def resume_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     if status != "paused":
         raise HTTPException(status_code=400, detail="task_not_resumable")
 
-    raise HTTPException(status_code=400, detail="task_not_resumable")
+    # DB-only resume: the in-memory runner is gone (e.g., server restarted).
+    # Simply flipping the DB row to "running" would leave the task without an
+    # active runner, appearing to run but never producing progress. Instead we
+    # report not_resumable so callers can fall back to retry/continue flows.
+    raise HTTPException(status_code=409, detail="task_runner_unavailable")
 
 
 @router.post("/{task_id}/compose-review", response_model=dict)
@@ -653,6 +677,7 @@ async def review_composed_paper(task_id: str, payload: Optional[dict] = None, us
 
     body = payload if isinstance(payload, dict) else {}
     questions = _reviewed_questions_from_draft(draft, body)
+    rejected_count = _compose_review_rejected_count(draft, body)
     if not questions:
         raise HTTPException(status_code=400, detail="no_questions_approved")
 
@@ -688,7 +713,7 @@ async def review_composed_paper(task_id: str, payload: Optional[dict] = None, us
                 "startTime": _now_iso(),
                 "endTime": _now_iso(),
                 "toolName": "compose-review",
-                "output": {"paperId": paper_id, "approved": len(questions)},
+                "output": {"paperId": paper_id, "approved": len(questions), "rejected": rejected_count},
             }
         },
         progress=95.0,
@@ -709,7 +734,7 @@ async def review_composed_paper(task_id: str, payload: Optional[dict] = None, us
         error={},
         ended_at=utcnow_naive(),
     )
-    return {"success": True, "taskId": task_id, "paper": result}
+    return {"success": True, "taskId": task_id, "paper": result, "review": {"approved": len(questions), "rejected": rejected_count}}
 
 
 @router.post("/{task_id}/cancel", response_model=dict)
@@ -800,6 +825,24 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
     if task_type == "question_evaluate":
         task = await submit_question_evaluate_task(user_id=user_id, request=dict(req), parent_task_id=task_id)
         return {"success": True, "taskId": task.task_id}
+
+    if task_type in {
+        "question_library_crawl",
+        "question_library_generate",
+        "question_library_score",
+        "question_library_media_import",
+    }:
+        from backend.generation.question_library import runner as ql_runner
+
+        creator = {
+            "question_library_crawl": ql_runner.create_crawl_task,
+            "question_library_generate": ql_runner.create_generate_task,
+            "question_library_score": ql_runner.create_score_task,
+            "question_library_media_import": ql_runner.create_media_import_task,
+        }.get(task_type)
+        if creator is not None:
+            task = await creator(user_id=user_id, request=dict(req), parent_task_id=task_id)
+            return {"success": True, "taskId": task.task_id}
 
     raise HTTPException(status_code=400, detail="task_not_retryable")
 

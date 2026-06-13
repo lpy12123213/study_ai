@@ -122,6 +122,32 @@ export async function retryTask(taskId: string): Promise<{ taskId: string }> {
   return { taskId: String(recordString(response.data, 'taskId') || '') }
 }
 
+export async function reviewComposedPaperTask(
+  taskId: string,
+  payload?: {
+    questions?: Array<{ questionId: string; status: 'approved' | 'rejected' }>
+  }
+): Promise<{
+  success: boolean
+  paper?: UnifiedTaskPayload
+  review?: { approved: number; rejected: number }
+}> {
+  const response = await apiClient.post(`/tasks/${encodeURIComponent(taskId)}/compose-review`, payload || {})
+  const data = isRecord(response.data) ? response.data : undefined
+  const reviewRaw = data && isRecord(data.review) ? data.review : undefined
+  const review = reviewRaw
+    ? {
+        approved: Math.max(0, Math.floor(Number(reviewRaw.approved) || 0)),
+        rejected: Math.max(0, Math.floor(Number(reviewRaw.rejected) || 0)),
+      }
+    : undefined
+  return {
+    success: Boolean(data?.success),
+    paper: data && isRecord(data.paper) ? data.paper : undefined,
+    review,
+  }
+}
+
 export async function exportPaperTask(
   paperId: number | string,
   input: {
@@ -160,6 +186,7 @@ export const tasksApi = {
   resumeTask,
   cancelTask,
   retryTask,
+  reviewComposedPaperTask,
   exportPaperTask,
   exportStudyArchiveTask,
   list: async (): Promise<{ data: UnifiedTaskListResponse }> => ({

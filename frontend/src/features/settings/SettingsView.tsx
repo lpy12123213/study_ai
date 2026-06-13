@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Sparkles } from 'lucide-react'
 import { useAuthStore } from '@/stores/useAuthStore'
 import { useThemeStore } from '@/stores/useThemeStore'
 import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore'
@@ -84,13 +85,40 @@ export default function SettingsView() {
     setAppearance(patch)
     scheduleAccountSave({ appearance: patch })
   }
+  const settingsStats = [
+    { label: '当前页', value: activeTab },
+    { label: '主题', value: theme },
+    { label: '登录', value: isAuthenticated ? '已连接' : '本地模式' },
+    { label: '同步', value: isSyncing ? '保存中' : syncError ? '异常' : '就绪' },
+  ]
 
   return (
-    <div className="h-full flex flex-col md:flex-row overflow-hidden bg-background">
+    <div className="aurora-settings-screen h-full flex flex-col md:flex-row overflow-hidden">
       <SettingsSidebar activeTab={activeTab} onSelectTab={setActiveTab} />
 
       <main className="flex-1 overflow-auto p-6 md:p-10">
-        <div className="max-w-2xl mx-auto space-y-8">
+        <div className="max-w-3xl mx-auto space-y-8">
+          <section className="aurora-settings-hero">
+            <div>
+              <div className="aurora-kicker">
+                <Sparkles className="h-3.5 w-3.5" />
+                System Settings Console
+              </div>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight">系统设置控制台</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                管理账户、本地偏好、模型连接、外观方案、数据导入导出与调试状态。
+              </p>
+            </div>
+            <div className="aurora-settings-stat-grid">
+              {settingsStats.map((item) => (
+                <div key={item.label} className="aurora-settings-stat">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+          </section>
+
           {activeTab === 'account' && <AccountPanel user={user} />}
 
           {activeTab === 'api' && <ApiSettingsPanel api={api} isActive={activeTab === 'api'} />}

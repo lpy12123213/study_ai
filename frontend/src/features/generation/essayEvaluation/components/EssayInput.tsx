@@ -82,13 +82,14 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="aurora-essay-form space-y-4">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground" htmlFor="essay-subject">
             学科
           </label>
           <Input
+            className="aurora-essay-input"
             id="essay-subject"
             value={subject}
             onChange={(event) => setSubject(event.target.value)}
@@ -100,6 +101,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
             题目
           </label>
           <Input
+            className="aurora-essay-input"
             id="essay-topic"
             value={topic}
             onChange={(event) => setTopic(event.target.value)}
@@ -115,7 +117,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
           </label>
           <select
             id="essay-language"
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            className="aurora-essay-select h-9 w-full rounded-md border px-3 text-sm"
             value={language}
             onChange={(event) => setLanguage(event.target.value as EssayLanguage)}
           >
@@ -132,7 +134,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
           </label>
           <select
             id="essay-type"
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            className="aurora-essay-select h-9 w-full rounded-md border px-3 text-sm"
             value={essayType}
             onChange={(event) => setEssayType(event.target.value as EssayType)}
           >
@@ -149,7 +151,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
           </label>
           <select
             id="essay-grade-band"
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+            className="aurora-essay-select h-9 w-full rounded-md border px-3 text-sm"
             value={gradeBand}
             onChange={(event) => setGradeBand(event.target.value as GradeBand)}
           >
@@ -162,7 +164,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
         </div>
       </div>
 
-      <div className="space-y-1">
+      <div className="aurora-essay-text-shell space-y-1">
         <label className="text-xs text-muted-foreground">
           作文正文
         </label>
@@ -184,6 +186,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
             评分总分
           </label>
           <Input
+            className="aurora-essay-input"
             id="essay-rubric-max"
             type="number"
             min={10}
@@ -198,6 +201,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
             评分要求（可选）
           </label>
           <Input
+            className="aurora-essay-input"
             id="essay-requirements"
             value={requirements}
             onChange={(event) => setRequirements(event.target.value)}
@@ -207,7 +211,7 @@ export function EssayInput({ loading, onSubmit }: EssayInputProps) {
       </div>
 
       <div className="flex justify-end">
-        <Button type="button" onClick={handleSubmit} disabled={loading || text.trim().length < 10}>
+        <Button className="aurora-essay-submit" type="button" onClick={handleSubmit} disabled={loading || text.trim().length < 10}>
           {loading ? '批改中…' : '开始批改'}
         </Button>
       </div>

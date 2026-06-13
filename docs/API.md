@@ -101,7 +101,7 @@
 - `POST /api/tasks/export/papers/{paper_id}`
 - `POST /api/tasks/export/study-archives/{archive_id}`
 
-DeepThink、教案、组卷、一键出卷、知识视频、自学资料、AI 出题/评分和好题鉴别属于中型或重型 AI 任务。其任务启动事件会携带 `data.native_agentic=true` 与 `data.agent_run_spec`，用于描述原生 agentic 的 domain、goal、roles、tool_policy、budget、output_contract 和 resume_state。客户端可忽略该字段以保持兼容；任务进度仍以既有 SSE 事件继续输出。
+DeepThink、教案、组卷、一键出卷、知识视频、自学资料、AI 出题/评分和好题鉴别属于中型或重型 AI 任务。默认 `AGENT_RUNTIME=codex_runtime` 时，这些 agent 入口由本机 Codex runtime 非交互执行；普通导出、作文批改等非 agent 流程不受影响。任务启动事件会携带 `data.native_agentic=true` 与 `data.agent_run_spec`，用于描述原生 agentic 的 domain、goal、roles、tool_policy、budget、output_contract、resume_state 和 metadata。`agent_run_spec.metadata.runtime` 为 `codex_runtime`，并包含可忽略的 `codex_runtime_version`、`approval_policy` 与 `sandbox_mode`。客户端可忽略新增字段以保持兼容；任务进度仍以既有 SSE 事件继续输出。
 
 状态与控制：
 

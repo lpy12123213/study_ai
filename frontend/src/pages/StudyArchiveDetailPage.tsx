@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookOpen, Loader2, Search, Share2, Download, ListTodo, MessageSquarePlus, Star, Pin, Tag, Film } from 'lucide-react'
+import { ArrowLeft, BookOpen, Loader2, Search, Share2, Download, ListTodo, MessageSquarePlus, Star, Pin, Tag, Film, Sparkles } from 'lucide-react'
 import { getStudyArchive } from '@/api/studyArchives'
 import { Markdown } from '@/components/shared/Markdown'
 import { Button } from '@/components/ui/button'
@@ -100,7 +100,7 @@ export default function StudyArchiveDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="aurora-archive-screen flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     )
@@ -108,14 +108,14 @@ export default function StudyArchiveDetailPage() {
 
   if (error || !data) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-        <div className="h-16 w-16 bg-muted rounded-full flex items-center justify-center mb-4">
+      <div className="aurora-archive-screen flex flex-col items-center justify-center h-full p-6 text-center">
+        <div className="aurora-archive-empty-icon h-16 w-16 rounded-full flex items-center justify-center mb-4">
           <BookOpen className="h-8 w-8 text-muted-foreground" />
         </div>
         <h3 className="text-lg font-medium mb-2">资料不存在</h3>
         <p className="text-muted-foreground mb-6">加载失败或已被删除</p>
         <Button asChild variant="outline">
-          <Link to="/study-materials">返回自学资料</Link>
+          <Link to="/study-archives">返回学习档案</Link>
         </Button>
       </div>
     )
@@ -124,6 +124,13 @@ export default function StudyArchiveDetailPage() {
   const title = `${toText(data?.subject)} ${toText(data?.topic)}`.trim() || `自学资料 #${String(archiveId)}`
   const isStarred = Boolean(meta?.starred)
   const isPinned = Boolean(meta?.pinned)
+  const tags = Array.isArray(meta?.tags) ? meta.tags : []
+  const archiveStats = [
+    { label: '学科', value: toText(data?.subject) || '未标注' },
+    { label: '主题', value: toText(data?.topic) || '自学资料' },
+    { label: '内容块', value: `${blocks.length}` },
+    { label: '标签', value: `${tags.length}` },
+  ]
 
   const exportMarkdown = async () => {
     if (!archiveId) return
@@ -149,11 +156,11 @@ export default function StudyArchiveDetailPage() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-background">
-      <div className="border-b border-border p-4 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-10">
+    <div className="aurora-archive-screen aurora-reading-theater h-full flex flex-col">
+      <div className="aurora-archive-topbar border-b border-border p-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" asChild className="rounded-full">
-            <Link to="/study-materials" aria-label="返回">
+            <Link to="/study-archives" aria-label="返回">
               <ArrowLeft className="h-5 w-5" />
             </Link>
           </Button>
@@ -234,15 +241,52 @@ export default function StudyArchiveDetailPage() {
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="max-w-4xl mx-auto p-6 space-y-4">
+        <div className="aurora-archive-shell aurora-reading-shell space-y-4">
+          <section className="aurora-archive-hero">
+            <div className="text-center">
+              <div className="aurora-archive-orb mx-auto mb-5">
+                <BookOpen className="h-8 w-8" />
+              </div>
+              <div className="aurora-kicker justify-center">
+                <Sparkles className="h-3.5 w-3.5" />
+                Study Archive Bridge
+              </div>
+              <h1 className="mt-4 text-3xl font-semibold tracking-tight">{title}</h1>
+              <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                这里沉淀自学资料的完整正文、章节结构、批注、标签和后续生成入口，可继续转为学习计划、知识视频或导出文档。
+              </p>
+            </div>
+
+            <div className="aurora-archive-stat-grid mt-7">
+              {archiveStats.map((item) => (
+                <div key={item.label} className="aurora-archive-stat">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+
+            {(isStarred || isPinned || tags.length > 0 || q) && (
+              <div className="aurora-archive-meta-strip mt-5">
+                {isStarred && <span>已收藏</span>}
+                {isPinned && <span>已置顶</span>}
+                {tags.slice(0, 5).map((tag) => (
+                  <span key={String(tag)}>{String(tag)}</span>
+                ))}
+                {!!q && <span>关键词：{q}</span>}
+              </div>
+            )}
+          </section>
+
           {blocks.map((b) => {
             const isHit = hitBlockId === b.id
             return (
               <div
                 key={b.id}
                 id={b.id}
+                data-hit={isHit ? 'true' : 'false'}
                 className={cn(
-                  'rounded-xl border border-border/60 bg-card p-5',
+                  'aurora-archive-block aurora-reading-block p-5',
                   isHit && 'border-primary/40 ring-2 ring-primary/10',
                 )}
               >
@@ -264,7 +308,7 @@ export default function StudyArchiveDetailPage() {
                     批注
                   </Button>
                 </div>
-                <div className="prose prose-sm dark:prose-invert max-w-none text-foreground leading-7">
+                <div className="aurora-archive-body aurora-reading-body">
                   <Markdown markdown={b.markdown} />
                 </div>
               </div>

@@ -79,7 +79,7 @@ export function ErrorNotice(props: {
   }
 
   return (
-    <div className={cn('rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive', className)}>
+    <div className={cn('aurora-error-notice rounded-lg p-4 text-sm text-destructive', className)}>
       <div className="flex items-start gap-3">
         <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
@@ -94,7 +94,14 @@ export function ErrorNotice(props: {
               )}
             </div>
             {onClose && (
-              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="aurora-error-notice-close h-7 w-7"
+                onClick={onClose}
+                aria-label="Close"
+              >
                 <X className="h-4 w-4" />
               </Button>
             )}
@@ -102,12 +109,12 @@ export function ErrorNotice(props: {
 
           <div className="mt-3 flex flex-wrap gap-2">
             {canRetry && (
-              <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+              <Button type="button" className="aurora-error-notice-action" size="sm" variant="secondary" onClick={onRetry}>
                 <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
                 重试
               </Button>
             )}
-            <Button type="button" size="sm" variant="outline" onClick={copyPayload}>
+            <Button type="button" className="aurora-error-notice-action" size="sm" variant="outline" onClick={copyPayload}>
               <Copy className="h-3.5 w-3.5 mr-1.5" />
               {copied ? '已复制' : '复制错误'}
             </Button>
@@ -123,6 +130,7 @@ export function ErrorNotice(props: {
                     type="button"
                     size="sm"
                     variant="outline"
+                    className="aurora-error-notice-action"
                     disabled={!a.request || runningActionId === a.id}
                     onClick={() => runAction(a)}
                   >

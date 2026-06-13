@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -41,6 +42,57 @@ def _with_thinking_depth_fields(item: Dict[str, Any], dimensions_json: Any) -> D
     item["thinking_method_count"] = depth.get("similar_method_count")
     item["thinking_depth_comment"] = depth.get("comment") or ""
     return item
+
+
+def _clean_filter(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _like_filter(columns: Iterable[Any], value: Any) -> Any | None:
+    needle = _clean_filter(value)
+    if not needle:
+        return None
+    like = f"%{needle}%"
+    return or_(*(col.like(like) for col in columns))
+
+
+def _difficulty_aliases(value: Any) -> List[str]:
+    v = _clean_filter(value)
+    if not v:
+        return []
+    aliases = {
+        "容易": ["容易", "简单"],
+        "简单": ["简单", "容易"],
+        "适中": ["适中", "中等", "普通"],
+        "中等": ["中等", "适中", "普通"],
+        "普通": ["普通", "中等", "适中"],
+        "困难": ["困难", "较难", "难"],
+        "较难": ["较难", "困难", "难"],
+    }
+    return aliases.get(v, [v])
+
+
+def _question_type_aliases(value: Any) -> List[str]:
+    v = _clean_filter(value)
+    if not v:
+        return []
+    aliases = {
+        "单选题": ["单选题", "单项选择题"],
+        "多选题": ["多选题", "多项选择题"],
+        "选择题": ["选择题", "单选题", "单项选择题", "多选题", "多项选择题"],
+        "解答题": ["解答题", "简答题", "问答题"],
+        "简答题": ["简答题", "解答题", "问答题"],
+        "概念填空": ["概念填空", "填空题"],
+        "填空题": ["填空题", "概念填空"],
+    }
+    return list(dict.fromkeys(aliases.get(v, [v])))
+
+
+def _question_type_filter(value: Any) -> Any | None:
+    values = _question_type_aliases(value)
+    if not values:
+        return None
+    return or_(*(QuestionCache.question_type.like(f"%{alias}%") for alias in values))
 
 
 async def upsert_question_library_items(
@@ -132,6 +184,16 @@ async def list_question_library_items(
     origin: str = "",
     hidden: HiddenFilter = "0",
     q: str = "",
+    exam_scene: str = "",
+    question_type: str = "",
+    difficulty: str = "",
+    category: str = "",
+    year: str = "",
+    region: str = "",
+    grade: str = "",
+    semester: str = "",
+    method: str = "",
+    only_new: bool = False,
     min_score: Optional[int] = None,
     sort: str = "updated_at",
     order: str = "desc",
@@ -156,6 +218,16 @@ async def list_question_library_items(
                 origin=origin,
                 hidden=hidden,
                 q=q,
+                exam_scene=exam_scene,
+                question_type=question_type,
+                difficulty=difficulty,
+                category=category,
+                year=year,
+                region=region,
+                grade=grade,
+                semester=semester,
+                method=method,
+                only_new=only_new,
                 min_score=min_score,
                 sort=sort,
                 order=order,
@@ -174,6 +246,33 @@ async def list_question_library_items(
         where.append(QuestionLibraryItem.hidden == (1 if hidden == "1" else 0))
     if min_score is not None:
         where.append(QuestionLibraryItem.ai_score >= int(min_score))
+    if only_new:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+        where.append(QuestionLibraryItem.updated_at >= cutoff)
+
+    source_columns = (QuestionCache.source, QuestionCache.stem)
+    broad_columns = (
+        QuestionCache.source,
+        QuestionCache.stem,
+        QuestionCache.knowledge_point,
+        QuestionCache.knowledge_points_json,
+    )
+    for extra_filter in (
+        _like_filter(source_columns, exam_scene),
+        _question_type_filter(question_type),
+        _like_filter(broad_columns, category),
+        _like_filter((QuestionCache.source, QuestionCache.date, QuestionCache.stem), year),
+        _like_filter(source_columns, region),
+        _like_filter(source_columns, grade),
+        _like_filter((QuestionCache.source, QuestionCache.date, QuestionCache.stem), semester),
+        _like_filter((*broad_columns, QuestionLibraryItem.ai_summary, QuestionLibraryItem.ai_dimensions_json), method),
+    ):
+        if extra_filter is not None:
+            where.append(extra_filter)
+
+    difficulty_values = _difficulty_aliases(difficulty)
+    if difficulty_values:
+        where.append(QuestionCache.difficulty.in_(difficulty_values))
 
     q_filter = None
     if qv:
@@ -220,15 +319,15 @@ async def list_question_library_items(
 
     total: Optional[int] = None
     if include_total:
+        total_stmt = (
+            select(func.count())
+            .select_from(QuestionLibraryItem)
+            .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
+        )
         if q_filter is not None:
-            total_stmt = (
-                select(func.count())
-                .select_from(QuestionLibraryItem)
-                .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
-                .where(*where, q_filter)
-            )
+            total_stmt = total_stmt.where(*where, q_filter)
         else:
-            total_stmt = select(func.count()).select_from(QuestionLibraryItem).where(*where)
+            total_stmt = total_stmt.where(*where)
         total = int((await session.execute(total_stmt)).scalar() or 0)
 
     rows = (await session.execute(stmt.limit(lim).offset(off))).all()

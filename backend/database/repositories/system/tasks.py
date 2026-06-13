@@ -604,11 +604,10 @@ async def get_task(
     if include_events:
         limit_safe = max(1, min(int(events_limit or 200), 5000))
         requested_after_seq = max(0, int(events_after_seq or 0))
-        after_seq = requested_after_seq if requested_after_seq > 0 else max(0, int(task.last_seq or 0) - limit_safe)
         events = await list_task_events(
             user_id=uid,
             task_id=tid,
-            after_seq=after_seq,
+            after_seq=requested_after_seq,
             limit=limit_safe,
             session=session,
         )
@@ -666,18 +665,6 @@ async def average_duration_seconds(
     if own:
         async with async_session_maker() as session:
             return await average_duration_seconds(user_id=uid, task_type=ttype, sample=sample, session=session)
-
-    aggregate_res = await session.execute(
-        select(TaskDurationAggregate).where(TaskDurationAggregate.task_type == ttype)
-    )
-    aggregate = aggregate_res.scalar_one_or_none()
-    if aggregate is not None and int(aggregate.completed_count or 0) > 0:
-        ema = float(aggregate.duration_ema_seconds or 0.0)
-        if ema > 0:
-            return ema
-        total = float(aggregate.duration_sum_seconds or 0.0)
-        if total > 0:
-            return total / max(1, int(aggregate.completed_count or 0))
 
     stmt = (
         select(Task.started_at, Task.ended_at)

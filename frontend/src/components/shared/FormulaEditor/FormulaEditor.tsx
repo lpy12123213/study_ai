@@ -128,8 +128,8 @@ export function FormulaEditor({
   const previewMarkdown = editor.latex.trim() ? `$$${editor.latex}$$` : ''
 
   return (
-    <div className={cn('rounded-md border border-border bg-background', className)}>
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-1">
+    <div className={cn('aurora-formula-editor rounded-md border border-border bg-background', className)}>
+      <div className="aurora-formula-editor-head flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-2 py-1">
         <span className="text-xs text-muted-foreground" id={`${editorId}-label`}>
           公式编辑
         </span>
@@ -138,7 +138,7 @@ export function FormulaEditor({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-xs"
+            className="aurora-formula-mode-toggle h-7 gap-1 px-2 text-xs"
             onClick={editor.toggleMode}
             aria-pressed={editor.mode === 'visual'}
             title={`切换到${editor.mode === 'visual' ? textLabel : visualLabel}`}
@@ -149,7 +149,7 @@ export function FormulaEditor({
         )}
       </div>
 
-      <div className="space-y-2 p-2">
+      <div className="aurora-formula-editor-body space-y-2 p-2">
         {editor.mode === 'visual' ? (
           mathliveReady ? (
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -168,11 +168,12 @@ export function FormulaEditor({
                   outline: 'none',
                 },
                 'aria-labelledby': `${editorId}-label`,
+                className: 'aurora-formula-mathfield',
               }
               return <math-field {...(props as any)} />
             })()
           ) : (
-            <div className="rounded border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
+            <div className="aurora-formula-loading rounded border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
               正在加载公式编辑器…
             </div>
           )
@@ -182,7 +183,7 @@ export function FormulaEditor({
             value={editor.latex}
             onChange={(event) => editor.setLatex(event.target.value)}
             placeholder={placeholder}
-            className="block min-h-[80px] w-full resize-y rounded border border-input bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="aurora-formula-textarea block min-h-[80px] w-full resize-y rounded border border-input bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             aria-labelledby={`${editorId}-label`}
             spellCheck={false}
           />
@@ -197,7 +198,7 @@ export function FormulaEditor({
         )}
 
         {showPreview && (
-          <div className="rounded border border-dashed border-border bg-muted/30 p-2">
+          <div className="aurora-formula-preview rounded border border-dashed border-border bg-muted/30 p-2">
             <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">实时预览</div>
             {previewMarkdown ? (
               <Markdown markdown={previewMarkdown} />

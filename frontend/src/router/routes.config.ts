@@ -80,7 +80,8 @@ export const ROUTE_CONFIG: RouteConfig[] = [
   defineRoute({ id: 'lesson-plan-detail', path: '/lesson-plans/:lessonPlanId', label: '教案详情', icon: BookOpen, layout: 'wide', sidebar: true, navGroup: 'hidden', command: false, parentId: 'lesson-plans' }),
   defineRoute({ id: 'search', path: '/search', label: '全文搜索', icon: Search, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'tasks', path: '/tasks', label: '任务中心', icon: ListChecks, layout: 'wide', sidebar: true, navGroup: 'secondary', command: true }),
-  defineRoute({ id: 'study-archive-detail', path: '/study-archives/:archiveId', label: '学习档案详情', icon: BookOpen, layout: 'standard', sidebar: true, navGroup: 'hidden', command: false }),
+  defineRoute({ id: 'study-archives', path: '/study-archives', label: '学习档案', icon: BookOpen, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
+  defineRoute({ id: 'study-archive-detail', path: '/study-archives/:archiveId', label: '学习档案详情', icon: BookOpen, layout: 'standard', sidebar: true, navGroup: 'hidden', command: false, parentId: 'study-archives' }),
   defineRoute({ id: 'exports', path: '/exports', label: '导出中心', icon: Files, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'templates', path: '/templates', label: '模板库', icon: LayoutTemplate, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
   defineRoute({ id: 'learning-plans', path: '/learning-plans', label: '学习计划', icon: ListTodo, layout: 'standard', sidebar: true, navGroup: 'secondary', command: true }),
@@ -137,8 +138,7 @@ export function getRouteConfigFromMatches(matches: Array<{ handle?: unknown }>):
   return undefined
 }
 
-export function getRouteCrumbs(pathname: string): RouteCrumb[] {
-  const route = matchRouteConfig(pathname)
+export function getRouteCrumbs(pathname: string, route: RouteConfig = matchRouteConfig(pathname)): RouteCrumb[] {
   const chain: RouteConfig[] = []
   let cursor: RouteConfig | undefined = route
 

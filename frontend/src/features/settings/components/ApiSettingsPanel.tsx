@@ -36,7 +36,7 @@ export function ApiSettingsPanel({ api, isActive }: Props) {
   )
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="aurora-settings-panel space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
         <h2 className="text-lg font-medium">模型连接</h2>
         <p className="text-sm text-muted-foreground">配置智能服务通道、访问密钥和默认模型</p>
@@ -141,7 +141,7 @@ export function ApiSettingsPanel({ api, isActive }: Props) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4 rounded-lg border bg-card p-4">
+        <div className="aurora-settings-card flex items-center justify-between gap-4 rounded-lg p-4">
           <div>
             <div className="text-sm font-medium">锁定当前通道</div>
             <div className="text-xs text-muted-foreground mt-1">模型选择不会自动切换服务通道</div>

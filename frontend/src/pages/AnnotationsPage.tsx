@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, Loader2, Tag, CheckCircle2, Circle } from 'lucide-react'
+import { Download, Loader2, Tag, CheckCircle2, Circle, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -52,6 +52,22 @@ export default function AnnotationsPage() {
       return hasDoubt && !solved
     })
   }, [items, unresolvedOnly])
+  const annotationStats = useMemo(() => {
+    const unresolved = items.filter((a) => {
+      const tags = Array.isArray(a.tags) ? a.tags.map((t) => String(t || '').trim()) : []
+      return tags.includes('疑问') && !tags.includes('已解决')
+    }).length
+    const solved = items.filter((a) => {
+      const tags = Array.isArray(a.tags) ? a.tags.map((t) => String(t || '').trim()) : []
+      return tags.includes('已解决')
+    }).length
+    return [
+      { label: '批注总数', value: `${items.length}` },
+      { label: '当前列表', value: `${filtered.length}` },
+      { label: '未解决', value: `${unresolved}` },
+      { label: '已解决', value: `${solved}` },
+    ]
+  }, [filtered.length, items])
 
   const jump = (ann: annotationsApi.Annotation) => {
     const t = String(ann.item_type || '').trim()
@@ -74,11 +90,26 @@ export default function AnnotationsPage() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-background">
-      <div className="border-b border-border p-4 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-10">
-        <div className="flex items-center gap-2 font-semibold">
-          <Tag className="h-4 w-4 text-primary" />
-          批注与标注
+    <div className="aurora-annotations-screen h-full flex flex-col overflow-hidden">
+      <div className="aurora-annotations-hero p-4 flex items-center justify-between sticky top-0 z-10">
+        <div className="min-w-0">
+          <div className="aurora-kicker">
+            <Sparkles className="h-3.5 w-3.5" />
+            Annotation Control Console
+          </div>
+          <div className="mt-2 flex items-center gap-2 font-semibold">
+            <Tag className="h-4 w-4 text-primary" />
+            批注与标注
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">集中处理试卷和学习资料中的批注，跟踪疑问、已解决状态，并回跳到原文位置。</p>
+        </div>
+        <div className="aurora-annotations-stat-grid">
+          {annotationStats.map((item) => (
+            <div key={item.label} className="aurora-annotations-stat">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
         </div>
         <Button type="button" size="sm" variant="outline" onClick={exportAll}>
           <Download className="h-4 w-4 mr-2" />
@@ -87,10 +118,10 @@ export default function AnnotationsPage() {
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-        <div className="p-4 border-b border-border bg-muted/10">
+        <div className="aurora-annotations-filter p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="按标签过滤（例如：未解决）" />
-            <Input value={itemType} onChange={(e) => setItemType(e.target.value)} placeholder="按类型过滤（paper / study_archive）" />
+            <Input className="aurora-annotations-input" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="按标签过滤（例如：未解决）" />
+            <Input className="aurora-annotations-input" value={itemType} onChange={(e) => setItemType(e.target.value)} placeholder="按类型过滤（paper / study_archive）" />
           </div>
           <label className="mt-3 inline-flex items-center gap-2 text-sm text-muted-foreground select-none">
             <input type="checkbox" checked={unresolvedOnly} onChange={(e) => setUnresolvedOnly(e.target.checked)} />
@@ -108,7 +139,7 @@ export default function AnnotationsPage() {
               </div>
             )}
             {!isLoading && !error && filtered.length === 0 && (
-              <Card className="p-6">
+              <Card className="aurora-annotations-empty p-6">
                 <div className="text-sm text-muted-foreground">暂无批注。</div>
               </Card>
             )}
@@ -120,7 +151,13 @@ export default function AnnotationsPage() {
               const canToggleSolved = isDoubt
 
               return (
-              <Card key={a.id} className="p-4 cursor-pointer hover:bg-accent/30 transition-colors" onClick={() => jump(a)}>
+              <Card
+                key={a.id}
+                className="aurora-annotations-card p-4 cursor-pointer transition-colors"
+                data-doubt={isDoubt ? 'true' : 'false'}
+                data-solved={isSolved ? 'true' : 'false'}
+                onClick={() => jump(a)}
+              >
                 <div className="text-xs text-muted-foreground font-mono">
                   {a.item_type}:{a.item_id} {a.anchor ? `#${a.anchor}` : ''}
                 </div>
@@ -152,7 +189,7 @@ export default function AnnotationsPage() {
                 {tags.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {tags.map((t) => (
-                      <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      <span key={t} className="aurora-annotations-tag text-[10px] px-1.5 py-0.5 rounded">
                         {t}
                       </span>
                     ))}

@@ -1,4 +1,5 @@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Sparkles } from 'lucide-react'
 import type { Subject } from '@/types'
 import type { SubjectFilters } from '@/api/subjects'
 import type { BlueprintSlot } from '@/types'
@@ -106,93 +107,134 @@ export function BlueprintConfigPanel({
   oneClick,
   onGenerateFull,
 }: BlueprintConfigPanelProps) {
+  const blueprintStats = [
+    { label: '模式', value: mode === 'blueprint' ? '蓝图组卷' : '一键组卷' },
+    { label: '题型槽', value: `${slots.length}` },
+    { label: '题目数', value: `${totalQuestions}` },
+    { label: '总分', value: `${totalScore}` },
+  ]
+
   return (
-    <div className="col-span-7 h-full overflow-auto border-r border-border bg-background p-6">
-      <div className="max-w-3xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-2">蓝图组卷</h1>
-          <p className="text-muted-foreground">
-            配置试卷结构，AI 将自动搜索并组合题目
-          </p>
+    <div className="aurora-blueprint-config col-span-7 h-full overflow-auto p-6">
+      <div className="mx-auto max-w-3xl space-y-6">
+        <section className="aurora-blueprint-hero">
+          <div>
+            <div className="aurora-kicker">
+              <Sparkles className="h-3.5 w-3.5" />
+              Paper Blueprint Tower
+            </div>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight">组卷蓝图控制塔</h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              配置试卷结构、题型槽位、教材过滤和生成策略，AI 将自动搜索并组合题目。
+            </p>
+          </div>
+          <div className="aurora-blueprint-stat-grid">
+            {blueprintStats.map((item) => (
+              <div key={item.label} className="aurora-blueprint-stat">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
           <div className="mt-4">
             <Tabs value={mode} onValueChange={(v) => onModeChange(v as BlueprintMode)}>
-              <TabsList>
+              <TabsList className="aurora-blueprint-tabs">
                 <TabsTrigger value="blueprint" onClick={() => onModeChange('blueprint')}>蓝图组卷</TabsTrigger>
                 <TabsTrigger value="one_click" onClick={() => onModeChange('one_click')}>一键组卷</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
-        </div>
+        </section>
 
-        <BlueprintBasicSettings
-          mode={mode}
-          subjects={subjects}
-          subject={subject}
-          onSubjectChange={onSubjectChange}
-          topic={topic}
-          onTopicChange={onTopicChange}
-          filters={filters}
-          isFiltersLoading={isFiltersLoading}
-          isFiltersFetching={isFiltersFetching}
-          filtersError={filtersError}
-          onRefetchFilters={onRefetchFilters}
-          gradeId={gradeId}
-          onGradeChange={onGradeChange}
-          textbookVersionId={textbookVersionId}
-          onTextbookVersionChange={onTextbookVersionChange}
-        />
+        <div className="aurora-blueprint-section">
+          <div className="aurora-blueprint-config-section">
+          <BlueprintBasicSettings
+            mode={mode}
+            subjects={subjects}
+            subject={subject}
+            onSubjectChange={onSubjectChange}
+            topic={topic}
+            onTopicChange={onTopicChange}
+            filters={filters}
+            isFiltersLoading={isFiltersLoading}
+            isFiltersFetching={isFiltersFetching}
+            filtersError={filtersError}
+            onRefetchFilters={onRefetchFilters}
+            gradeId={gradeId}
+            onGradeChange={onGradeChange}
+            textbookVersionId={textbookVersionId}
+            onTextbookVersionChange={onTextbookVersionChange}
+          />
+          </div>
+        </div>
 
         {mode === 'blueprint' ? (
           <>
-            <BlueprintSlotConfig
-              slots={slots}
-              totalQuestions={totalQuestions}
-              totalScore={totalScore}
-              showQuestionTypes={showQuestionTypes}
-              onToggleQuestionTypes={onToggleQuestionTypes}
-              onAddSlot={onAddSlot}
-              onUpdateSlot={onUpdateSlot}
-              onRemoveSlot={onRemoveSlot}
-            />
+            <div className="aurora-blueprint-section">
+              <div className="aurora-blueprint-config-section">
+              <BlueprintSlotConfig
+                slots={slots}
+                totalQuestions={totalQuestions}
+                totalScore={totalScore}
+                showQuestionTypes={showQuestionTypes}
+                onToggleQuestionTypes={onToggleQuestionTypes}
+                onAddSlot={onAddSlot}
+                onUpdateSlot={onUpdateSlot}
+                onRemoveSlot={onRemoveSlot}
+              />
+              </div>
+            </div>
 
-            <BlueprintActionBar
-              blueprintName={blueprintName}
-              onBlueprintNameChange={onBlueprintNameChange}
-              subject={subject}
-              slotsCount={slots.length}
-              isSaving={isSaving}
-              onSaveBlueprint={onSaveBlueprint}
-              isComposing={isComposing}
-              isPaused={isPaused}
-              onPause={onPause}
-              onResume={onResume}
-              onCompose={onCompose}
-            />
+            <div className="aurora-blueprint-section">
+              <div className="aurora-blueprint-config-section">
+              <BlueprintActionBar
+                blueprintName={blueprintName}
+                onBlueprintNameChange={onBlueprintNameChange}
+                subject={subject}
+                slotsCount={slots.length}
+                isSaving={isSaving}
+                onSaveBlueprint={onSaveBlueprint}
+                isComposing={isComposing}
+                isPaused={isPaused}
+                onPause={onPause}
+                onResume={onResume}
+                onCompose={onCompose}
+              />
+              </div>
+            </div>
           </>
         ) : (
           <>
-            <OneClickPaperForm
-              paperName={blueprintName}
-              onPaperNameChange={onBlueprintNameChange}
-              totalPoints={oneClickTotalPoints}
-              onTotalPointsChange={onOneClickTotalPointsChange}
-              timeLimit={oneClickTimeLimit}
-              onTimeLimitChange={onOneClickTimeLimitChange}
-              hardPct={oneClickHardPct}
-              onHardPctChange={onOneClickHardPctChange}
-              useArchive={oneClickUseArchive}
-              onUseArchiveChange={onOneClickUseArchiveChange}
-              error={oneClick.error}
-            />
+            <div className="aurora-blueprint-section">
+              <div className="aurora-blueprint-config-section">
+              <OneClickPaperForm
+                paperName={blueprintName}
+                onPaperNameChange={onBlueprintNameChange}
+                totalPoints={oneClickTotalPoints}
+                onTotalPointsChange={onOneClickTotalPointsChange}
+                timeLimit={oneClickTimeLimit}
+                onTimeLimitChange={onOneClickTimeLimitChange}
+                hardPct={oneClickHardPct}
+                onHardPctChange={onOneClickHardPctChange}
+                useArchive={oneClickUseArchive}
+                onUseArchiveChange={onOneClickUseArchiveChange}
+                error={oneClick.error}
+              />
+              </div>
+            </div>
 
-            <OneClickActionBar
-              progress={oneClick.progress}
-              taskId={oneClick.taskId}
-              subject={subject}
-              isGenerating={oneClick.isGenerating}
-              onStop={oneClick.stop}
-              onGenerate={onGenerateFull}
-            />
+            <div className="aurora-blueprint-section">
+              <div className="aurora-blueprint-config-section">
+              <OneClickActionBar
+                progress={oneClick.progress}
+                taskId={oneClick.taskId}
+                subject={subject}
+                isGenerating={oneClick.isGenerating}
+                onStop={oneClick.stop}
+                onGenerate={onGenerateFull}
+              />
+              </div>
+            </div>
           </>
         )}
       </div>

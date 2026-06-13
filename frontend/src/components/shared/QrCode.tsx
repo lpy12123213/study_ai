@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { cn } from '@/lib/utils'
 import QRCode from 'qrcode'
 
 export function QrCode(props: { text: string; size?: number; className?: string }) {
@@ -29,5 +30,5 @@ export function QrCode(props: { text: string; size?: number; className?: string 
   }, [text, size])
 
   if (!dataUrl) return null
-  return <img src={dataUrl} alt="QR Code" className={className} width={size} height={size} />
+  return <img src={dataUrl} alt="QR Code" className={cn('aurora-qr-code', className)} width={size} height={size} />
 }

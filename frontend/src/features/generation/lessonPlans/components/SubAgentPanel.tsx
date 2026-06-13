@@ -6,6 +6,8 @@ import type { SubAgentActivity } from '@/features/generation/lessonPlans/types'
 
 export function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const completedCount = activities.filter((activity) => activity.status === 'completed').length
+  const runningCount = activities.filter((activity) => activity.status === 'running').length
 
   useEffect(() => {
     if (!scrollRef.current) return
@@ -14,7 +16,7 @@ export function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }
 
   if (activities.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-sm p-6">
+      <div className="aurora-lesson-subagent-empty h-full flex flex-col items-center justify-center text-muted-foreground text-sm p-6">
         <Layers className="h-10 w-10 mb-3 opacity-30" />
         <p>等待知识点拆分…</p>
         <p className="text-xs mt-1 opacity-60">SubAgent 将逐个研究每个知识点</p>
@@ -24,9 +26,18 @@ export function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }
 
   return (
     <div ref={scrollRef} className="h-full overflow-auto p-4 space-y-3">
-      <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-2">
-        <Layers className="h-3.5 w-3.5" />
-        知识点研究进度（{activities.filter((a) => a.status === 'completed').length}/{activities.length}）
+      <div className="aurora-lesson-subagent-summary">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Teaching swarm</div>
+          <div className="mt-1 flex items-center gap-2 text-sm font-semibold">
+            <Layers className="h-3.5 w-3.5 text-primary" />
+            知识点研究进度
+          </div>
+        </div>
+        <div className="text-right text-xs text-muted-foreground">
+          <div>{completedCount}/{activities.length} 完成</div>
+          <div>{runningCount > 0 ? `${runningCount} 运行中` : '待调度'}</div>
+        </div>
       </div>
 
       {activities.map((activity, i) => (
@@ -36,7 +47,7 @@ export function SubAgentPanel({ activities }: { activities: SubAgentActivity[] }
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: i * 0.05 }}
           className={cn(
-            'rounded-lg border p-3 transition-all',
+            'aurora-lesson-subagent-card rounded-lg border p-3 transition-all',
             activity.status === 'running' && 'border-primary/50 bg-primary/5 shadow-sm',
             activity.status === 'completed' && 'border-border bg-card',
             activity.status === 'pending' && 'border-border/50 bg-muted/30 opacity-60',

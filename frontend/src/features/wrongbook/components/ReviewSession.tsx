@@ -84,7 +84,7 @@ export function ReviewSession({ subject }: { subject?: string }) {
 
   if (queueQuery.isLoading) {
     return (
-      <Card className="p-6">
+      <Card className="aurora-wrongbook-card p-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           加载复习队列...
@@ -99,7 +99,7 @@ export function ReviewSession({ subject }: { subject?: string }) {
 
   if (!current && !done) {
     return (
-      <Card className="p-6">
+      <Card className="aurora-wrongbook-card p-6">
         <div className="text-sm font-medium">今日没有到期错题</div>
         <div className="mt-1 text-sm text-muted-foreground">新的错题加入后会自动进入复习队列。</div>
       </Card>
@@ -108,9 +108,9 @@ export function ReviewSession({ subject }: { subject?: string }) {
 
   if (done) {
     return (
-      <Card className="p-6">
+      <Card className="aurora-wrongbook-card p-6">
         <div className="flex items-center gap-2 text-sm font-medium">
-          <CheckCircle2 className="h-4 w-4 text-primary" />
+          <CheckCircle2 className="h-4 w-4 text-[var(--semantic-success-base)]" />
           本轮复习已完成
         </div>
         <div className="mt-1 text-sm text-muted-foreground">已复习 {completed} 道错题。</div>
@@ -123,7 +123,7 @@ export function ReviewSession({ subject }: { subject?: string }) {
   const answer = answerMarkdown(current)
 
   return (
-    <Card className="p-5">
+    <Card className="aurora-wrongbook-review p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="break-all font-mono text-sm">{current.question_id}</div>
@@ -134,12 +134,12 @@ export function ReviewSession({ subject }: { subject?: string }) {
         <Badge variant="secondary">{progressText}</Badge>
       </div>
 
-      <div className="mt-5 rounded-md border border-border bg-card p-4">
+      <div className="aurora-wrongbook-question mt-5 p-4">
         <Markdown content={questionMarkdown(current)} />
       </div>
 
       {current.note && current.question?.stem && (
-        <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
+        <div className="aurora-wrongbook-note mt-3 p-3 text-sm text-muted-foreground">
           {current.note}
         </div>
       )}
@@ -152,7 +152,7 @@ export function ReviewSession({ subject }: { subject?: string }) {
         </div>
       ) : (
         <div className="mt-4 space-y-4">
-          <div className="rounded-md border border-border bg-muted/30 p-4">
+          <div className="aurora-wrongbook-answer p-4">
             {answer ? <Markdown content={answer} /> : <div className="text-sm text-muted-foreground">暂无答案解析。</div>}
           </div>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">

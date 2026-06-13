@@ -80,11 +80,13 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
     if (kind === 'tool_start' || kind === 'tool_call') {
       const toolName = toText(payload?.tool) || toText(payload?.name)
       const title = toText(payload?.title) || toolName || '工具调用'
+      const thought = toText(payload?.thought) || undefined
       const stepId = toText(payload?.step_id) || generateId()
       const input = getPayloadInput(payload)
       const step: TaskStep = {
         id: stepId,
         title,
+        thought,
         status: 'running',
         startTime: toText(payload?.start_time) || new Date().toISOString(),
         toolName: toolName || undefined,
@@ -186,6 +188,7 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
         assistant.upsertStep({
           id: stepId,
           title: toText(step.title) || '步骤',
+          thought: toText(step.thought) || undefined,
           status,
           startTime: toText(step.startTime) || undefined,
           endTime: toText(step.endTime) || undefined,
@@ -207,10 +210,23 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
       state.done = true
       assistant.flushAssistant()
       if (state.serverTaskId) {
+        const material = toRecord(payload.material ?? toRecord(payload.result).material)
+        const rawError = toRecord(material.error)
+        const materialErrorTool = toText(rawError.tool)
+        const materialErrorText = toText(rawError.error)
         useConversationStore.getState().updateConversation(conversationId, {
           activeStream: undefined,
           resumable: false,
-          status: 'active',
+          status: 'completed',
+          lastTask: {
+            taskType: 'study_materials',
+            taskId: state.serverTaskId,
+            lastSeq: state.lastSeq,
+            materialError:
+              materialErrorTool || materialErrorText
+                ? { tool: materialErrorTool || undefined, error: materialErrorText || undefined }
+                : undefined,
+          },
         })
       }
       setIsGeneratingLocal(false)
@@ -233,6 +249,12 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
         useConversationStore.getState().updateConversation(conversationId, {
           activeStream: undefined,
           resumable: false,
+          status: 'failed',
+          lastTask: {
+            taskType: 'study_materials',
+            taskId: state.serverTaskId,
+            lastSeq: state.lastSeq,
+          },
         })
       }
     }

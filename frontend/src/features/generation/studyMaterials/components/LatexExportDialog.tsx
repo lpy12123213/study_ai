@@ -69,7 +69,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
 
   return (
     <Dialog open={latexDialogOpen} onOpenChange={setLatexDialogOpen}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-auto">
+      <DialogContent className="aurora-materials-dialog max-w-3xl max-h-[85vh] overflow-auto">
         <DialogHeader>
           <DialogTitle>排版导出</DialogTitle>
           <DialogDescription>从已生成的文档（自学资料/教案）中选择，转换为可下载的排版源文件（.tex）。</DialogDescription>
@@ -161,7 +161,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
           </div>
 
           {latexIsConverting && (
-            <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
+            <div className="aurora-materials-export-state rounded-xl p-3 space-y-2">
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 <div className="truncate">{latexProgressStage || '转换中…'}</div>
                 <div className="shrink-0">{latexProgressPercent}%</div>
@@ -178,7 +178,7 @@ export function LatexExportDialog({ controller }: { controller: StudyMaterialsCo
           )}
 
           {latexTexUrl && (
-            <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2">
+            <div className="aurora-materials-export-state rounded-xl p-3 space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="text-xs text-muted-foreground">
                   {latexTexFilename ? `已生成：${latexTexFilename}` : '已生成排版稿'}

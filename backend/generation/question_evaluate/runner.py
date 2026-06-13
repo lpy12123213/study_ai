@@ -5,6 +5,11 @@ from typing import Any, Dict, List
 from backend.api.question_evaluate_schemas import QuestionInput
 from backend.core.settings import DEFAULT_SUBJECT, LESSON_PLAN_MODEL
 from backend.core.subjects import resolve_subject
+from backend.generation.agentic.codex_runtime import (
+    is_codex_runtime_agent_runtime,
+    legacy_agent_fallback_enabled,
+    run_codex_runtime_task,
+)
 from backend.generation.question_evaluate.service import evaluate_questions_batch
 from backend.shared.tasks import task_runtime
 from backend.shared.tasks.runtime import RuntimeTask
@@ -19,6 +24,11 @@ def _question_from_payload(raw: Any) -> QuestionInput:
 
 
 async def run_question_evaluate_task(task: RuntimeTask, *, user_id: str) -> None:
+    if is_codex_runtime_agent_runtime():
+        handled = await run_codex_runtime_task(task, user_id=user_id, task_type="question_evaluate", final_event_type="done")
+        if handled or not legacy_agent_fallback_enabled():
+            return
+
     req = dict(task.request or {})
     raw_questions = req.get("questions") if isinstance(req.get("questions"), list) else []
     questions: List[QuestionInput] = [_question_from_payload(item) for item in raw_questions[:50]]
@@ -70,11 +80,14 @@ async def run_question_evaluate_task(task: RuntimeTask, *, user_id: str) -> None
         model=model,
         on_progress=on_progress,
     )
+    failed_count = total - len(results)
     result_payload: Dict[str, Any] = {
-        "success": True,
+        "success": failed_count == 0,
         "results": [item.model_dump() for item in results],
         "model": model,
         "count": len(results),
+        "total": total,
+        "failed_count": failed_count,
     }
     task.meta["result"] = result_payload
 

@@ -44,7 +44,7 @@ function statusTone(status: string): 'default' | 'secondary' | 'destructive' {
 
 function CallRow({ call }: { call: LlmDebugCall }) {
   return (
-    <div className="grid gap-3 rounded-lg border bg-card p-4 md:grid-cols-[1fr_auto]">
+    <div className="aurora-settings-debug-row grid gap-3 rounded-lg p-4 md:grid-cols-[1fr_auto]">
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={statusTone(call.status)}>{call.status || 'unknown'}</Badge>
@@ -93,7 +93,7 @@ export function LlmDebugPanel({ isActive }: Props) {
   }, [payload?.by_model])
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="aurora-settings-panel space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-medium">LLM 调试</h2>
@@ -108,19 +108,19 @@ export function LlmDebugPanel({ isActive }: Props) {
       <Separator />
 
       <div className="grid gap-3 sm:grid-cols-4">
-        <div className="rounded-lg border bg-card p-4">
+        <div className="aurora-settings-card rounded-lg p-4">
           <div className="text-xs text-muted-foreground">请求</div>
           <div className="mt-1 text-2xl font-semibold">{formatNumber(payload?.count || 0)}</div>
         </div>
-        <div className="rounded-lg border bg-card p-4">
+        <div className="aurora-settings-card rounded-lg p-4">
           <div className="text-xs text-muted-foreground">总 tokens</div>
           <div className="mt-1 text-2xl font-semibold">{formatNumber(payload?.totals?.total_tokens)}</div>
         </div>
-        <div className="rounded-lg border bg-card p-4">
+        <div className="aurora-settings-card rounded-lg p-4">
           <div className="text-xs text-muted-foreground">缓存 tokens</div>
           <div className="mt-1 text-2xl font-semibold">{formatNumber(payload?.totals?.cached_tokens || 0)}</div>
         </div>
-        <div className="rounded-lg border bg-card p-4">
+        <div className="aurora-settings-card rounded-lg p-4">
           <div className="text-xs text-muted-foreground">成本</div>
           <div className="mt-1 text-2xl font-semibold">{formatCost(payload?.totals?.cost_usd)}</div>
         </div>
@@ -132,12 +132,12 @@ export function LlmDebugPanel({ isActive }: Props) {
           模型消耗
         </div>
         {modelRows.length === 0 ? (
-          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          <div className="aurora-settings-empty rounded-lg p-6 text-center text-sm text-muted-foreground">
             暂无调用记录
           </div>
         ) : (
           modelRows.map((row) => (
-            <div key={row.key} className="rounded-lg border bg-card p-4">
+            <div key={row.key} className="aurora-settings-card rounded-lg p-4">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="truncate font-mono">{row.key}</span>
                 <span className="text-muted-foreground">{formatNumber(row.totalTokens)} tokens</span>
@@ -158,7 +158,7 @@ export function LlmDebugPanel({ isActive }: Props) {
       <div className="space-y-3">
         <div className="text-sm font-medium">最近调用</div>
         {query.isError ? (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="aurora-settings-error rounded-lg p-4 text-sm text-destructive">
             读取失败
           </div>
         ) : null}
@@ -166,7 +166,7 @@ export function LlmDebugPanel({ isActive }: Props) {
           <CallRow key={`${call.request_id || 'request'}-${call.ts_s}-${index}`} call={call} />
         ))}
         {!query.isFetching && (payload?.calls || []).length === 0 ? (
-          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          <div className="aurora-settings-empty rounded-lg p-6 text-center text-sm text-muted-foreground">
             暂无调用记录
           </div>
         ) : null}

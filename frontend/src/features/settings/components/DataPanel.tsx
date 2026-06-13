@@ -156,14 +156,14 @@ export function DataPanel(props: DataPanelProps) {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="aurora-settings-panel space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
         <h2 className="text-lg font-medium">数据管理</h2>
         <p className="text-sm text-muted-foreground">管理本地存储的数据</p>
       </div>
       <Separator />
       <div className="space-y-4">
-        <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
+        <div className="aurora-settings-card flex items-center justify-between p-4 rounded-lg">
           <div>
             <h4 className="font-medium text-sm">清除本地缓存</h4>
             <p className="text-xs text-muted-foreground mt-1">清除浏览器中存储的所有临时数据和状态</p>
@@ -182,7 +182,7 @@ export function DataPanel(props: DataPanelProps) {
           </Button>
         </div>
 
-        <div className="p-4 rounded-lg border bg-card space-y-3">
+        <div className="aurora-settings-card p-4 rounded-lg space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h4 className="font-medium text-sm">本地配置</h4>
@@ -219,7 +219,7 @@ export function DataPanel(props: DataPanelProps) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
+        <div className="aurora-settings-card flex items-center justify-between p-4 rounded-lg">
           <div>
             <h4 className="font-medium text-sm">导出本地界面配置</h4>
             <p className="text-xs text-muted-foreground mt-1">

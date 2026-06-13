@@ -139,6 +139,21 @@ python scripts/check_config.py --strict
 - lesson plan、study materials 和 question library 可按需设置独立模型。
 - 设置页“抓取模型”会调用供应商的 OpenAI-compatible `GET /models` 接口；如果输入框未填写新 Key，则会使用已保存的加密 Key。
 
+## Agent Runtime
+
+中/重型 agent 任务默认使用本机 Codex runtime，而不是把 agent 简单切到某个模型字符串。覆盖范围包括自学资料、DeepThink、教案、组卷/一键出卷、知识视频、AI 出题、题库评分和好题鉴别；普通导出、作文批改等非 agent 流程不受影响。
+
+- `AGENT_RUNTIME`: 默认 `codex_runtime`。设为 `legacy` 时才允许走旧 agent/service 分支。
+- `CODEX_RUNTIME_COMMAND`: 默认 `codex`，可指向本机 Codex CLI。
+- `CODEX_RUNTIME_MODEL`: 默认空，表示沿用本机 Codex 配置；需要固定模型时填写。
+- `CODEX_RUNTIME_EFFORT`: 默认 `high`，保留给运行时策略与 metadata。
+- `CODEX_RUNTIME_APPROVAL_POLICY`: 默认 `never`，对应 `codex exec --ask-for-approval never`。
+- `CODEX_RUNTIME_SANDBOX`: 默认 `workspace-write`，对应 `codex exec --sandbox workspace-write`。
+- `CODEX_RUNTIME_TIMEOUT_S`: 默认 `900`。
+- `CODEX_RUNTIME_FALLBACK_LEGACY`: 默认 `0`，不静默回退旧 agent。
+
+每个任务会在 `.local/codex-runtime-agent/<task_id>` 建立隔离工作目录，并通过 `--add-dir` 只暴露该目录和请求中存在的必要输入文件目录。任务启动 metadata 会包含 `runtime=codex_runtime`、`codex_runtime_version`、`approval_policy` 和 `sandbox_mode`。
+
 ## 登录与权限
 
 - `JWT_SECRET`：JWT 签名密钥，生产环境必须改成随机长字符串。
@@ -227,7 +242,7 @@ python scripts/check_config.py --strict
 
 ## AI 组卷
 
-- `PAPER_COMPOSE_AGENTIC_BLUEPRINT`: 默认 `0`。设为 `1` 时，蓝图组卷 `/api/tasks/papers/compose` 默认走 Agentic 编排；单次请求可用 `agenticBlueprint` / `agentic_blueprint` / `agentic` 覆盖。
+- `PAPER_COMPOSE_AGENTIC_BLUEPRINT`: 仅在 `AGENT_RUNTIME=legacy` 时作为旧蓝图 Agentic 编排开关；默认 `AGENT_RUNTIME=codex_runtime` 会直接走 Codex runtime。
 - `COMPOSE_SANDBOX_DOCKER_IMAGE`: 默认 `study-ai/compose-sandbox:latest`。组卷工作台 Docker 会话镜像。
 - `COMPOSE_SANDBOX_ROOT`: 默认 `.local/compose-sandbox`。每个会话的宿主机工作区根目录。
 - `COMPOSE_SANDBOX_TIMEOUT_S`: 默认 `60`。单次白名单命令超时时间。

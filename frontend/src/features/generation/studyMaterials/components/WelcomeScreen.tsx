@@ -1,4 +1,4 @@
-import { BookOpen } from 'lucide-react'
+import { BookOpen, Layers, Search, Sparkles } from 'lucide-react'
 
 type WelcomeExample = { title: string; desc: string }
 
@@ -84,27 +84,50 @@ export function WelcomeScreen({
   onExampleClick: (text: string) => void
 }) {
   const examples = getWelcomeExamples(subject)
+  const metrics = [
+    { label: '检索编队', value: '题库 + 资料' },
+    { label: '生成模式', value: '讲解 + 例题' },
+    { label: '输出形态', value: 'Markdown / LaTeX' },
+  ]
+
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+    <div className="aurora-materials-welcome flex-1 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
       <div className="mb-10 flex flex-col items-center text-center space-y-6">
-        <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-primary/5 to-primary/10 flex items-center justify-center ring-1 ring-border/50 shadow-sm">
+        <div className="aurora-materials-orb">
           <BookOpen className="h-10 w-10 text-primary" strokeWidth={1.5} />
         </div>
-        <h2 className="text-2xl font-semibold tracking-tight">自学资料生成</h2>
-        <p className="text-muted-foreground max-w-md">
+        <div className="aurora-kicker">
+          <Sparkles className="h-3.5 w-3.5" />
+          Study Materials Forge
+        </div>
+        <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">自学资料生成舱</h2>
+        <p className="max-w-xl text-sm leading-7 text-muted-foreground sm:text-base">
           输入你想学的知识点（例如“函数单调性”），我将为你检索题目、生成讲解与例题步骤。
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
+      <div className="aurora-materials-metrics mb-8 grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3">
+        {metrics.map((item, index) => (
+          <div key={item.label} className="aurora-materials-metric" style={{ animationDelay: `${index * 70}ms` }}>
+            <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{item.label}</div>
+            <div className="mt-1 text-sm font-semibold text-foreground">{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl w-full">
         {examples.map((item) => (
           <button
             key={item.title}
             onClick={() => onExampleClick(item.title)}
-            className="group relative flex flex-col items-start p-4 h-auto text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:-translate-y-0.5 shadow-sm hover:shadow-md"
+            className="aurora-materials-example group relative flex h-auto flex-col items-start p-4 text-left transition-all duration-200 hover:-translate-y-1"
           >
-            <div className="mb-3 rounded-lg bg-muted p-2 group-hover:bg-background transition-colors">
-              <BookOpen className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+            <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-background/70 transition-colors group-hover:bg-primary/10">
+              {item.title.length % 2 === 0 ? (
+                <Search className="h-4 w-4 text-muted-foreground group-hover:text-primary" />
+              ) : (
+                <Layers className="h-4 w-4 text-muted-foreground group-hover:text-primary" />
+              )}
             </div>
             <div className="font-medium text-sm mb-1">{item.title}</div>
             <div className="text-xs text-muted-foreground line-clamp-2">{item.desc}</div>

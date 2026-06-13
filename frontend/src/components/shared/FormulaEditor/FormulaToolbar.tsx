@@ -39,7 +39,7 @@ export function FormulaToolbar({
   return (
     <div
       className={cn(
-        'rounded-md border border-border bg-card text-card-foreground',
+        'aurora-formula-toolbar rounded-md border border-border bg-card text-card-foreground',
         compact ? 'p-1' : 'p-2',
         className,
       )}
@@ -50,7 +50,7 @@ export function FormulaToolbar({
         <div className="mb-2 flex items-center gap-2">
           <span className="text-xs text-muted-foreground">学科</span>
           <select
-            className="h-7 rounded border border-input bg-background px-2 text-xs"
+            className="aurora-formula-subject-select h-7 rounded border border-input bg-background px-2 text-xs"
             value={subject}
             onChange={(event) => onSubjectChange(event.target.value as FormulaSubject)}
           >
@@ -66,7 +66,7 @@ export function FormulaToolbar({
       <div className={cn('grid gap-2', compact ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2')}>
         {groups.map((group) => (
           <div key={group.id} className="space-y-1">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="aurora-formula-group-title text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               {group.title}
             </div>
             <div className="flex flex-wrap gap-1">
@@ -75,7 +75,7 @@ export function FormulaToolbar({
                   key={`${group.id}-${idx}-${symbol.label}`}
                   type="button"
                   className={cn(
-                    'inline-flex h-7 min-w-[28px] items-center justify-center rounded border border-border bg-background px-1.5 text-xs font-medium transition-colors hover:bg-muted',
+                    'aurora-formula-symbol-button inline-flex h-7 min-w-[28px] items-center justify-center rounded border border-border bg-background px-1.5 text-xs font-medium transition-colors hover:bg-muted',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
                   )}
                   onMouseDown={(event) => event.preventDefault()}

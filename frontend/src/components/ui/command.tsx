@@ -25,8 +25,8 @@ const CommandDialog = ({
   ...props
 }: React.ComponentPropsWithoutRef<typeof Dialog>) => (
   <Dialog {...props}>
-    <DialogContent className="overflow-hidden p-0 shadow-none">
-      <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium">
+    <DialogContent className="aurora-command-dialog overflow-hidden p-0 shadow-none">
+      <Command className="aurora-command-root [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium">
         {children}
       </Command>
     </DialogContent>
@@ -37,7 +37,7 @@ const CommandInput = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Input>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
 >(({ className, ...props }, ref) => (
-  <div className="flex items-center border-b px-3" cmdk-input-wrapper="">
+  <div className="aurora-command-input-wrap flex items-center border-b px-3" cmdk-input-wrapper="">
     <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
     <CommandPrimitive.Input
       ref={ref}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
+from backend.generation.agentic.codex_runtime import codex_runtime_metadata_defaults
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 from backend.generation.agentic.types import (
     AgentBudget,
@@ -28,6 +29,7 @@ def _int(value: Any, *, default: int, min_v: int = 1, max_v: int = 10_000) -> in
 
 def _metadata(task_type: str, *, weight: str = "medium", extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = {
+        **codex_runtime_metadata_defaults(),
         "native_agentic": True,
         "task_type": _text(task_type, "unknown"),
         "weight": _text(weight, "medium"),

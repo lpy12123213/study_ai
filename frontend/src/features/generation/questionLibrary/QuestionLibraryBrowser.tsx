@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Brain, Database, FileImage, Loader2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useSubjects } from '@/hooks/useSubjects'
@@ -65,17 +65,25 @@ export function QuestionLibraryBrowser(props: Props = {}) {
     if (firstSubject?.code) lib.setSubject(firstSubject.code)
   }, [lib, lib.filters.subject, subjects])
 
-  const selectedCount = useMemo(() => {
-    return Object.values(selectedIds).filter(Boolean).length
-  }, [selectedIds])
+  const visibleQuestionIds = useMemo(() => {
+    return new Set(lib.items.map((item) => String(item.question_id || '').trim()).filter(Boolean))
+  }, [lib.items])
+
+  const selectedVisibleIds = useMemo(() => {
+    return Object.entries(selectedIds)
+      .filter(([, selected]) => selected)
+      .map(([id]) => id)
+      .filter((id) => visibleQuestionIds.has(id))
+  }, [selectedIds, visibleQuestionIds])
+
+  const selectedCount = selectedVisibleIds.length
 
   useEffect(() => {
-    const visibleIds = new Set(lib.items.map((item) => String(item.question_id || '').trim()).filter(Boolean))
     setSelectedIds((prev) => {
       let changed = false
       const next: Record<string, boolean> = {}
       for (const [id, selected] of Object.entries(prev)) {
-        if (selected && visibleIds.has(id)) {
+        if (selected && visibleQuestionIds.has(id)) {
           next[id] = true
         } else if (selected) {
           changed = true
@@ -83,7 +91,7 @@ export function QuestionLibraryBrowser(props: Props = {}) {
       }
       return changed ? next : prev
     })
-  }, [lib.items])
+  }, [visibleQuestionIds])
 
   const openDetail = (qid: string) => {
     lib.setSelectedId(qid)
@@ -127,11 +135,7 @@ export function QuestionLibraryBrowser(props: Props = {}) {
 
   const deleteSelected = async () => {
     if (isBulkDeleting) return
-    const visibleIds = new Set(lib.items.map((item) => String(item.question_id || '').trim()).filter(Boolean))
-    const ids = Object.entries(selectedIds)
-      .filter(([, v]) => v)
-      .map(([k]) => k)
-      .filter((id) => visibleIds.has(id))
+    const ids = selectedVisibleIds
     if (ids.length === 0) return
 
     const ok = confirm(`确定要删除选中的 ${ids.length} 道题吗？此操作不可恢复。`)
@@ -156,18 +160,29 @@ export function QuestionLibraryBrowser(props: Props = {}) {
     }
   }
 
+  const radarStats = [
+    { label: '当前列表', value: lib.items.length, icon: Database },
+    { label: '已选题目', value: selectedCount, icon: Sparkles },
+    { label: '导入入口', value: '3', icon: FileImage },
+    { label: '思维评分', value: tasks.preferredTask?.kind === 'score' ? `${Math.round(tasks.preferredTask.progress || 0)}%` : 'Ready', icon: Brain },
+  ]
+
   return (
-    <div className="h-full w-full flex flex-col">
-      <div className="px-6 py-4 border-b bg-background">
+    <div className="aurora-question-screen flex h-full w-full flex-col">
+      <div className="aurora-question-header px-6 py-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="text-lg font-semibold tracking-tight">本地题库</div>
-            <div className="text-xs text-muted-foreground">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-border bg-card/70 px-3 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+              <Database className="h-3.5 w-3.5 text-[var(--accent-brand-base)]" />
+              Question radar
+            </div>
+            <div className="app-display text-3xl text-foreground md:text-4xl">本地题库雷达站</div>
+            <div className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
               爬取题与 AI 题统一入库。本页默认展示爬取题，可切换来源筛选。
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {lib.listQuery.isFetching && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -223,6 +238,21 @@ export function QuestionLibraryBrowser(props: Props = {}) {
           </div>
         </div>
 
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {radarStats.map((stat) => {
+            const Icon = stat.icon
+            return (
+              <div key={stat.label} className="aurora-question-stat p-4">
+                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>{stat.label}</span>
+                  <Icon className="h-4 w-4 text-[var(--accent-brand-base)]" />
+                </div>
+                <div className="mt-2 font-mono text-2xl text-foreground">{stat.value}</div>
+              </div>
+            )
+          })}
+        </div>
+
         <div className="mt-4">
           <QuestionLibraryFilterBar
             subjects={subjects || []}
@@ -231,6 +261,12 @@ export function QuestionLibraryBrowser(props: Props = {}) {
             onOriginChange={lib.setOrigin}
             onHiddenChange={lib.setHidden}
             onQueryChange={lib.setQuery}
+            onExamSceneChange={lib.setExamScene}
+            onQuestionTypeChange={lib.setQuestionType}
+            onDifficultyChange={lib.setDifficulty}
+            onCategoryChange={lib.setCategory}
+            onMoreFilterChange={lib.setMoreFilter}
+            onOnlyNewChange={lib.setOnlyNew}
             onSortChange={lib.setSort}
             onOrderChange={lib.setOrder}
             onRefresh={lib.refreshList}
@@ -253,7 +289,7 @@ export function QuestionLibraryBrowser(props: Props = {}) {
             {(lib.listQuery.error as any)?.message || '加载失败'}
           </div>
         ) : lib.items.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             暂无题目
           </div>
         ) : (

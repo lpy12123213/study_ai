@@ -12,6 +12,13 @@ import { createPracticePaper } from '@/api/wrongbook'
 import { useMastery } from '@/features/wrongbook/hooks/useMastery'
 
 const ALL_SUBJECTS = '__all__'
+const radarTooltipStyle = {
+  background: 'rgba(5, 7, 10, 0.92)',
+  border: '1px solid var(--border-default-color)',
+  borderRadius: '12px',
+  boxShadow: 'var(--shadow-elevation-high)',
+  color: 'var(--text-primary)',
+} as const
 
 export function MasteryPanel() {
   const navigate = useNavigate()
@@ -49,7 +56,7 @@ export function MasteryPanel() {
 
   if (masteryQuery.isLoading) {
     return (
-      <Card className="p-6">
+      <Card className="aurora-wrongbook-card p-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           加载掌握度...
@@ -64,9 +71,9 @@ export function MasteryPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex max-w-xs items-center gap-2">
+      <div className="aurora-wrongbook-toolbar flex max-w-xs items-center gap-2 p-3">
         <Select value={subject} onValueChange={setSubject}>
-          <SelectTrigger>
+          <SelectTrigger className="bg-background/45">
             <SelectValue placeholder="选择学科" />
           </SelectTrigger>
           <SelectContent>
@@ -81,28 +88,34 @@ export function MasteryPanel() {
       </div>
 
       {points.length === 0 ? (
-        <Card className="p-6">
+        <Card className="aurora-wrongbook-card p-6">
           <div className="text-sm font-medium">暂无掌握度数据</div>
           <div className="mt-1 text-sm text-muted-foreground">为错题补充知识点后，这里会展示薄弱环节。</div>
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-          <Card className="h-[360px] p-4">
+          <Card className="aurora-wrongbook-card h-[360px] p-4">
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={chartData}>
-                <PolarGrid />
-                <PolarAngleAxis dataKey="name" />
-                <Tooltip />
-                <Radar dataKey="avg_mastery" name="平均掌握度" stroke="#2563eb" fill="#2563eb" fillOpacity={0.28} />
+                <PolarGrid stroke="var(--border-subtle-color)" />
+                <PolarAngleAxis dataKey="name" tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} />
+                <Tooltip contentStyle={radarTooltipStyle} />
+                <Radar
+                  dataKey="avg_mastery"
+                  name="平均掌握度"
+                  stroke="var(--accent-brand-base)"
+                  fill="var(--accent-ai-base)"
+                  fillOpacity={0.28}
+                />
               </RadarChart>
             </ResponsiveContainer>
           </Card>
 
-          <Card className="p-4">
-            <div className="text-sm font-medium">薄弱知识点</div>
+          <Card className="aurora-wrongbook-card p-4">
+            <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">薄弱知识点</div>
             <div className="mt-3 space-y-2">
               {weakPoints.map((item) => (
-                <div key={`${item.subject}-${item.knowledge_point}`} className="rounded-md border border-border p-3">
+                <div key={`${item.subject}-${item.knowledge_point}`} className="aurora-wrongbook-item p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">{item.knowledge_point || '未标注'}</div>

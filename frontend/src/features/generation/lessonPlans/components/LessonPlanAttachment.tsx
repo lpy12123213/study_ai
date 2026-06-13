@@ -11,7 +11,7 @@ export function LessonPlanAttachment({ lessonPlanId }: { lessonPlanId: string })
   return (
     <div className="mt-4">
       <Link to={`/lesson-plans/${plan.id}`} className="block group">
-        <div className="rounded-xl border border-border bg-card p-4 transition-all hover:shadow-md hover:border-primary/50">
+        <div className="aurora-lesson-attachment rounded-xl p-4 transition-all hover:border-primary/50">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">

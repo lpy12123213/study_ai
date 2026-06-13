@@ -117,17 +117,17 @@ export function NotificationCenter() {
       }}
     >
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" className="relative h-8 w-8" aria-label="通知">
+        <Button type="button" variant="ghost" size="icon" className="aurora-notification-trigger relative h-8 w-8" aria-label="通知">
           <Bell className="h-4 w-4" />
           {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 h-4 min-w-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] leading-4 text-center">
+            <span className="aurora-notification-badge absolute -top-1 -right-1 h-4 min-w-4 px-1 rounded-full text-[10px] leading-4 text-center">
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-80">
+      <DropdownMenuContent align="end" className="aurora-notification-menu w-80">
         <DropdownMenuLabel className="flex items-center justify-between">
           <span>通知</span>
           {notifications.length > 0 && (
@@ -136,7 +136,7 @@ export function NotificationCenter() {
               size="sm"
               variant="ghost"
               onClick={clearNotifications}
-              className="h-7 px-2 text-xs"
+              className="aurora-notification-clear h-7 px-2 text-xs"
             >
               清空
             </Button>
@@ -152,7 +152,7 @@ export function NotificationCenter() {
             return (
               <DropdownMenuItem
                 key={n.id}
-                className={cn('flex items-start gap-2 py-2', !n.read && 'bg-accent/30')}
+                className={cn('aurora-notification-item flex items-start gap-2 py-2', !n.read && 'aurora-notification-item-unread bg-accent/30')}
                 onClick={() => openTask(n.taskId)}
               >
                 {isFail ? <XCircle className="h-4 w-4 text-destructive mt-0.5" /> : <CheckCircle2 className="h-4 w-4 text-primary mt-0.5" />}

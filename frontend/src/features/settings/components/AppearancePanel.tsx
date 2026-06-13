@@ -102,7 +102,7 @@ export function AppearancePanel(props: AppearancePanelProps) {
   } = props
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="aurora-settings-panel space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
         <h2 className="text-lg font-medium">外观</h2>
         <p className="text-sm text-muted-foreground">自定义界面主题和显示偏好</p>
@@ -298,7 +298,7 @@ export function AppearancePanel(props: AppearancePanelProps) {
         </div>
       </div>
 
-      <div className="flex items-center justify-between p-4 rounded-lg border bg-card">
+      <div className="aurora-settings-card flex items-center justify-between p-4 rounded-lg">
         <div>
           <div className="text-sm font-medium">减少动画</div>
           <div className="text-xs text-muted-foreground mt-1">

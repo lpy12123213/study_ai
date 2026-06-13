@@ -133,55 +133,55 @@ export function CommandPalette() {
         {open ? t('command.paletteOpen') : t('command.paletteClosed')}
       </div>
       <CommandDialog open={open} onOpenChange={setOpen}>
-        <CommandInput aria-label={t('command.searchPlaceholder')} placeholder={t('command.searchPlaceholder')} />
-        <CommandList>
+        <CommandInput className="aurora-command-input" aria-label={t('command.searchPlaceholder')} placeholder={t('command.searchPlaceholder')} />
+        <CommandList className="aurora-command-list">
           <CommandEmpty>{t('command.noResults')}</CommandEmpty>
-          <CommandGroup heading={t('command.navigation')}>
+          <CommandGroup className="aurora-command-group" heading={t('command.navigation')}>
             {routeCommands.map((c) => {
               const Icon = c.icon
               return (
-                <CommandItem key={c.id} onSelect={c.run}>
+                <CommandItem key={c.id} className="aurora-command-item" onSelect={c.run}>
                   {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
                   <span>{c.title}</span>
                   {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
-                  {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
+                  {c.shortcut && <CommandShortcut className="aurora-command-shortcut">{c.shortcut}</CommandShortcut>}
                 </CommandItem>
               )
             })}
           </CommandGroup>
-          <CommandSeparator />
-          <CommandGroup heading={t('command.actions')}>
+          <CommandSeparator className="aurora-command-separator" />
+          <CommandGroup className="aurora-command-group" heading={t('command.actions')}>
             {actionCommands.map((c) => {
               const Icon = c.icon
               return (
-                <CommandItem key={c.id} onSelect={c.run}>
+                <CommandItem key={c.id} className="aurora-command-item" onSelect={c.run}>
                   {Icon && <Icon className="mr-2 h-4 w-4 opacity-70" />}
                   <span>{c.title}</span>
                   {c.subtitle && <span className="ml-2 text-xs text-muted-foreground">{c.subtitle}</span>}
-                  {c.shortcut && <CommandShortcut>{c.shortcut}</CommandShortcut>}
+                  {c.shortcut && <CommandShortcut className="aurora-command-shortcut">{c.shortcut}</CommandShortcut>}
                 </CommandItem>
               )
             })}
           </CommandGroup>
-          <CommandSeparator />
+          <CommandSeparator className="aurora-command-separator" />
           {showShortcuts ? (
-            <CommandGroup heading={t('command.shortcuts')}>
-              <CommandItem disabled>
+            <CommandGroup className="aurora-command-group" heading={t('command.shortcuts')}>
+              <CommandItem className="aurora-command-item" disabled>
                 <span className="text-xs text-muted-foreground">{t('command.openPalette')}</span>
-                <CommandShortcut>Ctrl/⌘ K</CommandShortcut>
+                <CommandShortcut className="aurora-command-shortcut">Ctrl/⌘ K</CommandShortcut>
               </CommandItem>
-              <CommandItem disabled>
+              <CommandItem className="aurora-command-item" disabled>
                 <span className="text-xs text-muted-foreground">{t('command.openShortcutHelp')}</span>
-                <CommandShortcut>Ctrl/⌘ /</CommandShortcut>
+                <CommandShortcut className="aurora-command-shortcut">Ctrl/⌘ /</CommandShortcut>
               </CommandItem>
-              <CommandItem disabled>
+              <CommandItem className="aurora-command-item" disabled>
                 <span className="text-xs text-muted-foreground">{t('command.closePalette')}</span>
-                <CommandShortcut>Esc</CommandShortcut>
+                <CommandShortcut className="aurora-command-shortcut">Esc</CommandShortcut>
               </CommandItem>
             </CommandGroup>
           ) : (
-            <CommandGroup heading={t('command.tips')}>
-              <CommandItem disabled>
+            <CommandGroup className="aurora-command-group" heading={t('command.tips')}>
+              <CommandItem className="aurora-command-item" disabled>
                 <span className="text-xs text-muted-foreground">{t('command.shortcutHint')}</span>
               </CommandItem>
             </CommandGroup>

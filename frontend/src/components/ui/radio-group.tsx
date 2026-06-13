@@ -35,7 +35,7 @@ const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
     )
     return (
       <RadioGroupContext.Provider value={ctx}>
-        <div ref={ref} role="radiogroup" className={cn('grid gap-2', className)} {...props}>
+        <div ref={ref} role="radiogroup" className={cn('aurora-ui-radio-group grid gap-2', className)} {...props}>
           {children}
         </div>
       </RadioGroupContext.Provider>
@@ -54,8 +54,8 @@ const RadioGroupItem = React.forwardRef<HTMLInputElement, RadioGroupItemProps>((
   return (
     <span
       className={cn(
-        'inline-flex h-4 w-4 items-center justify-center rounded-full border border-primary text-primary',
-        checked && 'bg-primary text-primary-foreground',
+        'aurora-ui-radio-item inline-flex h-4 w-4 items-center justify-center rounded-full border border-primary text-primary',
+        checked && 'aurora-ui-radio-item-checked bg-primary text-primary-foreground',
         className
       )}
     >

@@ -32,6 +32,7 @@ export interface StudyMaterialsTaskStatus {
   updated_at_s: number
   first_seq: number
   last_seq: number
+  resumable?: boolean
   last_success_step?: string | null
   last_failed_step?: string | null
   last_success_stage?: StudyMaterialsStage | null

@@ -312,7 +312,7 @@ export function QuestionContent(props: { content: string; className?: string }) 
                 <AuthImage
                   src={url}
                   alt="题目图片"
-                  className="max-w-full max-h-[360px] object-contain rounded-md border bg-white"
+                  className="aurora-question-content-image max-w-full max-h-[360px] object-contain rounded-md border bg-white"
                 />
               </a>
             </div>
@@ -328,7 +328,7 @@ export function QuestionContent(props: { content: string; className?: string }) 
               <AuthImage
                 src={src}
                 alt="题目公式"
-                className="inline-block max-h-[2.2em] max-w-[18rem] align-middle object-contain"
+                className="aurora-question-content-formula inline-block max-h-[2.2em] max-w-[18rem] align-middle object-contain"
               />
             </span>
           )
@@ -360,7 +360,7 @@ export function QuestionContent(props: { content: string; className?: string }) 
   if (!content?.trim()) return null
 
   return (
-    <div className={cn('whitespace-pre-wrap leading-relaxed break-words', className)}>
+    <div className={cn('aurora-question-content whitespace-pre-wrap leading-relaxed break-words', className)}>
       {nodes}
     </div>
   )

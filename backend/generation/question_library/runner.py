@@ -25,6 +25,11 @@ from backend.generation.agentic.task_specs import (
     build_agent_run_spec_for_task,
     build_agentic_starter_event,
 )
+from backend.generation.agentic.codex_runtime import (
+    is_codex_runtime_agent_runtime,
+    legacy_agent_fallback_enabled,
+    run_codex_runtime_task,
+)
 from backend.generation.question_library.curriculum_context import (
     build_curriculum_context,
     enrich_source_pack_with_curriculum,
@@ -84,7 +89,12 @@ logger = get_logger(__name__)
 
 
 
-async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
+async def create_crawl_task(
+    *,
+    user_id: str,
+    request: Dict[str, Any],
+    parent_task_id: Optional[str] = None,
+) -> RuntimeTask:
     req = dict(request or {})
     subject = str(req.get("subject") or "").strip()
     edu_level = str(req.get("edu_level") or "").strip()
@@ -212,6 +222,11 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
                 pct = int((i / max(1, total)) * 100)
                 await task_runtime.append_event(task, {"type": "progress", "data": {"progress": pct}})
 
+            if task.status != "running":
+                async with task.cond:
+                    task.cond.notify_all()
+                return
+
             await task_runtime.append_event(
                 task,
                 {
@@ -227,7 +242,11 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
             )
             await task_runtime.complete_task(task)
         except asyncio.CancelledError:
-            await task_runtime.fail_task(task, "Task cancelled")
+            if task.status == "running":
+                await task_runtime.fail_task(task, "Task cancelled")
+            else:
+                async with task.cond:
+                    task.cond.notify_all()
             raise
         except Exception as exc:  # pragma: no cover
             logger.exception("question_library_import_runner_failed", extra={"task_id": task.task_id})
@@ -243,10 +262,16 @@ async def create_crawl_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
         title=f"题库抓取：{subject or query or 'crawl'}",
         request=req,
         runner_factory=runner_factory,
+        parent_task_id=parent_task_id,
     )
 
 
-async def create_media_import_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
+async def create_media_import_task(
+    *,
+    user_id: str,
+    request: Dict[str, Any],
+    parent_task_id: Optional[str] = None,
+) -> RuntimeTask:
     req = dict(request or {})
     if not is_llm_configured(scope="chat"):
         raise RunnerError("llm_not_configured", status_code=500)
@@ -481,12 +506,18 @@ async def create_media_import_task(*, user_id: str, request: Dict[str, Any]) -> 
         starter_event=build_agentic_starter_event(spec=agent_spec, title="开始图片/PDF 录入", tool_name="question_library_media_import")
         if agent_spec is not None
         else None,
+        parent_task_id=parent_task_id,
     )
 
 
-async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
+async def create_score_task(
+    *,
+    user_id: str,
+    request: Dict[str, Any],
+    parent_task_id: Optional[str] = None,
+) -> RuntimeTask:
     req = dict(request or {})
-    if not is_llm_configured():
+    if not is_codex_runtime_agent_runtime() and not is_llm_configured():
         raise RunnerError("llm_not_configured", status_code=500)
 
     subject = str(req.get("subject") or "").strip()
@@ -503,6 +534,16 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
     agent_spec = build_agent_run_spec_for_task(task_type="question_library_score", request=req)
 
     async def runner_factory(task: RuntimeTask) -> None:
+        if is_codex_runtime_agent_runtime():
+            handled = await run_codex_runtime_task(
+                task,
+                user_id=user_id,
+                task_type="question_library_score",
+                final_event_type="done",
+            )
+            if handled or not legacy_agent_fallback_enabled():
+                return
+
         try:
             await task_runtime.append_event(task, {"type": "progress", "data": {"progress": 5, "stage": "Load"}})
 
@@ -665,6 +706,11 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
                         },
                     )
 
+            if task.status != "running":
+                async with task.cond:
+                    task.cond.notify_all()
+                return
+
             await task_runtime.append_event(
                 task,
                 {
@@ -683,7 +729,11 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
             )
             await task_runtime.complete_task(task)
         except asyncio.CancelledError:
-            await task_runtime.fail_task(task, "Task cancelled")
+            if task.status == "running":
+                await task_runtime.fail_task(task, "Task cancelled")
+            else:
+                async with task.cond:
+                    task.cond.notify_all()
             raise
         except Exception as exc:  # pragma: no cover
             logger.exception("question_library_score_runner_failed", extra={"task_id": task.task_id})
@@ -703,12 +753,18 @@ async def create_score_task(*, user_id: str, request: Dict[str, Any]) -> Runtime
         starter_event=build_agentic_starter_event(spec=agent_spec, title="开始题库评分", tool_name="question_library_score")
         if agent_spec is not None
         else None,
+        parent_task_id=parent_task_id,
     )
 
 
-async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> RuntimeTask:
+async def create_generate_task(
+    *,
+    user_id: str,
+    request: Dict[str, Any],
+    parent_task_id: Optional[str] = None,
+) -> RuntimeTask:
     req = dict(request or {})
-    if not is_llm_configured():
+    if not is_codex_runtime_agent_runtime() and not is_llm_configured():
         raise RunnerError("llm_not_configured", status_code=500)
 
     subject = str(req.get("subject") or "").strip()
@@ -785,6 +841,16 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
     save_session(current_session)
 
     async def runner_factory(task: RuntimeTask) -> None:
+        if is_codex_runtime_agent_runtime():
+            handled = await run_codex_runtime_task(
+                task,
+                user_id=user_id,
+                task_type="question_library_generate",
+                final_event_type="done",
+            )
+            if handled or not legacy_agent_fallback_enabled():
+                return
+
         draft_key_to_id: Dict[str, str] = {}
         progress_drafts = normalize_draft_questions(
             ((existing_preview or {}).get("draft_questions") if isinstance(existing_preview, dict) else [])
@@ -1029,6 +1095,11 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
                 if mode != "infinite":
                     break
 
+            if task.status != "running":
+                async with task.cond:
+                    task.cond.notify_all()
+                return
+
             final_session_status = "pending_review"
             if mode == "infinite":
                 final_session_status = "stopped" if await _stop_requested() else "pending_review"
@@ -1099,4 +1170,5 @@ async def create_generate_task(*, user_id: str, request: Dict[str, Any]) -> Runt
         starter_event=build_agentic_starter_event(spec=agent_spec, title="开始 AI 出题", tool_name="question_library_generate")
         if agent_spec is not None
         else None,
+        parent_task_id=parent_task_id,
     )

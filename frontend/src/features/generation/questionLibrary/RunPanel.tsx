@@ -56,7 +56,7 @@ export function RunPanel(props: Props) {
   if (!task) return null
 
   return (
-    <div className={cn('border-t bg-background', expanded ? 'h-[260px]' : 'h-[54px]')}>
+    <div className={cn('aurora-question-run-panel border-t', expanded ? 'h-[260px]' : 'h-[54px]')}>
       <div className="h-[54px] px-4 flex items-center justify-between gap-3">
         <button
           type="button"
@@ -93,7 +93,7 @@ export function RunPanel(props: Props) {
       </div>
 
       {expanded && (
-        <div className="h-[calc(260px-54px)] border-t">
+        <div className="h-[calc(260px-54px)] border-t border-border">
           <ScrollArea className="h-full">
             <div className="p-4">
               {task.error && <div className="text-sm text-destructive mb-3">{task.error}</div>}

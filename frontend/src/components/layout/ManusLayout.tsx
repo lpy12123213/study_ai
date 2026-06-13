@@ -37,8 +37,8 @@ export function ManusLayout() {
 
   if (isFullScreenPage) {
     return (
-      <div className="aurora-app-shell h-screen w-screen overflow-hidden bg-background text-foreground">
-        <div className="aurora-layout-surface fixed right-4 top-4 z-[60] rounded-md border border-border bg-background/90 shadow-sm backdrop-blur">
+      <div className="aurora-app-shell aurora-app-shell-fullscreen h-screen w-screen overflow-hidden text-foreground">
+        <div className="aurora-shell-floating-control fixed right-4 top-4 z-[60] rounded-md">
           <NotificationCenter />
         </div>
         <CommandPalette />
@@ -51,7 +51,7 @@ export function ManusLayout() {
   }
 
   return (
-    <div className="aurora-app-shell flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="aurora-app-shell aurora-app-shell-framed flex h-screen w-screen flex-col overflow-hidden text-foreground">
       <a
         href="#main"
         className="sr-only z-[60] rounded-md bg-background px-3 py-2 text-sm font-medium text-foreground ring-1 ring-ring focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
@@ -74,11 +74,11 @@ export function ManusLayout() {
           id="main"
           ref={mainRef}
           tabIndex={-1}
-          className="relative flex flex-1 flex-col overflow-hidden bg-background outline-none"
+          className="aurora-main-stage relative flex flex-1 flex-col overflow-hidden outline-none"
         >
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div className="aurora-main-scroll flex-1 min-h-0 overflow-auto">
             <div className={cn(
-              "mx-auto h-full",
+              "aurora-main-content mx-auto h-full",
               !isWidePage && contentWidthClass
             )}>
                <ErrorBoundary key={location.pathname}>

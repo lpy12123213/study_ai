@@ -1,7 +1,8 @@
 import { type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
-import { getRouteCrumbs, matchRouteConfig } from '@/router/routes.config'
+import { getRouteCrumbs } from '@/router/routes.config'
+import { useRouteMeta } from '@/router/useRouteMeta'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n'
 
@@ -12,13 +13,13 @@ type SubHeaderProps = {
 export function SubHeader({ actionsSlot }: SubHeaderProps) {
   const location = useLocation()
   const { routeLabel, t } = useI18n()
-  const routeConfig = matchRouteConfig(location.pathname)
-  const crumbs = getRouteCrumbs(location.pathname)
+  const routeConfig = useRouteMeta()
+  const crumbs = getRouteCrumbs(location.pathname, routeConfig)
 
   return (
-    <div className="flex min-h-11 items-center justify-between gap-4 border-b border-border bg-background px-4 lg:px-6">
+    <div className="aurora-shell-subheader flex min-h-11 items-center justify-between gap-4 px-4 lg:px-6">
       <div className="min-w-0">
-        <nav aria-label={t('layout.breadcrumbs')} className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+        <nav aria-label={t('layout.breadcrumbs')} className="aurora-shell-crumbs flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
           {crumbs.map((crumb, index) => {
             const label = routeLabel(crumb.id, crumb.label)
             return (

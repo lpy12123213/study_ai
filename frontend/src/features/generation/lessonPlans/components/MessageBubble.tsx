@@ -12,12 +12,16 @@ import { LessonPlanAttachment } from '@/features/generation/lessonPlans/componen
 export function MessageBubble({ message, disableMotion = false }: { message: Message; disableMotion?: boolean }) {
   const isUser = message.role === 'user'
   const [showSteps, setShowSteps] = useState(false)
+  const userBubbleClass =
+    'aurora-lesson-user-bubble max-w-[85%] sm:max-w-[75%] rounded-2xl px-5 py-3 text-sm leading-6 text-foreground'
+  const assistantWrapClass = 'aurora-lesson-assistant flex flex-col gap-2 mb-8 w-full'
+  const assistantMarkClass = 'aurora-lesson-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center'
 
   if (isUser) {
     if (disableMotion) {
       return (
         <div className="flex justify-end mb-6">
-          <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+          <div className={userBubbleClass}>
             <div className="whitespace-pre-wrap">{message.content}</div>
           </div>
         </div>
@@ -25,7 +29,7 @@ export function MessageBubble({ message, disableMotion = false }: { message: Mes
     }
     return (
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-end mb-6">
-        <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl bg-muted px-5 py-3 text-sm leading-6 text-foreground">
+        <div className={userBubbleClass}>
           <div className="whitespace-pre-wrap">{message.content}</div>
         </div>
       </motion.div>
@@ -35,7 +39,7 @@ export function MessageBubble({ message, disableMotion = false }: { message: Mes
   const assistantBody = (
     <>
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-        <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+        <div className={assistantMarkClass}>
           <BrandMark size={12} />
         </div>
         <span>{APP_ASSISTANT_NAME}</span>
@@ -52,7 +56,7 @@ export function MessageBubble({ message, disableMotion = false }: { message: Mes
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+            className="aurora-lesson-steps-button h-8 text-xs font-normal gap-1.5"
             onClick={() => setShowSteps(!showSteps)}
           >
             <Sparkles className="h-3.5 w-3.5 text-primary" />
@@ -70,9 +74,9 @@ export function MessageBubble({ message, disableMotion = false }: { message: Mes
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
+                className="aurora-lesson-steps-panel mt-3 overflow-hidden rounded-lg"
               >
-                <div className="p-4 bg-muted/30">
+                <div className="p-4">
                   <TaskTimeline steps={message.steps} />
                 </div>
               </motion.div>
@@ -84,14 +88,14 @@ export function MessageBubble({ message, disableMotion = false }: { message: Mes
   )
 
   if (disableMotion) {
-    return <div className="flex flex-col gap-2 mb-8 w-full">{assistantBody}</div>
+    return <div className={assistantWrapClass}>{assistantBody}</div>
   }
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col gap-2 mb-8 w-full"
+      className={assistantWrapClass}
     >
       {assistantBody}
     </motion.div>

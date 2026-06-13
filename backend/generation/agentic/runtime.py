@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, AsyncIterator, Dict, List
 
 from backend.generation.agentic.tooling import PlannerAgent, ToolExecutor, ToolResult
@@ -29,9 +30,14 @@ class AgentRuntime:
             "artifacts": [],
             "search_policy": spec.search_policy.to_dict(),
         }
+        start_time = time.monotonic()
 
         while state["iterations"] < spec.budget.max_iterations:
             state["iterations"] += 1
+
+            if spec.budget.max_runtime_s and (time.monotonic() - start_time) > spec.budget.max_runtime_s:
+                yield AgentTraceEvent(event="error", data={"error": "runtime_budget_exceeded"})
+                return
 
             if state["llm_calls"] >= spec.budget.max_llm_calls:
                 yield AgentTraceEvent(event="error", data={"error": "llm_budget_exceeded"})
@@ -103,7 +109,7 @@ class AgentRuntime:
                 event="tool_call",
                 role=decision.role,
                 step_id=decision.step_id,
-                data={"name": tool_name, "arguments": dict(decision.arguments)},
+                data={"name": tool_name, "arguments": dict(decision.arguments), "thought": decision.thought or ""},
             )
 
             try:

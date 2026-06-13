@@ -24,7 +24,7 @@ export function HandwritingToolbar({
   onClear,
 }: HandwritingToolbarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b p-2">
+    <div className="aurora-exam-handwriting-toolbar flex flex-wrap items-center gap-2 border-b p-2">
       <div className="flex items-center gap-1">
         {COLORS.map((item) => (
           <button

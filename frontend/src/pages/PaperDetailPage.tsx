@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams, Link } from 'react-router-dom'
-import { FileText, Loader2 } from 'lucide-react'
+import { FileText, Loader2, Play, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -175,7 +175,7 @@ export default function PaperDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="aurora-paper-detail-screen flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     )
@@ -183,8 +183,8 @@ export default function PaperDetailPage() {
 
   if (error || !paper) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-        <div className="h-16 w-16 bg-muted rounded-full flex items-center justify-center mb-4">
+      <div className="aurora-paper-detail-screen flex flex-col items-center justify-center h-full p-6 text-center">
+        <div className="aurora-paper-detail-empty-icon h-16 w-16 rounded-full flex items-center justify-center mb-4">
           <FileText className="h-8 w-8 text-muted-foreground" />
         </div>
         <h3 className="text-lg font-medium mb-2">试卷不存在</h3>
@@ -197,9 +197,15 @@ export default function PaperDetailPage() {
   }
 
   const activeHash = String(location.hash || '').replace(/^#/, '')
+  const paperStats = [
+    { label: '题目数', value: `${paper.questions.length}` },
+    { label: '题型数', value: `${Object.keys(questionsByType).length}` },
+    { label: '来源', value: sourceMode === 'mixed' ? '混合来源' : sourceMode === 'zujuan' ? '组卷网' : '本地题库' },
+    { label: '创建时间', value: formatDate(paper.createdAt) },
+  ]
 
   return (
-    <div className="h-full flex flex-col bg-background">
+    <div className="aurora-paper-detail-screen h-full flex flex-col">
       <PaperDetailHeader
         paperId={paperId}
         isExporting={isExporting}
@@ -217,42 +223,77 @@ export default function PaperDetailPage() {
       />
 
       <ScrollArea className="flex-1">
-        <div className="max-w-4xl mx-auto p-8 print:p-0">
-          <div className="text-center mb-8 print:mb-6">
-            <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-primary/10 text-primary mb-6 print:hidden">
-              <FileText className="h-8 w-8" />
+        <div className="max-w-5xl mx-auto p-8 print:p-0">
+          <section className="aurora-paper-detail-hero mb-8 print:mb-6">
+            <div className="text-center">
+              <div className="aurora-paper-detail-orb mx-auto mb-6 print:hidden">
+                <FileText className="h-8 w-8" />
+              </div>
+              <div className="aurora-kicker justify-center">
+                <Sparkles className="h-3.5 w-3.5" />
+                Paper Mission Bridge
+              </div>
+              <h1 className="mt-4 text-3xl font-bold tracking-tight text-foreground">{paper.name}</h1>
+
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
+                <Badge variant="secondary" className="px-3 py-1 text-sm font-normal">试卷 #{paper.id}</Badge>
+                <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+                <span>{paper.questions.length} 道题</span>
+                <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+                <span>{formatDate(paper.createdAt)}</span>
+              </div>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight mb-4 text-foreground">{paper.name}</h1>
 
-            <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
-              <Badge variant="secondary" className="px-3 py-1 text-sm font-normal">试卷 #{paper.id}</Badge>
-              <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
-              <span>{paper.questions.length} 道题</span>
-              <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
-              <span>{formatDate(paper.createdAt)}</span>
+            <div className="aurora-paper-detail-stat-grid mt-7">
+              {paperStats.map((item) => (
+                <div key={item.label} className="aurora-paper-detail-stat">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
             </div>
-          </div>
 
-          <PaperAnalysisPanel
-            analysis={paper.analysis}
-            paperId={paperId}
-            isLoadingAnalysis={isLoadingAnalysis}
-            analysisError={analysisError}
-            onLoadAnalysis={() => loadAnalysis()}
-          />
+            <div className="mt-6 flex flex-wrap justify-center gap-2 print:hidden">
+              <Button type="button" onClick={() => setExamOpen(true)}>
+                <Play className="h-4 w-4" />
+                开始考试
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setShareOpen(true)}>
+                分享试卷
+              </Button>
+            </div>
+          </section>
 
-          <Separator className="my-8 print:hidden" />
+          <section className="aurora-paper-detail-section">
+            <PaperAnalysisPanel
+              analysis={paper.analysis}
+              paperId={paperId}
+              isLoadingAnalysis={isLoadingAnalysis}
+              analysisError={analysisError}
+              onLoadAnalysis={() => loadAnalysis()}
+            />
+          </section>
 
-          <PaperHeatmapPanel questions={paper.questions} />
+          <Separator className="my-8 print:hidden opacity-50" />
 
-          <PaperDetailQuestions
-            questionsByType={questionsByType}
-            activeHash={activeHash}
-            onAddToWrongbook={addToWrongbook}
-            onAnnotate={openAnnotate}
-          />
+          <section className="aurora-paper-detail-section">
+            <PaperHeatmapPanel questions={paper.questions} />
+          </section>
 
-          {!!download?.success && <PaperDownloadLinks download={download} />}
+          <section className="aurora-paper-detail-section">
+            <PaperDetailQuestions
+              questionsByType={questionsByType}
+              activeHash={activeHash}
+              onAddToWrongbook={addToWrongbook}
+              onAnnotate={openAnnotate}
+            />
+          </section>
+
+          {!!download?.success && (
+            <section className="aurora-paper-detail-section">
+              <PaperDownloadLinks download={download} />
+            </section>
+          )}
         </div>
       </ScrollArea>
 

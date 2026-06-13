@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Search, Loader2, MessageSquareText, FileText, BookOpen } from 'lucide-react'
+import { Search, Loader2, MessageSquareText, FileText, BookOpen, Sparkles } from 'lucide-react'
 import { searchAll, type SearchResult } from '@/api/search'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -90,6 +90,27 @@ export default function SearchPage() {
   })
 
   const results = useMemo(() => (data?.results || []) as SearchResult[], [data])
+  const resultStats = useMemo(() => {
+    const counts = {
+      conversation: 0,
+      paper: 0,
+      question: 0,
+      studyArchive: 0,
+    }
+    for (const item of results) {
+      if (item.type === 'conversation') counts.conversation += 1
+      if (item.type === 'paper') counts.paper += 1
+      if (item.type === 'question') counts.question += 1
+      if (item.type === 'study_archive') counts.studyArchive += 1
+    }
+    return [
+      { label: '结果数', value: `${results.length}` },
+      { label: '对话', value: `${counts.conversation}` },
+      { label: '试卷', value: `${counts.paper}` },
+      { label: '资料', value: `${counts.studyArchive}` },
+      { label: '题目', value: `${counts.question}` },
+    ]
+  }, [results])
 
   const openResult = (r: SearchResult) => {
     if (r.type === 'conversation') {
@@ -118,36 +139,50 @@ export default function SearchPage() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden min-h-0">
-      <div className="p-4 border-b border-border flex items-center gap-3">
-        <div className="flex items-center gap-2">
-          <Search className="h-5 w-5 text-primary" />
-          <div className="font-semibold">全文搜索</div>
-          {isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+    <div className="aurora-search-screen h-full flex flex-col overflow-hidden min-h-0">
+      <div className="aurora-search-hero p-4 flex items-center gap-4">
+        <div className="min-w-0">
+          <div className="aurora-kicker">
+            <Sparkles className="h-3.5 w-3.5" />
+            Global Search Radar
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <Search className="h-5 w-5 text-primary" />
+            <div className="font-semibold">全文搜索</div>
+            {isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">跨对话、试卷题干、题库和自学资料定位内容，并直接回跳到命中位置。</p>
         </div>
-        <div className="flex-1" />
+        <div className="aurora-search-stat-grid">
+          {resultStats.map((item) => (
+            <div key={item.label} className="aurora-search-stat">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="p-4 space-y-3 overflow-auto">
         <div className="max-w-3xl mx-auto">
-          <div className="relative">
+          <div className="aurora-search-box relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="搜索对话、试卷题干、题库、自学资料…"
-              className="pl-9"
+              className="aurora-search-input pl-9"
             />
           </div>
 
           {Boolean(error) && (
-            <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="aurora-search-error mt-3 rounded-lg p-3 text-sm text-destructive">
               搜索失败，请稍后重试。
             </div>
           )}
 
           {qParam && !isFetching && results.length === 0 && (
-            <div className="mt-8 text-sm text-muted-foreground text-center">暂无结果</div>
+            <div className="aurora-search-empty mt-8 text-sm text-muted-foreground text-center">暂无结果</div>
           )}
 
           <div className="mt-4 space-y-2">
@@ -162,8 +197,9 @@ export default function SearchPage() {
                   type="button"
                   onClick={() => openResult(r)}
                   className={cn(
-                    'w-full text-left rounded-lg border border-border/60 bg-card px-4 py-3 hover:bg-accent/30 transition-colors',
+                    'aurora-search-result w-full text-left rounded-lg px-4 py-3 transition-colors',
                   )}
+                  data-type={r.type}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, Search, Wand2 } from 'lucide-react'
+import { Loader2, Search, Sparkles, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { RichTextarea } from '@/components/shared/RichTextarea'
@@ -142,18 +142,38 @@ export default function QuestionEvaluatePage() {
     items.sort((a, b) => (b.overallScore || 0) - (a.overallScore || 0))
     return items
   }, [evalResults])
+  const evaluateStats = [
+    { label: '搜索结果', value: `${searchResults.length}` },
+    { label: '已选题目', value: `${selectedQuestions.length}` },
+    { label: '鉴别结果', value: `${evalResults.length}` },
+    { label: '学科', value: subject || '未选择' },
+  ]
 
   return (
-    <div className="h-full p-6 overflow-hidden">
+    <div className="aurora-question-eval-screen h-full p-6 overflow-hidden">
       <div className="h-full max-w-6xl mx-auto flex flex-col gap-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight mb-1">好题鉴别</h1>
-          <p className="text-muted-foreground text-sm">
-            搜索题目后批量选择，使用 AI 从多维度评估题目质量。
-          </p>
-        </div>
+        <section className="aurora-question-eval-hero">
+          <div>
+            <div className="aurora-kicker">
+              <Sparkles className="h-3.5 w-3.5" />
+              Question Quality Spectrum
+            </div>
+            <h1 className="mt-3 text-3xl font-bold tracking-tight">题目诊断光谱仪</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              搜索题目后批量选择，使用 AI 从区分度、严谨性、教学价值和易错点等维度评估题目质量。
+            </p>
+          </div>
+          <div className="aurora-question-eval-stat-grid">
+            {evaluateStats.map((item) => (
+              <div key={item.label} className="aurora-question-eval-stat">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
 
-        <Card>
+        <Card className="aurora-question-eval-search">
           <CardHeader>
             <CardTitle className="text-base">搜索</CardTitle>
           </CardHeader>
@@ -185,10 +205,10 @@ export default function QuestionEvaluatePage() {
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
+                    className="aurora-question-eval-input pl-9 h-9"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="输入关键词（如：函数 单调性）"
-                    className="pl-9 h-9"
                     onKeyDown={(e) => {
                       if (shouldSubmitOnEnter(e)) doSearch()
                     }}
@@ -220,13 +240,13 @@ export default function QuestionEvaluatePage() {
             </div>
 
             {searchError && (
-              <div className="mt-3 text-sm text-destructive">{searchError}</div>
+              <div className="aurora-question-eval-error mt-3 text-sm text-destructive">{searchError}</div>
             )}
           </CardContent>
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
-          <Card className="flex flex-col min-h-0">
+          <Card className="aurora-question-eval-panel flex flex-col min-h-0">
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-base">搜索结果</CardTitle>
@@ -242,7 +262,7 @@ export default function QuestionEvaluatePage() {
             </CardHeader>
             <CardContent className="flex-1 min-h-0">
               {searchResults.length === 0 ? (
-                <div className="text-sm text-muted-foreground py-10 text-center">暂无结果</div>
+                <div className="aurora-question-eval-empty text-sm text-muted-foreground py-10 text-center">暂无结果</div>
               ) : (
                 <ScrollArea className="h-full pr-2">
                   <div className="space-y-2">
@@ -253,8 +273,8 @@ export default function QuestionEvaluatePage() {
                           key={q.questionId}
                           onClick={() => toggleSelected(q.questionId)}
                           className={cn(
-                            'w-full text-left rounded-lg border p-3 transition-colors',
-                            checked ? 'bg-accent border-accent' : 'hover:bg-muted/40',
+                            'aurora-question-eval-candidate w-full text-left rounded-lg p-3 transition-colors',
+                            checked && 'is-selected',
                           )}
                         >
                           <div className="flex items-start justify-between gap-3">
@@ -284,7 +304,7 @@ export default function QuestionEvaluatePage() {
             </CardContent>
           </Card>
 
-          <Card className="flex flex-col min-h-0">
+          <Card className="aurora-question-eval-panel flex flex-col min-h-0">
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-base">鉴别结果</CardTitle>
@@ -313,16 +333,16 @@ export default function QuestionEvaluatePage() {
                 />
               </div>
 
-              {evalError && <div className="text-sm text-destructive">{evalError}</div>}
+              {evalError && <div className="aurora-question-eval-error text-sm text-destructive">{evalError}</div>}
 
               <div className="flex-1 min-h-0">
                 {orderedEval.length === 0 ? (
-                  <div className="text-sm text-muted-foreground py-10 text-center">暂无结果</div>
+                  <div className="aurora-question-eval-empty text-sm text-muted-foreground py-10 text-center">暂无结果</div>
                 ) : (
                   <ScrollArea className="h-full pr-2">
                     <div className="space-y-3">
                       {orderedEval.map((r) => (
-                        <div key={r.questionId} className="rounded-lg border p-3">
+                        <div key={r.questionId} className="aurora-question-eval-result rounded-lg p-3" data-verdict={r.verdict || ''}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2">
@@ -340,7 +360,7 @@ export default function QuestionEvaluatePage() {
                           {r.dimensions?.length > 0 && (
                             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {r.dimensions.map((d) => (
-                                <div key={d.name} className="rounded-md bg-muted/30 p-2">
+                                <div key={d.name} className="aurora-question-eval-dimension rounded-md p-2">
                                   <div className="flex items-center justify-between text-xs">
                                     <span className="text-muted-foreground">{d.name}</span>
                                     <span className="font-medium">{d.score}/10</span>
@@ -357,7 +377,7 @@ export default function QuestionEvaluatePage() {
 
                           {(r.highlights?.length > 0 || r.issues?.length > 0) && (
                             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div>
+                              <div className="aurora-question-eval-feedback">
                                 <div className="text-xs font-medium mb-1">亮点</div>
                                 <div className="text-xs text-muted-foreground space-y-1">
                                   {(r.highlights || []).map((t, idx) => (
@@ -365,7 +385,7 @@ export default function QuestionEvaluatePage() {
                                   ))}
                                 </div>
                               </div>
-                              <div>
+                              <div className="aurora-question-eval-feedback">
                                 <div className="text-xs font-medium mb-1">问题</div>
                                 <div className="text-xs text-muted-foreground space-y-1">
                                   {(r.issues || []).map((t, idx) => (

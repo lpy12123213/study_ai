@@ -53,15 +53,15 @@ export function Header({ notificationSlot }: HeaderProps) {
   const setLanguage = (nextLocale: Locale) => setLocale(nextLocale)
 
   return (
-    <header className="aurora-layout-chrome sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-background px-4 lg:px-6">
+    <header className="aurora-shell-header sticky top-0 z-50 flex h-16 items-center justify-between px-4 lg:px-6">
       {/* Logo */}
-      <Link to="/dashboard" className="flex shrink-0 items-center gap-2">
+      <Link to="/dashboard" className="aurora-shell-brand flex shrink-0 items-center gap-2">
         <BrandMark size={26} />
-        <span className="text-sm font-medium text-foreground">{APP_BRAND_NAME}</span>
+        <span className="aurora-shell-brand-name text-sm font-medium text-foreground">{APP_BRAND_NAME}</span>
       </Link>
 
       {/* Navigation */}
-      <nav className="aurora-layout-surface hidden h-10 items-center gap-1 rounded-lg border border-border bg-card px-1 lg:flex">
+      <nav className="aurora-shell-nav hidden h-10 items-center gap-1 rounded-lg px-1 lg:flex">
         <TooltipProvider delayDuration={250}>
           {HEADER_NAV_ITEMS.map((item) => {
             const isActive =
@@ -78,10 +78,10 @@ export function Header({ notificationSlot }: HeaderProps) {
                     to={item.path}
                     aria-label={label}
                     className={cn(
-                      'relative flex h-8 w-8 items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors xl:w-auto xl:px-3',
+                      'aurora-shell-nav-item relative flex h-8 w-8 items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors xl:w-auto xl:px-3',
                       isActive
-                        ? 'bg-foreground text-background'
-                        : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                        ? 'aurora-shell-nav-item-active bg-foreground text-background'
+                        : 'aurora-shell-nav-item-idle text-muted-foreground hover:bg-accent hover:text-foreground'
                     )}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
@@ -103,7 +103,7 @@ export function Header({ notificationSlot }: HeaderProps) {
           type="button"
           variant="ghost"
           size="icon"
-          className="h-9 w-9"
+          className="aurora-shell-action h-9 w-9"
           aria-label={t('header.taskCenter')}
           onClick={() => navigate('/tasks')}
         >
@@ -114,7 +114,7 @@ export function Header({ notificationSlot }: HeaderProps) {
           type="button"
           variant="ghost"
           size="icon"
-          className="h-9 w-9"
+          className="aurora-shell-action h-9 w-9"
           aria-label={t('header.feedback')}
           onClick={() => setFeedbackOpen(true)}
         >
@@ -130,7 +130,7 @@ export function Header({ notificationSlot }: HeaderProps) {
               type="button"
               variant="ghost"
               size="icon"
-              className="h-9 w-9 lg:hidden"
+              className="aurora-shell-action h-9 w-9 lg:hidden"
               aria-label={t('header.openNavigation')}
             >
               <Menu className="h-4 w-4" />
@@ -138,7 +138,7 @@ export function Header({ notificationSlot }: HeaderProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="w-56"
+            className="aurora-shell-menu w-56"
             onCloseAutoFocus={(event) => {
               event.preventDefault()
               mobileNavTriggerRef.current?.focus()
@@ -173,10 +173,10 @@ export function Header({ notificationSlot }: HeaderProps) {
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="aurora-shell-action h-8 w-8"
               aria-label={t('header.openUserMenu')}
             >
-              <Avatar className="h-8 w-8 border border-border transition-opacity hover:opacity-80">
+              <Avatar className="aurora-shell-avatar h-8 w-8 transition-opacity hover:opacity-80">
                 <AvatarImage src="" />
                 <AvatarFallback className="bg-card text-xs text-foreground">{initials}</AvatarFallback>
               </Avatar>
@@ -184,7 +184,7 @@ export function Header({ notificationSlot }: HeaderProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="w-56"
+            className="aurora-shell-menu w-56"
             onCloseAutoFocus={(event) => {
               event.preventDefault()
               userMenuTriggerRef.current?.focus()

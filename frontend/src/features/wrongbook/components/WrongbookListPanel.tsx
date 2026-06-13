@@ -100,10 +100,20 @@ export function WrongbookListPanel() {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      <div className="aurora-wrongbook-toolbar flex flex-col gap-3 p-3 md:flex-row md:items-center">
         <div className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2">
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索题目ID / 备注..." />
-          <Input value={kp} onChange={(event) => setKp(event.target.value)} placeholder="按知识点过滤" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索题目ID / 备注..."
+            className="bg-background/45"
+          />
+          <Input
+            value={kp}
+            onChange={(event) => setKp(event.target.value)}
+            placeholder="按知识点过滤"
+            className="bg-background/45"
+          />
         </div>
         <Button type="button" variant="outline" size="sm" onClick={createPractice} disabled={practiceMutation.isPending}>
           {practiceMutation.isPending ? (
@@ -124,18 +134,18 @@ export function WrongbookListPanel() {
       )}
 
       {!isLoading && !error && items.length === 0 && (
-        <Card className="p-6">
+        <Card className="aurora-wrongbook-card p-6">
           <div className="text-sm text-muted-foreground">暂无错题。你可以在试卷详情页一键加入。</div>
         </Card>
       )}
 
       {items.map((it) => (
-        <Card key={it.question_id} className="p-4">
+        <Card key={it.question_id} className="aurora-wrongbook-item p-4">
           <div className="flex items-start justify-between gap-3">
             <label className="flex min-w-0 cursor-pointer items-start gap-3">
               <input
                 type="checkbox"
-                className="mt-1"
+                className="mt-1 accent-[var(--accent-brand-base)]"
                 checked={Boolean(selected[it.question_id])}
                 onChange={() => toggle(it.question_id)}
               />

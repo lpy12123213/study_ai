@@ -85,7 +85,7 @@ export function ShareLinkDialog(props: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px]">
+      <DialogContent className="aurora-share-link-dialog sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <LinkIcon className="h-4 w-4" />
@@ -102,7 +102,7 @@ export function ShareLinkDialog(props: {
             <div className="space-y-1.5">
               <div className="text-sm font-medium">有效期</div>
               <Select value={preset} onValueChange={setPreset}>
-                <SelectTrigger>
+                <SelectTrigger className="aurora-shared-input">
                   <SelectValue placeholder="选择有效期" />
                 </SelectTrigger>
                 <SelectContent>
@@ -122,34 +122,35 @@ export function ShareLinkDialog(props: {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="留空则无需密码"
+                className="aurora-shared-input"
               />
             </div>
           </div>
 
           <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" className="aurora-shared-secondary-action" variant="outline" onClick={() => onOpenChange(false)}>
               关闭
             </Button>
-            <Button type="button" onClick={create} disabled={isCreating}>
+            <Button type="button" className="aurora-shared-primary-action" onClick={create} disabled={isCreating}>
               {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : '生成'}
             </Button>
           </div>
 
           {shareUrl && (
-            <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+            <div className="aurora-share-link-result rounded-lg p-3 space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-medium flex items-center gap-2">
                   <QrIcon className="h-4 w-4" />
                   分享链接
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={copy}>
+                <Button type="button" className="aurora-shared-secondary-action" variant="outline" size="sm" onClick={copy}>
                   <Copy className="h-4 w-4 mr-2" />
                   {copied ? '已复制' : '复制'}
                 </Button>
               </div>
               <div className="text-xs text-muted-foreground break-all">{shareUrl}</div>
-              <div className="flex items-center justify-center">
-                <QrCode text={shareUrl} size={200} className="rounded-md border" />
+              <div className="aurora-share-link-qr flex items-center justify-center">
+                <QrCode text={shareUrl} size={200} className="rounded-md" />
               </div>
               {meta?.expires_at && (
                 <div className="text-xs text-muted-foreground">

@@ -228,7 +228,7 @@ export function QuestionLibraryCard(props: Props) {
   return (
     <div
       className={cn(
-        'rounded-xl border bg-background p-4 shadow-sm hover:shadow-md transition-shadow',
+        'aurora-question-card p-4',
         bulkEnabled && bulkSelected && 'ring-2 ring-primary/20 border-primary/40'
       )}
     >
@@ -284,7 +284,7 @@ export function QuestionLibraryCard(props: Props) {
       </button>
 
       {inlineOpen && (inlineAnswer || inlineAnalysis || inlineLoading) && (
-        <div className="mt-3 rounded-lg border bg-muted/20 p-3 space-y-3">
+        <div className="aurora-question-answer mt-3 space-y-3 p-3">
           {inlineLoading && (
             <div className="text-xs text-muted-foreground flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" />

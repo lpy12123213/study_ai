@@ -12,6 +12,19 @@ from backend.generation.question_library import preview_store
 
 
 class TestQuestionLibraryApi(unittest.TestCase):
+    def setUp(self) -> None:
+        self._runtime_patch = patch.dict("os.environ", {"AGENT_RUNTIME": "legacy"}, clear=False)
+        self._runtime_patch.start()
+        self._reference_patch = patch(
+            "backend.generation.question_library.runner.collect_reference_questions",
+            new=AsyncMock(return_value={"questions": []}),
+        )
+        self._reference_patch.start()
+
+    def tearDown(self) -> None:
+        self._reference_patch.stop()
+        self._runtime_patch.stop()
+
     def _override_auth(self, app) -> None:
         app.dependency_overrides[require_auth] = lambda: {"user_id": "u-1", "username": "alice", "role": "user"}
 
@@ -49,6 +62,53 @@ class TestQuestionLibraryApi(unittest.TestCase):
         resp = client.post("/api/question-library/items/bulk-delete", json={"question_ids": ["q1"]})
         # Auth will block; we only assert that it's not a 404/405.
         self.assertNotIn(resp.status_code, {404, 405})
+
+    def test_list_items_forwards_local_filter_params(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        mock_list = AsyncMock(
+            return_value={"success": True, "total": 0, "include_total": True, "items": [], "limit": 80, "offset": 0}
+        )
+        try:
+            client = TestClient(app)
+            with patch("backend.api.question_library.list_question_library_items", new=mock_list):
+                resp = client.get(
+                    "/api/question-library/items",
+                    params={
+                        "subject": "高中数学",
+                        "origin": "crawled",
+                        "hidden": "0",
+                        "q": "函数",
+                        "exam_scene": "期末",
+                        "question_type": "单选题",
+                        "difficulty": "容易",
+                        "category": "新文化题",
+                        "year": "2024",
+                        "region": "北京",
+                        "grade": "高三",
+                        "semester": "期末",
+                        "method": "分类讨论",
+                        "only_new": "true",
+                        "limit": "80",
+                    },
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        self.assertEqual(resp.status_code, 200)
+        mock_list.assert_awaited_once()
+        kwargs = mock_list.await_args.kwargs
+        self.assertEqual(kwargs["user_id"], "u-1")
+        self.assertEqual(kwargs["exam_scene"], "期末")
+        self.assertEqual(kwargs["question_type"], "单选题")
+        self.assertEqual(kwargs["difficulty"], "容易")
+        self.assertEqual(kwargs["category"], "新文化题")
+        self.assertEqual(kwargs["year"], "2024")
+        self.assertEqual(kwargs["region"], "北京")
+        self.assertEqual(kwargs["grade"], "高三")
+        self.assertEqual(kwargs["semester"], "期末")
+        self.assertEqual(kwargs["method"], "分类讨论")
+        self.assertIs(kwargs["only_new"], True)
 
     def test_latest_pending_preview_returns_current_users_latest_draft(self) -> None:
         app = create_app()
@@ -608,9 +668,32 @@ class TestQuestionLibraryApi(unittest.TestCase):
     def test_subject_knowledge_tree_endpoint_returns_unified_nodes(self) -> None:
         app = create_app()
         self._override_auth(app)
-        client = TestClient(app)
-        resp = client.get("/api/subjects/高中数学/knowledge-tree?grade_id=1&textbook_version_id=1")
-        app.dependency_overrides.clear()
+        fake_crawler = AsyncMock()
+        fake_crawler.get_knowledge_tree = AsyncMock(
+            return_value={
+                "success": True,
+                "nodes": [
+                    {
+                        "id": "root",
+                        "label": "高中数学知识点",
+                        "type": "root",
+                        "children": [],
+                    }
+                ],
+            }
+        )
+        fake_crawler.get_available_filters = AsyncMock(
+            return_value={
+                "grades": [{"id": 1, "name": "高一"}],
+                "textbook_versions": [{"id": 1, "name": "人教版"}],
+            }
+        )
+        try:
+            client = TestClient(app)
+            with patch("backend.api.subjects.get_crawler", new=AsyncMock(return_value=fake_crawler)):
+                resp = client.get("/api/subjects/高中数学/knowledge-tree?grade_id=1&textbook_version_id=1")
+        finally:
+            app.dependency_overrides.clear()
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()

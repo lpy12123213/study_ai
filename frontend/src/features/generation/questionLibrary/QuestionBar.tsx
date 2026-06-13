@@ -112,7 +112,7 @@ export function QuestionBar() {
   }
 
   return (
-    <div className={cn('border-t bg-background', expanded ? 'h-[240px]' : 'h-[54px]')}>
+    <div className={cn('aurora-question-basket border-t', expanded ? 'h-[240px]' : 'h-[54px]')}>
       <div className="h-[54px] px-4 flex items-center justify-between gap-3">
         <button
           type="button"
@@ -148,7 +148,7 @@ export function QuestionBar() {
       </div>
 
       {expanded && (
-        <div className="h-[calc(240px-54px)] border-t">
+        <div className="h-[calc(240px-54px)] border-t border-border">
           <ScrollArea className="h-full">
             <div className="p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -169,7 +169,7 @@ export function QuestionBar() {
               </div>
 
               {sourceMode !== 'zujuan' && (
-                <div className="flex flex-wrap items-center gap-4 rounded-md border bg-muted/20 p-3 text-sm">
+                <div className="aurora-question-answer flex flex-wrap items-center gap-4 p-3 text-sm">
                   <div className="flex items-center gap-2">
                     <Switch checked={includeAnswer} onCheckedChange={(v: boolean) => setIncludeAnswer(Boolean(v))} />
                     <div className="text-xs text-muted-foreground select-none">包含答案</div>
@@ -184,7 +184,7 @@ export function QuestionBar() {
               <div className="text-xs text-muted-foreground">题目列表</div>
               <div className="space-y-2">
                 {items.map((it) => (
-                  <div key={it.questionId} className="rounded-md border p-2 flex items-start justify-between gap-2">
+                  <div key={it.questionId} className="aurora-question-card flex items-start justify-between gap-2 p-2">
                     <div className="min-w-0">
                       <div className="text-xs font-mono text-muted-foreground truncate">{it.questionId}</div>
                       {it.stem && <div className="text-sm text-foreground/80 line-clamp-2 mt-1">{it.stem}</div>}

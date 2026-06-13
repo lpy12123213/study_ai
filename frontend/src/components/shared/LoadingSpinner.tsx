@@ -15,7 +15,7 @@ export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) 
 
   return (
     <Loader2
-      className={cn('animate-spin text-muted-foreground', sizeClasses[size], className)}
+      className={cn('aurora-loading-spinner animate-spin text-muted-foreground', sizeClasses[size], className)}
     />
   )
 }

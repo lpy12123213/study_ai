@@ -37,7 +37,7 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_generate_full_paper_can_use_legacy_runner_for_rollback(self) -> None:
         from backend.generation.paper_compose import full_paper_workflow
 
-        with patch.dict(os.environ, {"PAPER_COMPOSE_AGENTIC_FULL": "0"}, clear=False), patch.object(
+        with patch.dict(os.environ, {"AGENT_RUNTIME": "legacy", "PAPER_COMPOSE_AGENTIC_FULL": "0"}, clear=False), patch.object(
             full_paper_workflow,
             "run_agentic_full_paper_events",
             side_effect=AssertionError("agentic runner should not run"),
@@ -90,29 +90,58 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
             create_default_prompt_registry().render("paper_compose.planner.v1").content,
         )
 
-    async def test_paper_compose_runner_uses_legacy_blueprint_by_default(self) -> None:
+    async def test_agentic_paper_compose_uses_codex_runtime(self) -> None:
+        from backend.generation.paper_compose import agentic_workflow
+
+        async def fake_codex_events(*_args, **_kwargs):
+            yield {"type": "progress", "progress": 3.0, "stage": "codex_runtime_start"}
+            yield {"type": "result", "result": {"paper_id": 31, "paper_name": "codex-runtime"}}
+
+        with patch.object(
+            agentic_workflow,
+            "run_codex_runtime_agent_events",
+            side_effect=fake_codex_events,
+            create=True,
+        ) as codex_run, patch.object(
+            agentic_workflow,
+            "PaperComposePlanner",
+            side_effect=AssertionError("legacy PaperComposePlanner should not run"),
+        ):
+            events = [
+                event
+                async for event in agentic_workflow.run_agentic_blueprint_paper_events(
+                    {"subject": "高中数学", "paperName": "测试卷"},
+                    user_id="u-1",
+                )
+            ]
+
+        codex_run.assert_called_once()
+        self.assertEqual(events[-1]["type"], "result")
+        self.assertEqual(events[-1]["result"]["paper_id"], 31)
+
+    async def test_paper_compose_runner_uses_codex_runtime_agentic_blueprint_by_default(self) -> None:
         from backend.shared.tasks import RuntimeTask
         from backend.tasks import runners
 
-        async def fake_legacy_events(*_args, **_kwargs):
-            yield {"type": "result", "result": {"paper_id": 21, "paper_name": "legacy"}}
+        async def fake_agentic_events(*_args, **_kwargs):
+            yield {"type": "result", "result": {"paper_id": 21, "paper_name": "codex-runtime"}}
 
         task = RuntimeTask(
-            task_id="compose-legacy",
+            task_id="compose-codex",
             user_id="u-1",
             task_type="paper_compose",
-            title="legacy",
+            title="codex",
             request={"subject": "高中数学", "paperName": "测试卷"},
         )
 
         with patch.dict(os.environ, {}, clear=True), patch.object(
             runners,
-            "compose_paper_events",
-            side_effect=fake_legacy_events,
-        ) as legacy_run, patch.object(
-            runners,
             "run_agentic_blueprint_paper_events",
-            side_effect=AssertionError("agentic blueprint should not run by default"),
+            side_effect=fake_agentic_events,
+        ) as agentic_run, patch.object(
+            runners,
+            "compose_paper_events",
+            side_effect=AssertionError("legacy blueprint should not run by default"),
         ), patch.object(
             runners.task_runtime,
             "append_event",
@@ -124,9 +153,98 @@ class PaperComposeAgenticWorkflowTests(unittest.IsolatedAsyncioTestCase):
         ) as complete:
             await runners.run_paper_compose_task(task, user_id="u-1")
 
-        legacy_run.assert_called_once()
+        agentic_run.assert_called_once()
         complete.assert_awaited_once()
         self.assertEqual(complete.await_args.kwargs["result"]["paper_id"], 21)
+
+    async def test_agentic_paper_compose_falls_back_to_legacy_when_codex_fails(self) -> None:
+        """If codex runtime errors and ``CODEX_RUNTIME_FALLBACK_LEGACY=1``, the
+        workflow must keep going via the legacy planner instead of bubbling up
+        the error and failing the task."""
+
+        from backend.generation.paper_compose import agentic_workflow
+
+        async def failing_codex_events(*_args, **_kwargs):
+            yield {"type": "error", "data": {"code": "codex_runtime_failed"}}
+
+        from backend.generation.agentic.types import AgentTraceEvent
+
+        async def legacy_runtime_events(self, _spec):  # noqa: ARG001
+            yield AgentTraceEvent(event="finish", data={})
+
+        with patch.object(
+            agentic_workflow,
+            "is_codex_runtime_agent_runtime",
+            return_value=True,
+        ), patch.object(
+            agentic_workflow,
+            "legacy_agent_fallback_enabled",
+            return_value=True,
+        ), patch.object(
+            agentic_workflow,
+            "run_codex_runtime_agent_events",
+            side_effect=failing_codex_events,
+        ) as codex_run, patch.object(
+            agentic_workflow.AgentRuntime,
+            "run",
+            new=legacy_runtime_events,
+        ), patch.object(
+            agentic_workflow,
+            "_result_from_context",
+            return_value={"paper_id": 99, "paper_name": "legacy-fallback"},
+        ):
+            events = [
+                event
+                async for event in agentic_workflow.run_agentic_blueprint_paper_events(
+                    {"subject": "高中数学", "paperName": "测试卷"},
+                    user_id="u-1",
+                )
+            ]
+
+        codex_run.assert_called_once()
+        # We must see the fallback bookkeeping progress + the legacy result.
+        self.assertTrue(any(event.get("stage") == "codex_runtime_fallback" for event in events))
+        self.assertEqual(events[-1]["type"], "result")
+        self.assertEqual(events[-1]["result"]["paper_id"], 99)
+        # And we must NOT have surfaced the codex error to the caller.
+        self.assertFalse(any(event.get("type") == "error" for event in events))
+
+    async def test_agentic_paper_compose_propagates_error_when_no_fallback(self) -> None:
+        """Without ``CODEX_RUNTIME_FALLBACK_LEGACY`` enabled, codex errors must
+        bubble up so the task fails fast instead of silently switching runtime."""
+
+        from backend.generation.paper_compose import agentic_workflow
+
+        async def failing_codex_events(*_args, **_kwargs):
+            yield {"type": "error", "data": {"code": "codex_runtime_failed"}}
+
+        with patch.object(
+            agentic_workflow,
+            "is_codex_runtime_agent_runtime",
+            return_value=True,
+        ), patch.object(
+            agentic_workflow,
+            "legacy_agent_fallback_enabled",
+            return_value=False,
+        ), patch.object(
+            agentic_workflow,
+            "run_codex_runtime_agent_events",
+            side_effect=failing_codex_events,
+        ), patch.object(
+            agentic_workflow,
+            "PaperComposePlanner",
+            side_effect=AssertionError("legacy must not run when fallback is disabled"),
+        ):
+            events = [
+                event
+                async for event in agentic_workflow.run_agentic_blueprint_paper_events(
+                    {"subject": "高中数学", "paperName": "测试卷"},
+                    user_id="u-1",
+                )
+            ]
+
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertEqual(events[-1]["data"]["code"], "codex_runtime_failed")
 
     async def test_paper_compose_runner_uses_agentic_blueprint_when_enabled(self) -> None:
         from backend.shared.tasks import RuntimeTask

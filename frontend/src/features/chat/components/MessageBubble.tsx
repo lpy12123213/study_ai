@@ -40,7 +40,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
     return (
       <div className="aurora-chat-assistant flex flex-col gap-2 mb-8 max-w-3xl w-full">
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-          <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+          <div className="aurora-chat-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
             <BrandMark size={12} />
           </div>
           <span>{APP_ASSISTANT_NAME}</span>
@@ -53,7 +53,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
             <Button
               variant="outline"
               size="sm"
-              className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+              className="aurora-chat-steps-button h-8 text-xs font-normal gap-1.5"
               onClick={() => setShowSteps(!showSteps)}
             >
               <Sparkles className="h-3.5 w-3.5 text-primary" />
@@ -62,7 +62,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
             </Button>
 
             {showSteps && (
-              <div className="aurora-tool-card mt-3 overflow-hidden rounded-lg border border-border bg-card" data-state="success">
+              <div className="aurora-chat-steps-panel mt-3 overflow-hidden rounded-lg" data-state="success">
                 <div className="p-4">
                   <TaskTimeline steps={message.steps} />
                 </div>
@@ -81,7 +81,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
       className="aurora-chat-assistant flex flex-col gap-2 mb-8 max-w-3xl w-full"
     >
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-        <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+        <div className="aurora-chat-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
           <BrandMark size={12} />
         </div>
         <span>{APP_ASSISTANT_NAME}</span>
@@ -94,7 +94,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+            className="aurora-chat-steps-button h-8 text-xs font-normal gap-1.5"
             onClick={() => setShowSteps(!showSteps)}
           >
             <Sparkles className="h-3.5 w-3.5 text-primary" />
@@ -108,7 +108,7 @@ export function MessageBubble({ message, disableMotion }: { message: Message; di
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="aurora-tool-card mt-3 overflow-hidden rounded-lg border border-border bg-card"
+                className="aurora-chat-steps-panel mt-3 overflow-hidden rounded-lg"
                 data-state="success"
               >
                 <div className="p-4">

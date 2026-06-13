@@ -44,13 +44,13 @@ export function DraggableDivider({ onDrag }: { onDrag: (deltaX: number) => void 
 
   return (
     <div
-      className="w-2 shrink-0 cursor-col-resize flex items-center justify-center group hover:bg-primary/10 transition-colors relative z-10"
+      className="aurora-draggable-divider w-2 shrink-0 cursor-col-resize flex items-center justify-center group hover:bg-primary/10 transition-colors relative z-10"
       onMouseDown={onMouseDown}
       role="separator"
       aria-orientation="vertical"
       tabIndex={0}
     >
-      <GripVertical className="h-5 w-5 text-muted-foreground/30 group-hover:text-primary/50 transition-colors" />
+      <GripVertical className="aurora-draggable-divider-grip h-5 w-5 text-muted-foreground/30 group-hover:text-primary/50 transition-colors" />
     </div>
   )
 }

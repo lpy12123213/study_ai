@@ -140,7 +140,7 @@ export function FeedbackDialog(props: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="aurora-feedback-dialog max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Bug className="h-4 w-4 text-primary" />
@@ -159,6 +159,7 @@ export function FeedbackDialog(props: {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="例如：导出 PDF 失败"
+              className="aurora-feedback-input"
             />
           </div>
 
@@ -178,7 +179,7 @@ export function FeedbackDialog(props: {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" asChild>
+            <Button type="button" variant="outline" size="sm" className="aurora-feedback-secondary" asChild>
               <label className="cursor-pointer">
                 <Paperclip className="h-4 w-4 mr-2" />
                 附加截图（可选）
@@ -197,6 +198,7 @@ export function FeedbackDialog(props: {
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="aurora-feedback-secondary"
                 onClick={() => handlePickScreenshot(null)}
                 aria-label="移除截图"
               >
@@ -208,13 +210,13 @@ export function FeedbackDialog(props: {
           </div>
 
           {screenshotDataUrl && (
-            <div className="rounded-md border p-2 bg-muted/10">
+            <div className="aurora-feedback-preview rounded-md p-2">
               <div className="text-xs text-muted-foreground mb-2">截图预览：{screenshotName}</div>
               <img src={screenshotDataUrl} alt={screenshotName} className="max-h-56 rounded-md border object-contain" />
             </div>
           )}
 
-          <div className="rounded-md border bg-muted/10 p-3">
+          <div className="aurora-feedback-context rounded-md p-3">
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-medium">将提交的上下文</div>
               <div className="flex items-center gap-2">
@@ -222,6 +224,7 @@ export function FeedbackDialog(props: {
                   type="button"
                   size="sm"
                   variant="outline"
+                  className="aurora-feedback-secondary"
                   onClick={async () => {
                     const ok = await copyToClipboard(payloadPreview)
                     setCopied(ok)
@@ -231,23 +234,23 @@ export function FeedbackDialog(props: {
                   <Copy className="h-4 w-4 mr-2" />
                   {copied ? '已复制' : '复制'}
                 </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={() => navigate('/feedback')}>
+                <Button type="button" size="sm" variant="ghost" className="aurora-feedback-secondary" onClick={() => navigate('/feedback')}>
                   <ExternalLink className="h-4 w-4 mr-2" />
                   反馈列表
                 </Button>
               </div>
             </div>
-            <pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-background/60 p-2 text-[11px] leading-5">
+            <pre className="aurora-feedback-payload mt-2 max-h-48 overflow-auto rounded-md p-2 text-[11px] leading-5">
               {payloadPreview}
             </pre>
           </div>
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>
+          <Button type="button" className="aurora-feedback-secondary" variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>
             取消
           </Button>
-          <Button type="button" onClick={() => create.mutate()} disabled={create.isPending}>
+          <Button type="button" className="aurora-feedback-primary" onClick={() => create.mutate()} disabled={create.isPending}>
             {create.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
             提交反馈
           </Button>

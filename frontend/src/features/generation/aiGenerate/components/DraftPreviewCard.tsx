@@ -44,10 +44,11 @@ export function DraftPreviewCard({
   }
 
   return (
-    <Card className="border-primary/20">
+    <Card className="aurora-ai-draft overflow-hidden">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
+            <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">Review chamber</div>
             <CardTitle className="text-base">待审核草稿</CardTitle>
             <div className="text-xs text-muted-foreground mt-1">
               {meta.subject} · {meta.topic} · {meta.count} 题 · {meta.previewId}
@@ -82,7 +83,7 @@ export function DraftPreviewCard({
 
         <div className="space-y-4">
           {draftQuestions.map((q, idx) => (
-            <div key={q.question_id} className="rounded-lg border p-4 space-y-3">
+            <div key={q.question_id} className="aurora-ai-draft-item space-y-3 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium">
                   #{idx + 1} · {q.question_id}

@@ -16,7 +16,7 @@ export function SettingsSidebar(opts: { activeTab: SettingsTabId; onSelectTab: (
   const { activeTab, onSelectTab } = opts
 
   return (
-    <aside className="w-full md:w-64 border-b md:border-b-0 md:border-r border-border bg-muted/30 p-4 md:p-6 overflow-x-auto md:overflow-y-auto flex-shrink-0">
+    <aside className="aurora-settings-sidebar w-full md:w-64 p-4 md:p-6 overflow-x-auto md:overflow-y-auto flex-shrink-0">
       <div className="mb-6 hidden md:block">
         <h1 className="text-2xl font-bold tracking-tight">设置</h1>
         <p className="text-sm text-muted-foreground mt-1">管理你的账户和应用偏好</p>
@@ -30,8 +30,8 @@ export function SettingsSidebar(opts: { activeTab: SettingsTabId; onSelectTab: (
             className={cn(
               'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap',
               activeTab === tab.id
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                ? 'aurora-settings-tab is-active'
+                : 'aurora-settings-tab text-muted-foreground hover:text-foreground'
             )}
           >
             <tab.icon className="h-4 w-4" />

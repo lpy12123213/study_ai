@@ -42,7 +42,7 @@ export function ToastHost() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed top-14 right-4 z-[60] flex flex-col gap-2 w-[340px] max-w-[calc(100vw-2rem)]">
+    <div className="aurora-toast-host fixed top-14 right-4 z-[60] flex flex-col gap-2 w-[340px] max-w-[calc(100vw-2rem)]">
       {toasts.map((t) => {
         const s = String(t.status)
         const isFail = s === 'failed' || s === 'canceled' || s === 'cancelled'
@@ -51,8 +51,8 @@ export function ToastHost() {
           <div
             key={t.id}
             className={cn(
-              'rounded-lg border bg-background/95 backdrop-blur-sm shadow-lg p-3',
-              isFail ? 'border-destructive/30' : 'border-border/60'
+              'aurora-toast-card rounded-lg p-3',
+              isFail ? 'aurora-toast-card-fail border-destructive/30' : 'border-border/60'
             )}
           >
             <div className="flex items-start gap-2">

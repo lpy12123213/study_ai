@@ -12,7 +12,7 @@ export function AccountPanel({ user }: { user: User | null }) {
   const roleLabel = role ? roleLabels[role] || String(user?.role || '普通用户') : '普通用户'
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="aurora-settings-panel space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
         <h2 className="text-lg font-medium">账户信息</h2>
         <p className="text-sm text-muted-foreground">查看和管理你的个人资料</p>
@@ -20,8 +20,8 @@ export function AccountPanel({ user }: { user: User | null }) {
       <Separator />
       {user ? (
         <div className="space-y-6">
-          <div className="flex items-center gap-4">
-            <div className="h-20 w-20 rounded-full bg-primary/10 text-primary flex items-center justify-center text-2xl font-bold">
+          <div className="aurora-settings-account-card flex items-center gap-4">
+            <div className="aurora-settings-avatar h-20 w-20 rounded-full text-primary flex items-center justify-center text-2xl font-bold">
               {user.username.charAt(0).toUpperCase()}
             </div>
             <div>
@@ -36,7 +36,7 @@ export function AccountPanel({ user }: { user: User | null }) {
           <p className="text-sm text-muted-foreground">当前为本地模式，无需登录。</p>
         </div>
       ) : (
-        <div className="text-center py-8 bg-muted/30 rounded-lg border border-dashed">
+        <div className="aurora-settings-empty text-center py-8 rounded-lg border border-dashed">
           <p className="text-muted-foreground">当前为本地模式，无需登录。</p>
         </div>
       )}

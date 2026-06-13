@@ -48,7 +48,7 @@ export function TagEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px]">
+      <DialogContent className="aurora-tag-dialog sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle>{t('tagDialog.title')}</DialogTitle>
           <DialogDescription className="truncate">{itemTitle}</DialogDescription>
@@ -64,6 +64,7 @@ export function TagEditDialog({
               value={value}
               onChange={(event) => onValueChange(event.target.value)}
               placeholder={t('tagDialog.placeholder')}
+              className="aurora-tag-dialog-input"
             />
           </div>
 
@@ -73,7 +74,7 @@ export function TagEditDialog({
                 <button
                   key={tag}
                   type="button"
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary px-2 py-1 text-xs text-secondary-foreground"
+                  className="aurora-tag-dialog-pill inline-flex items-center gap-1 rounded-md border border-border bg-secondary px-2 py-1 text-xs text-secondary-foreground"
                   onClick={() => setTags(selectedTags.filter((item) => item !== tag))}
                 >
                   {tag}
@@ -84,13 +85,18 @@ export function TagEditDialog({
           )}
 
           {candidateTags.length > 0 && (
-            <Command className="rounded-md border border-border">
-              <CommandInput placeholder={t('tagDialog.searchPlaceholder')} />
+            <Command className="aurora-tag-dialog-command rounded-md border border-border">
+              <CommandInput className="aurora-tag-dialog-input" placeholder={t('tagDialog.searchPlaceholder')} />
               <CommandList>
                 <CommandEmpty>{t('tagDialog.empty')}</CommandEmpty>
                 <CommandGroup heading={t('tagDialog.existing')}>
                   {candidateTags.map((tag) => (
-                    <CommandItem key={tag} value={tag} onSelect={() => setTags([...selectedTags, tag])}>
+                    <CommandItem
+                      key={tag}
+                      className="aurora-tag-dialog-command-item"
+                      value={tag}
+                      onSelect={() => setTags([...selectedTags, tag])}
+                    >
                       <Tag className="mr-2 h-3.5 w-3.5" />
                       <span>{tag}</span>
                       <Check className="ml-auto h-3.5 w-3.5 opacity-0" />
@@ -103,10 +109,10 @@ export function TagEditDialog({
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" className="aurora-tag-dialog-secondary" variant="outline" onClick={() => onOpenChange(false)}>
             {t('tagDialog.cancel')}
           </Button>
-          <Button type="button" onClick={onSave}>
+          <Button type="button" className="aurora-tag-dialog-primary" onClick={onSave}>
             {t('tagDialog.save')}
           </Button>
         </DialogFooter>

@@ -62,14 +62,14 @@ export function AnnotationDialog(props: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px]">
+      <DialogContent className="aurora-annotation-dialog sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>添加批注</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-3">
           {snippet && (
-            <div className="text-xs text-muted-foreground rounded-md border bg-muted/20 p-2 whitespace-pre-wrap">
+            <div className="aurora-annotation-snippet text-xs text-muted-foreground rounded-md p-2 whitespace-pre-wrap">
               {snippet}
             </div>
           )}
@@ -91,14 +91,19 @@ export function AnnotationDialog(props: {
               <Tag className="h-4 w-4" />
               标签（逗号分隔，可选）
             </div>
-            <Input value={tagsText} onChange={(e) => setTagsText(e.target.value)} placeholder="例如：未解决, 重点, 易错" />
+            <Input
+              value={tagsText}
+              onChange={(e) => setTagsText(e.target.value)}
+              placeholder="例如：未解决, 重点, 易错"
+              className="aurora-shared-input"
+            />
           </div>
 
           <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" className="aurora-shared-secondary-action" variant="outline" onClick={() => onOpenChange(false)}>
               取消
             </Button>
-            <Button type="button" onClick={save} disabled={isSaving || !content.trim()}>
+            <Button type="button" className="aurora-shared-primary-action" onClick={save} disabled={isSaving || !content.trim()}>
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : '保存'}
             </Button>
           </div>

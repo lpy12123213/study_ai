@@ -188,13 +188,17 @@ async def list_item_meta(
     if pinned is not None:
         where.append(UserItemMeta.pinned == (1 if pinned else 0))
 
+    if tag and str(tag).strip():
+        t = str(tag).strip()
+        like = f"%{t}%"
+        where.append(UserItemMeta.tags_json.like(like))
+
     stmt = select(UserItemMeta).where(and_(*where)).order_by(UserItemMeta.updated_at.desc()).limit(int(limit or 200))
     res = await session.execute(stmt)
     rows = res.scalars().all()
 
     out = [_row_to_dict(r) for r in rows]
-    if tag:
+    if tag and str(tag).strip():
         t = str(tag).strip()
-        if t:
-            out = [x for x in out if t in set([str(v).strip() for v in (x.get("tags") or [])])]
+        out = [x for x in out if t in {str(v).strip() for v in (x.get("tags") or [])}]
     return out

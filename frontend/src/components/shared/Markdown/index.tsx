@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 
 const REMARK_PLUGINS = [remarkGfm, remarkMath]
 const REHYPE_PLUGINS = [rehypeKatex]
-const DEFAULT_MARKDOWN_CLASS = 'prose prose-sm dark:prose-invert max-w-none'
+const DEFAULT_MARKDOWN_CLASS = 'aurora-markdown prose prose-sm dark:prose-invert max-w-none'
 
 export type MarkdownProps = {
   markdown?: string
@@ -51,8 +51,8 @@ function linkClassName(href: string): string {
   const url = String(href || '')
   const isDownload = isGeneratedMediaResource(url) && /\.(md|pdf|tex|zip|png|jpg|jpeg|webp)$/i.test(url)
   return isDownload
-    ? 'inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground no-underline hover:bg-primary/90'
-    : 'text-primary underline underline-offset-4 hover:opacity-90'
+    ? 'aurora-markdown-download-link inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground no-underline hover:bg-primary/90'
+    : 'aurora-markdown-link text-primary underline underline-offset-4 hover:opacity-90'
 }
 
 const secureComponents: Components = {
@@ -91,7 +91,7 @@ const secureComponents: Components = {
   },
   img: ({ src, alt, className }) => {
     const rawSrc = typeof src === 'string' ? src : ''
-    return <AuthImage src={rawSrc} alt={alt} className={typeof className === 'string' ? className : undefined} />
+    return <AuthImage src={rawSrc} alt={alt} className={cn('aurora-markdown-image', typeof className === 'string' ? className : undefined)} />
   },
 }
 

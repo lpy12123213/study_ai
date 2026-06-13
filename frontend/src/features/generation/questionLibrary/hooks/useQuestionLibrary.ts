@@ -13,6 +13,16 @@ export interface QuestionLibraryFilters {
   origin: QuestionOrigin | 'all'
   hidden: '0' | '1' | 'all'
   q: string
+  examScene: string
+  questionType: string
+  difficulty: string
+  category: string
+  year: string
+  region: string
+  grade: string
+  semester: string
+  method: string
+  onlyNew: boolean
   sort: 'updated_at' | 'ai_score'
   order: 'desc' | 'asc'
 }
@@ -29,6 +39,16 @@ export function useQuestionLibrary(options?: {
       origin: initial.origin ?? 'all',
       hidden: initial.hidden ?? '0',
       q: typeof initial.q === 'string' ? initial.q : '',
+      examScene: typeof initial.examScene === 'string' ? initial.examScene : '',
+      questionType: typeof initial.questionType === 'string' ? initial.questionType : '',
+      difficulty: typeof initial.difficulty === 'string' ? initial.difficulty : '',
+      category: typeof initial.category === 'string' ? initial.category : '',
+      year: typeof initial.year === 'string' ? initial.year : '',
+      region: typeof initial.region === 'string' ? initial.region : '',
+      grade: typeof initial.grade === 'string' ? initial.grade : '',
+      semester: typeof initial.semester === 'string' ? initial.semester : '',
+      method: typeof initial.method === 'string' ? initial.method : '',
+      onlyNew: typeof initial.onlyNew === 'boolean' ? initial.onlyNew : false,
       sort: initial.sort ?? 'updated_at',
       order: initial.order ?? 'desc',
     }
@@ -44,6 +64,16 @@ export function useQuestionLibrary(options?: {
         origin: filters.origin === 'all' ? undefined : filters.origin,
         hidden: filters.hidden,
         q: filters.q.trim() ? filters.q.trim() : undefined,
+        exam_scene: filters.examScene.trim() ? filters.examScene.trim() : undefined,
+        question_type: filters.questionType.trim() ? filters.questionType.trim() : undefined,
+        difficulty: filters.difficulty.trim() ? filters.difficulty.trim() : undefined,
+        category: filters.category.trim() ? filters.category.trim() : undefined,
+        year: filters.year.trim() ? filters.year.trim() : undefined,
+        region: filters.region.trim() ? filters.region.trim() : undefined,
+        grade: filters.grade.trim() ? filters.grade.trim() : undefined,
+        semester: filters.semester.trim() ? filters.semester.trim() : undefined,
+        method: filters.method.trim() ? filters.method.trim() : undefined,
+        only_new: filters.onlyNew || undefined,
         sort: filters.sort,
         order: filters.order,
         limit: 80,
@@ -83,6 +113,13 @@ export function useQuestionLibrary(options?: {
   const setOrigin = (origin: QuestionOrigin | 'all') => setFilters((prev) => ({ ...prev, origin }))
   const setHidden = (hidden: '0' | '1' | 'all') => setFilters((prev) => ({ ...prev, hidden }))
   const setQuery = (q: string) => setFilters((prev) => ({ ...prev, q }))
+  const setExamScene = (examScene: string) => setFilters((prev) => ({ ...prev, examScene }))
+  const setQuestionType = (questionType: string) => setFilters((prev) => ({ ...prev, questionType }))
+  const setDifficulty = (difficulty: string) => setFilters((prev) => ({ ...prev, difficulty }))
+  const setCategory = (category: string) => setFilters((prev) => ({ ...prev, category }))
+  const setMoreFilter = (key: 'year' | 'region' | 'grade' | 'semester' | 'method', value: string) =>
+    setFilters((prev) => ({ ...prev, [key]: value }))
+  const setOnlyNew = (onlyNew: boolean) => setFilters((prev) => ({ ...prev, onlyNew }))
   const setSort = (sort: 'updated_at' | 'ai_score') => setFilters((prev) => ({ ...prev, sort }))
   const setOrder = (order: 'desc' | 'asc') => setFilters((prev) => ({ ...prev, order }))
 
@@ -92,6 +129,12 @@ export function useQuestionLibrary(options?: {
     setOrigin,
     setHidden,
     setQuery,
+    setExamScene,
+    setQuestionType,
+    setDifficulty,
+    setCategory,
+    setMoreFilter,
+    setOnlyNew,
     setSort,
     setOrder,
 

@@ -22,17 +22,17 @@ export function DraftRestoreBanner({
   return (
     <div
       className={cn(
-        'flex flex-col gap-3 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between',
+        'aurora-draft-restore-banner flex flex-col gap-3 rounded-lg px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between',
         className
       )}
     >
       <div className="text-muted-foreground">{description}</div>
       <div className="flex items-center gap-2">
-        <Button type="button" size="sm" onClick={onRestore}>
+        <Button type="button" className="aurora-shared-primary-action" size="sm" onClick={onRestore}>
           <RotateCcw className="mr-2 h-4 w-4" />
           恢复
         </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onDiscard}>
+        <Button type="button" className="aurora-shared-secondary-action" size="sm" variant="ghost" onClick={onDiscard}>
           <X className="mr-2 h-4 w-4" />
           丢弃
         </Button>

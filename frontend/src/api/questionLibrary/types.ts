@@ -46,6 +46,16 @@ export interface QuestionLibraryListParams {
   origin?: QuestionOrigin
   hidden?: '0' | '1' | 'all'
   q?: string
+  exam_scene?: string
+  question_type?: string
+  difficulty?: string
+  category?: string
+  year?: string
+  region?: string
+  grade?: string
+  semester?: string
+  method?: string
+  only_new?: boolean
   min_score?: number
   sort?: 'updated_at' | 'ai_score' | string
   order?: 'desc' | 'asc' | string

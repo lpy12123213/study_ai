@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, Loader2, Package, RotateCcw, X, FolderDown } from 'lucide-react'
+import { Download, Loader2, Package, RotateCcw, X, FolderDown, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -76,6 +76,19 @@ export default function ExportsPage() {
     () => Object.entries(selectedFiles).filter(([k, v]) => v && currentFilenameSet.has(k)).map(([k]) => k),
     [currentFilenameSet, selectedFiles],
   )
+  const exportStats = useMemo(() => {
+    const running = exportTasks.filter((task) => String(task.status || '') === 'running').length
+    const failed = exportTasks.filter((task) => String(task.status || '') === 'failed').length
+    const completed = exportTasks.filter((task) => String(task.status || '') === 'completed').length
+    return [
+      { label: '导出任务', value: `${exportTasks.length}` },
+      { label: '运行中', value: `${running}` },
+      { label: '失败', value: `${failed}` },
+      { label: '文件数', value: `${files.length}` },
+      { label: '已选文件', value: `${selectedList.length}` },
+      { label: '已完成', value: `${completed}` },
+    ]
+  }, [exportTasks, files.length, selectedList.length])
 
   useEffect(() => {
     setSelectedFiles((prev) => {
@@ -111,11 +124,26 @@ export default function ExportsPage() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-background">
-      <div className="border-b border-border p-4 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-10">
-        <div className="flex items-center gap-2 font-semibold">
-          <FolderDown className="h-4 w-4 text-primary" />
-          导出中心
+    <div className="aurora-exports-screen h-full flex flex-col overflow-hidden">
+      <div className="aurora-exports-hero p-4 flex items-center justify-between sticky top-0 z-10">
+        <div className="min-w-0">
+          <div className="aurora-kicker">
+            <Sparkles className="h-3.5 w-3.5" />
+            Export Delivery Dock
+          </div>
+          <div className="mt-2 flex items-center gap-2 font-semibold">
+            <FolderDown className="h-4 w-4 text-primary" />
+            导出中心
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">汇总试卷、资料、视频等导出任务与已生成文件，支持单独下载和批量打包。</p>
+        </div>
+        <div className="aurora-exports-stat-grid">
+          {exportStats.map((item) => (
+            <div key={item.label} className="aurora-exports-stat">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
         </div>
         <div className="flex items-center gap-2">
           {(['all', 'running', 'failed', 'completed'] as ExportStatusFilter[]).map((s) => (
@@ -133,8 +161,8 @@ export default function ExportsPage() {
       </div>
 
       <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-2 gap-4 p-4 overflow-hidden">
-        <Card className="flex flex-col min-h-0">
-          <div className="p-4 border-b border-border">
+        <Card className="aurora-exports-panel flex flex-col min-h-0">
+          <div className="aurora-exports-panel-head p-4">
             <div className="font-medium">导出队列</div>
             <div className="text-xs text-muted-foreground mt-1">来自试卷/资料的导出任务（支持取消/重试）。</div>
           </div>
@@ -152,13 +180,13 @@ export default function ExportsPage() {
               )}
 
               {exportTasks.map((t) => (
-                <div key={t.id} className="rounded-lg border p-3">
+                <div key={t.id} className="aurora-exports-task rounded-lg p-3" data-status={String(t.status || '')}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="font-medium text-sm truncate">{t.title}</div>
                       <div className="text-xs text-muted-foreground mt-1">
                         <span className={cn(
-                          'inline-flex items-center rounded px-1.5 py-0.5',
+                          'aurora-exports-status inline-flex items-center rounded px-1.5 py-0.5',
                           t.status === 'running' && 'bg-primary/10 text-primary',
                           t.status === 'failed' && 'bg-destructive/10 text-destructive',
                           t.status === 'completed' && 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
@@ -221,8 +249,8 @@ export default function ExportsPage() {
           </ScrollArea>
         </Card>
 
-        <Card className="flex flex-col min-h-0">
-          <div className="p-4 border-b border-border flex items-start justify-between gap-3">
+        <Card className="aurora-exports-panel flex flex-col min-h-0">
+          <div className="aurora-exports-panel-head p-4 flex items-start justify-between gap-3">
             <div>
               <div className="font-medium">导出文件</div>
               <div className="text-xs text-muted-foreground mt-1">所有已生成文件（可勾选打包下载）。</div>
@@ -252,7 +280,7 @@ export default function ExportsPage() {
               )}
 
               {files.map((f) => (
-                <div key={f.filename} className="rounded-lg border p-3">
+                <div key={f.filename} className="aurora-exports-file rounded-lg p-3">
                   <div className="flex items-start justify-between gap-3">
                     <label className="flex items-start gap-3 min-w-0 cursor-pointer">
                       <input
@@ -289,7 +317,7 @@ export default function ExportsPage() {
             </div>
           </ScrollArea>
           <Separator />
-          <div className="p-4 text-xs text-muted-foreground">
+          <div className="aurora-exports-foot p-4 text-xs text-muted-foreground">
             提示：下载会使用鉴权请求生成临时链接，避免泄露文件给其他用户。
           </div>
         </Card>

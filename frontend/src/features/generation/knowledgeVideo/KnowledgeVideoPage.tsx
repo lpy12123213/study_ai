@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Download, Film, Loader2, Play, RotateCcw, ShieldCheck, Video } from 'lucide-react'
+import { Download, Film, Loader2, Play, RotateCcw, ShieldCheck, Sparkles, Video } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -242,9 +242,20 @@ export default function KnowledgeVideoPage() {
     setSearchParams(next, { replace: true })
   }
 
+  const statusLabel =
+    status === 'running' ? '生成中' : status === 'completed' ? '已完成' : status === 'failed' ? '失败' : '待命'
+  const sourceMode = sourceArchiveId.trim() ? '归档引用' : sourceMarkdown.trim() ? '粘贴资料' : '纯主题生成'
+  const durationLabel = `${Math.max(10, Math.min(180, Number(durationSeconds) || 30))}s`
+  const videoStats = [
+    { label: '主题', value: topic.trim() || '待输入' },
+    { label: '时长', value: durationLabel },
+    { label: '素材', value: sourceMode },
+    { label: '画面', value: `${style} / ${quality}` },
+  ]
+
   return (
-    <div className="h-full min-h-0 flex flex-col bg-background">
-      <div className="border-b border-border p-4 flex items-center justify-between gap-3">
+    <div className="aurora-video-screen h-full min-h-0 flex flex-col">
+      <div className="aurora-video-topbar p-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <Film className="h-5 w-5 text-primary shrink-0" />
           <div className="font-semibold truncate">知识视频</div>
@@ -261,29 +272,48 @@ export default function KnowledgeVideoPage() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[420px_1fr] gap-4 p-4 overflow-hidden">
-        <Card className="min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[430px_1fr] gap-4 p-4 overflow-hidden">
+        <Card className="aurora-video-control min-h-0 flex flex-col">
+          <div className="aurora-video-hero">
+            <div className="aurora-kicker">
+              <Sparkles className="h-3.5 w-3.5" />
+              Video Learning Radar
+            </div>
+            <h1 className="mt-3 text-2xl font-semibold tracking-tight">知识视频生成舱</h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              将知识点、资料归档或粘贴文本转译为可播放的讲解动画，并保留脚本、字幕与任务时间线。
+            </p>
+            <div className="aurora-video-stat-grid">
+              {videoStats.map((item) => (
+                <div key={item.label} className="aurora-video-stat">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <ScrollArea className="flex-1">
             <div className="p-4 space-y-4">
               <label className="block space-y-1.5">
                 <span className="text-sm font-medium">主题</span>
-                <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="导数的几何意义" />
+                <Input className="aurora-video-input" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="导数的几何意义" />
               </label>
 
               <label className="block space-y-1.5">
                 <span className="text-sm font-medium">学科</span>
-                <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="高中数学" />
+                <Input className="aurora-video-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="高中数学" />
               </label>
 
               <div className="grid grid-cols-3 gap-3">
                 <label className="block space-y-1.5">
                   <span className="text-sm font-medium">时长</span>
-                  <Input value={durationSeconds} onChange={(e) => setDurationSeconds(e.target.value)} inputMode="numeric" />
+                  <Input className="aurora-video-input" value={durationSeconds} onChange={(e) => setDurationSeconds(e.target.value)} inputMode="numeric" />
                 </label>
                 <label className="block space-y-1.5">
                   <span className="text-sm font-medium">风格</span>
                   <select
-                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                    className="aurora-video-select h-9 w-full rounded-md border px-2 text-sm"
                     value={style}
                     onChange={(e) => setStyle(e.target.value)}
                   >
@@ -296,7 +326,7 @@ export default function KnowledgeVideoPage() {
                 <label className="block space-y-1.5">
                   <span className="text-sm font-medium">质量</span>
                   <select
-                    className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                    className="aurora-video-select h-9 w-full rounded-md border px-2 text-sm"
                     value={quality}
                     onChange={(e) => setQuality(e.target.value)}
                   >
@@ -309,7 +339,7 @@ export default function KnowledgeVideoPage() {
 
               <label className="block space-y-1.5">
                 <span className="text-sm font-medium">归档 ID</span>
-                <Input value={sourceArchiveId} onChange={(e) => setSourceArchiveId(e.target.value)} inputMode="numeric" />
+                <Input className="aurora-video-input" value={sourceArchiveId} onChange={(e) => setSourceArchiveId(e.target.value)} inputMode="numeric" />
               </label>
 
               <label className="block space-y-1.5">
@@ -338,7 +368,7 @@ export default function KnowledgeVideoPage() {
             </div>
           </ScrollArea>
 
-          <div className="border-t border-border p-4">
+          <div className="aurora-video-submit border-t border-border p-4">
             <Button type="button" className="w-full" disabled={!canSubmit} onClick={handleSubmit}>
               {status === 'running' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Play className="h-4 w-4 mr-2" />}
               生成视频
@@ -347,21 +377,24 @@ export default function KnowledgeVideoPage() {
         </Card>
 
         <div className="min-h-0 grid grid-rows-[auto_1fr] gap-4">
-          <Card className="p-4 space-y-3">
+          <Card className="aurora-video-progress p-4 space-y-3" data-status={status}>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 font-medium">
                 <ShieldCheck className="h-4 w-4 text-primary" />
                 {currentStage}
               </div>
-              <div className="text-sm text-muted-foreground">{Math.round(progress)}%</div>
+              <div className="flex items-center gap-2">
+                <Badge variant={status === 'failed' ? 'destructive' : status === 'completed' ? 'default' : 'secondary'}>{statusLabel}</Badge>
+                <div className="text-sm text-muted-foreground">{Math.round(progress)}%</div>
+              </div>
             </div>
             <Progress value={progress} />
             {error && <div className="text-sm text-destructive whitespace-pre-wrap break-words">{error}</div>}
           </Card>
 
           <div className="min-h-0 grid grid-cols-1 2xl:grid-cols-[1fr_380px] gap-4 overflow-hidden">
-            <Card className="min-h-0 flex flex-col overflow-hidden">
-              <div className="border-b border-border p-3 flex items-center justify-between gap-3">
+            <Card className="aurora-video-preview min-h-0 flex flex-col overflow-hidden">
+              <div className="border-b border-border/70 p-3 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 font-medium">
                   <Video className="h-4 w-4 text-primary" />
                   预览
@@ -384,16 +417,16 @@ export default function KnowledgeVideoPage() {
 
               <div className="flex-1 min-h-0 p-4">
                 {videoObjectUrl ? (
-                  <video className="h-full w-full bg-black rounded-md" src={videoObjectUrl} controls />
+                  <video className="aurora-video-player h-full w-full bg-black rounded-md" src={videoObjectUrl} controls />
                 ) : (
-                  <div className="h-full min-h-64 rounded-md border border-dashed border-border flex items-center justify-center text-sm text-muted-foreground">
+                  <div className="aurora-video-empty h-full min-h-64 rounded-md border border-dashed flex items-center justify-center text-sm text-muted-foreground">
                     {status === 'running' ? '渲染中…' : '等待视频'}
                   </div>
                 )}
               </div>
 
               {result?.script_url && (
-                <div className="border-t border-border p-3 space-y-2">
+                <div className="border-t border-border/70 p-3 space-y-2">
                   <div className="text-xs text-muted-foreground flex items-center justify-between gap-3">
                     <span className="font-mono break-all">{result.script_url}</span>
                     <Button type="button" size="sm" variant="ghost" onClick={() => downloadByUrl(result.script_url || '')}>
@@ -401,7 +434,7 @@ export default function KnowledgeVideoPage() {
                     </Button>
                   </div>
                   <div className="text-xs font-medium">生成脚本（只读）</div>
-                  <ScrollArea className="h-40 rounded-md border border-border bg-muted/30">
+                  <ScrollArea className="h-40 rounded-md border border-border/70 bg-muted/30">
                     <pre className="p-3 text-xs leading-relaxed whitespace-pre-wrap break-words font-mono">
                       {scriptText || scriptError || '脚本加载中'}
                     </pre>
@@ -410,7 +443,7 @@ export default function KnowledgeVideoPage() {
               )}
             </Card>
 
-            <Card className="min-h-0 overflow-hidden">
+            <Card className="aurora-video-timeline min-h-0 overflow-hidden">
               <ScrollArea className="h-full">
                 <div className="p-4">
                   <TaskTimeline steps={steps} />

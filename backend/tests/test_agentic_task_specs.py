@@ -38,6 +38,9 @@ class AgenticTaskSpecTests(unittest.TestCase):
                 self.assertGreater(spec.budget.max_iterations, 1)
                 self.assertTrue(spec.tool_policy.allowed_tools)
                 self.assertEqual(spec.metadata.get("native_agentic"), True)
+                self.assertEqual(spec.metadata.get("runtime"), "codex_runtime")
+                self.assertEqual(spec.metadata.get("approval_policy"), "never")
+                self.assertEqual(spec.metadata.get("sandbox_mode"), "workspace-write")
 
     def test_agentic_starter_event_preserves_task_step_shape_and_embeds_spec(self) -> None:
         from backend.generation.agentic.task_specs import build_agent_run_spec_for_task, build_agentic_starter_event
@@ -179,6 +182,7 @@ class AgenticTaskSubmitTests(unittest.IsolatedAsyncioTestCase):
                     spec = task.meta.get("agent_run_spec")
                     self.assertIsInstance(spec, dict)
                     self.assertEqual(spec.get("metadata", {}).get("native_agentic"), True)
+                    self.assertEqual(spec.get("metadata", {}).get("runtime"), "codex_runtime")
                     self.assertEqual(task.starter_event.get("data", {}).get("native_agentic"), True)
                     self.assertEqual(task.starter_event.get("step", {}).get("id"), "agent_run_started")
 
@@ -225,6 +229,7 @@ class AgenticTaskSubmitTests(unittest.IsolatedAsyncioTestCase):
                 spec = task.meta.get("agent_run_spec")
                 self.assertIsInstance(spec, dict)
                 self.assertEqual(spec.get("metadata", {}).get("native_agentic"), True)
+                self.assertEqual(spec.get("metadata", {}).get("runtime"), "codex_runtime")
                 self.assertEqual(task.starter_event.get("data", {}).get("native_agentic"), True)
                 self.assertEqual(task.starter_event.get("step", {}).get("id"), "agent_run_started")
 

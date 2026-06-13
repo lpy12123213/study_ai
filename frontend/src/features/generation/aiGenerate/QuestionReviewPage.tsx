@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Loader2, RefreshCcw, ShieldCheck, ShieldX } from 'lucide-react'
+import { ArrowLeft, Loader2, RefreshCcw, ShieldCheck, ShieldX, Sparkles } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   approveQuestionLibrarySessionQuestion,
@@ -61,17 +61,24 @@ function ReviewSection(props: {
   const { title, content, loading, onRegenerate } = props
 
   return (
-    <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
+    <div className="aurora-question-review-section rounded-[24px] p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="text-base font-semibold">{title}</div>
         {onRegenerate ? (
-          <Button type="button" variant="outline" size="sm" className="rounded-full" disabled={loading} onClick={onRegenerate}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="aurora-question-review-secondary-action rounded-full"
+            disabled={loading}
+            onClick={onRegenerate}
+          >
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
             {`重生成${title}`}
           </Button>
         ) : null}
       </div>
-      <div className="mt-4 rounded-[20px] border border-border/70 bg-background/90 p-4">
+      <div className="aurora-question-review-content mt-4 rounded-[20px] p-4">
         {content ? (
           <QuestionContent content={content} className="text-sm leading-7 text-foreground/90" />
         ) : (
@@ -89,7 +96,7 @@ function DiagramSection(props: {
   if (diagrams.length === 0) return null
 
   return (
-    <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
+    <div className="aurora-question-review-section rounded-[24px] p-4">
       <div className="text-base font-semibold">配图</div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {diagrams.map((item, index) => (
@@ -237,40 +244,49 @@ export function QuestionReviewPage() {
   const dimensions = useMemo(() => review?.dimensions || [], [review])
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="aurora-question-review-screen h-full overflow-y-auto p-6">
       <div className="mx-auto flex max-w-[1320px] flex-col gap-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="aurora-question-review-hero flex flex-wrap items-center justify-between gap-3 p-5">
           <div>
-            <div className="text-sm text-muted-foreground">AI 出题 / 单题审查</div>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight">生成题单题审查页</h1>
+            <div className="aurora-question-review-kicker">
+              <Sparkles className="h-4 w-4" />
+              <span>AI Question Review</span>
+            </div>
+            <h1>生成题单题审查页</h1>
+            <p>逐段审查题干、答案、解析与配图，并在通过或打回后自动推进下一题。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" className="rounded-full" onClick={() => navigate(`/ai-generate?session=${encodeURIComponent(sessionIdRef)}`)}>
+            <Button
+              type="button"
+              variant="outline"
+              className="aurora-question-review-secondary-action rounded-full"
+              onClick={() => navigate(`/ai-generate?session=${encodeURIComponent(sessionIdRef)}`)}
+            >
               <ArrowLeft className="h-4 w-4" />
               返回工作台
             </Button>
-            <Button asChild type="button" variant="ghost" className="rounded-full">
+            <Button asChild type="button" variant="ghost" className="aurora-question-review-ghost-action rounded-full">
               <Link to={`/ai-generate?session=${encodeURIComponent(sessionIdRef)}`}>继续处理会话</Link>
             </Button>
           </div>
         </div>
 
         {sessionQuery.isLoading ? (
-          <Card>
+          <Card className="aurora-question-review-card">
             <CardContent className="flex items-center justify-center py-16 text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               会话加载中
             </CardContent>
           </Card>
         ) : !question ? (
-          <Card>
+          <Card className="aurora-question-review-card">
             <CardContent className="py-16 text-center text-sm text-muted-foreground">没有找到对应题目或会话已失效。</CardContent>
           </Card>
         ) : (
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_360px]">
             <div className="space-y-6">
-              <Card className="rounded-[28px]">
-                <CardHeader className="border-b border-border/60 pb-4">
+              <Card className="aurora-question-review-card rounded-[28px]">
+                <CardHeader className="aurora-question-review-card-header pb-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <CardTitle className="text-lg">题目 {question.question_id}</CardTitle>
@@ -291,8 +307,8 @@ export function QuestionReviewPage() {
             </div>
 
             <div className="space-y-6">
-              <Card className="rounded-[28px]">
-                <CardHeader className="border-b border-border/60 pb-4">
+              <Card className="aurora-question-review-card rounded-[28px]">
+                <CardHeader className="aurora-question-review-card-header pb-4">
                   <div className="flex items-center justify-between gap-3">
                     <CardTitle className="text-lg">审查动作</CardTitle>
                     <Badge variant="outline" className="rounded-full">
@@ -301,14 +317,19 @@ export function QuestionReviewPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3 p-4 lg:p-6">
-                  <Button type="button" className="w-full rounded-full" disabled={!!actionLoading} onClick={() => handleReviewAction('review')}>
+                  <Button
+                    type="button"
+                    className="aurora-question-review-primary-action w-full rounded-full"
+                    disabled={!!actionLoading}
+                    onClick={() => handleReviewAction('review')}
+                  >
                     {actionLoading === 'review' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
                     生成审查意见
                   </Button>
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full rounded-full"
+                    className="aurora-question-review-secondary-action w-full rounded-full"
                     disabled={!!actionLoading}
                     onClick={() => handleReviewAction('approve')}
                   >
@@ -318,7 +339,7 @@ export function QuestionReviewPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full rounded-full"
+                    className="aurora-question-review-secondary-action w-full rounded-full"
                     disabled={!!actionLoading}
                     onClick={() => handleReviewAction('reject')}
                   >
@@ -328,8 +349,8 @@ export function QuestionReviewPage() {
                 </CardContent>
               </Card>
 
-              <Card className="rounded-[28px]">
-                <CardHeader className="border-b border-border/60 pb-4">
+              <Card className="aurora-question-review-card rounded-[28px]">
+                <CardHeader className="aurora-question-review-card-header pb-4">
                   <CardTitle className="text-lg">结构化审查意见</CardTitle>
                 </CardHeader>
                 <CardContent className="p-4 lg:p-6">
@@ -338,7 +359,7 @@ export function QuestionReviewPage() {
                   ) : (
                     <ScrollArea className="h-[520px] pr-3">
                       <div className="space-y-4">
-                        <div className="rounded-[20px] border border-border/70 bg-background/80 p-4">
+                        <div className="aurora-question-review-insight rounded-[20px] p-4">
                           <div className="flex items-center justify-between gap-3">
                             <div className="text-sm font-medium">结论</div>
                             <Badge variant="outline" className="rounded-full">
@@ -350,11 +371,11 @@ export function QuestionReviewPage() {
                         </div>
 
                         {dimensions.length > 0 ? (
-                          <div className="rounded-[20px] border border-border/70 bg-background/80 p-4">
+                          <div className="aurora-question-review-insight rounded-[20px] p-4">
                             <div className="text-sm font-medium">审查维度</div>
                             <div className="mt-3 space-y-3">
                               {dimensions.map((item) => (
-                                <div key={item.name} className="rounded-[16px] border border-border/60 bg-background/80 p-3">
+                                <div key={item.name} className="aurora-question-review-dimension rounded-[16px] p-3">
                                   <div className="flex items-center justify-between gap-3">
                                     <div className="font-medium">{item.name}</div>
                                     <Badge variant="outline" className="rounded-full">
@@ -368,7 +389,7 @@ export function QuestionReviewPage() {
                           </div>
                         ) : null}
 
-                        <div className="rounded-[20px] border border-border/70 bg-background/80 p-4">
+                        <div className="aurora-question-review-insight rounded-[20px] p-4">
                           <div className="text-sm font-medium">亮点</div>
                           <div className="mt-3 space-y-2 text-sm">
                             {(review.highlights || []).length > 0 ? (

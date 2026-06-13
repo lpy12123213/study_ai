@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import 'katex/dist/katex.min.css'
-import { Loader2, Plus, Send, Layers } from 'lucide-react'
+import { Loader2, Plus, Send, Layers, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RichTextarea } from '@/components/shared/RichTextarea'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
@@ -241,9 +241,17 @@ function LessonPlansView() {
   }
 
   const showSplitPane = stream.isGenerating || subAgentActivities.length > 0
+  const completedSubAgents = subAgentActivities.filter((activity) => activity.status === 'completed').length
+  const runningSubAgents = subAgentActivities.filter((activity) => activity.status === 'running').length
+  const lessonStats = [
+    { label: '对话轮次', value: `${messages.length}` },
+    { label: '知识点编队', value: `${completedSubAgents}/${subAgentActivities.length || 0}` },
+    { label: '生成状态', value: stream.isGenerating ? '编排中' : stream.activeUnifiedTaskId ? '可追踪' : '待命' },
+    { label: '研究中', value: runningSubAgents > 0 ? `${runningSubAgents} 个` : '无' },
+  ]
 
   return (
-    <div ref={containerRef} className="h-full flex flex-col relative">
+    <div ref={containerRef} className="aurora-lesson-screen h-full flex flex-col relative">
       {/* Messages area (or welcome) */}
       {messages.length === 0 && !showSplitPane ? (
         <WelcomeScreen onExampleClick={(text) => setInput(text)} />
@@ -256,8 +264,28 @@ function LessonPlansView() {
           >
             <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32">
               <div className="py-6">
+                <section className="aurora-lesson-ops mb-5">
+                  <div>
+                    <div className="aurora-kicker">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Lesson Design Console
+                    </div>
+                    <h1 className="mt-3 text-2xl font-semibold tracking-tight">备课编排控制台</h1>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                      根据学科、年级、课题和课时自动拆解教学目标、活动流程、练习与板书结构，并用 SubAgent 补足知识点素材。
+                    </p>
+                  </div>
+                  <div className="aurora-lesson-stat-grid">
+                    {lessonStats.map((item) => (
+                      <div key={item.label} className="aurora-lesson-stat">
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
                 {!!stream.activeUnifiedTaskId && (
-                  <div className="sticky top-0 z-10 pb-3 bg-background/80 backdrop-blur-sm">
+                  <div className="aurora-lesson-sticky sticky top-0 z-10 pb-3">
                     <TaskProgressHeader taskId={stream.activeUnifiedTaskId} compact />
                   </div>
                 )}
@@ -288,8 +316,8 @@ function LessonPlansView() {
                 )}
 
                 {stream.isGenerating && messages[messages.length - 1]?.content === '' && (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3 mb-4">
-                    <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="aurora-lesson-streaming flex gap-3 mb-4">
+                    <div className="aurora-lesson-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                       <Loader2 className="h-3 w-3 animate-spin text-primary" />
                     </div>
                     <div className="text-sm text-muted-foreground pt-0.5">正在生成教案...</div>
@@ -297,7 +325,7 @@ function LessonPlansView() {
                 )}
 
                 {stream.error && (
-                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
+                  <div className="aurora-lesson-error rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
                     {stream.error}
                   </div>
@@ -312,10 +340,10 @@ function LessonPlansView() {
           {/* ── Right column: SubAgent panel ── */}
           {showSplitPane && (
             <div
-              className="flex flex-col overflow-hidden border-l border-border bg-muted/20"
+              className="aurora-lesson-sidecar flex flex-col overflow-hidden"
               style={{ width: `${(1 - leftRatio) * 100}%` }}
             >
-              <div className="px-4 py-3 border-b border-border bg-background/50 backdrop-blur-sm">
+              <div className="px-4 py-3 border-b border-border/70 bg-background/50 backdrop-blur-sm">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Layers className="h-4 w-4 text-primary" />
                   SubAgent 工作区
@@ -330,12 +358,12 @@ function LessonPlansView() {
 
       {/* ── Composer ── */}
       <div
-        className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10"
+        className="aurora-lesson-composer-shell absolute bottom-0 left-0 right-0 p-4 pt-10"
         style={showSplitPane ? { width: `${leftRatio * 100}%` } : undefined}
       >
         <div className="max-w-3xl mx-auto">
           <form onSubmit={handleSubmit} className="relative group">
-            <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
+            <div className="aurora-lesson-command relative flex items-end gap-2 p-2 rounded-2xl transition-all">
               <Button
                 type="button"
                 variant="ghost"

@@ -22,6 +22,8 @@ export function SubAgentPanel({
   const selectedActivity = activities.find((a) => a.knowledgePoint === selectedKP)
   const selectedActivityIndex = selectedActivity ? activities.indexOf(selectedActivity) : -1
   const activityKey = (activity: SubAgentActivity, index: number) => `${index}:${activity.knowledgePoint}`
+  const completedCount = activities.filter((activity) => activity.status === 'completed').length
+  const runningCount = activities.filter((activity) => activity.status === 'running').length
 
   useEffect(() => {
     if (!selectedKP) return
@@ -34,7 +36,7 @@ export function SubAgentPanel({
 
   if (!activities.length) {
     return (
-      <div className="flex-1 flex items-center justify-center p-8 text-muted-foreground text-sm">
+      <div className="aurora-materials-subagent-empty flex-1 flex items-center justify-center p-8 text-muted-foreground text-sm">
         等待知识点拆分...
       </div>
     )
@@ -49,8 +51,18 @@ export function SubAgentPanel({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="aurora-materials-subagent-summary">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Research swarm</div>
+          <div className="mt-1 text-sm font-semibold">知识点研究编队</div>
+        </div>
+        <div className="text-right text-xs text-muted-foreground">
+          <div>{completedCount}/{activities.length} 完成</div>
+          <div>{runningCount > 0 ? `${runningCount} 运行中` : '待调度'}</div>
+        </div>
+      </div>
       {/* Tab bar */}
-      <div className="flex flex-wrap gap-1 p-2 border-b border-border bg-muted/30 shrink-0">
+      <div className="aurora-materials-subagent-tabs flex flex-wrap gap-1 p-2 shrink-0">
         {activities.map((activity) => {
           const isActive = activity.knowledgePoint === selectedKP
           return (
@@ -69,8 +81,8 @@ export function SubAgentPanel({
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors',
                 isActive
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+                  ? 'bg-background/90 text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/60'
               )}
             >
               {statusIcon(activity.status)}
@@ -94,7 +106,7 @@ export function SubAgentPanel({
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.18 }}
             >
-              <div className="flex items-center gap-2 mb-4">
+              <div className="aurora-materials-subagent-card flex items-center gap-2 mb-4">
                 {statusIcon(selectedActivity.status)}
                 <span className="text-sm font-medium">{selectedActivity.knowledgePoint}</span>
                 <Badge

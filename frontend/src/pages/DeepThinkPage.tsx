@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Brain, ChevronDown, ChevronUp, Loader2, Paperclip, RefreshCw, Send, Square } from 'lucide-react'
+import { Brain, ChevronDown, ChevronUp, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { RichTextarea } from '@/components/shared/RichTextarea'
@@ -164,16 +164,43 @@ export default function DeepThinkPage() {
         : status === 'searching' || status === 'answering'
           ? 'bg-primary'
           : 'bg-muted-foreground'
+  const nodeCountSummary = metrics.totalNodes || Object.keys(nodes).length
+  const deepStats = [
+    { label: '状态', value: statusLabel },
+    { label: '节点', value: `${nodeCountSummary}` },
+    { label: '深度', value: `${metrics.currentDepth || 0}` },
+    { label: '学科', value: subject || '待选择' },
+  ]
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="aurora-deep-screen h-full flex flex-col relative">
       {messages.length === 0 ? (
         <DeepThinkWelcomeScreen onExampleClick={(text) => setInput(text)} />
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-auto p-4 pb-32" onScroll={handleScroll}>
           <div className="max-w-3xl mx-auto py-6">
+            <section className="aurora-deep-ops mb-5">
+              <div>
+                <div className="aurora-kicker">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Reasoning Control Tower
+                </div>
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight">深度思考控制塔</h1>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  用分支搜索、评分剪枝和回溯路径生成更稳的解题过程，并把每个推理节点暴露给你检查。
+                </p>
+              </div>
+              <div className="aurora-deep-stat-grid">
+                {deepStats.map((item) => (
+                  <div key={item.label} className="aurora-deep-stat">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
             {!!taskId && status !== 'idle' && (
-              <div className="sticky top-0 z-10 pb-3 bg-background/80 backdrop-blur-sm">
+              <div className="aurora-deep-sticky sticky top-0 z-10 pb-3">
                 <TaskProgressHeader taskId={taskId} compact />
               </div>
             )}
@@ -192,10 +219,10 @@ export default function DeepThinkPage() {
                     key={message.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="flex flex-col gap-2 mb-8 max-w-3xl w-full"
+                    className="aurora-deep-assistant flex flex-col gap-2 mb-8 max-w-3xl w-full"
                   >
                     <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground mb-1 select-none">
-                      <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
+                      <div className="aurora-deep-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center">
                         <Brain className="h-3.5 w-3.5 text-primary" />
                       </div>
                       <span>深度解题</span>
@@ -224,7 +251,7 @@ export default function DeepThinkPage() {
                     </div>
 
                     {showMetrics && (
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <div className="aurora-deep-metrics flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         <span className="tabular-nums">
                           深度 {metrics.currentDepth} · 节点 {nodeCount}
                           {metrics.bestScore > 0 ? ` · 最优分 ${metrics.bestScore.toFixed(1)}` : ''}
@@ -245,7 +272,7 @@ export default function DeepThinkPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-8 text-xs font-normal gap-1.5 bg-background hover:bg-muted/50"
+                          className="aurora-deep-tree-button h-8 text-xs font-normal gap-1.5"
                           onClick={() => setShowTree((v) => !v)}
                           disabled={Object.keys(nodes).length === 0 && status === 'idle'}
                         >
@@ -265,9 +292,9 @@ export default function DeepThinkPage() {
                               initial={{ height: 0, opacity: 0 }}
                               animate={{ height: 'auto', opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
-                              className="mt-3 overflow-hidden rounded-lg border border-border bg-card"
+                              className="aurora-deep-tree-panel mt-3 overflow-hidden rounded-lg"
                             >
-                              <div className="p-4 bg-muted/30 space-y-3">
+                              <div className="p-4 space-y-3">
                                 <div className="h-[420px] sm:h-[520px]">
                                   <ThinkingTree
                                     nodes={nodes}
@@ -277,7 +304,7 @@ export default function DeepThinkPage() {
                                   />
                                 </div>
 
-                                <div className="rounded-lg border border-border bg-background p-3">
+                                <div className="aurora-deep-node-card rounded-lg p-3">
                                   {selectedNode ? (
                                     <div className="space-y-2">
                                       <div className="text-sm font-medium leading-6">{selectedNode.thought}</div>
@@ -324,7 +351,7 @@ export default function DeepThinkPage() {
 
             {isStreaming && activeAssistantId && messages[messages.length - 1]?.id === activeAssistantId && messages[messages.length - 1]?.content === '' && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex gap-3 mb-4 max-w-3xl">
-                <div className="h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                <div className="aurora-deep-mark h-5 w-5 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
                 </div>
                 <div className="text-sm text-muted-foreground pt-0.5">正在思考...</div>
@@ -332,7 +359,7 @@ export default function DeepThinkPage() {
             )}
 
             {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
+              <div className="aurora-deep-error rounded-lg p-4 mb-4 text-sm text-destructive flex items-center gap-2">
                 <div className="h-2 w-2 rounded-full bg-destructive shrink-0" />
                 {error}
               </div>
@@ -341,7 +368,7 @@ export default function DeepThinkPage() {
         </div>
       )}
 
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background via-background to-transparent pt-10">
+      <div className="aurora-deep-composer-shell absolute bottom-0 left-0 right-0 p-4 pt-10">
         <div className="max-w-3xl mx-auto">
           <AnimatePresence>
             {showOptions && (
@@ -349,7 +376,7 @@ export default function DeepThinkPage() {
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden rounded-2xl border bg-background/80 backdrop-blur mb-2"
+                className="aurora-deep-options overflow-hidden rounded-2xl mb-2"
               >
                 <div className="p-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
@@ -383,7 +410,7 @@ export default function DeepThinkPage() {
                       value={imageUrl}
                       onChange={(e) => setImageUrl(e.target.value)}
                       placeholder="https://...（可留空）"
-                      className="h-9"
+                      className="aurora-deep-input h-9"
                       disabled={isStreaming}
                     />
                   </div>
@@ -393,7 +420,7 @@ export default function DeepThinkPage() {
           </AnimatePresence>
 
           <form onSubmit={handleSubmit} className="relative group">
-            <div className="relative flex items-end gap-2 p-2 rounded-2xl border bg-background shadow-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 transition-all">
+            <div className="aurora-deep-command relative flex items-end gap-2 p-2 rounded-2xl transition-all">
               <Button
                 type="button"
                 variant="ghost"
@@ -470,7 +497,7 @@ export default function DeepThinkPage() {
 
       {messages.length > 0 && showJumpToBottom && (
         <div className="absolute bottom-28 right-4">
-          <Button type="button" variant="secondary" size="sm" className="shadow-md" onClick={scrollToBottom}>
+          <Button type="button" variant="secondary" size="sm" className="aurora-deep-float-button" onClick={scrollToBottom}>
             回到底部
             <ChevronDown className="h-4 w-4 ml-1" />
           </Button>

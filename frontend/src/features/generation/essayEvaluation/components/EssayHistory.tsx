@@ -25,7 +25,10 @@ export function EssayHistory({ selectedId, onSelect, className }: EssayHistoryPr
 
   return (
     <div className={cn('flex h-full flex-col', className)}>
-      <h3 className="border-b border-border px-3 py-2 text-sm font-semibold">批改历史</h3>
+      <div className="aurora-essay-history-head">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">History stream</div>
+        <h3 className="mt-1 text-sm font-semibold">批改历史</h3>
+      </div>
       <div className="flex-1 overflow-y-auto">
         {isLoading && <div className="p-3 text-xs text-muted-foreground">加载中…</div>}
         {error && <div className="p-3 text-xs text-rose-600">{(error as Error).message}</div>}
@@ -41,8 +44,8 @@ export function EssayHistory({ selectedId, onSelect, className }: EssayHistoryPr
                 <button
                   type="button"
                   className={cn(
-                    'block w-full border-b border-border px-3 py-2 text-left transition-colors hover:bg-muted/50',
-                    isActive && 'bg-muted',
+                    'aurora-essay-history-item block w-full px-3 py-3 text-left transition-colors',
+                    isActive && 'is-active',
                   )}
                   onClick={() => onSelect?.(item)}
                 >
@@ -57,7 +60,7 @@ export function EssayHistory({ selectedId, onSelect, className }: EssayHistoryPr
                   <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span
                       className={cn(
-                        'rounded px-1.5',
+                        'aurora-essay-grade-badge rounded px-1.5',
                         ratio >= 0.85
                           ? 'bg-emerald-100 text-emerald-700'
                           : ratio >= 0.7

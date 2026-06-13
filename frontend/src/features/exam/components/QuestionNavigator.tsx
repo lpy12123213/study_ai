@@ -19,11 +19,14 @@ function isAnswered(question: ExamQuestion, answer?: SaveExamAnswerRequest): boo
 
 export function QuestionNavigator({ questions, currentIndex, answers, onSelect }: QuestionNavigatorProps) {
   const answered = questions.filter((q) => isAnswered(q, answers[q.questionId])).length
+  const percent = questions.length > 0 ? Math.round((answered / questions.length) * 100) : 0
+
   return (
-    <aside className="aurora-layout-surface flex h-full min-h-0 w-full flex-col border-r bg-muted/20 md:w-56">
-      <div className="border-b p-4">
-        <div className="text-sm font-medium">题目导航</div>
-        <div className="mt-1 text-xs text-muted-foreground">{answered}/{questions.length} 已答</div>
+    <aside className="aurora-exam-navigator flex h-full min-h-0 w-full flex-col md:w-60">
+      <div className="aurora-exam-navigator-head p-4">
+        <div className="text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Answer map</div>
+        <div className="mt-1 text-sm font-medium">题目导航</div>
+        <div className="mt-1 text-xs text-muted-foreground">{answered}/{questions.length} 已答 · {percent}%</div>
       </div>
       <div className="grid grid-cols-5 gap-2 overflow-auto p-4 md:grid-cols-4">
         {questions.map((question, index) => {
@@ -34,9 +37,9 @@ export function QuestionNavigator({ questions, currentIndex, answers, onSelect }
               key={question.questionId}
               type="button"
               className={cn(
-                'flex aspect-square items-center justify-center rounded-md border text-sm font-medium transition-colors',
-                done ? 'bg-primary text-primary-foreground' : 'bg-background',
-                active && 'aurora-exam-focus ring-2 ring-ring ring-offset-2'
+                'aurora-exam-nav-button flex aspect-square items-center justify-center rounded-md border text-sm font-medium transition-colors',
+                done && 'is-done',
+                active && 'is-active aurora-exam-focus'
               )}
               onClick={() => onSelect(index)}
             >

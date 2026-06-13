@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, ListTodo, Loader2 } from 'lucide-react'
+import { CheckCircle2, Circle, ListTodo, Loader2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -64,18 +64,41 @@ export default function LearningPlansTodoPage() {
 
   const completedCount = items.filter((x) => x.completed).length
   const allDone = items.length > 0 && completedCount === items.length
+  const completionPercent = items.length > 0 ? Math.round((completedCount / items.length) * 100) : 0
+  const planStats = [
+    { label: '计划数', value: `${plans.length}` },
+    { label: '当前待办', value: `${items.length}` },
+    { label: '已完成', value: `${completedCount}` },
+    { label: '完成率', value: `${completionPercent}%` },
+  ]
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-background">
-      <div className="border-b border-border p-4 flex items-center justify-between sticky top-0 bg-background/80 backdrop-blur-sm z-10">
-        <div className="flex items-center gap-2 font-semibold">
-          <ListTodo className="h-4 w-4 text-primary" />
-          学习计划
+    <div className="aurora-learning-plan-screen h-full flex flex-col overflow-hidden">
+      <div className="aurora-learning-plan-hero p-4 flex items-center justify-between sticky top-0 z-10">
+        <div className="min-w-0">
+          <div className="aurora-kicker">
+            <Sparkles className="h-3.5 w-3.5" />
+            Learning Plan Runway
+          </div>
+          <div className="mt-2 flex items-center gap-2 font-semibold">
+            <ListTodo className="h-4 w-4 text-primary" />
+            学习计划执行舱
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">把资料归档转化为可执行待办，跟踪完成度并跳转到错题、批注等下一步学习入口。</p>
+        </div>
+        <div className="aurora-learning-plan-stat-grid">
+          {planStats.map((item) => (
+            <div key={item.label} className="aurora-learning-plan-stat">
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
-        <aside className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-border bg-muted/20 p-4 overflow-auto">
+        <aside className="aurora-learning-plan-sidebar w-full lg:w-80 p-4 overflow-auto">
+          <div className="aurora-kicker mb-3">Plan stack</div>
           <div className="text-sm font-medium mb-3">我的计划</div>
           {isLoading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -94,8 +117,8 @@ export default function LearningPlansTodoPage() {
                 key={p.id}
                 type="button"
                 className={cn(
-                  'w-full text-left rounded-md border px-3 py-2 bg-background hover:bg-accent transition-colors',
-                  String(activePlan?.id) === String(p.id) && 'border-primary/50 ring-2 ring-primary/10'
+                  'aurora-learning-plan-list-item w-full text-left rounded-md px-3 py-2 transition-colors',
+                  String(activePlan?.id) === String(p.id) && 'is-active'
                 )}
                 onClick={() => navigate(`/learning-plans?planId=${p.id}`)}
               >
@@ -108,15 +131,17 @@ export default function LearningPlansTodoPage() {
 
         <main className="flex-1 min-h-0 overflow-hidden">
           <ScrollArea className="h-full">
-            <div className="max-w-3xl mx-auto p-6 space-y-4">
+            <div className="aurora-learning-plan-content max-w-4xl mx-auto p-6 space-y-4">
               {!activePlan ? (
-                <Card className="p-6">
+                <Card className="aurora-learning-plan-empty p-6">
                   <div className="text-sm text-muted-foreground">请选择一个学习计划。</div>
                 </Card>
               ) : (
                 <>
+                  <section className="aurora-learning-plan-overview">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
+                      <div className="aurora-kicker">Active plan</div>
                       <div className="text-lg font-semibold truncate">{activePlan.title}</div>
                       <div className="text-xs text-muted-foreground mt-1">
                         完成 {completedCount}/{items.length}
@@ -129,9 +154,19 @@ export default function LearningPlansTodoPage() {
                       </div>
                     )}
                   </div>
+                    <div className="aurora-learning-plan-progress mt-4">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>执行进度</span>
+                        <span>{completionPercent}%</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${completionPercent}%` }} />
+                      </div>
+                    </div>
+                  </section>
 
                   {allDone && (
-                    <Card className="p-4 bg-primary/5 border-primary/20">
+                    <Card className="aurora-learning-plan-done p-4">
                       <div className="font-medium text-sm">全部完成</div>
                       <div className="mt-1 text-sm text-muted-foreground">
                         下一步建议：回看错题本、补齐未解决批注，并从新知识点生成练习卷。
@@ -151,7 +186,7 @@ export default function LearningPlansTodoPage() {
 
                   <div className="space-y-2">
                     {items.map((it) => (
-                      <Card key={it.id} className="p-4">
+                      <Card key={it.id} className="aurora-learning-plan-item p-4" data-completed={it.completed ? 'true' : 'false'}>
                         <div className="flex items-start gap-3">
                           <button
                             type="button"

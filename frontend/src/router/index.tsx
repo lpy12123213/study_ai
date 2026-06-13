@@ -29,6 +29,7 @@ const DeepThinkPage = lazy(() => import('@/pages/DeepThinkPage'))
 const TaskCenterPage = lazy(() => import('@/pages/TaskCenterPage'))
 const SearchPage = lazy(() => import('@/pages/SearchPage'))
 const StudyArchiveDetailPage = lazy(() => import('@/pages/StudyArchiveDetailPage'))
+const StudyArchivesIndexPage = lazy(() => import('@/pages/StudyArchivesIndexPage'))
 const SharePage = lazy(() => import('@/pages/SharePage'))
 const ExportsPage = lazy(() => import('@/pages/ExportsPage'))
 const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
@@ -103,18 +104,11 @@ export const router = createBrowserRouter([
               { path: 'question-evaluate', element: load(QuestionEvaluatePage), handle: handle('question-evaluate') },
               { path: 'essay-evaluation', element: load(EssayEvaluationPage), handle: handle('essay-evaluation') },
               { path: 'question-library', element: load(QuestionLibraryPage), handle: handle('question-library') },
+              { path: 'ai-generate', element: load(AiGeneratePage), handle: handle('ai-generate') },
               {
-                path: 'ai-generate',
-                element: <WorkspaceSplitLayout kind="ai-generate" />,
-                handle: handle('ai-generate'),
-                children: [
-                  { index: true, element: load(AiGeneratePage), handle: handle('ai-generate') },
-                  {
-                    path: 'review/:sessionId/:questionId',
-                    element: load(QuestionReviewPage),
-                    handle: handle('ai-generate-review'),
-                  },
-                ],
+                path: 'ai-generate/review/:sessionId/:questionId',
+                element: load(QuestionReviewPage),
+                handle: handle('ai-generate-review'),
               },
               {
                 path: 'papers',
@@ -135,8 +129,9 @@ export const router = createBrowserRouter([
               {
                 path: 'study-archives',
                 element: <WorkspaceSplitLayout kind="study-archives" />,
+                handle: handle('study-archives'),
                 children: [
-                  { index: true, element: <Navigate to="/study-materials" replace />, handle: handle('study-materials') },
+                  { index: true, element: load(StudyArchivesIndexPage), handle: handle('study-archives') },
                   {
                     path: ':archiveId',
                     element: load(StudyArchiveDetailPage),

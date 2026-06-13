@@ -18,8 +18,8 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
   const ratio = result.score_max > 0 ? result.score_total / result.score_max : 0
 
   return (
-    <div className="space-y-6">
-      <header className="rounded-lg border border-border bg-card p-4">
+    <div className="aurora-essay-result space-y-6">
+      <header className="aurora-essay-score-card rounded-lg p-4">
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           <span className="text-3xl font-bold text-primary">
             {result.score_total.toFixed(1)}
@@ -47,7 +47,7 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
       </header>
 
       <section className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="rounded-lg border border-border bg-card p-4">
+        <div className="aurora-essay-result-card rounded-lg p-4">
           <h3 className="mb-2 text-sm font-semibold">评分维度</h3>
           <ul className="space-y-2">
             {result.scores.map((dim) => {
@@ -78,7 +78,7 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
 
         <div className="space-y-3">
           {result.strengths.length > 0 && (
-            <div className="rounded-lg border border-border bg-card p-4">
+            <div className="aurora-essay-result-card rounded-lg p-4" data-tone="strength">
               <h3 className="mb-2 text-sm font-semibold text-emerald-700">亮点</h3>
               <ul className="list-disc space-y-1 pl-4 text-sm">
                 {result.strengths.map((item, index) => (
@@ -88,7 +88,7 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
             </div>
           )}
           {result.weaknesses.length > 0 && (
-            <div className="rounded-lg border border-border bg-card p-4">
+            <div className="aurora-essay-result-card rounded-lg p-4" data-tone="weakness">
               <h3 className="mb-2 text-sm font-semibold text-rose-700">不足</h3>
               <ul className="list-disc space-y-1 pl-4 text-sm">
                 {result.weaknesses.map((item, index) => (
@@ -98,7 +98,7 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
             </div>
           )}
           {result.suggestions.length > 0 && (
-            <div className="rounded-lg border border-border bg-card p-4">
+            <div className="aurora-essay-result-card rounded-lg p-4">
               <h3 className="mb-2 text-sm font-semibold">修改建议</h3>
               <ul className="list-disc space-y-1 pl-4 text-sm">
                 {result.suggestions.map((item, index) => (
@@ -111,13 +111,13 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
       </section>
 
       {result.paragraph_feedback.length > 0 && (
-        <section className="rounded-lg border border-border bg-card p-4">
+        <section className="aurora-essay-result-card rounded-lg p-4">
           <h3 className="mb-3 text-sm font-semibold">逐段批注</h3>
           <ul className="space-y-3">
             {result.paragraph_feedback.map((entry) => {
               const source = paragraphs?.[entry.index]
               return (
-                <li key={entry.index} className="rounded-md border border-dashed border-border bg-muted/40 p-3">
+                <li key={entry.index} className="aurora-essay-paragraph rounded-md border border-dashed p-3">
                   <div className="mb-1 text-xs font-medium text-muted-foreground">第 {entry.index + 1} 段</div>
                   {source && <p className="mb-2 whitespace-pre-line text-sm text-foreground/80">{source}</p>}
                   {entry.issues.length > 0 && (
@@ -138,7 +138,7 @@ export function EssayResult({ result, paragraphs }: EssayResultProps) {
       )}
 
       {result.rewrite && (
-        <section className="rounded-lg border border-border bg-card p-4">
+        <section className="aurora-essay-result-card rounded-lg p-4">
           <h3 className="mb-2 text-sm font-semibold">改写示例</h3>
           <p className="whitespace-pre-line text-sm leading-6">{result.rewrite}</p>
         </section>

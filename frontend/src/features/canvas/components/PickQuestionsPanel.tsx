@@ -29,8 +29,8 @@ export function PickQuestionsPanel({ subject, loading, onPick, onAdd }: PickQues
   }
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-l bg-background">
-      <div className="border-b p-3">
+    <aside className="aurora-canvas-pick-panel flex h-full w-80 shrink-0 flex-col">
+      <div className="aurora-canvas-pick-header p-3">
         <div className="text-sm font-medium">AI 选题</div>
       </div>
       <div className="space-y-3 p-3">
@@ -38,10 +38,20 @@ export function PickQuestionsPanel({ subject, loading, onPick, onAdd }: PickQues
           value={requirement}
           onChange={(event) => setRequirement(event.target.value)}
           placeholder="例如：函数零点与导数综合，偏中难"
-          className="min-h-24"
+          className="aurora-canvas-pick-input min-h-24"
         />
-        <Input value={count} onChange={(event) => setCount(event.target.value)} inputMode="numeric" />
-        <Button type="button" className="w-full" onClick={() => void runPick()} disabled={loading || !requirement.trim()}>
+        <Input
+          value={count}
+          onChange={(event) => setCount(event.target.value)}
+          inputMode="numeric"
+          className="aurora-canvas-pick-input"
+        />
+        <Button
+          type="button"
+          className="aurora-canvas-pick-action w-full"
+          onClick={() => void runPick()}
+          disabled={loading || !requirement.trim()}
+        >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
           搜索题目
         </Button>
@@ -52,7 +62,7 @@ export function PickQuestionsPanel({ subject, loading, onPick, onAdd }: PickQues
             key={question.questionId}
             type="button"
             onClick={() => onAdd([question])}
-            className="w-full rounded-md border bg-card p-3 text-left text-sm transition hover:bg-accent"
+            className="aurora-canvas-picked-question w-full p-3 text-left text-sm transition hover:bg-accent"
           >
             <div className="font-medium">{question.title}</div>
             {question.selectReason && <div className="mt-1 text-xs text-muted-foreground">{question.selectReason}</div>}

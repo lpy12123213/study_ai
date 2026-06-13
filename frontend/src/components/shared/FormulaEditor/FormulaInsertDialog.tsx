@@ -71,7 +71,7 @@ export function FormulaInsertDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[640px]">
+      <DialogContent className="aurora-formula-dialog sm:max-w-[640px]">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -87,10 +87,10 @@ export function FormulaInsertDialog({
         />
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" className="aurora-shared-secondary-action" variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button type="button" onClick={handleInsert} disabled={!latex.trim()}>
+          <Button type="button" className="aurora-shared-primary-action" onClick={handleInsert} disabled={!latex.trim()}>
             插入
           </Button>
         </DialogFooter>

@@ -309,7 +309,7 @@ export function useChatStream() {
 
             const step: TaskStep = {
               id: toolCallId,
-              title: `调用工具：${toolName}`,
+              title: toolName,
               status: 'running',
               toolName,
               input: toolStart?.arguments,

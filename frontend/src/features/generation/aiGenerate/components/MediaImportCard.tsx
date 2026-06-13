@@ -55,8 +55,9 @@ export function MediaImportCard({
   }
 
   return (
-    <Card>
+    <Card className="aurora-ai-card overflow-hidden">
       <CardHeader>
+        <div className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">Vision intake</div>
         <CardTitle className="text-base">图片/PDF 录入</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -88,7 +89,7 @@ export function MediaImportCard({
 
           <div className="md:col-span-2">
             <div className="text-xs text-muted-foreground mb-2">最多题数</div>
-            <Input value={maxQuestions} onChange={(e) => setMaxQuestions(e.target.value)} className="h-9" />
+            <Input value={maxQuestions} onChange={(e) => setMaxQuestions(e.target.value)} className="h-9 bg-background/45" />
           </div>
 
           <div className="md:col-span-3">
@@ -99,7 +100,7 @@ export function MediaImportCard({
           </div>
         </div>
 
-        <div className="text-xs text-muted-foreground">
+        <div className="aurora-ai-probe px-3 py-2 text-xs text-muted-foreground">
           {subject || '未选择学科'}
           {topic.trim() ? ` · ${topic.trim()}` : ''}
           {difficulty.trim() ? ` · ${difficulty.trim()}` : ''}

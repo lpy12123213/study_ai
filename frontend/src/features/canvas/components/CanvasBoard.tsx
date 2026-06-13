@@ -10,10 +10,10 @@ interface CanvasBoardProps {
 
 export function CanvasBoard({ nodes, onMoveNode, onUpdateNote }: CanvasBoardProps) {
   return (
-    <div className="relative h-full min-h-[720px] w-full overflow-auto bg-[linear-gradient(to_right,hsl(var(--border))_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border))_1px,transparent_1px)] bg-[size:32px_32px]">
+    <div className="aurora-canvas-board relative h-full min-h-[720px] w-full overflow-auto">
       <div className="relative h-[1800px] w-[2400px]">
         {nodes.length === 0 && (
-          <div className="absolute left-16 top-16 rounded-md border border-dashed bg-background/90 px-4 py-3 text-sm text-muted-foreground">
+          <div className="aurora-canvas-empty-note absolute left-16 top-16 px-4 py-3 text-sm">
             添加便签或从右侧选题入板
           </div>
         )}

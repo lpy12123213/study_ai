@@ -4,6 +4,7 @@ export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'pause
 export interface TaskStep {
   id: string;
   title: string;
+  thought?: string;
   status: StepStatus;
   toolName?: string;
   input?: unknown;
