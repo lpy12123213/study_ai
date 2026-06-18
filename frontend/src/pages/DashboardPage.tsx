@@ -1,5 +1,3 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -20,136 +18,27 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ErrorNotice } from '@/components/shared/ErrorNotice'
-import { downloadObjectUrl } from '@/api/client'
-import * as dashboardApi from '@/api/dashboard'
-import * as insightsApi from '@/api/insights'
-import * as wrongbookApi from '@/api/wrongbook'
-import { DASHBOARD_REFETCH_INTERVAL_MS, useRunningTasks } from '@/hooks/useRunningTasks'
+import { timelineStages } from '@/features/dashboard/utils'
+import { useDashboard } from '@/features/dashboard/hooks/useDashboard'
 
-function pct(value?: number): string {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return '--'
-  const normalized = numeric > 1 ? numeric : numeric * 100
-  return `${Math.round(normalized)}%`
-}
-
-function sec(value?: number): string {
-  const seconds = Number(value)
-  if (!Number.isFinite(seconds)) return '--'
-  if (seconds < 60) return `${Math.round(seconds)}s`
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}min`
-  return `${Math.round(minutes / 60)}h`
-}
-
-function sumTaskTypes(types: Record<string, number> | undefined, matches: Array<(taskType: string) => boolean>) {
-  if (!types) return 0
-  return Object.entries(types).reduce((sum, [key, value]) => {
-    const normalized = key.toLowerCase()
-    return matches.some((match) => match(normalized)) ? sum + Number(value || 0) : sum
-  }, 0)
-}
-
-const hasAny = (needles: string[]) => (taskType: string) => needles.some((needle) => taskType.includes(needle))
-const isAiGenerateTask = (taskType: string) =>
-  hasAny(['ai_generate', 'question_generate', 'generate_question', 'paper_generate'])(taskType) &&
-  !hasAny(['question_library', 'question_evaluate'])(taskType)
-const isStudyMaterialTask = hasAny(['study_material', 'lesson_plan', 'archive'])
-const isQuestionLibraryTask = hasAny(['question_library', 'library_crawl', 'crawl'])
-
-const timelineStages = [
-  { label: '规划', color: 'var(--timeline-thinking)', text: '拆解任务意图与资料边界' },
-  { label: '检索', color: 'var(--timeline-grep)', text: '检索题库、试卷与学习档案' },
-  { label: '阅读', color: 'var(--timeline-read)', text: '读取候选材料并抽取证据' },
-  { label: '生成', color: 'var(--timeline-edit)', text: '生成题目、讲义或视频脚本草稿' },
-  { label: '完成', color: 'var(--timeline-done)', text: '输出可复查的结果与导出物' },
-]
+const SUMMARY_ICONS = [BarChart3, CheckCircle2, TimerReset, FileText] as const
+const FEATURE_ICONS = [Sparkles, BookOpen, Library] as const
 
 export default function DashboardPage() {
-  const [days, setDays] = useState(30)
-
-  const { data: stats, isLoading, error } = useQuery({
-    queryKey: ['dashboard', days],
-    queryFn: () => dashboardApi.getDashboardStats({ days }),
-    refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
-  })
-
-  const { data: insights } = useQuery({
-    queryKey: ['insights', 'dashboard-preview', days],
-    queryFn: () => insightsApi.getInsightsOverview({ days }),
-    refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
-  })
-
-  const { data: reviewQueue } = useQuery({
-    queryKey: ['wrongbook', 'dashboard-review-queue'],
-    queryFn: () => wrongbookApi.getReviewQueue({ limit: 1 }),
-    refetchInterval: DASHBOARD_REFETCH_INTERVAL_MS,
-  })
-
-  const { data: runningTasksData } = useRunningTasks()
-
-  const runningTasks = (runningTasksData?.tasks ?? []).slice(0, 5)
-  const typeCounts = stats?.tasks_by_type
-  const statusRows = Object.entries(stats?.tasks_by_status ?? {})
-    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
-    .slice(0, 5)
-  const latestExam = insights?.exams?.recent?.[0]
-  const weakPoint = insights?.wrongbook?.weak_points?.[0]
-  const plan = insights?.activity?.plan_completion
-  const reviewDueCount = Number(reviewQueue?.due_count || 0)
-  const insightRows = [
-    { label: '最新成绩', value: latestExam ? pct(latestExam.score_ratio) : '--' },
-    { label: '薄弱点', value: weakPoint ? `${weakPoint.knowledge_point} ${pct(weakPoint.avg_mastery)}` : '--' },
-    { label: '活跃', value: insights?.activity ? `${insights.activity.active_days}天 / 连续${insights.activity.current_streak}天` : '--' },
-    { label: '计划', value: plan && plan.total > 0 ? `${plan.completed}/${plan.total}` : '--' },
-  ]
-
-  const featureCards = [
-    {
-      title: 'AI 出题',
-      description: '从知识点、题库和蓝图生成可审查题目，保留推理与草稿痕迹。',
-      path: '/ai-generate',
-      icon: Sparkles,
-      meta: `${sumTaskTypes(typeCounts, [isAiGenerateTask]) || '--'} 次任务`,
-      stage: '生成',
-      color: 'var(--timeline-edit)',
-    },
-    {
-      title: '自学资料',
-      description: '把章节、错题和外部资料整理成结构化讲义与复习路径。',
-      path: '/study-materials',
-      icon: BookOpen,
-      meta: `${sumTaskTypes(typeCounts, [isStudyMaterialTask]) || '--'} 次任务`,
-      stage: '阅读',
-      color: 'var(--timeline-read)',
-    },
-    {
-      title: '本地题库',
-      description: '集中管理题目、标签、来源与过滤条件，支撑后续生成流程。',
-      path: '/question-library',
-      icon: Library,
-      meta: `${sumTaskTypes(typeCounts, [isQuestionLibraryTask]) || '--'} 条线索`,
-      stage: '检索',
-      color: 'var(--timeline-grep)',
-    },
-  ]
-
-  const summaryCards = [
-    { label: '任务总数', value: stats?.tasks_total ?? '--', icon: BarChart3, hint: `近 ${days} 天` },
-    { label: '完成率', value: pct(stats?.completion_rate), icon: CheckCircle2, hint: '按任务状态统计' },
-    { label: '平均耗时', value: sec(stats?.avg_duration_s), icon: TimerReset, hint: '完成任务均值' },
-    { label: '导出文件', value: stats?.exports_total ?? '--', icon: FileText, hint: '试卷与资料归档' },
-  ]
-
-  const downloadCsv = async () => {
-    const url = `/api/dashboard/export?days=${encodeURIComponent(String(days))}`
-    const { objectUrl, revoke, filename } = await downloadObjectUrl(url)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = filename || `dashboard-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    window.setTimeout(revoke, 60_000)
-  }
+  const {
+    days,
+    setDays,
+    stats,
+    isLoading,
+    error,
+    reviewDueCount,
+    runningTasks,
+    statusRows,
+    insightRows,
+    featureCards,
+    summaryCards,
+    downloadCsv,
+  } = useDashboard()
 
   return (
     <div className="aurora-dashboard-screen min-h-full px-4 py-6 md:px-6 lg:px-8">
@@ -210,7 +99,9 @@ export default function DashboardPage() {
         {Boolean(error) && <ErrorNotice error={error} />}
 
         <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {summaryCards.map(({ label, value, icon: Icon, hint }) => (
+          {summaryCards.map(({ label, value, hint }, index) => {
+            const Icon = SUMMARY_ICONS[index] ?? BarChart3
+            return (
             <Card key={label} className="aurora-dashboard-stat p-4">
               <div className="flex items-center justify-between gap-3 text-muted-foreground">
                 <span className="text-xs">{label}</span>
@@ -219,13 +110,16 @@ export default function DashboardPage() {
               <div className="mt-3 font-mono text-3xl text-foreground">{value}</div>
               <div className="mt-2 text-xs text-muted-foreground">{hint}</div>
             </Card>
-          ))}
+            )
+          })}
         </section>
 
         <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-3">
-              {featureCards.map(({ title, description, path, icon: Icon, meta, stage, color }) => (
+              {featureCards.map(({ title, description, path, meta, stage, color }, index) => {
+                const Icon = FEATURE_ICONS[index] ?? Sparkles
+                return (
                 <Link key={path} to={path} className="aurora-dashboard-feature group block p-5">
                   <div className="flex items-start justify-between gap-4">
                     <span className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-accent/60">
@@ -245,7 +139,8 @@ export default function DashboardPage() {
                     <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                   </div>
                 </Link>
-              ))}
+                )
+              })}
             </div>
 
             <Card className="aurora-dashboard-workflow overflow-hidden">

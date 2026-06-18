@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Brain, ChevronDown, ChevronUp, Loader2, Paperclip, RefreshCw, Send, Sparkles, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -8,169 +7,48 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ThinkingTree } from '@/components/deepthink/ThinkingTree'
 import { TaskProgressHeader } from '@/components/task/TaskProgressHeader'
-import { useDeepThink } from '@/hooks/useDeepThink'
-import { useSubjects } from '@/hooks/useSubjects'
-import { readNumber } from '@/lib/record'
-import { cn, generateId } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { DeepThinkUserBubble } from '@/features/generation/deepThink/components/DeepThinkUserBubble'
 import { DeepThinkWelcomeScreen } from '@/features/generation/deepThink/components/DeepThinkWelcomeScreen'
-import type { DeepThinkChatMessage } from '@/features/generation/deepThink/types'
+import { useDeepThinkPage } from '@/features/generation/deepThink/hooks/useDeepThinkPage'
 
 export default function DeepThinkPage() {
-  const { data: subjects } = useSubjects()
-  const [subject, setSubject] = useState<string>('')
-  const [imageUrl, setImageUrl] = useState<string>('')
-
-  const [input, setInput] = useState('')
-  const [messages, setMessages] = useState<DeepThinkChatMessage[]>([])
-  const [showOptions, setShowOptions] = useState(false)
-  const [showTree, setShowTree] = useState(true)
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-  const [activeAssistantId, setActiveAssistantId] = useState<string | null>(null)
-  const activeAssistantIdRef = useRef<string | null>(null)
-
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const stickToBottomRef = useRef(true)
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false)
-
-  const { status, taskId, nodes, bestPath, answer, metrics, error, config, solve, cancel, reset } = useDeepThink()
-  const isStreaming = status === 'searching' || status === 'answering'
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    stickToBottomRef.current = true
-    setShowJumpToBottom(false)
-    requestAnimationFrame(() => {
-      const target = scrollRef.current
-      if (!target) return
-      target.scrollTop = target.scrollHeight
-    })
-  }, [])
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const distanceToBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
-    const nearBottom = distanceToBottom < 120
-    stickToBottomRef.current = nearBottom
-    setShowJumpToBottom((prev) => (prev !== !nearBottom ? !nearBottom : prev))
-  }, [])
-
-  useEffect(() => {
-    if (subjects && subjects.length > 0 && !subject) {
-      setSubject(subjects[0].code)
-    }
-  }, [subjects, subject])
-
-  useEffect(() => {
-    const id = activeAssistantIdRef.current
-    if (!id) return
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: answer } : m)))
-  }, [answer])
-
-  useEffect(() => {
-    if (!stickToBottomRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    requestAnimationFrame(() => {
-      const target = scrollRef.current
-      if (!target) return
-      target.scrollTop = target.scrollHeight
-    })
-  }, [messages])
-
-  const selectedNode = useMemo(() => {
-    if (!selectedNodeId) return null
-    return nodes[selectedNodeId] || null
-  }, [nodes, selectedNodeId])
-
-  const configSummary = useMemo(() => {
-    if (!config) return null
-    return {
-      bf: readNumber(config, 'branch_factor', 0),
-      bw: readNumber(config, 'beam_width', 0),
-      md: readNumber(config, 'max_depth', 0),
-      th: readNumber(config, 'prune_threshold', 0),
-    }
-  }, [config])
-
-  const statusLabel =
-    status === 'idle'
-      ? '等待输入'
-      : status === 'searching'
-        ? '思维树搜索中'
-        : status === 'answering'
-          ? '生成最终解答中'
-          : status === 'done'
-            ? '已完成'
-            : '出错'
-
-  const handleClear = () => {
-    if (isStreaming) return
-    activeAssistantIdRef.current = null
-    setActiveAssistantId(null)
-    setSelectedNodeId(null)
-    setShowTree(true)
-    setMessages([])
-    reset()
-  }
-
-  const handleSubmit = (e?: React.FormEvent) => {
-    e?.preventDefault()
-    const question = input.trim()
-    if (!question || isStreaming) return
-
-    stickToBottomRef.current = true
-    setShowJumpToBottom(false)
-
-    const now = new Date().toISOString()
-    const userMessage: DeepThinkChatMessage = {
-      id: generateId(),
-      role: 'user',
-      content: question,
-      createdAt: now,
-      meta: {
-        subject,
-        imageUrl: imageUrl.trim() ? imageUrl.trim() : undefined,
-      },
-    }
-    const assistantId = generateId()
-    const assistantMessage: DeepThinkChatMessage = {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      createdAt: now,
-    }
-
-    activeAssistantIdRef.current = assistantId
-    setActiveAssistantId(assistantId)
-    setSelectedNodeId(null)
-    setShowTree(true)
-    setMessages((prev) => [...prev, userMessage, assistantMessage])
-    setInput('')
-
-    solve(question, {
-      subject,
-      imageUrl: imageUrl.trim() ? imageUrl.trim() : undefined,
-    })
-  }
-
-  const assistantIndicatorTone =
-    status === 'error'
-      ? 'bg-destructive'
-      : status === 'done'
-        ? 'bg-emerald-500'
-        : status === 'searching' || status === 'answering'
-          ? 'bg-primary'
-          : 'bg-muted-foreground'
-  const nodeCountSummary = metrics.totalNodes || Object.keys(nodes).length
-  const deepStats = [
-    { label: '状态', value: statusLabel },
-    { label: '节点', value: `${nodeCountSummary}` },
-    { label: '深度', value: `${metrics.currentDepth || 0}` },
-    { label: '学科', value: subject || '待选择' },
-  ]
+  const {
+    subjects,
+    subject,
+    setSubject,
+    imageUrl,
+    setImageUrl,
+    input,
+    setInput,
+    messages,
+    showOptions,
+    setShowOptions,
+    showTree,
+    setShowTree,
+    selectedNodeId,
+    setSelectedNodeId,
+    activeAssistantId,
+    scrollRef,
+    showJumpToBottom,
+    scrollToBottom,
+    handleScroll,
+    status,
+    taskId,
+    nodes,
+    bestPath,
+    metrics,
+    error,
+    isStreaming,
+    selectedNode,
+    configSummary,
+    statusLabel,
+    assistantIndicatorTone,
+    deepStats,
+    handleClear,
+    handleSubmit,
+    cancel,
+  } = useDeepThinkPage()
 
   return (
     <div className="aurora-deep-screen h-full flex flex-col relative">
@@ -323,11 +201,11 @@ export default function DeepThinkPage() {
                                           评分理由：{selectedNode.evalReasoning}
                                         </div>
                                       )}
-                                      {selectedNode.issues?.length > 0 && (
+                                      {selectedNode.issues && selectedNode.issues.length > 0 && (
                                         <div className="text-xs text-muted-foreground">
                                           问题：
                                           <ul className="list-disc pl-5 mt-1 space-y-0.5">
-                                            {selectedNode.issues.slice(0, 6).map((x) => (
+                                            {selectedNode.issues.slice(0, 6).map((x: string) => (
                                               <li key={x}>{x}</li>
                                             ))}
                                           </ul>

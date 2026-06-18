@@ -29,7 +29,6 @@ from backend.core.subjects import (
     normalize_difficulty,
     resolve_subject,
 )
-from backend.llm.prompts import create_default_prompt_registry
 from backend.integrations.crawler.interface import CrawlerInterface
 from backend.integrations.crawler.manager import get_crawler
 from backend.integrations.mcp.core.sub_ai_selector import select_best_question
@@ -37,6 +36,7 @@ from backend.integrations.mcp.search.service import run_web_search
 from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
 from backend.integrations.mcp.tools.reviewer import review_questions_with_openrouter
 from backend.integrations.mcp.tools.stdio_llm import call_llm_text, extract_json_obj, pick_questions
+from backend.llm.prompts import create_default_prompt_registry
 from mcp.types import TextContent
 
 logger = get_logger(__name__)
@@ -64,6 +64,620 @@ def _required_list(arguments: Dict[str, Any], key: str, *, max_items: int = 0) -
     return value[:max_items] if max_items > 0 else value
 
 
+async def _handle_paper_diff(
+    server: Any,
+    arguments: Dict[str, Any],
+    ensure_crawler_initialized: Any,
+) -> Any:
+    """Handle the `paper_diff` tool — compare a paper against reference papers.
+
+    Returns either a result dict (to be serialized by the caller) or a list of
+    TextContent (for early-return error cases).
+    """
+    await ensure_crawler_initialized()
+
+    from backend.database.repositories.question.papers import get_paper
+    from backend.database.repositories.question.question_cache import get_question_cache
+    from backend.generation.paper_compose.workflow_support import _stem_fingerprint
+
+    paper_id = arguments.get("paper_id")
+    question_ids = arguments.get("question_ids") or []
+    reference_paper_ids = arguments.get("reference_paper_ids") or []
+    similarity_threshold = float(arguments.get("similarity_threshold", 0.6) or 0.6)
+    similarity_threshold = max(0.0, min(1.0, similarity_threshold))
+    max_questions = max(1, min(int(arguments.get("max_questions", 60) or 60), 120))
+
+    if not reference_paper_ids:
+        return {"success": False, "error": "reference_paper_ids 必填且非空"}
+
+    target_paper_meta: Optional[Dict[str, Any]] = None
+    target_qids: List[str] = []
+    if paper_id is not None:
+        paper = await get_paper(user_id="1", paper_id=int(paper_id))
+        if not paper:
+            return {"success": False, "error": f"未找到目标试卷 paper_id={paper_id}"}
+        target_paper_meta = paper
+        target_qids = [str(q.get("question_id")) for q in paper.get("questions", []) if q.get("question_id")]
+    elif question_ids:
+        target_qids = [str(x) for x in question_ids if str(x or "").strip()]
+    if not target_qids:
+        return {"success": False, "error": "paper_diff 需要 paper_id 或 question_ids"}
+
+    target_qids = target_qids[:max_questions]
+
+    ref_qid_to_paper: Dict[str, int] = {}
+    ref_paper_names: Dict[int, str] = {}
+    for ref_id in reference_paper_ids:
+        try:
+            ref = await get_paper(user_id="1", paper_id=int(ref_id))
+        except (TypeError, ValueError):
+            continue
+        if not ref:
+            continue
+        ref_paper_names[int(ref_id)] = ref.get("paper_name") or ""
+        for q in ref.get("questions", []) or []:
+            qid = str(q.get("question_id") or "").strip()
+            if qid:
+                ref_qid_to_paper.setdefault(qid, int(ref_id))
+
+    all_qids = list(set(target_qids) | set(ref_qid_to_paper.keys()))
+    cached = await get_question_cache(question_ids=all_qids)
+
+    async def _enrich_via_crawler(missing: List[str]) -> Dict[str, Dict[str, Any]]:
+        enriched: Dict[str, Dict[str, Any]] = {}
+        for i in range(0, len(missing), 10):
+            chunk_res = await server.crawler.batch_get_question_details(missing[i : i + 10])
+            for q in chunk_res.get("questions", []) or []:
+                qid = str(q.get("question_id") or "").strip()
+                if qid:
+                    enriched[qid] = q
+        return enriched
+
+    missing_ids = [qid for qid in all_qids if not (cached.get(qid) or {}).get("stem")]
+    crawler_extra = await _enrich_via_crawler(missing_ids) if missing_ids else {}
+
+    def _stem_for(qid: str) -> str:
+        item = cached.get(qid) or {}
+        stem = str(item.get("stem") or "").strip()
+        if stem:
+            return stem
+        extra = crawler_extra.get(qid) or {}
+        return str(extra.get("stem") or "").strip()
+
+    def _kps_for(qid: str) -> List[str]:
+        item = cached.get(qid) or {}
+        kps_json = item.get("knowledge_points_json")
+        if kps_json:
+            try:
+                parsed = json.loads(kps_json)
+                if isinstance(parsed, list):
+                    out = [str(x).strip() for x in parsed if str(x or "").strip()]
+                    if out:
+                        return out
+            except (TypeError, ValueError):
+                pass
+        single = str(item.get("knowledge_point") or "").strip()
+        if single:
+            return [single]
+        extra = crawler_extra.get(qid) or {}
+        kps = extra.get("knowledge_points")
+        if isinstance(kps, list):
+            return [str(x).strip() for x in kps if str(x or "").strip()]
+        return []
+
+    def _shingles(stem: str) -> set[str]:
+        s = re.sub(r"\s+", "", (stem or "").lower())[:1500]
+        if len(s) < 3:
+            return set()
+        return {s[i : i + 3] for i in range(len(s) - 2)}
+
+    def _jaccard(a: set[str], b: set[str]) -> float:
+        if not a or not b:
+            return 0.0
+        inter = len(a & b)
+        union = len(a | b)
+        return (inter / union) if union else 0.0
+
+    target_data = [
+        {
+            "qid": qid,
+            "stem": _stem_for(qid),
+            "fp": _stem_fingerprint(_stem_for(qid)),
+            "kps": _kps_for(qid),
+        }
+        for qid in target_qids
+    ]
+    ref_data = [
+        {
+            "qid": qid,
+            "stem": _stem_for(qid),
+            "fp": _stem_fingerprint(_stem_for(qid)),
+            "kps": _kps_for(qid),
+            "paper_id": ref_qid_to_paper.get(qid),
+        }
+        for qid in ref_qid_to_paper.keys()
+    ]
+    ref_data = [r for r in ref_data if r["stem"]]
+
+    ref_fp_set = {r["fp"] for r in ref_data if r["fp"]}
+    ref_shingles = [(r, _shingles(r["stem"])) for r in ref_data]
+
+    exact_dups: List[Dict[str, Any]] = []
+    similar_pairs: List[Dict[str, Any]] = []
+    for t in target_data:
+        if not t["stem"]:
+            continue
+        if t["fp"] and t["fp"] in ref_fp_set:
+            matched_refs = [r for r in ref_data if r["fp"] == t["fp"]]
+            exact_dups.append(
+                {
+                    "target_qid": t["qid"],
+                    "ref_qids": [r["qid"] for r in matched_refs],
+                    "ref_paper_ids": sorted({r["paper_id"] for r in matched_refs if r["paper_id"] is not None}),
+                }
+            )
+            continue
+        ts = _shingles(t["stem"])
+        if not ts:
+            continue
+        best = (0.0, None)
+        for r, rs in ref_shingles:
+            if r["fp"] == t["fp"]:
+                continue
+            j = _jaccard(ts, rs)
+            if j > best[0]:
+                best = (j, r)
+        if best[0] >= similarity_threshold and best[1]:
+            similar_pairs.append(
+                {
+                    "target_qid": t["qid"],
+                    "ref_qid": best[1]["qid"],
+                    "ref_paper_id": best[1]["paper_id"],
+                    "similarity": round(best[0], 3),
+                }
+            )
+
+    target_kps_set: set[str] = set()
+    for t in target_data:
+        target_kps_set.update(t["kps"])
+    ref_kps_set: set[str] = set()
+    for r in ref_data:
+        ref_kps_set.update(r["kps"])
+
+    return {
+        "success": True,
+        "target_paper_id": paper_id,
+        "target_paper_name": (target_paper_meta or {}).get("paper_name") or "",
+        "target_question_count": len(target_data),
+        "reference_paper_ids": list(ref_paper_names.keys()),
+        "reference_paper_names": ref_paper_names,
+        "reference_question_count": len(ref_data),
+        "similarity_threshold": similarity_threshold,
+        "exact_dup_count": len(exact_dups),
+        "exact_dups": exact_dups,
+        "similar_pair_count": len(similar_pairs),
+        "similar_pairs": similar_pairs,
+        "unique_kp_in_target": sorted(target_kps_set - ref_kps_set),
+        "missing_kp_from_target": sorted(ref_kps_set - target_kps_set),
+        "shared_kp": sorted(target_kps_set & ref_kps_set),
+    }
+
+
+async def _handle_solve_paper(
+    server: Any,
+    arguments: Dict[str, Any],
+    ensure_crawler_initialized: Any,
+) -> Any:
+    """Handle the `solve_paper` tool — batch-solve questions with LLM."""
+    await ensure_crawler_initialized()
+
+    target_subject = (arguments.get("subject") or "").strip()
+    if target_subject and target_subject in SUBJECTS:
+        server.current_subject = target_subject
+        await ensure_crawler_initialized(subject=target_subject)
+
+    paper_id = arguments.get("paper_id")
+    question_ids = arguments.get("question_ids") or []
+    max_questions = max(1, min(int(arguments.get("max_questions", 30) or 30), 60))
+    concurrency = max(1, min(int(arguments.get("concurrency", 3) or 3), 6))
+
+    if paper_id is not None:
+        from backend.database.repositories.question.papers import get_paper
+
+        paper = await get_paper(user_id="1", paper_id=int(paper_id))
+        if not paper:
+            return {"success": False, "error": f"未找到试卷 paper_id={paper_id}"}
+        question_ids = [q.get("question_id") for q in paper.get("questions", []) if q.get("question_id")]
+
+    if not question_ids:
+        return {"success": False, "error": "solve_paper 需要 paper_id 或 question_ids"}
+
+    question_ids = [str(x) for x in question_ids][:max_questions]
+
+    details_all: List[Dict[str, Any]] = []
+    for i in range(0, len(question_ids), 10):
+        chunk_res = await server.crawler.batch_get_question_details(question_ids[i : i + 10])
+        details_all.extend(chunk_res.get("questions", []))
+    detail_map = {str(q.get("question_id")): q for q in details_all if q.get("question_id")}
+
+    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        return {
+            "success": False,
+            "error": "missing_llm_config",
+            "hint": "LESSON_PLAN_API_KEY 或 MOONSHOT_API_KEY 未配置，无法批解",
+        }
+
+    sem = asyncio.Semaphore(concurrency)
+    solve_prompt = _prompt("mcp.solve_stepwise.v1")
+    subj = server.current_subject
+
+    async def _solve_one(qid: str) -> Dict[str, Any]:
+        async with sem:
+            q = detail_map.get(qid, {})
+            stem = str(q.get("stem") or "").strip()
+            if not stem:
+                return {"question_id": qid, "success": False, "error": "missing_stem"}
+            topic = ""
+            kps = q.get("knowledge_points")
+            if isinstance(kps, list) and kps:
+                topic = str(kps[0] or "").strip()
+            if not topic:
+                topic = str(q.get("knowledge_point") or "").strip()
+            user_prompt = (
+                f"Write a detailed step-by-step solution for the problem below in Markdown.\n\n"
+                f"Requirements:\n- Explain what each step is doing.\n"
+                f"- If the problem statement lacks information, state what needs to be added.\n"
+                f"- Match the language of the problem statement unless the caller explicitly requires another language.\n\n"
+                f"Subject: {subj}\nKnowledge point: {topic or '(unspecified)'}\n\nProblem:\n{stem}\n"
+            )
+            try:
+                text = await call_llm_text(
+                    messages=[
+                        {"role": "system", "content": solve_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    model=LESSON_PLAN_MODEL,
+                    temperature=0.3,
+                    max_tokens=1200,
+                )
+            except Exception as exc:
+                logger.warning("solve_paper_solve_failed", extra={"qid": qid}, exc_info=True)
+                return {"question_id": qid, "success": False, "error": f"solve_failed: {exc}"}
+            return {
+                "question_id": qid,
+                "success": True,
+                "markdown": (text or "").strip(),
+                "question_type": q.get("question_type") or q.get("type") or "",
+                "knowledge_point": topic,
+            }
+
+    solutions = await asyncio.gather(*[_solve_one(qid) for qid in question_ids])
+    ok_count = sum(1 for s in solutions if s.get("success"))
+    return {
+        "success": True,
+        "subject": subj,
+        "paper_id": paper_id,
+        "total": len(solutions),
+        "solved": ok_count,
+        "failed": len(solutions) - ok_count,
+        "solutions": solutions,
+    }
+
+
+async def _handle_review_paper(
+    server: Any,
+    arguments: Dict[str, Any],
+    ensure_crawler_initialized: Any,
+) -> Any:
+    """Handle the `review_paper` tool — review questions via OpenRouter."""
+    await ensure_crawler_initialized()
+
+    target_subject = (arguments.get("subject") or "").strip()
+    if target_subject:
+        if target_subject not in SUBJECTS:
+            matched = None
+            for name_key in SUBJECTS.keys():
+                if target_subject in name_key or name_key in target_subject:
+                    matched = name_key
+                    break
+            if matched:
+                target_subject = matched
+            else:
+                return {
+                    "success": False,
+                    "error": f"未找到学科: {target_subject}",
+                    "available_subjects": list(SUBJECTS.keys()),
+                    "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
+                }
+
+        server.current_subject = target_subject
+        await ensure_crawler_initialized(subject=target_subject)
+
+    paper_id = arguments.get("paper_id")
+    question_ids = arguments.get("question_ids") or []
+    paper_name = (arguments.get("paper_name") or "").strip()
+    focus = (arguments.get("focus") or "").strip()
+    strictness = int(arguments.get("strictness", 3) or 3)
+    max_questions = int(arguments.get("max_questions", 20) or 20)
+    if max_questions < 1:
+        max_questions = 1
+    if max_questions > 50:
+        max_questions = 50
+
+    paper_meta = None
+    if paper_id is not None:
+        from backend.database.repositories.question.papers import get_paper
+
+        paper = await get_paper(user_id="1", paper_id=int(paper_id))
+        if not paper:
+            return {"success": False, "error": f"未找到试卷 paper_id={paper_id}"}
+
+        paper_meta = paper
+        if not paper_name:
+            paper_name = paper.get("paper_name", "") or ""
+        question_ids = [q.get("question_id") for q in paper.get("questions", []) if q.get("question_id")]
+
+    if not question_ids:
+        return {
+            "success": False,
+            "error": "review_paper 需要 paper_id 或 question_ids",
+            "hint": "传入 paper_id（create_paper 的返回）或直接传入题目ID列表",
+        }
+
+    question_ids = [str(x) for x in question_ids][:max_questions]
+
+    details_all = []
+    for i in range(0, len(question_ids), 10):
+        chunk = question_ids[i : i + 10]
+        chunk_res = await server.crawler.batch_get_question_details(chunk)
+        details_all.extend(chunk_res.get("questions", []))
+
+    detail_map = {str(q.get("question_id")): q for q in details_all if q.get("question_id")}
+    ordered_questions = [detail_map.get(qid, {"question_id": qid}) for qid in question_ids]
+
+    result = await review_questions_with_openrouter(
+        questions=ordered_questions,
+        paper_name=paper_name,
+        subject=server.current_subject,
+        focus=focus,
+        strictness=strictness,
+    )
+    if paper_meta:
+        result["paper_meta"] = {
+            "paper_id": paper_meta.get("paper_id"),
+            "paper_name": paper_meta.get("paper_name"),
+            "question_count": len(paper_meta.get("questions", []) or []),
+        }
+    return result
+
+
+async def _handle_align_to_curriculum(
+    server: Any,
+    arguments: Dict[str, Any],
+) -> Any:
+    """Handle the `align_to_curriculum` tool — check knowledge-point scope vs curriculum."""
+    stem = (arguments.get("stem") or "").strip()
+    if not stem:
+        return {"success": False, "error": "missing_stem"}
+
+    from backend.generation.question_library.curriculum_context import (
+        build_curriculum_context,
+        get_static_curriculum_baseline,
+    )
+
+    target_subject = (arguments.get("subject") or "").strip() or str(
+        getattr(server, "current_subject", "") or ""
+    ).strip()
+    topic = (arguments.get("topic") or "").strip()
+    kps_in = arguments.get("knowledge_points")
+    knowledge_points = [str(x).strip() for x in kps_in if str(x or "").strip()] if isinstance(kps_in, list) else []
+    grade_id = str(arguments.get("grade_id") or "").strip()
+    textbook_version_id = str(arguments.get("textbook_version_id") or "").strip()
+
+    if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+        ctx = get_static_curriculum_baseline(target_subject)
+        if knowledge_points:
+            ctx["knowledge_scope"] = {"in_scope": knowledge_points, "out_of_scope": []}
+        return {
+            "success": True,
+            "source": "fallback",
+            "subject": target_subject,
+            "curriculum_standard": ctx.get("curriculum_standard"),
+            "in_scope": (ctx.get("knowledge_scope") or {}).get("in_scope") or [],
+            "out_of_scope": (ctx.get("knowledge_scope") or {}).get("out_of_scope") or [],
+            "question_requirements": ctx.get("question_requirements") or [],
+            "core_competencies": ctx.get("core_competencies") or [],
+            "prerequisites": ctx.get("prerequisites") or [],
+            "judgment": "unknown_without_llm",
+        }
+
+    try:
+        ctx = await build_curriculum_context(
+            subject=target_subject,
+            topic=topic or stem[:80],
+            knowledge_points=knowledge_points,
+            grade_id=grade_id,
+            textbook_version_id=textbook_version_id,
+            study_markdown=stem,
+        )
+    except Exception as exc:
+        logger.warning("align_to_curriculum_failed", exc_info=True)
+        return {"success": False, "error": f"curriculum_failed: {exc}"}
+
+    scope = ctx.get("knowledge_scope") or {}
+    out_of_scope = list(scope.get("out_of_scope") or [])
+    in_scope = list(scope.get("in_scope") or [])
+    offending = []
+    for kp in knowledge_points:
+        if any(kp and (kp in s or s in kp) for s in out_of_scope):
+            offending.append(kp)
+    judgment = "out_of_scope" if offending else ("in_scope" if in_scope else "uncertain")
+    return {
+        "success": True,
+        "source": "llm",
+        "subject": target_subject,
+        "curriculum_standard": ctx.get("curriculum_standard"),
+        "in_scope": in_scope,
+        "out_of_scope": out_of_scope,
+        "question_requirements": ctx.get("question_requirements") or [],
+        "core_competencies": ctx.get("core_competencies") or [],
+        "prerequisites": ctx.get("prerequisites") or [],
+        "judgment": judgment,
+        "offending_knowledge_points": offending,
+    }
+
+
+async def _handle_export_to_zujuan(
+    server: Any,
+    arguments: Dict[str, Any],
+    ensure_crawler_initialized: Any,
+) -> Any:
+    """Handle the `export_to_zujuan` tool — export questions to zujuan basket."""
+    await ensure_crawler_initialized()
+    question_ids = _required_list(arguments, "question_ids")
+    export_subject = (arguments.get("subject") or "").strip()
+
+    if export_subject:
+        if export_subject not in SUBJECTS:
+            matched = None
+            for name_key in SUBJECTS.keys():
+                if export_subject in name_key or name_key in export_subject:
+                    matched = name_key
+                    break
+            if matched:
+                export_subject = matched
+            else:
+                return {
+                    "success": False,
+                    "error": f"未找到学科: {export_subject}",
+                    "available_subjects": list(SUBJECTS.keys()),
+                    "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
+                }
+
+        server.current_subject = export_subject
+        await ensure_crawler_initialized(subject=export_subject)
+
+    details_result = await server.crawler.batch_get_question_details(
+        question_ids[:10]
+    )
+    question_details = details_result.get("questions", [])
+
+    result = await server.crawler.export_to_basket(
+        question_ids=question_ids,
+        question_details=question_details,
+        auto_login=False,
+    )
+
+    if result.get("cookie_expired"):
+        result["user_action_required"] = True
+        result["message"] = "Cookie 已过期，请按以下步骤重新登录"
+
+    elif result.get("login_required"):
+        login_result = await server.crawler.login_via_subprocess()
+        result["login_window"] = login_result
+        login_script = str(login_result.get("login_script") or "scripts/登录组卷网.bat")
+        login_command = str(login_result.get("login_command") or f'"{login_script}" "{server.current_subject}"')
+        result["login_script"] = login_script
+        result["login_command"] = login_command
+        result["login_instructions"] = [
+            "首次使用需要登录组卷网：",
+            f"1. 运行 {login_command}",
+            "2. 在弹出的浏览器中登录",
+            "3. 登录成功后等待脚本自动保存",
+            "4. 重新调用此工具导出题目",
+        ]
+
+    if result.get("success"):
+        result["next_steps"] = [
+            "1. 打开组卷网题篮页面: https://zujuan.xkw.com/basket/",
+            "2. 检查题目是否已添加",
+            "3. 点击'生成试卷'按钮完成组卷",
+        ]
+    return result
+
+
+async def _handle_search_questions(
+    server: Any,
+    arguments: Dict[str, Any],
+    ensure_crawler_initialized: Any,
+    *,
+    mode: str,
+) -> Any:
+    """Handle `search_questions_by_keyword` / `search_questions_by_knowledge` tools."""
+    edu_level = (arguments.get("edu_level") or "").strip()
+    subject_input = (arguments.get("subject") or "").strip()
+    try:
+        resolved_subject = resolve_subject(
+            subject_input or server.current_subject,
+            edu_level=edu_level,
+            strict=True,
+        )
+        difficulty = normalize_difficulty(
+            arguments.get("difficulty") or DEFAULT_DIFFICULTY,
+            strict=True,
+        )
+    except ValueError as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "current_subject": server.current_subject,
+            "available_subjects": list(SUBJECTS.keys()),
+            "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
+            "allowed_edu_levels": list(EDU_LEVELS.keys()),
+        }
+
+    await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
+
+    search_kwargs = dict(
+        subject=resolved_subject,
+        edu_level=edu_level,
+        limit=arguments.get("limit", 10),
+        difficulty=difficulty,
+        question_type=arguments.get("question_type", ""),
+        learn_grade=arguments.get("learn_grade", ""),
+        learn_grade_id=arguments.get("learn_grade_id", 0),
+        textbook_version=arguments.get("textbook_version", ""),
+        max_pages=arguments.get("max_pages", 2),
+        year=arguments.get("year", 0),
+        province=arguments.get("province", ""),
+        province_id=arguments.get("province_id", -1),
+        paper_type_id=arguments.get("paper_type_id", 0),
+        term=arguments.get("term", 0),
+        order_by=arguments.get("order_by", 2),
+        source_contains=arguments.get("source_contains", ""),
+        stem_contains=arguments.get("stem_contains", ""),
+        knowledge_contains=arguments.get("knowledge_contains", ""),
+        exclude_elective=bool(arguments.get("exclude_elective", False)),
+        elective_mode=arguments.get("elective_mode", ""),
+        elective_keywords=arguments.get("elective_keywords"),
+        dedup_by_stem=bool(arguments.get("dedup_by_stem", False)),
+        min_quality_score=arguments.get("min_quality_score", 0),
+        with_quality=bool(arguments.get("with_quality", True)),
+        difficulty_value_min=arguments.get("difficulty_value_min"),
+        difficulty_value_max=arguments.get("difficulty_value_max"),
+        require_difficulty=True,
+        strict_subject=True,
+    )
+
+    if mode == "keyword":
+        result = await server.crawler.search_by_keyword(
+            keyword=_required(arguments, "keyword"),
+            **search_kwargs,
+        )
+    else:
+        result = await server.crawler.search_by_knowledge(
+            knowledge_point=_required(arguments, "knowledge_point"),
+            **search_kwargs,
+        )
+
+    result["current_subject"] = server.current_subject
+    result["applied_difficulty"] = difficulty
+    if edu_level:
+        result["applied_edu_level"] = edu_level
+    result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，公式已转换为LaTeX"
+    return result
+
+
 async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[TextContent]:
     """处理工具调用"""
 
@@ -79,132 +693,16 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
 
     try:
         if name == "search_questions_by_keyword":
-            edu_level = (arguments.get("edu_level") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            try:
-                resolved_subject = resolve_subject(
-                    subject_input or server.current_subject,
-                    edu_level=edu_level,
-                    strict=True,
-                )
-                difficulty = normalize_difficulty(
-                    arguments.get("difficulty") or DEFAULT_DIFFICULTY,
-                    strict=True,
-                )
-            except ValueError as exc:
-                result = {
-                    "success": False,
-                    "error": str(exc),
-                    "current_subject": server.current_subject,
-                    "available_subjects": list(SUBJECTS.keys()),
-                    "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
-                    "allowed_edu_levels": list(EDU_LEVELS.keys()),
-                }
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
-
-            result = await server.crawler.search_by_keyword(
-                keyword=_required(arguments, "keyword"),
-                subject=resolved_subject,
-                edu_level=edu_level,
-                limit=arguments.get("limit", 10),
-                difficulty=difficulty,
-                question_type=arguments.get("question_type", ""),
-                learn_grade=arguments.get("learn_grade", ""),
-                learn_grade_id=arguments.get("learn_grade_id", 0),
-                textbook_version=arguments.get("textbook_version", ""),
-                max_pages=arguments.get("max_pages", 2),
-                year=arguments.get("year", 0),
-                province=arguments.get("province", ""),
-                province_id=arguments.get("province_id", -1),
-                paper_type_id=arguments.get("paper_type_id", 0),
-                term=arguments.get("term", 0),
-                order_by=arguments.get("order_by", 2),
-                source_contains=arguments.get("source_contains", ""),
-                stem_contains=arguments.get("stem_contains", ""),
-                knowledge_contains=arguments.get("knowledge_contains", ""),
-                exclude_elective=bool(arguments.get("exclude_elective", False)),
-                elective_mode=arguments.get("elective_mode", ""),
-                elective_keywords=arguments.get("elective_keywords"),
-                dedup_by_stem=bool(arguments.get("dedup_by_stem", False)),
-                min_quality_score=arguments.get("min_quality_score", 0),
-                with_quality=bool(arguments.get("with_quality", True)),
-                difficulty_value_min=arguments.get("difficulty_value_min"),
-                difficulty_value_max=arguments.get("difficulty_value_max"),
-                require_difficulty=True,
-                strict_subject=True,
-            )
-            # 添加当前学科信息和使用提示
-            result["current_subject"] = server.current_subject
-            result["applied_difficulty"] = difficulty
-            if edu_level:
-                result["applied_edu_level"] = edu_level
-            result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，公式已转换为LaTeX"
+            outcome = await _handle_search_questions(server, arguments, ensure_crawler_initialized, mode="keyword")
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "search_questions_by_knowledge":
-            edu_level = (arguments.get("edu_level") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            try:
-                resolved_subject = resolve_subject(
-                    subject_input or server.current_subject,
-                    edu_level=edu_level,
-                    strict=True,
-                )
-                difficulty = normalize_difficulty(
-                    arguments.get("difficulty") or DEFAULT_DIFFICULTY,
-                    strict=True,
-                )
-            except ValueError as exc:
-                result = {
-                    "success": False,
-                    "error": str(exc),
-                    "current_subject": server.current_subject,
-                    "available_subjects": list(SUBJECTS.keys()),
-                    "allowed_difficulties": sorted(DIFFICULTY_LEVELS),
-                    "allowed_edu_levels": list(EDU_LEVELS.keys()),
-                }
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
-
-            result = await server.crawler.search_by_knowledge(
-                knowledge_point=_required(arguments, "knowledge_point"),
-                subject=resolved_subject,
-                edu_level=edu_level,
-                limit=arguments.get("limit", 10),
-                difficulty=difficulty,
-                question_type=arguments.get("question_type", ""),
-                learn_grade=arguments.get("learn_grade", ""),
-                learn_grade_id=arguments.get("learn_grade_id", 0),
-                textbook_version=arguments.get("textbook_version", ""),
-                max_pages=arguments.get("max_pages", 2),
-                year=arguments.get("year", 0),
-                province=arguments.get("province", ""),
-                province_id=arguments.get("province_id", -1),
-                paper_type_id=arguments.get("paper_type_id", 0),
-                term=arguments.get("term", 0),
-                order_by=arguments.get("order_by", 2),
-                source_contains=arguments.get("source_contains", ""),
-                stem_contains=arguments.get("stem_contains", ""),
-                knowledge_contains=arguments.get("knowledge_contains", ""),
-                exclude_elective=bool(arguments.get("exclude_elective", False)),
-                elective_mode=arguments.get("elective_mode", ""),
-                elective_keywords=arguments.get("elective_keywords"),
-                dedup_by_stem=bool(arguments.get("dedup_by_stem", False)),
-                min_quality_score=arguments.get("min_quality_score", 0),
-                with_quality=bool(arguments.get("with_quality", True)),
-                difficulty_value_min=arguments.get("difficulty_value_min"),
-                difficulty_value_max=arguments.get("difficulty_value_max"),
-                require_difficulty=True,
-                strict_subject=True,
-            )
-            # 添加当前学科信息和使用提示
-            result["current_subject"] = server.current_subject
-            result["applied_difficulty"] = difficulty
-            if edu_level:
-                result["applied_edu_level"] = edu_level
-            result["hint"] = "搜索结果已包含完整题目信息(题干、难度、知识点)，公式已转换为LaTeX"
+            outcome = await _handle_search_questions(server, arguments, ensure_crawler_initialized, mode="knowledge")
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "filter_questions":
             await ensure_crawler_initialized()
@@ -261,162 +759,16 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     result["message"] = f"子AI已从{len(questions)}道候选题目中选择了最符合要求的题目"
 
         elif name == "export_to_zujuan":
-            await ensure_crawler_initialized()
-            # 导出到组卷网题篮
-            question_ids = _required_list(arguments, "question_ids")
-            paper_name = arguments.get("paper_name", "AI组卷")
-            export_subject = (arguments.get("subject") or "").strip()
-
-            if export_subject:
-                # 复用 set_subject 的模糊匹配逻辑
-                if export_subject not in SUBJECTS:
-                    matched = None
-                    for name_key in SUBJECTS.keys():
-                        if export_subject in name_key or name_key in export_subject:
-                            matched = name_key
-                            break
-                    if matched:
-                        export_subject = matched
-                    else:
-                        result = {
-                            "success": False,
-                            "error": f"未找到学科: {export_subject}",
-                            "available_subjects": list(SUBJECTS.keys()),
-                            "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
-                        }
-                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-                server.current_subject = export_subject
-                await ensure_crawler_initialized(subject=export_subject)
-
-            # 先获取题目详情（用于填充题型、难度等信息）
-            details_result = await server.crawler.batch_get_question_details(
-                question_ids[:10]  # 限制最多10个
-            )
-            question_details = details_result.get("questions", [])
-
-            # 调用导出功能（MCP环境无法弹出GUI，禁用自动登录）
-            result = await server.crawler.export_to_basket(
-                question_ids=question_ids,
-                question_details=question_details,
-                auto_login=False,  # MCP环境不支持GUI弹窗
-            )
-
-            # 如果 cookie 过期，显示友好提示
-            if result.get("cookie_expired"):
-                result["user_action_required"] = True
-                result["message"] = "Cookie 已过期，请按以下步骤重新登录"
-
-            # 如果需要登录（首次使用），尝试启动独立登录窗口
-            elif result.get("login_required"):
-                # 启动独立进程显示登录窗口
-                login_result = await server.crawler.login_via_subprocess()
-                result["login_window"] = login_result
-                login_script = str(login_result.get("login_script") or "scripts/登录组卷网.bat")
-                login_command = str(login_result.get("login_command") or f'"{login_script}" "{server.current_subject}"')
-                result["login_script"] = login_script
-                result["login_command"] = login_command
-                result["login_instructions"] = [
-                    "首次使用需要登录组卷网：",
-                    f"1. 运行 {login_command}",
-                    "2. 在弹出的浏览器中登录",
-                    "3. 登录成功后等待脚本自动保存",
-                    "4. 重新调用此工具导出题目",
-                ]
-
-            # 如果成功，添加额外提示
-            if result.get("success"):
-                result["next_steps"] = [
-                    "1. 打开组卷网题篮页面: https://zujuan.xkw.com/basket/",
-                    "2. 检查题目是否已添加",
-                    "3. 点击'生成试卷'按钮完成组卷",
-                ]
+            outcome = await _handle_export_to_zujuan(server, arguments, ensure_crawler_initialized)
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "review_paper":
-            await ensure_crawler_initialized()
-
-            # 可选切换学科
-            target_subject = (arguments.get("subject") or "").strip()
-            if target_subject:
-                if target_subject not in SUBJECTS:
-                    matched = None
-                    for name_key in SUBJECTS.keys():
-                        if target_subject in name_key or name_key in target_subject:
-                            matched = name_key
-                            break
-                    if matched:
-                        target_subject = matched
-                    else:
-                        result = {
-                            "success": False,
-                            "error": f"未找到学科: {target_subject}",
-                            "available_subjects": list(SUBJECTS.keys()),
-                            "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
-                        }
-                        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-                server.current_subject = target_subject
-                await ensure_crawler_initialized(subject=target_subject)
-
-            paper_id = arguments.get("paper_id")
-            question_ids = arguments.get("question_ids") or []
-            paper_name = (arguments.get("paper_name") or "").strip()
-            focus = (arguments.get("focus") or "").strip()
-            strictness = int(arguments.get("strictness", 3) or 3)
-            max_questions = int(arguments.get("max_questions", 20) or 20)
-            if max_questions < 1:
-                max_questions = 1
-            if max_questions > 50:
-                max_questions = 50
-
-            paper_meta = None
-            if paper_id is not None:
-                from backend.database.repositories.question.papers import get_paper
-
-                paper = await get_paper(user_id="1", paper_id=int(paper_id))
-                if not paper:
-                    result = {"success": False, "error": f"未找到试卷 paper_id={paper_id}"}
-                    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-                paper_meta = paper
-                if not paper_name:
-                    paper_name = paper.get("paper_name", "") or ""
-                question_ids = [q.get("question_id") for q in paper.get("questions", []) if q.get("question_id")]
-
-            if not question_ids:
-                result = {
-                    "success": False,
-                    "error": "review_paper 需要 paper_id 或 question_ids",
-                    "hint": "传入 paper_id（create_paper 的返回）或直接传入题目ID列表",
-                }
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            question_ids = [str(x) for x in question_ids][:max_questions]
-
-            # 拉取题干等信息（batch_get_question_details 单次最多10个，这里分批拉取）
-            details_all = []
-            for i in range(0, len(question_ids), 10):
-                chunk = question_ids[i : i + 10]
-                chunk_res = await server.crawler.batch_get_question_details(chunk)
-                details_all.extend(chunk_res.get("questions", []))
-
-            # 保持顺序
-            detail_map = {str(q.get("question_id")): q for q in details_all if q.get("question_id")}
-            ordered_questions = [detail_map.get(qid, {"question_id": qid}) for qid in question_ids]
-
-            result = await review_questions_with_openrouter(
-                questions=ordered_questions,
-                paper_name=paper_name,
-                subject=server.current_subject,
-                focus=focus,
-                strictness=strictness,
-            )
-            if paper_meta:
-                result["paper_meta"] = {
-                    "paper_id": paper_meta.get("paper_id"),
-                    "paper_name": paper_meta.get("paper_name"),
-                    "question_count": len(paper_meta.get("questions", []) or []),
-                }
+            outcome = await _handle_review_paper(server, arguments, ensure_crawler_initialized)
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "list_subjects":
             # 列出所有支持的学科
@@ -879,365 +1231,22 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
                     result = {"success": False, "error": f"zhihu_fetch failed: {exc}"}
 
         elif name == "solve_paper":
-            await ensure_crawler_initialized()
-
-            target_subject = (arguments.get("subject") or "").strip()
-            if target_subject and target_subject in SUBJECTS:
-                server.current_subject = target_subject
-                await ensure_crawler_initialized(subject=target_subject)
-
-            paper_id = arguments.get("paper_id")
-            question_ids = arguments.get("question_ids") or []
-            max_questions = max(1, min(int(arguments.get("max_questions", 30) or 30), 60))
-            concurrency = max(1, min(int(arguments.get("concurrency", 3) or 3), 6))
-
-            if paper_id is not None:
-                from backend.database.repositories.question.papers import get_paper
-
-                paper = await get_paper(user_id="1", paper_id=int(paper_id))
-                if not paper:
-                    result = {"success": False, "error": f"未找到试卷 paper_id={paper_id}"}
-                    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-                question_ids = [q.get("question_id") for q in paper.get("questions", []) if q.get("question_id")]
-
-            if not question_ids:
-                result = {"success": False, "error": "solve_paper 需要 paper_id 或 question_ids"}
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            question_ids = [str(x) for x in question_ids][:max_questions]
-
-            details_all: List[Dict[str, Any]] = []
-            for i in range(0, len(question_ids), 10):
-                chunk_res = await server.crawler.batch_get_question_details(question_ids[i : i + 10])
-                details_all.extend(chunk_res.get("questions", []))
-            detail_map = {str(q.get("question_id")): q for q in details_all if q.get("question_id")}
-
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {
-                    "success": False,
-                    "error": "missing_llm_config",
-                    "hint": "LESSON_PLAN_API_KEY 或 MOONSHOT_API_KEY 未配置，无法批解",
-                }
-            else:
-                sem = asyncio.Semaphore(concurrency)
-                solve_prompt = _prompt("mcp.solve_stepwise.v1")
-                subj = server.current_subject
-
-                async def _solve_one(qid: str) -> Dict[str, Any]:
-                    async with sem:
-                        q = detail_map.get(qid, {})
-                        stem = str(q.get("stem") or "").strip()
-                        if not stem:
-                            return {"question_id": qid, "success": False, "error": "missing_stem"}
-                        topic = ""
-                        kps = q.get("knowledge_points")
-                        if isinstance(kps, list) and kps:
-                            topic = str(kps[0] or "").strip()
-                        if not topic:
-                            topic = str(q.get("knowledge_point") or "").strip()
-                        user_prompt = (
-                            f"Write a detailed step-by-step solution for the problem below in Markdown.\n\n"
-                            f"Requirements:\n- Explain what each step is doing.\n"
-                            f"- If the problem statement lacks information, state what needs to be added.\n"
-                            f"- Match the language of the problem statement unless the caller explicitly requires another language.\n\n"
-                            f"Subject: {subj}\nKnowledge point: {topic or '(unspecified)'}\n\nProblem:\n{stem}\n"
-                        )
-                        try:
-                            text = await call_llm_text(
-                                messages=[
-                                    {"role": "system", "content": solve_prompt},
-                                    {"role": "user", "content": user_prompt},
-                                ],
-                                model=LESSON_PLAN_MODEL,
-                                temperature=0.3,
-                                max_tokens=1200,
-                            )
-                        except Exception as exc:
-                            logger.warning("solve_paper_solve_failed", extra={"qid": qid}, exc_info=True)
-                            return {"question_id": qid, "success": False, "error": f"solve_failed: {exc}"}
-                        return {
-                            "question_id": qid,
-                            "success": True,
-                            "markdown": (text or "").strip(),
-                            "question_type": q.get("question_type") or q.get("type") or "",
-                            "knowledge_point": topic,
-                        }
-
-                solutions = await asyncio.gather(*[_solve_one(qid) for qid in question_ids])
-                ok_count = sum(1 for s in solutions if s.get("success"))
-                result = {
-                    "success": True,
-                    "subject": subj,
-                    "paper_id": paper_id,
-                    "total": len(solutions),
-                    "solved": ok_count,
-                    "failed": len(solutions) - ok_count,
-                    "solutions": solutions,
-                }
+            outcome = await _handle_solve_paper(server, arguments, ensure_crawler_initialized)
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "align_to_curriculum":
-            stem = (arguments.get("stem") or "").strip()
-            if not stem:
-                result = {"success": False, "error": "missing_stem"}
-            else:
-                from backend.generation.question_library.curriculum_context import (
-                    build_curriculum_context,
-                    get_static_curriculum_baseline,
-                )
-
-                target_subject = (arguments.get("subject") or "").strip() or str(
-                    getattr(server, "current_subject", "") or ""
-                ).strip()
-                topic = (arguments.get("topic") or "").strip()
-                kps_in = arguments.get("knowledge_points")
-                knowledge_points = [str(x).strip() for x in kps_in if str(x or "").strip()] if isinstance(kps_in, list) else []
-                grade_id = str(arguments.get("grade_id") or "").strip()
-                textbook_version_id = str(arguments.get("textbook_version_id") or "").strip()
-
-                if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                    ctx = get_static_curriculum_baseline(target_subject)
-                    if knowledge_points:
-                        ctx["knowledge_scope"] = {"in_scope": knowledge_points, "out_of_scope": []}
-                    result = {
-                        "success": True,
-                        "source": "fallback",
-                        "subject": target_subject,
-                        "curriculum_standard": ctx.get("curriculum_standard"),
-                        "in_scope": (ctx.get("knowledge_scope") or {}).get("in_scope") or [],
-                        "out_of_scope": (ctx.get("knowledge_scope") or {}).get("out_of_scope") or [],
-                        "question_requirements": ctx.get("question_requirements") or [],
-                        "core_competencies": ctx.get("core_competencies") or [],
-                        "prerequisites": ctx.get("prerequisites") or [],
-                        "judgment": "unknown_without_llm",
-                    }
-                else:
-                    try:
-                        ctx = await build_curriculum_context(
-                            subject=target_subject,
-                            topic=topic or stem[:80],
-                            knowledge_points=knowledge_points,
-                            grade_id=grade_id,
-                            textbook_version_id=textbook_version_id,
-                            study_markdown=stem,
-                        )
-                    except Exception as exc:
-                        logger.warning("align_to_curriculum_failed", exc_info=True)
-                        result = {"success": False, "error": f"curriculum_failed: {exc}"}
-                    else:
-                        scope = ctx.get("knowledge_scope") or {}
-                        out_of_scope = list(scope.get("out_of_scope") or [])
-                        in_scope = list(scope.get("in_scope") or [])
-                        # naive judgment: flag if any knowledge_point appears in out_of_scope
-                        offending = []
-                        for kp in knowledge_points:
-                            if any(kp and (kp in s or s in kp) for s in out_of_scope):
-                                offending.append(kp)
-                        judgment = "out_of_scope" if offending else ("in_scope" if in_scope else "uncertain")
-                        result = {
-                            "success": True,
-                            "source": "llm",
-                            "subject": target_subject,
-                            "curriculum_standard": ctx.get("curriculum_standard"),
-                            "in_scope": in_scope,
-                            "out_of_scope": out_of_scope,
-                            "question_requirements": ctx.get("question_requirements") or [],
-                            "core_competencies": ctx.get("core_competencies") or [],
-                            "prerequisites": ctx.get("prerequisites") or [],
-                            "judgment": judgment,
-                            "offending_knowledge_points": offending,
-                        }
+            outcome = await _handle_align_to_curriculum(server, arguments)
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "paper_diff":
-            await ensure_crawler_initialized()
-
-            from backend.database.repositories.question.papers import get_paper
-            from backend.database.repositories.question.question_cache import get_question_cache
-            from backend.generation.paper_compose.workflow_support import _stem_fingerprint
-
-            paper_id = arguments.get("paper_id")
-            question_ids = arguments.get("question_ids") or []
-            reference_paper_ids = arguments.get("reference_paper_ids") or []
-            similarity_threshold = float(arguments.get("similarity_threshold", 0.6) or 0.6)
-            similarity_threshold = max(0.0, min(1.0, similarity_threshold))
-            max_questions = max(1, min(int(arguments.get("max_questions", 60) or 60), 120))
-
-            if not reference_paper_ids:
-                result = {"success": False, "error": "reference_paper_ids 必填且非空"}
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            target_paper_meta: Optional[Dict[str, Any]] = None
-            target_qids: List[str] = []
-            if paper_id is not None:
-                paper = await get_paper(user_id="1", paper_id=int(paper_id))
-                if not paper:
-                    result = {"success": False, "error": f"未找到目标试卷 paper_id={paper_id}"}
-                    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-                target_paper_meta = paper
-                target_qids = [str(q.get("question_id")) for q in paper.get("questions", []) if q.get("question_id")]
-            elif question_ids:
-                target_qids = [str(x) for x in question_ids if str(x or "").strip()]
-            if not target_qids:
-                result = {"success": False, "error": "paper_diff 需要 paper_id 或 question_ids"}
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            target_qids = target_qids[:max_questions]
-
-            ref_qid_to_paper: Dict[str, int] = {}
-            ref_paper_names: Dict[int, str] = {}
-            for ref_id in reference_paper_ids:
-                try:
-                    ref = await get_paper(user_id="1", paper_id=int(ref_id))
-                except (TypeError, ValueError):
-                    continue
-                if not ref:
-                    continue
-                ref_paper_names[int(ref_id)] = ref.get("paper_name") or ""
-                for q in ref.get("questions", []) or []:
-                    qid = str(q.get("question_id") or "").strip()
-                    if qid:
-                        ref_qid_to_paper.setdefault(qid, int(ref_id))
-
-            all_qids = list(set(target_qids) | set(ref_qid_to_paper.keys()))
-            cached = await get_question_cache(question_ids=all_qids)
-
-            async def _enrich_via_crawler(missing: List[str]) -> Dict[str, Dict[str, Any]]:
-                enriched: Dict[str, Dict[str, Any]] = {}
-                for i in range(0, len(missing), 10):
-                    chunk_res = await server.crawler.batch_get_question_details(missing[i : i + 10])
-                    for q in chunk_res.get("questions", []) or []:
-                        qid = str(q.get("question_id") or "").strip()
-                        if qid:
-                            enriched[qid] = q
-                return enriched
-
-            missing_ids = [qid for qid in all_qids if not (cached.get(qid) or {}).get("stem")]
-            crawler_extra = await _enrich_via_crawler(missing_ids) if missing_ids else {}
-
-            def _stem_for(qid: str) -> str:
-                item = cached.get(qid) or {}
-                stem = str(item.get("stem") or "").strip()
-                if stem:
-                    return stem
-                extra = crawler_extra.get(qid) or {}
-                return str(extra.get("stem") or "").strip()
-
-            def _kps_for(qid: str) -> List[str]:
-                item = cached.get(qid) or {}
-                kps_json = item.get("knowledge_points_json")
-                if kps_json:
-                    try:
-                        parsed = json.loads(kps_json)
-                        if isinstance(parsed, list):
-                            out = [str(x).strip() for x in parsed if str(x or "").strip()]
-                            if out:
-                                return out
-                    except (TypeError, ValueError):
-                        pass
-                single = str(item.get("knowledge_point") or "").strip()
-                if single:
-                    return [single]
-                extra = crawler_extra.get(qid) or {}
-                kps = extra.get("knowledge_points")
-                if isinstance(kps, list):
-                    return [str(x).strip() for x in kps if str(x or "").strip()]
-                return []
-
-            def _shingles(stem: str) -> set[str]:
-                s = re.sub(r"\s+", "", (stem or "").lower())[:1500]
-                if len(s) < 3:
-                    return set()
-                return {s[i : i + 3] for i in range(len(s) - 2)}
-
-            def _jaccard(a: set[str], b: set[str]) -> float:
-                if not a or not b:
-                    return 0.0
-                inter = len(a & b)
-                union = len(a | b)
-                return (inter / union) if union else 0.0
-
-            target_data = [
-                {
-                    "qid": qid,
-                    "stem": _stem_for(qid),
-                    "fp": _stem_fingerprint(_stem_for(qid)),
-                    "kps": _kps_for(qid),
-                }
-                for qid in target_qids
-            ]
-            ref_data = [
-                {
-                    "qid": qid,
-                    "stem": _stem_for(qid),
-                    "fp": _stem_fingerprint(_stem_for(qid)),
-                    "kps": _kps_for(qid),
-                    "paper_id": ref_qid_to_paper.get(qid),
-                }
-                for qid in ref_qid_to_paper.keys()
-            ]
-            ref_data = [r for r in ref_data if r["stem"]]
-
-            ref_fp_set = {r["fp"] for r in ref_data if r["fp"]}
-            ref_shingles = [(r, _shingles(r["stem"])) for r in ref_data]
-
-            exact_dups: List[Dict[str, Any]] = []
-            similar_pairs: List[Dict[str, Any]] = []
-            for t in target_data:
-                if not t["stem"]:
-                    continue
-                if t["fp"] and t["fp"] in ref_fp_set:
-                    matched_refs = [r for r in ref_data if r["fp"] == t["fp"]]
-                    exact_dups.append(
-                        {
-                            "target_qid": t["qid"],
-                            "ref_qids": [r["qid"] for r in matched_refs],
-                            "ref_paper_ids": sorted({r["paper_id"] for r in matched_refs if r["paper_id"] is not None}),
-                        }
-                    )
-                    continue
-                ts = _shingles(t["stem"])
-                if not ts:
-                    continue
-                best = (0.0, None)
-                for r, rs in ref_shingles:
-                    if r["fp"] == t["fp"]:
-                        continue
-                    j = _jaccard(ts, rs)
-                    if j > best[0]:
-                        best = (j, r)
-                if best[0] >= similarity_threshold and best[1]:
-                    similar_pairs.append(
-                        {
-                            "target_qid": t["qid"],
-                            "ref_qid": best[1]["qid"],
-                            "ref_paper_id": best[1]["paper_id"],
-                            "similarity": round(best[0], 3),
-                        }
-                    )
-
-            target_kps_set: set[str] = set()
-            for t in target_data:
-                target_kps_set.update(t["kps"])
-            ref_kps_set: set[str] = set()
-            for r in ref_data:
-                ref_kps_set.update(r["kps"])
-
-            result = {
-                "success": True,
-                "target_paper_id": paper_id,
-                "target_paper_name": (target_paper_meta or {}).get("paper_name") or "",
-                "target_question_count": len(target_data),
-                "reference_paper_ids": list(ref_paper_names.keys()),
-                "reference_paper_names": ref_paper_names,
-                "reference_question_count": len(ref_data),
-                "similarity_threshold": similarity_threshold,
-                "exact_dup_count": len(exact_dups),
-                "exact_dups": exact_dups,
-                "similar_pair_count": len(similar_pairs),
-                "similar_pairs": similar_pairs,
-                "unique_kp_in_target": sorted(target_kps_set - ref_kps_set),
-                "missing_kp_from_target": sorted(ref_kps_set - target_kps_set),
-                "shared_kp": sorted(target_kps_set & ref_kps_set),
-            }
+            outcome = await _handle_paper_diff(server, arguments, ensure_crawler_initialized)
+            if isinstance(outcome, list):
+                return outcome
+            result = outcome
 
         elif name == "plot_function":
             from backend.generation.question_library.diagram_utils import render_matplotlib_2d_to_url

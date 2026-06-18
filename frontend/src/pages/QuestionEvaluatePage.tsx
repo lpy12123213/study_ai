@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Search, Sparkles, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,145 +8,35 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { shouldSubmitOnEnter } from '@/lib/keyboard'
 import { cn } from '@/lib/utils'
-import { useSubjects } from '@/hooks/useSubjects'
-import * as questionEvaluateApi from '@/api/questionEvaluate'
-
-function verdictBadgeVariant(verdict: string): 'default' | 'secondary' | 'destructive' {
-  if (verdict === '好题') return 'default'
-  if (verdict === '普通题') return 'secondary'
-  if (verdict === '差题') return 'destructive'
-  return 'secondary'
-}
-
-function scoreClass(score: number): string {
-  if (score >= 80) return 'text-emerald-600'
-  if (score >= 60) return 'text-amber-600'
-  return 'text-rose-600'
-}
-
-// Radix Select reserves the empty string value for clearing the selection.
-const DIFFICULTY_ANY = '__any__'
+import { DIFFICULTY_ANY, scoreClass, verdictBadgeVariant } from '@/features/questionEvaluate/utils'
+import { useQuestionEvaluate } from '@/features/questionEvaluate/hooks/useQuestionEvaluate'
 
 export default function QuestionEvaluatePage() {
-  const { data: subjects } = useSubjects()
-
-  const [subject, setSubject] = useState<string>('高中数学')
-  const [query, setQuery] = useState<string>('')
-  const [difficulty, setDifficulty] = useState<string>(DIFFICULTY_ANY)
-
-  const [isSearching, setIsSearching] = useState(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
-  const [searchResults, setSearchResults] = useState<questionEvaluateApi.QuestionEvaluateQuestion[]>([])
-
-  const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({})
-
-  const [requirements, setRequirements] = useState<string>('')
-  const [isEvaluating, setIsEvaluating] = useState(false)
-  const [evalError, setEvalError] = useState<string | null>(null)
-  const [evalResults, setEvalResults] = useState<questionEvaluateApi.QuestionEvaluateResult[]>([])
-  const evaluateAbortRef = useRef<AbortController | null>(null)
-
-  useEffect(() => {
-    return () => {
-      evaluateAbortRef.current?.abort()
-    }
-  }, [])
-
-  const selectedQuestions = useMemo(() => {
-    const set = new Set(Object.entries(selectedIds).filter(([, v]) => v).map(([k]) => k))
-    return searchResults.filter((q) => set.has(q.questionId))
-  }, [searchResults, selectedIds])
-
-  const toggleSelected = (id: string) => {
-    setSelectedIds((prev) => ({ ...prev, [id]: !prev[id] }))
-  }
-
-  const selectAll = () => {
-    const next: Record<string, boolean> = {}
-    for (const q of searchResults) next[q.questionId] = true
-    setSelectedIds(next)
-  }
-
-  const clearSelection = () => {
-    setSelectedIds({})
-  }
-
-  const doSearch = async () => {
-    const q = query.trim()
-    if (!q) return
-
-    setIsSearching(true)
-    setSearchError(null)
-    setEvalResults([])
-    setEvalError(null)
-
-    try {
-      const res = await questionEvaluateApi.searchQuestions({
-        query: q,
-        subject,
-        difficulty: difficulty && difficulty !== DIFFICULTY_ANY ? difficulty : undefined,
-        limit: 20,
-        maxPages: 2,
-        minQualityScore: 0,
-      })
-
-      if (!res.success) {
-        setSearchError(res.error || '搜索失败')
-        setSearchResults([])
-        setSelectedIds({})
-        return
-      }
-
-      setSearchResults(res.questions)
-      setSelectedIds({})
-    } catch (err: any) {
-      setSearchError(err?.message || '搜索失败')
-      setSearchResults([])
-      setSelectedIds({})
-    } finally {
-      setIsSearching(false)
-    }
-  }
-
-  const doEvaluate = async () => {
-    if (selectedQuestions.length === 0) return
-
-    setIsEvaluating(true)
-    setEvalError(null)
-    evaluateAbortRef.current?.abort()
-    const controller = new AbortController()
-    evaluateAbortRef.current = controller
-    try {
-      const res = await questionEvaluateApi.evaluateQuestions({
-        subject,
-        requirements,
-        questions: selectedQuestions,
-      }, { signal: controller.signal })
-      if (controller.signal.aborted) return
-      setEvalResults(res.results)
-    } catch (err: any) {
-      if (err?.name === 'AbortError') return
-      setEvalError(err?.message || '鉴别失败')
-      setEvalResults([])
-    } finally {
-      if (evaluateAbortRef.current === controller) {
-        evaluateAbortRef.current = null
-        setIsEvaluating(false)
-      }
-    }
-  }
-
-  const orderedEval = useMemo(() => {
-    const items = [...evalResults]
-    items.sort((a, b) => (b.overallScore || 0) - (a.overallScore || 0))
-    return items
-  }, [evalResults])
-  const evaluateStats = [
-    { label: '搜索结果', value: `${searchResults.length}` },
-    { label: '已选题目', value: `${selectedQuestions.length}` },
-    { label: '鉴别结果', value: `${evalResults.length}` },
-    { label: '学科', value: subject || '未选择' },
-  ]
+  const {
+    subjects,
+    subject,
+    setSubject,
+    query,
+    setQuery,
+    difficulty,
+    setDifficulty,
+    isSearching,
+    searchError,
+    searchResults,
+    selectedIds,
+    selectedQuestions,
+    toggleSelected,
+    selectAll,
+    clearSelection,
+    requirements,
+    setRequirements,
+    isEvaluating,
+    evalError,
+    orderedEval,
+    evaluateStats,
+    doSearch,
+    doEvaluate,
+  } = useQuestionEvaluate()
 
   return (
     <div className="aurora-question-eval-screen h-full p-6 overflow-hidden">
