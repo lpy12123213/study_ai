@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, List, Optional
 
 from sqlalchemy import func, select
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_bool
 from backend.database.engine import async_session_maker
 from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import Paper, PaperQuestion, QuestionCache
@@ -39,18 +39,12 @@ def _require_user_id(user_id: str) -> str:
     return uid
 
 
-def _env_truthy(name: str, *, default: bool = False) -> bool:
-    raw = str(os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
-
 
 def _paper_storage_flags() -> tuple[bool, bool, bool]:
-    store_all = _env_truthy("PAPER_STORE_CONTENT", default=False)
-    store_stem = _env_truthy("PAPER_STORE_STEM", default=store_all)
-    store_answer = _env_truthy("PAPER_STORE_ANSWER", default=store_all)
-    store_analysis = _env_truthy("PAPER_STORE_ANALYSIS", default=store_all)
+    store_all = env_bool("PAPER_STORE_CONTENT", default=False)
+    store_stem = env_bool("PAPER_STORE_STEM", default=store_all)
+    store_answer = env_bool("PAPER_STORE_ANSWER", default=store_all)
+    store_analysis = env_bool("PAPER_STORE_ANALYSIS", default=store_all)
     return store_stem, store_answer, store_analysis
 
 

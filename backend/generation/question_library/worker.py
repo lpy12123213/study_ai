@@ -4,20 +4,14 @@ import asyncio
 import os
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, env_bool
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import list_unscored_question_ids
-from backend.llm.client import is_llm_configured
 from backend.generation.question_library.scoring import apply_score_and_hide, score_stem_with_llm
+from backend.llm.client import is_llm_configured
 
 logger = get_logger(__name__)
 
-
-def _env_truthy(name: str, *, default: bool = False) -> bool:
-    raw = str(os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _as_int(value: str, default: int) -> int:
@@ -52,7 +46,7 @@ async def score_batch_once(*, user_id: str, subject: str, model: str, threshold:
 
 
 async def run_question_library_scoring_worker(*, stop: asyncio.Event) -> None:
-    if not _env_truthy("QUESTION_LIBRARY_AUTO_SCORE", default=False):
+    if not env_bool("QUESTION_LIBRARY_AUTO_SCORE", default=False):
         return
     if not is_llm_configured():
         return

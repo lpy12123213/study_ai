@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional
 import jwt
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import load_project_dotenv
+from backend.core.settings import env_int, load_project_dotenv
 from backend.database.repositories.system import auth_users as _user_repo
 
 load_project_dotenv(override=False)
@@ -47,16 +47,6 @@ def _load_jwt_secret_from_env() -> str:
         return env_secret
 
     raise ValueError("JWT_SECRET is required (set it in environment or .env).")
-
-
-def _get_int_env(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
 
 
 def hash_password(password: str) -> str:
@@ -199,7 +189,7 @@ def _bootstrap_admin_once() -> None:
 # JWT settings
 JWT_SECRET = _load_jwt_secret_from_env()
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = _get_int_env("JWT_EXPIRE_HOURS", 24)
+JWT_EXPIRE_HOURS = env_int("JWT_EXPIRE_HOURS", 24)
 
 
 # Best-effort one-shot migration of the legacy snapshots, then bootstrap admin.

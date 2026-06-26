@@ -147,12 +147,13 @@ python scripts/check_config.py --strict
 - `CODEX_RUNTIME_COMMAND`: 默认 `codex`，可指向本机 Codex CLI。
 - `CODEX_RUNTIME_MODEL`: 默认空，表示沿用本机 Codex 配置；需要固定模型时填写。
 - `CODEX_RUNTIME_EFFORT`: 默认 `high`，保留给运行时策略与 metadata。
-- `CODEX_RUNTIME_APPROVAL_POLICY`: 默认 `never`，对应 `codex exec --ask-for-approval never`。
+- `CODEX_RUNTIME_APPROVAL_POLICY`: 默认 `never`，对应 `codex --ask-for-approval never exec`。
 - `CODEX_RUNTIME_SANDBOX`: 默认 `workspace-write`，对应 `codex exec --sandbox workspace-write`。
+- `CODEX_RUNTIME_PROXY`: 可选的 HTTP 代理地址；现有 `HTTP_PROXY`/`HTTPS_PROXY` 优先。未显式配置时，Windows 会读取当前用户的 Internet Settings 代理并只注入 Codex 子进程。
 - `CODEX_RUNTIME_TIMEOUT_S`: 默认 `900`。
 - `CODEX_RUNTIME_FALLBACK_LEGACY`: 默认 `0`，不静默回退旧 agent。
 
-每个任务会在 `.local/codex-runtime-agent/<task_id>` 建立隔离工作目录，并通过 `--add-dir` 只暴露该目录和请求中存在的必要输入文件目录。任务启动 metadata 会包含 `runtime=codex_runtime`、`codex_runtime_version`、`approval_policy` 和 `sandbox_mode`。
+每个任务会在 `.local/codex-runtime-agent/<task_id>` 建立隔离工作目录，并通过 `--add-dir` 只暴露该目录和请求中存在的必要输入文件目录。默认命令形态为 `codex --ask-for-approval never --disable plugins --disable memories exec --json --ephemeral --skip-git-repo-check --cd <task_dir> --sandbox workspace-write --output-last-message <task_dir>/agent-output.json -`：`-` 表示从标准输入读取精简任务指令，并关闭 CLI 的 plugins/memories feature。自学资料的初次生成会额外关闭 `shell_tool`、以内联输入直接生成 Markdown；LaTeX/PDF 留给后续独立导出，避免 Codex 把业务规格误解成环境探测和本地文件制作。应用会在启动前清理同名旧输出，并在进程成功退出后校验本次 `--output-last-message` JSON。任务启动 metadata 会包含 `runtime=codex_runtime`、`codex_runtime_version`、`approval_policy` 和 `sandbox_mode`。
 
 ## 登录与权限
 

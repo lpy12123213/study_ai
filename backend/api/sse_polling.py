@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from backend.core.settings import LESSON_PLAN_MODEL, MODEL_TIER_MAP, SUB_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, MODEL_TIER_MAP, SUB_MODEL, env_bool, env_int
 
 
 @dataclass(frozen=True)
@@ -45,21 +45,6 @@ class AgentConfig:
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
-        def _get_int(name: str, default: int) -> int:
-            raw = (os.getenv(name) or "").strip()
-            if not raw:
-                return default
-            try:
-                return int(raw)
-            except ValueError:
-                return default
-
-        def _get_bool(name: str, default: bool) -> bool:
-            raw = (os.getenv(name) or "").strip().lower()
-            if not raw:
-                return default
-            return raw in {"1", "true", "yes", "y", "on"}
-
         def _get_str(name: str, default: str) -> str:
             raw = (os.getenv(name) or "").strip()
             return raw or default
@@ -73,23 +58,23 @@ class AgentConfig:
             return "plan"
 
         return cls(
-            max_iterations=_get_int("AGENT_MAX_ITERATIONS", cls.max_iterations),
-            parallel_tool_calls=_get_bool("AGENT_PARALLEL_TOOL_CALLS", cls.parallel_tool_calls),
-            subagent_concurrency=_get_int(
+            max_iterations=env_int("AGENT_MAX_ITERATIONS", cls.max_iterations),
+            parallel_tool_calls=env_bool("AGENT_PARALLEL_TOOL_CALLS", cls.parallel_tool_calls),
+            subagent_concurrency=env_int(
                 "STUDY_MATERIALS_SUBAGENT_CONCURRENCY",
-                _get_int("AGENT_SUBAGENT_CONCURRENCY", cls.subagent_concurrency),
+                env_int("AGENT_SUBAGENT_CONCURRENCY", cls.subagent_concurrency),
             ),
             agent_mode=_normalize_mode(_get_str("AGENT_MODE", cls.agent_mode)),
-            react_max_iterations=_get_int("AGENT_REACT_MAX_ITERATIONS", cls.react_max_iterations),
-            react_llm_call_budget=_get_int("AGENT_REACT_LLM_CALL_BUDGET", cls.react_llm_call_budget),
-            react_retry_budget_per_tool=_get_int(
+            react_max_iterations=env_int("AGENT_REACT_MAX_ITERATIONS", cls.react_max_iterations),
+            react_llm_call_budget=env_int("AGENT_REACT_LLM_CALL_BUDGET", cls.react_llm_call_budget),
+            react_retry_budget_per_tool=env_int(
                 "AGENT_REACT_RETRY_BUDGET_PER_TOOL",
                 cls.react_retry_budget_per_tool,
             ),
-            sliding_window_size=_get_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
-            token_threshold=_get_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
-            emergency_token_threshold=_get_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
-            compressed_history_max=_get_int("AGENT_COMPRESSED_HISTORY_MAX", cls.compressed_history_max),
+            sliding_window_size=env_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
+            token_threshold=env_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
+            emergency_token_threshold=env_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
+            compressed_history_max=env_int("AGENT_COMPRESSED_HISTORY_MAX", cls.compressed_history_max),
             checkpoint_dir=_get_str("AGENT_CHECKPOINT_DIR", cls.checkpoint_dir),
             planner_model=_get_str("AGENT_PLANNER_MODEL", cls.planner_model),
             summarizer_model=_get_str("AGENT_SUMMARIZER_MODEL", cls.summarizer_model),

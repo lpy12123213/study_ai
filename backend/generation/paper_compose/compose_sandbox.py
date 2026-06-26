@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Optional, Sequence
 
+from backend.core.settings import env_int
+
 
 class SandboxUnavailableError(RuntimeError):
     """Raised when Docker or the configured compose sandbox image is unavailable."""
@@ -57,23 +59,17 @@ class ComposeSandboxSession:
     closed: bool = False
 
 
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(str(os.getenv(name) or "").strip() or default)
-    except (TypeError, ValueError):
-        return int(default)
-
 
 def default_compose_sandbox_config() -> ComposeSandboxConfig:
     return ComposeSandboxConfig(
         image=(os.getenv("COMPOSE_SANDBOX_DOCKER_IMAGE") or "study-ai/compose-sandbox:latest").strip(),
         root_dir=Path(os.getenv("COMPOSE_SANDBOX_ROOT") or ".local/compose-sandbox"),
-        timeout_s=_int_env("COMPOSE_SANDBOX_TIMEOUT_S", 60),
-        ttl_s=_int_env("COMPOSE_SANDBOX_TTL_S", 900),
-        max_workspace_bytes=_int_env("COMPOSE_SANDBOX_MAX_WORKSPACE_BYTES", 50 * 1024 * 1024),
+        timeout_s=env_int("COMPOSE_SANDBOX_TIMEOUT_S", 60),
+        ttl_s=env_int("COMPOSE_SANDBOX_TTL_S", 900),
+        max_workspace_bytes=env_int("COMPOSE_SANDBOX_MAX_WORKSPACE_BYTES", 50 * 1024 * 1024),
         memory=(os.getenv("COMPOSE_SANDBOX_MEMORY") or "1g").strip() or "1g",
         cpus=(os.getenv("COMPOSE_SANDBOX_CPUS") or "2").strip() or "2",
-        pids_limit=_int_env("COMPOSE_SANDBOX_PIDS_LIMIT", 128),
+        pids_limit=env_int("COMPOSE_SANDBOX_PIDS_LIMIT", 128),
         user=(os.getenv("COMPOSE_SANDBOX_USER") or "1000:1000").strip() or "1000:1000",
         docker_bin=(os.getenv("DOCKER_BIN") or "docker").strip() or "docker",
     )

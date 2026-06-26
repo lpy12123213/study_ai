@@ -8,15 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.settings import env_bool
 from backend.database.engine import async_session_maker
 from backend.database.schema import QuestionCache, UsedQuestion, UsedQuestionUser
-
-
-def _env_truthy(name: str, *, default: bool = False) -> bool:
-    raw = str(os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _used_questions_user_scope_enabled() -> bool:
@@ -26,7 +20,7 @@ def _used_questions_user_scope_enabled() -> bool:
     if scope in {"global", ""}:
         return False
     # Back-compat: allow `USED_QUESTIONS_PER_USER=1`.
-    return _env_truthy("USED_QUESTIONS_PER_USER", default=False)
+    return env_bool("USED_QUESTIONS_PER_USER", default=False)
 
 
 def _clip(text: str, max_chars: int) -> str:

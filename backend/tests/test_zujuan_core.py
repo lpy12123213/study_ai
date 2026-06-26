@@ -372,6 +372,7 @@ class TestZujuanCrawlerInitialization(unittest.IsolatedAsyncioTestCase):
             patch.dict(
                 "os.environ",
                 {
+                    "ZUJUAN_COOKIE_FILE": "",
                     "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "0",
                     "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
                     "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",

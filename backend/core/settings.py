@@ -54,7 +54,11 @@ def _get_str(name: str, default: str) -> str:
     return value if value else default
 
 
-def _get_int(name: str, default: int) -> int:
+def env_int(name: str, default: int) -> int:
+    """Read an integer env var with a default (public deduplicated helper).
+
+    Use this instead of redefining `_env_int` / `_get_int` / `_int_env` in each module.
+    """
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -80,7 +84,12 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
-def _get_bool(name: str, default: bool) -> bool:
+def env_bool(name: str, default: bool) -> bool:
+    """Read a boolean env var with a default (public deduplicated helper).
+
+    Use this instead of redefining `_env_truthy` / `_get_bool` in each module.
+    Accepts 1/true/yes/y/on (case-insensitive) as truthy.
+    """
     raw = os.getenv(name)
     if raw is None:
         return bool(default)
@@ -242,7 +251,7 @@ class Settings:
         # Allow env override so users can quickly pin provider without editing config/model.json.
         # When pinned, `backend.llm.providers.resolve_provider(...)` won't auto-switch to Moonshot
         # even if MOONSHOT_API_KEY is present and the model ID looks like `moonshotai/kimi-*`.
-        llm_provider_pinned = _get_bool("LLM_PROVIDER_PINNED", llm_provider_pinned)
+        llm_provider_pinned = env_bool("LLM_PROVIDER_PINNED", llm_provider_pinned)
         llm_active_provider = str(model_json.active_provider if model_json else "").strip().lower()
         model_config_path = str(model_json.path) if model_json else ""
 
@@ -275,9 +284,9 @@ class Settings:
                     fireworks_base_url = cfg["fireworks"].base_url
 
         metaso_api_key = _get_str("METASO_API_KEY", "")
-        metaso_timeout_seconds = _get_int("METASO_TIMEOUT", 30)
+        metaso_timeout_seconds = env_int("METASO_TIMEOUT", 30)
         tavily_api_key = _get_str("TAVILY_API_KEY", "")
-        tavily_timeout_seconds = _get_int("TAVILY_TIMEOUT", 60)
+        tavily_timeout_seconds = env_int("TAVILY_TIMEOUT", 60)
         zhipu_api_key = _get_str("ZHIPU_API_KEY", "")
 
         chat_base_url = ""
@@ -352,7 +361,7 @@ class Settings:
             picked = _pick_provider_scoped(model_json.models.get("lesson_plan"), provider_for_models)
             if picked:
                 lesson_plan_model = picked
-        lesson_plan_concurrency = _get_int("LESSON_PLAN_SUBAGENT_CONCURRENCY", 3)
+        lesson_plan_concurrency = env_int("LESSON_PLAN_SUBAGENT_CONCURRENCY", 3)
 
         main_model = _get_str("MAIN_MODEL", "openai/gpt-5-mini")
         sub_model = _get_str("SUB_MODEL", "openai/gpt-4o-mini")
@@ -392,21 +401,21 @@ class Settings:
         )
 
         deepthink_generator_temperature = _get_float("DEEPTHINK_GENERATOR_TEMPERATURE", 0.4)
-        deepthink_generator_max_tokens = _get_int("DEEPTHINK_GENERATOR_MAX_TOKENS", 1400)
+        deepthink_generator_max_tokens = env_int("DEEPTHINK_GENERATOR_MAX_TOKENS", 1400)
         deepthink_evaluator_temperature = _get_float("DEEPTHINK_EVALUATOR_TEMPERATURE", 0.2)
-        deepthink_evaluator_max_tokens = _get_int("DEEPTHINK_EVALUATOR_MAX_TOKENS", 900)
+        deepthink_evaluator_max_tokens = env_int("DEEPTHINK_EVALUATOR_MAX_TOKENS", 900)
         deepthink_reasoning_effort = _get_str("DEEPTHINK_REASONING_EFFORT", "high")
 
-        tot_branch_factor = _get_int("TOT_BRANCH_FACTOR", 3)
-        tot_beam_width = _get_int("TOT_BEAM_WIDTH", 3)
-        tot_max_depth = _get_int("TOT_MAX_DEPTH", 4)
+        tot_branch_factor = env_int("TOT_BRANCH_FACTOR", 3)
+        tot_beam_width = env_int("TOT_BEAM_WIDTH", 3)
+        tot_max_depth = env_int("TOT_MAX_DEPTH", 4)
         tot_prune_threshold = _get_float("TOT_PRUNE_THRESHOLD", 5.0)
-        tot_timeout_seconds = _get_int("TOT_TIMEOUT", 60)
+        tot_timeout_seconds = env_int("TOT_TIMEOUT", 60)
 
         main_model_temperature = _get_float("MAIN_MODEL_TEMPERATURE", 0.7)
-        main_model_max_tokens = _get_int("MAIN_MODEL_MAX_TOKENS", 2000)
+        main_model_max_tokens = env_int("MAIN_MODEL_MAX_TOKENS", 2000)
         sub_model_temperature = _get_float("SUB_MODEL_TEMPERATURE", 0.3)
-        sub_model_max_tokens = _get_int("SUB_MODEL_MAX_TOKENS", 1000)
+        sub_model_max_tokens = env_int("SUB_MODEL_MAX_TOKENS", 1000)
 
         thinking_effort_env = str(
             os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT") or ""
@@ -470,15 +479,15 @@ class Settings:
             study_materials_thinking_model=study_materials_thinking_model,
             study_materials_writer_model=study_materials_writer_model,
             lesson_plan_temperature=_get_float("LESSON_PLAN_TEMPERATURE", _get_float("MAIN_MODEL_TEMPERATURE", 0.7)),
-            lesson_plan_max_tokens=_get_int(
+            lesson_plan_max_tokens=env_int(
                 "LESSON_PLAN_MAX_TOKENS",
-                max(_get_int("MAIN_MODEL_MAX_TOKENS", 2000), 50000),
+                max(env_int("MAIN_MODEL_MAX_TOKENS", 2000), 50000),
             ),
-            max_tool_iterations=_get_int("MAX_TOOL_ITERATIONS", 10),
-            api_timeout_seconds=_get_int("API_TIMEOUT", 120),
-            sub_ai_timeout_seconds=_get_int("SUB_AI_TIMEOUT", 60),
-            llm_circuit_breaker_fail_threshold=_get_int("LLM_CIRCUIT_BREAKER_FAIL_THRESHOLD", 6),
-            llm_circuit_breaker_open_seconds=_get_int("LLM_CIRCUIT_BREAKER_OPEN_SECONDS", 30),
+            max_tool_iterations=env_int("MAX_TOOL_ITERATIONS", 10),
+            api_timeout_seconds=env_int("API_TIMEOUT", 120),
+            sub_ai_timeout_seconds=env_int("SUB_AI_TIMEOUT", 60),
+            llm_circuit_breaker_fail_threshold=env_int("LLM_CIRCUIT_BREAKER_FAIL_THRESHOLD", 6),
+            llm_circuit_breaker_open_seconds=env_int("LLM_CIRCUIT_BREAKER_OPEN_SECONDS", 30),
             default_subject=_get_str("DEFAULT_SUBJECT", "高中数学"),
             difficulty_query_mode=_get_str("DIFFICULTY_QUERY_MODE", "multi").lower(),
             review_provider=_get_str("REVIEW_PROVIDER", "fireworks").lower(),
@@ -487,15 +496,15 @@ class Settings:
             # Fireworks model IDs change over time; default to a currently listed, chat-capable model.
             review_model=review_model,
             review_model_temperature=_get_float("REVIEW_MODEL_TEMPERATURE", 0.2),
-            review_model_max_tokens=_get_int("REVIEW_MODEL_MAX_TOKENS", 1800),
-            review_timeout_seconds=_get_int("REVIEW_TIMEOUT", 90),
-            review_max_stem_chars=_get_int("REVIEW_MAX_STEM_CHARS", 900),
+            review_model_max_tokens=env_int("REVIEW_MODEL_MAX_TOKENS", 1800),
+            review_timeout_seconds=env_int("REVIEW_TIMEOUT", 90),
+            review_max_stem_chars=env_int("REVIEW_MAX_STEM_CHARS", 900),
             review_http_referer=_get_str("REVIEW_HTTP_REFERER", "http://localhost:8000"),
             review_x_title=_get_str("REVIEW_X_TITLE", "Exam Paper Assistant - Reviewer"),
             zhipu_api_key=SecretString(zhipu_api_key),
             zhipu_base_url=zhipu_base_url,
             zhipu_model=_get_str("ZHIPU_MODEL", "glm-4.5"),
-            zhipu_timeout_seconds=_get_int("ZHIPU_TIMEOUT", 60),
+            zhipu_timeout_seconds=env_int("ZHIPU_TIMEOUT", 60),
             metaso_api_key=SecretString(metaso_api_key),
             metaso_base_url=metaso_base_url,
             metaso_timeout_seconds=metaso_timeout_seconds,

@@ -4,11 +4,7 @@ import os
 from typing import Any, Dict
 
 from backend.agent.types import CompressedContext, UserProfile
-
-
-def _env_truthy(name: str) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    return raw in {"1", "true", "yes", "y", "on"}
+from backend.core.settings import env_bool
 
 
 def _normalize_preset(value: str) -> str:
@@ -45,10 +41,10 @@ def _study_flags(context: CompressedContext) -> Dict[str, Any]:
     preset = _normalize_preset(str(opts.get("preset") or os.getenv("STUDY_MATERIALS_PRESET") or ""))
 
     with_q = opts.get("with_questions")
-    enable_questions = bool(with_q) if isinstance(with_q, bool) else _env_truthy("STUDY_MATERIALS_ENABLE_QUESTIONS")
+    enable_questions = bool(with_q) if isinstance(with_q, bool) else env_bool("STUDY_MATERIALS_ENABLE_QUESTIONS")
 
     extra = opts.get("enable_extra_tools")
-    enable_extra_tools = bool(extra) if isinstance(extra, bool) else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
+    enable_extra_tools = bool(extra) if isinstance(extra, bool) else env_bool("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
 
     # Deep preset does not auto-enable extra tools by default
     # if preset in {"deep", "research"}:

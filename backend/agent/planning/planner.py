@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from backend.agent.config import AgentConfig
 from backend.agent.mcp.registry import MCPToolRegistry
 from backend.agent.planning.json_utils import _extract_json_obj
-from backend.agent.planning.study_options import _difficulty_from_profile, _env_truthy, _study_flags
+from backend.agent.planning.study_options import _difficulty_from_profile, _study_flags
 from backend.agent.planning.tool_catalog import build_allowed_tools
 from backend.agent.types import CompressedContext, ExecutionPlan, PlanStep, UserProfile
 from backend.core.logging_utils import get_logger
@@ -19,6 +19,7 @@ from backend.core.settings import (
     DEFAULT_SUBJECT,
     LESSON_PLAN_MAX_TOKENS,
     LESSON_PLAN_TEMPERATURE,
+    env_bool,
 )
 from backend.llm.client import chat_completion_text, is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
@@ -101,12 +102,12 @@ class Planner:
         use_questions = (
             bool(flags.get("enable_questions"))
             if "enable_questions" in flags
-            else _env_truthy("STUDY_MATERIALS_ENABLE_QUESTIONS")
+            else env_bool("STUDY_MATERIALS_ENABLE_QUESTIONS")
         )
         enable_extra_tools = (
             bool(flags.get("enable_extra_tools"))
             if "enable_extra_tools" in flags
-            else _env_truthy("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
+            else env_bool("STUDY_MATERIALS_ENABLE_EXTRA_TOOLS")
         )
         enable_diagrams = bool(flags.get("enable_diagrams")) if "enable_diagrams" in flags else True
         requirements = str(flags.get("requirements") or "").strip()

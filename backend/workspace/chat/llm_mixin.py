@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import math
 import os
 import re
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
-from backend.workspace.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
-from backend.workspace.chat.tools_spec import TOOLS
+from backend.core.logging_utils import get_logger
 from backend.core.settings import (
     API_TIMEOUT,
     MAIN_MODEL,
@@ -17,8 +15,10 @@ from backend.core.settings import (
     MAIN_MODEL_TEMPERATURE,
 )
 from backend.llm.client import _estimate_messages_tokens, cacheable_message, chat_completion, is_llm_configured
+from backend.workspace.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
+from backend.workspace.chat.tools_spec import TOOLS
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ChatLLMMixin:

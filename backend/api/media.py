@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 
 from backend.api.auth import require_auth
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_int
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.system.generated_files import get_generated_file
 
@@ -55,15 +56,6 @@ _PROXY_CACHE_STATS = {
 _proxy_http_client: Optional[httpx.AsyncClient] = None
 _proxy_http_client_lock = asyncio.Lock()
 
-
-def _env_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return int(default)
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return int(default)
 
 
 def reset_proxy_cache_stats() -> None:
@@ -348,9 +340,9 @@ def _prune_proxy_cache() -> dict[str, int]:
     - MEDIA_PROXY_CACHE_MAX_FILES  (default: 5000)
     """
 
-    ttl_s = _env_int("MEDIA_PROXY_CACHE_TTL_SECONDS", 7 * 24 * 3600)
-    max_bytes = _env_int("MEDIA_PROXY_CACHE_MAX_BYTES", 512 * 1024 * 1024)
-    max_files = _env_int("MEDIA_PROXY_CACHE_MAX_FILES", 5000)
+    ttl_s = env_int("MEDIA_PROXY_CACHE_TTL_SECONDS", 7 * 24 * 3600)
+    max_bytes = env_int("MEDIA_PROXY_CACHE_MAX_BYTES", 512 * 1024 * 1024)
+    max_files = env_int("MEDIA_PROXY_CACHE_MAX_FILES", 5000)
 
     ttl_s = max(0, min(ttl_s, 365 * 24 * 3600))
     max_bytes = max(1, min(max_bytes, 10 * 1024 * 1024 * 1024))

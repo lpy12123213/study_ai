@@ -11,6 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from backend.core.logging_utils import get_logger, get_request_id
+from backend.core.settings import env_int
 
 logger = get_logger(__name__)
 
@@ -38,24 +39,15 @@ def _truthy(raw: str) -> bool:
 
 
 def limits_from_env() -> InputLimits:
-    def _get_int(name: str, default: int) -> int:
-        raw = (os.getenv(name) or "").strip()
-        if not raw:
-            return default
-        try:
-            return int(raw)
-        except ValueError:
-            return default
-
     strip_html_raw = os.getenv("INPUT_STRIP_HTML_TAGS")
     strip_html = True if strip_html_raw is None else _truthy(strip_html_raw)
 
     return InputLimits(
-        max_body_bytes=_get_int("INPUT_MAX_BODY_BYTES", InputLimits.max_body_bytes),
-        max_string_length=_get_int("INPUT_MAX_STRING_LENGTH", InputLimits.max_string_length),
-        max_array_size=_get_int("INPUT_MAX_ARRAY_SIZE", InputLimits.max_array_size),
-        max_object_keys=_get_int("INPUT_MAX_OBJECT_KEYS", InputLimits.max_object_keys),
-        max_nested_depth=_get_int("INPUT_MAX_NESTED_DEPTH", InputLimits.max_nested_depth),
+        max_body_bytes=env_int("INPUT_MAX_BODY_BYTES", InputLimits.max_body_bytes),
+        max_string_length=env_int("INPUT_MAX_STRING_LENGTH", InputLimits.max_string_length),
+        max_array_size=env_int("INPUT_MAX_ARRAY_SIZE", InputLimits.max_array_size),
+        max_object_keys=env_int("INPUT_MAX_OBJECT_KEYS", InputLimits.max_object_keys),
+        max_nested_depth=env_int("INPUT_MAX_NESTED_DEPTH", InputLimits.max_nested_depth),
         strip_html_tags=strip_html,
     )
 

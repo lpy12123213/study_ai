@@ -32,6 +32,8 @@ from backend.core.subjects import (
 from backend.integrations.crawler.rate_limiter import get_rate_limiter
 from backend.integrations.crawler.zujuan.cookies import (
     DEFAULT_USER_AGENT,
+    ZujuanCookieFileError,
+    build_cookie_header_from_netscape_file,
     build_cookie_string,
     get_cookies_with_playwright,
     get_login_session_with_playwright,
@@ -39,6 +41,7 @@ from backend.integrations.crawler.zujuan.cookies import (
     load_env_login,
     missing_antibot_keys,
     parse_cookie_string,
+    resolve_cookie_file_path,
     save_antibot_cookie_cache,
 )
 from backend.integrations.crawler.zujuan.utils import (
@@ -269,6 +272,69 @@ class ZujuanCrawler:
         if use_env_cookies and env_cookies and not self.cookies:
             self.cookies = env_cookies
 
+        cookie_file_loaded = False
+        cookie_file_value = str(os.getenv("ZUJUAN_COOKIE_FILE") or os.getenv("ZUJIAN_COOKIE_FILE") or "").strip()
+        if cookie_file_value and not self.cookies:
+            cookie_file_path = resolve_cookie_file_path(cookie_file_value)
+            try:
+                cookie_file = build_cookie_header_from_netscape_file(cookie_file_path)
+            except FileNotFoundError as exc:
+                raise ZujuanCookieFileError(
+                    error="zujuan_cookie_file_missing",
+                    message=f"ZUJUAN_COOKIE_FILE points to a missing cookie file: {cookie_file_path}",
+                    path=cookie_file_path,
+                    instructions=[
+                        "请检查 ZUJUAN_COOKIE_FILE 指向的 Netscape/curl 访客 Cookie 文件是否存在。",
+                        "相对路径会从 study_ai 仓库根目录解析；更新配置后重启后端服务再试。",
+                    ],
+                ) from exc
+            except OSError as exc:
+                raise ZujuanCookieFileError(
+                    error="zujuan_cookie_file_unreadable",
+                    message=f"ZUJUAN_COOKIE_FILE could not be read: {cookie_file_path}",
+                    path=cookie_file_path,
+                    instructions=[
+                        "请确认 ZUJUAN_COOKIE_FILE 指向的是可读取的 Netscape/curl 访客 Cookie 文件。",
+                        "更新配置后重启后端服务再试。",
+                    ],
+                ) from exc
+
+            if not cookie_file.header:
+                raise ZujuanCookieFileError(
+                    error="zujuan_cookie_file_empty",
+                    message=f"ZUJUAN_COOKIE_FILE contains no usable cookie rows: {cookie_file_path}",
+                    path=cookie_file_path,
+                    cookie_count=cookie_file.cookie_count,
+                    expired_cookie_names=cookie_file.expired_cookie_names,
+                    instructions=[
+                        "这个访客 Cookie 文件没有可用 Cookie 行，请重新导出 Netscape/curl 格式文件。",
+                        "更新 ZUJUAN_COOKIE_FILE 后重启后端服务再试。",
+                    ],
+                )
+
+            if cookie_file.all_cookie_rows_expired:
+                raise ZujuanCookieFileError(
+                    error="zujuan_cookie_file_expired",
+                    message=f"ZUJUAN_COOKIE_FILE contains only expired cookie rows: {cookie_file_path}",
+                    path=cookie_file_path,
+                    cookie_count=cookie_file.cookie_count,
+                    expired_cookie_names=cookie_file.expired_cookie_names,
+                    instructions=[
+                        "这个访客 Cookie 文件里的 Cookie 已全部过期，请在浏览器正常访问组卷网后重新导出。",
+                        "更新 ZUJUAN_COOKIE_FILE 后重启后端服务再试。",
+                    ],
+                )
+
+            self.cookies = cookie_file.header
+            cookie_file_loaded = True
+            logger.info(
+                "zujuan visitor cookie file loaded",
+                extra={
+                    "cookie_count": cookie_file.cookie_count,
+                    "expired_rows": len(cookie_file.expired_cookie_names),
+                },
+            )
+
         env_cookie_dict = parse_cookie_string(self.cookies)
 
         # Optional: merge cached visitor anti-bot cookies. Disabled by default because
@@ -317,6 +383,8 @@ class ZujuanCrawler:
             missing_antibot = missing_antibot_keys(self.cookies)
             if is_logged_in:
                 logger.info("zujuan cookie mode: logged_in")
+            elif cookie_file_loaded:
+                logger.info("zujuan cookie mode: visitor_cookie_file")
             elif env_cookies:
                 logger.info("zujuan cookie mode: dotenv")
             elif not self.cookies:

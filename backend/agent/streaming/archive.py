@@ -8,8 +8,8 @@ from typing import Any, Dict, List
 
 from backend.agent.memory import SemanticDoc
 from backend.agent.types import ActionResults, CompressedContext
-from backend.core.helpers import clip_text as _clip_chars
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
+from backend.core.text_utils import clip_text as _clip_chars
 
 logger = get_logger(__name__)
 

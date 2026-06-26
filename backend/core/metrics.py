@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 from typing import Tuple
 
@@ -8,20 +7,15 @@ from fastapi import FastAPI, Request, Response
 from starlette.routing import Match
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_bool
 
 logger = get_logger(__name__)
 
 
-def _env_truthy(name: str, *, default: bool = False) -> bool:
-    raw = str(os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
-
 
 def metrics_enabled() -> bool:
     # Default: enabled in all environments (low overhead, useful for debugging).
-    return _env_truthy("PROMETHEUS_METRICS_ENABLED", default=True)
+    return env_bool("PROMETHEUS_METRICS_ENABLED", default=True)
 
 
 def _safe_import_prometheus():

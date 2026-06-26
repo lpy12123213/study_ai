@@ -88,6 +88,44 @@ from backend.shared.tasks import RuntimeTask, task_runtime
 logger = get_logger(__name__)
 
 
+def _crawl_failure_payload(source: Any, *, default_error: str = "crawl_failed") -> Dict[str, Any]:
+    if hasattr(source, "payload") and isinstance(getattr(source, "payload"), dict):
+        source = getattr(source, "payload")
+
+    if isinstance(source, dict):
+        error = str(source.get("error") or default_error).strip() or default_error
+        message = str(source.get("message") or source.get("detail") or "").strip()
+        raw_instructions = source.get("instructions") if isinstance(source.get("instructions"), list) else []
+        instructions = [str(item).strip() for item in raw_instructions if str(item or "").strip()]
+        payload: Dict[str, Any] = {
+            "success": False,
+            "error": error,
+            "message": message or ("\n".join([error, *instructions]) if instructions else error),
+        }
+        if instructions:
+            payload["instructions"] = instructions
+        for key in (
+            "trace",
+            "login_required",
+            "cookie_expired",
+            "cookie_file",
+            "available_subjects",
+            "allowed_difficulties",
+        ):
+            if key in source:
+                payload[key] = source.get(key)
+        return payload
+
+    message = str(source or default_error).strip() or default_error
+    return {"success": False, "error": message, "message": message}
+
+
+async def _fail_crawl_task(task: RuntimeTask, payload: Dict[str, Any]) -> None:
+    error = str(payload.get("error") or "crawl_failed").strip() or "crawl_failed"
+    message = str(payload.get("message") or error).strip() or error
+    await task_runtime.append_event(task, {"type": "error", "data": dict(payload)})
+    await task_runtime.fail_task(task, message, error=dict(payload), emit_event=False)
+
 
 async def create_crawl_task(
     *,
@@ -163,7 +201,8 @@ async def create_crawl_task(
                 parse_content=True,
             )
             if not bool(res.get("success")):
-                raise RuntimeError(str(res.get("error") or "crawl_failed"))
+                await _fail_crawl_task(task, _crawl_failure_payload(res))
+                return
 
             questions = res.get("questions") if isinstance(res.get("questions"), list) else []
             total = len(questions)
@@ -249,8 +288,16 @@ async def create_crawl_task(
                     task.cond.notify_all()
             raise
         except Exception as exc:  # pragma: no cover
-            logger.exception("question_library_import_runner_failed", extra={"task_id": task.task_id})
-            await task_runtime.fail_task(task, str(exc))
+            payload = _crawl_failure_payload(exc)
+            error_code = str(payload.get("error") or "").strip()
+            if error_code.startswith("zujuan_cookie_file_"):
+                logger.warning(
+                    "question_library_crawl_cookie_file_configuration_failed",
+                    extra={"task_id": task.task_id, "error": error_code},
+                )
+            else:
+                logger.exception("question_library_import_runner_failed", extra={"task_id": task.task_id})
+            await _fail_crawl_task(task, payload)
         finally:
             if task.status == "running":
                 await task_runtime.fail_task(task, "Task ended unexpectedly")

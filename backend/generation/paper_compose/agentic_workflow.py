@@ -331,7 +331,8 @@ async def _run_agentic_paper_events(
         return
 
     if is_codex_runtime_agent_runtime():
-        codex_failed = False
+        codex_terminal = False
+        codex_succeeded = False
         last_error_event: Optional[Dict[str, Any]] = None
         async for event in run_codex_runtime_agent_events(
             task_type=task_type,
@@ -342,26 +343,29 @@ async def _run_agentic_paper_events(
             final_event_type="result",
         ):
             if event.get("type") == "error":
-                codex_failed = True
+                codex_terminal = True
                 last_error_event = event
-                # If fallback is enabled we swallow the error and try legacy;
-                # otherwise propagate it so the caller can fail the task.
-                if legacy_agent_fallback_enabled():
-                    continue
+                # A successful final result can follow recoverable tool errors.
+                # Defer failure handling until the Codex stream is exhausted.
+                continue
+            if event.get("type") in {"result", "done", "pending_review"}:
+                codex_terminal = True
+                codex_succeeded = True
             yield event
-        if not codex_failed:
+        if codex_terminal:
+            if not codex_succeeded and isinstance(last_error_event, dict):
+                yield last_error_event
             return
         if not legacy_agent_fallback_enabled():
-            # Codex emitted error events that we already forwarded; nothing more to do.
             return
-        # Fall through to legacy AgentRuntime path; record why we fell back.
-        if isinstance(last_error_event, dict):
-            yield {
-                "type": "progress",
-                "progress": 1.0,
-                "stage": "codex_runtime_fallback",
-                "data": last_error_event.get("data") or {},
-            }
+        # Only a stream that ended without any terminal event may use the
+        # compatibility runner. Explicit Codex success/error is authoritative.
+        yield {
+            "type": "progress",
+            "progress": 1.0,
+            "stage": "codex_runtime_fallback",
+            "data": {"code": "codex_runtime_ended_without_terminal_event"},
+        }
 
     executor = PaperComposeToolExecutor(user_id=user_id, request=req)
     runtime = AgentRuntime(planner=PaperComposePlanner(), tool_executor=executor)

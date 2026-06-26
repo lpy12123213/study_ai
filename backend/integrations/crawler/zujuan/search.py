@@ -301,6 +301,19 @@ async def search_by_keyword(
         page_errors = [str(d.get("error") or "").strip() for d in debug_pages if isinstance(d, dict)]
         first_blocker = next((e for e in page_errors if e in {"login_page", "js_challenge"}), "")
         if first_blocker:
+            if first_blocker == "js_challenge":
+                instructions = [
+                    "题库请求返回了 JavaScript 挑战页，不能作为试题数据解析。",
+                    "请导出本人浏览器正常访问组卷网后生成的 Netscape/curl 访客 Cookie 文件，"
+                    "设置 ZUJUAN_COOKIE_FILE 后重启服务再试。",
+                    "如果已设置 ZUJUAN_COOKIE_FILE，请确认路径存在、相对路径从仓库根目录解析，"
+                    "且文件不是全量过期 Cookie。",
+                ]
+            else:
+                instructions = [
+                    "题库请求返回了登录页，可能原因是登录 Cookie 过期。",
+                    "建议：双击运行 scripts/登录组卷网.bat 重新登录并保存 Cookie，然后重试。",
+                ]
             return {
                 "success": False,
                 "error": first_blocker,
@@ -308,10 +321,7 @@ async def search_by_keyword(
                 "login_required": first_blocker == "login_page",
                 "cookie_expired": first_blocker == "login_page",
                 "trace": {"pages": debug_pages},
-                "instructions": [
-                    "题库请求被登录页/反爬拦截。可能原因：Cookie 过期、风控或网络环境异常。",
-                    "建议：双击运行 scripts/登录组卷网.bat 重新登录并保存 Cookie，然后重试。",
-                ],
+                "instructions": instructions,
             }
 
     if bank_id_mismatch and not selected_questions:

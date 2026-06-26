@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_int
 from backend.database.migrations import sync_migrate_db_schema
 from backend.database.paths import resolve_db_path
 from backend.database.schema import Base
@@ -19,15 +20,6 @@ logger = get_logger(__name__)
 DB_PATH = resolve_db_path()
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH.as_posix()}"
 
-
-def _get_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
 
 
 def _get_float(name: str, default: float) -> float:
@@ -44,8 +36,8 @@ DB_BUSY_TIMEOUT_S = float(_get_float("DB_BUSY_TIMEOUT_S", 30.0))
 # SQLite/aiosqlite still serializes writes at the database-file level. These pool
 # knobs only control how many async connections can wait on SQLite locks; they do
 # not increase write throughput like PostgreSQL. See docs/DB_CONCURRENCY.md.
-DB_POOL_SIZE = int(_get_int("DB_POOL_SIZE", 5))
-DB_MAX_OVERFLOW = int(_get_int("DB_MAX_OVERFLOW", 10))
+DB_POOL_SIZE = int(env_int("DB_POOL_SIZE", 5))
+DB_MAX_OVERFLOW = int(env_int("DB_MAX_OVERFLOW", 10))
 DB_POOL_TIMEOUT_S = float(_get_float("DB_POOL_TIMEOUT_S", 30.0))
 
 DB_BUSY_TIMEOUT_S = max(1.0, min(DB_BUSY_TIMEOUT_S, 300.0))

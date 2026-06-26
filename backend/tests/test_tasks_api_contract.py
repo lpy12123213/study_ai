@@ -364,7 +364,7 @@ class TestTasksApiContract(unittest.TestCase):
                                     "type": "解答题",
                                     "difficulty": "中等",
                                     "knowledge_point": "函数",
-                                    "stem": "待人工审核题干",
+                                    "stem": "待审核草稿题干",
                                     "answer": "1",
                                     "analysis": "解析。",
                                     "quality_score": 90,
@@ -401,7 +401,7 @@ class TestTasksApiContract(unittest.TestCase):
                     "difficulty": "中等",
                     "knowledge_point": "函数",
                     "source_url": "",
-                    "stem": "待人工审核题干",
+                    "stem": "   ",
                 }
             ],
         }
@@ -417,7 +417,7 @@ class TestTasksApiContract(unittest.TestCase):
                 "/api/tasks/task-review/compose-review",
                 json={
                     "questions": [
-                        {"questionId": "q-review", "status": "approved"},
+                        {"questionId": "q-review", "status": "approved", "stem": "人工复审回填题干"},
                         {"questionId": "q-reject", "status": "rejected"},
                     ]
                 },
@@ -427,12 +427,15 @@ class TestTasksApiContract(unittest.TestCase):
         body = resp.json()
         self.assertTrue(body["success"])
         self.assertEqual(body["paper"]["id"], 88)
+        self.assertEqual(body["paper"]["questions"][0]["stem"], "人工复审回填题干")
         save.assert_awaited_once()
         saved_questions = save.await_args.kwargs["questions"]
         self.assertEqual([q["question_id"] for q in saved_questions], ["q-review"])
+        self.assertEqual(saved_questions[0]["stem"], "人工复审回填题干")
         update_status.assert_awaited_once()
         self.assertEqual(update_status.await_args.kwargs["status"], "completed")
         self.assertEqual(update_status.await_args.kwargs["result"]["id"], 88)
+        self.assertEqual(update_status.await_args.kwargs["result"]["questions"][0]["stem"], "人工复审回填题干")
         self.assertGreaterEqual(append_event.await_count, 2)
         step_event = append_event.await_args_list[0].kwargs
         self.assertEqual(step_event["event_type"], "step")

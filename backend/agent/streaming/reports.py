@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 

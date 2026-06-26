@@ -43,8 +43,10 @@ from backend.core.auth import validate_access_token
 from backend.core.config_check import log_config_check
 from backend.core.logging_utils import configure_logging, get_logger
 from backend.core.metrics import instrument_app
-from backend.integrations.crawler.manager import close_crawler
+from backend.core.settings import env_bool, env_int
 from backend.database.engine import init_db
+from backend.generation.question_library.worker import run_question_library_scoring_worker
+from backend.integrations.crawler.manager import close_crawler
 from backend.llm.client import (
     close_shared_llm_http_client,
     reset_llm_api_key_override,
@@ -53,7 +55,6 @@ from backend.llm.client import (
     set_moonshot_api_key_override,
 )
 from backend.media.generated import cleanup_expired_generated_files
-from backend.generation.question_library.worker import run_question_library_scoring_worker
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_PATH = PROJECT_ROOT / "frontend" / "dist"
@@ -65,29 +66,12 @@ configure_logging(force=(not _log_format or _log_format == "json"))
 logger = get_logger(__name__)
 
 
-def _env_truthy(name: str, *, default: bool = False) -> bool:
-    raw = str(os.getenv(name) or "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw in {"1", "true", "yes", "y", "on"}
-
-
-def _env_int(name: str, *, default: int) -> int:
-    raw = str(os.getenv(name) or "").strip()
-    if not raw:
-        return int(default)
-    try:
-        return int(raw)
-    except ValueError:
-        return int(default)
-
-
 async def _run_generated_files_cleanup_worker(*, stop: asyncio.Event) -> None:
     # Default: cleanup every 30 minutes.
-    interval_s = max(60, min(_env_int("GENERATED_FILES_CLEANUP_INTERVAL_S", default=30 * 60), 24 * 60 * 60))
+    interval_s = max(60, min(env_int("GENERATED_FILES_CLEANUP_INTERVAL_S", default=30 * 60), 24 * 60 * 60))
     while not stop.is_set():
         try:
-            await cleanup_expired_generated_files(limit=_env_int("GENERATED_FILES_CLEANUP_BATCH", default=500))
+            await cleanup_expired_generated_files(limit=env_int("GENERATED_FILES_CLEANUP_BATCH", default=500))
         except Exception:
             logger.exception("generated_files_cleanup_failed")
 
@@ -100,7 +84,7 @@ async def _run_generated_files_cleanup_worker(*, stop: asyncio.Event) -> None:
 def _client_ip(request: Request) -> str:
     """Best-effort client IP extraction with optional proxy header trust."""
 
-    if _env_truthy("TRUST_PROXY_HEADERS", default=False) and _is_trusted_proxy(request):
+    if env_bool("TRUST_PROXY_HEADERS", default=False) and _is_trusted_proxy(request):
         # RFC 7239 Forwarded: for=...
         forwarded = str(request.headers.get("Forwarded") or "").strip()
         if forwarded:
@@ -184,7 +168,7 @@ def _warn_proxy_settings_on_startup() -> None:
                 extra={"trusted_proxies": raw},
             )
 
-    if _env_truthy("TRUST_PROXY_HEADERS", default=False) and not _trusted_proxy_networks():
+    if env_bool("TRUST_PROXY_HEADERS", default=False) and not _trusted_proxy_networks():
         # This is a common misconfig: enabling proxy headers without defining trusted proxy IPs
         # effectively disables all proxy-header parsing (fail-closed), which surprises users.
         logger.warning("trust_proxy_headers_enabled_but_no_trusted_proxies")
@@ -265,11 +249,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     stop = asyncio.Event()
     worker_task: Optional[asyncio.Task] = None
     cleanup_task: Optional[asyncio.Task] = None
-    if _env_truthy(
-        "QUESTION_LIBRARY_WORKER_ENABLED", default=_env_truthy("QUESTION_LIBRARY_AUTO_SCORE", default=False)
+    if env_bool(
+        "QUESTION_LIBRARY_WORKER_ENABLED", default=env_bool("QUESTION_LIBRARY_AUTO_SCORE", default=False)
     ):
         worker_task = asyncio.create_task(run_question_library_scoring_worker(stop=stop))
-    if _env_truthy("GENERATED_FILES_CLEANUP_ENABLED", default=True):
+    if env_bool("GENERATED_FILES_CLEANUP_ENABLED", default=True):
         cleanup_task = asyncio.create_task(_run_generated_files_cleanup_worker(stop=stop))
     try:
         yield
@@ -442,8 +426,8 @@ def create_app() -> FastAPI:
         moonshot_key_header = str(request.headers.get("X-Moonshot-API-Key") or "").strip()
         has_override_headers = bool(llm_key_header or moonshot_key_header)
 
-        allow_override = _env_truthy("LLM_API_KEY_OVERRIDE_ENABLED", default=False)
-        require_admin = _env_truthy("LLM_API_KEY_OVERRIDE_REQUIRE_ADMIN", default=True)
+        allow_override = env_bool("LLM_API_KEY_OVERRIDE_ENABLED", default=False)
+        require_admin = env_bool("LLM_API_KEY_OVERRIDE_REQUIRE_ADMIN", default=True)
         permitted = allow_override
 
         if has_override_headers and not allow_override:

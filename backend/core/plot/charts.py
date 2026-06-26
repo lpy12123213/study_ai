@@ -4,7 +4,7 @@ import io
 import os
 from typing import Any, Dict, List
 
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
 from backend.core.plot.expression import _PLOT_EVAL_EXCEPTIONS, _safe_eval_expr
 from backend.core.plot.parsers import _as_str, _clamp_float, _clamp_int, _iter_list, _parse_range
 

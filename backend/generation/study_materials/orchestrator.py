@@ -909,6 +909,7 @@ class StudyMaterialsTaskManager:
                         spec = None
 
                 codex_tool_names_by_id: Dict[str, str] = {}
+                codex_last_error: Optional[Dict[str, Any]] = None
                 async for evt in run_codex_runtime_agent_events(
                     task_type="study_materials",
                     request=req,
@@ -973,14 +974,23 @@ class StudyMaterialsTaskManager:
                             meta["resume_working_memory"] = _merge_resume_working_memory(existing, wm)
                             _refresh_resume_meta(meta=meta)
                             self._persist_snapshot(task, force=True)
-                        msg = str(data.get("message") or data.get("error") or data.get("code") or "").strip()
-                        await task_runtime.fail_task(
-                            task,
-                            msg or "Generation failed",
-                            error={"message": msg or "Generation failed", **data},
-                            emit_event=False,
-                        )
-                        return
+                        codex_last_error = data
+                        continue
+
+                if isinstance(codex_last_error, dict):
+                    msg = str(
+                        codex_last_error.get("message")
+                        or codex_last_error.get("error")
+                        or codex_last_error.get("code")
+                        or ""
+                    ).strip()
+                    await task_runtime.fail_task(
+                        task,
+                        msg or "Generation failed",
+                        error={"message": msg or "Generation failed", **codex_last_error},
+                        emit_event=False,
+                    )
+                    return
 
                 if not legacy_agent_fallback_enabled():
                     return

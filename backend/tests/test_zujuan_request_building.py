@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 import unittest
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from backend.integrations.crawler.zujuan.question_list import fetch_question_list
@@ -15,6 +19,167 @@ class TestZujuanAntibotCookieDetection(unittest.TestCase):
         missing = missing_antibot_keys("aliyungf_tc=a; acw_tc=b; alicfw=c; alicfw_gfver=v1.200309.1")
 
         self.assertEqual(missing, set())
+
+
+class TestZujuanCookieFileReplay(unittest.IsolatedAsyncioTestCase):
+    def test_builds_raw_header_from_netscape_cookie_file(self) -> None:
+        from backend.integrations.crawler.zujuan.cookies import build_cookie_header_from_netscape_file
+
+        cookie_text = "\n".join(
+            [
+                "# Netscape HTTP Cookie File",
+                ".xkw.com\tTRUE\t/\tFALSE\t1893456000\tbankId\t11",
+                "#HttpOnly_zujuan.xkw.com\tFALSE\t/\tTRUE\t1700000000\tacw_tc\tabc=def",
+                "zujuan.xkw.com\tFALSE\t/\tFALSE\t0\talicfw\tvisitor",
+                "",
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cookies.txt"
+            path.write_text(cookie_text, encoding="utf-8")
+
+            result = build_cookie_header_from_netscape_file(
+                path,
+                now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(result.header, "bankId=11; acw_tc=abc=def; alicfw=visitor")
+        self.assertEqual(result.cookie_names, ["bankId", "acw_tc", "alicfw"])
+        self.assertEqual(result.expired_cookie_names, ["acw_tc"])
+        self.assertEqual(result.cookie_count, 3)
+
+    async def test_initialize_loads_configured_visitor_cookie_file(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        cookie_text = "zujuan.xkw.com\tFALSE\t/\tFALSE\t0\tacw_tc\tabc=def\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cookies.txt"
+            path.write_text(cookie_text, encoding="utf-8")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "ZUJUAN_COOKIE_FILE": str(path),
+                    "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "0",
+                    "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
+                    "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",
+                },
+                clear=False,
+            ):
+                crawler = ZujuanCrawler(subject="高中数学")
+                await crawler.initialize()
+                try:
+                    self.assertEqual(crawler.cookies, "acw_tc=abc=def")
+                    self.assertEqual(crawler.client.headers.get("Cookie"), "acw_tc=abc=def")
+                finally:
+                    await crawler.close()
+
+    async def test_initialize_resolves_relative_cookie_file_from_repo_root(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        repo_root = Path(__file__).resolve().parents[2]
+        rel_path = Path(".local") / f"zujuan-relative-cookie-{os.getpid()}.txt"
+        cookie_path = repo_root / rel_path
+        cookie_path.parent.mkdir(parents=True, exist_ok=True)
+        cookie_path.write_text("zujuan.xkw.com\tFALSE\t/\tFALSE\t0\tacw_tc\trelative\n", encoding="utf-8")
+
+        old_cwd = Path.cwd()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    os.chdir(tmp)
+                    with patch.dict(
+                        "os.environ",
+                        {
+                            "ZUJUAN_COOKIE_FILE": rel_path.as_posix(),
+                            "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "0",
+                            "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
+                            "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",
+                        },
+                        clear=False,
+                    ):
+                        crawler = ZujuanCrawler(subject="高中数学")
+                        await crawler.initialize()
+                        try:
+                            self.assertEqual(crawler.cookies, "acw_tc=relative")
+                            self.assertEqual(crawler.client.headers.get("Cookie"), "acw_tc=relative")
+                        finally:
+                            await crawler.close()
+                finally:
+                    os.chdir(old_cwd)
+        finally:
+            cookie_path.unlink(missing_ok=True)
+
+    async def test_initialize_fails_when_configured_cookie_file_is_missing(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ZUJUAN_COOKIE_FILE": ".local/missing-zujuan-cookie-file.txt",
+                "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "0",
+                "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
+                "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",
+            },
+            clear=False,
+        ):
+            crawler = ZujuanCrawler(subject="高中数学")
+            with self.assertRaisesRegex(RuntimeError, "ZUJUAN_COOKIE_FILE.*missing-zujuan-cookie-file"):
+                await crawler.initialize()
+
+    async def test_initialize_fails_when_configured_cookie_file_only_has_expired_rows(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        cookie_text = "zujuan.xkw.com\tFALSE\t/\tFALSE\t1700000000\tacw_tc\texpired\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cookies.txt"
+            path.write_text(cookie_text, encoding="utf-8")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "ZUJUAN_COOKIE_FILE": str(path),
+                    "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "0",
+                    "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
+                    "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",
+                },
+                clear=False,
+            ):
+                crawler = ZujuanCrawler(subject="高中数学")
+                with self.assertRaisesRegex(RuntimeError, "ZUJUAN_COOKIE_FILE.*expired"):
+                    await crawler.initialize()
+
+    async def test_enabled_login_cookie_takes_precedence_over_visitor_cookie_file(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cookies.txt"
+            path.write_text("zujuan.xkw.com\tFALSE\t/\tFALSE\t0\tacw_tc\tvisitor\n", encoding="utf-8")
+
+            with (
+                patch(
+                    "backend.integrations.crawler.zujuan.client.load_env_login",
+                    return_value={"cookies": "userId=123; session=login", "is_logged_in": True},
+                ),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "ZUJUAN_COOKIE_FILE": str(path),
+                        "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "1",
+                        "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
+                        "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",
+                    },
+                    clear=False,
+                ),
+            ):
+                crawler = ZujuanCrawler(subject="高中数学")
+                await crawler.initialize()
+                try:
+                    self.assertEqual(crawler.cookies, "userId=123; session=login")
+                    self.assertEqual(crawler.client.headers.get("Cookie"), "userId=123; session=login")
+                finally:
+                    await crawler.close()
 
 
 class TestZujuanSubjectRequestDefaults(unittest.TestCase):
@@ -313,6 +478,25 @@ class TestZujuanSearchRequestFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(crawler.fetch_calls[0]["course_id_py"], "gzsx")
 
 
+class ChallengeSearchFakeCrawler(SearchFakeCrawler):
+    async def _fetch_question_list(self, **kwargs):
+        self.fetch_calls.append(kwargs)
+        return [], {"error": "js_challenge", "raw_count": 0, "status": 200}
+
+
+class TestZujuanChallengeGuidance(unittest.IsolatedAsyncioTestCase):
+    async def test_challenge_guidance_names_visitor_cookie_file_configuration(self) -> None:
+        crawler = ChallengeSearchFakeCrawler()
+
+        result = await search_by_keyword(crawler, keyword="函数", limit=1, max_pages=1, parse_content=False)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "js_challenge")
+        guidance = " ".join(result["instructions"])
+        self.assertIn("ZUJUAN_COOKIE_FILE", guidance)
+        self.assertIn("访客", guidance)
+
+
 class TestZujuanCrawlerInitialization(unittest.IsolatedAsyncioTestCase):
     async def test_initialize_defaults_to_visitor_mode_without_cookie_bootstrap(self) -> None:
         from backend.integrations.crawler.zujuan.client import ZujuanCrawler
@@ -324,6 +508,7 @@ class TestZujuanCrawlerInitialization(unittest.IsolatedAsyncioTestCase):
             patch.dict(
                 "os.environ",
                 {
+                    "ZUJUAN_COOKIE_FILE": "",
                     "ZUJUAN_USE_ENV_COOKIES_FOR_SEARCH": "0",
                     "ZUJUAN_USE_CACHED_ANTIBOT_COOKIES": "0",
                     "ZUJUAN_AUTO_BOOTSTRAP_COOKIES": "0",

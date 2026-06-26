@@ -5,6 +5,7 @@ import os
 import re
 from typing import Any, Dict, List
 
+from backend.core.settings import env_int
 from backend.generation.knowledge_video.models import GeneratedVideoPackage, KnowledgeVideoRequest
 from backend.llm.client import chat_completion_text
 from backend.llm.prompts import create_default_prompt_registry
@@ -39,12 +40,6 @@ def _clip(text: str, *, max_chars: int) -> str:
     return s[:max_chars].rstrip()
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name) or str(default))
-    except (TypeError, ValueError):
-        return int(default)
-
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -76,7 +71,7 @@ async def generate_manim_package(
     render_error: str = "",
 ) -> GeneratedVideoPackage:
     model = str(os.getenv("KNOWLEDGE_VIDEO_MODEL") or os.getenv("STUDY_MATERIALS_WRITER_MODEL") or os.getenv("SUB_MODEL") or "").strip()
-    max_tokens = _env_int("KNOWLEDGE_VIDEO_MAX_TOKENS", 8000)
+    max_tokens = env_int("KNOWLEDGE_VIDEO_MAX_TOKENS", 8000)
     temp = _env_float("KNOWLEDGE_VIDEO_TEMPERATURE", 0.3)
 
     repair = ""

@@ -54,11 +54,6 @@ def build_study_materials_agent_spec(
         "assemble_study_archive",
         "review_content",
         "revise_markdown",
-        "save_markdown_file",
-        "export_study_markdown",
-        "convert_markdown_to_latex",
-        "refine_latex",
-        "compile_latex_to_pdf",
     ]
     if bool(opts.get("with_questions")) or bool(opts.get("enable_questions")):
         allowed_tools.append("search_questions_by_knowledge")
@@ -91,7 +86,11 @@ def build_study_materials_agent_spec(
         ),
         search_policy=AgentSearchPolicy(providers=["tavily", "exa", "metaso", "bigmodel"]),
         budget=_preset_budget(preset),
-        output_contract={"kind": "study_archive", "formats": ["markdown", "latex", "pdf"]},
+        output_contract={
+            "kind": "study_archive",
+            "formats": ["markdown"],
+            "deferred_formats": ["latex", "pdf"],
+        },
         resume_state=dict(resume_state or {}),
         metadata={
             **codex_runtime_metadata_defaults(),

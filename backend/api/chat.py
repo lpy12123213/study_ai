@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from backend.api.auth import require_auth
 from backend.api.schemas import ChatRequest
 from backend.api.sse_utils import is_sse_client_disconnected
+from backend.core.logging_utils import get_logger
 from backend.database.repositories.content.conversations import (
     add_message,
     get_conversation,
@@ -20,7 +20,7 @@ from backend.workspace.chat.titles import update_title_for_first_user_message
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.post("/chat")

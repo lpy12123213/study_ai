@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -10,6 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_int
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.system.generated_files import (
     delete_generated_file,
@@ -41,15 +41,6 @@ _ALLOWED_EXTS = {
     ".py",
 }
 
-
-def _env_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return int(default)
-    try:
-        return int(raw)
-    except ValueError:
-        return int(default)
 
 
 def _normalize_ext(ext: str) -> str:
@@ -153,7 +144,7 @@ async def publish_generated_text(
 def default_generated_media_ttl_s() -> int:
     """Default TTL for generated files served over HTTP."""
 
-    return max(60, min(_env_int("GENERATED_MEDIA_TTL_SECONDS", 7 * 24 * 3600), 365 * 24 * 3600))
+    return max(60, min(env_int("GENERATED_MEDIA_TTL_SECONDS", 7 * 24 * 3600), 365 * 24 * 3600))
 
 
 async def cleanup_expired_generated_files(*, limit: int = 200) -> Dict[str, Any]:

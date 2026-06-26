@@ -11,7 +11,7 @@ import httpx
 from httpcore._backends.auto import AutoBackend
 from httpx._config import create_ssl_context
 
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 

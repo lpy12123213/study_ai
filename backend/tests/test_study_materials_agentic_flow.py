@@ -23,6 +23,9 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spec.user_requirements, "偏直观")
         self.assertEqual(spec.search_policy.providers[0], "tavily")
         self.assertIn("web_search_knowledge", spec.tool_policy.allowed_tools)
+        self.assertNotIn("compile_latex_to_pdf", spec.tool_policy.allowed_tools)
+        self.assertEqual(spec.output_contract.get("formats"), ["markdown"])
+        self.assertEqual(spec.output_contract.get("deferred_formats"), ["latex", "pdf"])
         self.assertTrue(any(role.name == "planner" for role in spec.roles))
         self.assertTrue(any(role.name == "writer" for role in spec.roles))
 
@@ -113,6 +116,70 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
 
         codex_run.assert_called_once()
         complete.assert_awaited_once()
+
+    async def test_run_task_waits_for_done_after_recoverable_codex_error(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = SimpleNamespace(
+            task_id="study-reconnect",
+            user_id="u-1",
+            request={"query": "函数单调性", "subject": "高中数学", "options": {}},
+            meta={},
+            parent_task_id=None,
+            status="running",
+        )
+
+        async def fake_codex_events(*_args, **_kwargs):
+            yield {
+                "event": "error",
+                "type": "error",
+                "data": {"code": "codex_runtime_stream_error", "message": "Reconnecting... 2/5"},
+            }
+            yield {
+                "event": "done",
+                "type": "done",
+                "data": {"material": {"topic": "函数单调性"}, "runtime": "codex_runtime"},
+            }
+
+        async def fake_complete(runtime_task, **_kwargs):
+            runtime_task.status = "completed"
+
+        async def fake_fail(runtime_task, *_args, **_kwargs):
+            runtime_task.status = "failed"
+
+        with patch.object(
+            orchestrator,
+            "AgentCore",
+            side_effect=AssertionError("legacy AgentCore should not run"),
+        ), patch.object(
+            orchestrator,
+            "get_study_archive_by_fingerprint",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            orchestrator,
+            "run_codex_runtime_agent_events",
+            side_effect=fake_codex_events,
+        ), patch.object(
+            orchestrator.task_runtime,
+            "append_event",
+            new=AsyncMock(),
+        ), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(side_effect=fake_complete),
+        ) as complete, patch.object(
+            orchestrator.task_runtime,
+            "fail_task",
+            new=AsyncMock(side_effect=fake_fail),
+        ) as fail, patch.object(
+            manager,
+            "_persist_snapshot",
+        ):
+            await manager._run_task(task)
+
+        complete.assert_awaited_once()
+        fail.assert_not_awaited()
 
     async def test_run_task_codex_done_persists_resume_state_and_archive(self) -> None:
         from backend.generation.study_materials import orchestrator

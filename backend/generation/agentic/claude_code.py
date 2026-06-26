@@ -5,10 +5,11 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterable, Optional, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterable, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.generation.agentic.types import AgentRunSpec
@@ -48,6 +49,85 @@ CLAUDE_CODE_RESULT_SCHEMA = CODEX_RUNTIME_RESULT_SCHEMA
 
 
 ProcessFactory = Callable[..., Awaitable[Any]]
+
+
+def _resolve_runtime_executable(command: str) -> str:
+    raw = str(command or "").strip()
+    if os.name != "nt" or not raw:
+        return raw
+    return str(shutil.which(raw) or raw)
+
+
+def _proxy_url(value: Any, *, scheme: str = "http") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" in raw:
+        return raw
+    return f"{scheme}://{raw}"
+
+
+def _parse_windows_proxy_server(value: Any) -> Dict[str, str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    if "=" not in raw:
+        proxy = _proxy_url(raw)
+        return {"HTTP_PROXY": proxy, "HTTPS_PROXY": proxy} if proxy else {}
+
+    parsed: Dict[str, str] = {}
+    for item in raw.split(";"):
+        name, separator, address = item.partition("=")
+        if not separator:
+            continue
+        protocol = name.strip().lower()
+        if protocol == "http":
+            parsed["HTTP_PROXY"] = _proxy_url(address)
+        elif protocol == "https":
+            parsed["HTTPS_PROXY"] = _proxy_url(address)
+        elif protocol.startswith("socks"):
+            parsed["ALL_PROXY"] = _proxy_url(address, scheme="socks5")
+    if parsed.get("HTTP_PROXY") and not parsed.get("HTTPS_PROXY"):
+        parsed["HTTPS_PROXY"] = parsed["HTTP_PROXY"]
+    return {key: value for key, value in parsed.items() if value}
+
+
+def _windows_user_proxy_urls() -> Dict[str, str]:
+    if os.name != "nt":
+        return {}
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            enabled = int(winreg.QueryValueEx(key, "ProxyEnable")[0] or 0)
+            proxy_server = winreg.QueryValueEx(key, "ProxyServer")[0] if enabled else ""
+    except (OSError, TypeError, ValueError):
+        return {}
+    return _parse_windows_proxy_server(proxy_server)
+
+
+def _codex_subprocess_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    proxy_keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    explicit_proxy = _env_first("CODEX_RUNTIME_PROXY")
+    if explicit_proxy:
+        proxy = _proxy_url(explicit_proxy)
+        for key in proxy_keys:
+            env.pop(key.lower(), None)
+            env[key] = proxy
+        return env
+
+    if any(str(env.get(key) or env.get(key.lower()) or "").strip() for key in proxy_keys):
+        return env
+
+    proxy_values = _windows_user_proxy_urls()
+    for key, value in proxy_values.items():
+        if value and not str(env.get(key) or env.get(key.lower()) or "").strip():
+            env[key] = value
+    return env
 
 
 @dataclass
@@ -204,35 +284,42 @@ def build_codex_runtime_command(
     task_dir: Path,
     add_dirs: Optional[Iterable[Path]] = None,
     config: Optional[CodexRuntimeConfig] = None,
+    disable_shell_tool: bool = False,
 ) -> list[str]:
     cfg = (config or CodexRuntimeConfig.from_env()).normalized()
-    schema_path = Path(task_dir).resolve() / "agent-output.schema.json"
     output_path = Path(task_dir).resolve() / "agent-output.json"
-    schema_path.parent.mkdir(parents=True, exist_ok=True)
-    schema_path.write_text(json.dumps(schema or CODEX_RUNTIME_RESULT_SCHEMA, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         cfg.command,
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--cd",
-        str(Path(task_dir).resolve()),
-        "--sandbox",
-        cfg.sandbox_mode,
         "--ask-for-approval",
         cfg.approval_policy,
-        "--output-schema",
-        str(schema_path),
-        "--output-last-message",
-        str(output_path),
+        "--disable",
+        "plugins",
+        "--disable",
+        "memories",
     ]
+    if disable_shell_tool:
+        cmd.extend(["--disable", "shell_tool"])
+    cmd.extend(
+        [
+            "exec",
+            "--json",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--cd",
+            str(Path(task_dir).resolve()),
+            "--sandbox",
+            cfg.sandbox_mode,
+            "--output-last-message",
+            str(output_path),
+        ]
+    )
     if cfg.model:
         cmd.extend(["--model", cfg.model])
 
     for directory in _dedupe_dirs([Path(task_dir), *(list(add_dirs or []))]):
         cmd.extend(["--add-dir", str(directory)])
-    cmd.append(str(prompt or ""))
+    cmd.append("-")
     return cmd
 
 
@@ -261,22 +348,36 @@ def build_codex_runtime_prompt(
     task_id: str,
     spec: AgentRunSpec,
 ) -> str:
-    payload = {
-        "task_type": str(task_type or spec.metadata.get("task_type") or spec.domain),
-        "task_id": str(task_id or ""),
-        "user_id": str(user_id or ""),
-        "agent_run_spec": spec.to_dict(),
-        "request": dict(request or {}),
-        "result_schema": CODEX_RUNTIME_RESULT_SCHEMA,
-    }
+    confirmation_hint = ""
+    output_contract = spec.output_contract if isinstance(spec.output_contract, dict) else {}
+    if output_contract.get("requires_confirmation"):
+        confirmation_hint = (
+            "待审输出：当任务需要人工确认且已生成待审核草稿时，最终 JSON 顶层 status 仍填 completed，"
+            "并在 result 中填 status=pending_review、composeDraft={...}；不要改为失败，也不要保存为最终完成结果。\n"
+        )
+    input_instruction = "先读取当前工作目录中的 agent-input.json，并严格按其中的任务规格和请求完成任务。"
+    task_hint = ""
+    if str(task_type or "").strip() == "study_materials":
+        inline_input = json.dumps(
+            {"request": dict(request or {}), "agent_run_spec": spec.to_dict()},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+        input_instruction = f"直接使用下列内联输入完成任务，无需读取其他文件：{inline_input}"
+        task_hint = (
+            "自学资料初次生成只返回 Markdown 正文，放在 result.material.markdown；"
+            "不要生成或写入 Markdown、LaTeX、PDF 文件，LaTeX/PDF 由后续独立导出流程处理。\n"
+        )
     return (
         "你是 Study AI 的本机 Codex runtime。\n"
-        "目标：根据 agent_run_spec 完成任务，使用 Codex 可用工具时只访问当前授权目录。\n"
+        f"输入：{input_instruction}\n"
         "限制：不要读取或输出密钥、cookie、本地数据库或无关文件；不要请求交互式确认；不要绕过权限模式。\n"
-        "事件：执行中可通过 JSONL 输出推理、工具调用和工具结果；最终必须只给出匹配 result_schema 的 JSON。\n"
-        "最终 JSON 至少包含 status、summary、result；如失败请填 status=failed 和 error。\n\n"
-        "任务输入已写入 agent-input.json，完整载荷如下：\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
+        "最终响应必须只包含一个 JSON 对象，不要附加 Markdown 或说明。\n"
+        "JSON 顶层至少包含 status、summary、result；成功时 status=completed，失败时 status=failed 并填写 error。\n"
+        f"{task_hint}"
+        f"{confirmation_hint}"
+        f"任务类型：{str(task_type or spec.metadata.get('task_type') or spec.domain)}；任务 ID：{str(task_id or '')}。"
     )
 
 
@@ -312,6 +413,9 @@ async def run_codex_runtime_agent_events(
     safe_task_id = _safe_task_id(task_id or req.get("taskId") or req.get("task_id") or f"{task_type}-{int(time.time())}")
     task_dir = (cfg.task_root / safe_task_id).resolve()
     task_dir.mkdir(parents=True, exist_ok=True)
+    output_path = task_dir / "agent-output.json"
+    with contextlib.suppress(FileNotFoundError):
+        output_path.unlink()
 
     input_payload = {
         "task_type": str(task_type or spec_obj.metadata.get("task_type") or spec_obj.domain),
@@ -330,7 +434,9 @@ async def run_codex_runtime_agent_events(
         task_dir=task_dir,
         add_dirs=add_dirs,
         config=cfg,
+        disable_shell_tool=str(task_type or "").strip() == "study_materials",
     )
+    cmd[0] = _resolve_runtime_executable(cmd[0])
     factory = process_factory or asyncio.create_subprocess_exec
     proc: Any = None
     stderr_task: Optional[asyncio.Task[str]] = None
@@ -340,10 +446,17 @@ async def run_codex_runtime_agent_events(
     try:
         proc = await factory(
             *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(task_dir),
+            env=_codex_subprocess_env(),
         )
+        proc_stdin = getattr(proc, "stdin", None)
+        if proc_stdin is not None:
+            proc_stdin.write(str(prompt or "").encode("utf-8"))
+            await proc_stdin.drain()
+            proc_stdin.close()
         stderr_task = asyncio.create_task(_read_stderr(proc))
         yield {
             "type": "status",
@@ -399,7 +512,7 @@ async def run_codex_runtime_agent_events(
             return
 
         if final_result is None:
-            final_result = _parse_agent_result_file(task_dir / "agent-output.json") or _parse_agent_result("\n".join(text_parts))
+            final_result = _parse_agent_result_file(output_path) or _parse_agent_result("\n".join(text_parts))
         if final_result is None:
             yield _error_event(
                 "codex_runtime_invalid_result",
@@ -418,7 +531,7 @@ async def run_codex_runtime_agent_events(
 
         for event in _events_from_final_result(final_result):
             yield event
-        yield _final_event(final_result, final_event_type=final_event_type)
+        yield _final_event(final_result, final_event_type=final_event_type, task_id=safe_task_id)
     except asyncio.CancelledError:
         if proc is not None:
             await _terminate_process(proc)
@@ -694,7 +807,20 @@ def _events_from_stream_obj(obj: Dict[str, Any]) -> list[Dict[str, Any]]:
             if text:
                 events.append({"type": "reasoning_delta", "event": "reasoning_delta", "data": {"content": text}})
     if typ == "error":
-        events.append(_error_event("codex_runtime_stream_error", message=str(obj.get("error") or obj.get("message") or "")))
+        message = str(obj.get("error") or obj.get("message") or "")
+        events.append(
+            {
+                "type": "status",
+                "event": "status",
+                "data": {
+                    "content": message or "Codex runtime stream warning",
+                    "message": message,
+                    "code": "codex_runtime_stream_error",
+                    "level": "warning",
+                    "runtime": "codex_runtime",
+                },
+            }
+        )
     return events
 
 
@@ -800,16 +926,64 @@ def _events_from_final_result(result: Dict[str, Any]) -> list[Dict[str, Any]]:
         event.setdefault("event", event_type)
         event.setdefault("data", {})
         out.append(event)
+    if not any(str(event.get("type") or "").strip() == "text_delta" for event in out):
+        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+        material = payload.get("material") if isinstance(payload.get("material"), dict) else {}
+        markdown = str(material.get("markdown") or "").strip()
+        if markdown:
+            out.append({"type": "text_delta", "event": "text_delta", "data": {"content": markdown}})
     return out
 
 
-def _final_event(result: Dict[str, Any], *, final_event_type: str) -> Dict[str, Any]:
+def _pending_review_event_from_payload(
+    payload: Dict[str, Any],
+    *,
+    result: Dict[str, Any],
+    task_id: str,
+) -> Optional[Dict[str, Any]]:
+    draft = payload.get("composeDraft") if isinstance(payload.get("composeDraft"), dict) else payload.get("compose_draft")
+    if not isinstance(draft, dict) or not draft:
+        return None
+
+    metadata = {"runtime": "codex_runtime", **(result.get("metadata") if isinstance(result.get("metadata"), dict) else {})}
+    data = {
+        "success": True,
+        "summary": result.get("summary") or "",
+        "status": "pending_review",
+        "runtime": "codex_runtime",
+        "composeDraft": draft,
+        "result": payload,
+        "metadata": metadata,
+    }
+    return {
+        "type": "pending_review",
+        "event": "pending_review",
+        "taskId": str(payload.get("taskId") or payload.get("task_id") or task_id or ""),
+        "composeDraft": draft,
+        "data": data,
+    }
+
+
+def _final_event(result: Dict[str, Any], *, final_event_type: str, task_id: str = "") -> Dict[str, Any]:
     payload = result.get("result") if isinstance(result.get("result"), dict) else {}
     payload = dict(payload)
     payload.setdefault("native_agentic", True)
     payload.setdefault("runtime", "codex_runtime")
     if result.get("artifacts"):
         payload.setdefault("artifacts", result.get("artifacts"))
+
+    pending_review = _pending_review_event_from_payload(payload, result=result, task_id=task_id)
+    if pending_review is not None:
+        return pending_review
+
+    pending_status = str(payload.get("status") or payload.get("task_status") or "").strip().lower()
+    has_compose_draft = "composeDraft" in payload or "compose_draft" in payload
+    if pending_status == "pending_review" or has_compose_draft:
+        return _error_event(
+            "codex_runtime_invalid_pending_review",
+            message="Codex runtime returned pending review without a valid composeDraft.",
+            result=payload,
+        )
 
     data = {
         "success": True,
@@ -842,6 +1016,23 @@ async def _read_stderr(proc: Any) -> str:
 
 
 async def _terminate_process(proc: Any) -> None:
+    pid = getattr(proc, "pid", None)
+    if os.name == "nt" and isinstance(pid, int) and pid > 0:
+        with contextlib.suppress(Exception):
+            taskkill = await asyncio.create_subprocess_exec(
+                "taskkill.exe",
+                "/PID",
+                str(pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            taskkill_returncode = await asyncio.wait_for(taskkill.wait(), timeout=5.0)
+            if taskkill_returncode == 0:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
+                return
     with contextlib.suppress(Exception):
         proc.terminate()
     with contextlib.suppress(Exception):

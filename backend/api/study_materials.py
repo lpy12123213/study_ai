@@ -34,10 +34,6 @@ router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependen
 logger = get_logger(__name__)
 
 
-def _env_truthy(name: str) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    return raw in {"1", "true", "yes", "y", "on"}
-
 
 def _sse_headers() -> dict:
     return {

@@ -1,28 +1,11 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from backend.agent.types import CompressedContext, PolicyState
-
-
-def _env_truthy(name: str, default: bool = False) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "y", "on"}
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
+from backend.core.settings import env_bool, env_int
 
 
 def _clip_list(items: List[str], limit: int) -> List[str]:
@@ -59,24 +42,24 @@ class StudyMaterialsPolicyConfig:
     @classmethod
     def from_env(cls) -> "StudyMaterialsPolicyConfig":
         # Back-compat: keep honoring existing knobs.
-        auto_research = _env_truthy(
-            "STUDY_MATERIALS_POLICY_AUTO_RESEARCH", _env_truthy("STUDY_MATERIALS_AUTO_RESEARCH", True)
+        auto_research = env_bool(
+            "STUDY_MATERIALS_POLICY_AUTO_RESEARCH", env_bool("STUDY_MATERIALS_AUTO_RESEARCH", True)
         )
-        auto_revise = _env_truthy(
-            "STUDY_MATERIALS_POLICY_AUTO_REVISE", _env_truthy("STUDY_MATERIALS_AUTO_REVISE", True)
+        auto_revise = env_bool(
+            "STUDY_MATERIALS_POLICY_AUTO_REVISE", env_bool("STUDY_MATERIALS_AUTO_REVISE", True)
         )
 
         return cls(
             auto_research=auto_research,
             auto_revise=auto_revise,
-            auto_research_max_points=max(1, min(_env_int("STUDY_MATERIALS_AUTO_RESEARCH_MAX_POINTS", 3), 15)),
-            auto_research_max_rounds=max(0, min(_env_int("STUDY_MATERIALS_POLICY_AUTO_RESEARCH_MAX_ROUNDS", 2), 10)),
-            auto_revise_max_rounds=max(0, min(_env_int("STUDY_MATERIALS_POLICY_AUTO_REVISE_MAX_ROUNDS", 1), 10)),
-            iterations_quick=max(1, min(_env_int("STUDY_MATERIALS_POLICY_ITERATIONS_QUICK", 1), 10)),
-            iterations_standard=max(1, min(_env_int("STUDY_MATERIALS_POLICY_ITERATIONS_STANDARD", 2), 10)),
-            iterations_deep=max(1, min(_env_int("STUDY_MATERIALS_POLICY_ITERATIONS_DEEP", 3), 10)),
-            iterations_research=max(1, min(_env_int("STUDY_MATERIALS_POLICY_ITERATIONS_RESEARCH", 4), 10)),
-            iterations_cap=max(1, min(_env_int("STUDY_MATERIALS_POLICY_ITERATIONS_CAP", 6), 20)),
+            auto_research_max_points=max(1, min(env_int("STUDY_MATERIALS_AUTO_RESEARCH_MAX_POINTS", 3), 15)),
+            auto_research_max_rounds=max(0, min(env_int("STUDY_MATERIALS_POLICY_AUTO_RESEARCH_MAX_ROUNDS", 2), 10)),
+            auto_revise_max_rounds=max(0, min(env_int("STUDY_MATERIALS_POLICY_AUTO_REVISE_MAX_ROUNDS", 1), 10)),
+            iterations_quick=max(1, min(env_int("STUDY_MATERIALS_POLICY_ITERATIONS_QUICK", 1), 10)),
+            iterations_standard=max(1, min(env_int("STUDY_MATERIALS_POLICY_ITERATIONS_STANDARD", 2), 10)),
+            iterations_deep=max(1, min(env_int("STUDY_MATERIALS_POLICY_ITERATIONS_DEEP", 3), 10)),
+            iterations_research=max(1, min(env_int("STUDY_MATERIALS_POLICY_ITERATIONS_RESEARCH", 4), 10)),
+            iterations_cap=max(1, min(env_int("STUDY_MATERIALS_POLICY_ITERATIONS_CAP", 6), 20)),
         )
 
 

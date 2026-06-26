@@ -15,7 +15,7 @@ from backend.agent.types import (
     StepResult,
     agent_event,
 )
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 

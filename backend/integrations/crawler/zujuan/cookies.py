@@ -5,6 +5,8 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,6 +29,7 @@ CSRF_TOKEN_PATTERN = re.compile(r'name="__RequestVerificationToken"[^>]*value="(
 _ANTIBOT_COOKIE_KEYS = {"aliyungf_tc", "acw_tc", "acw_sc__v2"}
 _ALICFW_COOKIE_KEYS = {"alicfw", "alicfw_gfver"}
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _ANTIBOT_CACHE_FILE = str(_PROJECT_ROOT / ".local" / "cache" / "zujuan_antibot_cookies.json")
 _ANTIBOT_CACHE_FILE_LEGACY = str(_PROJECT_ROOT / ".cache" / "zujuan_antibot_cookies.json")
 _ANTIBOT_CACHE_TTL_SECONDS = 6 * 60 * 60
@@ -34,6 +37,111 @@ _ANTIBOT_CACHE_TTL_SECONDS = 6 * 60 * 60
 # Login cookie cache is optional (best-effort) and stored locally only.
 _LOGIN_CACHE_FILE = str(_PROJECT_ROOT / ".local" / "cache" / "zujuan_login_session.json")
 _LOGIN_CACHE_TTL_SECONDS = 4 * 60 * 60
+
+
+@dataclass(frozen=True)
+class CookieFileHeader:
+    header: str
+    cookie_names: list[str]
+    expired_cookie_names: list[str]
+
+    @property
+    def cookie_count(self) -> int:
+        return len(self.cookie_names)
+
+    @property
+    def all_cookie_rows_expired(self) -> bool:
+        return bool(self.cookie_names) and len(self.expired_cookie_names) >= len(self.cookie_names)
+
+
+class ZujuanCookieFileError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        error: str,
+        message: str,
+        path: str | Path,
+        instructions: list[str],
+        cookie_count: int = 0,
+        expired_cookie_names: Optional[list[str]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.error = str(error or "").strip() or "zujuan_cookie_file_error"
+        self.payload = {
+            "success": False,
+            "error": self.error,
+            "message": message,
+            "instructions": instructions,
+            "cookie_file": {
+                "variable": "ZUJUAN_COOKIE_FILE",
+                "path": str(path),
+                "cookie_count": int(cookie_count or 0),
+                "expired_cookie_count": len(expired_cookie_names or []),
+            },
+        }
+
+
+def resolve_cookie_file_path(path: str | Path) -> Path:
+    source = Path(str(path or "").strip()).expanduser()
+    if not source.is_absolute():
+        source = _REPO_ROOT / source
+    return source.resolve(strict=False)
+
+
+def build_cookie_header_from_netscape_file(
+    path: str | Path,
+    *,
+    include_expired: bool = True,
+    now: datetime | None = None,
+) -> CookieFileHeader:
+    """Build a raw Cookie header from a Netscape/curl visitor-cookie file."""
+
+    source = Path(path).expanduser()
+    if not source.exists():
+        raise FileNotFoundError(f"cookie file not found: {source}")
+
+    now_ts = (now or datetime.now(timezone.utc)).timestamp()
+    pairs: list[str] = []
+    names: list[str] = []
+    expired_names: list[str] = []
+
+    for raw_line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_") :]
+        elif line.startswith("#"):
+            continue
+
+        fields = line.split("\t", 6)
+        if len(fields) != 7:
+            continue
+
+        _domain, _include_subdomains, _path, _secure, expires, name, value = fields
+        if not name:
+            continue
+
+        is_expired = False
+        try:
+            expires_ts = int(expires)
+            is_expired = expires_ts > 0 and expires_ts < now_ts
+        except ValueError:
+            pass
+
+        if is_expired:
+            expired_names.append(name)
+            if not include_expired:
+                continue
+
+        names.append(name)
+        pairs.append(f"{name}={value}")
+
+    return CookieFileHeader(
+        header="; ".join(pairs),
+        cookie_names=names,
+        expired_cookie_names=expired_names,
+    )
 
 
 def parse_cookie_string(cookie_str: str) -> Dict[str, str]:

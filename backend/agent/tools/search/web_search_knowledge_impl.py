@@ -18,7 +18,7 @@ from backend.agent.tools.search.deep_research import deep_research
 from backend.agent.tools.utils.text_utils import _clip_text, _postprocess_web_search_result
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
-from backend.core.settings import STUDY_MATERIALS_THINKING_MODEL
+from backend.core.settings import STUDY_MATERIALS_THINKING_MODEL, env_bool
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -88,12 +88,6 @@ class WebSearchKnowledgeToolsMixin:
 
         from backend.integrations.mcp.search.metaso import metaso_ask, metaso_search
 
-        def _env_truthy(name: str, default: bool = False) -> bool:
-            raw = (os.getenv(name) or "").strip().lower()
-            if not raw:
-                return default
-            return raw in {"1", "true", "yes", "y", "on"}
-
         def _normalize_result(r: Dict[str, Any], *, provider: str, source_query: str) -> Dict[str, Any]:
             rr = dict(r or {})
             if source_query:
@@ -105,7 +99,7 @@ class WebSearchKnowledgeToolsMixin:
 
         disable_metaso_raw = args.get("disable_metaso")
         if disable_metaso_raw is None:
-            disable_metaso = _env_truthy("STUDY_MATERIALS_DISABLE_METASO", False)
+            disable_metaso = env_bool("STUDY_MATERIALS_DISABLE_METASO", False)
         else:
             disable_metaso = str(disable_metaso_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -527,7 +521,7 @@ class WebSearchKnowledgeToolsMixin:
             ) -> Dict[str, Any]:
                 decompose = args.get("decompose")
                 if decompose is None:
-                    decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
+                    decompose = env_bool("STUDY_MATERIALS_WEB_DECOMPOSE", True)
                 decompose = bool(decompose)
                 provider_value = f"{provider_base}+decompose" if decompose else provider_base
 
@@ -805,7 +799,7 @@ class WebSearchKnowledgeToolsMixin:
                     # Sub-agent behavior: decompose the knowledge point into smaller questions, then ask.
                     decompose = args.get("decompose")
                     if decompose is None:
-                        decompose = _env_truthy("STUDY_MATERIALS_WEB_DECOMPOSE", True)
+                        decompose = env_bool("STUDY_MATERIALS_WEB_DECOMPOSE", True)
                     decompose = bool(decompose)
                     provider_value = "metaso-ask+decompose" if decompose else "metaso-ask"
 

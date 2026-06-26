@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -9,6 +8,7 @@ from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_int
 from backend.core.time_utils import utcnow_naive
 from backend.database.engine import async_session_maker
 from backend.database.repositories.user_ids import normalize_user_id
@@ -19,17 +19,8 @@ logger = get_logger(__name__)
 TASK_DURATION_EMA_ALPHA = 0.2
 
 
-def _get_int(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return int(default)
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return int(default)
 
-
-TASK_JSON_MAX_CHARS = max(10_000, min(_get_int("TASK_JSON_MAX_CHARS", 200_000), 5_000_000))
+TASK_JSON_MAX_CHARS = max(10_000, min(env_int("TASK_JSON_MAX_CHARS", 200_000), 5_000_000))
 
 
 def _isoformat_utc_z(dt: Optional[datetime]) -> str:

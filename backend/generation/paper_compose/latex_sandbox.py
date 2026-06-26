@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from backend.core.settings import env_int
+
 
 class SandboxUnavailableError(RuntimeError):
     """Raised when Docker or the configured LaTeX image is unavailable."""
@@ -24,20 +26,14 @@ class LatexSandboxConfig:
     docker_bin: str = "docker"
 
 
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(str(os.getenv(name) or "").strip() or default)
-    except (TypeError, ValueError):
-        return int(default)
-
 
 def default_latex_sandbox_config() -> LatexSandboxConfig:
     return LatexSandboxConfig(
         image=(os.getenv("LATEX_SANDBOX_DOCKER_IMAGE") or "study-ai/latex-sandbox:latest").strip(),
-        timeout_s=_int_env("LATEX_SANDBOX_TIMEOUT_S", _int_env("PAPER_EXPORT_LATEX_TIMEOUT_S", 600)),
+        timeout_s=env_int("LATEX_SANDBOX_TIMEOUT_S", env_int("PAPER_EXPORT_LATEX_TIMEOUT_S", 600)),
         memory=(os.getenv("LATEX_SANDBOX_MEMORY") or "1g").strip() or "1g",
         cpus=(os.getenv("LATEX_SANDBOX_CPUS") or "2").strip() or "2",
-        pids_limit=_int_env("LATEX_SANDBOX_PIDS_LIMIT", 128),
+        pids_limit=env_int("LATEX_SANDBOX_PIDS_LIMIT", 128),
         user=(os.getenv("LATEX_SANDBOX_USER") or "1000:1000").strip() or "1000:1000",
         docker_bin=(os.getenv("DOCKER_BIN") or "docker").strip() or "docker",
     )

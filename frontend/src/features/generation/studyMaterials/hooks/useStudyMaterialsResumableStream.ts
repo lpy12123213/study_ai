@@ -37,12 +37,15 @@ export function useStudyMaterialsResumableStream(opts: {
 
       try {
         const status = await getStudyMaterialsTask(taskId)
-        if (status.status !== 'running') {
+        const taskStatus = String(status.status || '').trim()
+        const lastSeq = Number(status.last_seq || 0)
+        const hasUnreplayedEvents = Number.isFinite(lastSeq) && lastSeq > afterSeq
+        if (taskStatus !== 'running' && !hasUnreplayedEvents) {
           useConversationStore.getState().updateConversation(conversationId, {
             activeStream: undefined,
             resumable: false,
+            ...(taskStatus === 'completed' || taskStatus === 'failed' ? { status: taskStatus } : {}),
           })
-          setError('该任务已结束，请重新生成或开启新的续写。')
           return
         }
       } catch {

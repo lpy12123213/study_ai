@@ -1,5 +1,5 @@
 import React from 'react'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { useConversationStore } from '@/stores/useConversationStore'
@@ -103,7 +103,7 @@ describe('useStudyMaterialsController.resumeStudyMaterialsStreamWithProbe', () =
     expect(args.request.url).toBe('/tasks/task-1/stream?after_seq=42')
   })
 
-  it('clears resumable stream state when the task is no longer running', async () => {
+  it('replays a terminal task stream so refresh can receive the final event', async () => {
     const now = new Date().toISOString()
     const conversationId = 'conv-2'
 
@@ -126,24 +126,61 @@ describe('useStudyMaterialsController.resumeStudyMaterialsStreamWithProbe', () =
     useConversationStore.getState().addConversation(conversation)
     useConversationStore.getState().setCurrentConversation(conversationId, 'study_materials')
 
-    getStudyMaterialsTaskMock.mockResolvedValueOnce({ status: 'completed' })
+    getStudyMaterialsTaskMock.mockResolvedValue({ status: 'completed', last_seq: 13 })
+    runStudyMaterialsStreamMock.mockImplementation((opts) => {
+      streamKeyRef.current = opts.streamKey || null
+    })
 
     const { result } = renderHook(() => useStudyMaterialsController(), { wrapper })
 
-    await act(async () => {
-      await result.current.resumeStudyMaterialsStreamWithProbe({
-        conversationId,
-        assistantMessageId: 'assistant-2',
-        taskId: 'task-2',
-        afterSeq: 12,
-      })
+    await waitFor(() => expect(runStudyMaterialsStreamMock).toHaveBeenCalled())
+    const args = runStudyMaterialsStreamMock.mock.calls[0]?.[0]
+    expect(args.conversationId).toBe(conversationId)
+    expect(args.assistantMessageId).toBe('assistant-2')
+    expect(args.initialTaskId).toBe('task-2')
+    expect(args.initialSeq).toBe(12)
+    expect(args.request.method).toBe('GET')
+    expect(args.request.url).toBe('/tasks/task-2/stream?after_seq=12')
+    expect(String(result.current.error || '')).toBe('')
+  })
+
+  it('silently clears stale active stream state when a terminal task has no new events', async () => {
+    const now = new Date().toISOString()
+    const conversationId = 'conv-terminal-stale'
+
+    const conversation: ConversationItem = {
+      id: conversationId,
+      title: '新自学资料',
+      type: 'study_materials',
+      createdAt: now,
+      updatedAt: now,
+      status: 'failed',
+      resumable: true,
+      activeStream: {
+        taskType: 'study_materials',
+        taskId: 'task-terminal-stale',
+        assistantMessageId: 'assistant-terminal-stale',
+        lastSeq: 12,
+      },
+    } as any
+
+    useConversationStore.getState().addConversation(conversation)
+    useConversationStore.getState().setCurrentConversation(conversationId, 'study_materials')
+
+    getStudyMaterialsTaskMock.mockResolvedValue({ status: 'failed', last_seq: 12 })
+
+    const { result } = renderHook(() => useStudyMaterialsController(), { wrapper })
+
+    await waitFor(() => {
+      const updated = useConversationStore.getState().conversations.find((c) => c.id === conversationId) as any
+      expect(updated?.activeStream).toBeUndefined()
     })
 
-    expect(runStudyMaterialsStreamMock).toHaveBeenCalledTimes(0)
-
+    expect(runStudyMaterialsStreamMock).not.toHaveBeenCalled()
     const updated = useConversationStore.getState().conversations.find((c) => c.id === conversationId) as any
     expect(updated?.resumable).toBe(false)
-    expect(updated?.activeStream).toBeUndefined()
+    expect(updated?.status).toBe('failed')
+    expect(String(result.current.error || '')).toBe('')
   })
 
   it('marks the resumable stream as lost when the probe fails', async () => {

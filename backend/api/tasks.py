@@ -202,7 +202,19 @@ def _compose_review_rejected_count(draft: dict, payload: dict) -> int:
     return rejected
 
 
-def _paper_result_payload(paper: dict, *, paper_id: int, fallback_name: str) -> dict:
+def _paper_result_payload(
+    paper: dict,
+    *,
+    paper_id: int,
+    fallback_name: str,
+    fallback_questions: Optional[list[dict]] = None,
+) -> dict:
+    fallback_by_id = {
+        str(question.get("question_id") or question.get("questionId") or "").strip(): question
+        for question in (fallback_questions or [])
+        if isinstance(question, dict)
+        and str(question.get("question_id") or question.get("questionId") or "").strip()
+    }
     return {
         "id": int(paper.get("paper_id") or paper_id),
         "name": str(paper.get("paper_name") or fallback_name),
@@ -216,7 +228,8 @@ def _paper_result_payload(paper: dict, *, paper_id: int, fallback_name: str) -> 
                 "difficulty": q.get("difficulty"),
                 "knowledgePoint": q.get("knowledge_point"),
                 "sourceUrl": q.get("source_url"),
-                "stem": q.get("stem") or "",
+                "stem": str(q.get("stem") or "").strip()
+                or str((fallback_by_id.get(str(q.get("question_id") or "").strip()) or {}).get("stem") or "").strip(),
             }
             for q in (paper.get("questions") or [])
             if isinstance(q, dict) and str(q.get("question_id") or "").strip()
@@ -700,7 +713,12 @@ async def review_composed_paper(task_id: str, payload: Optional[dict] = None, us
     if not paper:
         raise HTTPException(status_code=500, detail="paper_save_failed")
 
-    result = _paper_result_payload(paper, paper_id=paper_id, fallback_name=paper_name)
+    result = _paper_result_payload(
+        paper,
+        paper_id=paper_id,
+        fallback_name=paper_name,
+        fallback_questions=questions,
+    )
     await db_append_task_event(
         user_id=user_id,
         task_id=task_id,

@@ -29,6 +29,7 @@ from backend.core.auth import (
     revoke_token_jti,
     validate_access_token,
 )
+from backend.core.settings import env_int
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
@@ -65,9 +66,9 @@ class _LoginAttemptLimiter:
         return max(1, int(round(until - now)))
 
     def record_failure(self, key: str) -> int:
-        max_failures = _int_env("AUTH_LOGIN_MAX_FAILURES", 5)
-        window_s = _int_env("AUTH_LOGIN_WINDOW_S", 300)
-        lock_s = _int_env("AUTH_LOGIN_LOCK_S", 300)
+        max_failures = env_int("AUTH_LOGIN_MAX_FAILURES", 5)
+        window_s = env_int("AUTH_LOGIN_WINDOW_S", 300)
+        lock_s = env_int("AUTH_LOGIN_LOCK_S", 300)
         if max_failures <= 0 or window_s <= 0 or lock_s <= 0:
             return 0
 
@@ -87,15 +88,6 @@ class _LoginAttemptLimiter:
 
 _login_attempt_limiter = _LoginAttemptLimiter()
 
-
-def _int_env(name: str, default: int) -> int:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
 
 
 def _request_ip(req: Request) -> str:

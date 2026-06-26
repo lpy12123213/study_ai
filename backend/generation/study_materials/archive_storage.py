@@ -7,7 +7,7 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
-from backend.core.helpers import get_logger
+from backend.core.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
