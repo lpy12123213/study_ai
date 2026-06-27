@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,11 +52,91 @@ CLAUDE_CODE_RESULT_SCHEMA = CODEX_RUNTIME_RESULT_SCHEMA
 ProcessFactory = Callable[..., Awaitable[Any]]
 
 
+class _ThreadedPipeReader:
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+
+    async def readline(self) -> bytes:
+        chunk = await asyncio.to_thread(self._stream.readline)
+        if not chunk:
+            await asyncio.to_thread(self._stream.close)
+        return chunk
+
+    async def read(self) -> bytes:
+        try:
+            return await asyncio.to_thread(self._stream.read)
+        finally:
+            await asyncio.to_thread(self._stream.close)
+
+
+class _ThreadedPipeWriter:
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._pending = bytearray()
+
+    def write(self, chunk: bytes) -> None:
+        self._pending.extend(chunk)
+
+    async def drain(self) -> None:
+        chunk = bytes(self._pending)
+        self._pending.clear()
+        if chunk:
+            await asyncio.to_thread(self._write_and_flush, chunk)
+
+    def _write_and_flush(self, chunk: bytes) -> None:
+        self._stream.write(chunk)
+        self._stream.flush()
+
+    def close(self) -> None:
+        self._stream.close()
+
+
+class _ThreadedPopenProcess:
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self._process = process
+        self.stdin = _ThreadedPipeWriter(process.stdin) if process.stdin is not None else None
+        self.stdout = _ThreadedPipeReader(process.stdout) if process.stdout is not None else None
+        self.stderr = _ThreadedPipeReader(process.stderr) if process.stderr is not None else None
+        self.pid = process.pid
+
+    @property
+    def returncode(self) -> Optional[int]:
+        return self._process.returncode
+
+    async def wait(self) -> int:
+        return await asyncio.to_thread(self._process.wait)
+
+    def terminate(self) -> None:
+        self._process.terminate()
+
+    def kill(self) -> None:
+        self._process.kill()
+
+
+async def _start_runtime_process(
+    *cmd: str,
+    process_factory: Optional[ProcessFactory] = None,
+    **kwargs: Any,
+) -> Any:
+    factory = process_factory or asyncio.create_subprocess_exec
+    try:
+        return await factory(*cmd, **kwargs)
+    except NotImplementedError:
+        if os.name != "nt" or process_factory is not None:
+            raise
+        process = await asyncio.to_thread(subprocess.Popen, list(cmd), **kwargs)
+        return _ThreadedPopenProcess(process)
+
+
 def _resolve_runtime_executable(command: str) -> str:
     raw = str(command or "").strip()
     if os.name != "nt" or not raw:
         return raw
     return str(shutil.which(raw) or raw)
+
+
+def _exception_message(exc: BaseException) -> str:
+    return str(exc).strip() or type(exc).__name__
 
 
 def _proxy_url(value: Any, *, scheme: str = "http") -> str:
@@ -437,15 +518,15 @@ async def run_codex_runtime_agent_events(
         disable_shell_tool=str(task_type or "").strip() == "study_materials",
     )
     cmd[0] = _resolve_runtime_executable(cmd[0])
-    factory = process_factory or asyncio.create_subprocess_exec
     proc: Any = None
     stderr_task: Optional[asyncio.Task[str]] = None
     final_result: Optional[Dict[str, Any]] = None
     text_parts: list[str] = []
 
     try:
-        proc = await factory(
+        proc = await _start_runtime_process(
             *cmd,
+            process_factory=process_factory,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -550,7 +631,7 @@ async def run_codex_runtime_agent_events(
             stderr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stderr_task
-        yield _error_event("codex_runtime_exception", message=str(exc))
+        yield _error_event("codex_runtime_exception", message=_exception_message(exc))
 
 
 async def run_claude_code_agent_events(

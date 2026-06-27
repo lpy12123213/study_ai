@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,6 +83,56 @@ def _spec() -> AgentRunSpec:
 
 
 class CodexRuntimeRunnerTests(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows selector-loop regression")
+    def test_windows_selector_loop_falls_back_to_threaded_subprocess(self) -> None:
+        from backend.generation.agentic.codex_runtime import CodexRuntimeConfig, run_codex_runtime_agent_events
+
+        async def collect_events(task_root: Path) -> list[dict[str, Any]]:
+            return [
+                event
+                async for event in run_codex_runtime_agent_events(
+                    task_type="deepthink",
+                    request={"question": "x^2"},
+                    user_id="u-1",
+                    task_id="selector-loop",
+                    spec=_spec(),
+                    config=CodexRuntimeConfig(command=sys.executable, task_root=task_root, timeout_s=5),
+                )
+            ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+                events = runner.run(collect_events(Path(tmp)))
+
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertEqual(events[-1]["data"]["code"], "codex_runtime_failed")
+        self.assertNotEqual(events[-1]["data"]["code"], "codex_runtime_exception")
+
+    async def test_empty_runtime_exception_uses_exception_class_name(self) -> None:
+        from backend.generation.agentic.codex_runtime import CodexRuntimeConfig, run_codex_runtime_agent_events
+
+        async def failing_factory(*cmd: str, **kwargs: Any) -> _FakeProcess:
+            raise RuntimeError()
+
+        with tempfile.TemporaryDirectory() as tmp, self.assertLogs(
+            "backend.generation.agentic.claude_code", level="ERROR"
+        ):
+            events = [
+                event
+                async for event in run_codex_runtime_agent_events(
+                    task_type="deepthink",
+                    request={"question": "x^2"},
+                    user_id="u-1",
+                    task_id="empty-error",
+                    spec=_spec(),
+                    config=CodexRuntimeConfig(command="codex", task_root=Path(tmp), timeout_s=5),
+                    process_factory=failing_factory,
+                )
+            ]
+
+        self.assertEqual(events[-1]["data"]["code"], "codex_runtime_exception")
+        self.assertEqual(events[-1]["data"]["message"], "RuntimeError")
+
     def test_build_command_uses_supported_codex_exec_flags(self) -> None:
         from backend.generation.agentic.codex_runtime import (
             CODEX_RUNTIME_RESULT_SCHEMA,
