@@ -196,6 +196,17 @@ class TestEnvBoolDeduplication(unittest.TestCase):
                     os.environ[name] = value
                     self.assertFalse(settings_mod.env_bool(name, True))
 
+    def test_env_bool_default_is_optional_and_false(self):
+        """Old `_env_truthy(name)` callers relied on an omitted default meaning False."""
+        from backend.core import settings as settings_mod
+
+        name = "TEST_ENV_HELPERS_DEDUP_BOOL_OPTIONAL_DEFAULT"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(name, None)
+            self.assertFalse(settings_mod.env_bool(name))
+            os.environ[name] = "1"
+            self.assertTrue(settings_mod.env_bool(name))
+
 
 class TestCoreHelpersCleanup(unittest.TestCase):
     """core.helpers should not retain dead duplicates; get_logger users point to logging_utils."""

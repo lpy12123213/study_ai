@@ -69,6 +69,25 @@ class TestApiMiddlewareRegistration(unittest.TestCase):
         self.assertEqual(limited.json().get("error", {}).get("code"), "rate_limited")
         self.assertTrue(limited.headers.get("X-Request-ID"))
 
+    def test_rate_limit_integer_envs_fallback_when_invalid(self) -> None:
+        app = FastAPI()
+
+        @app.get("/api/ping")
+        def ping() -> dict[str, str]:
+            return {"ok": "1"}
+
+        env = {
+            "API_RATE_LIMIT_MAX_REQUESTS": "not-an-int",
+            "API_RATE_LIMIT_WINDOW_S": "60",
+            "API_RATE_LIMIT_MAX_KEYS": "not-an-int",
+            "AUTH_RATE_LIMIT_MAX_FAILS": "not-an-int",
+            "AUTH_RATE_LIMIT_WINDOW_S": "900",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            register_rate_limit_middleware(app, client_ip=lambda request: "127.0.0.1")
+
+        self.assertEqual(TestClient(app).get("/api/ping").status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

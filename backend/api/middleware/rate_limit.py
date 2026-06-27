@@ -12,6 +12,7 @@ from starlette.responses import Response
 
 from backend.api.middleware.request_id import ensure_request_id
 from backend.core.logging_utils import get_logger
+from backend.core.settings import env_int
 
 CallNext = Callable[[Request], Awaitable[Response]]
 ClientIpGetter = Callable[[Request], str]
@@ -185,9 +186,9 @@ def _rate_limited_response(request: Request) -> JSONResponse:
 def register_rate_limit_middleware(app: FastAPI, *, client_ip: ClientIpGetter) -> None:
     warn_if_multi_worker_in_memory_rate_limit()
 
-    rate_limit_max = int(os.getenv("API_RATE_LIMIT_MAX_REQUESTS") or "300")
+    rate_limit_max = env_int("API_RATE_LIMIT_MAX_REQUESTS", 300)
     rate_limit_window_s = float(os.getenv("API_RATE_LIMIT_WINDOW_S") or "60")
-    rate_limit_keys_max = int(os.getenv("API_RATE_LIMIT_MAX_KEYS") or "20000")
+    rate_limit_keys_max = env_int("API_RATE_LIMIT_MAX_KEYS", 20000)
     rate_limit_max = max(0, min(rate_limit_max, 50_000))
     rate_limit_window_s = max(1.0, min(rate_limit_window_s, 3600.0))
     rate_limit_keys_max = max(100, min(rate_limit_keys_max, 200_000))
@@ -198,7 +199,7 @@ def register_rate_limit_middleware(app: FastAPI, *, client_ip: ClientIpGetter) -
         max_keys=rate_limit_keys_max,
     )
 
-    auth_fail_limit_max = int(os.getenv("AUTH_RATE_LIMIT_MAX_FAILS") or "5")
+    auth_fail_limit_max = env_int("AUTH_RATE_LIMIT_MAX_FAILS", 5)
     auth_fail_limit_window_s = float(os.getenv("AUTH_RATE_LIMIT_WINDOW_S") or "900")
     auth_fail_limit_max = max(0, min(auth_fail_limit_max, 10_000))
     auth_fail_limit_window_s = max(1.0, min(auth_fail_limit_window_s, 24 * 3600.0))

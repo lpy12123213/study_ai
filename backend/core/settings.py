@@ -84,7 +84,7 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
-def env_bool(name: str, default: bool) -> bool:
+def env_bool(name: str, default: bool = False) -> bool:
     """Read a boolean env var with a default (public deduplicated helper).
 
     Use this instead of redefining `_env_truthy` / `_get_bool` in each module.

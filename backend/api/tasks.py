@@ -174,6 +174,8 @@ def _reviewed_questions_from_draft(draft: dict, payload: dict) -> list[dict]:
         for key, value in edit.items():
             target_key = aliases.get(str(key), str(key))
             if target_key in editable_keys:
+                if target_key == "stem" and not str(value or "").strip():
+                    continue
                 merged[target_key] = value
         if edit:
             merged["review_status"] = str(merged.get("review_status") or "approved").strip() or "approved"
