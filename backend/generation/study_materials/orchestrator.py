@@ -22,19 +22,24 @@ from backend.database.repositories.system.tasks import list_task_events as db_li
 from backend.generation.agentic.codex_runtime import (
     is_codex_runtime_agent_runtime,
     legacy_agent_fallback_enabled,
-    run_codex_runtime_agent_events,
 )
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
-from backend.generation.agentic.types import AgentRunSpec
+from backend.generation.study_materials.codex_stages import StageResultError
+from backend.generation.study_materials.quality_gate import (
+    WORKFLOW_VERSION,
+    acceptance_record_is_current,
+)
 from backend.generation.study_materials.resume import (
     _derive_resume_state,
     _prune_resume_working_memory,
     _refresh_resume_meta,
+    _set_workflow_resume_stage,
     _truthy,
 )
 from backend.generation.study_materials.resume import (
     _infer_stage_from_tool as _infer_stage_from_tool,
 )
+from backend.generation.study_materials.workflow import WorkflowFailure, run_study_materials_workflow
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 from backend.shared.tasks import RuntimeTask, task_runtime
 
@@ -582,6 +587,13 @@ class StudyMaterialsTaskManager:
                 derived = _derive_resume_state(resume_wm)
                 failed_stage = str(derived.get("last_failed_stage") or "").strip()
             resume_wm = _prune_resume_working_memory(resume_wm, mode=mode_norm, last_failed_stage=failed_stage)
+        else:
+            failed_stage = str(snap.get("last_failed_stage") or "").strip()
+        resume_wm = _set_workflow_resume_stage(
+            resume_wm,
+            mode=mode_norm,
+            last_failed_stage=failed_stage,
+        )
 
         try:
             iteration_offset_n = int(snap.get("iterations_done") or 0)
@@ -744,6 +756,8 @@ class StudyMaterialsTaskManager:
             topic = str(material.get("topic") or query or "").strip()
             subj = str(material.get("subject") or subject or "").strip()
             if markdown and topic and subj:
+                workflow_state = _dict(wm.get("study_materials_workflow")) or _dict(meta.get("study_materials_workflow"))
+                acceptance = _dict(workflow_state.get("acceptance"))
                 await upsert_study_archive(
                     user_id=task.user_id,
                     subject=subj,
@@ -752,6 +766,7 @@ class StudyMaterialsTaskManager:
                     requirements=requirements,
                     markdown=markdown,
                     sections=[x for x in sections if isinstance(x, dict)],
+                    acceptance=acceptance,
                 )
         except Exception:
             logger.warning(
@@ -836,7 +851,35 @@ class StudyMaterialsTaskManager:
                 return False
 
             sections = archive.get("sections") if isinstance(archive.get("sections"), list) else []
-            exported = await _export_markdown_to_media(markdown=markdown, user_id=task.user_id)
+            point_titles = [
+                str(item.get("knowledge_point") or item.get("title") or "").strip()
+                for item in sections
+                if isinstance(item, dict) and str(item.get("knowledge_point") or item.get("title") or "").strip()
+            ]
+            if not point_titles:
+                point_titles = [query]
+            plan_points = [
+                {"id": f"kp-{index + 1}", "title": title, "queries": [f"{title} {subject}".strip()]}
+                for index, title in enumerate(point_titles[:15])
+            ]
+            acceptance = _dict(archive.get("acceptance"))
+            workflow_state = {
+                "version": WORKFLOW_VERSION,
+                "stage": "completed" if acceptance_record_is_current(archive=archive, preset=preset, markdown=markdown) else "research",
+                "last_successful_stage": "accept" if acceptance else "",
+                "preset": preset,
+                "plan": {"knowledge_points": plan_points},
+                "research": {},
+                "markdown": markdown,
+                "coverage_map": {point["id"]: True for point in plan_points},
+                "review": {},
+                "quality_report": {},
+                "acceptance": acceptance,
+                "revision_attempts": 0,
+                "last_failure": {},
+            }
+            if workflow_state["stage"] != "completed":
+                workflow_state["resume_after_research"] = "review"
 
             meta["resume_working_memory"] = {
                 "study_options": {"preset": preset, "requirements": requirements},
@@ -849,9 +892,25 @@ class StudyMaterialsTaskManager:
                     "requirements": requirements,
                     "sections": sections,
                 },
-                "md_url": exported.get("md_url"),
-                "md_filename": exported.get("md_filename"),
+                "study_materials_workflow": workflow_state,
             }
+            meta["study_materials_workflow"] = workflow_state
+            _refresh_resume_meta(meta=meta)
+            self._persist_snapshot(task, force=True)
+
+            if workflow_state["stage"] != "completed":
+                await task_runtime.append_event(
+                    task,
+                    agent_event(
+                        "status",
+                        {"content": "本地知识库命中：历史归档将作为候选草稿重新检索并通过当前质量门。"},
+                    ),
+                )
+                return False
+
+            exported = await _export_markdown_to_media(markdown=markdown, user_id=task.user_id)
+            meta["resume_working_memory"]["md_url"] = exported.get("md_url")
+            meta["resume_working_memory"]["md_filename"] = exported.get("md_filename")
             meta["iterations_done"] = 1
             _refresh_resume_meta(meta=meta)
             self._persist_snapshot(task, force=True)
@@ -887,6 +946,7 @@ class StudyMaterialsTaskManager:
                             "issues": [],
                             "error": None,
                         },
+                        "acceptance": acceptance,
                         "per_kp_report": [],
                         "timing_report": {"reused_local_archive": True},
                     },
@@ -900,99 +960,79 @@ class StudyMaterialsTaskManager:
                 return
 
             if is_codex_runtime_agent_runtime():
-                spec = None
-                raw_spec = meta.get("agent_run_spec") if isinstance(meta.get("agent_run_spec"), dict) else None
-                if isinstance(raw_spec, dict):
-                    try:
-                        spec = AgentRunSpec.from_dict(raw_spec)
-                    except (TypeError, ValueError):
-                        spec = None
-
-                codex_tool_names_by_id: Dict[str, str] = {}
-                codex_last_error: Optional[Dict[str, Any]] = None
-                async for evt in run_codex_runtime_agent_events(
-                    task_type="study_materials",
-                    request=req,
-                    user_id=task.user_id,
-                    task_id=task.task_id,
-                    spec=spec,
-                    final_event_type="done",
-                ):
+                async def _workflow_event_sink(evt: Dict[str, Any]) -> None:
                     if task.status != "running":
-                        break
-
+                        raise asyncio.CancelledError
                     await task_runtime.append_event(task, evt)
-                    kind = str(evt.get("event") or evt.get("type") or "")
-                    if kind == "tool_call":
-                        data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
-                        call_id = str(data.get("id") or data.get("step_id") or "").strip()
-                        tool_name = str(data.get("name") or data.get("tool") or "").strip()
-                        if call_id and tool_name:
-                            codex_tool_names_by_id[call_id] = tool_name
-                        continue
-                    if kind == "tool_result":
-                        data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
-                        call_id = str(data.get("id") or data.get("tool_use_id") or data.get("step_id") or "").strip()
-                        tool_name = str(
-                            data.get("name") or data.get("tool") or codex_tool_names_by_id.get(call_id) or ""
-                        ).strip()
-                        if _update_codex_stream_resume_state(
-                            meta=meta,
-                            tool_name=tool_name,
-                            event_data=data,
-                            query=query,
-                            subject=subject,
-                            options=options,
-                        ):
-                            self._persist_snapshot(task, force=False)
-                        continue
-                    if kind == "done":
-                        data = evt.get("data")
-                        payload = _dict(data)
-                        wm = _codex_resume_working_memory(payload, query=query, subject=subject, options=options)
-                        if wm:
-                            existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
-                            meta["resume_working_memory"] = _merge_resume_working_memory(existing, wm)
-                            _refresh_resume_meta(meta=meta)
-                        material = _dict(payload.get("material")) or _dict(_dict(payload.get("result")).get("material"))
-                        try:
-                            iterations_done = int(material.get("iteration") or 0)
-                        except (TypeError, ValueError):
-                            iterations_done = 0
-                        meta["iterations_done"] = iterations_done or (iteration_offset + 1)
-                        await self._upsert_archive_from_resume_state(
-                            task, meta=meta, query=query, subject=subject, options=options
-                        )
-                        self._persist_snapshot(task, force=True)
-                        await task_runtime.complete_task(task, result=data if isinstance(data, dict) else {"result": data})
-                        return
-                    if kind == "error":
-                        data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
-                        wm = _codex_resume_working_memory(data, query=query, subject=subject, options=options)
-                        if wm:
-                            existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
-                            meta["resume_working_memory"] = _merge_resume_working_memory(existing, wm)
-                            _refresh_resume_meta(meta=meta)
-                            self._persist_snapshot(task, force=True)
-                        codex_last_error = data
-                        continue
 
-                if isinstance(codex_last_error, dict):
-                    msg = str(
-                        codex_last_error.get("message")
-                        or codex_last_error.get("error")
-                        or codex_last_error.get("code")
-                        or ""
-                    ).strip()
-                    await task_runtime.fail_task(
-                        task,
-                        msg or "Generation failed",
-                        error={"message": msg or "Generation failed", **codex_last_error},
-                        emit_event=False,
+                async def _workflow_checkpoint_sink(state: Dict[str, Any], wm: Dict[str, Any]) -> None:
+                    existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+                    meta["resume_working_memory"] = _merge_resume_working_memory(existing, wm)
+                    meta["study_materials_workflow"] = dict(state)
+                    _refresh_resume_meta(meta=meta)
+                    self._persist_snapshot(task, force=False)
+
+                try:
+                    result = await run_study_materials_workflow(
+                        task_id=task.task_id,
+                        user_id=task.user_id,
+                        topic=query,
+                        subject=subject,
+                        preset=str(options.get("preset") or "standard"),
+                        requirements=str(options.get("requirements") or ""),
+                        resume_working_memory=_dict(meta.get("resume_working_memory")),
+                        event_sink=_workflow_event_sink,
+                        checkpoint_sink=_workflow_checkpoint_sink,
                     )
+                except WorkflowFailure as failure:
+                    error = {"message": failure.code, **failure.to_dict()}
+                    await task_runtime.fail_task(task, failure.code, error=error, emit_event=False)
                     return
-
-                if not legacy_agent_fallback_enabled():
+                except StageResultError as failure:
+                    allow_fallback = (
+                        failure.code == "invalid_stage_result"
+                        and failure.detail == "stage_result_missing"
+                        and legacy_agent_fallback_enabled()
+                    )
+                    if not allow_fallback:
+                        await task_runtime.fail_task(
+                            task,
+                            failure.code,
+                            error={
+                                "message": failure.code,
+                                "code": failure.code,
+                                "stage": failure.stage,
+                                "detail": failure.detail,
+                                "recoverable": True,
+                            },
+                            emit_event=False,
+                        )
+                        return
+                else:
+                    result_wm = _dict(result.get("resume_working_memory"))
+                    if result_wm:
+                        existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+                        meta["resume_working_memory"] = _merge_resume_working_memory(existing, result_wm)
+                    workflow_state = _dict(result.get("workflow"))
+                    if workflow_state:
+                        meta["study_materials_workflow"] = workflow_state
+                    material = _dict(result.get("material"))
+                    try:
+                        iterations_done = int(material.get("iteration") or 0)
+                    except (TypeError, ValueError):
+                        iterations_done = 0
+                    meta["iterations_done"] = iterations_done or (iteration_offset + 1)
+                    _refresh_resume_meta(meta=meta)
+                    await self._upsert_archive_from_resume_state(
+                        task,
+                        meta=meta,
+                        query=query,
+                        subject=subject,
+                        options=options,
+                    )
+                    self._persist_snapshot(task, force=True)
+                    await task_runtime.append_event(task, agent_event("done", result))
+                    await task_runtime.complete_task(task, result=result)
                     return
 
             agent = AgentCore()

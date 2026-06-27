@@ -226,6 +226,40 @@ def _prune_resume_working_memory(
     return out
 
 
+def _set_workflow_resume_stage(
+    wm: Dict[str, Any],
+    *,
+    mode: str,
+    last_failed_stage: Optional[str] = None,
+) -> Dict[str, Any]:
+    out = dict(wm or {})
+    workflow_raw = out.get("study_materials_workflow")
+    if not isinstance(workflow_raw, dict):
+        return out
+    workflow = dict(workflow_raw)
+    mode_norm = str(mode or "").strip().lower()
+    if mode_norm == "improve":
+        workflow["stage"] = "review"
+    elif mode_norm in {"deepen_research", "retry_search"}:
+        workflow["stage"] = "research"
+        if str(workflow.get("markdown") or out.get("markdown") or "").strip():
+            workflow["resume_after_research"] = "review"
+    elif mode_norm == "replan_from_failure":
+        workflow["stage"] = "plan"
+    elif mode_norm == "resume_failed_stage":
+        failure = workflow.get("last_failure") if isinstance(workflow.get("last_failure"), dict) else {}
+        failed = str(failure.get("stage") or "").strip()
+        if not failed:
+            legacy_stage = str(last_failed_stage or "").strip().lower()
+            failed = {"search": "research", "aggregate": "research", "write": "review", "export": "review"}.get(
+                legacy_stage,
+                "review",
+            )
+        workflow["stage"] = failed
+    out["study_materials_workflow"] = workflow
+    return out
+
+
 def _refresh_resume_meta(*, meta: Dict[str, Any]) -> None:
     """Refresh resumable metadata based on the latest working_memory snapshot (best-effort)."""
 

@@ -346,3 +346,29 @@ class StudyMaterialsWorkflow:
             "workflow": copy.deepcopy(self.state),
             "resume_working_memory": self._resume_snapshot(),
         }
+
+
+async def run_study_materials_workflow(
+    *,
+    task_id: str,
+    user_id: str,
+    topic: str,
+    subject: str,
+    preset: str,
+    requirements: str = "",
+    resume_working_memory: Optional[Dict[str, Any]] = None,
+    event_sink: Optional[EventSink] = None,
+    checkpoint_sink: Optional[CheckpointSink] = None,
+) -> Dict[str, Any]:
+    workflow = StudyMaterialsWorkflow(
+        task_id=task_id,
+        user_id=user_id,
+        topic=topic,
+        subject=subject,
+        preset=preset,
+        requirements=requirements,
+        resume_working_memory=resume_working_memory,
+        event_sink=event_sink,
+        checkpoint_sink=checkpoint_sink,
+    )
+    return await workflow.run()
