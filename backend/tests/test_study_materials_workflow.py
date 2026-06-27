@@ -173,5 +173,234 @@ class StudyMaterialsToolExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review["draft_hash"], draft_hash(markdown))
 
 
+class _WorkflowToolExecutor:
+    def __init__(self, *, reviews: list[dict], enough_research: bool = True) -> None:
+        self.reviews = list(reviews)
+        self.enough_research = enough_research
+        self.working_memory: dict = {}
+        self.step_results: list[dict] = []
+        self.research_calls = 0
+        self.review_calls = 0
+
+    async def research(self, *, plan: dict, event_sink) -> dict:
+        self.research_calls += 1
+        if not self.enough_research:
+            return {"kp-1": []}
+        return {
+            "kp-1": [
+                {
+                    "source_class": "web",
+                    "url": "https://example.test/a",
+                    "title": "增函数定义",
+                    "snippet": "增函数的定义、性质和判定。",
+                },
+                {
+                    "source_class": "wikipedia",
+                    "url": "https://zh.wikipedia.org/wiki/单调函数",
+                    "title": "单调函数",
+                    "snippet": "单调函数的百科定义。",
+                },
+            ]
+        }
+
+    async def review(self, *, markdown: str, event_sink) -> dict:
+        from backend.generation.study_materials.quality_gate import draft_hash
+
+        self.review_calls += 1
+        review = dict(self.reviews.pop(0))
+        review["draft_hash"] = draft_hash(markdown)
+        return review
+
+
+def _passing_review() -> dict:
+    return {
+        "passed": True,
+        "issues": [],
+        "suggestions": [],
+        "dimensions": {
+            "增函数": {
+                "present": ["定义/概念", "性质/结论", "条件/适用范围", "反例/边界", "应用/题型"],
+                "missing": [],
+            }
+        },
+    }
+
+
+def _failing_review() -> dict:
+    return {
+        "passed": False,
+        "issues": ["缺少适用条件"],
+        "suggestions": ["补充条件"],
+        "dimensions": {"增函数": {"present": ["定义/概念"], "missing": ["条件/适用范围"]}},
+    }
+
+
+class StudyMaterialsWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_codex_cannot_complete_before_independent_review_passes(self) -> None:
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow, WorkflowFailure
+
+        stages: list[str] = []
+
+        async def stage_runner(**kwargs):
+            stage = kwargs["stage"]
+            stages.append(stage)
+            if stage == "plan":
+                return {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]}
+            return {
+                "markdown": "# 函数单调性\n\n## 增函数\n\n定义与例题。",
+                "coverage_map": {"kp-1": True},
+                "resolved_issues": ["缺少适用条件"],
+            }
+
+        async def sink(_event: dict) -> None:
+            return None
+
+        async def checkpoint(_state: dict, _resume: dict) -> None:
+            return None
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-early",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="quick",
+            stage_runner=stage_runner,
+            tool_executor=_WorkflowToolExecutor(reviews=[_failing_review(), _failing_review()]),
+            event_sink=sink,
+            checkpoint_sink=checkpoint,
+        )
+
+        with self.assertRaisesRegex(WorkflowFailure, "quality_gate_not_met") as raised:
+            await workflow.run()
+
+        self.assertEqual(stages, ["plan", "draft", "revise"])
+        self.assertNotEqual(workflow.state["stage"], "completed")
+        self.assertTrue(raised.exception.recoverable)
+        self.assertFalse(workflow.state.get("acceptance", {}).get("accepted", False))
+
+    async def test_successful_workflow_completes_only_after_acceptance_gate(self) -> None:
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow
+
+        stages: list[str] = []
+        events: list[dict] = []
+        checkpoints: list[dict] = []
+
+        async def stage_runner(**kwargs):
+            stage = kwargs["stage"]
+            stages.append(stage)
+            if stage == "plan":
+                return {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]}
+            return {
+                "markdown": "# 函数单调性\n\n## 增函数\n\n定义、性质、条件、反例和例题。",
+                "coverage_map": {"kp-1": True},
+            }
+
+        async def sink(event: dict) -> None:
+            events.append(event)
+
+        async def checkpoint(state: dict, _resume: dict) -> None:
+            checkpoints.append(dict(state))
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-pass",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="standard",
+            stage_runner=stage_runner,
+            tool_executor=_WorkflowToolExecutor(reviews=[_passing_review()]),
+            event_sink=sink,
+            checkpoint_sink=checkpoint,
+        )
+
+        result = await workflow.run()
+
+        self.assertEqual(stages, ["plan", "draft"])
+        self.assertEqual(workflow.state["stage"], "completed")
+        self.assertTrue(result["acceptance"]["accepted"])
+        self.assertTrue(result["quality_report"]["passed"])
+        self.assertGreaterEqual(len(checkpoints), 5)
+        self.assertIn("quality_report", [event.get("type") or event.get("event") for event in events])
+
+    async def test_failed_review_is_revised_and_reviewed_again(self) -> None:
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow
+
+        stages: list[str] = []
+        tool_executor = _WorkflowToolExecutor(reviews=[_failing_review(), _passing_review()])
+
+        async def stage_runner(**kwargs):
+            stage = kwargs["stage"]
+            stages.append(stage)
+            if stage == "plan":
+                return {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]}
+            if stage == "draft":
+                return {
+                    "markdown": "# 函数单调性\n\n## 增函数\n\n定义和例题。",
+                    "coverage_map": {"kp-1": True},
+                }
+            return {
+                "markdown": "# 函数单调性\n\n## 增函数\n\n定义、性质、适用条件、反例和例题。",
+                "coverage_map": {"kp-1": True},
+                "resolved_issues": ["缺少适用条件"],
+            }
+
+        async def sink(_event: dict) -> None:
+            return None
+
+        async def checkpoint(_state: dict, _resume: dict) -> None:
+            return None
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-revise",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="standard",
+            stage_runner=stage_runner,
+            tool_executor=tool_executor,
+            event_sink=sink,
+            checkpoint_sink=checkpoint,
+        )
+
+        result = await workflow.run()
+
+        self.assertEqual(stages, ["plan", "draft", "revise"])
+        self.assertEqual(tool_executor.review_calls, 2)
+        self.assertTrue(result["acceptance"]["accepted"])
+
+    async def test_missing_research_fails_before_draft(self) -> None:
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow, WorkflowFailure
+
+        stages: list[str] = []
+
+        async def stage_runner(**kwargs):
+            stages.append(kwargs["stage"])
+            return {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]}
+
+        async def sink(_event: dict) -> None:
+            return None
+
+        async def checkpoint(_state: dict, _resume: dict) -> None:
+            return None
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-no-research",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="standard",
+            stage_runner=stage_runner,
+            tool_executor=_WorkflowToolExecutor(reviews=[], enough_research=False),
+            event_sink=sink,
+            checkpoint_sink=checkpoint,
+        )
+
+        with self.assertRaisesRegex(WorkflowFailure, "quality_gate_not_met") as raised:
+            await workflow.run()
+
+        self.assertEqual(stages, ["plan"])
+        self.assertEqual(raised.exception.stage, "research")
+
+
 if __name__ == "__main__":
     unittest.main()

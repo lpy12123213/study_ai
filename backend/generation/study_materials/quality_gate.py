@@ -6,7 +6,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from backend.core.text_lint import lint_text
 
-
 WORKFLOW_VERSION = 1
 QUALITY_POLICY_VERSION = 1
 REVIEW_SCHEMA_VERSION = 1
@@ -97,22 +96,17 @@ def _knowledge_points(state: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     return [dict(item) for item in points if isinstance(item, dict)]
 
 
-def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_research(*, state: Dict[str, Any]) -> Dict[str, Any]:
     preset = normalize_preset(state.get("preset"))
     profile = PRESET_PROFILES[preset]
     research = state.get("research") if isinstance(state.get("research"), dict) else {}
-    markdown = str(state.get("markdown") or "")
-    review = state.get("review") if isinstance(state.get("review"), dict) else {}
-
     failed_checks: List[str] = []
     per_knowledge_point: Dict[str, Any] = {}
     points = list(_knowledge_points(state))
     if not points:
         failed_checks.append("plan_missing")
-
     for index, point in enumerate(points):
         point_id = str(point.get("id") or f"kp-{index + 1}").strip()
-        title = str(point.get("title") or point.get("knowledge_point") or "").strip()
         evidence = normalize_evidence(research.get(point_id))
         source_classes = {str(item.get("source_class") or "") for item in evidence}
         point_failures: List[str] = []
@@ -120,14 +114,49 @@ def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
             point_failures.append(f"research_evidence_missing:{point_id}")
         if len(source_classes) < profile["min_source_classes"]:
             point_failures.append(f"source_classes_missing:{point_id}")
-        if not title or title not in markdown:
-            point_failures.append(f"draft_coverage_missing:{point_id}")
         failed_checks.extend(point_failures)
         per_knowledge_point[point_id] = {
             "passed": not point_failures,
             "failed_checks": point_failures,
             "source_count": len(evidence),
             "source_classes": sorted(source_classes),
+        }
+    failed_checks = list(dict.fromkeys(failed_checks))
+    return {
+        "passed": not failed_checks,
+        "failed_checks": failed_checks,
+        "per_knowledge_point": per_knowledge_point,
+        "preset": preset,
+        "quality_policy_version": QUALITY_POLICY_VERSION,
+    }
+
+
+def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
+    preset = normalize_preset(state.get("preset"))
+    profile = PRESET_PROFILES[preset]
+    markdown = str(state.get("markdown") or "")
+    review = state.get("review") if isinstance(state.get("review"), dict) else {}
+
+    failed_checks: List[str] = []
+    per_knowledge_point: Dict[str, Any] = {}
+    research_report = evaluate_research(state=state)
+    failed_checks.extend(research_report["failed_checks"])
+    points = list(_knowledge_points(state))
+    for index, point in enumerate(points):
+        point_id = str(point.get("id") or f"kp-{index + 1}").strip()
+        title = str(point.get("title") or point.get("knowledge_point") or "").strip()
+        point_failures = list(
+            research_report.get("per_knowledge_point", {}).get(point_id, {}).get("failed_checks", [])
+        )
+        if not title or title not in markdown:
+            point_failures.append(f"draft_coverage_missing:{point_id}")
+            failed_checks.append(f"draft_coverage_missing:{point_id}")
+        research_point = research_report.get("per_knowledge_point", {}).get(point_id, {})
+        per_knowledge_point[point_id] = {
+            "passed": not point_failures,
+            "failed_checks": point_failures,
+            "source_count": int(research_point.get("source_count") or 0),
+            "source_classes": list(research_point.get("source_classes") or []),
         }
 
     current_hash = draft_hash(markdown)
