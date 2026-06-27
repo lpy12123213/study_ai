@@ -303,6 +303,67 @@ class CodexRuntimeRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["data"]["runtime"], "codex_runtime")
         self.assertEqual(events[-1]["data"]["metadata"]["runtime"], "codex_runtime")
 
+    async def test_runner_accepts_stage_prompt_and_result_schema_overrides(self) -> None:
+        from unittest.mock import patch
+
+        from backend.generation.agentic import claude_code
+        from backend.generation.agentic.codex_runtime import CodexRuntimeConfig
+
+        captured: dict[str, Any] = {}
+        stage_schema = {
+            "type": "object",
+            "required": ["status", "summary", "result"],
+            "properties": {"status": {"type": "string"}},
+        }
+        original_build = claude_code.build_codex_runtime_command
+
+        def capture_command(**kwargs: Any) -> list[str]:
+            captured["schema"] = kwargs["schema"]
+            return original_build(**kwargs)
+
+        async def fake_process_factory(*_cmd: str, **_kwargs: Any) -> _FakeProcess:
+            proc = _FakeProcess(
+                stdout=[
+                    {
+                        "type": "result",
+                        "result": json.dumps(
+                            {
+                                "status": "completed",
+                                "summary": "stage complete",
+                                "result": {"stage": "plan", "stage_status": "completed", "payload": {}},
+                            }
+                        ),
+                    }
+                ]
+            )
+            captured["proc"] = proc
+            return proc
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            claude_code,
+            "build_codex_runtime_command",
+            side_effect=capture_command,
+        ):
+            events = [
+                event
+                async for event in claude_code.run_codex_runtime_agent_events(
+                    task_type="study_materials",
+                    request={},
+                    user_id="u-1",
+                    task_id="stage-plan",
+                    spec=_spec(),
+                    config=CodexRuntimeConfig(command="codex", task_root=Path(tmp), timeout_s=5),
+                    process_factory=fake_process_factory,
+                    final_event_type="result",
+                    prompt_override="STAGE PROMPT",
+                    result_schema=stage_schema,
+                )
+            ]
+
+        self.assertEqual(captured["schema"], stage_schema)
+        self.assertEqual(bytes(captured["proc"].stdin.data).decode("utf-8"), "STAGE PROMPT")
+        self.assertEqual(events[-1]["type"], "result")
+
     async def test_windows_runtime_resolves_bare_codex_to_cmd_shim_before_launch(self) -> None:
         from unittest.mock import patch
 

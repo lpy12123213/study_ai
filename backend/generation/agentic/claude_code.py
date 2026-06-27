@@ -483,6 +483,8 @@ async def run_codex_runtime_agent_events(
     config: Optional[CodexRuntimeConfig] = None,
     process_factory: Optional[ProcessFactory] = None,
     final_event_type: str = "done",
+    prompt_override: str = "",
+    result_schema: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     req = dict(request or {})
     spec_obj = spec or _build_spec_for_task(task_type=task_type, request=req)
@@ -508,10 +510,16 @@ async def run_codex_runtime_agent_events(
     (task_dir / "agent-input.json").write_text(json.dumps(input_payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     add_dirs = [task_dir, *_collect_input_dirs(req, allowed_roots=_allowed_input_roots(task_dir=task_dir, config=cfg))]
-    prompt = build_codex_runtime_prompt(task_type=task_type, request=req, user_id=user_id, task_id=safe_task_id, spec=spec_obj)
+    prompt = str(prompt_override or "").strip() or build_codex_runtime_prompt(
+        task_type=task_type,
+        request=req,
+        user_id=user_id,
+        task_id=safe_task_id,
+        spec=spec_obj,
+    )
     cmd = build_codex_runtime_command(
         prompt=prompt,
-        schema=CODEX_RUNTIME_RESULT_SCHEMA,
+        schema=result_schema if isinstance(result_schema, dict) and result_schema else CODEX_RUNTIME_RESULT_SCHEMA,
         task_dir=task_dir,
         add_dirs=add_dirs,
         config=cfg,
