@@ -223,6 +223,17 @@ AI 出题任务的 `progress` SSE 事件会携带结构化阶段字段：`stage_
 - `POST /api/study-materials/convert-markdown-to-latex`
 - `POST /api/study-materials/convert-markdown-to-latex/stream`
 
+当 `AGENT_RUNTIME=codex_runtime` 时，自学资料由后端状态机依次执行规划、检索、写作、独立审查、修订和验收。Codex 子进程返回 `completed` 只表示当前阶段结束；只有当前 Markdown 满足 preset 对应的来源覆盖、内容覆盖，并且独立审查通过后，任务才会进入 `completed`。
+
+该流程会追加以下 SSE 事件，同时保留原有事件兼容性：
+
+- `workflow_stage`：当前阶段、最近成功阶段和修订次数。
+- `quality_report`：逐知识点的来源覆盖与未通过检查。
+- `revision_required`：审查问题和剩余修订次数。
+- `recovery_available`：可恢复失败的阶段、错误码和问题列表。
+
+若来源不足、审查持续不通过或修订次数耗尽，任务以可恢复的 `quality_gate_not_met` 失败结束，并保留工作流快照；它不会以部分 Markdown 冒充成功。历史归档只有在草稿哈希、preset、质量策略版本和审查版本均匹配时才能直接复用，否则作为候选草稿重新检索和验收。
+
 教案：
 
 - `GET /api/lesson-plans`

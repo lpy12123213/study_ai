@@ -8,7 +8,6 @@ from backend.agent.executor import Executor
 from backend.agent.types import CompressedContext, PlanStep, StepResult, UserProfile, agent_event
 from backend.generation.study_materials.quality_gate import draft_hash, normalize_evidence, normalize_preset
 
-
 EventSink = Callable[[Dict[str, Any]], Awaitable[None]]
 
 

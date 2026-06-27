@@ -6,7 +6,6 @@ from typing import Any, Awaitable, Callable, Dict
 from backend.generation.agentic.codex_runtime import run_codex_runtime_agent_events
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 
-
 STAGE_VERSION = 1
 STAGE_RESULT_SCHEMA: Dict[str, Any] = {
     "type": "object",
