@@ -356,6 +356,7 @@ class StudyArchive(Base):
 
     markdown = Column(Text, default="")
     sections_json = Column(Text, default="[]")
+    acceptance_json = Column(Text, default="{}")
 
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

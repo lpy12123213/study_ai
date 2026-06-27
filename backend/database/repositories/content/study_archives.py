@@ -58,6 +58,42 @@ def _version_fingerprint(base_fingerprint: str) -> str:
     return hashlib.md5(f"{base}|{seed}".encode("utf-8", errors="ignore")).hexdigest()
 
 
+def _parse_json_list(value: Any) -> List[Any]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _parse_json_dict(value: Any) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _archive_to_dict(row: StudyArchive, *, include_updated: bool = False) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "id": row.id,
+        "user_id": row.user_id,
+        "subject": row.subject,
+        "topic": row.topic,
+        "base_fingerprint": getattr(row, "base_fingerprint", "") or "",
+        "fingerprint": row.fingerprint,
+        "preset": row.preset,
+        "requirements": row.requirements,
+        "markdown": row.markdown or "",
+        "sections": _parse_json_list(row.sections_json),
+        "acceptance": _parse_json_dict(getattr(row, "acceptance_json", "{}")),
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+    }
+    if include_updated:
+        payload["updated_at"] = row.updated_at.isoformat() if row.updated_at else ""
+    return payload
+
+
 async def upsert_study_archive(
     *,
     user_id: str,
@@ -67,6 +103,7 @@ async def upsert_study_archive(
     requirements: str,
     markdown: str,
     sections: List[Dict[str, Any]],
+    acceptance: Optional[Dict[str, Any]] = None,
     session: Optional[AsyncSession] = None,
 ) -> dict:
     uid = _require_user_id(user_id)
@@ -80,6 +117,10 @@ async def upsert_study_archive(
         sections_json = json.dumps(sections or [], ensure_ascii=False)
     except (TypeError, ValueError):
         sections_json = "[]"
+    try:
+        acceptance_json = json.dumps(acceptance or {}, ensure_ascii=False)
+    except (TypeError, ValueError):
+        acceptance_json = "{}"
 
     base_fp = build_study_archive_fingerprint(subject=subj, topic=top, requirements=req, user_id=uid)
     fp = _version_fingerprint(base_fp)
@@ -95,6 +136,7 @@ async def upsert_study_archive(
                 requirements=req,
                 markdown=md,
                 sections=sections,
+                acceptance=acceptance,
                 session=session,
             )
             await session.commit()
@@ -110,6 +152,7 @@ async def upsert_study_archive(
         requirements=req,
         markdown=md,
         sections_json=sections_json,
+        acceptance_json=acceptance_json,
     )
     session.add(row)
     await session.flush()
@@ -165,26 +208,7 @@ async def get_latest_study_archive(
     if not row:
         return None
 
-    try:
-        sections = json.loads(row.sections_json or "[]")
-        if not isinstance(sections, list):
-            sections = []
-    except (TypeError, json.JSONDecodeError):
-        sections = []
-
-    return {
-        "id": row.id,
-        "user_id": row.user_id,
-        "subject": row.subject,
-        "topic": row.topic,
-        "base_fingerprint": getattr(row, "base_fingerprint", "") or "",
-        "fingerprint": row.fingerprint,
-        "preset": row.preset,
-        "requirements": row.requirements,
-        "markdown": row.markdown or "",
-        "sections": sections,
-        "created_at": row.created_at.isoformat() if row.created_at else "",
-    }
+    return _archive_to_dict(row)
 
 
 async def get_latest_study_archive_for_subject(
@@ -218,26 +242,7 @@ async def get_latest_study_archive_for_subject(
     if not row:
         return None
 
-    try:
-        sections = json.loads(row.sections_json or "[]")
-        if not isinstance(sections, list):
-            sections = []
-    except (TypeError, json.JSONDecodeError):
-        sections = []
-
-    return {
-        "id": row.id,
-        "user_id": row.user_id,
-        "subject": row.subject,
-        "topic": row.topic,
-        "base_fingerprint": getattr(row, "base_fingerprint", "") or "",
-        "fingerprint": row.fingerprint,
-        "preset": row.preset,
-        "requirements": row.requirements,
-        "markdown": row.markdown or "",
-        "sections": sections,
-        "created_at": row.created_at.isoformat() if row.created_at else "",
-    }
+    return _archive_to_dict(row)
 
 
 async def get_study_archive_by_fingerprint(
@@ -289,26 +294,7 @@ async def get_study_archive_by_fingerprint(
         if not row:
             return None
 
-    try:
-        sections = json.loads(row.sections_json or "[]")
-        if not isinstance(sections, list):
-            sections = []
-    except (TypeError, json.JSONDecodeError):
-        sections = []
-
-    return {
-        "id": row.id,
-        "user_id": row.user_id,
-        "subject": row.subject,
-        "topic": row.topic,
-        "base_fingerprint": getattr(row, "base_fingerprint", "") or "",
-        "fingerprint": row.fingerprint,
-        "preset": row.preset,
-        "requirements": row.requirements,
-        "markdown": row.markdown or "",
-        "sections": sections,
-        "created_at": row.created_at.isoformat() if row.created_at else "",
-    }
+    return _archive_to_dict(row)
 
 
 async def get_study_archive(
@@ -334,27 +320,7 @@ async def get_study_archive(
     if not row:
         return None
 
-    try:
-        sections = json.loads(row.sections_json or "[]")
-        if not isinstance(sections, list):
-            sections = []
-    except (TypeError, json.JSONDecodeError):
-        sections = []
-
-    return {
-        "id": row.id,
-        "user_id": row.user_id,
-        "subject": row.subject,
-        "topic": row.topic,
-        "base_fingerprint": getattr(row, "base_fingerprint", "") or "",
-        "fingerprint": row.fingerprint,
-        "preset": row.preset,
-        "requirements": row.requirements,
-        "markdown": row.markdown or "",
-        "sections": sections,
-        "created_at": row.created_at.isoformat() if row.created_at else "",
-        "updated_at": row.updated_at.isoformat() if row.updated_at else "",
-    }
+    return _archive_to_dict(row, include_updated=True)
 
 
 async def list_study_archives(

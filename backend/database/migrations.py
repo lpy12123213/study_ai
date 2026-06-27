@@ -229,6 +229,13 @@ def sync_migrate_db_schema(conn) -> None:
             existing_cols=sa_cols,
         )
         _add_col(conn, table="study_archives", name="updated_at", ddl="DATETIME", existing_cols=sa_cols)
+        _add_col(
+            conn,
+            table="study_archives",
+            name="acceptance_json",
+            ddl="TEXT NOT NULL DEFAULT '{}'",
+            existing_cols=sa_cols,
+        )
         _ensure_index(
             conn, name="ix_study_archives_base_fingerprint", table="study_archives", columns="base_fingerprint"
         )
