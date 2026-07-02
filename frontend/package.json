@@ -44,7 +44,7 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
     "diff": "^8.0.3",
-    "framer-motion": "^12.33.0",
+    "framer-motion": "^12.38.0",
     "katex": "^0.16.22",
     "lucide-react": "^1.14.0",
     "mathlive": "^0.105.3",
