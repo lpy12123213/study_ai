@@ -19,6 +19,7 @@ class StudyMaterialsToolExecutor:
         subject: str,
         preset: str,
         user_id: str,
+        options: Optional[Dict[str, Any]] = None,
         resume_working_memory: Optional[Dict[str, Any]] = None,
         executor: Optional[Any] = None,
         context_manager: Optional[Any] = None,
@@ -26,6 +27,8 @@ class StudyMaterialsToolExecutor:
         self.topic = str(topic or "").strip()
         self.subject = str(subject or "").strip()
         self.preset = normalize_preset(preset)
+        self.options = dict(options or {})
+        self.options["preset"] = self.preset
         self.user_id = str(user_id or "anonymous").strip() or "anonymous"
         self.executor = executor or Executor()
         self.context_manager = context_manager or ContextManager(config=getattr(self.executor, "config", None))
@@ -41,7 +44,7 @@ class StudyMaterialsToolExecutor:
                 if isinstance(self.context.working_memory.get("study_options"), dict)
                 else {}
             ),
-            "preset": self.preset,
+            **self.options,
             "strict_llm": True,
         }
         existing_results = self.context.working_memory.get("step_results")
@@ -124,7 +127,7 @@ class StudyMaterialsToolExecutor:
         }.get(tool, tool)
         evidence: List[Dict[str, Any]] = []
         for item in cls._matching_items(output, point_title):
-            if tool == "web_search_knowledge":
+            if tool in {"web_search_knowledge", "stackexchange_search", "github_search"}:
                 values = item.get("results") if isinstance(item.get("results"), list) else []
                 for value in values:
                     if not isinstance(value, dict):
@@ -132,9 +135,16 @@ class StudyMaterialsToolExecutor:
                     evidence.append(
                         {
                             "source_class": source_class,
-                            "url": value.get("url"),
-                            "title": value.get("title"),
-                            "snippet": value.get("snippet") or value.get("description") or value.get("text"),
+                            "url": value.get("url") or value.get("html_url"),
+                            "title": value.get("title") or value.get("full_name") or value.get("name"),
+                            "snippet": (
+                                value.get("snippet")
+                                or value.get("description")
+                                or value.get("text")
+                                or value.get("question_text")
+                                or value.get("top_answer_text")
+                                or value.get("readme_excerpt")
+                            ),
                         }
                     )
                 continue
@@ -173,6 +183,8 @@ class StudyMaterialsToolExecutor:
             tools.append("wikipedia_search")
         if self.preset == "research":
             tools.append("mediawiki_search")
+        if bool(self.options.get("enable_extra_tools")):
+            tools.extend(["stackexchange_search", "github_search"])
 
         research: Dict[str, List[Dict[str, Any]]] = {}
         browse_urls: Dict[str, List[str]] = {}

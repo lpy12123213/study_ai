@@ -130,6 +130,40 @@ class StudyMaterialsQualityGateTests(unittest.TestCase):
         self.assertFalse(acceptance_record_is_current(archive=archive, preset="standard", markdown=markdown))
         self.assertFalse(acceptance_record_is_current(archive=archive, preset="quick", markdown=markdown + " changed"))
 
+    def test_archive_acceptance_rejects_changed_content_options(self) -> None:
+        from backend.generation.study_materials.quality_gate import (
+            acceptance_record_is_current,
+            build_acceptance_record,
+            draft_hash,
+        )
+
+        markdown = "# 函数单调性"
+        report = {"passed": True, "draft_hash": draft_hash(markdown), "failed_checks": []}
+        archive = {
+            "acceptance": build_acceptance_record(
+                report=report,
+                preset="standard",
+                options={"with_questions": False, "with_diagrams": True},
+            )
+        }
+
+        self.assertTrue(
+            acceptance_record_is_current(
+                archive=archive,
+                preset="standard",
+                markdown=markdown,
+                options={"with_questions": False, "with_diagrams": True},
+            )
+        )
+        self.assertFalse(
+            acceptance_record_is_current(
+                archive=archive,
+                preset="standard",
+                markdown=markdown,
+                options={"with_questions": True, "with_diagrams": True},
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

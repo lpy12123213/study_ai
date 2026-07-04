@@ -88,6 +88,41 @@ class _FakeContextManager:
 
 
 class StudyMaterialsToolExecutorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_extra_research_options_are_persisted_and_used(self) -> None:
+        from backend.generation.study_materials.tool_executor import StudyMaterialsToolExecutor
+
+        executor = _FakeExecutor()
+        adapter = StudyMaterialsToolExecutor(
+            topic="函数单调性",
+            subject="高中数学",
+            preset="standard",
+            user_id="u-1",
+            options={
+                "with_questions": True,
+                "with_diagrams": False,
+                "enable_extra_tools": True,
+                "max_points": 2,
+            },
+            executor=executor,
+            context_manager=_FakeContextManager(),
+        )
+
+        async def sink(_event: dict) -> None:
+            return None
+
+        await adapter.research(
+            plan={"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]},
+            event_sink=sink,
+        )
+
+        self.assertEqual(
+            [step.tool for step in executor.calls],
+            ["web_search_knowledge", "wikipedia_search", "stackexchange_search", "github_search"],
+        )
+        self.assertTrue(adapter.working_memory["study_options"]["with_questions"])
+        self.assertFalse(adapter.working_memory["study_options"]["with_diagrams"])
+        self.assertEqual(adapter.working_memory["study_options"]["max_points"], 2)
+
     async def test_standard_research_uses_web_and_wikipedia_and_normalizes_evidence(self) -> None:
         from backend.generation.study_materials.tool_executor import StudyMaterialsToolExecutor
 
@@ -236,6 +271,91 @@ def _failing_review() -> dict:
 
 
 class StudyMaterialsWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stage_result_error_checkpoints_failed_stage(self) -> None:
+        from backend.generation.study_materials.codex_stages import StageResultError
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow
+
+        checkpoints: list[dict] = []
+
+        async def stage_runner(**kwargs):
+            raise StageResultError(
+                "invalid_stage_result",
+                stage=kwargs["stage"],
+                detail="stage_contract_mismatch",
+            )
+
+        async def checkpoint(state: dict, _resume: dict) -> None:
+            checkpoints.append(dict(state))
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-stage-error",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="standard",
+            resume_working_memory={
+                "study_materials_workflow": {
+                    "version": 1,
+                    "stage": "draft",
+                    "preset": "standard",
+                    "plan": {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]},
+                    "research": {},
+                    "markdown": "",
+                    "last_failure": {},
+                }
+            },
+            stage_runner=stage_runner,
+            tool_executor=_WorkflowToolExecutor(reviews=[]),
+            checkpoint_sink=checkpoint,
+        )
+
+        with self.assertRaisesRegex(StageResultError, "invalid_stage_result"):
+            await workflow.run()
+
+        self.assertTrue(checkpoints)
+        self.assertEqual(checkpoints[-1]["stage"], "draft")
+        self.assertEqual(checkpoints[-1]["last_failure"]["stage"], "draft")
+        self.assertEqual(checkpoints[-1]["last_failure"]["detail"], "stage_contract_mismatch")
+
+    async def test_generation_options_reach_stage_runner_and_resume_memory(self) -> None:
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow
+
+        options = {
+            "preset": "quick",
+            "requirements": "保留要求",
+            "with_questions": True,
+            "with_diagrams": False,
+            "enable_extra_tools": True,
+            "max_points": 2,
+        }
+        seen_options: list[dict] = []
+
+        async def stage_runner(**kwargs):
+            seen_options.append(dict(kwargs["options"]))
+            if kwargs["stage"] == "plan":
+                return {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]}
+            return {
+                "markdown": "# 函数单调性\n\n## 增函数\n\n定义、性质和例题。",
+                "coverage_map": {"kp-1": True},
+            }
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-options",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="quick",
+            requirements="保留要求",
+            options=options,
+            stage_runner=stage_runner,
+            tool_executor=_WorkflowToolExecutor(reviews=[_passing_review()]),
+        )
+
+        result = await workflow.run()
+
+        self.assertEqual(seen_options, [options, options])
+        self.assertEqual(result["resume_working_memory"]["study_options"], options)
+
     async def test_codex_cannot_complete_before_independent_review_passes(self) -> None:
         from backend.generation.study_materials.workflow import StudyMaterialsWorkflow, WorkflowFailure
 

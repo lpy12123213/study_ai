@@ -50,3 +50,21 @@ class TestStudyMaterialsResumeState(unittest.TestCase):
         self.assertNotIn("web_search_knowledge", pruned)
         self.assertNotIn("aggregate_knowledge", pruned)
         self.assertNotIn("generate_study_material", pruned)
+
+    def test_resume_failed_stage_prefers_nested_workflow_stage(self) -> None:
+        from backend.generation.study_materials.resume import _set_workflow_resume_stage
+
+        resumed = _set_workflow_resume_stage(
+            {
+                "study_materials_workflow": {
+                    "version": 1,
+                    "stage": "draft",
+                    "last_failure": {},
+                    "markdown": "",
+                }
+            },
+            mode="resume_failed_stage",
+            last_failed_stage="",
+        )
+
+        self.assertEqual(resumed["study_materials_workflow"]["stage"], "draft")

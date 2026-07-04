@@ -805,6 +805,78 @@ class StudyMaterialsTaskManager:
             except Exception:
                 logger.warning("study_materials_resume_snapshot_failed", extra={"task_id": task.task_id}, exc_info=True)
 
+        async def _maybe_complete_export_continuation() -> bool:
+            continue_mode = str(options.get("continue_mode") or "").strip().lower()
+            if continue_mode not in {"fix_export", "skip_export"}:
+                return False
+
+            workflow_state = _dict(resume_wm.get("study_materials_workflow"))
+            markdown = str(
+                workflow_state.get("markdown")
+                or resume_wm.get("assemble_study_archive")
+                or resume_wm.get("markdown")
+                or ""
+            ).strip()
+            preset = str(options.get("preset") or workflow_state.get("preset") or "standard").strip().lower()
+            acceptance = _dict(workflow_state.get("acceptance"))
+            if not markdown or not acceptance_record_is_current(
+                archive={"acceptance": acceptance},
+                preset=preset,
+                markdown=markdown,
+                options=options,
+            ):
+                await task_runtime.fail_task(
+                    task,
+                    "accepted_content_required",
+                    error={
+                        "message": "accepted_content_required",
+                        "code": "accepted_content_required",
+                        "stage": "export",
+                        "recoverable": True,
+                    },
+                )
+                return True
+
+            exported: Dict[str, Any] = {}
+            if continue_mode == "fix_export":
+                exported = await _export_markdown_to_media(markdown=markdown, user_id=task.user_id)
+
+            next_resume = dict(resume_wm)
+            next_resume.update(exported)
+            next_resume["markdown"] = markdown
+            next_resume["assemble_study_archive"] = markdown
+            next_resume["study_materials_workflow"] = workflow_state
+            meta["resume_working_memory"] = next_resume
+            meta["study_materials_workflow"] = workflow_state
+            _refresh_resume_meta(meta=meta)
+            self._persist_snapshot(task, force=True)
+
+            file_fields = {
+                key: value
+                for key, value in next_resume.items()
+                if key in {"md_url", "md_filename", "sha256", "bytes", "expires_at"}
+            }
+            result = {
+                "success": True,
+                "material": {
+                    "topic": query,
+                    "subject": subject,
+                    "markdown": markdown,
+                    "iteration": int(meta.get("iterations_done") or iteration_offset or 1),
+                    "passed": True,
+                    "issues": [],
+                    "error": None,
+                    **file_fields,
+                },
+                "acceptance": acceptance,
+                "workflow": workflow_state,
+                "resume_working_memory": next_resume,
+                **file_fields,
+            }
+            await task_runtime.append_event(task, agent_event("done", result))
+            await task_runtime.complete_task(task, result=result)
+            return True
+
         async def _maybe_reuse_local_archive() -> bool:
             if parent_task_id or resume_wm:
                 return False
@@ -865,7 +937,16 @@ class StudyMaterialsTaskManager:
             acceptance = _dict(archive.get("acceptance"))
             workflow_state = {
                 "version": WORKFLOW_VERSION,
-                "stage": "completed" if acceptance_record_is_current(archive=archive, preset=preset, markdown=markdown) else "research",
+                "stage": (
+                    "completed"
+                    if acceptance_record_is_current(
+                        archive=archive,
+                        preset=preset,
+                        markdown=markdown,
+                        options=options,
+                    )
+                    else "research"
+                ),
                 "last_successful_stage": "accept" if acceptance else "",
                 "preset": preset,
                 "plan": {"knowledge_points": plan_points},
@@ -956,6 +1037,8 @@ class StudyMaterialsTaskManager:
             return True
 
         try:
+            if await _maybe_complete_export_continuation():
+                return
             if await _maybe_reuse_local_archive():
                 return
 
@@ -980,13 +1063,14 @@ class StudyMaterialsTaskManager:
                         subject=subject,
                         preset=str(options.get("preset") or "standard"),
                         requirements=str(options.get("requirements") or ""),
+                        options=options,
                         resume_working_memory=_dict(meta.get("resume_working_memory")),
                         event_sink=_workflow_event_sink,
                         checkpoint_sink=_workflow_checkpoint_sink,
                     )
                 except WorkflowFailure as failure:
                     error = {"message": failure.code, **failure.to_dict()}
-                    await task_runtime.fail_task(task, failure.code, error=error, emit_event=False)
+                    await task_runtime.fail_task(task, failure.code, error=error)
                     return
                 except StageResultError as failure:
                     allow_fallback = (
@@ -1005,7 +1089,6 @@ class StudyMaterialsTaskManager:
                                 "detail": failure.detail,
                                 "recoverable": True,
                             },
-                            emit_event=False,
                         )
                         return
                 else:

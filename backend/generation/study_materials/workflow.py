@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from backend.generation.study_materials.codex_stages import run_codex_stage
+from backend.generation.study_materials.codex_stages import StageResultError, run_codex_stage
 from backend.generation.study_materials.quality_gate import (
     PRESET_PROFILES,
     WORKFLOW_VERSION,
@@ -70,6 +70,7 @@ class StudyMaterialsWorkflow:
         subject: str,
         preset: str,
         requirements: str = "",
+        options: Optional[Dict[str, Any]] = None,
         resume_working_memory: Optional[Dict[str, Any]] = None,
         stage_runner: Optional[CodexStageRunner] = None,
         tool_executor: Optional[Any] = None,
@@ -82,6 +83,9 @@ class StudyMaterialsWorkflow:
         self.subject = str(subject or "").strip()
         self.preset = normalize_preset(preset)
         self.requirements = str(requirements or "").strip()
+        self.options = dict(options or {})
+        self.options["preset"] = self.preset
+        self.options["requirements"] = self.requirements
         self.stage_runner = stage_runner or run_codex_stage
         self.event_sink = event_sink or _noop_event
         self.checkpoint_sink = checkpoint_sink or _noop_checkpoint
@@ -113,6 +117,7 @@ class StudyMaterialsWorkflow:
             subject=self.subject,
             preset=self.preset,
             user_id=self.user_id,
+            options=self.options,
             resume_working_memory=self.resume_working_memory,
         )
 
@@ -132,8 +137,7 @@ class StudyMaterialsWorkflow:
             }
         resume["study_options"] = {
             **(dict(resume.get("study_options") or {}) if isinstance(resume.get("study_options"), dict) else {}),
-            "preset": self.preset,
-            "requirements": self.requirements,
+            **self.options,
         }
         step_results = getattr(self.tool_executor, "step_results", None)
         if isinstance(step_results, list):
@@ -175,16 +179,29 @@ class StudyMaterialsWorkflow:
         await self._checkpoint()
 
     async def _run_codex(self, stage: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return await self.stage_runner(
-            stage=stage,
-            task_id=self.task_id,
-            user_id=self.user_id,
-            topic=self.topic,
-            subject=self.subject,
-            preset=self.preset,
-            payload=payload,
-            event_sink=self.event_sink,
-        )
+        try:
+            return await self.stage_runner(
+                stage=stage,
+                task_id=self.task_id,
+                user_id=self.user_id,
+                topic=self.topic,
+                subject=self.subject,
+                preset=self.preset,
+                options=self.options,
+                payload=payload,
+                event_sink=self.event_sink,
+            )
+        except StageResultError as exc:
+            failed_stage = str(exc.stage or stage).strip() or stage
+            self.state["last_failure"] = {
+                "code": exc.code,
+                "stage": failed_stage,
+                "detail": exc.detail,
+                "recoverable": True,
+            }
+            self.state["stage"] = failed_stage
+            await self._checkpoint()
+            raise
 
     async def run(self) -> Dict[str, Any]:
         for _ in range(64):
@@ -303,7 +320,7 @@ class StudyMaterialsWorkflow:
                     )
                     await self._fail(failure)
                     raise failure
-                acceptance = build_acceptance_record(report=report, preset=self.preset)
+                acceptance = build_acceptance_record(report=report, preset=self.preset, options=self.options)
                 self.state["acceptance"] = acceptance
                 await self._set_stage(COMPLETED, successful=ACCEPT)
                 return self._accepted_result()
@@ -314,6 +331,7 @@ class StudyMaterialsWorkflow:
                     archive=archive,
                     preset=self.preset,
                     markdown=str(self.state.get("markdown") or ""),
+                    options=self.options,
                 ):
                     return self._accepted_result()
                 self.state["stage"] = REVIEW
@@ -356,6 +374,7 @@ async def run_study_materials_workflow(
     subject: str,
     preset: str,
     requirements: str = "",
+    options: Optional[Dict[str, Any]] = None,
     resume_working_memory: Optional[Dict[str, Any]] = None,
     event_sink: Optional[EventSink] = None,
     checkpoint_sink: Optional[CheckpointSink] = None,
@@ -367,6 +386,7 @@ async def run_study_materials_workflow(
         subject=subject,
         preset=preset,
         requirements=requirements,
+        options=options,
         resume_working_memory=resume_working_memory,
         event_sink=event_sink,
         checkpoint_sink=checkpoint_sink,

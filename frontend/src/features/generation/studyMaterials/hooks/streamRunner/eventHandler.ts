@@ -237,7 +237,7 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
     }
 
     if (kind === 'error') {
-      const msg = formatStudyMaterialsError(toText(payload?.message) || '生成失败')
+      const msg = formatStudyMaterialsError(toText(payload?.message) || toText(payload?.error) || '生成失败')
       if (msg) setError(msg)
       state.done = true
       assistant.flushAssistant()

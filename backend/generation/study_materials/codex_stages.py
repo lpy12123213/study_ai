@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Awaitable, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from backend.generation.agentic.codex_runtime import run_codex_runtime_agent_events
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
@@ -99,6 +99,7 @@ def build_stage_prompt(
     topic: str,
     subject: str,
     preset: str,
+    options: Optional[Dict[str, Any]] = None,
     payload: Dict[str, Any],
 ) -> str:
     stage_instruction = {
@@ -122,6 +123,7 @@ def build_stage_prompt(
             "topic": _text(topic),
             "subject": _text(subject),
             "preset": _text(preset) or "standard",
+            "options": dict(options or {}),
             "stage": stage,
             "input": payload,
         },
@@ -148,13 +150,17 @@ async def run_codex_stage(
     topic: str,
     subject: str,
     preset: str,
+    options: Optional[Dict[str, Any]] = None,
     payload: Dict[str, Any],
     event_sink: StageEventSink,
 ) -> Dict[str, Any]:
+    stage_options = dict(options or {})
+    stage_options["preset"] = _text(preset) or "standard"
+    stage_options["workflow_stage"] = stage
     spec = build_study_materials_agent_spec(
         query=topic,
         subject=subject,
-        options={"preset": preset, "workflow_stage": stage},
+        options=stage_options,
     )
     final_result: Dict[str, Any] | None = None
     async for event in run_codex_runtime_agent_events(
@@ -169,6 +175,7 @@ async def run_codex_stage(
             topic=topic,
             subject=subject,
             preset=preset,
+            options=stage_options,
             payload=payload,
         ),
         result_schema=STAGE_RESULT_SCHEMA,

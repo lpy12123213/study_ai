@@ -198,7 +198,7 @@ describe('useStudyMaterialsStreamRunner', () => {
 
     act(() => {
       onMessage({ type: 'task_started', data: { taskId: 'server-task-9' }, seq: 1 })
-      onMessage({ type: 'error', data: { message: 'codex runtime failed' }, seq: 2 })
+      onMessage({ type: 'error', data: { error: 'quality_gate_not_met' }, seq: 2 })
     })
 
     const conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId)
@@ -206,7 +206,7 @@ describe('useStudyMaterialsStreamRunner', () => {
     expect(conversation?.resumable).toBe(false)
     expect(conversation?.activeStream).toBeUndefined()
     expect(conversation?.lastTask).toMatchObject({ taskType: 'study_materials', taskId: 'server-task-9' })
-    expect(setError).toHaveBeenCalledWith(expect.stringContaining('codex runtime failed'))
+    expect(setError).toHaveBeenCalledWith(expect.stringContaining('quality_gate_not_met'))
   })
 
   it('populates SubAgent activities from canonical task stream events', () => {

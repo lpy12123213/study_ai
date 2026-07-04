@@ -249,6 +249,9 @@ def _set_workflow_resume_stage(
     elif mode_norm == "resume_failed_stage":
         failure = workflow.get("last_failure") if isinstance(workflow.get("last_failure"), dict) else {}
         failed = str(failure.get("stage") or "").strip()
+        current = str(workflow.get("stage") or "").strip().lower()
+        if not failed and current in {"plan", "research", "draft", "review", "revise", "accept"}:
+            failed = current
         if not failed:
             legacy_stage = str(last_failed_stage or "").strip().lower()
             failed = {"search": "research", "aggregate": "research", "write": "review", "export": "review"}.get(

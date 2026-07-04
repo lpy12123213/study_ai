@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, Dict, Iterable, List
 from urllib.parse import urlsplit, urlunsplit
 
@@ -9,6 +10,13 @@ from backend.core.text_lint import lint_text
 WORKFLOW_VERSION = 1
 QUALITY_POLICY_VERSION = 1
 REVIEW_SCHEMA_VERSION = 1
+
+_ACCEPTANCE_OPTION_DEFAULTS: Dict[str, Any] = {
+    "with_questions": False,
+    "with_diagrams": True,
+    "enable_extra_tools": False,
+    "max_points": 0,
+}
 
 PRESET_PROFILES: Dict[str, Dict[str, int]] = {
     "quick": {"min_sources": 1, "min_source_classes": 1, "min_dimensions": 3, "max_review_cycles": 1},
@@ -25,6 +33,26 @@ def normalize_preset(value: Any) -> str:
 
 def draft_hash(markdown: str) -> str:
     return hashlib.sha256(str(markdown or "").encode("utf-8")).hexdigest()
+
+
+def acceptance_options_fingerprint(options: Any) -> str:
+    values = options if isinstance(options, dict) else {}
+    try:
+        max_points = int(values.get("max_points") or 0)
+    except (TypeError, ValueError):
+        max_points = 0
+    normalized = {
+        "with_questions": bool(values.get("with_questions") or values.get("enable_questions")),
+        "with_diagrams": (
+            bool(values.get("with_diagrams"))
+            if isinstance(values.get("with_diagrams"), bool)
+            else _ACCEPTANCE_OPTION_DEFAULTS["with_diagrams"]
+        ),
+        "enable_extra_tools": bool(values.get("enable_extra_tools")),
+        "max_points": max(0, min(max_points, 15)),
+    }
+    raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _canonical_url(value: Any) -> str:
@@ -187,14 +215,29 @@ def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def acceptance_record_is_current(*, archive: Dict[str, Any], preset: str, markdown: str) -> bool:
+def acceptance_record_is_current(
+    *,
+    archive: Dict[str, Any],
+    preset: str,
+    markdown: str,
+    options: Any = None,
+) -> bool:
     record = archive.get("acceptance") if isinstance(archive.get("acceptance"), dict) else {}
     try:
         policy_version = int(record.get("quality_policy_version") or 0)
         review_version = int(record.get("review_schema_version") or 0)
     except (TypeError, ValueError):
         return False
-    return bool(record.get("accepted")) and all(
+    options_match = True
+    if options is not None:
+        expected_options_fingerprint = acceptance_options_fingerprint(options)
+        recorded_options_fingerprint = str(record.get("options_fingerprint") or "").strip()
+        options_match = (
+            recorded_options_fingerprint == expected_options_fingerprint
+            if recorded_options_fingerprint
+            else expected_options_fingerprint == acceptance_options_fingerprint(_ACCEPTANCE_OPTION_DEFAULTS)
+        )
+    return bool(record.get("accepted")) and options_match and all(
         (
             str(record.get("preset") or "") == normalize_preset(preset),
             str(record.get("draft_hash") or "") == draft_hash(markdown),
@@ -204,12 +247,13 @@ def acceptance_record_is_current(*, archive: Dict[str, Any], preset: str, markdo
     )
 
 
-def build_acceptance_record(*, report: Dict[str, Any], preset: str) -> Dict[str, Any]:
+def build_acceptance_record(*, report: Dict[str, Any], preset: str, options: Any = None) -> Dict[str, Any]:
     return {
         "accepted": bool(report.get("passed")),
         "preset": normalize_preset(preset),
         "draft_hash": str(report.get("draft_hash") or ""),
         "quality_policy_version": QUALITY_POLICY_VERSION,
         "review_schema_version": REVIEW_SCHEMA_VERSION,
+        "options_fingerprint": acceptance_options_fingerprint(options),
         "failed_checks": list(report.get("failed_checks") or []),
     }

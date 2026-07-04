@@ -132,10 +132,23 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         from backend.generation.study_materials import orchestrator
 
         manager = StudyMaterialsTaskManager()
-        task = _task(meta={"agent_run_spec": build_study_materials_agent_spec(query="函数单调性").to_dict()})
+        options = {
+            "preset": "standard",
+            "requirements": "保留要求",
+            "with_questions": True,
+            "with_diagrams": False,
+            "enable_extra_tools": True,
+            "max_points": 2,
+        }
+        task = _task(
+            options=options,
+            meta={"agent_run_spec": build_study_materials_agent_spec(query="函数单调性", options=options).to_dict()},
+        )
         accepted = _accepted_result()
+        workflow_kwargs: dict = {}
 
         async def fake_workflow(**kwargs):
+            workflow_kwargs.update(kwargs)
             await kwargs["event_sink"](
                 {"type": "workflow_stage", "event": "workflow_stage", "data": {"stage": "review"}}
             )
@@ -170,6 +183,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
             await manager._run_task(task)
 
         run_workflow.assert_awaited_once()
+        self.assertEqual(workflow_kwargs.get("options"), options)
         complete.assert_awaited_once()
         upsert.assert_awaited_once()
         self.assertEqual(upsert.await_args.kwargs["acceptance"], accepted["acceptance"])
@@ -216,6 +230,51 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         fail.assert_awaited_once()
         self.assertEqual(fail.await_args.kwargs["error"]["code"], "quality_gate_not_met")
         self.assertTrue(fail.await_args.kwargs["error"]["recoverable"])
+        self.assertTrue(fail.await_args.kwargs.get("emit_event", True))
+
+    async def test_stage_result_failure_emits_terminal_error_event(self) -> None:
+        from backend.generation.study_materials import orchestrator
+        from backend.generation.study_materials.codex_stages import StageResultError
+
+        manager = StudyMaterialsTaskManager()
+        task = _task(task_id="study-stage-fail")
+        failure = StageResultError(
+            "invalid_stage_result",
+            stage="draft",
+            detail="stage_contract_mismatch",
+        )
+
+        async def fake_fail(runtime_task, *_args, **_kwargs):
+            runtime_task.status = "failed"
+
+        with patch.object(
+            orchestrator,
+            "AgentCore",
+            side_effect=AssertionError("legacy AgentCore should not run"),
+        ), patch.object(
+            orchestrator,
+            "get_study_archive_by_fingerprint",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            orchestrator,
+            "run_study_materials_workflow",
+            new=AsyncMock(side_effect=failure),
+        ), patch.object(orchestrator.task_runtime, "append_event", new=AsyncMock()), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(),
+        ) as complete, patch.object(
+            orchestrator.task_runtime,
+            "fail_task",
+            new=AsyncMock(side_effect=fake_fail),
+        ) as fail, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        complete.assert_not_awaited()
+        fail.assert_awaited_once()
+        self.assertEqual(fail.await_args.kwargs["error"]["stage"], "draft")
+        self.assertEqual(fail.await_args.kwargs["error"]["detail"], "stage_contract_mismatch")
+        self.assertTrue(fail.await_args.kwargs.get("emit_event", True))
 
     async def test_current_accepted_local_archive_keeps_fast_path(self) -> None:
         from backend.generation.study_materials import orchestrator
@@ -297,6 +356,128 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
 
         run_workflow.assert_awaited_once()
         complete.assert_awaited_once()
+
+    async def test_fix_export_republishes_accepted_markdown_without_codex(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        accepted = _accepted_result()
+        markdown = accepted["material"]["markdown"]
+        task = _task(
+            task_id="study-fix-export",
+            options={"preset": "standard", "continue_mode": "fix_export"},
+            meta={"resume_working_memory": accepted["resume_working_memory"]},
+        )
+
+        async def fake_complete(runtime_task, **_kwargs):
+            runtime_task.status = "completed"
+
+        with patch.object(
+            orchestrator,
+            "_export_markdown_to_media",
+            new=AsyncMock(return_value={"md_url": "/media/generated/refreshed.md", "md_filename": "refreshed.md"}),
+        ) as export, patch.object(
+            orchestrator,
+            "run_study_materials_workflow",
+            new=AsyncMock(),
+        ) as run_workflow, patch.object(
+            orchestrator.task_runtime,
+            "append_event",
+            new=AsyncMock(),
+        ), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(side_effect=fake_complete),
+        ) as complete, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        export.assert_awaited_once_with(markdown=markdown, user_id="u-1")
+        run_workflow.assert_not_awaited()
+        complete.assert_awaited_once()
+        result = complete.await_args.kwargs["result"]
+        self.assertEqual(result["md_url"], "/media/generated/refreshed.md")
+        self.assertEqual(result["resume_working_memory"]["md_url"], "/media/generated/refreshed.md")
+        self.assertEqual(result["material"]["markdown"], markdown)
+
+    async def test_skip_export_completes_accepted_markdown_without_publishing(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        accepted = _accepted_result()
+        markdown = accepted["material"]["markdown"]
+        task = _task(
+            task_id="study-skip-export",
+            options={"preset": "standard", "continue_mode": "skip_export"},
+            meta={"resume_working_memory": accepted["resume_working_memory"]},
+        )
+
+        async def fake_complete(runtime_task, **_kwargs):
+            runtime_task.status = "completed"
+
+        with patch.object(orchestrator, "_export_markdown_to_media", new=AsyncMock()) as export, patch.object(
+            orchestrator,
+            "run_study_materials_workflow",
+            new=AsyncMock(),
+        ) as run_workflow, patch.object(
+            orchestrator.task_runtime,
+            "append_event",
+            new=AsyncMock(),
+        ), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(side_effect=fake_complete),
+        ) as complete, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        export.assert_not_awaited()
+        run_workflow.assert_not_awaited()
+        complete.assert_awaited_once()
+        self.assertEqual(complete.await_args.kwargs["result"]["material"]["markdown"], markdown)
+
+    async def test_export_continuation_requires_current_acceptance(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        accepted = _accepted_result()
+        resume = dict(accepted["resume_working_memory"])
+        resume["study_materials_workflow"] = {
+            **accepted["workflow"],
+            "acceptance": {},
+        }
+        task = _task(
+            task_id="study-invalid-export",
+            options={"preset": "standard", "continue_mode": "fix_export"},
+            meta={"resume_working_memory": resume},
+        )
+
+        async def fake_fail(runtime_task, *_args, **_kwargs):
+            runtime_task.status = "failed"
+
+        with patch.object(orchestrator, "_export_markdown_to_media", new=AsyncMock()) as export, patch.object(
+            orchestrator,
+            "run_study_materials_workflow",
+            new=AsyncMock(),
+        ) as run_workflow, patch.object(
+            orchestrator.task_runtime,
+            "append_event",
+            new=AsyncMock(),
+        ), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(),
+        ) as complete, patch.object(
+            orchestrator.task_runtime,
+            "fail_task",
+            new=AsyncMock(side_effect=fake_fail),
+        ) as fail, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        export.assert_not_awaited()
+        run_workflow.assert_not_awaited()
+        complete.assert_not_awaited()
+        fail.assert_awaited_once()
+        self.assertEqual(fail.await_args.args[1], "accepted_content_required")
+        self.assertTrue(fail.await_args.kwargs.get("emit_event", True))
 
     async def test_continue_task_modes_reuse_workflow_snapshot(self) -> None:
         from backend.generation.study_materials import orchestrator

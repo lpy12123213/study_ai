@@ -56,8 +56,18 @@ class StudyMaterialsCodexStageTests(unittest.IsolatedAsyncioTestCase):
         from backend.generation.study_materials import codex_stages
 
         seen: list[dict] = []
+        runtime_calls: list[dict] = []
+        options = {
+            "preset": "standard",
+            "requirements": "保留要求",
+            "with_questions": True,
+            "with_diagrams": False,
+            "enable_extra_tools": True,
+            "max_points": 2,
+        }
 
-        async def fake_events(**_kwargs):
+        async def fake_events(**kwargs):
+            runtime_calls.append(kwargs)
             yield {"type": "status", "event": "status", "data": {"content": "planning"}}
             yield {
                 "type": "result",
@@ -85,12 +95,16 @@ class StudyMaterialsCodexStageTests(unittest.IsolatedAsyncioTestCase):
                 topic="函数单调性",
                 subject="高中数学",
                 preset="standard",
+                options=options,
                 payload={},
                 event_sink=sink,
             )
 
         self.assertEqual(result["knowledge_points"][0]["title"], "增函数")
         self.assertEqual([event["type"] for event in seen], ["status"])
+        self.assertEqual(runtime_calls[0]["spec"].input_payload["options"], {**options, "workflow_stage": "plan"})
+        self.assertIn('"options":', runtime_calls[0]["prompt_override"])
+        self.assertIn('"with_questions":true', runtime_calls[0]["prompt_override"])
 
     async def test_stage_runner_rejects_task_level_done(self) -> None:
         from backend.generation.study_materials import codex_stages
