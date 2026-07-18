@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.database.repositories.content.study_archives import (
-    get_latest_study_archive,
-    get_latest_study_archive_for_subject,
+    get_latest_reusable_study_archive,
+    get_latest_reusable_study_archive_for_subject,
 )
 from backend.database.repositories.question.question_cache import get_question_cache, upsert_question_cache
 from backend.database.repositories.question.question_library import (
@@ -20,15 +20,15 @@ from backend.database.repositories.question.question_library import (
     list_thinking_method_stats,
     upsert_question_library_items,
 )
-from backend.generation.agentic.task_specs import (
-    agentic_task_meta,
-    build_agent_run_spec_for_task,
-    build_agentic_starter_event,
-)
 from backend.generation.agentic.codex_runtime import (
     is_codex_runtime_agent_runtime,
     legacy_agent_fallback_enabled,
     run_codex_runtime_task,
+)
+from backend.generation.agentic.task_specs import (
+    agentic_task_meta,
+    build_agent_run_spec_for_task,
+    build_agentic_starter_event,
 )
 from backend.generation.question_library.curriculum_context import (
     build_curriculum_context,
@@ -1004,7 +1004,11 @@ async def create_generate_task(
             study_markdown = ""
             if use_archive:
                 try:
-                    archive = await get_latest_study_archive(user_id=user_id, subject=subject, topic=topic_key)
+                    archive = await get_latest_reusable_study_archive(
+                        user_id=user_id,
+                        subject=subject,
+                        topic=topic_key,
+                    )
                 except Exception:
                     logger.warning(
                         "question_library_latest_archive_lookup_failed",
@@ -1014,7 +1018,10 @@ async def create_generate_task(
                     archive = None
                 if not isinstance(archive, dict):
                     try:
-                        archive = await get_latest_study_archive_for_subject(user_id=user_id, subject=subject)
+                        archive = await get_latest_reusable_study_archive_for_subject(
+                            user_id=user_id,
+                            subject=subject,
+                        )
                     except Exception:
                         logger.warning(
                             "question_library_subject_archive_lookup_failed",

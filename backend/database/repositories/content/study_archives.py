@@ -13,8 +13,11 @@ from backend.core.logging_utils import get_logger
 from backend.database.engine import async_session_maker
 from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import StudyArchive
+from backend.generation.study_materials.quality_gate import acceptance_record_is_current
 
 logger = get_logger(__name__)
+
+_REUSABLE_ARCHIVE_SCAN_LIMIT = 200
 
 
 def build_study_archive_fingerprint(*, subject: str, topic: str, requirements: str = "", user_id: str = "") -> str:
@@ -92,6 +95,33 @@ def _archive_to_dict(row: StudyArchive, *, include_updated: bool = False) -> Dic
     if include_updated:
         payload["updated_at"] = row.updated_at.isoformat() if row.updated_at else ""
     return payload
+
+
+def study_archive_is_reusable(archive: Any) -> bool:
+    """Return whether an archive has acceptance metadata valid for its current Markdown."""
+
+    if not isinstance(archive, dict):
+        return False
+    markdown = str(archive.get("markdown") or "")
+    return bool(markdown.strip()) and acceptance_record_is_current(
+        archive=archive,
+        preset=str(archive.get("preset") or ""),
+        markdown=markdown,
+    )
+
+
+async def _latest_reusable_archive(session: AsyncSession, *conditions: Any) -> Optional[dict]:
+    result = await session.execute(
+        select(StudyArchive)
+        .where(*conditions)
+        .order_by(desc(StudyArchive.created_at), desc(StudyArchive.id))
+        .limit(_REUSABLE_ARCHIVE_SCAN_LIMIT)
+    )
+    for row in result.scalars().all():
+        archive = _archive_to_dict(row)
+        if study_archive_is_reusable(archive):
+            return archive
+    return None
 
 
 async def upsert_study_archive(
@@ -245,6 +275,62 @@ async def get_latest_study_archive_for_subject(
     return _archive_to_dict(row)
 
 
+async def get_latest_reusable_study_archive(
+    *,
+    user_id: str,
+    subject: str,
+    topic: str,
+    session: Optional[AsyncSession] = None,
+) -> Optional[dict]:
+    """Fetch the newest user+subject+topic archive whose acceptance is still current."""
+
+    uid = _require_user_id(user_id)
+    subj = str(subject or "").strip()
+    top = str(topic or "").strip()
+
+    if session is None:
+        async with async_session_maker() as owned_session:
+            return await get_latest_reusable_study_archive(
+                user_id=uid,
+                subject=subj,
+                topic=top,
+                session=owned_session,
+            )
+
+    return await _latest_reusable_archive(
+        session,
+        StudyArchive.user_id == uid,
+        StudyArchive.subject == subj,
+        StudyArchive.topic == top,
+    )
+
+
+async def get_latest_reusable_study_archive_for_subject(
+    *,
+    user_id: str,
+    subject: str,
+    session: Optional[AsyncSession] = None,
+) -> Optional[dict]:
+    """Fetch the newest current-acceptance archive for a user+subject."""
+
+    uid = _require_user_id(user_id)
+    subj = str(subject or "").strip()
+
+    if session is None:
+        async with async_session_maker() as owned_session:
+            return await get_latest_reusable_study_archive_for_subject(
+                user_id=uid,
+                subject=subj,
+                session=owned_session,
+            )
+
+    return await _latest_reusable_archive(
+        session,
+        StudyArchive.user_id == uid,
+        StudyArchive.subject == subj,
+    )
+
+
 async def get_study_archive_by_fingerprint(
     *,
     user_id: str,
@@ -321,6 +407,18 @@ async def get_study_archive(
         return None
 
     return _archive_to_dict(row, include_updated=True)
+
+
+async def get_reusable_study_archive(
+    *,
+    user_id: str,
+    archive_id: int,
+    session: Optional[AsyncSession] = None,
+) -> Optional[dict]:
+    """Fetch an archive by id only when its acceptance is still current."""
+
+    archive = await get_study_archive(user_id=user_id, archive_id=archive_id, session=session)
+    return archive if study_archive_is_reusable(archive) else None
 
 
 async def list_study_archives(

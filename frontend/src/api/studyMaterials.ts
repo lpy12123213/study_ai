@@ -1,6 +1,17 @@
 import { apiClient } from '@/api/client'
 
-export type StudyMaterialsStage = '' | 'search' | 'aggregate' | 'write' | 'export'
+export type StudyMaterialsStage =
+  | ''
+  | 'plan'
+  | 'research'
+  | 'draft'
+  | 'review'
+  | 'revise'
+  | 'accept'
+  | 'search'
+  | 'aggregate'
+  | 'write'
+  | 'export'
 
 export interface StudyMaterialsPerKpState {
   search_done?: boolean
@@ -33,6 +44,7 @@ export interface StudyMaterialsTaskStatus {
   first_seq: number
   last_seq: number
   resumable?: boolean
+  recovery_available?: boolean
   last_success_step?: string | null
   last_failed_step?: string | null
   last_success_stage?: StudyMaterialsStage | null

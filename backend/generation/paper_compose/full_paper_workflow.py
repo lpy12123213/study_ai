@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import resolve_subject
-from backend.database.repositories.content.study_archives import get_latest_study_archive
+from backend.database.repositories.content.study_archives import get_latest_reusable_study_archive
 from backend.database.repositories.question.papers import save_paper
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.generation.agentic.codex_runtime import is_codex_runtime_agent_runtime
@@ -188,7 +188,11 @@ async def generate_full_paper_events(
     study_markdown = ""
     if use_archive:
         try:
-            archive = await get_latest_study_archive(user_id=str(user_id or "").strip(), subject=subject, topic=topic)
+            archive = await get_latest_reusable_study_archive(
+                user_id=str(user_id or "").strip(),
+                subject=subject,
+                topic=topic,
+            )
         except (SQLAlchemyError, ValueError):
             archive = None
         if isinstance(archive, dict):

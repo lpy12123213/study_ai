@@ -26,8 +26,9 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
     discardResumableStream,
     isLastExportFailure,
     startContinueIteration,
-    lastTaskStatus,
     lastTaskStatusError,
+    lastFailedStage,
+    lastTaskResumable,
     error,
     clearError,
     hasSubAgentPane,
@@ -38,18 +39,20 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
   } = controller
 
   const lastTask = activeConversation?.lastTask
-  const lastFailedStage = lastTaskStatus?.last_failed_stage || ''
-  const lastTaskResumable = lastTaskStatus?.resumable !== false
-  const lastFailedStageLabel =
-    lastFailedStage === 'search'
-      ? '检索'
-      : lastFailedStage === 'aggregate'
-        ? '聚合'
-        : lastFailedStage === 'write'
-          ? '写作'
-          : lastFailedStage === 'export'
-            ? '导出'
-            : ''
+  const failureStagePresentation: Record<string, { label: string; actionLabel?: string }> = {
+    plan: { label: '规划', actionLabel: '继续规划' },
+    research: { label: '检索研究', actionLabel: '继续研究' },
+    draft: { label: '起草', actionLabel: '继续起草' },
+    review: { label: '审查', actionLabel: '继续审查' },
+    revise: { label: '修订', actionLabel: '继续修订' },
+    accept: { label: '验收', actionLabel: '继续验收' },
+    search: { label: '检索' },
+    aggregate: { label: '聚合' },
+    write: { label: '写作' },
+    export: { label: '导出' },
+  }
+  const failedStagePresentation = failureStagePresentation[lastFailedStage]
+  const lastFailedStageLabel = failedStagePresentation?.label || ''
   const shouldVirtualize = messages.length >= 500
   const completedSubAgents = subAgentActivities.filter((activity) => activity.status === 'completed').length
   const runningSubAgents = subAgentActivities.filter((activity) => activity.status === 'running').length
@@ -149,6 +152,11 @@ export function StudyMaterialsWorkspace({ controller }: { controller: StudyMater
                       {(lastFailedStage === 'aggregate' || lastFailedStage === 'write') && (
                         <Button size="sm" onClick={() => startContinueIteration('resume_failed_stage')}>
                           继续写作
+                        </Button>
+                      )}
+                      {failedStagePresentation?.actionLabel && (
+                        <Button size="sm" onClick={() => startContinueIteration('resume_failed_stage')}>
+                          {failedStagePresentation.actionLabel}
                         </Button>
                       )}
                       {lastFailedStage === 'export' && (

@@ -209,6 +209,59 @@ describe('useStudyMaterialsStreamRunner', () => {
     expect(setError).toHaveBeenCalledWith(expect.stringContaining('quality_gate_not_met'))
   })
 
+  it('keeps exact staged recovery metadata from recovery_available through the terminal error', () => {
+    const now = new Date().toISOString()
+    const conversationId = 'conv-staged-recovery'
+    const assistantMessageId = 'msg-staged-recovery'
+
+    useConversationStore.getState().addConversation({
+      id: conversationId,
+      title: '新自学资料',
+      type: 'study_materials',
+      createdAt: now,
+      updatedAt: now,
+      status: 'active',
+      resumable: false,
+    })
+    useConversationStore.getState().setCurrentConversation(conversationId, 'study_materials')
+    useConversationStore
+      .getState()
+      .setMessages(conversationId, [{ id: assistantMessageId, role: 'assistant', content: '', createdAt: now }])
+
+    const { result } = renderHook(() =>
+      useStudyMaterialsStreamRunner({
+        setIsGeneratingLocal: vi.fn(),
+        setError: vi.fn(),
+        setSubAgentActivities: vi.fn(),
+        setActiveSubAgentTab: vi.fn(),
+      })
+    )
+
+    act(() => {
+      result.current.runStudyMaterialsStream({
+        conversationId,
+        assistantMessageId,
+        request: { url: '/study-materials/generate/stream', method: 'POST', body: { topic: 'test' } },
+      })
+    })
+
+    const onMessage = fetchSSERequestMock.mock.calls[0]?.[2] as (data: unknown) => void
+    act(() => {
+      onMessage({ type: 'task_started', data: { taskId: 'server-task-staged' }, seq: 1 })
+      onMessage({
+        type: 'recovery_available',
+        data: { code: 'quality_gate_not_met', stage: 'revise', recoverable: true },
+        seq: 2,
+      })
+      onMessage({ type: 'error', data: { error: 'quality_gate_not_met' }, seq: 3 })
+    })
+
+    const conversation = useConversationStore.getState().conversations.find((c) => c.id === conversationId)
+    expect(conversation?.status).toBe('failed')
+    expect(conversation?.resumable).toBe(true)
+    expect(conversation?.lastTask?.recovery).toEqual({ stage: 'revise', recoverable: true })
+  })
+
   it('populates SubAgent activities from canonical task stream events', () => {
     const now = new Date().toISOString()
     const conversationId = 'conv-1'

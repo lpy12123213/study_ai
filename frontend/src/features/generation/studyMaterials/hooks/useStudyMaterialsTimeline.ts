@@ -9,6 +9,7 @@ import { toText } from '@/features/generation/studyMaterials/utils'
 type StickToBottom = ReturnType<typeof useStickToBottom>
 
 const EXPORT_FAILURE_TOOLS = ['convert_markdown_to_latex', 'refine_latex', 'compile_latex_to_pdf']
+const STAGED_WORKFLOW_STAGES = new Set(['plan', 'research', 'draft', 'review', 'revise', 'accept'])
 
 /**
  * Read-model for the study-materials view: conversation selection, derived
@@ -40,6 +41,17 @@ export function useStudyMaterialsTimeline({ stick }: { stick: StickToBottom }) {
 
   const [lastTaskStatus, setLastTaskStatus] = useState<StudyMaterialsTaskStatus | null>(null)
   const [lastTaskStatusError, setLastTaskStatusError] = useState<string | null>(null)
+  const currentLastTaskStatus = lastTaskStatus?.task_id === lastTask?.taskId ? lastTaskStatus : null
+  const streamedRecoveryStage = toText(lastTask?.recovery?.stage)
+  const statusFailedStage = toText(currentLastTaskStatus?.last_failed_stage)
+  const lastFailedStage = STAGED_WORKFLOW_STAGES.has(streamedRecoveryStage)
+    ? streamedRecoveryStage
+    : statusFailedStage || streamedRecoveryStage
+  const lastTaskResumable = currentLastTaskStatus
+    ? (currentLastTaskStatus.recovery_available ?? currentLastTaskStatus.resumable) !== false
+    : lastTask?.recovery
+      ? lastTask.recovery.recoverable !== false
+      : true
 
   useEffect(() => {
     const taskId = String(activeConversation?.lastTask?.taskId || '').trim()
@@ -87,8 +99,10 @@ export function useStudyMaterialsTimeline({ stick }: { stick: StickToBottom }) {
     hasResumableStream,
     lastTask,
     isLastExportFailure,
-    lastTaskStatus,
+    lastTaskStatus: currentLastTaskStatus,
     lastTaskStatusError,
+    lastFailedStage,
+    lastTaskResumable,
     messages,
   }
 }

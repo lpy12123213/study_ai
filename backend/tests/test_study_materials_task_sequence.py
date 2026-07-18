@@ -76,3 +76,46 @@ class TestStudyMaterialsTaskSequence(unittest.TestCase):
         self.assertEqual(data["task_id"], "sm-2")
         self.assertEqual(data["first_seq"], 8)
         self.assertEqual(data["last_seq"], 9)
+
+    def test_get_task_exposes_staged_recovery_without_markdown(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+
+        dummy = SimpleNamespace(
+            task_id="sm-staged-failure",
+            query="q",
+            user_id="u-1",
+            status="failed",
+            error="invalid_stage_result",
+            created_at_s=1.0,
+            updated_at_s=2.0,
+            first_seq=1,
+            last_seq=9,
+            resume_working_memory={
+                "study_materials_workflow": {
+                    "stage": "draft",
+                    "last_failure": {
+                        "code": "invalid_stage_result",
+                        "stage": "draft",
+                        "recoverable": True,
+                    },
+                    "markdown": "",
+                }
+            },
+            last_success_step=None,
+            last_failed_step=None,
+            last_success_stage="research",
+            last_failed_stage="write",
+            per_kp_state={},
+            search_summary_by_kp={},
+        )
+
+        with patch("backend.api.study_materials._tasks.get_task", new=AsyncMock(return_value=dummy)):
+            client = TestClient(app)
+            resp = client.get("/api/study-materials/tasks/sm-staged-failure")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data["resumable"])
+        self.assertTrue(data["recovery_available"])
+        self.assertEqual(data["last_failed_stage"], "draft")

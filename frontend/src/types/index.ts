@@ -50,6 +50,10 @@ export interface ConversationItem {
       tool?: string;
       error?: string;
     };
+    recovery?: {
+      stage?: string;
+      recoverable: boolean;
+    };
   };
   activeStream?: {
     taskType: 'study_materials';

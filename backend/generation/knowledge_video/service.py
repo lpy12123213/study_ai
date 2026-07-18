@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_text
-from backend.database.repositories.content.study_archives import get_study_archive
+from backend.database.repositories.content.study_archives import get_reusable_study_archive
 from backend.generation.knowledge_video.llm import generate_manim_package
 from backend.generation.knowledge_video.models import GeneratedVideoPackage, KnowledgeVideoRequest, RenderResult
 from backend.generation.knowledge_video.renderer import (
@@ -58,7 +58,7 @@ async def _hydrate_source_markdown(request: KnowledgeVideoRequest, *, user_id: s
     if request.source_markdown or request.source_archive_id <= 0:
         return request
     try:
-        archive = await get_study_archive(user_id=user_id, archive_id=request.source_archive_id)
+        archive = await get_reusable_study_archive(user_id=user_id, archive_id=request.source_archive_id)
     except Exception:
         logger.warning(
             "knowledge_video_source_archive_lookup_failed",

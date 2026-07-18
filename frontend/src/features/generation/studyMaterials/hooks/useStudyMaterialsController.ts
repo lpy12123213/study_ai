@@ -34,6 +34,8 @@ export function useStudyMaterialsController() {
     isLastExportFailure,
     lastTaskStatus,
     lastTaskStatusError,
+    lastFailedStage,
+    lastTaskResumable,
     messages,
   } = useStudyMaterialsTimeline({ stick })
 
@@ -193,6 +195,8 @@ export function useStudyMaterialsController() {
     activeConversation,
     lastTaskStatus,
     lastTaskStatusError,
+    lastFailedStage,
+    lastTaskResumable,
     messagesByConversation,
     messages,
     hasResumableStream,

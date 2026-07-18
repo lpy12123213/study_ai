@@ -16,6 +16,10 @@ export type StreamEventHandlerContext = {
     serverTaskId: string | null
     lastSeq: number
     done: boolean
+    recovery?: {
+      stage?: string
+      recoverable: boolean
+    }
   }
   assistant: AssistantMessageTracker
   subAgents: SubAgentTracker
@@ -206,6 +210,24 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
       return
     }
 
+    if (kind === 'recovery_available') {
+      const stage = toText(payload.stage).trim() || undefined
+      const recoverable = payload.recoverable !== false
+      state.recovery = { stage, recoverable }
+      if (state.serverTaskId) {
+        useConversationStore.getState().updateConversation(conversationId, {
+          resumable: recoverable,
+          lastTask: {
+            taskType: 'study_materials',
+            taskId: state.serverTaskId,
+            lastSeq: state.lastSeq,
+            recovery: state.recovery,
+          },
+        })
+      }
+      return
+    }
+
     if (kind === 'done') {
       state.done = true
       assistant.flushAssistant()
@@ -246,14 +268,19 @@ export function createStreamEventHandler(ctx: StreamEventHandlerContext) {
         useTaskStore.getState().failTask(localTaskId, msg)
       }
       if (state.serverTaskId) {
+        const payloadStage = toText(payload.stage).trim()
+        const recovery = payloadStage
+          ? { stage: payloadStage, recoverable: payload.recoverable !== false }
+          : state.recovery
         useConversationStore.getState().updateConversation(conversationId, {
           activeStream: undefined,
-          resumable: false,
+          resumable: recovery?.recoverable === true,
           status: 'failed',
           lastTask: {
             taskType: 'study_materials',
             taskId: state.serverTaskId,
             lastSeq: state.lastSeq,
+            recovery,
           },
         })
       }

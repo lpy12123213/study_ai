@@ -313,16 +313,26 @@ async def get_study_materials_task(task_id: str, user: dict = Depends(require_au
 
     wm = getattr(task, "resume_working_memory", None)
     wm_dict = wm if isinstance(wm, dict) else {}
-    # A task is only truly resumable when there is markdown content to extend
-    # or re-export. Mirrors continue_task's own resume contract.
-    resumable = bool(
-        wm_dict
-        and str(task.status or "").lower() != "running"
-        and (
-            str(wm_dict.get("markdown") or "").strip()
-            or str(wm_dict.get("assemble_study_archive") or "").strip()
-        )
+    workflow = wm_dict.get("study_materials_workflow")
+    workflow = workflow if isinstance(workflow, dict) else {}
+    last_failure = workflow.get("last_failure")
+    last_failure = last_failure if isinstance(last_failure, dict) else {}
+    task_status = str(task.status or "").lower()
+
+    # continue_task only requires a non-empty working-memory snapshot. Staged
+    # workflows can resume from plan/research/draft before markdown exists.
+    resumable = bool(wm_dict and task_status != "running")
+    recovery_available = bool(
+        resumable
+        and task_status == "failed"
+        and last_failure.get("recoverable") is not False
     )
+    workflow_failed_stage = str(last_failure.get("stage") or "").strip()
+    if not workflow_failed_stage and task_status == "failed":
+        candidate_stage = str(workflow.get("stage") or "").strip()
+        if candidate_stage in {"plan", "research", "draft", "review", "revise", "accept"}:
+            workflow_failed_stage = candidate_stage
+    last_failed_stage = workflow_failed_stage or str(task.last_failed_stage or "").strip()
 
     return {
         "task_id": task.task_id,
@@ -335,10 +345,11 @@ async def get_study_materials_task(task_id: str, user: dict = Depends(require_au
         "first_seq": first_seq,
         "last_seq": task.last_seq,
         "resumable": resumable,
+        "recovery_available": recovery_available,
         "last_success_step": task.last_success_step,
         "last_failed_step": task.last_failed_step,
         "last_success_stage": task.last_success_stage,
-        "last_failed_stage": task.last_failed_stage,
+        "last_failed_stage": last_failed_stage,
         "per_kp_state": task.per_kp_state,
         "search_summary_by_kp": task.search_summary_by_kp,
     }
