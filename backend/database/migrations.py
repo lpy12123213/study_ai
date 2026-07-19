@@ -128,6 +128,7 @@ def sync_migrate_db_schema(conn) -> None:
         )
         _ensure_index(conn, name="ix_question_library_subject", table="question_library", columns="subject")
         _ensure_index(conn, name="ix_question_library_origin", table="question_library", columns="origin")
+
         _ensure_index(conn, name="ix_question_library_hidden", table="question_library", columns="hidden")
         _ensure_index(conn, name="ix_question_library_starred", table="question_library", columns="starred")
         _ensure_index(
@@ -162,6 +163,16 @@ def sync_migrate_db_schema(conn) -> None:
             )
         except Exception:
             logger.warning("legacy_migration_question_library_unscored_index_failed", exc_info=True)
+
+    question_cache_cols = _table_cols(conn, "question_cache")
+    if question_cache_cols:
+        _add_col(
+            conn,
+            table="question_cache",
+            name="intuition_packet_json",
+            ddl="TEXT NOT NULL DEFAULT ''",
+            existing_cols=question_cache_cols,
+        )
 
     # Wrongbook SRS scheduling additions.
     wq_cols = _table_cols(conn, "wrong_questions")

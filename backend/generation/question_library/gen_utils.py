@@ -37,9 +37,9 @@ def _resolve_runtime_search_config(config: Optional[dict], *, count: int) -> dic
         else:
             cfg["beam_width"] = 8
     if "drafts_per_spec" not in explicit:
-        cfg["drafts_per_spec"] = 2
+        cfg["drafts_per_spec"] = 1
     if "expand_budget" not in explicit:
-        cfg["expand_budget"] = 60 if target <= 3 else 90 if target <= 5 else 120
+        cfg["expand_budget"] = 36 if target <= 3 else 54 if target <= 5 else 72
     cfg["max_concurrent_realize"] = max(1, int(explicit.get("max_concurrent_realize") or 4))
     cfg["max_concurrent_judge"] = max(1, int(explicit.get("max_concurrent_judge") or 3))
     return cfg

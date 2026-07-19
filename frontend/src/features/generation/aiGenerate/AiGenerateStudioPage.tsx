@@ -107,6 +107,7 @@ export function AiGenerateStudioPage() {
     textbookVersionId: sr.textbookVersionId,
     selectedKnowledgePointIds: sr.selectedKnowledgePointIds,
     selectedKnowledgeNodeLabels,
+    intuitionPractice: sr.intuitionPractice,
     isGenerating,
   })
 
@@ -261,6 +262,10 @@ export function AiGenerateStudioPage() {
               useReferenceQuestions={sr.useReferenceQuestions}
               referenceSource={sr.referenceSource}
               referenceYearRange={sr.referenceYearRange}
+              practiceGoal={sr.intuitionPractice.practice_goal}
+              intuitionKinds={sr.intuitionPractice.intuition_kinds}
+              packetSize={sr.intuitionPractice.packet_size}
+              feedbackMode={sr.intuitionPractice.feedback_mode}
               mode={sr.mode}
               subjects={(subjects || []).filter((item) => String((item as any).code || '').trim())}
               isGenerating={isGenerating}
@@ -279,6 +284,10 @@ export function AiGenerateStudioPage() {
               onUseReferenceQuestionsChange={sr.setUseReferenceQuestions}
               onReferenceSourceChange={(value) => sr.setReferenceSource(value as 'any' | 'gaokao' | 'mock' | 'joint')}
               onReferenceYearRangeChange={(value) => sr.setReferenceYearRange(value as 'all' | '3' | '5')}
+              onPracticeGoalChange={(value) => sr.setIntuitionPractice((prev) => ({ ...prev, practice_goal: value }))}
+              onIntuitionKindsChange={(value) => sr.setIntuitionPractice((prev) => ({ ...prev, intuition_kinds: value }))}
+              onPacketSizeChange={(value) => sr.setIntuitionPractice((prev) => ({ ...prev, packet_size: value }))}
+              onFeedbackModeChange={(value) => sr.setIntuitionPractice((prev) => ({ ...prev, feedback_mode: value }))}
               onModeChange={sr.setMode}
               onGenerate={inf.startGeneration}
               onStop={inf.stopAppend}
@@ -329,6 +338,21 @@ export function AiGenerateStudioPage() {
                       {sr.useStudyArchive ? '引用自学资料' : '不引用资料'}
                       <br />
                       {sr.useReferenceQuestions ? '参考真题' : '不参考真题'}
+                    </div>
+                  </div>
+                  <div className="rounded-[20px] border border-border/70 bg-background/75 p-4">
+                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">直觉练习</div>
+                    <div className="mt-2 leading-6 text-foreground">
+                      {sr.intuitionPractice.practice_goal === 'fluency'
+                        ? '熟练感'
+                        : sr.intuitionPractice.practice_goal === 'intuition_correction'
+                          ? '直觉纠错'
+                          : sr.intuitionPractice.practice_goal === 'transfer'
+                            ? '迁移'
+                            : sr.intuitionPractice.practice_goal === 'solution_appreciation'
+                              ? '解法品鉴'
+                              : '结构直觉'}
+                      {' · '}每题 {sr.intuitionPractice.packet_size} 个直觉环节
                     </div>
                   </div>
                 </div>

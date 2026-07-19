@@ -4,11 +4,11 @@ import json
 from typing import List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.llm.client import is_llm_configured
-from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.gen_common import _clip_unique
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
+from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 
 def _reference_analysis_system_prompt() -> str:
@@ -49,11 +49,11 @@ def _fallback_reference_analysis(topic: str, reference_questions: List[dict]) ->
         if question_type or knowledge:
             patterns.append(f"围绕{knowledge or topic_text}设计{question_type or '综合'}设问，保持题干结构紧凑。")
         if difficulty:
-            difficulty_markers.append(f"参考题整体难度以{difficulty}为主，常通过条件变化与多步推导拉开区分度。")
+            difficulty_markers.append(f"参考题整体难度以{difficulty}为主；只借鉴课内知识边界与认知负荷，不把长推导本身当作优点。")
         if source:
             innovative_angles.append(f"可借鉴{source}中的设问切入角度，但需替换具体数值、情境与结论。")
         if question.get("answer") or question.get("analysis"):
-            format_conventions.append("答案先给关键结论，再用解析补足必要推导与分类讨论。")
+            format_conventions.append("答案先给关键结论，再用最短充分证据解释决定性结构。")
         normalized_example = _normalize_reference_example(
             {
                 "question_id": question.get("question_id"),
@@ -69,8 +69,8 @@ def _fallback_reference_analysis(topic: str, reference_questions: List[dict]) ->
     patterns = _clip_unique(
         patterns
         + [
-            f"围绕{topic_text or '目标知识点'}设置分层条件与递进式设问。",
-            "优先采用真实试卷常见的多步推导、分类讨论或参数变化结构。",
+            f"围绕{topic_text or '目标知识点'}提取可先预测、再验证的决定性结构线索。",
+            "优先识别典型表征、不变量、边界变化和容易产生的错误直觉。",
             "避免直接套用教材例题表达，保持真题风格但不复刻原题。",
         ],
         6,
@@ -78,8 +78,8 @@ def _fallback_reference_analysis(topic: str, reference_questions: List[dict]) ->
     difficulty_markers = _clip_unique(
         difficulty_markers
         + [
-            "难度标定以条件复杂度、运算量和是否需要分类讨论为主。",
-            "高质量参考题通常在结论明确前要求先完成关键中间量或辅助量构造。",
+            "难度标定同时考虑知识边界、表征转换、推理负荷和运算量，避免用步骤长度替代难度。",
+            "自主练习应保持低入口，用一个决定性观察和短验证形成可迁移的内部模型。",
         ],
         6,
     )
@@ -95,7 +95,7 @@ def _fallback_reference_analysis(topic: str, reference_questions: List[dict]) ->
         format_conventions
         + [
             "答案表述保持结论清晰，解析按关键步骤推进，不写多余点评。",
-            "若有多问，解析需与题目顺序对应，并在必要处点明分类依据。",
+            "若有多阶段，解析需对应第一感觉、结构解释、最小检验和迁移任务。",
         ],
         6,
     )
@@ -179,7 +179,16 @@ async def analyze_reference_questions(
         messages=[
             {
                 "role": "system",
-                "content": _reference_analysis_system_prompt(),
+                "content": (
+                    _reference_analysis_system_prompt()
+                    + "\n\n"
+                    "<purpose>References serve student intuition practice, not imitation of exam difficulty.</purpose>\n"
+                    "<extract>Extract only curriculum boundaries, decisive structural cues, useful representations, invariants/boundaries, and common false intuitions.</extract>\n"
+                    "<avoid>Do not praise long derivations, parameter case counts, large computation, or finale-question difficulty as quality by themselves.</avoid>\n"
+                    "<transfer>Describe how to preserve the underlying structure while changing at least two surface features.</transfer>\n"
+                    "<anti_copy>Never copy the reference stem, values, context, conclusion, or solution wording.</anti_copy>\n"
+                    "<output_format>Output one strict JSON object matching output_schema.</output_format>"
+                ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],

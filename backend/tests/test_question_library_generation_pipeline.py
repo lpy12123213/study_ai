@@ -4,6 +4,48 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 
+def _test_intuition_packet(tag: str = "base") -> dict:
+    return {
+        "version": "1.0",
+        "practice_goal": "structural_intuition",
+        "atom": {
+            "concept": f"函数结构-{tag}",
+            "internal_model": "把函数看成变化关系而不是公式字符串。",
+            "mental_action": "先预测，再用最短证据校准。",
+            "decisive_cue": f"决定性线索-{tag}",
+            "expected_first_feel": "先判断变化方向。",
+            "common_false_intuition": "只看表面数字。",
+            "formal_anchor": "检查导数符号。",
+            "transfer_mutation": f"保留结构并改变表征-{tag}",
+            "boundary_flip": "改变关键条件观察结论翻转。",
+            "feedback": "指出抓对的结构并校准偏差。",
+        },
+        "stages": [
+            {"stage": "perception", "kind": "prediction", "prompt": f"先预测-{tag}"},
+            {
+                "stage": "model_externalization",
+                "kind": "representation",
+                "prompt": f"外化模型-{tag}",
+            },
+            {"stage": "transfer", "kind": "representation", "prompt": f"迁移判断-{tag}"},
+        ],
+    }
+
+
+def _quick_validation(*, passed: bool = True, issues: list[str] | None = None) -> dict:
+    return {
+        "pass": passed,
+        "scope_ok": passed,
+        "answer_correct": passed,
+        "answer_analysis_consistent": passed,
+        "conditions_sufficient": passed,
+        "unambiguous": passed,
+        "transfer_valid": passed,
+        "issues": list(issues or ([] if passed else ["answer_incorrect"])),
+        "summary": "ok" if passed else "needs repair",
+    }
+
+
 class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
     async def test_chat_json_with_reasoning_executes_scientific_compute_tool_and_emits_logs(self) -> None:
         from backend.generation.question_library import gen_llm
@@ -240,6 +282,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                     "skill": str(spec.get("skill") or ""),
                     "reasoning": str(spec.get("reasoning") or ""),
                     "surface": str(spec.get("surface") or ""),
+                    "intuition_packet": _test_intuition_packet(str(spec.get("spec_id") or "")),
                 }
             ]
 
@@ -253,21 +296,22 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.generation.realize_drafts",
             new=AsyncMock(side_effect=fake_realize_drafts),
         ), patch(
-            "backend.generation.question_library.generation.solve_draft",
-            new=AsyncMock(return_value={"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}),
-        ), patch(
-            "backend.generation.question_library.generation.check_ambiguity",
-            new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
-        ), patch(
-            "backend.generation.question_library.generation.judge_draft",
-            new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "中等"}),
+            "backend.generation.question_library.generation.quick_validate_draft",
+            new=AsyncMock(return_value=_quick_validation()),
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["参数讨论"]},
+                source_pack={
+                    "subject": "高中数学",
+                    "topic": "导数",
+                    "study_markdown": "",
+                    "skills": ["参数讨论"],
+                    "question_requirements": ["课内"],
+                },
                 count=2,
                 difficulty="中等",
                 question_type="解答题",
                 on_stage_event=stage_events.append,
+                config={"enable_brainstorm": False},
             )
 
         self.assertTrue(out)
@@ -321,6 +365,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                     "skill": str(spec.get("skill") or ""),
                     "reasoning": str(spec.get("reasoning") or ""),
                     "surface": str(spec.get("surface") or ""),
+                    "intuition_packet": _test_intuition_packet(str(spec.get("spec_id") or "")),
                 }
             ]
 
@@ -334,31 +379,31 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.generation.realize_drafts",
             new=AsyncMock(side_effect=fake_realize_drafts),
         ), patch(
-            "backend.generation.question_library.generation.solve_draft",
-            new=AsyncMock(return_value={"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}),
-        ), patch(
-            "backend.generation.question_library.generation.check_ambiguity",
-            new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
-        ), patch(
-            "backend.generation.question_library.generation.judge_draft",
-            new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "困难"}),
+            "backend.generation.question_library.generation.quick_validate_draft",
+            new=AsyncMock(return_value=_quick_validation()),
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["参数讨论"]},
+                source_pack={
+                    "subject": "高中数学",
+                    "topic": "导数",
+                    "study_markdown": "",
+                    "skills": ["参数讨论"],
+                    "question_requirements": ["课内"],
+                },
                 count=2,
                 difficulty="困难",
                 question_type="解答题",
-                config={"beam_width": 4, "drafts_per_spec": 1},
+                config={"enable_brainstorm": False, "beam_width": 4, "drafts_per_spec": 1},
             )
 
         self.assertTrue(out)
         self.assertGreater(max_realize, 1)
 
-    async def test_generate_questions_judge_stage_runs_solve_concurrently(self) -> None:
+    async def test_generate_questions_quick_validation_runs_candidates_concurrently(self) -> None:
         from backend.generation.question_library.generation import generate_questions
 
-        active_solves = 0
-        max_solves = 0
+        active_validations = 0
+        max_validations = 0
         base_specs = [
             {
                 "spec_id": f"spec-{idx}",
@@ -395,17 +440,18 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                     "skill": str(spec.get("skill") or ""),
                     "reasoning": str(spec.get("reasoning") or ""),
                     "surface": str(spec.get("surface") or ""),
+                    "intuition_packet": _test_intuition_packet(str(spec.get("spec_id") or "")),
                 }
             ]
 
-        async def fake_solve(*args, **kwargs):  # type: ignore[no-untyped-def]
-            nonlocal active_solves, max_solves
+        async def fake_quick_validate(*args, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal active_validations, max_validations
             _ = args, kwargs
-            active_solves += 1
-            max_solves = max(max_solves, active_solves)
+            active_validations += 1
+            max_validations = max(max_validations, active_validations)
             await asyncio.sleep(0.01)
-            active_solves -= 1
-            return {"match": True, "final_answer": "答案", "issues": [], "summary": "ok"}
+            active_validations -= 1
+            return _quick_validation()
 
         with patch("backend.generation.question_library.generation.is_llm_configured", return_value=True), patch(
             "backend.generation.question_library.generation.seed_root_specs", return_value=base_specs
@@ -417,27 +463,27 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.generation.realize_drafts",
             new=AsyncMock(side_effect=fake_realize_drafts),
         ), patch(
-            "backend.generation.question_library.generation.solve_draft",
-            new=AsyncMock(side_effect=fake_solve),
-        ), patch(
-            "backend.generation.question_library.generation.check_ambiguity",
-            new=AsyncMock(return_value={"ambiguous": False, "issues": [], "summary": "ok"}),
-        ), patch(
-            "backend.generation.question_library.generation.judge_draft",
-            new=AsyncMock(return_value={"pass": True, "overall_score": 90, "issues": [], "summary": "ok", "difficulty_estimate": "困难"}),
+            "backend.generation.question_library.generation.quick_validate_draft",
+            new=AsyncMock(side_effect=fake_quick_validate),
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["参数讨论"]},
+                source_pack={
+                    "subject": "高中数学",
+                    "topic": "导数",
+                    "study_markdown": "",
+                    "skills": ["参数讨论"],
+                    "question_requirements": ["课内"],
+                },
                 count=2,
                 difficulty="困难",
                 question_type="解答题",
-                config={"beam_width": 3, "drafts_per_spec": 1, "solver_consensus_n": 2},
+                config={"enable_brainstorm": False, "beam_width": 3, "drafts_per_spec": 1},
             )
 
         self.assertTrue(out)
-        self.assertGreater(max_solves, 1)
+        self.assertGreater(max_validations, 1)
 
-    async def test_generate_questions_rejects_difficulty_mismatch_after_judge(self) -> None:
+    async def test_generate_questions_accepts_low_entry_task_without_difficulty_veto(self) -> None:
         from backend.generation.question_library.generation import generate_questions
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
@@ -480,11 +526,12 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["分类讨论"], "question_requirements": ["课内"]},
                 count=1,
                 difficulty="困难",
                 question_type="解答题",
                 config={
+                    "enable_brainstorm": False,
                     "beam_width": 1,
                     "expand_budget": 6,
                     "skill_branch_factor": 1,
@@ -496,15 +543,20 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-        self.assertEqual(out, [])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(str(out[0].get("stem") or ""), "题干-难度不匹配")
 
-    async def test_generate_questions_filters_low_quality_and_keeps_novel(self) -> None:
+    async def test_generate_questions_filters_only_failed_quick_validation(self) -> None:
         from backend.generation.question_library.generation import generate_questions
         stage_events: list[dict] = []
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
             _ = kwargs
-            prompt = "\n".join([str(m.get("content") or "") for m in (messages or []) if isinstance(m, dict)])
+            try:
+                review_payload = json.loads(str((messages or [])[-1].get("content") or "{}"))
+            except (AttributeError, IndexError, json.JSONDecodeError):
+                review_payload = {}
+            reviewed_stem = str(((review_payload.get("question") or {}) if isinstance(review_payload, dict) else {}).get("stem") or "")
 
             if req_id_prefix == "qlg":
                 return json.dumps(
@@ -542,7 +594,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 return json.dumps({"ambiguous": False, "issues": [], "summary": "表述清晰。"}, ensure_ascii=False)
 
             if req_id_prefix == "ql_judge":
-                if "求其单调区间" in prompt:
+                if "求其单调区间" in reviewed_stem:
                     overall = 60
                     dims = [
                         {"name": "思维含量", "score": 4, "comment": "套路题"},
@@ -609,12 +661,13 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数应用", "study_markdown": ""},
+                source_pack={"subject": "高中数学", "topic": "导数应用", "study_markdown": "", "skills": ["分类讨论"], "question_requirements": ["课内"]},
                 count=1,
                 difficulty="困难",
                 question_type="解答题",
                 on_stage_event=stage_events.append,
                 config={
+                    "enable_brainstorm": False,
                     "beam_width": 1,
                     "expand_budget": 10,
                     "skill_branch_factor": 1,
@@ -623,7 +676,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                     "surface_branch_factor": 1,
                     "drafts_per_spec": 2,
                     "judge_pass_score": 80,
-                    "max_repair_rounds": 1,
+                    "max_repair_rounds": 0,
                     "solver_consensus_n": 1,
                 },
             )
@@ -643,7 +696,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         for evt in judge_events:
             stats = evt.get("stats") if isinstance(evt.get("stats"), dict) else {}
             reject_counts.update(stats.get("reject_reason_counts") or {})
-        self.assertIn("judge_below_floor", reject_counts)
+        self.assertIn("answer_incorrect", reject_counts)
 
     async def test_generate_questions_isolates_single_spec_realize_failure(self) -> None:
         from backend.generation.question_library.generation import generate_questions
@@ -686,11 +739,12 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["分类讨论"], "question_requirements": ["课内"]},
                 count=1,
                 difficulty="困难",
                 question_type="解答题",
                 config={
+                    "enable_brainstorm": False,
                     "beam_width": 2,
                     "expand_budget": 8,
                     "skill_branch_factor": 1,
@@ -705,7 +759,7 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(str(out[0].get("stem") or ""), "题干-可保留")
 
-    async def test_generate_questions_mismatch_and_ambiguity_are_penalties_not_veto(self) -> None:
+    async def test_generate_questions_failed_quick_validation_is_hard_veto(self) -> None:
         from backend.generation.question_library.generation import generate_questions
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
@@ -758,11 +812,12 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["分类讨论"], "question_requirements": ["课内"]},
                 count=1,
                 difficulty="困难",
                 question_type="解答题",
                 config={
+                    "enable_brainstorm": False,
                     "beam_width": 1,
                     "expand_budget": 6,
                     "skill_branch_factor": 1,
@@ -774,18 +829,19 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-        self.assertEqual(len(out), 1)
-        self.assertEqual(str(out[0].get("stem") or ""), "题干-高质量")
+        self.assertEqual(out, [])
 
-    async def test_generate_questions_skips_repair_for_very_low_scores(self) -> None:
+    async def test_generate_questions_repairs_at_most_once_without_score_band(self) -> None:
         from backend.generation.question_library.generation import generate_questions
 
         repair_calls = 0
+        qlg_calls = 0
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
             _ = messages, kwargs
-            nonlocal repair_calls
+            nonlocal repair_calls, qlg_calls
             if req_id_prefix == "qlg":
+                qlg_calls += 1
                 return json.dumps(
                     {"questions": [{"stem": "题干-低分", "answer": "答案", "analysis": "解析"}]},
                     ensure_ascii=False,
@@ -821,11 +877,12 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             "backend.generation.question_library.gen_llm.chat_completion_text", new=AsyncMock(side_effect=fake_chat_completion_text)
         ):
             out = await generate_questions(
-                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": ""},
+                source_pack={"subject": "高中数学", "topic": "导数", "study_markdown": "", "skills": ["分类讨论"], "question_requirements": ["课内"]},
                 count=1,
                 difficulty="困难",
                 question_type="解答题",
                 config={
+                    "enable_brainstorm": False,
                     "beam_width": 1,
                     "expand_budget": 6,
                     "skill_branch_factor": 1,
@@ -840,4 +897,5 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(out, [])
-        self.assertEqual(repair_calls, 0)
+        self.assertGreater(repair_calls, 0)
+        self.assertLessEqual(repair_calls, qlg_calls)

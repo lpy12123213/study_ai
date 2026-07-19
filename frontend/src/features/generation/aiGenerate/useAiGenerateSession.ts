@@ -4,6 +4,7 @@ import type {
 } from '@/api/questionLibrary'
 import { generateId } from '@/lib/utils'
 import type { QuestionLibraryDraftPreview } from '@/features/generation/questionLibrary/hooks/useQuestionLibraryTasks'
+import { normalizeIntuitionPractice } from '@/features/generation/aiGenerate/types'
 import type {
   AiGenerateDraftCard,
   AiGenerateReasonBlock,
@@ -45,6 +46,7 @@ function mapDraftQuestion(
   index: number,
   input: QuestionLibraryDraftQuestion,
   confirmedIds: string[],
+  practiceAttempts?: QuestionLibrarySessionDetail['practice_attempts'],
 ): AiGenerateDraftCard {
   const reviewStatus = toReviewStatus(input.review_status)
   const questionId = String(input.question_id || '').trim()
@@ -85,6 +87,8 @@ function mapDraftQuestion(
           }))
           .filter((item) => item.url)
       : undefined,
+    intuitionPacket: input.intuition_packet,
+    practiceState: practiceAttempts?.[questionId],
     sections: {
       stem: buildSection('题干', input.stem),
       answer: buildSection('答案', input.answer),
@@ -135,6 +139,9 @@ export function reduceTaskPreviewToSession(preview: QuestionLibraryDraftPreview)
       useReferenceQuestions: preview.useReferenceQuestions !== false,
       referenceSource: String(preview.referenceSource || 'any').trim() || 'any',
       referenceYearRange: String(preview.referenceYearRange || 'all').trim() || 'all',
+      intuitionPractice: normalizeIntuitionPractice(
+        (preview as any).intuitionPractice ?? (preview as any).intuition_practice
+      ),
     },
     drafts: (preview.draftQuestions || []).map((item, index) => mapDraftQuestion(index, item, confirmedIds)),
     confirmedIds,
@@ -168,8 +175,11 @@ export function reduceSessionDetailToSession(detail: QuestionLibrarySessionDetai
       textbookVersionId: String((detail as any).textbook_version_id || '').trim(),
       knowledgePointIds: [...((detail as any).knowledge_point_ids || [])],
       knowledgePoints: [...((detail as any).knowledge_points || [])],
+      intuitionPractice: normalizeIntuitionPractice((detail as any).intuition_practice),
     },
-    drafts: (detail.draft_questions || []).map((item, index) => mapDraftQuestion(index, item, confirmedIds)),
+    drafts: (detail.draft_questions || []).map((item, index) =>
+      mapDraftQuestion(index, item, confirmedIds, detail.practice_attempts)
+    ),
     confirmedIds,
     reasoningBlocks: normalizeReasonBlocks(detail.reasoning_blocks),
     taskEvents: Array.isArray(detail.task_events) ? detail.task_events : [],
@@ -193,6 +203,7 @@ export function createQueuedSession(input: {
   textbookVersionId?: string
   knowledgePointIds?: string[]
   knowledgePoints?: string[]
+  intuitionPractice?: unknown
 }): AiGenerateStudioSession {
   const count = Math.max(1, Math.min(Number(input.count || 1), 10))
   const drafts: AiGenerateDraftCard[] = Array.from({ length: count }).map((_, index) => {
@@ -235,6 +246,7 @@ export function createQueuedSession(input: {
       textbookVersionId: String(input.textbookVersionId || '').trim(),
       knowledgePointIds: [...(input.knowledgePointIds || [])],
       knowledgePoints: [...(input.knowledgePoints || [])],
+      intuitionPractice: normalizeIntuitionPractice(input.intuitionPractice),
     },
     drafts,
     confirmedIds: [],
@@ -263,6 +275,8 @@ export function updateDraftSection(
 ): AiGenerateStudioSession {
   return updateDraft(session, questionId, (draft) => ({
     ...draft,
+    intuitionPacket: undefined,
+    practiceState: undefined,
     sections: {
       ...draft.sections,
       [sectionKey]: {
@@ -320,6 +334,8 @@ export function finalizeDraftSectionRegeneration(
   return updateDraft(session, questionId, (draft) => ({
     ...draft,
     status: reviewStatusLabel(draft.reviewStatus),
+    intuitionPacket: undefined,
+    practiceState: undefined,
     sections: {
       ...draft.sections,
       [sectionKey]: {
@@ -340,6 +356,8 @@ export function applyRegeneratedDraftSection(
   return updateDraft(session, questionId, (draft) => ({
     ...draft,
     status: reviewStatusLabel(draft.reviewStatus),
+    intuitionPacket: undefined,
+    practiceState: undefined,
     sections: {
       ...draft.sections,
       [sectionKey]: {
@@ -449,6 +467,7 @@ export function toCommitQuestions(session: AiGenerateStudioSession): QuestionLib
           }))
           .filter((item) => item.url)
       : undefined,
+    intuition_packet: draft.intuitionPacket,
     review_status: draft.reviewStatus,
     review: draft.review
       ? {

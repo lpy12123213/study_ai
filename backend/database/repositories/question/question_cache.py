@@ -43,6 +43,19 @@ def _to_json_str(value: Any) -> str:
     return ""
 
 
+def _parse_json_obj(value: Any) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
 async def get_question_cache(
     *,
     question_ids: Iterable[str],
@@ -62,6 +75,7 @@ async def get_question_cache(
 
     out: Dict[str, dict] = {}
     for r in rows:
+        intuition_packet_json = str(getattr(r, "intuition_packet_json", "") or "")
         out[str(r.question_id)] = {
             "question_id": r.question_id,
             "subject": r.subject,
@@ -73,6 +87,8 @@ async def get_question_cache(
             "stem_fingerprint": r.stem_fingerprint or "",
             "answer": r.answer or "",
             "analysis": r.analysis or "",
+            "intuition_packet_json": intuition_packet_json,
+            "intuition_packet": _parse_json_obj(intuition_packet_json),
             "difficulty_value": r.difficulty_value,
             "quality_score": int(r.quality_score or 0),
             "quality_flags": r.quality_flags or "",
@@ -101,6 +117,11 @@ async def upsert_question_cache(items: List[dict], *, session: Optional[AsyncSes
         qid = str(it.get("question_id") or "").strip()
         if not qid:
             continue
+        if "intuition_packet" in it or "intuition_packet_json" in it:
+            intuition_packet_json = _to_json_str(it.get("intuition_packet_json") or it.get("intuition_packet") or "")
+        else:
+            existing = await session.get(QuestionCache, qid)
+            intuition_packet_json = str(getattr(existing, "intuition_packet_json", "") or "") if existing else ""
         row = QuestionCache(
             question_id=qid,
             subject=str(it.get("subject") or "").strip(),
@@ -112,6 +133,7 @@ async def upsert_question_cache(items: List[dict], *, session: Optional[AsyncSes
             stem_fingerprint=str(it.get("stem_fingerprint") or it.get("stem_fp") or "").strip(),
             answer=_clip(str(it.get("answer") or it.get("solution") or ""), 12000),
             analysis=_clip(str(it.get("analysis") or it.get("explanation") or ""), 20000),
+            intuition_packet_json=_clip(intuition_packet_json, 50000),
             difficulty_value=it.get("difficulty_value"),
             quality_score=int(it.get("quality_score") or 0),
             quality_flags=_to_json_str(it.get("quality_flags") or ""),

@@ -97,6 +97,102 @@ export interface CrawlQuestionsPayload {
   task_id?: string
 }
 
+export type IntuitionPracticeGoal =
+  | 'fluency'
+  | 'structural_intuition'
+  | 'intuition_correction'
+  | 'transfer'
+  | 'solution_appreciation'
+
+export type IntuitionKind =
+  | 'prediction'
+  | 'representation'
+  | 'invariant'
+  | 'boundary'
+  | 'counterexample'
+  | 'solution_comparison'
+
+export type IntuitionFeedbackMode = 'guided' | 'concise' | 'reflective'
+
+export interface IntuitionPracticeConfig {
+  practice_goal: IntuitionPracticeGoal
+  intuition_kinds: IntuitionKind[]
+  packet_size: number
+  feedback_mode: IntuitionFeedbackMode
+}
+
+export type IntuitionPracticeStageName =
+  | 'perception'
+  | 'model_externalization'
+  | 'minimal_check'
+  | 'transfer'
+  | 'appreciation'
+
+export interface IntuitionPracticeAtom {
+  concept: string
+  internal_model: string
+  mental_action: string
+  decisive_cue: string
+  expected_first_feel: string
+  common_false_intuition: string
+  formal_anchor: string
+  transfer_mutation: string
+  boundary_flip: string
+  feedback: string
+}
+
+export interface IntuitionPracticeStage {
+  stage: IntuitionPracticeStageName
+  kind: IntuitionKind
+  prompt: string
+  hint?: string
+  expected_answer?: string
+  feedback?: string
+}
+
+export interface IntuitionPacket {
+  version: '1.0' | string
+  practice_goal: IntuitionPracticeGoal
+  atom: IntuitionPracticeAtom
+  stages: IntuitionPracticeStage[]
+  curriculum_alignment?: {
+    knowledge_points: string[]
+    scope_note: string
+    in_scope?: boolean
+  }
+  validation?: {
+    status: 'pending' | 'passed' | 'failed'
+    scope_ok: boolean
+    answer_correct: boolean
+    answer_analysis_consistent: boolean
+    conditions_sufficient: boolean
+    unambiguous: boolean
+    transfer_valid: boolean
+    issues: string[]
+    repaired: boolean
+  }
+}
+
+export interface IntuitionPracticeAttempt {
+  phase?: IntuitionPracticeStageName
+  first_guess?: string
+  final_response?: string
+  confidence?: number
+  hint_level?: number
+  transfer_correct?: boolean | null
+  reflection?: string
+  completed?: boolean
+  completed_at_s?: number
+  updated_at_s?: number
+  stage_responses?: Partial<Record<IntuitionPracticeStageName, {
+    initial_response?: string
+    final_response?: string
+    confidence?: number
+    hint_level?: number
+    revealed_at_s?: number
+  }>>
+}
+
 export interface GenerateQuestionsPayload {
   subject: string
   topic: string
@@ -115,6 +211,7 @@ export interface GenerateQuestionsPayload {
   knowledge_points?: string[]
   append?: boolean
   stream_reasoning?: boolean
+  intuition_practice?: IntuitionPracticeConfig
   task_id?: string
 }
 
@@ -144,6 +241,7 @@ export interface QuestionLibraryDraftQuestion {
     caption?: string
     markdown?: string
   }>
+  intuition_packet?: IntuitionPacket
   review_status?: 'pending_review' | 'in_review' | 'approved' | 'rejected' | 'confirmed' | 'committed'
   review?: {
     verdict: string
@@ -170,6 +268,7 @@ export interface QuestionLibraryPreviewResponse {
   use_reference_questions?: boolean
   reference_source?: 'any' | 'gaokao' | 'mock' | 'joint'
   reference_year_range?: 'all' | '3' | '5'
+  intuition_practice?: IntuitionPracticeConfig
   count: number
   draft_questions: QuestionLibraryDraftQuestion[]
 }
@@ -225,6 +324,7 @@ export interface QuestionLibrarySessionSummary {
   use_reference_questions?: boolean
   reference_source?: 'any' | 'gaokao' | 'mock' | 'joint'
   reference_year_range?: 'all' | '3' | '5'
+  intuition_practice?: IntuitionPracticeConfig
   task_ids: string[]
   latest_task_id?: string
   updated_at_s?: number
@@ -243,6 +343,7 @@ export interface QuestionLibrarySessionDetail extends QuestionLibrarySessionSumm
   knowledge_point_ids?: string[]
   knowledge_points?: string[]
   stream_reasoning?: boolean
+  practice_attempts?: Record<string, IntuitionPracticeAttempt>
   draft_questions: QuestionLibraryDraftQuestion[]
   reasoning_blocks: QuestionLibraryReasoningBlock[]
   task_events: SseEnvelope[]

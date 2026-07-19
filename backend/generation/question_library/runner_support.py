@@ -6,8 +6,13 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.generation.question_library.generation import build_ai_question_id
+from backend.generation.question_library.intuition_practice import normalize_intuition_practice_config
 from backend.generation.question_library.preview_store import load_session, new_preview_id, new_session_id, save_session
-from backend.generation.question_library.session_utils import draft_identity, normalize_draft_questions, normalize_review_status
+from backend.generation.question_library.session_utils import (
+    draft_identity,
+    normalize_draft_questions,
+    normalize_review_status,
+)
 from backend.shared.tasks import RuntimeTask, task_runtime
 
 
@@ -37,6 +42,7 @@ def _ensure_session(
     knowledge_points: List[str],
     task_id: str,
     stream_reasoning: bool,
+    intuition_practice: Optional[dict] = None,
 ) -> dict:
     existing = load_session(session_id) if session_id else None
     session = dict(existing or {})
@@ -69,6 +75,9 @@ def _ensure_session(
     session["knowledge_point_ids"] = [str(item or "").strip() for item in (knowledge_point_ids or []) if str(item or "").strip()]
     session["knowledge_points"] = [str(item or "").strip() for item in (knowledge_points or []) if str(item or "").strip()]
     session["stream_reasoning"] = bool(stream_reasoning)
+    session["intuition_practice"] = normalize_intuition_practice_config(
+        intuition_practice or session.get("intuition_practice")
+    )
     session["stop_requested"] = False if task_id else bool(session.get("stop_requested"))
 
     task_ids = list(session.get("task_ids") or []) if isinstance(session.get("task_ids"), list) else []
@@ -80,6 +89,7 @@ def _ensure_session(
     session.setdefault("reasoning_blocks", [])
     session.setdefault("draft_questions", [])
     session.setdefault("confirmed_question_ids", [])
+    session.setdefault("practice_attempts", {})
     return save_session(session)
 
 
@@ -248,6 +258,7 @@ def _materialize_drafts(
             continue
         diagrams = item.get("diagrams")
         normalized_diagrams = [d for d in diagrams if isinstance(d, dict)][:6] if isinstance(diagrams, list) else None
+        intuition_packet = item.get("intuition_packet") if isinstance(item.get("intuition_packet"), dict) else None
         key = draft_identity({"stem": stem, "answer": answer, "analysis": analysis})
         qid = str(item.get("question_id") or "").strip() or draft_key_to_id.get(key) or build_ai_question_id(
             suffix=uuid.uuid4().hex[:8]
@@ -268,6 +279,7 @@ def _materialize_drafts(
                     else {}
                 ),
                 **({"diagrams": normalized_diagrams} if normalized_diagrams is not None else {}),
+                **({"intuition_packet": dict(intuition_packet)} if intuition_packet is not None else {}),
             }
         )
     return out, draft_key_to_id

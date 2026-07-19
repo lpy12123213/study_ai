@@ -1,10 +1,112 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 HiddenFilter = Literal["0", "1", "all"]
+
+PracticeGoal = Literal[
+    "fluency",
+    "structural_intuition",
+    "intuition_correction",
+    "transfer",
+    "solution_appreciation",
+]
+IntuitionKind = Literal[
+    "prediction",
+    "representation",
+    "invariant",
+    "boundary",
+    "counterexample",
+    "solution_comparison",
+]
+FeedbackMode = Literal["guided", "concise", "reflective"]
+IntuitionPacketStageName = Literal[
+    "perception",
+    "model_externalization",
+    "minimal_check",
+    "transfer",
+    "appreciation",
+]
+
+
+class QuestionLibraryIntuitionPracticeConfig(BaseModel):
+    practice_goal: PracticeGoal = "structural_intuition"
+    intuition_kinds: List[IntuitionKind] = Field(
+        default_factory=lambda: ["prediction", "representation", "invariant"]
+    )
+    packet_size: int = Field(default=3, ge=3, le=5)
+    feedback_mode: FeedbackMode = "guided"
+
+
+class QuestionLibraryIntuitionAtom(BaseModel):
+    concept: str = ""
+    internal_model: str = ""
+    mental_action: str = ""
+    decisive_cue: str = ""
+    expected_first_feel: str = ""
+    common_false_intuition: str = ""
+    formal_anchor: str = ""
+    transfer_mutation: str = ""
+    boundary_flip: str = ""
+    feedback: str = ""
+
+
+class QuestionLibraryIntuitionPacketStage(BaseModel):
+    stage: IntuitionPacketStageName
+    kind: IntuitionKind
+    prompt: str = ""
+    hint: str = ""
+    expected_answer: str = ""
+    feedback: str = ""
+
+
+class QuestionLibraryIntuitionCurriculumAlignment(BaseModel):
+    knowledge_points: List[str] = Field(default_factory=list)
+    scope_note: str = ""
+    in_scope: Optional[bool] = None
+
+
+class QuestionLibraryIntuitionValidation(BaseModel):
+    status: Literal["pending", "passed", "failed"] = "pending"
+    scope_ok: bool = False
+    answer_correct: bool = False
+    answer_analysis_consistent: bool = False
+    conditions_sufficient: bool = False
+    unambiguous: bool = False
+    transfer_valid: bool = False
+    issues: List[str] = Field(default_factory=list)
+    repaired: bool = False
+
+
+class QuestionLibraryIntuitionPacket(BaseModel):
+    version: Literal["1.0"] = "1.0"
+    practice_goal: PracticeGoal = "structural_intuition"
+    atom: QuestionLibraryIntuitionAtom = Field(default_factory=QuestionLibraryIntuitionAtom)
+    stages: List[QuestionLibraryIntuitionPacketStage] = Field(default_factory=list)
+    curriculum_alignment: Optional[QuestionLibraryIntuitionCurriculumAlignment] = None
+    validation: Optional[QuestionLibraryIntuitionValidation] = None
+
+
+class QuestionLibraryPracticeStageStatePatch(BaseModel):
+    initial_response: Optional[str] = None
+    final_response: Optional[str] = None
+    confidence: Optional[float] = Field(default=None, ge=0, le=100)
+    hint_level: Optional[int] = Field(default=None, ge=0, le=4)
+    revealed_at_s: Optional[float] = Field(default=None, ge=0)
+
+
+class QuestionLibraryPracticeStatePatch(BaseModel):
+    phase: Optional[IntuitionPacketStageName] = None
+    first_guess: Optional[str] = None
+    final_response: Optional[str] = None
+    confidence: Optional[float] = Field(default=None, ge=0, le=100)
+    hint_level: Optional[int] = Field(default=None, ge=0, le=4)
+    transfer_correct: Optional[bool] = None
+    reflection: Optional[str] = None
+    stage_responses: Optional[Dict[IntuitionPacketStageName, QuestionLibraryPracticeStageStatePatch]] = None
+    completed: Optional[bool] = None
 
 
 class QuestionLibraryListResponseItem(BaseModel):
@@ -77,6 +179,9 @@ class QuestionLibraryGenerateRequest(BaseModel):
     append: bool = False
     stream_reasoning: bool = False
     task_id: str = ""
+    intuition_practice: QuestionLibraryIntuitionPracticeConfig = Field(
+        default_factory=QuestionLibraryIntuitionPracticeConfig
+    )
 
 
 class QuestionLibraryDraftReviewDimension(BaseModel):
@@ -113,6 +218,7 @@ class QuestionLibraryDraftQuestion(BaseModel):
     review_status: Literal["pending_review", "in_review", "approved", "rejected", "confirmed", "committed"] = "pending_review"
     review: Optional[QuestionLibraryDraftReview] = None
     diagrams: Optional[List[QuestionLibraryDiagram]] = None
+    intuition_packet: Optional[QuestionLibraryIntuitionPacket] = None
 
 
 class QuestionLibraryPreviewData(BaseModel):
@@ -129,6 +235,9 @@ class QuestionLibraryPreviewData(BaseModel):
     reference_source: Literal["any", "gaokao", "mock", "joint"] = "any"
     reference_year_range: Literal["all", "3", "5"] = "all"
     count: int = 0
+    intuition_practice: QuestionLibraryIntuitionPracticeConfig = Field(
+        default_factory=QuestionLibraryIntuitionPracticeConfig
+    )
     draft_questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
 
 

@@ -32,14 +32,25 @@ from backend.generation.question_library.gen_utils import (
     ReasoningEventHandler,
     StageEventHandler,
     _as_bool,
-    _difficulty_mismatch_penalty,
     _emit_callback,
     _emit_stage_event,
     _resolve_runtime_search_config,
     _summarize_candidate_sample,
     build_ai_question_id,
 )
-from backend.generation.question_library.judging import check_ambiguity, judge_draft, refine_draft, solve_draft
+from backend.generation.question_library.intuition_practice import (
+    attach_quick_validation,
+    intuition_packet_signature,
+    normalize_intuition_practice_config,
+    validate_intuition_packet_structure,
+)
+from backend.generation.question_library.judging import (
+    check_ambiguity,
+    judge_draft,
+    quick_validate_draft,
+    refine_draft,
+    solve_draft,
+)
 from backend.generation.question_library.reference_analysis import (
     analyze_reference_questions,
     enrich_source_pack_with_reference,
@@ -79,6 +90,7 @@ __all__ = [
     "solve_draft",
     "check_ambiguity",
     "judge_draft",
+    "quick_validate_draft",
     "refine_draft",
     # Final selection
     "select_final",
@@ -107,15 +119,24 @@ async def generate_questions(
     # Ensure source_pack contains distilled guidance for novelty/template avoidance.
     if not isinstance(source_pack, dict):
         source_pack = {}
+    original_source_pack = dict(source_pack)
+    practice_config = normalize_intuition_practice_config(original_source_pack.get("intuition_practice"))
+    source_pack = {**original_source_pack, "intuition_practice": practice_config}
     if not source_pack.get("skills") and not source_pack.get("forbidden_patterns"):
         try:
-            source_pack = await build_source_pack(
+            rebuilt_source_pack = await build_source_pack(
                 str(source_pack.get("study_markdown") or ""),
                 str(source_pack.get("subject") or ""),
                 str(source_pack.get("topic") or ""),
                 stream_reasoning=stream_reasoning,
                 on_reasoning_event=on_reasoning_event,
             )
+            # Distillation must not erase request-owned generation constraints.
+            source_pack = {
+                **original_source_pack,
+                **(rebuilt_source_pack if isinstance(rebuilt_source_pack, dict) else {}),
+                "intuition_practice": practice_config,
+            }
         except Exception:
             logger.warning(
                 "question_library_source_pack_build_failed",
@@ -204,7 +225,7 @@ async def generate_questions(
             await _emit_stage_event(
                 on_stage_event,
                 phase="brainstorm",
-                label="创意发散",
+                label="直觉原子设计",
                 progress=10.0,
                 stats={
                     "enabled": True,
@@ -217,7 +238,7 @@ async def generate_questions(
             await _emit_stage_event(
                 on_stage_event,
                 phase="brainstorm",
-                label="创意发散",
+                label="直觉原子设计",
                 progress=10.0,
                 stats={"enabled": False},
             )
@@ -250,7 +271,7 @@ async def generate_questions(
     await _emit_stage_event(
         on_stage_event,
         phase="spec_search",
-        label="规格搜索",
+        label="练习包设计",
         progress=20.0,
         stats={
             "root_specs": len(root_specs),
@@ -312,7 +333,7 @@ async def generate_questions(
     await _emit_stage_event(
         on_stage_event,
         phase="draft_realization",
-        label="草稿生成",
+        label="练习包生成",
         progress=55.0,
         stats={
             "spec_count": len(specs),
@@ -383,24 +404,12 @@ async def generate_questions(
             exc_info=True,
         )
 
-    # Stage: solver + ambiguity + judge + optional repair.
+    # Stage: one lightweight self-practice validation call + at most one repair.
     accepted: List[dict] = []
-    judge_floor = int(cfg.get("judge_pass_score") or DEFAULT_SEARCH_CONFIG["judge_pass_score"])
-    judge_require_pass_flag = _as_bool(cfg.get("judge_require_pass_flag"), default=False)
-    solver_consensus_n = max(1, min(int(cfg.get("solver_consensus_n") or 1), 3))
-    answer_mismatch_penalty = max(
-        0, int(cfg.get("answer_mismatch_penalty") or DEFAULT_SEARCH_CONFIG["answer_mismatch_penalty"])
-    )
-    ambiguity_penalty_score = max(
-        0, int(cfg.get("ambiguity_penalty_score") or DEFAULT_SEARCH_CONFIG["ambiguity_penalty_score"])
-    )
-    max_repairs = max(0, int(cfg.get("max_repair_rounds") or 0))
-    repair_band = max(0, int(cfg.get("repair_score_band") or DEFAULT_SEARCH_CONFIG["repair_score_band"]))
-    repair_min_score = max(0, int(cfg.get("repair_min_score") or DEFAULT_SEARCH_CONFIG["repair_min_score"]))
+    max_repairs = min(1, max(0, int(cfg.get("max_repair_rounds") or 0)))
     judged_total = 0
     repairs_attempted = 0
     reject_reason_counts: Dict[str, int] = {}
-    difficulty_tolerance = float(cfg.get("difficulty_tolerance") or DEFAULT_SEARCH_CONFIG["difficulty_tolerance"])
     judge_sem = asyncio.Semaphore(max(1, int(cfg.get("max_concurrent_judge") or 3)))
 
     def _bump_reject_reasons(reasons: List[str]) -> None:
@@ -409,61 +418,6 @@ async def generate_questions(
             if not key:
                 continue
             reject_reason_counts[key] = int(reject_reason_counts.get(key) or 0) + 1
-
-    async def _solve_with_consensus(stem_text: str, solve_options: dict) -> dict:
-        async def _run_solve() -> dict:
-            try:
-                result = await solve_draft(
-                    stem_text,
-                    solve_options,
-                    stream_reasoning=stream_reasoning,
-                    on_reasoning_event=on_reasoning_event,
-                )
-            except RuntimeError as exc:
-                result = {
-                    "match": False,
-                    "final_answer": "",
-                    "issues": [f"solver_exception:{str(exc)}"],
-                    "summary": "",
-                }
-            except Exception as exc:
-                logger.warning("question_library_solve_draft_unexpected_failed", exc_info=True)
-                result = {
-                    "match": False,
-                    "final_answer": "",
-                    "issues": [f"solver_exception:{str(exc)}"],
-                    "summary": "",
-                }
-            return result if isinstance(result, dict) else {}
-
-        outcomes = await asyncio.gather(*[_run_solve() for _ in range(solver_consensus_n)])
-
-        true_votes = sum(1 for item in outcomes if bool(item.get("match")))
-        target_match = true_votes * 2 >= len(outcomes) + 1
-
-        combined_issues: List[str] = []
-        best_result: dict = {}
-        for item in outcomes:
-            if not best_result and bool(item.get("match")) == target_match:
-                best_result = dict(item)
-            raw_issues = item.get("issues")
-            if isinstance(raw_issues, list):
-                for issue in raw_issues:
-                    txt = str(issue or "").strip()
-                    if txt:
-                        combined_issues.append(txt)
-        if not best_result and outcomes:
-            best_result = dict(outcomes[0])
-
-        return {
-            "match": target_match,
-            "final_answer": str(best_result.get("final_answer") or "").strip(),
-            "issues": _clip_unique(combined_issues, 8),
-            "summary": str(best_result.get("summary") or "").strip(),
-            "match_votes": true_votes,
-            "consensus_n": len(outcomes),
-            "consistency_score": (round(true_votes / len(outcomes), 3) if outcomes else 0.0),
-        }
 
     async def _evaluate_candidate(cand: dict) -> dict:
         async with judge_sem:
@@ -484,62 +438,87 @@ async def generate_questions(
             current = dict(cand)
             local_repairs = 0
             while True:
-                solved_result, amb_result = await asyncio.gather(
-                    _solve_with_consensus(
-                        str(current.get("stem") or ""),
-                        {"subject": str(spec.get("subject") or ""), "proposed_answer": str(current.get("answer") or "")},
-                    ),
-                    check_ambiguity(
-                        current,
-                        stream_reasoning=stream_reasoning,
-                        on_reasoning_event=on_reasoning_event,
-                    ),
-                    return_exceptions=True,
+                packet_issues = validate_intuition_packet_structure(
+                    current.get("intuition_packet"),
+                    packet_size=int(source_pack["intuition_practice"]["packet_size"]),
                 )
-                if isinstance(solved_result, Exception):
-                    solved = {"match": False, "final_answer": "", "issues": [f"solver_exception:{str(solved_result)}"], "summary": ""}
+                if packet_issues:
+                    validation_result: dict = {
+                        "pass": False,
+                        "scope_ok": True,
+                        "answer_correct": True,
+                        "answer_analysis_consistent": True,
+                        "conditions_sufficient": False,
+                        "unambiguous": False,
+                        "transfer_valid": False,
+                        "issues": packet_issues,
+                        "summary": "直觉练习包结构不完整。",
+                        "overall_score": 0,
+                    }
                 else:
-                    solved = dict(solved_result or {})
-                if isinstance(amb_result, Exception):
-                    amb = {"ambiguous": True, "issues": [f"ambiguity_exception:{str(amb_result)}"], "summary": ""}
-                else:
-                    amb = dict(amb_result or {})
-
-                judge_result = await judge_draft(
-                    current,
-                    spec,
-                    source_pack=source_pack,
-                    stream_reasoning=stream_reasoning,
-                    on_reasoning_event=on_reasoning_event,
-                )
-                judge = dict(judge_result or {})
+                    try:
+                        validation_result = await quick_validate_draft(
+                            current,
+                            spec,
+                            source_pack=source_pack,
+                            stream_reasoning=stream_reasoning,
+                            on_reasoning_event=on_reasoning_event,
+                        )
+                    except Exception as exc:
+                        validation_result = {
+                            "pass": False,
+                            "scope_ok": False,
+                            "answer_correct": False,
+                            "answer_analysis_consistent": False,
+                            "conditions_sufficient": False,
+                            "unambiguous": False,
+                            "transfer_valid": False,
+                            "issues": [f"quick_validation_exception:{str(exc)}"],
+                            "summary": "",
+                            "overall_score": 0,
+                        }
+                judge = dict(validation_result or {})
+                solved = {
+                    "match": bool(judge.get("answer_correct"))
+                    and bool(judge.get("answer_analysis_consistent")),
+                    "final_answer": str(current.get("answer") or "").strip(),
+                    "issues": [
+                        str(x or "").strip()
+                        for x in (judge.get("issues") or [])
+                        if str(x or "").strip()
+                        and ("answer" in str(x).lower() or "答案" in str(x))
+                    ],
+                    "match_votes": 1 if bool(judge.get("answer_correct")) else 0,
+                    "consensus_n": 1,
+                    "consistency_score": 1.0 if bool(judge.get("pass")) else 0.0,
+                }
+                amb = {
+                    "ambiguous": not (
+                        bool(judge.get("conditions_sufficient")) and bool(judge.get("unambiguous"))
+                    ),
+                    "issues": [
+                        str(x or "").strip()
+                        for x in (judge.get("issues") or [])
+                        if str(x or "").strip()
+                        and any(token in str(x).lower() for token in ("ambigu", "condition", "歧义", "条件"))
+                    ],
+                    "summary": str(judge.get("summary") or "").strip(),
+                }
                 ambiguous_issues = [str(x or "").strip() for x in (amb.get("issues") or []) if str(x or "").strip()][:6]
 
                 issues = list(judge.get("issues") or []) if isinstance(judge.get("issues"), list) else []
                 judge_pass = bool(judge.get("pass"))
-                overall = max(0, int(judge.get("overall_score") or 0))
+                overall = 100 if judge_pass else 0
                 penalty_total = 0
                 if not bool(solved.get("match")):
-                    penalty_total += answer_mismatch_penalty
                     issues.append("answer_mismatch")
                     solver_issues = solved.get("issues")
                     if isinstance(solver_issues, list):
                         issues.extend([f"solver:{str(x or '').strip()}" for x in solver_issues if str(x or "").strip()])
                 if bool(amb.get("ambiguous")):
-                    penalty_total += ambiguity_penalty_score
                     issues.extend([f"ambiguous:{x}" for x in ambiguous_issues])
-                difficulty_penalty = _difficulty_mismatch_penalty(
-                    str(difficulty or "").strip(),
-                    str(judge.get("difficulty_estimate") or "").strip(),
-                    difficulty_tolerance,
-                )
-                if difficulty_penalty > 0:
-                    penalty_total += difficulty_penalty
-                    issues.append("difficulty_mismatch")
-                if penalty_total > 0:
-                    overall = max(0, overall - penalty_total)
-                if overall < judge_floor:
-                    issues.append("judge_below_floor")
+                if not judge_pass:
+                    issues.append("quick_validation_failed")
 
                 normalized_reasons = _clip_unique([str(x or "").strip() for x in issues if str(x or "").strip()], 10)
                 keep = dict(current)
@@ -557,11 +536,38 @@ async def generate_questions(
                 keep["consistency_score"] = consistency_score
                 keep["judge"]["ambiguity"] = bool(amb.get("ambiguous"))
                 keep["judge"]["ambiguity_issues"] = ambiguous_issues
+                keep["quick_validation"] = dict(judge)
+                keep["intuition_packet"] = attach_quick_validation(
+                    current.get("intuition_packet") if isinstance(current.get("intuition_packet"), dict) else {},
+                    judge,
+                    repaired=local_repairs > 0,
+                )
+                check_dimensions = [
+                    ("课内范围", "scope_ok"),
+                    ("答案正确", "answer_correct"),
+                    ("答案解析一致", "answer_analysis_consistent"),
+                    ("条件充分", "conditions_sufficient"),
+                    ("无致命歧义", "unambiguous"),
+                    ("迁移有效", "transfer_valid"),
+                ]
+                keep["review"] = {
+                    "verdict": "可练习" if judge_pass else "需修复",
+                    "overall_score": overall,
+                    "dimensions": [
+                        {
+                            "name": name,
+                            "score": 10 if bool(judge.get(key)) else 0,
+                            "comment": "通过" if bool(judge.get(key)) else "未通过",
+                        }
+                        for name, key in check_dimensions
+                    ],
+                    "highlights": [],
+                    "issues": normalized_reasons,
+                    "summary": str(judge.get("summary") or "").strip(),
+                    "model": "quick-validation",
+                }
 
-                if (judge_require_pass_flag and not judge_pass) or overall < judge_floor:
-                    passable = False
-                else:
-                    passable = True
+                passable = judge_pass
 
                 if passable:
                     return {
@@ -573,16 +579,7 @@ async def generate_questions(
                         "sample": _summarize_candidate_sample(current),
                     }
 
-                has_answer_mismatch = any(reason == "answer_mismatch" for reason in normalized_reasons)
-                has_ambiguity = any(reason.startswith("ambiguous:") for reason in normalized_reasons)
-                has_difficulty_mismatch = any(reason == "difficulty_mismatch" for reason in normalized_reasons)
-                close_to_floor = overall >= repair_min_score and overall < judge_floor and (judge_floor - overall) <= repair_band
-                can_repair = (
-                    attempt < max_repairs
-                    and overall >= repair_min_score
-                    and not has_difficulty_mismatch
-                    and (has_answer_mismatch or has_ambiguity or close_to_floor)
-                )
+                can_repair = attempt < max_repairs and bool(normalized_reasons)
 
                 if not can_repair:
                     return {
@@ -608,6 +605,7 @@ async def generate_questions(
                 local_repairs += 1
                 attempt += 1
 
+    accepted_signatures: set[str] = set()
     judge_tasks = [asyncio.create_task(_evaluate_candidate(cand)) for cand in raw_candidates if isinstance(cand, dict)]
     for future in asyncio.as_completed(judge_tasks):
         result = await future
@@ -617,15 +615,21 @@ async def generate_questions(
         repairs_attempted += int(result.get("repairs_attempted") or 0)
         if bool(result.get("accepted")) and isinstance(result.get("candidate"), dict):
             keep = dict(result.get("candidate") or {})
-            accepted.append(keep)
-            await _emit_callback(on_candidate_accepted, keep)
+            signature = intuition_packet_signature(keep.get("intuition_packet"))
+            if signature and signature in accepted_signatures:
+                _bump_reject_reasons(["duplicate_intuition_packet"])
+            else:
+                if signature:
+                    accepted_signatures.add(signature)
+                accepted.append(keep)
+                await _emit_callback(on_candidate_accepted, keep)
         else:
             _bump_reject_reasons([str(x or "").strip() for x in (result.get("reasons") or []) if str(x or "").strip()])
 
         await _emit_stage_event(
             on_stage_event,
             phase="judge",
-            label="判题筛选",
+            label="快速校验",
             progress=min(90.0, 80.0 + (judged_total / max(1, len(raw_candidates))) * 10.0),
             stats={
                 "evaluated": judged_total,
@@ -672,7 +676,7 @@ async def generate_questions(
     await _emit_stage_event(
         on_stage_event,
         phase="final_selection",
-        label="终选入围",
+        label="练习包去重",
         progress=92.0,
         stats={
             "accepted_pool": len(accepted),

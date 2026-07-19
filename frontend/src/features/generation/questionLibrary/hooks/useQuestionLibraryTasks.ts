@@ -16,6 +16,7 @@ import {
   type CrawlQuestionsPayload,
   type GenerateQuestionsPayload,
   type ImportMediaQuestionsPayload,
+  type IntuitionPracticeConfig,
   type QuestionLibraryListItem,
   type QuestionLibraryListResponse,
   type ScoreQuestionLibraryBatchPayload,
@@ -46,6 +47,7 @@ export interface QuestionLibraryDraftPreview {
   useReferenceQuestions?: boolean
   referenceSource?: 'any' | 'gaokao' | 'mock' | 'joint' | string
   referenceYearRange?: 'all' | '3' | '5' | string
+  intuitionPractice?: IntuitionPracticeConfig
   count: number
   draftQuestions: QuestionLibraryDraftQuestion[]
   taskId: string
@@ -158,6 +160,7 @@ export function useQuestionLibraryTasks(options: {
       const reviewStatus = allowedReviewStatuses.has(reviewStatusRaw)
         ? (reviewStatusRaw as QuestionLibraryDraftQuestion['review_status'])
         : undefined
+      const intuitionPacketRaw = it.intuition_packet ?? it.intuitionPacket
 
       out.push({
         question_id: qid,
@@ -167,6 +170,10 @@ export function useQuestionLibraryTasks(options: {
         keep: it.keep === false ? false : true,
         review_status: reviewStatus,
         review,
+        intuition_packet:
+          isRecord(intuitionPacketRaw) && Array.isArray(intuitionPacketRaw.stages)
+            ? (intuitionPacketRaw as unknown as QuestionLibraryDraftQuestion['intuition_packet'])
+            : undefined,
       })
     }
     return out
@@ -320,6 +327,9 @@ export function useQuestionLibraryTasks(options: {
             const referenceYearRange = readString(payload, 'reference_year_range').trim() || 'all'
             const useStudyArchiveRaw = payload.use_study_archive
             const useReferenceQuestionsRaw = payload.use_reference_questions
+            const intuitionPractice = isRecord(payload.intuition_practice)
+              ? (payload.intuition_practice as unknown as IntuitionPracticeConfig)
+              : undefined
             const count = readNumber(payload, 'count', drafts.length)
 
             setDraftPreview({
@@ -334,6 +344,7 @@ export function useQuestionLibraryTasks(options: {
               useReferenceQuestions: useReferenceQuestionsRaw === undefined ? true : Boolean(useReferenceQuestionsRaw),
               referenceSource,
               referenceYearRange,
+              intuitionPractice,
               count: Math.max(0, Number.isFinite(count) ? count : drafts.length) || drafts.length,
               draftQuestions: drafts,
               taskId: id,
@@ -482,6 +493,9 @@ export function useQuestionLibraryTasks(options: {
           readString(preview, 'task_id').trim() || `ql-preview-${readString(preview, 'preview_id')}`
         const useStudyArchiveRaw = preview.use_study_archive
         const useReferenceQuestionsRaw = preview.use_reference_questions
+        const intuitionPractice = isRecord(preview.intuition_practice)
+          ? (preview.intuition_practice as unknown as IntuitionPracticeConfig)
+          : undefined
         const count = readNumber(preview, 'count', drafts.length)
 
         setDraftPreview({
@@ -496,6 +510,7 @@ export function useQuestionLibraryTasks(options: {
           useReferenceQuestions: useReferenceQuestionsRaw === undefined ? true : Boolean(useReferenceQuestionsRaw),
           referenceSource: readString(preview, 'reference_source').trim() || 'any',
           referenceYearRange: readString(preview, 'reference_year_range').trim() || 'all',
+          intuitionPractice,
           count: Math.max(0, Number.isFinite(count) ? count : drafts.length) || drafts.length,
           draftQuestions: drafts,
           taskId,

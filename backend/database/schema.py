@@ -279,6 +279,7 @@ class QuestionCache(Base):
     stem_fingerprint = Column(String(32), default="")
     answer = Column(Text, default="")
     analysis = Column(Text, default="")
+    intuition_packet_json = Column(Text, default="")
 
     difficulty_value = Column(Float)
     quality_score = Column(Integer, default=0)

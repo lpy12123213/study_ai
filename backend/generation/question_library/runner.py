@@ -41,6 +41,7 @@ from backend.generation.question_library.generation import (
     enrich_source_pack_with_reference,
     generate_questions,
 )
+from backend.generation.question_library.intuition_practice import normalize_intuition_practice_config
 from backend.generation.question_library.media_import import (
     MediaFileRef,
     MediaImportError,
@@ -811,7 +812,9 @@ async def create_generate_task(
     parent_task_id: Optional[str] = None,
 ) -> RuntimeTask:
     req = dict(request or {})
-    if not is_codex_runtime_agent_runtime() and not is_llm_configured():
+    # Question generation relies on the in-process domain pipeline (curriculum,
+    # intuition packet realization, quick validation, and preview persistence).
+    if not is_llm_configured():
         raise RunnerError("llm_not_configured", status_code=500)
 
     subject = str(req.get("subject") or "").strip()
@@ -847,6 +850,7 @@ async def create_generate_task(
     textbook_version_id = str(req.get("textbook_version_id") or "").strip()
     knowledge_point_ids = [str(item or "").strip() for item in (req.get("knowledge_point_ids") or []) if str(item or "").strip()]
     knowledge_points = [str(item or "").strip() for item in (req.get("knowledge_points") or []) if str(item or "").strip()]
+    intuition_practice = normalize_intuition_practice_config(req.get("intuition_practice"))
 
     task_id = str(req.get("task_id") or "").strip() or f"ql_gen_{uuid.uuid4().hex[:12]}"
     topic_key = normalize_topic_key(topic_raw) or topic_raw
@@ -883,21 +887,12 @@ async def create_generate_task(
         knowledge_points=knowledge_points,
         task_id=task_id,
         stream_reasoning=stream_reasoning,
+        intuition_practice=intuition_practice,
     )
     current_session["status"] = "running"
     save_session(current_session)
 
     async def runner_factory(task: RuntimeTask) -> None:
-        if is_codex_runtime_agent_runtime():
-            handled = await run_codex_runtime_task(
-                task,
-                user_id=user_id,
-                task_type="question_library_generate",
-                final_event_type="done",
-            )
-            if handled or not legacy_agent_fallback_enabled():
-                return
-
         draft_key_to_id: Dict[str, str] = {}
         progress_drafts = normalize_draft_questions(
             ((existing_preview or {}).get("draft_questions") if isinstance(existing_preview, dict) else [])
@@ -932,6 +927,7 @@ async def create_generate_task(
                     "use_reference_questions": bool(use_reference_questions),
                     "reference_source": reference_source,
                     "reference_year_range": reference_year_range,
+                    "intuition_practice": intuition_practice,
                     "study_markdown": "",
                     "draft_questions": progress_drafts,
                 }
@@ -1054,6 +1050,9 @@ async def create_generate_task(
             )
             source_pack = enrich_source_pack_with_curriculum(source_pack, curriculum)
             source_pack["knowledge_points"] = list(knowledge_points)
+            source_pack["grade_id"] = grade_id
+            source_pack["textbook_version_id"] = textbook_version_id
+            source_pack["intuition_practice"] = intuition_practice
             await _emit_progress(
                 "curriculum_context",
                 progress=14.0,
@@ -1175,6 +1174,7 @@ async def create_generate_task(
                     "use_reference_questions": bool(use_reference_questions),
                     "reference_source": reference_source,
                     "reference_year_range": reference_year_range,
+                    "intuition_practice": intuition_practice,
                     "count": len(progress_drafts),
                 },
                 user_id=user_id,

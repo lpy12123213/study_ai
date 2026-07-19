@@ -16,6 +16,7 @@ from backend.api.question_library_schemas import (
     QuestionLibraryCrawlRequest,
     QuestionLibraryGenerateRequest,
     QuestionLibraryLatestPendingPreviewResponse,
+    QuestionLibraryPracticeStatePatch,
     QuestionLibraryPreviewResponse,
     QuestionLibraryRegenerateSectionRequest,
     QuestionLibraryScoreRequest,
@@ -426,6 +427,22 @@ async def discard_preview(preview_id: str, user: dict = Depends(require_auth)) -
 async def review_session_question(session_id: str, question_id: str, user: dict = Depends(require_auth)) -> dict:
     user_id = _require_user_id(user)
     return await session_service.review_session_question(user_id=user_id, session_id=session_id, question_id=question_id)
+
+
+@router.patch("/sessions/{session_id}/questions/{question_id}/practice-state", response_model=dict)
+async def update_session_question_practice_state(
+    session_id: str,
+    question_id: str,
+    request: QuestionLibraryPracticeStatePatch,
+    user: dict = Depends(require_auth),
+) -> dict:
+    user_id = _require_user_id(user)
+    return await session_service.update_session_question_practice_state(
+        user_id=user_id,
+        session_id=session_id,
+        question_id=question_id,
+        patch=request.model_dump(exclude_unset=True),
+    )
 
 
 @router.post("/sessions/{session_id}/questions/{question_id}/approve", response_model=dict)

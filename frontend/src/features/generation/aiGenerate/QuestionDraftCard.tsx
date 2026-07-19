@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { CheckCircle2, CircleDashed, Eye, TriangleAlert } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { AuthImage } from '@/components/shared/AuthImage'
@@ -5,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ArtifactSection } from '@/features/generation/aiGenerate/ArtifactSection'
+import { IntuitionPracticePanel } from '@/features/generation/aiGenerate/components/IntuitionPracticePanel'
 import { canConfirmDraft } from '@/features/generation/aiGenerate/useAiGenerateSession'
 import type { AiGenerateDraftCard, AiGenerateSectionState } from '@/features/generation/aiGenerate/types'
 
@@ -50,6 +52,10 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
   const rejected = draft.reviewStatus === 'rejected'
   const confirmLabel = committed ? '已入库' : rejected ? '已打回' : '审核通过并入库'
   const reviewHref = sessionId ? `/ai-generate/review/${encodeURIComponent(sessionId)}/${encodeURIComponent(draft.questionId)}` : ''
+  const [referenceRevealed, setReferenceRevealed] = useState(
+    !draft.intuitionPacket || draft.practiceState?.completed === true
+  )
+  const showReference = referenceRevealed || !draft.intuitionPacket || draft.practiceState?.completed === true
 
   const renderSection = (sectionKey: keyof AiGenerateDraftCard['sections'], section: AiGenerateSectionState) => (
     <ArtifactSection
@@ -110,9 +116,24 @@ export function QuestionDraftCard(props: QuestionDraftCardProps) {
         </div>
       </CardHeader>
       <CardContent className="grid gap-4 p-4 md:grid-cols-2 2xl:grid-cols-3 lg:p-6">
-        {renderSection('stem', draft.sections.stem)}
-        {renderSection('answer', draft.sections.answer)}
-        {renderSection('analysis', draft.sections.analysis)}
+        {draft.intuitionPacket ? (
+          <div className="md:col-span-2 2xl:col-span-3">{renderSection('stem', draft.sections.stem)}</div>
+        ) : (
+          renderSection('stem', draft.sections.stem)
+        )}
+        {draft.intuitionPacket ? (
+          <div className="md:col-span-2 2xl:col-span-3">
+            <IntuitionPracticePanel
+              packet={draft.intuitionPacket}
+              practiceState={draft.practiceState}
+              sessionId={sessionId}
+              questionId={draft.questionId}
+              onRevealReference={() => setReferenceRevealed(true)}
+            />
+          </div>
+        ) : null}
+        {showReference ? renderSection('answer', draft.sections.answer) : null}
+        {showReference ? renderSection('analysis', draft.sections.analysis) : null}
         {Array.isArray(draft.diagrams) && draft.diagrams.length > 0 ? (
           <div className="md:col-span-2 2xl:col-span-3">
             <div className="rounded-[22px] border border-border/60 bg-background/60 p-4 shadow-sm">

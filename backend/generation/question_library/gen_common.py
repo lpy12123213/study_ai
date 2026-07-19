@@ -9,12 +9,12 @@ from backend.generation.question_library.subject_knowledge import get_subject_ba
 DEFAULT_SEARCH_CONFIG = {
     "preset": "balanced-creative",
     "depth": 4,
-    "beam_width": 12,
-    "expand_budget": 140,
-    "skill_branch_factor": 4,
-    "reasoning_branch_factor": 4,
-    "trap_branch_factor": 3,
-    "surface_branch_factor": 3,
+    "beam_width": 6,
+    "expand_budget": 60,
+    "skill_branch_factor": 2,
+    "reasoning_branch_factor": 2,
+    "trap_branch_factor": 2,
+    "surface_branch_factor": 2,
     "difficulty_match_weight": 0.24,
     "novelty_weight": 0.24,
     "skill_coverage_weight": 0.2,
@@ -22,10 +22,11 @@ DEFAULT_SEARCH_CONFIG = {
     "ambiguity_penalty": 0.26,
     "template_penalty": 0.16,
     "reference_alignment_weight": 0.12,
+    "intuition_alignment_weight": 0.36,
     "judge_pass_score": 70,
     "difficulty_tolerance": 0.22,
-    "solver_consensus_n": 3,
-    "max_repair_rounds": 2,
+    "solver_consensus_n": 1,
+    "max_repair_rounds": 1,
     # Only attempt a repair when the judge score is close to the pass floor.
     # Low-quality "template" questions should be discarded rather than rewritten.
     "repair_score_band": 20,
@@ -34,10 +35,10 @@ DEFAULT_SEARCH_CONFIG = {
     "ambiguity_penalty_score": 8,
     "judge_require_pass_flag": False,
     "realize_min_max_tokens": 50000,
-    "drafts_per_spec": 3,
+    "drafts_per_spec": 1,
     # New: brainstorm stage (can be disabled by config override).
     "enable_brainstorm": True,
-    "brainstorm_seed_count": 8,
+    "brainstorm_seed_count": 6,
 }
 
 

@@ -3,12 +3,15 @@ from __future__ import annotations
 import re
 from typing import List
 
+from backend.generation.question_library.intuition_practice import intuition_packet_signature
+
 
 def select_final(candidates: List[dict], count: int) -> List[dict]:
     n = max(1, min(int(count or 1), 20))
     out: List[dict] = []
     seen: set[str] = set()
     combo_used: set[tuple[str, str, str]] = set()
+    packet_signatures: set[str] = set()
 
     def _norm(text: str) -> str:
         t = re.sub(r"\s+", " ", str(text or "").strip())
@@ -27,7 +30,12 @@ def select_final(candidates: List[dict], count: int) -> List[dict]:
         key = _norm(stem)
         if key in seen:
             continue
+        packet_signature = intuition_packet_signature(c.get("intuition_packet"))
+        if packet_signature and packet_signature in packet_signatures:
+            continue
         seen.add(key)
+        if packet_signature:
+            packet_signatures.add(packet_signature)
 
         combo = (
             str(c.get("skill") or "").strip(),
@@ -53,6 +61,11 @@ def select_final(candidates: List[dict], count: int) -> List[dict]:
                 continue
             key = _norm(stem)
             if key in {_norm(str(x.get("stem") or "")) for x in out}:
+                continue
+            packet_signature = intuition_packet_signature(c.get("intuition_packet"))
+            if packet_signature and packet_signature in {
+                intuition_packet_signature(x.get("intuition_packet")) for x in out
+            }:
                 continue
             out.append(dict(c))
             if len(out) >= n:

@@ -4,6 +4,7 @@ import hashlib
 
 from backend.generation.question_library.gen_common import DEFAULT_SEARCH_CONFIG
 from backend.generation.question_library.gen_utils import _difficulty_gap_ratio
+from backend.generation.question_library.intuition_practice import normalize_intuition_atom
 
 
 def _stable_jitter(key: str, *, magnitude: float) -> float:
@@ -38,23 +39,49 @@ def score_spec(spec: dict, source_pack: dict, config: dict) -> dict:
     surface = str(out.get("surface") or "").strip()
     seed_tag = str(out.get("seed_tag") or "").strip()
 
-    # Normalize sub-scores to [0, 1].
+    # Normalize sub-scores to [0, 1].  The search now rewards a usable intuition
+    # atom instead of treating long derivations and keyword density as proxies for
+    # mathematical thinking.
     difficulty_match = max(0.0, 1.0 - _difficulty_gap_ratio(target_difficulty, difficulty))
+    atom = normalize_intuition_atom(
+        out.get("intuition_atom"),
+        subject=str(out.get("subject") or ""),
+        topic=str(out.get("topic") or ""),
+        seed_tag=seed_tag,
+    )
+    out["intuition_atom"] = atom
 
-    reasoning_depth = 0.25
-    for kw in ["分类", "参数", "构造", "反证", "多步", "数形", "综合"]:
-        if kw in reasoning:
-            reasoning_depth += 0.12
-    reasoning_depth = min(1.0, reasoning_depth)
+    atom_fields = (
+        "concept",
+        "internal_model",
+        "mental_action",
+        "decisive_cue",
+        "expected_first_feel",
+        "common_false_intuition",
+        "formal_anchor",
+        "transfer_mutation",
+    )
+    completeness = sum(1 for key in atom_fields if str(atom.get(key) or "").strip()) / len(atom_fields)
+    cue_specificity = min(1.0, len(str(atom.get("decisive_cue") or "").strip()) / 36.0)
+    transfer_specificity = min(1.0, len(str(atom.get("transfer_mutation") or "").strip()) / 48.0)
+    correction_value = min(1.0, len(str(atom.get("common_false_intuition") or "").strip()) / 48.0)
+    intuition_alignment = min(
+        1.0,
+        0.4 * completeness + 0.2 * cue_specificity + 0.2 * transfer_specificity + 0.2 * correction_value,
+    )
 
-    novelty = 0.25
-    for kw in ["参数", "反例", "探究", "变化", "开放", "压轴", "综合"]:
-        if kw in (surface + " " + reasoning + " " + skill):
-            novelty += 0.1
+    # Variety remains useful, but it is secondary to whether the idea exposes and
+    # calibrates an internal model.
+    novelty = 0.35
+    if str(atom.get("boundary_flip") or "").strip():
+        novelty += 0.2
+    if str(atom.get("mental_action") or "").strip():
+        novelty += 0.15
+    if any(token in str(atom.get("transfer_mutation") or "") for token in ("表征", "逆向", "情境", "图", "代数")):
+        novelty += 0.15
     novelty = min(1.0, novelty)
 
-    skill_coverage = 0.35 + (0.25 if skill else 0.0) + (0.25 if reasoning else 0.0)
-    skill_coverage = min(1.0, skill_coverage)
+    skill_coverage = min(1.0, 0.35 + (0.2 if skill else 0.0) + 0.4 * intuition_alignment)
 
     solvability = 0.8
     if any(k in trap for k in ["多解", "歧义", "陷阱过多"]):
@@ -96,9 +123,10 @@ def score_spec(spec: dict, source_pack: dict, config: dict) -> dict:
     reference_alignment = min(1.0, reference_alignment)
 
     w_diff = float((config or {}).get("difficulty_match_weight") or 0.24)
-    w_novel = float((config or {}).get("novelty_weight") or 0.24)
-    w_skill = float((config or {}).get("skill_coverage_weight") or 0.2)
+    w_novel = float((config or {}).get("novelty_weight") or 0.14)
+    w_skill = float((config or {}).get("skill_coverage_weight") or 0.14)
     w_solv = float((config or {}).get("solvability_weight") or 0.2)
+    w_intuition = float((config or {}).get("intuition_alignment_weight") or 0.36)
     w_amb = float((config or {}).get("ambiguity_penalty") or 0.26)
     w_tpl = float((config or {}).get("template_penalty") or 0.16)
     w_ref = float((config or {}).get("reference_alignment_weight") or DEFAULT_SEARCH_CONFIG["reference_alignment_weight"])
@@ -108,6 +136,7 @@ def score_spec(spec: dict, source_pack: dict, config: dict) -> dict:
         + w_novel * novelty
         + w_skill * skill_coverage
         + w_solv * solvability
+        + w_intuition * intuition_alignment
         + w_ref * reference_alignment
         - w_amb * ambiguity_risk
         - w_tpl * template_similarity
@@ -118,5 +147,6 @@ def score_spec(spec: dict, source_pack: dict, config: dict) -> dict:
     score += _stable_jitter(f"{spec_id}|{seed_tag}|{skill}|{reasoning}|{trap}|{surface}", magnitude=jitter)
     # Convert to a 0-100-ish scale for easier debugging.
     out["reference_alignment"] = round(reference_alignment, 4)
-    out["score"] = float(max(0.0, min(1.0, score)) * 100.0 + reasoning_depth * 8.0)
+    out["intuition_alignment"] = round(intuition_alignment, 4)
+    out["score"] = float(max(0.0, min(1.0, score)) * 100.0)
     return out

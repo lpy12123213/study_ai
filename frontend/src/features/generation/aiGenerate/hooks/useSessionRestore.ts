@@ -3,7 +3,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 
 import { archiveQuestionLibrarySession, getQuestionLibrarySession, listQuestionLibrarySessions } from '@/api/questionLibrary'
-import type { AiGenerateSessionMode, AiGenerateStudioSession } from '@/features/generation/aiGenerate/types'
+import {
+  DEFAULT_INTUITION_PRACTICE,
+  normalizeIntuitionPractice,
+  type AiGenerateSessionMode,
+  type AiGenerateStudioSession,
+} from '@/features/generation/aiGenerate/types'
+import type { IntuitionPracticeConfig } from '@/api/questionLibrary'
 import { historySort } from '@/features/generation/aiGenerate/studioUtils'
 import { reduceSessionDetailToSession, reduceTaskPreviewToSession } from '@/features/generation/aiGenerate/useAiGenerateSession'
 
@@ -49,6 +55,10 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
   const [textbookVersionId, setTextbookVersionIdState] = useState('')
   const [selectedKnowledgePointIds, setSelectedKnowledgePointIdsState] = useState<string[]>([])
   const [selectedKnowledgePointLabels, setSelectedKnowledgePointLabelsState] = useState<string[]>([])
+  const [intuitionPractice, setIntuitionPracticeState] = useState<IntuitionPracticeConfig>(() => ({
+    ...DEFAULT_INTUITION_PRACTICE,
+    intuition_kinds: [...DEFAULT_INTUITION_PRACTICE.intuition_kinds],
+  }))
   const [session, setSession] = useState<AiGenerateStudioSession | null>(null)
   const [historyOpen, setHistoryOpen] = useState(true)
   const [workflowOpen, setWorkflowOpen] = useState(true)
@@ -146,6 +156,12 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
     },
     [setComposerState]
   )
+  const setIntuitionPractice = useCallback<Dispatch<SetStateAction<IntuitionPracticeConfig>>>(
+    (value) => {
+      setComposerState(setIntuitionPracticeState, value)
+    },
+    [setComposerState]
+  )
 
   const hydrateComposerFromSession = useCallback(
     (next: AiGenerateStudioSession, options?: { force?: boolean }) => {
@@ -165,6 +181,7 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
       setTextbookVersionIdState(next.mission.textbookVersionId || '')
       setSelectedKnowledgePointIdsState([...(next.mission.knowledgePointIds || [])])
       setSelectedKnowledgePointLabelsState([...(next.mission.knowledgePoints || [])])
+      setIntuitionPracticeState(normalizeIntuitionPractice(next.mission.intuitionPractice))
       composerEditedRef.current = false
 
       const nextSubject = String(next.mission.subject || '').trim()
@@ -353,6 +370,8 @@ export function useSessionRestore(options: UseSessionRestoreOptions) {
     setSelectedKnowledgePointIds,
     selectedKnowledgePointLabels,
     setSelectedKnowledgePointLabels,
+    intuitionPractice,
+    setIntuitionPractice,
     historyOpen,
     setHistoryOpen,
     workflowOpen,

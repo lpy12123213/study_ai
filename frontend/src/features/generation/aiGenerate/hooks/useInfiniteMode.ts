@@ -6,6 +6,7 @@ import { appendLatexConstraint } from '@/features/generation/aiGenerate/latexRul
 import { clampCount } from '@/features/generation/aiGenerate/studioUtils'
 import type { AiGenerateSessionMode, AiGenerateStudioSession } from '@/features/generation/aiGenerate/types'
 import { createQueuedSession, setSessionStopRequested } from '@/features/generation/aiGenerate/useAiGenerateSession'
+import type { IntuitionPracticeConfig } from '@/api/questionLibrary'
 
 type ToastStatus = 'completed' | 'failed'
 
@@ -46,6 +47,7 @@ interface UseInfiniteModeOptions {
   textbookVersionId: string
   selectedKnowledgePointIds: string[]
   selectedKnowledgeNodeLabels: string[]
+  intuitionPractice: IntuitionPracticeConfig
   isGenerating: boolean
 }
 
@@ -74,6 +76,7 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
     textbookVersionId,
     selectedKnowledgePointIds,
     selectedKnowledgeNodeLabels,
+    intuitionPractice,
     isGenerating,
   } = options
 
@@ -117,6 +120,10 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
       knowledge_points: selectedKnowledgeNodeLabels,
       append: true,
       stream_reasoning: true,
+      intuition_practice: {
+        ...intuitionPractice,
+        intuition_kinds: [...intuitionPractice.intuition_kinds],
+      },
     })
 
     setSession((prev) =>
@@ -136,6 +143,7 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
     difficulty,
     gradeId,
     isGenerating,
+    intuitionPractice,
     missionText,
     mode,
     questionType,
@@ -189,6 +197,10 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
       knowledge_points: selectedKnowledgeNodeLabels,
       append: continuingInfinite,
       stream_reasoning: true,
+      intuition_practice: {
+        ...intuitionPractice,
+        intuition_kinds: [...intuitionPractice.intuition_kinds],
+      },
     })
 
     setAutoAppendEnabled(mode === 'infinite')
@@ -216,6 +228,10 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
           textbookVersionId: textbookVersionId || '',
           knowledgePointIds: [...selectedKnowledgePointIds],
           knowledgePoints: [...selectedKnowledgeNodeLabels],
+          intuitionPractice: {
+            ...intuitionPractice,
+            intuition_kinds: [...intuitionPractice.intuition_kinds],
+          },
         },
       })
       return
@@ -239,6 +255,7 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
         textbookVersionId: textbookVersionId || '',
         knowledgePointIds: [...selectedKnowledgePointIds],
         knowledgePoints: [...selectedKnowledgeNodeLabels],
+        intuitionPractice,
       })
     )
 
@@ -253,6 +270,7 @@ export function useInfiniteMode(options: UseInfiniteModeOptions) {
     difficulty,
     gradeId,
     missionText,
+    intuitionPractice,
     mode,
     optimisticStopRequestedRef,
     pushToast,

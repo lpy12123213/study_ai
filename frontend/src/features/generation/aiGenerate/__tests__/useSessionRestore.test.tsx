@@ -36,6 +36,12 @@ function createSessionDetail(overrides: Record<string, unknown> = {}) {
     difficulty: '中等',
     question_type: '填空题',
     use_study_archive: false,
+    intuition_practice: {
+      practice_goal: 'transfer',
+      intuition_kinds: ['prediction', 'representation'],
+      packet_size: 4,
+      feedback_mode: 'reflective',
+    },
     draft_questions: [],
     reasoning_blocks: [],
     task_events: [],
@@ -120,6 +126,12 @@ describe('useSessionRestore', () => {
       result.current.setDifficulty('困难')
       result.current.setQuestionType('解答题')
       result.current.setUseStudyArchive(true)
+      result.current.setIntuitionPractice({
+        practice_goal: 'solution_appreciation',
+        intuition_kinds: ['solution_comparison'],
+        packet_size: 4,
+        feedback_mode: 'guided',
+      })
     })
 
     await act(async () => {
@@ -136,5 +148,7 @@ describe('useSessionRestore', () => {
     expect(result.current.difficulty).toBe('困难')
     expect(result.current.questionType).toBe('解答题')
     expect(result.current.useStudyArchive).toBe(true)
+    expect(result.current.intuitionPractice.practice_goal).toBe('solution_appreciation')
+    expect(result.current.intuitionPractice.intuition_kinds).toEqual(['solution_comparison'])
   })
 })

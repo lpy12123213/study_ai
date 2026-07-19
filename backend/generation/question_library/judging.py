@@ -5,12 +5,13 @@ import os
 from typing import Any
 
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
+from backend.generation.question_library.intuition_practice import normalize_intuition_packet
 from backend.generation.question_library.subject_knowledge import get_subject_bank, infer_subject_family
 from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 
 def _prompt(prompt_id: str) -> str:
@@ -97,7 +98,7 @@ async def solve_draft(
         retries=2,
         raise_on_fail=False,
         stage_id="judge",
-        stage_label="判题筛选",
+        stage_label="快速校验",
         stream_reasoning=stream_reasoning,
         on_reasoning_event=on_reasoning_event,
     )
@@ -157,7 +158,7 @@ async def check_ambiguity(
         retries=2,
         raise_on_fail=False,
         stage_id="judge",
-        stage_label="判题筛选",
+        stage_label="快速校验",
         stream_reasoning=stream_reasoning,
         on_reasoning_event=on_reasoning_event,
     )
@@ -167,6 +168,125 @@ async def check_ambiguity(
         "ambiguous": bool(obj.get("ambiguous")),
         "issues": list(issues or []) if isinstance(issues, list) else [],
         "summary": str(obj.get("summary") or "").strip(),
+    }
+
+
+async def quick_validate_draft(
+    draft: dict,
+    spec: dict,
+    *,
+    source_pack: dict | None = None,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
+    """Run the minimum safety gate required for a student self-practice packet.
+
+    This deliberately avoids competition-style quality scoring, repeated solver
+    consensus, and psychometric claims.  One review call checks only curriculum
+    scope, correctness/answer consistency, and whether the task is sufficiently
+    specified and unambiguous.
+    """
+
+    if not is_llm_configured():
+        return {
+            "pass": False,
+            "scope_ok": False,
+            "answer_correct": False,
+            "answer_analysis_consistent": False,
+            "conditions_sufficient": False,
+            "unambiguous": False,
+            "transfer_valid": False,
+            "issues": ["llm_not_configured"],
+            "summary": "",
+        }
+
+    subject = str((spec or {}).get("subject") or (source_pack or {}).get("subject") or "").strip()
+    curriculum = curriculum_context_for_prompt(source_pack or {})
+    payload = {
+        "subject": subject,
+        "curriculum_context": curriculum,
+        "question": {
+            "stem": str((draft or {}).get("stem") or "").strip()[:2400],
+            "answer": str((draft or {}).get("answer") or "").strip()[:2000],
+            "analysis": str((draft or {}).get("analysis") or "").strip()[:3200],
+            "intuition_packet": (draft or {}).get("intuition_packet")
+            if isinstance((draft or {}).get("intuition_packet"), dict)
+            else {},
+        },
+        "output_schema": {
+            "scope_ok": "bool (all required knowledge and methods are in curriculum scope)",
+            "answer_correct": "bool (independently checking the task leads to the proposed answer)",
+            "answer_analysis_consistent": "bool",
+            "conditions_sufficient": "bool",
+            "unambiguous": "bool",
+            "transfer_valid": "bool (the transfer stage preserves the decisive structure while changing at least two surface features, not only numbers)",
+            "issues": "string[] (short, actionable issue codes or descriptions)",
+            "summary": "string",
+            "pass": "bool (true only when all five checks above pass)",
+        },
+    }
+    text = await _chat_json_with_reasoning(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    _prompt("question.judge.quality.v1")
+                    + "\n\n"
+                    "<role>You are a lightweight self-practice question checker.</role>\n"
+                    "<scope>Check only: curriculum boundary, answer correctness and answer-analysis consistency, sufficient conditions, fatal ambiguity, and whether transfer preserves the decisive structure while changing at least two surface features.</scope>\n"
+                    "<independent_check>Briefly solve or verify each stage before comparing with the proposed answer. Use the scientific-compute tool only when it materially helps.</independent_check>\n"
+                    "<not_required>Do not score novelty, competition difficulty, discrimination, elegance, or psychometrics. A short low-entry task may pass.</not_required>\n"
+                    "<ambiguity>Case discussion and open reflection are not ambiguity when the allowed response space and reference criteria are clear.</ambiguity>\n"
+                    "<pass_rule>pass=true only if scope_ok, answer_correct, answer_analysis_consistent, conditions_sufficient, unambiguous, and transfer_valid are all true.</pass_rule>\n"
+                    "<output_format>Output one strict JSON object only.</output_format>"
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        model=_resolve_judge_model(),
+        temperature=0.1,
+        max_tokens=0,
+        req_id_prefix="ql_judge",
+        retries=2,
+        raise_on_fail=False,
+        stage_id="judge",
+        stage_label="快速校验",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
+    )
+    obj = _extract_json_obj(text)
+    legacy_pass = bool(obj.get("pass"))
+
+    def _flag(name: str) -> bool:
+        return bool(obj.get(name)) if name in obj else legacy_pass
+
+    flags = {
+        "scope_ok": _flag("scope_ok"),
+        "answer_correct": _flag("answer_correct"),
+        "answer_analysis_consistent": _flag("answer_analysis_consistent"),
+        "conditions_sufficient": _flag("conditions_sufficient"),
+        "unambiguous": _flag("unambiguous"),
+        "transfer_valid": _flag("transfer_valid"),
+    }
+    issues = [str(item or "").strip() for item in (obj.get("issues") or []) if str(item or "").strip()]
+    issue_by_flag = {
+        "scope_ok": "out_of_scope",
+        "answer_correct": "answer_incorrect",
+        "answer_analysis_consistent": "answer_analysis_mismatch",
+        "conditions_sufficient": "conditions_insufficient",
+        "unambiguous": "fatal_ambiguity",
+        "transfer_valid": "transfer_invalid",
+    }
+    for name, ok in flags.items():
+        if not ok and issue_by_flag[name] not in issues:
+            issues.append(issue_by_flag[name])
+    passed = all(flags.values())
+    return {
+        "pass": passed,
+        **flags,
+        "issues": issues[:12],
+        "summary": str(obj.get("summary") or "").strip(),
+        "overall_score": 100 if passed else 0,
     }
 
 
@@ -288,7 +408,7 @@ async def judge_draft(
         retries=3,
         raise_on_fail=False,
         stage_id="judge",
-        stage_label="判题筛选",
+        stage_label="快速校验",
         stream_reasoning=stream_reasoning,
         on_reasoning_event=on_reasoning_event,
     )
@@ -325,9 +445,17 @@ async def refine_draft(
             "stem": str((draft or {}).get("stem") or "").strip(),
             "answer": str((draft or {}).get("answer") or "").strip(),
             "analysis": str((draft or {}).get("analysis") or "").strip(),
+            "intuition_packet": (draft or {}).get("intuition_packet")
+            if isinstance((draft or {}).get("intuition_packet"), dict)
+            else {},
         },
         "issues": list(issues or []) if isinstance(issues, list) else [],
-        "output_schema": {"stem": "string", "answer": "string", "analysis": "string"},
+        "output_schema": {
+            "stem": "string",
+            "answer": "string",
+            "analysis": "string",
+            "intuition_packet": "object (same version 1.0 packet contract, repaired consistently)",
+        },
     }
 
     text = await _chat_json_with_reasoning(
@@ -338,7 +466,8 @@ async def refine_draft(
                     _prompt("question.repair.minimal.v1")
                     + "\n\n"
                     "<role>You are a curriculum question-repair assistant responsible for minimally modifying a question according to issues.</role>\n"
-                    "<edit_principle>Prefer changing only problematic parts while preserving difficulty, knowledge point, and question type.</edit_principle>\n"
+                    "<edit_principle>Prefer changing only problematic parts while preserving difficulty, knowledge point, question type, intuition atom, and practice-stage order.</edit_principle>\n"
+                    "<packet_integrity>Repair stem, answer, analysis, and intuition_packet together. The required perception/model_externalization/transfer stages must remain mutually consistent.</packet_integrity>\n"
                     "<latex_rules>Inline formulas: \\(...\\). Display formulas: \\[...\\]. Do not use $...$.</latex_rules>\n"
                     "<verification>After modification, verify answer correctness and ensure stem/answer/analysis are fully self-consistent.</verification>\n"
                     "<output_format>Output a strict JSON object only.</output_format>"
@@ -353,7 +482,7 @@ async def refine_draft(
         retries=2,
         raise_on_fail=False,
         stage_id="judge",
-        stage_label="判题筛选",
+        stage_label="快速校验",
         stream_reasoning=stream_reasoning,
         on_reasoning_event=on_reasoning_event,
     )
@@ -362,6 +491,13 @@ async def refine_draft(
     out["stem"] = str(obj.get("stem") or out.get("stem") or "").strip()
     out["answer"] = str(obj.get("answer") or out.get("answer") or "").strip()
     out["analysis"] = str(obj.get("analysis") or out.get("analysis") or "").strip()
+    existing_packet = out.get("intuition_packet") if isinstance(out.get("intuition_packet"), dict) else {}
+    out["intuition_packet"] = normalize_intuition_packet(
+        obj.get("intuition_packet") if isinstance(obj.get("intuition_packet"), dict) else existing_packet,
+        practice_config=existing_packet,
+        atom=existing_packet.get("atom") if isinstance(existing_packet.get("atom"), dict) else {},
+        legacy_question=out,
+    )
     return out
 
 

@@ -1,9 +1,18 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MissionComposer } from '@/features/generation/aiGenerate/MissionComposer'
 
 describe('MissionComposer', () => {
+  beforeAll(() => {
+    Object.defineProperty(HTMLElement.prototype, 'hasPointerCapture', { configurable: true, value: () => false })
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { configurable: true, value: () => undefined })
+    Object.defineProperty(HTMLElement.prototype, 'releasePointerCapture', { configurable: true, value: () => undefined })
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: () => undefined })
+  })
+
+  afterEach(() => cleanup())
+
   it('reveals advanced controls on demand', async () => {
     const user = userEvent.setup()
 
@@ -18,6 +27,10 @@ describe('MissionComposer', () => {
         useReferenceQuestions
         referenceSource="any"
         referenceYearRange="all"
+        practiceGoal="structural_intuition"
+        intuitionKinds={['prediction', 'representation', 'invariant']}
+        packetSize={3}
+        feedbackMode="guided"
         mode="standard"
         subjects={[
           { id: 1, code: '高中数学', name: '高中数学' },
@@ -33,6 +46,10 @@ describe('MissionComposer', () => {
         onUseReferenceQuestionsChange={vi.fn()}
         onReferenceSourceChange={vi.fn()}
         onReferenceYearRangeChange={vi.fn()}
+        onPracticeGoalChange={vi.fn()}
+        onIntuitionKindsChange={vi.fn()}
+        onPacketSizeChange={vi.fn()}
+        onFeedbackModeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -60,6 +77,10 @@ describe('MissionComposer', () => {
         useReferenceQuestions
         referenceSource="any"
         referenceYearRange="all"
+        practiceGoal="structural_intuition"
+        intuitionKinds={['prediction', 'representation', 'invariant']}
+        packetSize={3}
+        feedbackMode="guided"
         mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
@@ -72,6 +93,10 @@ describe('MissionComposer', () => {
         onUseReferenceQuestionsChange={vi.fn()}
         onReferenceSourceChange={vi.fn()}
         onReferenceYearRangeChange={vi.fn()}
+        onPracticeGoalChange={vi.fn()}
+        onIntuitionKindsChange={vi.fn()}
+        onPacketSizeChange={vi.fn()}
+        onFeedbackModeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -101,6 +126,10 @@ describe('MissionComposer', () => {
         useReferenceQuestions
         referenceSource="any"
         referenceYearRange="all"
+        practiceGoal="structural_intuition"
+        intuitionKinds={['prediction', 'representation', 'invariant']}
+        packetSize={3}
+        feedbackMode="guided"
         mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
@@ -113,6 +142,10 @@ describe('MissionComposer', () => {
         onUseReferenceQuestionsChange={vi.fn()}
         onReferenceSourceChange={vi.fn()}
         onReferenceYearRangeChange={vi.fn()}
+        onPracticeGoalChange={vi.fn()}
+        onIntuitionKindsChange={vi.fn()}
+        onPacketSizeChange={vi.fn()}
+        onFeedbackModeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -142,6 +175,10 @@ describe('MissionComposer', () => {
         useReferenceQuestions
         referenceSource="any"
         referenceYearRange="all"
+        practiceGoal="structural_intuition"
+        intuitionKinds={['prediction', 'representation', 'invariant']}
+        packetSize={3}
+        feedbackMode="guided"
         mode="standard"
         subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
         isGenerating={false}
@@ -154,6 +191,10 @@ describe('MissionComposer', () => {
         onUseReferenceQuestionsChange={vi.fn()}
         onReferenceSourceChange={vi.fn()}
         onReferenceYearRangeChange={vi.fn()}
+        onPracticeGoalChange={vi.fn()}
+        onIntuitionKindsChange={vi.fn()}
+        onPacketSizeChange={vi.fn()}
+        onFeedbackModeChange={vi.fn()}
         onModeChange={vi.fn()}
         onGenerate={vi.fn()}
       />
@@ -171,5 +212,74 @@ describe('MissionComposer', () => {
     expect(editorRoot.style.height).toBe('148px')
     fireEvent.click(decrease)
     expect(editorRoot.style.height).toBe('124px')
+  })
+
+  it('exposes intuition practice controls on the original composer', async () => {
+    const user = userEvent.setup()
+    const onPracticeGoalChange = vi.fn()
+    const onIntuitionKindsChange = vi.fn()
+    const onPacketSizeChange = vi.fn()
+    const onFeedbackModeChange = vi.fn()
+
+    render(
+      <MissionComposer
+        missionText="训练函数图像的结构直觉"
+        subject="高中数学"
+        count="3"
+        difficulty="中等"
+        questionType=""
+        useStudyArchive
+        useReferenceQuestions
+        referenceSource="any"
+        referenceYearRange="all"
+        practiceGoal="structural_intuition"
+        intuitionKinds={['prediction', 'representation', 'invariant']}
+        packetSize={3}
+        feedbackMode="guided"
+        mode="standard"
+        subjects={[{ id: 1, code: '高中数学', name: '高中数学' }]}
+        isGenerating={false}
+        onMissionTextChange={vi.fn()}
+        onSubjectChange={vi.fn()}
+        onCountChange={vi.fn()}
+        onDifficultyChange={vi.fn()}
+        onQuestionTypeChange={vi.fn()}
+        onUseStudyArchiveChange={vi.fn()}
+        onUseReferenceQuestionsChange={vi.fn()}
+        onReferenceSourceChange={vi.fn()}
+        onReferenceYearRangeChange={vi.fn()}
+        onPracticeGoalChange={onPracticeGoalChange}
+        onIntuitionKindsChange={onIntuitionKindsChange}
+        onPacketSizeChange={onPacketSizeChange}
+        onFeedbackModeChange={onFeedbackModeChange}
+        onModeChange={vi.fn()}
+        onGenerate={vi.fn()}
+      />
+    )
+
+    expect(screen.getByLabelText('直觉练习设置')).toBeInTheDocument()
+    expect(screen.getByText('随原线路生成')).toBeInTheDocument()
+
+    await user.click(screen.getByLabelText('练习目标'))
+    await user.click(screen.getByRole('option', { name: '解法品鉴' }))
+    expect(onPracticeGoalChange).toHaveBeenCalledWith('solution_appreciation')
+    expect(onPacketSizeChange).toHaveBeenCalledWith(4)
+
+    await user.click(screen.getByText('更多直觉控制'))
+    await user.click(screen.getByRole('button', { name: '试探边界' }))
+    expect(onIntuitionKindsChange).toHaveBeenCalledWith([
+      'prediction',
+      'representation',
+      'invariant',
+      'boundary',
+    ])
+
+    await user.click(screen.getByLabelText('环节数'))
+    await user.click(screen.getByRole('option', { name: '每题 5 个直觉环节' }))
+    expect(onPacketSizeChange).toHaveBeenLastCalledWith(5)
+
+    await user.click(screen.getByLabelText('反馈方式'))
+    await user.click(screen.getByRole('option', { name: '反思追问' }))
+    expect(onFeedbackModeChange).toHaveBeenCalledWith('reflective')
   })
 })

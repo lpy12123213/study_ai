@@ -11,6 +11,7 @@ import type {
   QuestionLibraryPreviewResponse,
   QuestionLibrarySessionDetail,
   QuestionLibrarySessionSummary,
+  IntuitionPracticeAttempt,
   ScoreQuestionLibraryBatchPayload,
   ScoreQuestionLibraryBatchResponse,
 } from './types'
@@ -163,6 +164,32 @@ export async function unconfirmQuestionLibrarySessionQuestion(
   if (!qid) throw new Error('missing_question_id')
   const resp = await apiClient.post(`/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/unconfirm`)
   return resp.data as { success: boolean; session_id: string; question: QuestionLibraryDraftQuestion }
+}
+
+export async function saveQuestionLibraryPracticeState(
+  sessionId: string,
+  questionId: string,
+  payload: Partial<IntuitionPracticeAttempt>
+): Promise<{
+  success: boolean
+  session_id: string
+  question_id: string
+  practice_state: IntuitionPracticeAttempt
+}> {
+  const sid = String(sessionId || '').trim()
+  const qid = String(questionId || '').trim()
+  if (!sid) throw new Error('missing_session_id')
+  if (!qid) throw new Error('missing_question_id')
+  const resp = await apiClient.patch(
+    `/question-library/sessions/${encodeURIComponent(sid)}/questions/${encodeURIComponent(qid)}/practice-state`,
+    payload
+  )
+  return resp.data as {
+    success: boolean
+    session_id: string
+    question_id: string
+    practice_state: IntuitionPracticeAttempt
+  }
 }
 
 export async function commitQuestionLibraryPreview(

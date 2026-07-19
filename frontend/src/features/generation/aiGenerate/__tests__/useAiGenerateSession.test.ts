@@ -9,7 +9,20 @@ import {
   setSessionStopRequested,
   toggleDraftConfirmed,
   toCommitQuestions,
+  updateDraftSection,
 } from '@/features/generation/aiGenerate/useAiGenerateSession'
+import { normalizeIntuitionPractice } from '@/features/generation/aiGenerate/types'
+
+describe('normalizeIntuitionPractice', () => {
+  it('reserves a fourth stage for solution appreciation', () => {
+    expect(normalizeIntuitionPractice({
+      practice_goal: 'solution_appreciation',
+      intuition_kinds: ['solution_comparison'],
+      packet_size: 3,
+      feedback_mode: 'guided',
+    }).packet_size).toBe(4)
+  })
+})
 
 describe('reduceTaskPreviewToSession', () => {
   it('maps preview drafts into ordered studio cards', () => {
@@ -93,12 +106,20 @@ describe('reduceTaskPreviewToSession', () => {
     }
 
     const session = reduceTaskPreviewToSession(preview)
+    session.drafts[0].intuitionPacket = { version: '1.0', stages: [] } as any
+    session.drafts[0].practiceState = { first_guess: '旧猜想' }
     const next = applyRegeneratedDraftSection(session, 'q-001', 'analysis', '新解析：由 \\(f\'(x)=2x\\) 的符号判断。')
 
     expect(next.drafts[0].status).toBe('ready')
     expect(next.drafts[0].sections.analysis.content).toBe('新解析：由 \\(f\'(x)=2x\\) 的符号判断。')
     expect(next.drafts[0].sections.analysis.status).toBe('done')
     expect(next.drafts[0].sections.analysis.edited).toBe(false)
+    expect(next.drafts[0].intuitionPacket).toBeUndefined()
+    expect(next.drafts[0].practiceState).toBeUndefined()
+
+    const edited = updateDraftSection(session, 'q-001', 'stem', '手工调整后的题干')
+    expect(edited.drafts[0].intuitionPacket).toBeUndefined()
+    expect(edited.drafts[0].practiceState).toBeUndefined()
   })
 
   it('restores persisted session detail with reasoning blocks and confirmed drafts', () => {
@@ -125,6 +146,24 @@ describe('reduceTaskPreviewToSession', () => {
       knowledge_points: ['函数单调性'],
       stream_reasoning: true,
       use_study_archive: true,
+      intuition_practice: {
+        practice_goal: 'transfer',
+        intuition_kinds: ['prediction', 'representation'],
+        packet_size: 4,
+        feedback_mode: 'reflective',
+      },
+      practice_attempts: {
+        'q-001': {
+          phase: 'transfer',
+          first_guess: '先猜单调递增',
+          final_response: '结合导数后修正',
+          confidence: 70,
+          hint_level: 1,
+          transfer_correct: true,
+          reflection: '图像直觉需要用导数校准',
+          completed: true,
+        },
+      },
       draft_questions: [
         {
           question_id: 'q-001',
@@ -133,6 +172,26 @@ describe('reduceTaskPreviewToSession', () => {
           analysis: '解析 1',
           keep: true,
           review_status: 'confirmed',
+          intuition_packet: {
+            version: '1.0',
+            practice_goal: 'transfer',
+            atom: {
+              concept: '函数单调性',
+              internal_model: '图像随输入变化',
+              mental_action: '观察走势',
+              decisive_cue: '导数符号',
+              expected_first_feel: '先减后增',
+              common_false_intuition: '局部代替整体',
+              formal_anchor: '符号表',
+              transfer_mutation: '改成参数函数',
+              boundary_flip: '临界参数',
+              feedback: '比较猜想与证明',
+            },
+            stages: [
+              { stage: 'perception', kind: 'prediction', prompt: '先判断走势。' },
+              { stage: 'transfer', kind: 'representation', prompt: '换成图像再判断。' },
+            ],
+          },
           review: {
             verdict: '通过',
             overall_score: 93,
@@ -188,8 +247,16 @@ describe('reduceTaskPreviewToSession', () => {
     expect(session.mission.gradeId).toBe('grade-1')
     expect(session.mission.textbookVersionId).toBe('textbook-1')
     expect(session.mission.knowledgePointIds).toEqual(['kp-1'])
+    expect(session.mission.intuitionPractice).toEqual({
+      practice_goal: 'transfer',
+      intuition_kinds: ['prediction', 'representation'],
+      packet_size: 4,
+      feedback_mode: 'reflective',
+    })
     expect(session.confirmedIds).toEqual(['q-001'])
     expect(session.drafts[0].reviewStatus).toBe('confirmed')
+    expect(session.drafts[0].intuitionPacket?.stages).toHaveLength(2)
+    expect(session.drafts[0].practiceState?.completed).toBe(true)
     expect(session.reasoningBlocks[0].source).toBe('raw')
     expect(session.taskEvents[0]?.type).toBe('reasoning_status')
   })

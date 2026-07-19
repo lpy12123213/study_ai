@@ -20,6 +20,11 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import type { AiGenerateSessionMode } from '@/features/generation/aiGenerate/types'
+import type {
+  IntuitionFeedbackMode,
+  IntuitionKind,
+  IntuitionPracticeGoal,
+} from '@/api/questionLibrary'
 
 type SubjectOption = {
   id: number | string
@@ -37,6 +42,10 @@ interface MissionComposerProps {
   useReferenceQuestions: boolean
   referenceSource: 'any' | 'gaokao' | 'mock' | 'joint' | string
   referenceYearRange: 'all' | '3' | '5' | string
+  practiceGoal: IntuitionPracticeGoal
+  intuitionKinds: IntuitionKind[]
+  packetSize: number
+  feedbackMode: IntuitionFeedbackMode
   mode: AiGenerateSessionMode
   subjects: SubjectOption[]
   isGenerating: boolean
@@ -52,6 +61,10 @@ interface MissionComposerProps {
   onUseReferenceQuestionsChange: (value: boolean) => void
   onReferenceSourceChange: (value: string) => void
   onReferenceYearRangeChange: (value: string) => void
+  onPracticeGoalChange: (value: IntuitionPracticeGoal) => void
+  onIntuitionKindsChange: (value: IntuitionKind[]) => void
+  onPacketSizeChange: (value: number) => void
+  onFeedbackModeChange: (value: IntuitionFeedbackMode) => void
   onModeChange: (value: AiGenerateSessionMode) => void
   onGenerate: () => void
   onStop?: () => void
@@ -60,6 +73,29 @@ interface MissionComposerProps {
 const MIN_MISSION_HEIGHT = 124
 const MAX_MISSION_HEIGHT = 320
 type ResizeInputMode = 'mouse' | 'touch'
+
+const PRACTICE_GOALS: Array<{ value: IntuitionPracticeGoal; label: string; description: string }> = [
+  { value: 'fluency', label: '熟练感', description: '把基础对象练到可直接操作，不把套路记忆误当成理解。' },
+  { value: 'structural_intuition', label: '结构直觉', description: '先看见关系、不变量或合适表征，再用逻辑校准。' },
+  { value: 'intuition_correction', label: '直觉纠错', description: '主动制造可解释的认知冲突，修正错误的内部模型。' },
+  { value: 'transfer', label: '迁移', description: '保留关键结构、改变题目表面，检查直觉能否跨情境复用。' },
+  { value: 'solution_appreciation', label: '解法品鉴', description: '比较正确解法的简洁性、统一性和推广能力。' },
+]
+
+const INTUITION_KINDS: Array<{ value: IntuitionKind; label: string }> = [
+  { value: 'prediction', label: '先猜后证' },
+  { value: 'representation', label: '换种表示' },
+  { value: 'invariant', label: '寻找不变量' },
+  { value: 'boundary', label: '试探边界' },
+  { value: 'counterexample', label: '寻找反例' },
+  { value: 'solution_comparison', label: '比较解法' },
+]
+
+const FEEDBACK_MODES: Array<{ value: IntuitionFeedbackMode; label: string }> = [
+  { value: 'guided', label: '逐级提示' },
+  { value: 'concise', label: '关键点反馈' },
+  { value: 'reflective', label: '反思追问' },
+]
 
 export function MissionComposer(props: MissionComposerProps) {
   const {
@@ -72,6 +108,10 @@ export function MissionComposer(props: MissionComposerProps) {
     useReferenceQuestions,
     referenceSource,
     referenceYearRange,
+    practiceGoal,
+    intuitionKinds,
+    packetSize,
+    feedbackMode,
     mode,
     subjects,
     isGenerating,
@@ -87,6 +127,10 @@ export function MissionComposer(props: MissionComposerProps) {
     onUseReferenceQuestionsChange,
     onReferenceSourceChange,
     onReferenceYearRangeChange,
+    onPracticeGoalChange,
+    onIntuitionKindsChange,
+    onPacketSizeChange,
+    onFeedbackModeChange,
     onModeChange,
     onGenerate,
     onStop,
@@ -189,6 +233,16 @@ export function MissionComposer(props: MissionComposerProps) {
   }, [])
 
   const actionLabel = primaryActionLabel || (isGenerating ? '生成中' : '开始生成')
+  const selectedPracticeGoal = PRACTICE_GOALS.find((item) => item.value === practiceGoal) || PRACTICE_GOALS[1]
+
+  const toggleIntuitionKind = (kind: IntuitionKind) => {
+    if (intuitionKinds.includes(kind)) {
+      if (intuitionKinds.length <= 1) return
+      onIntuitionKindsChange(intuitionKinds.filter((item) => item !== kind))
+      return
+    }
+    onIntuitionKindsChange([...intuitionKinds, kind])
+  }
 
   return (
     <section className="overflow-hidden rounded-[30px] border border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(245,240,229,0.92))] shadow-[0_24px_70px_rgba(30,33,45,0.08)] dark:bg-[linear-gradient(180deg,rgba(24,26,40,0.96),rgba(16,18,28,0.94))] dark:shadow-[0_28px_90px_rgba(0,0,0,0.58)]">
@@ -238,7 +292,7 @@ export function MissionComposer(props: MissionComposerProps) {
             style={{ height: `${missionHeight}px` }}
             className="min-h-0 rounded-[24px] border-border/70 bg-background text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:bg-card/80 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
             editorClassName="px-5 py-5 pb-10 text-base leading-7"
-            placeholder="例如：沿着函数单调性继续出 3 道压轴变式题，优先覆盖导数与分类讨论，审查不过的题不要自动确认。"
+            placeholder="例如：围绕函数单调性生成 3 道直觉练习，先判断图像变化，再用最小推导验证，并安排一道不同表面的迁移题。"
           />
           <div className="absolute right-16 bottom-7 z-10 inline-flex items-center gap-1">
             <button
@@ -274,6 +328,111 @@ export function MissionComposer(props: MissionComposerProps) {
               独立公式写成 <code>{'\\[x^2-1=0\\]'}</code>。
             </div>
           </div>
+        </div>
+
+        <div
+          aria-label="直觉练习设置"
+          className="rounded-[24px] border border-amber-200/80 bg-amber-50/55 p-4 dark:border-amber-800/55 dark:bg-amber-950/20"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                直觉练习
+                <Badge variant="outline" className="rounded-full border-amber-300/80 bg-background/70">
+                  随原线路生成
+                </Badge>
+              </div>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+                先暴露第一感觉，再用最小计算或论证校准；不额外切换页面，也不增加考试级审核负担。
+              </p>
+            </div>
+            <div className="text-xs text-muted-foreground">每题 {packetSize} 个直觉环节 · {selectedPracticeGoal.label}</div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <label htmlFor="ai-generate-practice-goal" className="text-xs font-medium">
+                练习目标
+              </label>
+              <Select
+                value={practiceGoal}
+                onValueChange={(value) => {
+                  const nextGoal = value as IntuitionPracticeGoal
+                  onPracticeGoalChange(nextGoal)
+                  if (nextGoal === 'solution_appreciation' && packetSize < 4) onPacketSizeChange(4)
+                }}
+              >
+                <SelectTrigger id="ai-generate-practice-goal" aria-label="练习目标" className="h-9 rounded-xl bg-background/80">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRACTICE_GOALS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="ai-generate-packet-size" className="text-xs font-medium">
+                环节数
+              </label>
+              <Select value={String(packetSize)} onValueChange={(value) => onPacketSizeChange(Number(value))}>
+                <SelectTrigger id="ai-generate-packet-size" aria-label="环节数" className="h-9 rounded-xl bg-background/80">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="3">每题 3 个直觉环节</SelectItem>
+                  <SelectItem value="4">每题 4 个直觉环节</SelectItem>
+                  <SelectItem value="5">每题 5 个直觉环节</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+          </div>
+
+          <details className="mt-3 rounded-2xl border border-border/60 bg-background/45 px-3 py-2">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">更多直觉控制</summary>
+            <div className="mt-3 max-w-xs space-y-2">
+              <label htmlFor="ai-generate-feedback-mode" className="text-xs font-medium">
+                反馈方式
+              </label>
+              <Select value={feedbackMode} onValueChange={(value) => onFeedbackModeChange(value as IntuitionFeedbackMode)}>
+                <SelectTrigger id="ai-generate-feedback-mode" aria-label="反馈方式" className="h-9 rounded-xl bg-background/80">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {FEEDBACK_MODES.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="mt-3">
+              <div className="mb-2 text-xs font-medium">直觉切面（至少保留一项）</div>
+              <div className="flex flex-wrap gap-2">
+              {INTUITION_KINDS.map((item) => {
+                const selected = intuitionKinds.includes(item.value)
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={selected}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                      selected
+                        ? 'border-amber-400/80 bg-amber-100 text-amber-950 dark:border-amber-600 dark:bg-amber-900/45 dark:text-amber-50'
+                        : 'border-border/70 bg-background/75 text-muted-foreground hover:bg-accent hover:text-foreground'
+                    }`}
+                    onClick={() => toggleIntuitionKind(item.value)}
+                  >
+                    {item.label}
+                  </button>
+                )
+              })}
+              </div>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{selectedPracticeGoal.description}</p>
+          </details>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">

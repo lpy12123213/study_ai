@@ -30,7 +30,9 @@ from backend.generation.question_library.session_utils import (
     committed_ids_from_drafts,
     confirmed_ids_from_drafts,
     derive_review_container_status,
+    merge_practice_state,
     normalize_draft_questions,
+    normalize_practice_attempts,
     normalize_review_status,
     serialize_session_preview,
     serialize_session_summary,
@@ -61,6 +63,7 @@ async def get_question_library_session(*, user_id: str, session_id: str) -> dict
     task_events = await _load_session_task_events(str(user_id or "").strip(), task_ids)
     payload = dict(session)
     payload["draft_questions"] = normalize_draft_questions(session.get("draft_questions"))
+    payload["practice_attempts"] = normalize_practice_attempts(session.get("practice_attempts"))
     payload["task_events"] = task_events
     return {"success": True, "session": payload}
 
@@ -165,6 +168,12 @@ async def commit_preview_to_library(
                 "stem": stem,
                 "answer": answer,
                 "analysis": analysis,
+                **(
+                    {"intuition_packet": dict(preview_by_id[qid]["intuition_packet"])}
+                    if isinstance(preview_by_id[qid].get("intuition_packet"), dict)
+                    and preview_by_id[qid].get("intuition_packet")
+                    else {}
+                ),
             }
         )
 
@@ -270,6 +279,32 @@ def _find_draft_index(items: List[dict], question_id: str) -> int:
         if str((item or {}).get("question_id") or "").strip() == target_id:
             return index
     return -1
+
+
+async def update_session_question_practice_state(
+    *,
+    user_id: str,
+    session_id: str,
+    question_id: str,
+    patch: dict,
+) -> dict:
+    session = _load_owned_session_or_404(session_id, user_id)
+    qid = str(question_id or "").strip()
+    drafts = normalize_draft_questions(session.get("draft_questions"))
+    if _find_draft_index(drafts, qid) < 0:
+        raise HTTPException(status_code=404, detail="session_question_not_found")
+
+    attempts = normalize_practice_attempts(session.get("practice_attempts"))
+    state = merge_practice_state(attempts.get(qid), patch, updated_at_s=time.time())
+    attempts[qid] = state
+    session["practice_attempts"] = attempts
+    saved = save_session(session)
+    return {
+        "success": True,
+        "session_id": str(saved.get("session_id") or ""),
+        "question_id": qid,
+        "practice_state": state,
+    }
 
 
 def _sync_session_review_state(session: dict) -> dict:
@@ -470,8 +505,15 @@ async def regenerate_preview_section(
                 answer=str(target_question.get("answer") or "").strip(),
                 analysis=str(target_question.get("analysis") or "").strip(),
             )
-            if content:
+            content_changed = bool(content) and content != str(target_question.get(normalized_key) or "").strip()
+            if content_changed:
                 target_question[normalized_key] = content
+                # A local content rewrite invalidates the old packet, validation,
+                # review, and any learner responses tied to that exact content.
+                target_question.pop("intuition_packet", None)
+                target_question.pop("quick_validation", None)
+                target_question.pop("review", None)
+                target_question["review_status"] = "pending_review"
 
             yield format_event(
                 "progress",
@@ -488,8 +530,28 @@ async def regenerate_preview_section(
             save_preview(obj)
             session = find_session_by_preview_id(user_id, pid)
             if isinstance(session, dict):
-                session["draft_questions"] = normalize_draft_questions(session.get("draft_questions"))
-                session["draft_questions"] = merge_drafts(session.get("draft_questions"), [target_question])
+                session_drafts = normalize_draft_questions(session.get("draft_questions"))
+                normalized_target_items = normalize_draft_questions([target_question])
+                normalized_target = normalized_target_items[0] if normalized_target_items else dict(target_question)
+                session_index = next(
+                    (
+                        index
+                        for index, item in enumerate(session_drafts)
+                        if str((item or {}).get("question_id") or "").strip() == qid
+                    ),
+                    -1,
+                )
+                if session_index >= 0:
+                    # Replace the draft instead of shallow-merging it. A changed
+                    # section intentionally omits stale packet/review fields.
+                    session_drafts[session_index] = dict(normalized_target)
+                else:
+                    session_drafts.append(dict(normalized_target))
+                session["draft_questions"] = session_drafts
+                if content_changed:
+                    attempts = normalize_practice_attempts(session.get("practice_attempts"))
+                    attempts.pop(qid, None)
+                    session["practice_attempts"] = attempts
                 save_session(session)
 
             done_payload = {
@@ -511,7 +573,6 @@ async def regenerate_preview_section(
                 },
             )
 
-    from backend.generation.question_library.session_utils import merge_drafts
 
     return StreamingResponse(event_generator(), media_type="text/event-stream", headers=_sse_headers())
 
@@ -578,6 +639,11 @@ async def _commit_single_draft_to_library(*, user_id: str, session: dict, draft:
                 "stem": stem,
                 "answer": answer,
                 "analysis": analysis,
+                **(
+                    {"intuition_packet": dict(draft["intuition_packet"])}
+                    if isinstance(draft.get("intuition_packet"), dict) and draft.get("intuition_packet")
+                    else {}
+                ),
             }
         ]
     )

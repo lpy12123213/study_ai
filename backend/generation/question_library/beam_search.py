@@ -14,6 +14,11 @@ from backend.generation.question_library.gen_common import (
     get_surfaces,
     get_traps,
 )
+from backend.generation.question_library.intuition_practice import (
+    fallback_intuition_atom,
+    normalize_intuition_atom,
+    normalize_intuition_practice_config,
+)
 
 
 def _stable_child_id(value: str) -> str:
@@ -60,6 +65,7 @@ def seed_root_specs(source_pack: dict, count: int, difficulty: str, question_typ
     seed_tags = get_seed_tags(subj) or ["覆盖能力", "变化分析", "综合推理", "反例辨析", "条件反推", "应用迁移"]
     seed_tags = _clip_unique(seed_tags, n)
     difficulty_variants = _difficulty_variants(str(difficulty or "").strip(), len(seed_tags))
+    practice_config = normalize_intuition_practice_config((source_pack or {}).get("intuition_practice"))
     for i, tag in enumerate(seed_tags):
         specs.append(
             {
@@ -70,6 +76,8 @@ def seed_root_specs(source_pack: dict, count: int, difficulty: str, question_typ
                 "question_type": str(question_type or "").strip(),
                 "layer": "root",
                 "seed_tag": tag,
+                "intuition_practice": practice_config,
+                "intuition_atom": fallback_intuition_atom(subject=subj, topic=top, seed_tag=tag),
             }
         )
     return specs
@@ -107,6 +115,7 @@ def seed_root_specs_from_brainstorm(
         return seed_root_specs(source_pack, count=count, difficulty=difficulty, question_type=question_type)
 
     difficulty_variants = _difficulty_variants(str(difficulty or "").strip(), len(normalized))
+    practice_config = normalize_intuition_practice_config((source_pack or {}).get("intuition_practice"))
     specs: List[dict] = []
     for i, seed in enumerate(normalized):
         concept = str(seed.get("concept") or "").strip()
@@ -132,6 +141,13 @@ def seed_root_specs_from_brainstorm(
             "brainstorm_novelty_note": novelty,
             "brainstorm_skill_hint": str(seed.get("skill_hint") or "").strip(),
             "brainstorm_reasoning_hint": str(seed.get("reasoning_hint") or "").strip(),
+            "intuition_practice": practice_config,
+            "intuition_atom": normalize_intuition_atom(
+                seed.get("intuition_atom"),
+                subject=subj,
+                topic=top or concept,
+                seed_tag=seed_tag,
+            ),
         }
         specs.append(spec)
     return specs
@@ -156,7 +172,24 @@ def expand_reasoning_layer(specs: List[dict], config: dict) -> List[dict]:
     if not specs:
         return []
     subj = str((specs[0] or {}).get("subject") or "").strip()
-    options = get_reasoning_patterns(subj) or ["多步推导", "分类讨论", "变化分析", "构造反例", "等价转化", "综合推理"]
+    if "数学" in subj or subj.lower() in {"math", "mathematics"}:
+        # Do not inherit the legacy subject-bank bias toward long derivations.
+        options = [
+            "先估计再验证",
+            "换表征后比较",
+            "寻找不变量与对称性",
+            "边界变化分析",
+            "构造反例校准",
+            "比较解法与条件必要性",
+        ]
+    else:
+        options = get_reasoning_patterns(subj) or [
+            "先作定性预测再用证据校准",
+            "更换表征后比较",
+            "寻找守恒或稳定结构",
+            "检查边界与反例",
+            "比较两种解释的证据简约性",
+        ]
     return _expand_field(
         specs,
         field="reasoning",

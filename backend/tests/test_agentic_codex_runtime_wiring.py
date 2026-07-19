@@ -62,7 +62,7 @@ class CodexRuntimeTaskWiringTests(unittest.IsolatedAsyncioTestCase):
 
         codex_run.assert_awaited_once()
 
-    async def test_question_library_score_and_generate_runners_delegate_to_codex_runtime(self) -> None:
+    async def test_question_library_score_uses_codex_but_generate_uses_domain_pipeline(self) -> None:
         from backend.generation.question_library import runner as ql_runner
 
         created: list[RuntimeTask] = []
@@ -87,6 +87,7 @@ class CodexRuntimeTaskWiringTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             ql_runner,
             "save_session",
+            side_effect=lambda value: value,
         ), patch.object(
             ql_runner,
             "load_session",
@@ -101,6 +102,33 @@ class CodexRuntimeTaskWiringTests(unittest.IsolatedAsyncioTestCase):
             return_value="preview-1",
         ), patch.object(
             ql_runner,
+            "save_preview",
+            side_effect=lambda value: value,
+        ), patch.object(
+            ql_runner,
+            "build_source_pack",
+            new=AsyncMock(
+                return_value={
+                    "subject": "高中数学",
+                    "topic": "函数",
+                    "skills": ["函数"],
+                    "question_requirements": ["课内"],
+                }
+            ),
+        ), patch.object(
+            ql_runner,
+            "build_curriculum_context",
+            new=AsyncMock(return_value={"question_requirements": ["课内"], "knowledge_scope": {"in_scope": ["函数"]}}),
+        ), patch.object(
+            ql_runner,
+            "generate_questions",
+            new=AsyncMock(return_value=[]),
+        ) as domain_generate, patch.object(
+            ql_runner,
+            "collect_reference_questions",
+            new=AsyncMock(return_value={"questions": []}),
+        ), patch.object(
+            ql_runner,
             "run_codex_runtime_task",
             new=AsyncMock(return_value=True),
         ) as codex_run:
@@ -111,7 +139,8 @@ class CodexRuntimeTaskWiringTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual([task.task_type for task in created], ["question_library_score", "question_library_generate"])
-        self.assertEqual(codex_run.await_count, 2)
+        self.assertEqual(codex_run.await_count, 1)
+        domain_generate.assert_awaited_once()
 
     async def test_question_library_score_runner_falls_back_when_codex_returns_false(self) -> None:
         """If codex runtime signals it did not handle the task and fallback is on, legacy path must run."""
