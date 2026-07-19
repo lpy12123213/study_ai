@@ -125,6 +125,16 @@ python -m backend.mcp.stdio_server
 - 知识视频：生成 Manim 风格的知识讲解视频任务。
 - MCP 服务：把题目搜索、组卷、审卷、联网检索等能力暴露给 MCP 客户端。
 
+### 知识视频沙盒
+
+知识视频依赖 Docker 和本地 Manim 沙盒镜像。首次使用前运行：
+
+```bash
+docker build -t study-ai/manim-sandbox:latest docker/manim-sandbox
+```
+
+镜像名、渲染质量、超时和资源限制可通过 `.env` 中的 `KNOWLEDGE_VIDEO_*` 配置调整。
+
 ## 目录结构
 
 ```text

@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from backend.core.settings import env_int
 from backend.generation.knowledge_video.models import GeneratedVideoPackage, KnowledgeVideoRequest
 from backend.llm.client import chat_completion_text
+from backend.llm.json_utils import strip_code_fences
 from backend.llm.prompts import create_default_prompt_registry
 
 
@@ -40,7 +41,6 @@ def _clip(text: str, *, max_chars: int) -> str:
     return s[:max_chars].rstrip()
 
 
-
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name) or str(default))
@@ -50,7 +50,7 @@ def _env_float(name: str, default: float) -> float:
 
 def parse_generated_package(text: str) -> GeneratedVideoPackage:
     obj = _json_from_text(text)
-    code = str(obj.get("code") or "").strip()
+    code = strip_code_fences(str(obj.get("code") or ""))
     scene_name = str(obj.get("scene_name") or obj.get("sceneName") or "KnowledgeVideoScene").strip()
     subtitles = obj.get("subtitles") if isinstance(obj.get("subtitles"), list) else []
     metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Canonical prompt registry implementation for LLM-facing generation workflows."""
+
+from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
@@ -780,7 +780,8 @@ def create_default_prompt_registry() -> PromptRegistry:
             "knowledge_video.manim_code.v1",
             "You are a Manim Community code generator. Return only a JSON object, not Markdown. JSON fields must "
             "include code, scene_name, subtitles, metadata. code must be complete Python source that directly uses "
-            "Manim to generate a single-scene knowledge explanation animation. 代码会在无网络、非 root、资源受限的 "
+            "Manim to generate a single-scene knowledge explanation animation; the code field must not contain "
+            "Markdown code fences. 代码会在无网络、非 root、资源受限的 "
             "Docker 沙盒中运行；可自由使用 Manim 和 Python 表达教学内容。默认 scene_name 使用 KnowledgeVideoScene。"
             "字幕 subtitles 为数组，每项包含 start/end/text 秒级时间。 Output fields: code, scene_name, subtitles, metadata.",
         ),

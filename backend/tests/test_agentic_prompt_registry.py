@@ -171,6 +171,11 @@ class AgenticPromptRegistryTests(unittest.TestCase):
             issues = prompt.output_contract.validate_prompt_text(text)
             self.assertEqual(issues, [], msg=f"{prompt.id}: {issues}")
 
+    def test_manim_code_prompt_forbids_fences_inside_code_field(self) -> None:
+        rendered = create_default_prompt_registry().render("knowledge_video.manim_code.v1")
+
+        self.assertIn("code field must not contain Markdown code fences", rendered.content)
+
     def test_educational_markdown_prompts_include_source_and_rewrite_guardrails(self) -> None:
         registry = create_default_prompt_registry()
         markdown_prompts = [

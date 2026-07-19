@@ -8,6 +8,25 @@ from unittest.mock import AsyncMock, patch
 from backend.shared.tasks.runtime import RuntimeTask
 
 
+class TestKnowledgeVideoLLM(unittest.TestCase):
+    def test_parse_generated_package_strips_code_fence_from_code_field(self) -> None:
+        from backend.generation.knowledge_video.llm import parse_generated_package
+
+        text = """
+{
+  "scene_name": "KnowledgeVideoScene",
+  "code": "```python\\nfrom manim import *\\nclass KnowledgeVideoScene(Scene):\\n    def construct(self):\\n        self.wait(1)\\n```",
+  "subtitles": [],
+  "metadata": {}
+}
+"""
+
+        package = parse_generated_package(text)
+
+        self.assertTrue(package.code.startswith("from manim import *"))
+        self.assertNotIn("```", package.code)
+
+
 class TestKnowledgeVideoSafety(unittest.TestCase):
     def test_allows_python_imports_without_content_blacklist(self) -> None:
         from backend.generation.knowledge_video.safety import validate_manim_code
