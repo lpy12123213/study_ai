@@ -5,6 +5,43 @@ from typing import Any
 
 _PLACEHOLDER_RE = re.compile(r"(?<!\{)\{[A-Za-z_][A-Za-z0-9_]{1,40}\}(?!\})")
 _UNESCAPED_SINGLE_DOLLAR_RE = re.compile(r"(?<!\\)(?<!\$)\$(?!\$)")
+_UNESCAPED_DOUBLE_DOLLAR_RE = re.compile(r"(?<!\\)\$\$")
+_CODE_FENCE_RE = re.compile(r"(?m)^```")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
+# 句读终止符：中英文句末标点 + 常见闭合引号/括号（用于判断文末是否被截断）。
+_TERMINAL_PUNCT = frozenset("。！？!?；;：:….．”’\"')）》」』】]}")
+
+
+def _has_heading_with_empty_body(raw: str) -> bool:
+    lines = raw.splitlines()
+    headings = [
+        (index, len(match.group(1)))
+        for index, line in enumerate(lines)
+        if (match := _HEADING_RE.match(line))
+    ]
+    for position, (line_no, level) in enumerate(headings):
+        end = len(lines)
+        for next_no, next_level in headings[position + 1 :]:
+            if next_level <= level:
+                end = next_no
+                break
+        body = lines[line_no + 1 : end]
+        if all(not line.strip() or _HEADING_RE.match(line) for line in body):
+            return True
+    return False
+
+
+def _ends_mid_sentence(raw: str, *, fence_count: int, display_math_count: int) -> bool:
+    tail = raw.rstrip()
+    if not tail:
+        return False
+    if fence_count % 2 == 1 or display_math_count % 2 == 1:
+        return True
+    if tail.endswith("```") and fence_count >= 2:
+        return False  # 以完整代码块收尾，不算截断
+    if tail.endswith("$$") and display_math_count >= 2:
+        return False  # 以完整独立公式收尾，不算截断
+    return tail[-1] not in _TERMINAL_PUNCT
 
 
 def lint_text(text: Any) -> list[str]:
@@ -19,10 +56,18 @@ def lint_text(text: Any) -> list[str]:
         flags.append("unresolved_placeholder")
     if len(_UNESCAPED_SINGLE_DOLLAR_RE.findall(raw)) % 2 == 1:
         flags.append("unbalanced_inline_math")
-    if len(re.findall(r"(?m)^```", raw)) % 2 == 1:
+    fence_count = len(_CODE_FENCE_RE.findall(raw))
+    if fence_count % 2 == 1:
         flags.append("unclosed_code_fence")
     if re.search(r"(?m)^\s*\|[^|\n]+\|\s*$", raw):
         flags.append("suspicious_markdown_table")
+    display_math_count = len(_UNESCAPED_DOUBLE_DOLLAR_RE.findall(raw))
+    if display_math_count % 2 == 1:
+        flags.append("unclosed_display_math")
+    if _has_heading_with_empty_body(raw):
+        flags.append("heading_with_empty_body")
+    if _ends_mid_sentence(raw, fence_count=fence_count, display_math_count=display_math_count):
+        flags.append("eof_mid_sentence")
     return flags
 
 

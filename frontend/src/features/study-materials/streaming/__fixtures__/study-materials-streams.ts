@@ -244,3 +244,148 @@ export const continuationChildStart: StudyMaterialsWireEvent = {
     status: "running",
   },
 };
+
+/**
+ * 质量审查未通过 → 修订 + 检索补充 → 降级完成的 codex 流。
+ * 覆盖 revision_required / research_retry_required / quality_degraded / degraded done。
+ */
+export const degradedRevisionStream: StudyMaterialsWireEvent[] = [
+  {
+    taskId: "materials-degraded-1",
+    seq: 1,
+    type: "task_started",
+    data: { taskId: "materials-degraded-1", query: "函数单调性", status: "running" },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 2,
+    type: "workflow_stage",
+    data: { stage: "research", last_successful_stage: "plan", revision_attempts: 0 },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 3,
+    type: "subagent_start",
+    data: { knowledge_point: "定义与判定" },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 4,
+    type: "subagent_end",
+    data: { knowledge_point: "定义与判定" },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 5,
+    type: "quality_report",
+    data: {
+      passed: false,
+      failed_checks: ["research_evidence_missing:kp-1"],
+      per_knowledge_point: {
+        "kp-1": {
+          passed: false,
+          failed_checks: ["research_evidence_missing:kp-1"],
+          source_count: 1,
+          source_classes: ["web"],
+        },
+      },
+    },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 6,
+    type: "revision_required",
+    data: { issues: ["「定义与判定」检索证据不足"], remaining_attempts: 2 },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 7,
+    type: "research_retry_required",
+    data: { point_ids: ["kp-1"], attempt: 1, remaining_attempts: 1 },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 8,
+    type: "workflow_stage",
+    data: { stage: "revise", last_successful_stage: "research", revision_attempts: 1 },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 9,
+    type: "text_delta",
+    data: { content: "# 函数单调性\n\n修订后的完整草稿。" },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 10,
+    type: "quality_degraded",
+    data: { issues: ["「定义与判定」来源类型单一"], revision_attempts: 2 },
+  },
+  {
+    taskId: "materials-degraded-1",
+    seq: 11,
+    type: "done",
+    data: {
+      success: true,
+      degraded: true,
+      material: {
+        topic: "函数单调性",
+        subject: "高中数学",
+        markdown: "# 函数单调性\n\n修订后的完整草稿。",
+        passed: false,
+        issues: ["「定义与判定」来源类型单一"],
+        md_url: "/api/media/generated/degraded.md",
+      },
+      quality_report: {
+        passed: false,
+        failed_checks: ["source_classes_missing:kp-1"],
+        per_knowledge_point: {
+          "kp-1": {
+            passed: false,
+            failed_checks: ["source_classes_missing:kp-1"],
+            source_count: 2,
+            source_classes: ["web"],
+          },
+        },
+      },
+    },
+  },
+];
+
+/** 检索服务故障：research_tool_outage 恢复码与质量门文案必须区分。 */
+export const researchOutageStream: StudyMaterialsWireEvent[] = [
+  {
+    taskId: "materials-outage-1",
+    seq: 1,
+    type: "task_started",
+    data: { taskId: "materials-outage-1", query: "光合作用", status: "running" },
+  },
+  {
+    taskId: "materials-outage-1",
+    seq: 2,
+    type: "workflow_stage",
+    data: { stage: "research", last_successful_stage: "plan" },
+  },
+  {
+    taskId: "materials-outage-1",
+    seq: 3,
+    type: "recovery_available",
+    data: {
+      code: "research_tool_outage",
+      stage: "research",
+      recoverable: true,
+      issues: ["检索服务暂时不可用"],
+    },
+  },
+  {
+    taskId: "materials-outage-1",
+    seq: 4,
+    type: "error",
+    data: {
+      message: "research_tool_outage",
+      code: "research_tool_outage",
+      stage: "research",
+      recoverable: true,
+    },
+  },
+];

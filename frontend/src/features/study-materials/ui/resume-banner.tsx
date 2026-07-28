@@ -4,25 +4,35 @@ import { Button } from "@/components/ui/button";
 
 export function ResumeBanner({
   title,
+  status,
   onResume,
   onDiscard,
   busy,
 }: {
   title: string;
+  /** 任务中心状态；completed 时切换为「重新接收输出并恢复视图」语义。 */
+  status?: string;
   onResume: () => void;
   onDiscard: () => void;
   busy?: boolean;
 }) {
+  const completed = status === "completed";
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-spectral/20 bg-surface-mist px-4 py-3 sm:flex-row sm:items-center">
       <Clock3 className="size-4 shrink-0 text-spectral" />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">检测到未完成的生成任务</div>
-        <div className="truncate text-xs text-muted-foreground">{title}，可继续接收输出并恢复当前视图。</div>
+        <div className="text-sm font-medium">
+          {completed ? "检测到已完成的生成任务" : "检测到未完成的生成任务"}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">
+          {completed
+            ? `${title}，可重新接收输出并恢复视图。`
+            : `${title}，可继续接收输出并恢复当前视图。`}
+        </div>
       </div>
       <div className="flex gap-2">
         <Button size="sm" onClick={onResume} disabled={busy}>
-          继续接收
+          {completed ? "恢复视图" : "继续接收"}
         </Button>
         <Button size="sm" variant="ghost" onClick={onDiscard} disabled={busy}>
           放弃

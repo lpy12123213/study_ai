@@ -9,11 +9,13 @@ import {
   type StudyProjectionState,
 } from "../reducer";
 import {
+  selectKnowledgePointBoard,
   selectStageNodes,
   selectStatusLine,
   selectTimelineFoldSummary,
   selectTimelineGroups,
 } from "../selectors";
+import { degradedRevisionStream, type StudyMaterialsWireEvent } from "../../streaming/__fixtures__/study-materials-streams";
 
 interface WireEvent {
   type: string;
@@ -103,6 +105,26 @@ function project(events: WireEvent[], startAt = 1_000): StudyProjectionState {
     const decoded = decodeStudyEvent(normalized);
     if (!decoded) continue;
     state = studyProjectionReducer(state, { type: "event", event: decoded, at });
+    at += 100;
+  }
+  return state;
+}
+
+/** 固定 wire fixture 的投影入口（与 reducer.test 同一约定）。 */
+function projectWire(events: StudyMaterialsWireEvent[]): StudyProjectionState {
+  let state = initialStudyProjection();
+  let at = 1_000;
+  for (const raw of events) {
+    const normalized = normalizeEvent(raw);
+    if (!normalized) continue;
+    const decoded = decodeStudyEvent(normalized);
+    if (!decoded) continue;
+    state = studyProjectionReducer(state, {
+      type: "event",
+      event: decoded,
+      seq: normalized.seq,
+      at,
+    });
     at += 100;
   }
   return state;
@@ -230,5 +252,61 @@ describe("normalizeStudyResult", () => {
     const r = normalizeStudyResult({ material: { topic: "x", markdown: "# 稿" }, md_url: "/new.md" });
     expect(r.markdown).toBe("# 稿");
     expect(r.mdUrl).toBe("/new.md");
+  });
+});
+
+describe("selectKnowledgePointBoard", () => {
+  it("检索中用实时 kpItems，无质量数据时来源信息为空", () => {
+    const state = project(legacyStream.slice(0, 9)); // 截至 web_search 结果，subagent 仍在
+    const board = selectKnowledgePointBoard(state);
+    expect(board.serverReported).toBe(false);
+    expect(board.items).toEqual([
+      { key: "定义与判定", title: "定义与判定", status: "running", sourceClasses: [], failedChecks: [] },
+    ]);
+    expect(board.failedChecks).toEqual([]);
+  });
+
+  it("quality_report.per_knowledge_point 到达后合并来源统计与失败检查", () => {
+    const state = projectWire(degradedRevisionStream.slice(0, 7));
+    const board = selectKnowledgePointBoard(state);
+    expect(board.serverReported).toBe(false);
+    const kp = board.items.find((item) => item.key === "kp-1");
+    // kp-1 与 kpItems[0] 对齐，标题回到中文知识点名。
+    expect(kp?.title).toBe("定义与判定");
+    expect(kp?.passed).toBe(false);
+    expect(kp?.sourceCount).toBe(1);
+    expect(kp?.sourceClasses).toEqual(["web"]);
+    expect(kp?.failedChecks).toEqual(["research_evidence_missing:kp-1"]);
+    expect(board.failedChecks).toEqual(["research_evidence_missing:kp-1"]);
+  });
+
+  it("hydrate_server_state 回填后标注服务端快照", () => {
+    const base = project(legacyStream.slice(0, 2)); // 尚无 kpItems 与 quality_report
+    const hydrated = studyProjectionReducer(base, {
+      type: "hydrate_server_state",
+      perKpState: {
+        定义与判定: { knowledge_point: "定义与判定", search: true, aggregate: false, write: false, web_results: 3 },
+      },
+      searchSummaryByKp: {
+        定义与判定: { provider: "web", query: "函数单调性 定义", results: [{ title: "a", url: "u" }] },
+      },
+    });
+    const board = selectKnowledgePointBoard(hydrated);
+    expect(board.serverReported).toBe(true);
+    expect(board.items).toHaveLength(1);
+    expect(board.items[0]).toMatchObject({
+      title: "定义与判定",
+      status: "done",
+      sourceCount: 3,
+      sourceClasses: ["web"],
+    });
+
+    // 实时 kpItems 出现后优先于服务端快照。
+    const withLive = project(legacyStream.slice(0, 9));
+    const merged = studyProjectionReducer(withLive, {
+      type: "hydrate_server_state",
+      perKpState: { 定义与判定: { search: true, aggregate: true, write: false, web_results: 3 } },
+    });
+    expect(selectKnowledgePointBoard(merged).serverReported).toBe(false);
   });
 });

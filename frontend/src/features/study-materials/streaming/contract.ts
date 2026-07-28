@@ -21,7 +21,13 @@ export type StudyMaterialsStreamEvent =
   | { kind: "status"; content: string }
   | { kind: "progress"; percent?: number; stage?: string }
   | { kind: "thinking"; content: string }
-  | { kind: "workflow_stage"; stage: string; lastSuccessfulStage?: string }
+  | {
+      kind: "workflow_stage";
+      stage: string;
+      lastSuccessfulStage?: string;
+      revisionAttempts?: number;
+      researchAttempts?: number;
+    }
   | {
       kind: "tool_call";
       stepId: string;
@@ -43,6 +49,13 @@ export type StudyMaterialsStreamEvent =
   | { kind: "quality_report"; report: Record<string, unknown> }
   | { kind: "recovery_available"; recovery: Record<string, unknown> }
   | { kind: "revision_required"; issues: string[]; remainingAttempts?: number }
+  | {
+      kind: "research_retry_required";
+      pointIds: string[];
+      attempt?: number;
+      remainingAttempts?: number;
+    }
+  | { kind: "quality_degraded"; issues: string[]; revisionAttempts?: number }
   | { kind: "subagent_start"; knowledgePoint: string }
   | { kind: "subagent_end"; knowledgePoint: string }
   | { kind: "done"; result: StudyMaterialResult }
@@ -159,10 +172,14 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
       const stage = asString(data.stage);
       if (!stage) return null;
       const lastSuccessfulStage = asString(data.last_successful_stage);
+      const revisionAttempts = asNumber(data.revision_attempts);
+      const researchAttempts = asNumber(data.research_attempts);
       return {
         kind: "workflow_stage",
         stage,
         ...(lastSuccessfulStage ? { lastSuccessfulStage } : {}),
+        ...(revisionAttempts !== undefined ? { revisionAttempts } : {}),
+        ...(researchAttempts !== undefined ? { researchAttempts } : {}),
       };
     }
 
@@ -229,6 +246,25 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         issues: stringList(data.issues),
         ...(asNumber(data.remaining_attempts) !== undefined
           ? { remainingAttempts: asNumber(data.remaining_attempts) }
+          : {}),
+      };
+
+    case "research_retry_required":
+      return {
+        kind: "research_retry_required",
+        pointIds: stringList(data.point_ids),
+        ...(asNumber(data.attempt) !== undefined ? { attempt: asNumber(data.attempt) } : {}),
+        ...(asNumber(data.remaining_attempts) !== undefined
+          ? { remainingAttempts: asNumber(data.remaining_attempts) }
+          : {}),
+      };
+
+    case "quality_degraded":
+      return {
+        kind: "quality_degraded",
+        issues: stringList(data.issues),
+        ...(asNumber(data.revision_attempts) !== undefined
+          ? { revisionAttempts: asNumber(data.revision_attempts) }
           : {}),
       };
 

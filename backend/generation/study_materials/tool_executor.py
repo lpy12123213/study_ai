@@ -1,14 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from backend.agent.context import ContextManager
 from backend.agent.executor import Executor
 from backend.agent.types import CompressedContext, PlanStep, StepResult, UserProfile, agent_event
-from backend.generation.study_materials.quality_gate import draft_hash, normalize_evidence, normalize_preset
+from backend.core.settings import env_int
+from backend.generation.study_materials.quality_gate import (
+    PRESET_PROFILES,
+    draft_hash,
+    normalize_evidence,
+    normalize_preset,
+)
 
 EventSink = Callable[[Dict[str, Any]], Awaitable[None]]
+
+
+class ResearchToolOutage(RuntimeError):
+    """连续工具失败达到上限，说明检索链路整体不可用（而非单个知识点证据不足）。"""
+
+    def __init__(self, tools: List[str]) -> None:
+        self.tools = [str(tool or "").strip() for tool in tools if str(tool or "").strip()]
+        detail = ",".join(self.tools) or "unknown"
+        super().__init__(f"research_tool_outage: {detail}")
 
 
 class StudyMaterialsToolExecutor:
@@ -172,7 +188,14 @@ class StudyMaterialsToolExecutor:
             )
         return normalize_evidence(evidence)
 
-    async def research(self, *, plan: Dict[str, Any], event_sink: EventSink) -> Dict[str, List[Dict[str, Any]]]:
+    async def research(
+        self,
+        *,
+        plan: Dict[str, Any],
+        event_sink: EventSink,
+        only_point_ids: Optional[List[str]] = None,
+        attempt: int = 0,
+    ) -> Dict[str, List[Dict[str, Any]]]:
         raw_points = plan.get("knowledge_points") if isinstance(plan.get("knowledge_points"), list) else []
         points = [dict(item) for item in raw_points if isinstance(item, dict)]
         titles = [str(item.get("title") or "").strip() for item in points if str(item.get("title") or "").strip()]
@@ -186,17 +209,58 @@ class StudyMaterialsToolExecutor:
         if bool(self.options.get("enable_extra_tools")):
             tools.extend(["stackexchange_search", "github_search"])
 
-        research: Dict[str, List[Dict[str, Any]]] = {}
-        browse_urls: Dict[str, List[str]] = {}
-        for point in points:
+        if only_point_ids is not None:
+            wanted = {str(item or "").strip() for item in only_point_ids if str(item or "").strip()}
+            points = [point for point in points if str(point.get("id") or "").strip() in wanted]
+
+        profile = PRESET_PROFILES.get(self.preset) or PRESET_PROFILES["standard"]
+        max_consecutive_failures = max(1, int(profile.get("max_consecutive_tool_failures") or 3))
+        # 与 backend/agent/config.py 相同的读取方式（STUDY_MATERIALS_SUBAGENT_CONCURRENCY 优先）。
+        concurrency = max(
+            1,
+            env_int("STUDY_MATERIALS_SUBAGENT_CONCURRENCY", env_int("AGENT_SUBAGENT_CONCURRENCY", 3)),
+        )
+
+        # 跨并发任务共享的熔断状态：连续失败达到上限即判定检索链路整体不可用。
+        # browse_web_pages 是可选深读，失败只单独记录，不触发熔断。
+        breaker_lock = asyncio.Lock()
+        breaker_state: Dict[str, Any] = {"consecutive_failures": 0, "tools": []}
+        browse_failures = 0
+
+        async def _check_breaker() -> None:
+            async with breaker_lock:
+                if breaker_state["consecutive_failures"] >= max_consecutive_failures:
+                    raise ResearchToolOutage(list(breaker_state["tools"]))
+
+        async def _note_tool_result(tool: str, success: bool) -> None:
+            nonlocal browse_failures
+            if tool == "browse_web_pages":
+                if not success:
+                    browse_failures += 1
+                return
+            async with breaker_lock:
+                if success:
+                    breaker_state["consecutive_failures"] = 0
+                    breaker_state["tools"] = []
+                    return
+                breaker_state["consecutive_failures"] += 1
+                breaker_state["tools"].append(tool)
+                if breaker_state["consecutive_failures"] >= max_consecutive_failures:
+                    raise ResearchToolOutage(list(breaker_state["tools"]))
+
+        async def _research_point(point: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]]]:
             point_id = str(point.get("id") or "").strip()
             point_title = str(point.get("title") or "").strip()
-            if not point_id or not point_title:
-                continue
             point_evidence: List[Dict[str, Any]] = []
-            queries = point.get("queries") if isinstance(point.get("queries"), list) else []
-            query_hint = str(queries[0] if queries else point_title).strip()
+            if not point_id or not point_title:
+                return point_id, point_evidence
+            queries_raw = point.get("queries") if isinstance(point.get("queries"), list) else []
+            queries = [str(query or "").strip() for query in queries_raw if str(query or "").strip()]
+            # 重试时轮换查询提示，避免每一轮都用同一个 queries[0]。
+            query_hint = queries[attempt % len(queries)] if queries else point_title
+            browse_targets: List[str] = []
             for tool in tools:
+                await _check_breaker()
                 arguments: Dict[str, Any] = {
                     "topic": self.topic,
                     "subject": self.subject,
@@ -210,24 +274,26 @@ class StudyMaterialsToolExecutor:
                     arguments=arguments,
                     event_sink=event_sink,
                 )
+                await _note_tool_result(tool, bool(result.success))
                 if result.success:
                     extracted = self._evidence_from_result(tool=tool, output=result.output, point_title=point_title)
                     point_evidence.extend(extracted)
                     if tool == "web_search_knowledge":
-                        browse_urls[point_id] = [str(item.get("url") or "") for item in extracted if item.get("url")][:2]
+                        browse_targets = [str(item.get("url") or "") for item in extracted if item.get("url")][:2]
 
-            if self.preset in {"deep", "research"} and browse_urls.get(point_id):
+            if self.preset in {"deep", "research"} and browse_targets:
                 result = await self._execute(
                     tool="browse_web_pages",
                     title=f"深读：{point_title}",
                     arguments={
                         "knowledge_point": point_title,
-                        "urls": browse_urls[point_id],
+                        "urls": browse_targets,
                         "max_pages": 2,
                         "max_chars": 6000,
                     },
                     event_sink=event_sink,
                 )
+                await _note_tool_result("browse_web_pages", bool(result.success))
                 if result.success:
                     page_evidence = self._evidence_from_result(
                         tool="browse_web_pages",
@@ -239,7 +305,36 @@ class StudyMaterialsToolExecutor:
                         item for item in point_evidence if str(item.get("url") or "") not in page_urls
                     ]
                     point_evidence.extend(page_evidence)
-            research[point_id] = normalize_evidence(point_evidence)
+            return point_id, normalize_evidence(point_evidence)
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _bounded(point: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]]]:
+            async with semaphore:
+                return await _research_point(point)
+
+        tasks = [asyncio.create_task(_bounded(point)) for point in points]
+        try:
+            gathered = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        # 重试时以 working_memory 中已有证据为底，逐知识点合并而不是整体覆盖。
+        research: Dict[str, List[Dict[str, Any]]] = {}
+        if only_point_ids is not None:
+            existing = self.context.working_memory.get("workflow_research")
+            if isinstance(existing, dict):
+                research = {str(key): list(value) for key, value in existing.items() if isinstance(value, list)}
+        for point_id, evidence in gathered:
+            if not point_id:
+                continue
+            if point_id in research:
+                research[point_id] = normalize_evidence(list(research.get(point_id) or []) + list(evidence))
+            else:
+                research[point_id] = normalize_evidence(evidence)
 
         self.context.working_memory["workflow_research"] = research
         return research

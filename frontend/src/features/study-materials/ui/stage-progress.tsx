@@ -1,5 +1,6 @@
 import { Check, Circle, LoaderCircle, X } from "lucide-react";
 
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import type { StudyMaterialsStageView } from "../model/types";
 
@@ -32,11 +33,21 @@ function StageIcon({ stage }: { stage: StudyMaterialsStageView }) {
   );
 }
 
-export function StageProgress({ stages }: { stages: StudyMaterialsStageView[] }) {
+export function StageProgress({
+  stages,
+  progress,
+}: {
+  stages: StudyMaterialsStageView[];
+  /** 后端 progress 事件的百分比；缺失时不渲染进度条。 */
+  progress?: number;
+}) {
+  // 推断免责声明只在阶段确实来自工具推断时出现；权威 workflow_stage 覆盖后不再展示。
+  const hasInferred = stages.some((stage) => stage.inferred && stage.status !== "pending");
+  const percent = typeof progress === "number" ? Math.round(Math.max(0, Math.min(100, progress))) : undefined;
   return (
     <div>
       <ol
-        aria-label="资料生成阶段（由工具活动推断）"
+        aria-label={hasInferred ? "资料生成阶段（由工具活动推断）" : "资料生成阶段"}
         className="flex min-w-max items-center rounded-xl border border-border bg-surface px-3 py-2 shadow-soft"
       >
         {stages.map((stage, index) => (
@@ -65,9 +76,17 @@ export function StageProgress({ stages }: { stages: StudyMaterialsStageView[] })
           </li>
         ))}
       </ol>
-      <p className="mt-1.5 text-[11px] text-muted-foreground">
-        阶段由当前工具活动推断；legacy 任务不提供权威 workflow_stage。
-      </p>
+      {percent !== undefined ? (
+        <div className="mt-2 flex items-center gap-2">
+          <Progress value={percent} className="h-1 flex-1" aria-label="生成进度" />
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{percent}%</span>
+        </div>
+      ) : null}
+      {hasInferred ? (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          阶段由当前工具活动推断；legacy 任务不提供权威 workflow_stage。
+        </p>
+      ) : null}
     </div>
   );
 }

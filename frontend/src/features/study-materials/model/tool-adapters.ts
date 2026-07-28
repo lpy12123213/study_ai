@@ -38,6 +38,39 @@ export function studyToolDisplayName(name: string): string {
   return TOOL_DISPLAY[name] ?? name;
 }
 
+/** quality_gate failed_checks 前缀 → 中文标签（带 :kp-N 后缀的检查会保留后缀）。 */
+const FAILED_CHECK_LABELS: Record<string, string> = {
+  plan_missing: "知识点规划缺失",
+  research_evidence_missing: "检索证据不足",
+  source_classes_missing: "来源类型单一",
+  draft_coverage_missing: "草稿未覆盖知识点",
+  markdown_missing: "正文缺失",
+  markdown_lint_failed: "正文格式检查未通过",
+  independent_review_failed: "独立审查未通过",
+  review_draft_mismatch: "审查与草稿不一致",
+};
+
+export function studyFailedCheckLabel(check: string): string {
+  const [head, ...rest] = check.split(":");
+  const base = FAILED_CHECK_LABELS[head] ?? check;
+  const suffix = rest.join(":").trim();
+  return suffix ? `${base}（${suffix}）` : base;
+}
+
+/** quality_gate evidence.source_class → 中文标签。 */
+const SOURCE_CLASS_LABELS: Record<string, string> = {
+  web: "网页检索",
+  wikipedia: "维基百科",
+  mediawiki: "开放百科",
+  page: "网页正文",
+  stackexchange_search: "问答社区",
+  github_search: "代码仓库",
+};
+
+export function studySourceClassLabel(sourceClass: string): string {
+  return SOURCE_CLASS_LABELS[sourceClass] ?? sourceClass;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

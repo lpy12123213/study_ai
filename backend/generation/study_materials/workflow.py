@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from backend.generation.study_materials.codex_stages import StageResultError, run_codex_stage
 from backend.generation.study_materials.quality_gate import (
@@ -13,7 +13,7 @@ from backend.generation.study_materials.quality_gate import (
     evaluate_research,
     normalize_preset,
 )
-from backend.generation.study_materials.tool_executor import StudyMaterialsToolExecutor
+from backend.generation.study_materials.tool_executor import ResearchToolOutage, StudyMaterialsToolExecutor
 
 PLAN = "plan"
 RESEARCH = "research"
@@ -109,6 +109,8 @@ class StudyMaterialsWorkflow:
                 "quality_report": {},
                 "acceptance": {},
                 "revision_attempts": 0,
+                "research_attempts": 0,
+                "research_retry_points": [],
                 "last_failure": {},
             }
 
@@ -161,6 +163,7 @@ class StudyMaterialsWorkflow:
                     "stage": stage,
                     "last_successful_stage": self.state.get("last_successful_stage") or "",
                     "revision_attempts": int(self.state.get("revision_attempts") or 0),
+                    "research_attempts": int(self.state.get("research_attempts") or 0),
                 },
             }
         )
@@ -169,6 +172,9 @@ class StudyMaterialsWorkflow:
     async def _fail(self, failure: WorkflowFailure) -> None:
         self.state["last_failure"] = failure.to_dict()
         self.state["stage"] = failure.stage
+        # 先落盘再广播：event_sink 可能在任务取消时抛 CancelledError，
+        # 若顺序反过来会丢掉 last_failure 的检查点。
+        await self._checkpoint()
         await self.event_sink(
             {
                 "type": "recovery_available",
@@ -176,7 +182,6 @@ class StudyMaterialsWorkflow:
                 "data": failure.to_dict(),
             }
         )
-        await self._checkpoint()
 
     async def _run_codex(self, stage: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -204,7 +209,12 @@ class StudyMaterialsWorkflow:
             raise
 
     async def run(self) -> Dict[str, Any]:
-        for _ in range(64):
+        profile = PRESET_PROFILES[self.preset]
+        # 迭代上限推导：plan/draft/accept 等线性阶段固定约占 8 次；
+        # 每个审查/检索重试周期最多再占 3 次阶段跳转（review→revise→review
+        # 或 research→(checkpoint)→research），按当前 preset 的周期数放大。
+        max_iterations = 8 + 3 * (int(profile["max_review_cycles"]) + int(profile["max_research_cycles"]))
+        for _ in range(max_iterations):
             stage = str(self.state.get("stage") or PLAN)
             if stage == PLAN:
                 plan = await self._run_codex(
@@ -217,16 +227,56 @@ class StudyMaterialsWorkflow:
                 continue
 
             if stage == RESEARCH:
-                research = await self.tool_executor.research(
-                    plan=dict(self.state.get("plan") or {}),
-                    event_sink=self.event_sink,
-                )
+                retry_points = [
+                    str(item or "").strip()
+                    for item in (self.state.get("research_retry_points") or [])
+                    if str(item or "").strip()
+                ]
+                try:
+                    research = await self.tool_executor.research(
+                        plan=dict(self.state.get("plan") or {}),
+                        event_sink=self.event_sink,
+                        only_point_ids=retry_points or None,
+                        attempt=int(self.state.get("research_attempts") or 0),
+                    )
+                except ResearchToolOutage as outage:
+                    failure = WorkflowFailure(
+                        "research_tool_outage",
+                        stage=RESEARCH,
+                        issues=[f"tool_unavailable:{tool}" for tool in outage.tools] or ["tool_unavailable"],
+                    )
+                    await self._fail(failure)
+                    raise failure
                 self.state["research"] = dict(research)
                 research_report = evaluate_research(state=self.state)
                 await self.event_sink(
                     {"type": "quality_report", "event": "quality_report", "data": research_report}
                 )
                 if not research_report["passed"]:
+                    failed_point_ids = [
+                        str(point_id)
+                        for point_id, detail in (research_report.get("per_knowledge_point") or {}).items()
+                        if isinstance(detail, dict) and not detail.get("passed")
+                    ]
+                    research_attempts = int(self.state.get("research_attempts") or 0)
+                    max_research_attempts = int(PRESET_PROFILES[self.preset]["max_research_cycles"])
+                    if failed_point_ids and research_attempts < max_research_attempts:
+                        research_attempts += 1
+                        self.state["research_attempts"] = research_attempts
+                        self.state["research_retry_points"] = failed_point_ids
+                        await self.event_sink(
+                            {
+                                "type": "research_retry_required",
+                                "event": "research_retry_required",
+                                "data": {
+                                    "point_ids": list(failed_point_ids),
+                                    "attempt": research_attempts,
+                                    "remaining_attempts": max_research_attempts - research_attempts,
+                                },
+                            }
+                        )
+                        await self._set_stage(RESEARCH)
+                        continue
                     failure = WorkflowFailure(
                         "quality_gate_not_met",
                         stage=RESEARCH,
@@ -234,6 +284,7 @@ class StudyMaterialsWorkflow:
                     )
                     await self._fail(failure)
                     raise failure
+                self.state["research_retry_points"] = []
                 next_stage = REVIEW if self.state.get("markdown") and self.state.get("resume_after_research") == REVIEW else DRAFT
                 await self._set_stage(next_stage, successful=RESEARCH)
                 continue
@@ -253,6 +304,10 @@ class StudyMaterialsWorkflow:
                 continue
 
             if stage == REVIEW:
+                if not str(self.state.get("markdown") or "").strip():
+                    # 空稿没有可审查内容，直接回 DRAFT 重新生成（防死循环由上面的迭代上限兜底）。
+                    await self._set_stage(DRAFT)
+                    continue
                 review = await self.tool_executor.review(
                     markdown=str(self.state.get("markdown") or ""),
                     event_sink=self.event_sink,
@@ -270,6 +325,18 @@ class StudyMaterialsWorkflow:
                 max_attempts = int(PRESET_PROFILES[self.preset]["max_review_cycles"])
                 if attempts >= max_attempts:
                     issues = list(report.get("failed_checks") or []) + list(review.get("issues") or [])
+                    if str(self.state.get("markdown") or "").strip():
+                        # 尽力交付：修订次数用尽但已有成稿时降级完成，不落验收记录。
+                        await self.event_sink(
+                            {
+                                "type": "quality_degraded",
+                                "event": "quality_degraded",
+                                "data": {"issues": issues, "revision_attempts": attempts},
+                            }
+                        )
+                        self.state["acceptance"] = {}
+                        await self._set_stage(COMPLETED)
+                        return self._degraded_result(issues=issues)
                     failure = WorkflowFailure("quality_gate_not_met", stage=REVIEW, issues=issues)
                     await self._fail(failure)
                     raise failure
@@ -313,6 +380,23 @@ class StudyMaterialsWorkflow:
                 report = evaluate_acceptance(state=self.state)
                 self.state["quality_report"] = dict(report)
                 if not report["passed"]:
+                    if str(self.state.get("markdown") or "").strip():
+                        # 与 REVIEW 相同的降级交付：成稿存在但复评未过时不写验收记录。
+                        review = self.state.get("review") if isinstance(self.state.get("review"), dict) else {}
+                        issues = list(report.get("failed_checks") or []) + list(review.get("issues") or [])
+                        await self.event_sink(
+                            {
+                                "type": "quality_degraded",
+                                "event": "quality_degraded",
+                                "data": {
+                                    "issues": issues,
+                                    "revision_attempts": int(self.state.get("revision_attempts") or 0),
+                                },
+                            }
+                        )
+                        self.state["acceptance"] = {}
+                        await self._set_stage(COMPLETED)
+                        return self._degraded_result(issues=issues)
                     failure = WorkflowFailure(
                         "quality_gate_not_met",
                         stage=ACCEPT,
@@ -364,6 +448,18 @@ class StudyMaterialsWorkflow:
             "workflow": copy.deepcopy(self.state),
             "resume_working_memory": self._resume_snapshot(),
         }
+
+    def _degraded_result(self, *, issues: List[str]) -> Dict[str, Any]:
+        # 与 _accepted_result 同形，但标记 degraded、material.passed=False，
+        # 且不带验收记录（归档不得复用降级产物）。
+        result = self._accepted_result()
+        material = dict(result["material"])
+        material["passed"] = False
+        material["issues"] = [str(issue) for issue in issues if str(issue or "").strip()]
+        result["material"] = material
+        result["degraded"] = True
+        result["acceptance"] = {}
+        return result
 
 
 async def run_study_materials_workflow(

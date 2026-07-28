@@ -10,6 +10,22 @@ import {
   type StudyStageKey,
 } from "./stages";
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    : [];
+}
+
+function asCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 export function selectMaterialResult(state: StudyMaterialsProjection): StudyMaterialResult["material"] | undefined {
   return state.result?.material;
 }
@@ -33,6 +49,118 @@ export function selectStageSummary(state: StudyMaterialsProjection): string {
 
 export function selectToolCount(state: StudyMaterialsProjection): number {
   return state.turn.iterations.reduce((total, iteration) => total + iteration.tools.length, 0);
+}
+
+export interface KnowledgePointBoardItem {
+  key: string;
+  title: string;
+  status: "running" | "done" | "error";
+  passed?: boolean;
+  sourceCount?: number;
+  sourceClasses: string[];
+  failedChecks: string[];
+}
+
+export interface KnowledgePointBoardView {
+  items: KnowledgePointBoardItem[];
+  /** quality_report 顶层 failed_checks（未按知识点拆分的部分也在这里）。 */
+  failedChecks: string[];
+  /** 数据来自 taskStatus 回填（重连场景），不是本次流的实时观测。 */
+  serverReported: boolean;
+}
+
+/** quality_report.per_knowledge_point 以 kp-N 为键；尽量对回实时 kpItems 的标题。 */
+function liveTitleForPointId(
+  pointId: string,
+  kpItems: StudyMaterialsProjection["turn"]["kpItems"],
+): string | undefined {
+  const indexed = /^kp-(\d+)$/.exec(pointId);
+  if (indexed) {
+    const candidate = kpItems[Number(indexed[1]) - 1];
+    if (candidate) return candidate.title;
+  }
+  return kpItems.find((item) => item.title === pointId)?.title;
+}
+
+/**
+ * 知识点看板：优先 quality_report.per_knowledge_point（审查后），
+ * 其次实时 kpItems（检索中），最后退回 taskStatus 回填的服务端快照。
+ */
+export function selectKnowledgePointBoard(
+  state: StudyMaterialsProjection,
+): KnowledgePointBoardView {
+  const report = asRecord(state.qualityReport);
+  const topFailedChecks = asStringList(report?.failed_checks);
+  const perKp = asRecord(report?.per_knowledge_point);
+  const live = state.turn.kpItems;
+
+  if (perKp && Object.keys(perKp).length > 0) {
+    const items = Object.entries(perKp).map(([pointId, raw]) => {
+      const entry = asRecord(raw) ?? {};
+      const liveTitle = liveTitleForPointId(pointId, live);
+      const liveItem = liveTitle ? live.find((item) => item.title === liveTitle) : undefined;
+      const failedChecks = asStringList(entry.failed_checks);
+      const passed = typeof entry.passed === "boolean" ? entry.passed : undefined;
+      return {
+        key: pointId,
+        title: liveTitle ?? pointId,
+        status: liveItem?.status ?? (passed === false ? "error" : "done"),
+        ...(passed !== undefined ? { passed } : {}),
+        ...(asCount(entry.source_count) !== undefined
+          ? { sourceCount: asCount(entry.source_count) }
+          : {}),
+        sourceClasses: asStringList(entry.source_classes),
+        failedChecks,
+      } satisfies KnowledgePointBoardItem;
+    });
+    return { items, failedChecks: topFailedChecks, serverReported: false };
+  }
+
+  if (live.length > 0) {
+    return {
+      items: live.map((item) => ({
+        key: item.title,
+        title: item.title,
+        status: item.status,
+        sourceClasses: [],
+        failedChecks: [],
+      })),
+      failedChecks: topFailedChecks,
+      serverReported: false,
+    };
+  }
+
+  const coverage = state.serverKpCoverage;
+  const serverPerKp = asRecord(coverage?.perKpState);
+  const serverSearch = asRecord(coverage?.searchSummaryByKp);
+  const keys = [
+    ...new Set([...Object.keys(serverPerKp ?? {}), ...Object.keys(serverSearch ?? {})]),
+  ];
+  if (keys.length > 0) {
+    const items = keys.map((kp) => {
+      const kpState = asRecord(serverPerKp?.[kp]);
+      const search = asRecord(serverSearch?.[kp]);
+      const results = Array.isArray(search?.results) ? search.results.length : undefined;
+      const sourceCount = asCount(kpState?.web_results) ?? results;
+      const provider = typeof search?.provider === "string" && search.provider.trim()
+        ? search.provider.trim()
+        : undefined;
+      const covered = kpState
+        ? Boolean(kpState.search || kpState.aggregate || kpState.write)
+        : Boolean(sourceCount);
+      return {
+        key: kp,
+        title: kp,
+        status: covered ? ("done" as const) : ("running" as const),
+        ...(sourceCount !== undefined ? { sourceCount } : {}),
+        sourceClasses: provider ? [provider] : [],
+        failedChecks: [],
+      } satisfies KnowledgePointBoardItem;
+    });
+    return { items, failedChecks: topFailedChecks, serverReported: true };
+  }
+
+  return { items: [], failedChecks: topFailedChecks, serverReported: false };
 }
 
 export interface StudyTimelineGroup {

@@ -3,7 +3,14 @@ import { BookOpenText, Clock3, FileText, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { STUDY_PRESETS, type StudyArchiveSummary, type StudyPreset, type TaskSummary } from "@/shared/api/types";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  STUDY_PRESETS,
+  TASK_STATUS_LABELS,
+  type StudyArchiveSummary,
+  type StudyPreset,
+  type TaskSummary,
+} from "@/shared/api/types";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -132,17 +139,24 @@ export function MaterialsWelcome({
           </h2>
           <div className="flex flex-wrap gap-2">
             {recentTasks.slice(0, 4).map((task) => (
-              <span
-                key={task.id}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground"
-              >
-                {task.status === "running" ? (
-                  <Clock3 className="size-3 text-tool-running" />
-                ) : (
-                  <BookOpenText className="size-3 text-tool-success" />
-                )}
-                <span className="max-w-48 truncate">{task.title || "学习资料"}</span>
-              </span>
+              <Tooltip key={task.id}>
+                <TooltipTrigger asChild>
+                  <Link
+                    to={`/materials?task=${encodeURIComponent(task.id)}`}
+                    className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    {task.status === "running" ? (
+                      <Clock3 className="size-3 text-tool-running" />
+                    ) : (
+                      <BookOpenText className="size-3 text-tool-success" />
+                    )}
+                    <span className="max-w-48 truncate">{task.title || "学习资料"}</span>
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent>
+                  状态：{TASK_STATUS_LABELS[task.status] ?? task.status} · 点击恢复视图
+                </TooltipContent>
+              </Tooltip>
             ))}
           </div>
         </section>

@@ -3,10 +3,16 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from backend.core.settings import env_int
+from backend.core.text_utils import clip_text
 from backend.generation.agentic.codex_runtime import run_codex_runtime_agent_events
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 
 STAGE_VERSION = 1
+# 阶段提示词载荷预算默认值（env STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS 可调）。
+_STAGE_PROMPT_DEFAULT_MAX_CHARS = 30000
+_RESEARCH_ITEMS_PER_KP = 4
+_RESEARCH_SNIPPET_MAX_CHARS = 500
 STAGE_RESULT_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -93,6 +99,55 @@ def normalize_stage_result(expected_stage: str, result: Dict[str, Any]) -> Dict[
     raise StageResultError("invalid_stage_result", stage=expected_stage, detail="unsupported_stage")
 
 
+def _slim_research_payload(research: Any) -> Any:
+    """Trim research evidence to the top items per knowledge point for prompt size."""
+
+    if not isinstance(research, dict):
+        return research
+    slimmed: Dict[str, Any] = {}
+    for key, items in research.items():
+        if not isinstance(items, list):
+            slimmed[key] = items
+            continue
+        trimmed: list[Any] = []
+        for item in items[:_RESEARCH_ITEMS_PER_KP]:
+            if isinstance(item, dict):
+                trimmed.append({**item, "snippet": clip_text(item.get("snippet"), _RESEARCH_SNIPPET_MAX_CHARS)})
+            else:
+                trimmed.append(item)
+        slimmed[key] = trimmed
+    return slimmed
+
+
+def _cap_stage_input(stage_input: Dict[str, Any], *, stage: str, max_chars: int) -> Dict[str, Any]:
+    """Pre-truncate payload fields so the serialized stage input stays within budget.
+
+    draft/revise 都内联 plan+research（revise 还带完整 markdown），需要统一瘦身；
+    plan 载荷本身很小，不处理。
+    """
+
+    if stage not in {"draft", "revise"} or max_chars <= 0:
+        return stage_input
+    payload = stage_input.get("input")
+    if not isinstance(payload, dict):
+        return stage_input
+    capped = dict(payload)
+    if "research" in capped:
+        capped["research"] = _slim_research_payload(capped.get("research"))
+    markdown = capped.get("markdown")
+    if isinstance(markdown, str) and markdown:
+        # 用“其余字段序列化后的剩余预算”截断正文，保证整个阶段输入不超限。
+        base = json.dumps(
+            {**stage_input, "input": {key: value for key, value in capped.items() if key != "markdown"}},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+        budget = max(0, max_chars - len(base) - 16)
+        capped["markdown"] = clip_text(markdown, budget)
+    return {**stage_input, "input": capped}
+
+
 def build_stage_prompt(
     *,
     stage: str,
@@ -118,7 +173,8 @@ def build_stage_prompt(
     }.get(stage)
     if not stage_instruction:
         raise StageResultError("invalid_stage_result", stage=stage, detail="unsupported_stage")
-    stage_input = json.dumps(
+    max_chars = max(0, env_int("STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS", _STAGE_PROMPT_DEFAULT_MAX_CHARS))
+    stage_input_obj = _cap_stage_input(
         {
             "topic": _text(topic),
             "subject": _text(subject),
@@ -127,6 +183,11 @@ def build_stage_prompt(
             "stage": stage,
             "input": payload,
         },
+        stage=stage,
+        max_chars=max_chars,
+    )
+    stage_input = json.dumps(
+        stage_input_obj,
         ensure_ascii=False,
         separators=(",", ":"),
         default=str,

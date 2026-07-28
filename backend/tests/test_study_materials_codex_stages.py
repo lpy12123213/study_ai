@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -127,6 +128,86 @@ class StudyMaterialsCodexStageTests(unittest.IsolatedAsyncioTestCase):
                     payload={},
                     event_sink=sink,
                 )
+
+
+class StudyMaterialsStagePromptCapTests(unittest.TestCase):
+    def _payload(self, *, markdown_chars: int, evidence_per_kp: int) -> dict:
+        return {
+            "plan": {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]},
+            "research": {
+                "kp-1": [
+                    {
+                        "source_class": "web",
+                        "url": f"https://example.test/{index}",
+                        "title": f"资料 {index}",
+                        "snippet": "证" * 800,
+                    }
+                    for index in range(evidence_per_kp)
+                ]
+            },
+            "markdown": "# 函数单调性\n\n## 增函数\n\n" + ("定义与性质。" * (markdown_chars // 6)),
+        }
+
+    def test_revise_prompt_clips_markdown_to_env_budget(self) -> None:
+        from backend.generation.study_materials.codex_stages import build_stage_prompt
+
+        with patch.dict(os.environ, {"STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS": "2000"}):
+            prompt = build_stage_prompt(
+                stage="revise",
+                topic="函数单调性",
+                subject="高中数学",
+                preset="standard",
+                payload=self._payload(markdown_chars=60000, evidence_per_kp=1),
+            )
+
+        stage_input = prompt.split("阶段输入：", 1)[1]
+        self.assertLessEqual(len(stage_input), 2100)
+        self.assertIn("…", stage_input)
+
+    def test_stage_prompt_slims_research_evidence(self) -> None:
+        from backend.generation.study_materials.codex_stages import build_stage_prompt
+
+        prompt = build_stage_prompt(
+            stage="draft",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="standard",
+            payload=self._payload(markdown_chars=100, evidence_per_kp=9),
+        )
+
+        stage_input = prompt.split("阶段输入：", 1)[1]
+        self.assertEqual(stage_input.count("https://example.test/"), 4)
+        self.assertNotIn("证" * 600, stage_input)
+
+    def test_stage_prompt_uses_default_budget_without_env(self) -> None:
+        from backend.generation.study_materials.codex_stages import build_stage_prompt
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS", None)
+            prompt = build_stage_prompt(
+                stage="revise",
+                topic="函数单调性",
+                subject="高中数学",
+                preset="standard",
+                payload=self._payload(markdown_chars=120000, evidence_per_kp=2),
+            )
+
+        stage_input = prompt.split("阶段输入：", 1)[1]
+        self.assertLessEqual(len(stage_input), 31000)
+
+    def test_plan_prompt_is_not_capped(self) -> None:
+        from backend.generation.study_materials.codex_stages import build_stage_prompt
+
+        with patch.dict(os.environ, {"STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS": "2000"}):
+            prompt = build_stage_prompt(
+                stage="plan",
+                topic="函数单调性",
+                subject="高中数学",
+                preset="standard",
+                payload={"requirements": "保留要求" * 400},
+            )
+
+        self.assertIn("保留要求", prompt)
 
 
 if __name__ == "__main__":

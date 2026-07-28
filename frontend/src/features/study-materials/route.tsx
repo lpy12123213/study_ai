@@ -13,10 +13,14 @@ import {
   BookOpenText,
   Bot,
   CheckCircle2,
+  ChevronDown,
+  FileText,
   History,
   Plus,
+  RotateCcw,
   SlidersHorizontal,
   Sparkles,
+  Undo2,
 } from "lucide-react";
 
 import { ApiError } from "@/shared/api/http-client";
@@ -35,8 +39,11 @@ import {
 import { useTasksStore } from "@/stores/tasks";
 import { useUiStore } from "@/stores/ui";
 import { SubjectSelect } from "@/components/question/subject-select";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MarkdownView } from "@/components/markdown/markdown-view";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -48,6 +55,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 import type { ToolStepView } from "@/features/chat/model/types";
 import { AssistantTurn } from "@/features/chat/ui/assistant-turn";
 import { PromptComposer } from "@/features/chat/ui/prompt-composer";
@@ -59,16 +67,19 @@ import {
   type StudyMaterialsStreamEndReason,
 } from "./model/reducer";
 import {
+  selectKnowledgePointBoard,
   selectResultMarkdown,
   selectStageSummary,
   selectToolCount,
 } from "./model/selectors";
 import type { StudyMaterialsProjection } from "./model/types";
 import { decodeStudyMaterialsEvent } from "./streaming/contract";
+import { KnowledgePointBoard } from "./ui/knowledge-point-board";
 import { MaterialResultCard } from "./ui/material-result-card";
 import { MaterialsWelcome } from "./ui/materials-welcome";
 import { RecoveryCard } from "./ui/recovery-card";
 import { ResumeBanner } from "./ui/resume-banner";
+import { RevisionStrip } from "./ui/revision-strip";
 import { StageProgress } from "./ui/stage-progress";
 import { StudyMaterialsUserRequest } from "./ui/user-request";
 
@@ -85,6 +96,7 @@ interface ActiveRequest {
   preset: StudyPreset;
   requirements: string;
   flags: GenerationFlags;
+  maxPoints?: number;
 }
 
 interface PersistedRun extends ActiveRequest {
@@ -95,6 +107,8 @@ interface PersistedRun extends ActiveRequest {
 interface ResumeCandidate {
   taskId: string;
   query: string;
+  /** 任务中心状态：completed 时 ResumeBanner 切换为「恢复视图」语义。 */
+  status?: string;
   persisted?: PersistedRun;
 }
 
@@ -126,6 +140,7 @@ function readPersistedRun(): PersistedRun | null {
       preset: value.preset as StudyPreset,
       requirements: typeof value.requirements === "string" ? value.requirements : "",
       flags: { ...DEFAULT_FLAGS, ...(value.flags ?? {}) },
+      ...(typeof value.maxPoints === "number" ? { maxPoints: value.maxPoints } : {}),
       lastSeq: typeof value.lastSeq === "number" ? value.lastSeq : 0,
     };
   } catch {
@@ -171,13 +186,17 @@ function GenerationOptions({
   onRequirementsChange,
   flags,
   onFlagsChange,
+  maxPoints,
+  onMaxPointsChange,
 }: {
   requirements: string;
   onRequirementsChange: (value: string) => void;
   flags: GenerationFlags;
   onFlagsChange: (flags: GenerationFlags) => void;
+  maxPoints?: number;
+  onMaxPointsChange: (value: number | undefined) => void;
 }) {
-  const selected = Object.values(flags).filter(Boolean).length;
+  const selected = Object.values(flags).filter(Boolean).length + (maxPoints !== undefined ? 1 : 0);
   const items: Array<{ key: keyof GenerationFlags; label: string; description: string }> = [
     { key: "with_questions", label: "包含练习题", description: "在讲义中加入典型例题或练习" },
     { key: "with_diagrams", label: "生成示意图", description: "需要时生成教学示意图" },
@@ -213,6 +232,35 @@ function GenerationOptions({
               />
             </div>
           ))}
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <Label htmlFor="materials-max-points" className="text-sm">
+                知识点上限
+              </Label>
+              <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                1–15 个；留空使用预设默认值
+              </div>
+            </div>
+            <Input
+              id="materials-max-points"
+              type="number"
+              min={1}
+              max={15}
+              placeholder="默认"
+              className="h-8 w-20"
+              value={maxPoints ?? ""}
+              onChange={(event) => {
+                const raw = event.target.value.trim();
+                if (!raw) {
+                  onMaxPointsChange(undefined);
+                  return;
+                }
+                const value = Number(raw);
+                if (!Number.isFinite(value)) return;
+                onMaxPointsChange(Math.max(1, Math.min(15, Math.round(value))));
+              }}
+            />
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="materials-requirements">额外要求</Label>
@@ -229,6 +277,49 @@ function GenerationOptions({
   );
 }
 
+/** 运行中的草稿预览：text_delta 为完整快照，修订时整体替换。 */
+function DraftPreviewPane({ markdown, version }: { markdown: string; version: number }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-card shadow-soft">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left"
+        aria-expanded={open}
+      >
+        <span className="flex min-w-0 items-center gap-2 text-xs font-semibold text-muted-foreground">
+          <FileText className="size-3.5 shrink-0" />
+          <span className="truncate">草稿预览 · 修订中会自动更新</span>
+          {version > 0 ? <Badge variant="outline">第 {version} 版草稿</Badge> : null}
+        </span>
+        <ChevronDown
+          className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open ? (
+        <div className="max-h-96 overflow-y-auto border-t border-border px-4 py-3">
+          <MarkdownView content={markdown} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** 流在 task_started 之前失败：服务端没有可恢复记录，提供同参重试。 */
+function EarlyRetryNotice({ onRetry, disabled }: { onRetry: () => void; disabled?: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-soft">
+      <p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">
+        任务在启动前中断，服务端没有留下可恢复的记录。可以使用相同请求直接重试。
+      </p>
+      <Button size="sm" variant="outline" onClick={onRetry} disabled={disabled}>
+        <RotateCcw /> 重试生成
+      </Button>
+    </div>
+  );
+}
+
 export function StudyMaterialsRoute() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -242,6 +333,7 @@ export function StudyMaterialsRoute() {
   const [preset, setPreset] = useState<StudyPreset>("standard");
   const [requirements, setRequirements] = useState("");
   const [flags, setFlags] = useState<GenerationFlags>(DEFAULT_FLAGS);
+  const [maxPoints, setMaxPoints] = useState<number | undefined>(undefined);
   const [activeRequest, setActiveRequest] = useState<ActiveRequest | null>(null);
   const [projection, setProjection] = useState<StudyMaterialsProjection>(
     initialStudyMaterialsProjection,
@@ -257,7 +349,8 @@ export function StudyMaterialsRoute() {
   const abortRef = useRef<AbortController | null>(null);
   const streamEpochRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const resumeProbeRef = useRef(false);
+  // 已探测过的 taskId：同一任务只探测一次，点击不同最近任务仍可触发。
+  const resumeProbeRef = useRef("");
 
   useEffect(() => {
     projectionRef.current = projection;
@@ -364,6 +457,14 @@ export function StudyMaterialsRoute() {
     async (taskId: string) => {
       try {
         const status = await studyMaterialsApi.taskStatus(taskId);
+        // 重连场景回填服务端检索覆盖，知识点看板仍有内容可显示（标注为服务端快照）。
+        if (status.per_kp_state || status.search_summary_by_kp) {
+          dispatchProjection({
+            type: "hydrate_server_state",
+            ...(status.per_kp_state ? { perKpState: status.per_kp_state } : {}),
+            ...(status.search_summary_by_kp ? { searchSummaryByKp: status.search_summary_by_kp } : {}),
+          });
+        }
         if (status.status === "failed" && (status.resumable || status.recovery_available)) {
           dispatchProjection({
             type: "event",
@@ -430,23 +531,18 @@ export function StudyMaterialsRoute() {
     [handleWireEvent, settleStream, toast],
   );
 
-  const startGeneration = useCallback(
-    async (queryOverride?: string) => {
-      const query = (queryOverride ?? draft).trim();
+  /** 以完整请求启动生成；重试/重新生成复用同一入口，保证参数一致。 */
+  const launchGeneration = useCallback(
+    async (request: ActiveRequest) => {
+      const query = request.query.trim();
       if (!query || receiving) return;
 
       streamEpochRef.current += 1;
       abortRef.current?.abort();
       const epoch = streamEpochRef.current;
-      const request: ActiveRequest = {
-        query,
-        subject,
-        preset,
-        requirements: requirements.trim(),
-        flags,
-      };
-      activeRequestRef.current = request;
-      setActiveRequest(request);
+      const nextRequest: ActiveRequest = { ...request, query };
+      activeRequestRef.current = nextRequest;
+      setActiveRequest(nextRequest);
       setDraft("");
       setInspectorToolId(null);
       setLatexUrl(undefined);
@@ -463,24 +559,50 @@ export function StudyMaterialsRoute() {
 
       const payload: StudyGeneratePayload = {
         query,
-        ...(subject ? { subject } : {}),
-        preset,
-        ...(request.requirements ? { requirements: request.requirements } : {}),
-        ...flags,
+        ...(nextRequest.subject ? { subject: nextRequest.subject } : {}),
+        preset: nextRequest.preset,
+        ...(nextRequest.requirements ? { requirements: nextRequest.requirements } : {}),
+        ...nextRequest.flags,
+        ...(nextRequest.maxPoints !== undefined ? { max_points: nextRequest.maxPoints } : {}),
       };
       await generateStudyMaterials(payload, streamHandlers(controller, epoch));
     },
-    [
-      draft,
-      flags,
-      preset,
-      receiving,
-      requirements,
-      setSearchParams,
-      streamHandlers,
-      subject,
-    ],
+    [receiving, setSearchParams, streamHandlers],
   );
+
+  const startGeneration = useCallback(
+    async (queryOverride?: string) => {
+      const query = (queryOverride ?? draft).trim();
+      if (!query) return;
+      await launchGeneration({
+        query,
+        subject,
+        preset,
+        requirements: requirements.trim(),
+        flags,
+        ...(maxPoints !== undefined ? { maxPoints } : {}),
+      });
+    },
+    [draft, flags, launchGeneration, maxPoints, preset, requirements, subject],
+  );
+
+  /** 「编辑并重跑」：把上次请求回填输入舱，由用户确认后再提交。 */
+  const editPreviousRequest = useCallback(() => {
+    const request = activeRequestRef.current;
+    if (!request || receiving) return;
+    setDraft(request.query);
+    setSubject(request.subject);
+    setPreset(request.preset);
+    setRequirements(request.requirements);
+    setFlags(request.flags);
+    setMaxPoints(request.maxPoints);
+  }, [receiving]);
+
+  /** 同参重跑：早期失败重试与不可恢复失败的「重新生成」。 */
+  const rerunActiveRequest = useCallback(() => {
+    const request = activeRequestRef.current;
+    if (request) void launchGeneration(request);
+  }, [launchGeneration]);
 
   const continueWith = useCallback(
     async (
@@ -501,15 +623,15 @@ export function StudyMaterialsRoute() {
       setReceiving(true);
       setInspectorToolId(null);
       setLatexUrl(undefined);
-      projectionRef.current = initialStudyMaterialsProjection();
-      setProjection(projectionRef.current);
+      // 重置投影前把当前成果快照为「上一版」，改进期间下载入口不丢。
+      dispatchProjection({ type: "begin_continuation" });
       await studyMaterialsApi.continueTask(
         parentTaskId,
         mode,
         streamHandlers(controller, epoch),
       );
     },
-    [receiving, streamHandlers],
+    [dispatchProjection, receiving, streamHandlers],
   );
 
   const resumeReceiving = useCallback(
@@ -527,6 +649,7 @@ export function StudyMaterialsRoute() {
           preset: saved.preset,
           requirements: saved.requirements,
           flags: saved.flags,
+          ...(saved.maxPoints !== undefined ? { maxPoints: saved.maxPoints } : {}),
         };
         activeRequestRef.current = request;
         setActiveRequest(request);
@@ -562,12 +685,23 @@ export function StudyMaterialsRoute() {
     [receiving, streamHandlers],
   );
 
-  const stopReceiving = useCallback(() => {
+  const stopReceiving = useCallback(async () => {
+    const taskId = projectionRef.current.taskId;
     dispatchProjection({ type: "stop_requested", at: Date.now() });
+    if (taskId) {
+      try {
+        await tasksApi.cancel(taskId);
+        dispatchProjection({ type: "server_cancel_confirmed", at: Date.now() });
+      } catch {
+        // 取消请求失败（离线等）也要中断本地接收，不能死路。
+      }
+    }
     abortRef.current?.abort();
   }, [dispatchProjection]);
 
   const reset = useCallback(() => {
+    const activeTaskId =
+      projectionRef.current.runStatus === "running" ? projectionRef.current.taskId : undefined;
     streamEpochRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
@@ -581,6 +715,10 @@ export function StudyMaterialsRoute() {
     setResumeCandidate(null);
     clearPersistedRun();
     setSearchParams({}, { replace: true });
+    // 「新的生成」与停止接收同理：尽力取消服务端任务，失败不阻塞本地重置。
+    if (activeTaskId) {
+      void tasksApi.cancel(activeTaskId).catch(() => {});
+    }
   }, [setSearchParams]);
 
   const discardResume = useCallback(() => {
@@ -589,13 +727,16 @@ export function StudyMaterialsRoute() {
     setSearchParams({}, { replace: true });
   }, [setSearchParams]);
 
-  // 刷新后只探测一次。是否真正续播由用户确认，避免页面载入即占用长连接。
+  // 刷新后每个任务只探测一次。是否真正续播由用户确认，避免页面载入即占用长连接。
   useEffect(() => {
-    if (resumeProbeRef.current) return;
-    resumeProbeRef.current = true;
     const persisted = readPersistedRun();
     const taskId = searchParams.get("task") || persisted?.taskId;
-    if (!taskId) return;
+    if (!taskId) {
+      resumeProbeRef.current = "";
+      return;
+    }
+    if (resumeProbeRef.current === taskId) return;
+    resumeProbeRef.current = taskId;
 
     void (async () => {
       try {
@@ -604,12 +745,14 @@ export function StudyMaterialsRoute() {
           setResumeCandidate({
             taskId,
             query: persisted?.query || status.query || "学习资料",
+            status: status.status,
             ...(persisted ? { persisted } : {}),
           });
         } else if (status.status === "completed" && searchParams.get("task")) {
           setResumeCandidate({
             taskId,
             query: persisted?.query || status.query || "已完成的学习资料",
+            status: "completed",
             ...(persisted ? { persisted } : {}),
           });
         } else {
@@ -641,11 +784,30 @@ export function StudyMaterialsRoute() {
 
   const markdown = selectResultMarkdown(projection);
   const toolCount = selectToolCount(projection);
+  const kpBoard = selectKnowledgePointBoard(projection);
   const hasConversation = activeRequest !== null || projection.runStatus !== "idle";
   const interruptedCandidate =
     projection.runStatus === "interrupted" && projection.taskId
       ? { taskId: projection.taskId, query: activeRequest?.query || "学习资料" }
       : null;
+  // 知识点看板：运行中与中断后可见；done/failed 由结果卡与恢复卡接管。
+  const showKpBoard =
+    kpBoard.items.length > 0 &&
+    (projection.runStatus === "running" || projection.runStatus === "interrupted");
+  // 修订条只在审查/修订或检索补充期间出现，避免导出阶段残留过期提示。
+  const showRevisionStrip =
+    projection.runStatus === "running" &&
+    (projection.researchRetry !== undefined ||
+      (projection.revisionIssues.length > 0 &&
+        (projection.currentStage === "review" || projection.currentStage === "research")));
+  // task_started 之前的失败没有 taskId，恢复探测无从谈起，提供同参重试。
+  const showEarlyRetry =
+    Boolean(activeRequest) &&
+    !projection.taskId &&
+    (projection.runStatus === "failed" || projection.runStatus === "interrupted");
+  const showRestorePrevious =
+    Boolean(projection.previousResult) &&
+    (projection.runStatus === "failed" || projection.runStatus === "interrupted");
 
   return (
     <div className="flex h-full min-h-0 animate-fade-in p-3 sm:p-4">
@@ -675,6 +837,7 @@ export function StudyMaterialsRoute() {
                   <div className="mb-5">
                     <ResumeBanner
                       title={resumeCandidate.query}
+                      status={resumeCandidate.status}
                       onResume={() => void resumeReceiving(resumeCandidate)}
                       onDiscard={discardResume}
                       busy={receiving}
@@ -697,9 +860,15 @@ export function StudyMaterialsRoute() {
                       query={activeRequest.query}
                       subject={activeRequest.subject}
                       preset={activeRequest.preset}
+                      requirements={activeRequest.requirements}
                       withQuestions={activeRequest.flags.with_questions}
                       withDiagrams={activeRequest.flags.with_diagrams}
                       extraTools={activeRequest.flags.enable_extra_tools}
+                      preferLocalArchive={activeRequest.flags.prefer_local_archive}
+                      {...(activeRequest.maxPoints !== undefined
+                        ? { maxPoints: activeRequest.maxPoints }
+                        : {})}
+                      onEditRerun={receiving ? undefined : editPreviousRequest}
                     />
 
                     <AssistantShell>
@@ -716,8 +885,31 @@ export function StudyMaterialsRoute() {
                         </div>
 
                         <div className="overflow-x-auto pb-1">
-                          <StageProgress stages={projection.stages} />
+                          <StageProgress stages={projection.stages} progress={projection.progress} />
                         </div>
+
+                        {projection.previousResult ? (
+                          <MaterialResultCard
+                            compact
+                            result={projection.previousResult.result}
+                            markdown={projection.previousResult.markdownSnapshot}
+                            preset={activeRequest.preset}
+                          />
+                        ) : null}
+
+                        {showKpBoard ? <KnowledgePointBoard board={kpBoard} /> : null}
+
+                        {showRevisionStrip ? (
+                          <RevisionStrip
+                            issues={projection.revisionIssues}
+                            {...(projection.remainingRevisionAttempts !== undefined
+                              ? { remainingAttempts: projection.remainingRevisionAttempts }
+                              : {})}
+                            {...(projection.researchRetry
+                              ? { researchRetry: projection.researchRetry }
+                              : {})}
+                          />
+                        ) : null}
 
                         <AssistantTurn
                           turn={projection.turn}
@@ -725,10 +917,17 @@ export function StudyMaterialsRoute() {
                           onInspectTool={(tool: ToolStepView) => setInspectorToolId(tool.id)}
                         />
 
-                        {projection.runStatus === "running" ? (
+                        {projection.runStatus === "running" && !projection.markdownSnapshot ? (
                           <p className="text-xs leading-5 text-muted-foreground">
                             legacy 生成流不会发送实时 Markdown 正文；最终讲义将在完成事件到达后显示。
                           </p>
+                        ) : null}
+
+                        {projection.runStatus === "running" && projection.markdownSnapshot ? (
+                          <DraftPreviewPane
+                            markdown={projection.markdownSnapshot}
+                            version={projection.snapshotVersion}
+                          />
                         ) : null}
 
                         {projection.runStatus === "done" && projection.result ? (
@@ -770,22 +969,61 @@ export function StudyMaterialsRoute() {
                           </>
                         ) : null}
 
-                        {projection.runStatus === "failed" ? (
+                        {showRestorePrevious ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                dispatchProjection({ type: "restore_previous_result", at: Date.now() })
+                              }
+                              disabled={receiving}
+                            >
+                              <Undo2 /> 还原上一版
+                            </Button>
+                            <span className="text-xs text-muted-foreground">
+                              本轮未产出新成果，可以切回上一版继续下载。
+                            </span>
+                          </div>
+                        ) : null}
+
+                        {showEarlyRetry ? (
+                          <EarlyRetryNotice onRetry={rerunActiveRequest} disabled={receiving} />
+                        ) : null}
+
+                        {projection.runStatus === "failed" && projection.taskId ? (
                           <RecoveryCard
                             message={projection.turn.errorMessage || projection.statusText || "生成任务失败"}
                             recovery={projection.recovery}
                             onContinue={(mode) => void continueWith(mode)}
+                            onRegenerate={rerunActiveRequest}
                             disabled={receiving}
                           />
                         ) : null}
 
                         {interruptedCandidate ? (
-                          <ResumeBanner
-                            title={interruptedCandidate.query}
-                            onResume={() => void resumeReceiving(interruptedCandidate)}
-                            onDiscard={reset}
-                            busy={receiving}
-                          />
+                          projection.serverCancelConfirmed ? (
+                            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-soft">
+                              <p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">
+                                任务已在服务端取消，无法继续接收。可以基于已保留的中间成果继续生成。
+                              </p>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void continueWith("improve")}
+                                disabled={receiving}
+                              >
+                                <Sparkles /> 继续生成
+                              </Button>
+                            </div>
+                          ) : (
+                            <ResumeBanner
+                              title={interruptedCandidate.query}
+                              onResume={() => void resumeReceiving(interruptedCandidate)}
+                              onDiscard={reset}
+                              busy={receiving}
+                            />
+                          )
                         ) : null}
                       </div>
                     </AssistantShell>
@@ -813,7 +1051,7 @@ export function StudyMaterialsRoute() {
               onChange={setDraft}
               onSubmit={() => void startGeneration()}
               sending={receiving}
-              onStop={stopReceiving}
+              onStop={() => void stopReceiving()}
               submitLabel="开始生成"
               placeholder={
                 projection.runStatus === "done"
@@ -846,6 +1084,8 @@ export function StudyMaterialsRoute() {
                     onRequirementsChange={setRequirements}
                     flags={flags}
                     onFlagsChange={setFlags}
+                    maxPoints={maxPoints}
+                    onMaxPointsChange={setMaxPoints}
                   />
                 </>
               }

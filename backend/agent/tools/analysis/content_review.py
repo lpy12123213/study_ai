@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.text_lint import lint_text
+from backend.generation.study_materials.coverage import evaluate_kp_dimensions, split_sections_by_kp
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -74,20 +74,12 @@ class ContentReviewToolsMixin:
             # for deep/research presets so iteration is driven by concrete gaps (conditions/edge cases/applications).
             md_sections_by_kp: Dict[str, str] = {}
             if markdown.strip():
-                current_kp = ""
-                buf: List[str] = []
-                for line in markdown.splitlines():
-                    m = re.match(r"^##\s+\d+、\s*(.+?)\s*$", line.strip())
-                    if m:
-                        if current_kp:
-                            md_sections_by_kp[current_kp] = "\n".join(buf).strip()
-                        current_kp = str(m.group(1) or "").strip()
-                        buf = []
-                        continue
-                    if current_kp:
-                        buf.append(line)
-                if current_kp and current_kp not in md_sections_by_kp:
-                    md_sections_by_kp[current_kp] = "\n".join(buf).strip()
+                kp_names = [
+                    str(x.get("knowledge_point") or "").strip() or "（未知知识点）"
+                    for x in items
+                    if isinstance(x, dict)
+                ]
+                md_sections_by_kp = split_sections_by_kp(markdown, kp_names)
 
             source_facts = ctx.working_memory.get("source_facts")
             source_facts = dict(source_facts) if isinstance(source_facts, dict) else {}
@@ -150,24 +142,9 @@ class ContentReviewToolsMixin:
                 if md_sections_by_kp:
                     sec = md_sections_by_kp.get(kp, "")
                     if sec:
-                        missing_dims: List[str] = []
-                        present_dims: List[str] = []
-
-                        def _dim(name: str, pattern: str) -> None:
-                            if re.search(pattern, sec):
-                                present_dims.append(name)
-                            else:
-                                missing_dims.append(name)
-
-                        _dim("动机/直观", r"(动机|为什么|意义|背景|直观|intuition|引入|起源|由来|缘由)")
-                        _dim("定义/概念", r"(定义|概念|是什么|含义|本质|内涵|外延|界定)")
-                        _dim("性质/结论", r"(性质|结论|定理|推论|关键结论|重要结论|特点|特性|规律|法则)")
-                        _dim("条件/适用范围", r"(条件|适用|前提|范围|成立|约束|限制|假设|要求)")
-                        _dim("反例/边界", r"(反例|边界|极端|陷阱|特例|例外|临界|极限情况)")
-                        _dim("误区/易错点", r"(误区|易错|注意|常见错误|混淆|辨析|区分|对比)")
-                        _dim("应用/题型", r"(应用|题型|例题|典型|场景|实例|案例|练习|解题)")
-                        _dim("推导/证明", r"(推导|证明|演算|论证|证法|步骤)")
-                        _dim("联系/拓展", r"(联系|拓展|延伸|相关|对比|类比|推广|深入)")
+                        dims = evaluate_kp_dimensions(sec)
+                        present_dims = dims["present"]
+                        missing_dims = dims["missing"]
 
                         facts_total = 0
                         facts_raw = source_facts.get(kp)

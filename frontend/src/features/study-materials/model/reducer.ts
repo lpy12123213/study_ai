@@ -6,6 +6,7 @@ import type {
 import type { StudyMaterialsStreamEvent } from "../streaming/contract";
 import type {
   NormalizedStudyResult,
+  StudyMaterialsPreviousResult,
   StudyMaterialsProjection,
   StudyMaterialsRecoveryView,
   StudyMaterialsStageId,
@@ -33,6 +34,14 @@ export type StudyMaterialsProjectionAction =
   | { type: "reset" }
   | { type: "event"; event: StudyMaterialsStreamEvent; seq?: number; at: number }
   | { type: "stop_requested"; at: number }
+  | { type: "server_cancel_confirmed"; at: number }
+  | { type: "begin_continuation" }
+  | { type: "restore_previous_result"; at: number }
+  | {
+      type: "hydrate_server_state";
+      perKpState?: Record<string, unknown>;
+      searchSummaryByKp?: Record<string, unknown>;
+    }
   | { type: "settled"; reason: StudyMaterialsStreamEndReason; at: number; error?: Error | string };
 
 export const STUDY_MATERIALS_STAGES: ReadonlyArray<{
@@ -69,6 +78,7 @@ export function initialStudyMaterialsProjection(): StudyMaterialsProjection {
       statusText: "",
     },
     markdownSnapshot: "",
+    snapshotVersion: 0,
     revisionIssues: [],
     seenTerminal: false,
     stopIntent: false,
@@ -160,10 +170,18 @@ function aggregateIterationStatus(tools: ToolStepView[]): ToolStepStatus {
 function setCurrentStage(
   state: StudyMaterialsProjection,
   stage: StudyMaterialsStageId,
+  opts?: { authoritative?: boolean },
 ): StudyMaterialsProjection {
   const currentIndex = STAGE_INDEX.get(stage) ?? 0;
   const stages = state.stages.map((item, index) => {
-    if (item.id === stage) return { ...item, status: "running" as const };
+    if (item.id === stage) {
+      return {
+        ...item,
+        status: "running" as const,
+        // 权威 workflow_stage 到达后摘掉「推断」标注；工具推断保持 inferred。
+        ...(opts?.authoritative ? { inferred: false } : {}),
+      };
+    }
     if (index < currentIndex && item.status === "pending") return { ...item, status: "success" as const };
     return item;
   });
@@ -297,6 +315,18 @@ function recoveryFromEvent(event: Extract<StudyMaterialsStreamEvent, { kind: "re
   return recovery;
 }
 
+/** continue 前把当前成果快照为「上一版」，没有结果时不产生快照。 */
+function snapshotPreviousResult(
+  state: StudyMaterialsProjection,
+): StudyMaterialsPreviousResult | undefined {
+  if (!state.result) return undefined;
+  return {
+    result: state.result,
+    markdownSnapshot: state.markdownSnapshot,
+    ...(state.taskId ? { taskId: state.taskId } : {}),
+  };
+}
+
 function applyEvent(
   state: StudyMaterialsProjection,
   event: StudyMaterialsStreamEvent,
@@ -311,6 +341,7 @@ function applyEvent(
           ...(event.parentTaskId ? { parentTaskId: event.parentTaskId } : {}),
           startedAt: state.startedAt ?? at,
           stopIntent: false,
+          serverCancelConfirmed: false,
           seenTerminal: false,
         },
         "plan",
@@ -365,7 +396,7 @@ function applyEvent(
 
     case "workflow_stage": {
       const stage = mapWorkflowStage(event.stage);
-      return stage ? setCurrentStage(state, stage) : state;
+      return stage ? setCurrentStage(state, stage, { authoritative: true }) : state;
     }
 
     case "tool_call": {
@@ -463,6 +494,7 @@ function applyEvent(
       return {
         ...state,
         markdownSnapshot: event.content,
+        snapshotVersion: state.snapshotVersion + 1,
         turn: { ...state.turn, snapshotMarkdown: event.content },
       };
 
@@ -477,6 +509,28 @@ function applyEvent(
       return { ...state, recovery: recoveryFromEvent(event) };
 
     case "revision_required":
+      return {
+        ...state,
+        revisionIssues: event.issues,
+        ...(event.remainingAttempts !== undefined
+          ? { remainingRevisionAttempts: event.remainingAttempts }
+          : {}),
+      };
+
+    case "research_retry_required":
+      return {
+        ...state,
+        researchRetry: {
+          pointIds: event.pointIds,
+          ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
+          ...(event.remainingAttempts !== undefined
+            ? { remainingAttempts: event.remainingAttempts }
+            : {}),
+        },
+      };
+
+    case "quality_degraded":
+      // 质量降级不重写 remainingRevisionAttempts（事件携带的是已用次数）。
       return { ...state, revisionIssues: event.issues };
 
     case "subagent_start": {
@@ -518,6 +572,9 @@ function applyEvent(
           seenTerminal: true,
           progress: 100,
           statusText: "讲义已生成并保存到资料档案",
+          // 新一轮完成：上一版快照与检索重试进度不再需要保留。
+          previousResult: undefined,
+          researchRetry: undefined,
           turn: {
             ...state.turn,
             result: normalized,
@@ -596,6 +653,55 @@ export function studyMaterialsProjectionReducer(
         statusText: "正在停止接收当前生成…",
       };
 
+    case "server_cancel_confirmed":
+      if (!state.stopIntent) return state;
+      return { ...state, serverCancelConfirmed: true };
+
+    case "begin_continuation": {
+      const previousResult = snapshotPreviousResult(state);
+      return {
+        ...initialStudyMaterialsProjection(),
+        ...(previousResult ? { previousResult } : {}),
+      };
+    }
+
+    case "restore_previous_result": {
+      const previous = state.previousResult;
+      if (!previous) return state;
+      return {
+        ...state,
+        runStatus: "done",
+        result: previous.result,
+        markdownSnapshot: previous.markdownSnapshot,
+        ...(previous.taskId ? { taskId: previous.taskId } : {}),
+        statusText: "已还原上一版成果",
+        endedAt: action.at,
+        previousResult: undefined,
+        recovery: undefined,
+        turn: {
+          ...state.turn,
+          runStatus: "done",
+          errorMessage: undefined,
+          result: normalizeStudyResult(previous.result),
+          snapshotMarkdown: previous.markdownSnapshot,
+          statusText: "已还原上一版成果",
+        },
+      };
+    }
+
+    case "hydrate_server_state": {
+      const perKpState = asRecord(action.perKpState);
+      const searchSummaryByKp = asRecord(action.searchSummaryByKp);
+      if (!perKpState && !searchSummaryByKp) return state;
+      return {
+        ...state,
+        serverKpCoverage: {
+          ...(perKpState ? { perKpState } : {}),
+          ...(searchSummaryByKp ? { searchSummaryByKp } : {}),
+        },
+      };
+    }
+
     case "settled": {
       if (state.seenTerminal) return state;
       if (action.reason === "error") {
@@ -614,12 +720,18 @@ export function studyMaterialsProjectionReducer(
           },
         };
       }
-      const reason = action.reason === "aborted" || state.stopIntent ? "已停止接收" : "连接已中断";
+      const stopped = action.reason === "aborted" || state.stopIntent;
+      // 服务端取消已确认时不声称任务仍在继续；否则保持诚实提示。
+      const statusText = stopped
+        ? state.serverCancelConfirmed
+          ? "已停止，服务端任务已取消"
+          : "已停止接收；服务端任务可能仍在继续"
+        : "连接已中断；服务端任务可能仍在继续";
       return {
         ...state,
         runStatus: "interrupted",
         endedAt: action.at,
-        statusText: `${reason}；服务端任务可能仍在继续`,
+        statusText,
         turn: {
           ...markActiveTools(state.turn, "interrupted", action.at),
           runStatus: "interrupted",

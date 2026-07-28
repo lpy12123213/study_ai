@@ -11,8 +11,10 @@ import { decodeStudyMaterialsEvent } from "../../streaming/contract";
 import {
   codexSnapshotStream,
   continuationChildStart,
+  degradedRevisionStream,
   failedRecoveryStream,
   legacyStudyMaterialsStream,
+  researchOutageStream,
   type StudyMaterialsWireEvent,
 } from "../../streaming/__fixtures__/study-materials-streams";
 
@@ -103,5 +105,100 @@ describe("study-materials projection reducer", () => {
     expect(child.taskId).toBe("materials-child-2");
     expect(child.parentTaskId).toBe("materials-parent-1");
     expect(child.runStatus).toBe("running");
+  });
+
+  it("text_snapshot 递增 snapshotVersion，与快照替换语义一致", () => {
+    const state = project(codexSnapshotStream.slice(0, -1));
+    expect(state.snapshotVersion).toBe(2);
+    expect(state.markdownSnapshot).toContain("第二版");
+  });
+
+  it("workflow_stage 摘掉当前阶段的推断标注，工具推断保持不变", () => {
+    const codex = project(codexSnapshotStream);
+    expect(codex.stages.find((stage) => stage.id === "research")?.inferred).toBe(false);
+    // plan 由 workflow_stage 前置完成，但没有自己的权威事件，仍是推断。
+    expect(codex.stages.find((stage) => stage.id === "plan")?.inferred).toBe(true);
+
+    const legacy = project(legacyStudyMaterialsStream);
+    expect(legacy.stages.every((stage) => stage.inferred)).toBe(true);
+  });
+
+  it("revision_required 保留剩余修订次数，quality_degraded 不覆盖它", () => {
+    const retrying = project(degradedRevisionStream.slice(0, 7));
+    expect(retrying.revisionIssues).toEqual(["「定义与判定」检索证据不足"]);
+    expect(retrying.remainingRevisionAttempts).toBe(2);
+    expect(retrying.researchRetry).toEqual({ pointIds: ["kp-1"], attempt: 1, remainingAttempts: 1 });
+
+    // quality_degraded 携带的是已用修订次数，不能覆盖 remainingAttempts。
+    const degraded = project(degradedRevisionStream.slice(0, 10));
+    expect(degraded.revisionIssues).toEqual(["「定义与判定」来源类型单一"]);
+    expect(degraded.remainingRevisionAttempts).toBe(2);
+  });
+
+  it("degraded done 保留 issues 与 quality_report，runStatus 仍为 done", () => {
+    const state = project(degradedRevisionStream);
+    expect(state.runStatus).toBe("done");
+    expect(state.result?.degraded).toBe(true);
+    expect(state.result?.material?.passed).toBe(false);
+    expect(state.result?.material?.issues).toEqual(["「定义与判定」来源类型单一"]);
+    expect(state.qualityReport?.failed_checks).toEqual(["source_classes_missing:kp-1"]);
+    expect(state.researchRetry).toBeUndefined();
+  });
+
+  it("research_tool_outage 恢复码原样保留，供 UI 区分文案", () => {
+    const state = project(researchOutageStream);
+    expect(state.runStatus).toBe("failed");
+    expect(state.recovery?.code).toBe("research_tool_outage");
+    expect(state.recovery?.recoverable).toBe(true);
+  });
+
+  it("服务端取消确认后 settled 文案区分", () => {
+    const running = project(legacyStudyMaterialsStream.slice(0, 5));
+    const stopping = studyMaterialsProjectionReducer(running, { type: "stop_requested", at: 9_000 });
+    const confirmed = studyMaterialsProjectionReducer(stopping, {
+      type: "server_cancel_confirmed",
+      at: 9_100,
+    });
+    expect(settle(confirmed, "aborted").statusText).toBe("已停止，服务端任务已取消");
+    expect(settle(stopping, "aborted").statusText).toBe("已停止接收；服务端任务可能仍在继续");
+  });
+
+  it("begin_continuation 快照上一版成果；done 清除；restore 还原", () => {
+    const done = project(legacyStudyMaterialsStream);
+    const continued = studyMaterialsProjectionReducer(done, { type: "begin_continuation" });
+    expect(continued.runStatus).toBe("idle");
+    expect(continued.result).toBeUndefined();
+    expect(continued.previousResult?.result.material?.topic).toContain("函数单调性");
+    expect(continued.previousResult?.markdownSnapshot).toContain("# 函数单调性");
+    expect(continued.previousResult?.taskId).toBe("materials-legacy-1");
+
+    const restored = studyMaterialsProjectionReducer(continued, {
+      type: "restore_previous_result",
+      at: 14_000,
+    });
+    expect(restored.runStatus).toBe("done");
+    expect(restored.result?.material?.topic).toContain("函数单调性");
+    expect(restored.taskId).toBe("materials-legacy-1");
+    expect(restored.statusText).toBe("已还原上一版成果");
+    expect(restored.previousResult).toBeUndefined();
+
+    // 新一轮完成（子任务 done）清除上一版快照。
+    const redone = studyMaterialsProjectionReducer(continued, {
+      type: "event",
+      event: {
+        kind: "done",
+        result: { material: { topic: "函数单调性 · 第二版", markdown: "# 新稿", passed: true } },
+      },
+      seq: 1,
+      at: 15_000,
+    });
+    expect(redone.previousResult).toBeUndefined();
+    expect(redone.runStatus).toBe("done");
+  });
+
+  it("没有成果时 begin_continuation 不产生上一版快照", () => {
+    const running = project(legacyStudyMaterialsStream.slice(0, 5));
+    const continued = studyMaterialsProjectionReducer(running, { type: "begin_continuation" });
+    expect(continued.previousResult).toBeUndefined();
   });
 });

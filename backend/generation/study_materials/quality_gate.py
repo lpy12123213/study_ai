@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, Iterable, List
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from backend.core.text_lint import lint_text
+from backend.generation.study_materials.coverage import split_sections_by_kp
 
 WORKFLOW_VERSION = 1
-QUALITY_POLICY_VERSION = 1
+QUALITY_POLICY_VERSION = 2
 REVIEW_SCHEMA_VERSION = 1
 
 _ACCEPTANCE_OPTION_DEFAULTS: Dict[str, Any] = {
@@ -19,10 +22,38 @@ _ACCEPTANCE_OPTION_DEFAULTS: Dict[str, Any] = {
 }
 
 PRESET_PROFILES: Dict[str, Dict[str, int]] = {
-    "quick": {"min_sources": 1, "min_source_classes": 1, "min_dimensions": 3, "max_review_cycles": 1},
-    "standard": {"min_sources": 2, "min_source_classes": 2, "min_dimensions": 5, "max_review_cycles": 2},
-    "deep": {"min_sources": 3, "min_source_classes": 2, "min_dimensions": 6, "max_review_cycles": 3},
-    "research": {"min_sources": 4, "min_source_classes": 3, "min_dimensions": 8, "max_review_cycles": 4},
+    "quick": {
+        "min_sources": 1,
+        "min_source_classes": 1,
+        "min_dimensions": 3,
+        "max_review_cycles": 1,
+        "max_research_cycles": 1,
+        "max_consecutive_tool_failures": 3,
+    },
+    "standard": {
+        "min_sources": 2,
+        "min_source_classes": 2,
+        "min_dimensions": 5,
+        "max_review_cycles": 2,
+        "max_research_cycles": 2,
+        "max_consecutive_tool_failures": 3,
+    },
+    "deep": {
+        "min_sources": 3,
+        "min_source_classes": 2,
+        "min_dimensions": 6,
+        "max_review_cycles": 3,
+        "max_research_cycles": 2,
+        "max_consecutive_tool_failures": 3,
+    },
+    "research": {
+        "min_sources": 4,
+        "min_source_classes": 3,
+        "min_dimensions": 8,
+        "max_review_cycles": 4,
+        "max_research_cycles": 3,
+        "max_consecutive_tool_failures": 3,
+    },
 }
 
 
@@ -159,26 +190,56 @@ def evaluate_research(*, state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _kp_present_dimensions(entry: Any) -> set[str]:
+    """Extract the present dimension names from one per-kp review dimensions entry."""
+
+    if not isinstance(entry, dict):
+        return set()
+    present = entry.get("present")
+    if isinstance(present, list):
+        return {str(item or "").strip() for item in present if str(item or "").strip()}
+    # 兼容按维度名嵌套的旧形状：{维度名: {"covered": bool} | bool}
+    return _review_dimension_names(entry) - {"present", "missing", "facts_total"}
+
+
 def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
     preset = normalize_preset(state.get("preset"))
     profile = PRESET_PROFILES[preset]
     markdown = str(state.get("markdown") or "")
     review = state.get("review") if isinstance(state.get("review"), dict) else {}
+    coverage_map = state.get("coverage_map") if isinstance(state.get("coverage_map"), dict) else {}
 
     failed_checks: List[str] = []
     per_knowledge_point: Dict[str, Any] = {}
     research_report = evaluate_research(state=state)
     failed_checks.extend(research_report["failed_checks"])
     points = list(_knowledge_points(state))
+    kp_titles = [str(point.get("title") or point.get("knowledge_point") or "").strip() for point in points]
+    sections_by_kp = split_sections_by_kp(markdown, kp_titles) if points else {}
+    review_dimensions = review.get("dimensions") if isinstance(review.get("dimensions"), dict) else {}
+    # 每个知识点必须含 定义/概念，且在此之外另具备 >= min_dimensions-2 个自身维度。
+    min_kp_extra_dimensions = max(1, int(profile["min_dimensions"]) - 2)
     for index, point in enumerate(points):
         point_id = str(point.get("id") or f"kp-{index + 1}").strip()
-        title = str(point.get("title") or point.get("knowledge_point") or "").strip()
+        title = kp_titles[index] if index < len(kp_titles) else ""
         point_failures = list(
             research_report.get("per_knowledge_point", {}).get(point_id, {}).get("failed_checks", [])
         )
-        if not title or title not in markdown:
-            point_failures.append(f"draft_coverage_missing:{point_id}")
-            failed_checks.append(f"draft_coverage_missing:{point_id}")
+        section = str(sections_by_kp.get(title) or "")
+        if not title or not section.strip():
+            point_failures.append(f"draft_section_unmatched:{point_id}")
+            failed_checks.append(f"draft_section_unmatched:{point_id}")
+        # coverage_map 必须逐知识点为真，且与小节拆分交叉一致（防止全 True 的伪造 map 直接通过）。
+        if not coverage_map.get(point_id) or not section.strip():
+            point_failures.append(f"coverage_map_mismatch:{point_id}")
+            failed_checks.append(f"coverage_map_mismatch:{point_id}")
+        dims_entry = review_dimensions.get(title)
+        if not isinstance(dims_entry, dict):
+            dims_entry = review_dimensions.get(point_id)
+        present_dims = _kp_present_dimensions(dims_entry)
+        if "定义/概念" not in present_dims or len(present_dims - {"定义/概念"}) < min_kp_extra_dimensions:
+            point_failures.append(f"kp_dimensions_missing:{point_id}")
+            failed_checks.append(f"kp_dimensions_missing:{point_id}")
         research_point = research_report.get("per_knowledge_point", {}).get(point_id, {})
         per_knowledge_point[point_id] = {
             "passed": not point_failures,
@@ -197,6 +258,7 @@ def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
         failed_checks.append("independent_review_failed")
     if str(review.get("draft_hash") or "") != current_hash:
         failed_checks.append("review_draft_mismatch")
+    # 维度并集只保留为兜底下限；逐项要求见上面的 kp_dimensions_missing。
     dimension_names = _review_dimension_names(review.get("dimensions"))
     if len(dimension_names) < profile["min_dimensions"]:
         failed_checks.append("review_dimensions_missing")
@@ -215,12 +277,41 @@ def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _archive_age_seconds(archive: Dict[str, Any]) -> Optional[float]:
+    """Best-effort age of an archive row from its updated/created timestamp.
+
+    study_archives 行里 ``updated_at``/``created_at`` 是 ISO 字符串；也兼容
+    直接存放 epoch 秒的场景。无法解析时返回 None（调用方按“不新鲜”处理）。
+    """
+
+    raw = archive.get("updated_at") or archive.get("created_at")
+    if raw is None or raw == "":
+        return None
+    timestamp: float
+    if isinstance(raw, (int, float)):
+        timestamp = float(raw)
+    else:
+        text = str(raw).strip()
+        try:
+            timestamp = float(text)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            timestamp = parsed.timestamp()
+    return max(0.0, time.time() - timestamp)
+
+
 def acceptance_record_is_current(
     *,
     archive: Dict[str, Any],
     preset: str,
     markdown: str,
     options: Any = None,
+    max_age_s: Any = None,
 ) -> bool:
     record = archive.get("acceptance") if isinstance(archive.get("acceptance"), dict) else {}
     try:
@@ -237,7 +328,7 @@ def acceptance_record_is_current(
             if recorded_options_fingerprint
             else expected_options_fingerprint == acceptance_options_fingerprint(_ACCEPTANCE_OPTION_DEFAULTS)
         )
-    return bool(record.get("accepted")) and options_match and all(
+    current = bool(record.get("accepted")) and options_match and all(
         (
             str(record.get("preset") or "") == normalize_preset(preset),
             str(record.get("draft_hash") or "") == draft_hash(markdown),
@@ -245,6 +336,18 @@ def acceptance_record_is_current(
             review_version == REVIEW_SCHEMA_VERSION,
         )
     )
+    if not current:
+        return False
+    if max_age_s:
+        try:
+            budget = float(max_age_s)
+        except (TypeError, ValueError):
+            budget = 0.0
+        if budget > 0:
+            age = _archive_age_seconds(archive)
+            if age is None or age > budget:
+                return False
+    return True
 
 
 def build_acceptance_record(*, report: Dict[str, Any], preset: str, options: Any = None) -> Dict[str, Any]:
