@@ -637,22 +637,6 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
                 nested = new_task.meta["resume_working_memory"]["study_materials_workflow"]
                 self.assertEqual(nested["stage"], expected_stage)
 
-    def test_stream_tool_result_recovery_still_builds_resume_snapshot(self) -> None:
-        from backend.generation.study_materials.orchestrator import _update_codex_stream_resume_state
-
-        meta: dict = {}
-        updated = _update_codex_stream_resume_state(
-            meta=meta,
-            tool_name="assemble_study_archive",
-            event_data={"id": "call-1", "content": {"markdown": "# 部分草稿"}, "is_error": False},
-            query="函数单调性",
-            subject="高中数学",
-            options={"preset": "standard"},
-        )
-
-        self.assertTrue(updated)
-        self.assertEqual(meta["resume_working_memory"]["markdown"], "# 部分草稿")
-
     def test_merge_resume_working_memory_keeps_streamed_metadata(self) -> None:
         from backend.generation.study_materials.orchestrator import _merge_resume_working_memory
 

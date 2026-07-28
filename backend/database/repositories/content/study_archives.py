@@ -97,8 +97,17 @@ def _archive_to_dict(row: StudyArchive, *, include_updated: bool = False) -> Dic
     return payload
 
 
-def study_archive_is_reusable(archive: Any) -> bool:
-    """Return whether an archive has acceptance metadata valid for its current Markdown."""
+def study_archive_is_reusable(
+    archive: Any,
+    *,
+    options: Optional[Dict[str, Any]] = None,
+    max_age_s: Optional[int] = None,
+) -> bool:
+    """Return whether an archive has acceptance metadata valid for its current Markdown.
+
+    ``options``/``max_age_s`` are threaded into ``acceptance_record_is_current``;
+    both default to the legacy lenient behavior (no options check, no age limit).
+    """
 
     if not isinstance(archive, dict):
         return False
@@ -107,10 +116,17 @@ def study_archive_is_reusable(archive: Any) -> bool:
         archive=archive,
         preset=str(archive.get("preset") or ""),
         markdown=markdown,
+        options=options,
+        max_age_s=max_age_s,
     )
 
 
-async def _latest_reusable_archive(session: AsyncSession, *conditions: Any) -> Optional[dict]:
+async def _latest_reusable_archive(
+    session: AsyncSession,
+    *conditions: Any,
+    options: Optional[Dict[str, Any]] = None,
+    max_age_s: Optional[int] = None,
+) -> Optional[dict]:
     result = await session.execute(
         select(StudyArchive)
         .where(*conditions)
@@ -118,8 +134,8 @@ async def _latest_reusable_archive(session: AsyncSession, *conditions: Any) -> O
         .limit(_REUSABLE_ARCHIVE_SCAN_LIMIT)
     )
     for row in result.scalars().all():
-        archive = _archive_to_dict(row)
-        if study_archive_is_reusable(archive):
+        archive = _archive_to_dict(row, include_updated=True)
+        if study_archive_is_reusable(archive, options=options, max_age_s=max_age_s):
             return archive
     return None
 
@@ -280,6 +296,8 @@ async def get_latest_reusable_study_archive(
     user_id: str,
     subject: str,
     topic: str,
+    options: Optional[Dict[str, Any]] = None,
+    max_age_s: Optional[int] = None,
     session: Optional[AsyncSession] = None,
 ) -> Optional[dict]:
     """Fetch the newest user+subject+topic archive whose acceptance is still current."""
@@ -294,6 +312,8 @@ async def get_latest_reusable_study_archive(
                 user_id=uid,
                 subject=subj,
                 topic=top,
+                options=options,
+                max_age_s=max_age_s,
                 session=owned_session,
             )
 
@@ -302,6 +322,8 @@ async def get_latest_reusable_study_archive(
         StudyArchive.user_id == uid,
         StudyArchive.subject == subj,
         StudyArchive.topic == top,
+        options=options,
+        max_age_s=max_age_s,
     )
 
 
@@ -309,6 +331,8 @@ async def get_latest_reusable_study_archive_for_subject(
     *,
     user_id: str,
     subject: str,
+    options: Optional[Dict[str, Any]] = None,
+    max_age_s: Optional[int] = None,
     session: Optional[AsyncSession] = None,
 ) -> Optional[dict]:
     """Fetch the newest current-acceptance archive for a user+subject."""
@@ -321,6 +345,8 @@ async def get_latest_reusable_study_archive_for_subject(
             return await get_latest_reusable_study_archive_for_subject(
                 user_id=uid,
                 subject=subj,
+                options=options,
+                max_age_s=max_age_s,
                 session=owned_session,
             )
 
@@ -328,6 +354,8 @@ async def get_latest_reusable_study_archive_for_subject(
         session,
         StudyArchive.user_id == uid,
         StudyArchive.subject == subj,
+        options=options,
+        max_age_s=max_age_s,
     )
 
 
@@ -413,12 +441,14 @@ async def get_reusable_study_archive(
     *,
     user_id: str,
     archive_id: int,
+    options: Optional[Dict[str, Any]] = None,
+    max_age_s: Optional[int] = None,
     session: Optional[AsyncSession] = None,
 ) -> Optional[dict]:
     """Fetch an archive by id only when its acceptance is still current."""
 
     archive = await get_study_archive(user_id=user_id, archive_id=archive_id, session=session)
-    return archive if study_archive_is_reusable(archive) else None
+    return archive if study_archive_is_reusable(archive, options=options, max_age_s=max_age_s) else None
 
 
 async def list_study_archives(
@@ -426,6 +456,7 @@ async def list_study_archives(
     user_id: str,
     limit: int = 50,
     offset: int = 0,
+    base_fingerprint: Optional[str] = None,
     session: Optional[AsyncSession] = None,
 ) -> List[dict]:
     uid = _require_user_id(user_id)
@@ -433,11 +464,21 @@ async def list_study_archives(
     own = session is None
     if own:
         async with async_session_maker() as session:
-            return await list_study_archives(user_id=uid, limit=limit, offset=offset, session=session)
+            return await list_study_archives(
+                user_id=uid,
+                limit=limit,
+                offset=offset,
+                base_fingerprint=base_fingerprint,
+                session=session,
+            )
 
+    conditions = [StudyArchive.user_id == uid]
+    fp = str(base_fingerprint or "").strip()
+    if fp:
+        conditions.append(StudyArchive.base_fingerprint == fp)
     stmt = (
         select(StudyArchive)
-        .where(StudyArchive.user_id == uid)
+        .where(*conditions)
         .order_by(desc(StudyArchive.updated_at))
         .limit(int(limit or 50))
         .offset(int(offset or 0))

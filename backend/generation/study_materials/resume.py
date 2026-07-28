@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from backend.core.logging_utils import get_logger
 from backend.core.text_utils import clip_text as _clip_text
+
+logger = get_logger(__name__)
 
 
 def _truthy(value: Any) -> bool:
@@ -60,6 +63,7 @@ def _derive_resume_state(wm: Dict[str, Any]) -> Dict[str, Any]:
     last_failed_step: Dict[str, Any] = {}
     last_success_stage = ""
     last_failed_stage = ""
+    unknown_tools: set[str] = set()
 
     for it in step_results:
         if not isinstance(it, dict):
@@ -69,6 +73,9 @@ def _derive_resume_state(wm: Dict[str, Any]) -> Dict[str, Any]:
             continue
         success = bool(it.get("success"))
         stage = _infer_stage_from_tool(tool)
+        if not stage:
+            # B17: 未知工具推断不出阶段时记录告警，避免静默沿用陈旧 stage 造成错误的续作目标。
+            unknown_tools.add(tool)
         record = {
             "step_id": str(it.get("step_id") or "").strip(),
             "tool": tool,
@@ -82,6 +89,12 @@ def _derive_resume_state(wm: Dict[str, Any]) -> Dict[str, Any]:
             last_failed_step = record
             last_failed_stage = stage or last_failed_stage
 
+    if unknown_tools:
+        logger.warning(
+            "study_materials_resume_stage_inference_empty",
+            extra={"tools": sorted(unknown_tools)},
+        )
+
     out: Dict[str, Any] = {}
     if last_success_step:
         out["last_success_step"] = last_success_step
@@ -91,6 +104,10 @@ def _derive_resume_state(wm: Dict[str, Any]) -> Dict[str, Any]:
         out["last_success_stage"] = last_success_stage
     if last_failed_stage:
         out["last_failed_stage"] = last_failed_stage
+    # B9: 透出 previous_attempt（retry_search/replan 前封存的上次产物），供 API 展示。
+    previous_attempt = wm.get("previous_attempt") if isinstance(wm, dict) else None
+    if isinstance(previous_attempt, dict) and previous_attempt:
+        out["previous_attempt"] = previous_attempt
     return out
 
 
@@ -105,11 +122,30 @@ def _prune_resume_working_memory(
     mode_norm = str(mode or "").strip().lower()
     stage = str(last_failed_stage or "").strip().lower()
     if mode_norm == "retry_search":
-        stage = "search"
+        # B9: 仅在失败确实发生在检索链路（search/read/aggregate）时才强制回到 search；
+        # write/export 阶段的失败应回到该阶段本身，只丢弃其下游键，避免误毁成稿。
+        if stage not in {"write", "export"}:
+            stage = "search"
     elif mode_norm == "resume_failed_stage" and not stage:
         stage = "write"
 
     keep_keys = {"split_knowledge_points", "review_knowledge_points", "study_options"}
+
+    # B9: 丢弃前先把本轮产物封存到 previous_attempt，调用方/前端仍可回看上一版内容。
+    salvage_keys = ("markdown", "study_material", "outlines", "aggregated", "review_content", "diagrams")
+    stash: Dict[str, Any] = {}
+    for key in salvage_keys:
+        value = (wm or {}).get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        stash[key] = value
+    previous_attempt: Dict[str, Any] = {}
+    if stash:
+        previous_attempt = {"dropped_at_stage": stage, "keys": stash}
 
     drop_keys: set[str] = set()
     if stage == "search":
@@ -223,7 +259,18 @@ def _prune_resume_working_memory(
         if key in drop_keys:
             continue
         out[key] = v
+    if previous_attempt:
+        out["previous_attempt"] = previous_attempt
     return out
+
+
+def _workflow_review_target(workflow: Dict[str, Any]) -> str:
+    """B16: review 续作前置检查——无成稿时回 draft（无计划时回 plan）。"""
+
+    if str(workflow.get("markdown") or "").strip():
+        return "review"
+    plan = workflow.get("plan") if isinstance(workflow.get("plan"), dict) else {}
+    return "draft" if plan else "plan"
 
 
 def _set_workflow_resume_stage(
@@ -239,9 +286,12 @@ def _set_workflow_resume_stage(
     workflow = dict(workflow_raw)
     mode_norm = str(mode or "").strip().lower()
     if mode_norm == "improve":
-        workflow["stage"] = "review"
+        workflow["stage"] = _workflow_review_target(workflow)
     elif mode_norm in {"deepen_research", "retry_search"}:
         workflow["stage"] = "research"
+        if mode_norm == "deepen_research":
+            # B8: 新的改进周期从零开始计修订次数，避免旧 revision_attempts 直接耗尽预算。
+            workflow["revision_attempts"] = 0
         if str(workflow.get("markdown") or out.get("markdown") or "").strip():
             workflow["resume_after_research"] = "review"
     elif mode_norm == "replan_from_failure":
@@ -258,6 +308,9 @@ def _set_workflow_resume_stage(
                 legacy_stage,
                 "review",
             )
+        if failed == "review":
+            # B16: 与 improve 相同的成稿前置检查，空稿不应直接进 review。
+            failed = _workflow_review_target(workflow)
         workflow["stage"] = failed
     out["study_materials_workflow"] = workflow
     return out

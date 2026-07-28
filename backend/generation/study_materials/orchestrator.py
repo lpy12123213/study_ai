@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
@@ -22,6 +24,7 @@ from backend.database.repositories.system.tasks import list_task_events as db_li
 from backend.generation.agentic.codex_runtime import legacy_agent_fallback_enabled
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 from backend.generation.study_materials.codex_stages import StageResultError
+from backend.generation.study_materials.coverage import split_sections_by_kp
 from backend.generation.study_materials.quality_gate import (
     WORKFLOW_VERSION,
     acceptance_record_is_current,
@@ -61,8 +64,52 @@ def _now_s() -> float:
     return time.time()
 
 
+def _iso_to_epoch(value: Any) -> float:
+    """Best-effort ISO-8601/epoch 秒转换；无法解析时返回 0.0。"""
+
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return parsed.timestamp()
+
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_SNAPSHOTS_DIR = (_REPO_ROOT / ".local" / "study_materials" / "tasks").resolve()
+
+_STEP_RESULTS_CAP = 300
+_CONTINUE_MODES = {
+    "improve",
+    "deepen_research",
+    "fix_export",
+    "skip_export",
+    "resume_failed_stage",
+    "retry_search",
+    "replan_from_failure",
+}
+
+
+def _archive_max_age_s() -> float:
+    """归档复用的新鲜度预算（秒）。默认 14 天；0 表示不做时间过期。"""
+
+    raw = str(os.getenv("STUDY_MATERIALS_ARCHIVE_MAX_AGE_S") or "").strip()
+    if not raw:
+        return 1209600.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 1209600.0
 
 
 
@@ -87,177 +134,31 @@ def _dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _parse_codex_tool_content(value: Any) -> Dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    if isinstance(value, list):
-        merged: Dict[str, Any] = {}
-        text_parts: list[str] = []
-        for item in value:
-            if isinstance(item, dict):
-                item_type = str(item.get("type") or "").strip()
-                text = str(item.get("text") or item.get("content") or "").strip()
-                if item_type == "text" and text:
-                    text_parts.append(text)
-                    continue
-                merged.update(item)
-            elif item is not None:
-                text_parts.append(str(item))
-        if merged:
-            if text_parts and "content" not in merged:
-                merged["content"] = "\n".join(text_parts).strip()
-            return merged
-        text = "\n".join([part for part in text_parts if part]).strip()
-        return {"content": text} if text else {}
+def _step_result_key(item: Dict[str, Any]) -> str:
+    """B1: step_results 去重的稳定内容键——优先非空 step_id，否则用规范化 JSON 的 sha1。"""
 
-    text = str(value or "").strip()
-    if not text:
-        return {}
+    step_id = str(item.get("step_id") or "").strip()
+    if step_id:
+        return f"id:{step_id}"
     try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict):
-        return dict(parsed)
-    return {"content": text}
+        blob = json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        blob = str(item)
+    return "sha1:" + hashlib.sha1(blob.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _first_text(source: Dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = source.get(key)
-        if isinstance(value, (dict, list)):
-            continue
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _update_codex_stream_resume_state(
-    *,
-    meta: Dict[str, Any],
-    tool_name: str,
-    event_data: Dict[str, Any],
-    query: str,
-    subject: str,
-    options: Dict[str, Any],
-) -> bool:
-    tool = str(tool_name or "").strip()
-    if not tool:
-        return False
-
-    payload = _parse_codex_tool_content(event_data.get("content"))
-    is_error = bool(event_data.get("is_error")) or payload.get("success") is False or payload.get("ok") is False
-    error = _first_text(payload, "error", "message") or _first_text(event_data, "error", "message")
-    step_id = _first_text(event_data, "step_id", "id", "tool_use_id") or f"{tool}-{len(payload)}"
-
-    existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
-    wm = dict(existing)
-    step_results = wm.get("step_results") if isinstance(wm.get("step_results"), list) else []
-    wm["step_results"] = [
-        *[dict(item) for item in step_results if isinstance(item, dict)],
-        {"step_id": step_id, "tool": tool, "success": not is_error, "error": error or None},
-    ]
-
-    if payload:
-        wm[tool] = payload
-
-    markdown = ""
-    if tool in {
-        "assemble_study_archive",
-        "export_study_markdown",
-        "save_markdown_file",
-        "revise_markdown",
-        "refine_draft",
-    }:
-        markdown = _first_text(payload, "markdown", "assemble_study_archive", "content", "text", "output", "md")
-    if tool == "generate_study_material" and isinstance(payload.get("markdown"), str):
-        markdown = str(payload.get("markdown") or "").strip()
-
-    if markdown:
-        wm["assemble_study_archive"] = markdown
-        wm["markdown"] = markdown
-        material = wm.get("generate_study_material") if isinstance(wm.get("generate_study_material"), dict) else {}
-        if not material:
-            wm["generate_study_material"] = {
-                "topic": query,
-                "subject": subject,
-                "preset": str(options.get("preset") or "standard").strip().lower() or "standard",
-                "requirements": str(options.get("requirements") or "").strip(),
-                "sections": [],
-            }
-
-    for key in ("md_url", "md_filename", "tex_url", "tex_filename", "pdf_url", "pdf_filename"):
-        value = _first_text(payload, key)
-        if value:
-            wm[key] = value
-
-    if "study_options" not in wm:
-        wm["study_options"] = {
-            "preset": str(options.get("preset") or "standard").strip().lower() or "standard",
-            "requirements": str(options.get("requirements") or "").strip(),
-        }
-
-    meta["resume_working_memory"] = wm
-    _refresh_resume_meta(meta=meta)
-    return True
-
-
-def _merge_resume_working_memory(
-    existing: Dict[str, Any],
-    incoming: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Merge a final ``done``/``error`` resume snapshot into the streamed one.
-
-    The streamed resume_working_memory (built tool-by-tool during execution) often
-    carries metadata the final payload lacks: ``md_url``/``tex_url`` exports,
-    ``step_results`` history, intermediate tool outputs. Replacing the whole dict
-    on ``done`` would discard those and break ``fix_export``/``improve``
-    continuations. We therefore prefer incoming values for the canonical content
-    fields (``markdown`` / ``assemble_study_archive`` / ``generate_study_material``)
-    while preserving any streamed metadata not present in the final payload.
-    """
-
-    if not isinstance(existing, dict) or not existing:
-        return dict(incoming) if isinstance(incoming, dict) else {}
-    if not isinstance(incoming, dict) or not incoming:
-        return dict(existing)
-
-    merged: Dict[str, Any] = dict(existing)
-    for key, value in incoming.items():
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        if isinstance(value, (list, dict)) and not value:
-            continue
-        if key == "step_results" and isinstance(value, list):
-            prior = merged.get("step_results") if isinstance(merged.get("step_results"), list) else []
-            seen = {id(item) for item in prior}
-            merged["step_results"] = [
-                *prior,
-                *[item for item in value if isinstance(item, dict) and id(item) not in seen],
-            ]
-            continue
-        if key == "generate_study_material" and isinstance(value, dict):
-            prior = merged.get("generate_study_material") if isinstance(merged.get("generate_study_material"), dict) else {}
-            merged["generate_study_material"] = {**prior, **value}
-            continue
-        merged[key] = value
-    return merged
-
-
-def _codex_resume_working_memory(
+def _resume_wm_from_result_payload(
     data: Dict[str, Any],
     *,
     query: str,
     subject: str,
     options: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Best-effort resume_working_memory from a codex-runtime final done/error payload.
+    """Best-effort resume_working_memory from a persisted final result payload.
 
-    Keeps codex-runtime tasks resumable (improve/fix_export/skip_export/...) with the
-    same snapshot shape the legacy AgentCore path persists.
+    B3 冷续作：DB 任务行的 ``result`` 是唯一事实来源。优先直接取结果里持久化的
+    ``resume_working_memory``（codex 完成路径会写入）；否则从 material/markdown
+    重建一个最小快照，保证 improve/fix_export 等续作仍可工作。
     """
 
     result = _dict(data.get("result"))
@@ -300,7 +201,62 @@ def _codex_resume_working_memory(
         value = str(material.get(key) or result.get(key) or data.get(key) or "").strip()
         if value:
             wm[key] = value
+    workflow_state = _dict(data.get("workflow")) or _dict(result.get("workflow"))
+    if workflow_state:
+        wm["study_materials_workflow"] = workflow_state
     return wm
+
+
+def _merge_resume_working_memory(
+    existing: Dict[str, Any],
+    incoming: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge a final ``done``/``error`` resume snapshot into the streamed one.
+
+    The streamed resume_working_memory (built tool-by-tool during execution) often
+    carries metadata the final payload lacks: ``md_url``/``tex_url`` exports,
+    ``step_results`` history, intermediate tool outputs. Replacing the whole dict
+    on ``done`` would discard those and break ``fix_export``/``improve``
+    continuations. We therefore prefer incoming values for the canonical content
+    fields (``markdown`` / ``assemble_study_archive`` / ``generate_study_material``)
+    while preserving any streamed metadata not present in the final payload.
+    """
+
+    if not isinstance(existing, dict) or not existing:
+        return dict(incoming) if isinstance(incoming, dict) else {}
+    if not isinstance(incoming, dict) or not incoming:
+        return dict(existing)
+
+    merged: Dict[str, Any] = dict(existing)
+    for key, value in incoming.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        if key == "step_results" and isinstance(value, list):
+            prior = merged.get("step_results") if isinstance(merged.get("step_results"), list) else []
+            # B1: 用稳定内容键去重（prior 与 incoming 双向），重复键原地更新并保持顺序。
+            ordered: Dict[str, Dict[str, Any]] = {}
+            for item in [*prior, *value]:
+                if not isinstance(item, dict):
+                    continue
+                ordered[_step_result_key(item)] = item
+            records = list(ordered.values())
+            dropped = max(0, len(records) - _STEP_RESULTS_CAP)
+            if dropped:
+                records = records[-_STEP_RESULTS_CAP:]
+            merged["step_results"] = records
+            if dropped:
+                merged["_step_results_dropped"] = dropped
+            continue
+        if key == "generate_study_material" and isinstance(value, dict):
+            prior = merged.get("generate_study_material") if isinstance(merged.get("generate_study_material"), dict) else {}
+            merged["generate_study_material"] = {**prior, **value}
+            continue
+        merged[key] = value
+    return merged
 
 
 @dataclass
@@ -320,6 +276,10 @@ class StudyMaterialsTaskView:
     resume_working_memory: Dict[str, Any] = field(default_factory=dict)
     iteration_offset: int = 0
     max_iterations: Optional[int] = None
+    # B6: 用户可见迭代（父链深度）与内部修订周期分开记账；iterations_done 保留为
+    # user_iteration 的向后兼容别名。
+    user_iteration: int = 0
+    revision_cycles: int = 0
     iterations_done: int = 0
 
     last_success_step: Optional[Dict[str, Any]] = None
@@ -333,6 +293,22 @@ class StudyMaterialsTaskView:
     last_seq: int = 0
 
 
+@dataclass
+class _TaskRunContext:
+    """B2: _run_task 单次执行的共享上下文，代替散落在闭包里的局部变量。"""
+
+    task: RuntimeTask
+    meta: Dict[str, Any]
+    query: str
+    subject: str
+    options: Dict[str, Any]
+    parent_task_id: Optional[str]
+    resume_wm: Dict[str, Any]
+    iteration_offset: int
+    max_iterations: Optional[int]
+    agent: Optional[AgentCore] = None
+
+
 class StudyMaterialsTaskManager:
     def __init__(self, *, task_ttl_s: int = 60 * 60) -> None:
         self._task_ttl_s = max(60, int(task_ttl_s or (60 * 60)))
@@ -340,6 +316,50 @@ class StudyMaterialsTaskManager:
     def _snapshot_path(self, task_id: str) -> Path:
         tid = str(task_id or "").strip()
         return _TASK_SNAPSHOTS_DIR / f"{tid}.json"
+
+    def _record_persistence_warning(
+        self,
+        task: Optional[RuntimeTask],
+        *,
+        target: str,
+        error: BaseException,
+        meta: Optional[Dict[str, Any]] = None,
+        task_id: str = "",
+    ) -> None:
+        """B4: 持久化失败不再静默——记日志、写 meta.warnings，并尽力广播 warning 事件。"""
+
+        message = str(error or "").strip() or type(error).__name__
+        tid = str(task_id or getattr(task, "task_id", "") or "")
+        logger.warning(
+            "study_materials_persistence_warning",
+            extra={"task_id": tid, "target": target, "error": message},
+            exc_info=True,
+        )
+        if isinstance(meta, dict):
+            warnings = meta.setdefault("warnings", [])
+            if isinstance(warnings, list):
+                warnings.append({"target": target, "error": message})
+        if task is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is None:
+            return
+        try:
+            loop.create_task(
+                task_runtime.append_event(
+                    task,
+                    agent_event("persistence_warning", {"target": target, "error": message}),
+                )
+            )
+        except Exception:
+            logger.warning(
+                "study_materials_persistence_warning_event_failed",
+                extra={"task_id": getattr(task, "task_id", ""), "target": target},
+                exc_info=True,
+            )
 
     def _load_snapshot(self, task_id: str) -> Optional[dict]:
         try:
@@ -349,8 +369,9 @@ class StudyMaterialsTaskManager:
             raw = path.read_text(encoding="utf-8")
             obj = json.loads(raw) if raw.strip() else {}
             return obj if isinstance(obj, dict) else None
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
-            logger.warning("study_materials_snapshot_load_failed", extra={"task_id": task_id}, exc_info=True)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+            # 此处尚无 task/meta 上下文（调用方随后会走 DB 兜底），只能先留日志。
+            self._record_persistence_warning(None, target="snapshot_load", error=exc, task_id=task_id)
             return None
 
     def _persist_snapshot(self, task: RuntimeTask, *, force: bool = False) -> None:
@@ -379,6 +400,8 @@ class StudyMaterialsTaskManager:
                     "resume_working_memory": wm,
                     "iteration_offset": int(meta.get("iteration_offset") or 0),
                     "max_iterations": meta.get("max_iterations"),
+                    "user_iteration": int(meta.get("user_iteration") or 0),
+                    "revision_cycles": int(meta.get("revision_cycles") or 0),
                     "iterations_done": int(meta.get("iterations_done") or 0),
                     "last_success_step": meta.get("last_success_step")
                     if isinstance(meta.get("last_success_step"), dict)
@@ -392,7 +415,6 @@ class StudyMaterialsTaskManager:
                     else {},
                 },
                 ensure_ascii=False,
-                indent=2,
                 default=str,
             )
 
@@ -422,12 +444,8 @@ class StudyMaterialsTaskManager:
                     )
 
             meta["_persisted_at_s"] = now
-        except Exception:
-            logger.warning(
-                "study_materials_snapshot_persist_failed",
-                extra={"task_id": task.task_id, "user_id": task.user_id},
-                exc_info=True,
-            )
+        except Exception as exc:
+            self._record_persistence_warning(task, target="snapshot_persist", error=exc, meta=meta)
 
     def _cleanup_snapshots(self) -> int:
         try:
@@ -492,7 +510,10 @@ class StudyMaterialsTaskManager:
             "resume_working_memory": dict(wm),
             "iteration_offset": iteration_offset_n,
             "max_iterations": max_iterations,
-            "iterations_done": 0,
+            # B6: user_iteration 是父链深度（用户可见迭代数）；iterations_done 为其别名。
+            "user_iteration": iteration_offset_n,
+            "revision_cycles": 0,
+            "iterations_done": iteration_offset_n,
         }
         try:
             meta["agent_run_spec"] = build_study_materials_agent_spec(
@@ -553,23 +574,21 @@ class StudyMaterialsTaskManager:
     async def continue_task(self, *, task_id: str, user_id: str, mode: str) -> RuntimeTask:
         tid = str(task_id or "").strip()
         uid = str(user_id or "").strip() or "anonymous"
-        mode_norm = str(mode or "").strip().lower() or "improve"
-        if mode_norm not in {
-            "improve",
-            "deepen_research",
-            "fix_export",
-            "skip_export",
-            "resume_failed_stage",
-            "retry_search",
-            "replan_from_failure",
-        }:
+        mode_raw = str(mode or "").strip().lower()
+        if not mode_raw:
             mode_norm = "improve"
+        elif mode_raw not in _CONTINUE_MODES:
+            # B7: 未知续作模式必须显式报错，而不是静默改写成 improve。
+            raise ValueError("invalid_continue_mode")
+        else:
+            mode_norm = mode_raw
 
         snap = self._load_snapshot(tid)
-        if not snap or str(snap.get("user_id") or "").strip() != uid:
+        if snap and str(snap.get("user_id") or "").strip() != uid:
             raise ValueError("task_not_found")
 
-        # "running" is determined by the DB task row (source of truth across restarts).
+        # "running" 由 DB 任务行判定（跨重启的事实来源）；已完成/失败/取消的任务均可续作。
+        db_task: Optional[Dict[str, Any]] = None
         try:
             db_task = await db_get_task(user_id=uid, task_id=tid, include_events=False)
         except Exception:
@@ -578,49 +597,226 @@ class StudyMaterialsTaskManager:
         if isinstance(db_task, dict) and str(db_task.get("status") or "") == "running":
             raise ValueError("task_running")
 
-        resume_wm = snap.get("resume_working_memory") if isinstance(snap.get("resume_working_memory"), dict) else {}
+        # B3: 快照只是缓存——缺失时从 DB 行/事件/归档重建续作上下文。
+        if snap:
+            source: Optional[Dict[str, Any]] = self._continue_source_from_snapshot(snap)
+        else:
+            source = await self._continue_source_from_db(tid, uid=uid, db_task=db_task)
+        if source is None:
+            # DB 行也不存在/无可重建内容时才是诚实的 404。
+            raise ValueError("task_not_found")
+
+        resume_wm = source.get("resume_working_memory") if isinstance(source.get("resume_working_memory"), dict) else {}
         if not resume_wm:
             raise ValueError("task_not_resumable")
 
-        options = snap.get("options") if isinstance(snap.get("options"), dict) else {}
+        options = source.get("options") if isinstance(source.get("options"), dict) else {}
         options = dict(options)
         options["continue_mode"] = mode_norm
 
         preset = str(options.get("preset") or "standard").strip().lower() or "standard"
         if mode_norm == "deepen_research" and preset not in {"deep", "research"}:
+            # B8: 研究广度按 research profile，但既有内容的验收仍沿用原 preset。
+            options["acceptance_preset"] = preset
             options["preset"] = "research"
 
         max_iters = 1
 
+        failed_stage = str(source.get("last_failed_stage") or "").strip()
         if mode_norm in {"resume_failed_stage", "retry_search", "replan_from_failure"}:
-            failed_stage = str(snap.get("last_failed_stage") or "").strip()
             if not failed_stage:
                 derived = _derive_resume_state(resume_wm)
                 failed_stage = str(derived.get("last_failed_stage") or "").strip()
             resume_wm = _prune_resume_working_memory(resume_wm, mode=mode_norm, last_failed_stage=failed_stage)
-        else:
-            failed_stage = str(snap.get("last_failed_stage") or "").strip()
         resume_wm = _set_workflow_resume_stage(
             resume_wm,
             mode=mode_norm,
             last_failed_stage=failed_stage,
         )
 
-        try:
-            iteration_offset_n = int(snap.get("iterations_done") or 0)
-        except (TypeError, ValueError):
-            iteration_offset_n = 0
-
         return await self.create_task(
-            query=str(snap.get("query") or "").strip(),
+            query=str(source.get("query") or "").strip(),
             user_id=uid,
-            subject=str(snap.get("subject") or "").strip(),
+            subject=str(source.get("subject") or "").strip(),
             options=options,
             parent_task_id=tid,
             resume_working_memory=resume_wm,
-            iteration_offset=max(0, iteration_offset_n),
+            iteration_offset=max(0, int(source.get("iteration_offset") or 0)),
             max_iterations=max_iters,
         )
+
+    def _continue_source_from_snapshot(self, snap: Dict[str, Any]) -> Dict[str, Any]:
+        # B6: 续作偏移优先取 user_iteration（父链深度）；旧快照回退 iterations_done。
+        try:
+            iteration_offset_n = int(snap.get("user_iteration"))
+        except (TypeError, ValueError):
+            try:
+                iteration_offset_n = int(snap.get("iterations_done") or 0)
+            except (TypeError, ValueError):
+                iteration_offset_n = 0
+        return {
+            "query": str(snap.get("query") or "").strip(),
+            "subject": str(snap.get("subject") or "").strip(),
+            "options": dict(snap.get("options") or {}) if isinstance(snap.get("options"), dict) else {},
+            "resume_working_memory": dict(snap.get("resume_working_memory") or {})
+            if isinstance(snap.get("resume_working_memory"), dict)
+            else {},
+            "last_failed_stage": str(snap.get("last_failed_stage") or "").strip(),
+            "iteration_offset": max(0, iteration_offset_n),
+        }
+
+    async def _continue_source_from_db(
+        self,
+        tid: str,
+        *,
+        uid: str,
+        db_task: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """B3: 无磁盘快照时，从 DB 任务行重建续作上下文（事件溯源冷续作）。"""
+
+        if not isinstance(db_task, dict):
+            return None
+        req = db_task.get("request") if isinstance(db_task.get("request"), dict) else {}
+        query = str(req.get("query") or "").strip()
+        subject = str(req.get("subject") or "").strip()
+        options = dict(req.get("options") or {}) if isinstance(req.get("options"), dict) else {}
+        result = db_task.get("result") if isinstance(db_task.get("result"), dict) else {}
+
+        resume_wm = _resume_wm_from_result_payload(result, query=query, subject=subject, options=options)
+        if not resume_wm:
+            resume_wm = await self._archive_resume_working_memory(
+                uid=uid,
+                query=query,
+                subject=subject,
+                options=options,
+            )
+        if not resume_wm and str(db_task.get("status") or "") == "failed":
+            resume_wm = await self._events_resume_working_memory(uid=uid, task_id=tid)
+        if not resume_wm:
+            return None
+
+        derived = _derive_resume_state(resume_wm)
+        return {
+            "query": query,
+            "subject": subject,
+            "options": options,
+            "resume_working_memory": resume_wm,
+            "last_failed_stage": str(derived.get("last_failed_stage") or "").strip(),
+            # 冷续作无法可靠还原父链深度，从 0 起算（诚实优于伪造）。
+            "iteration_offset": 0,
+        }
+
+    async def _archive_resume_working_memory(
+        self,
+        *,
+        uid: str,
+        query: str,
+        subject: str,
+        options: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """B3: 已入档的成稿 → 逆变换 _upsert_archive_from_resume_state 还原最小 wm。"""
+
+        if not query or not subject:
+            return {}
+        requirements = str(options.get("requirements") or "").strip()
+        try:
+            archive = await get_study_archive_by_fingerprint(
+                user_id=uid,
+                subject=subject,
+                topic=query,
+                requirements=requirements,
+            )
+        except Exception:
+            logger.warning(
+                "study_materials_resume_archive_lookup_failed",
+                extra={"user_id": uid, "subject": subject, "topic": query},
+                exc_info=True,
+            )
+            return {}
+        if not isinstance(archive, dict):
+            return {}
+        markdown = str(archive.get("markdown") or "").strip()
+        if not markdown:
+            return {}
+        preset = str(options.get("preset") or archive.get("preset") or "standard").strip().lower() or "standard"
+        sections = [x for x in (archive.get("sections") or []) if isinstance(x, dict)]
+        workflow_state = self._workflow_state_from_archive(
+            archive,
+            preset=preset,
+            query=query,
+            subject=subject,
+            archive_current=acceptance_record_is_current(
+                archive=archive,
+                preset=preset,
+                markdown=markdown,
+                options=options,
+                max_age_s=_archive_max_age_s(),
+            ),
+        )
+        return {
+            "study_options": {"preset": preset, "requirements": requirements},
+            "assemble_study_archive": markdown,
+            "markdown": markdown,
+            "generate_study_material": {
+                "topic": query,
+                "subject": subject,
+                "preset": preset,
+                "requirements": requirements,
+                "sections": sections,
+            },
+            "study_materials_workflow": workflow_state,
+        }
+
+    async def _events_resume_working_memory(self, *, uid: str, task_id: str) -> Dict[str, Any]:
+        """B3: 失败任务无结果载荷时，重放事件流找回最后的阶段上下文。"""
+
+        try:
+            events = await db_list_task_events(user_id=uid, task_id=task_id, after_seq=0, limit=500)
+        except Exception:
+            logger.warning(
+                "study_materials_resume_events_lookup_failed",
+                extra={"task_id": task_id, "user_id": uid},
+                exc_info=True,
+            )
+            return {}
+        stage = ""
+        last_successful = ""
+        failure: Dict[str, Any] = {}
+        for evt in events:
+            etype = str(evt.get("type") or "").strip()
+            data = evt.get("data") if isinstance(evt.get("data"), dict) else {}
+            if etype == "workflow_stage":
+                stage = str(data.get("stage") or "").strip() or stage
+                last_successful = str(data.get("last_successful_stage") or "").strip() or last_successful
+            elif etype == "recovery_available":
+                failure = {
+                    key: data.get(key)
+                    for key in ("code", "stage", "detail", "recoverable")
+                    if data.get(key) is not None
+                }
+                stage = str(data.get("stage") or "").strip() or stage
+            elif etype == "error" and not failure:
+                message = str(data.get("message") or data.get("error") or "").strip()
+                if message:
+                    failure = {"code": message, "stage": stage, "recoverable": True}
+        if not stage and not failure:
+            return {}
+        workflow_state = {
+            "version": WORKFLOW_VERSION,
+            "stage": stage or "plan",
+            "last_successful_stage": last_successful,
+            "preset": "standard",
+            "plan": {},
+            "research": {},
+            "markdown": "",
+            "coverage_map": {},
+            "review": {},
+            "quality_report": {},
+            "acceptance": {},
+            "revision_attempts": 0,
+            "last_failure": failure,
+        }
+        return {"study_materials_workflow": workflow_state}
 
     async def get_task(self, task_id: str, *, user_id: Optional[str] = None) -> Optional[StudyMaterialsTaskView]:
         tid = str(task_id or "").strip()
@@ -629,7 +825,8 @@ class StudyMaterialsTaskManager:
 
         snap = self._load_snapshot(tid)
         if not snap:
-            return None
+            # B3: 快照只是缓存——DB 任务行才是事实来源；缓存缺失时从 DB 构建状态视图。
+            return await self._get_task_view_from_db(tid, user_id=user_id)
 
         snap_user = str(snap.get("user_id") or "").strip()
         if user_id is not None and str(user_id or "").strip() != snap_user:
@@ -689,7 +886,9 @@ class StudyMaterialsTaskManager:
             resume_working_memory=resume_wm,
             iteration_offset=int(snap.get("iteration_offset") or 0),
             max_iterations=snap.get("max_iterations"),
-            iterations_done=int(snap.get("iterations_done") or 0),
+            user_iteration=int(snap.get("user_iteration") or snap.get("iterations_done") or 0),
+            revision_cycles=int(snap.get("revision_cycles") or 0),
+            iterations_done=int(snap.get("user_iteration") or snap.get("iterations_done") or 0),
             last_success_step=meta.get("last_success_step") if isinstance(meta.get("last_success_step"), dict) else None,
             last_failed_step=meta.get("last_failed_step") if isinstance(meta.get("last_failed_step"), dict) else None,
             last_success_stage=str(meta.get("last_success_stage") or "").strip(),
@@ -698,6 +897,66 @@ class StudyMaterialsTaskManager:
             search_summary_by_kp=meta.get("search_summary_by_kp") if isinstance(meta.get("search_summary_by_kp"), dict) else {},
             first_seq=int(first_seq or 1),
             last_seq=int(last_seq or 0),
+        )
+
+    async def _get_task_view_from_db(self, tid: str, *, user_id: Optional[str]) -> Optional[StudyMaterialsTaskView]:
+        """B3: 无磁盘快照时，从 DB 任务行构建状态视图（归属校验保持不变）。"""
+
+        uid = str(user_id or "").strip()
+        if not uid:
+            # 无 user_id 无法做归属校验，宁可 404 也不能越权返回。
+            return None
+        try:
+            db_task = await db_get_task(user_id=uid, task_id=tid, include_events=False)
+        except Exception:
+            logger.warning(
+                "study_materials_task_db_lookup_failed",
+                extra={"task_id": tid, "user_id": uid},
+                exc_info=True,
+            )
+            return None
+        if not isinstance(db_task, dict):
+            return None
+
+        req = db_task.get("request") if isinstance(db_task.get("request"), dict) else {}
+        result = db_task.get("result") if isinstance(db_task.get("result"), dict) else {}
+        err_obj = db_task.get("error") if isinstance(db_task.get("error"), dict) else {}
+        query = str(req.get("query") or "").strip()
+        subject = str(req.get("subject") or "").strip()
+        options = dict(req.get("options") or {}) if isinstance(req.get("options"), dict) else {}
+
+        # 无快照且无结果载荷时 resumable=False（API 层据 resume_working_memory 判定）。
+        resume_wm = _resume_wm_from_result_payload(result, query=query, subject=subject, options=options)
+
+        meta: Dict[str, Any] = {"resume_working_memory": resume_wm}
+        if resume_wm:
+            _refresh_resume_meta(meta=meta)
+
+        try:
+            last_seq = int(db_task.get("last_seq") or 0)
+        except (TypeError, ValueError):
+            last_seq = 0
+
+        return StudyMaterialsTaskView(
+            task_id=tid,
+            query=query,
+            user_id=uid,
+            subject=subject,
+            options=options,
+            status=str(db_task.get("status") or "") or "unknown",
+            error=str(err_obj.get("message") or err_obj.get("error") or "").strip() or None,
+            created_at_s=_iso_to_epoch(db_task.get("created_at")),
+            updated_at_s=_iso_to_epoch(db_task.get("updated_at")),
+            parent_task_id=str(db_task.get("parent_task_id") or "").strip() or None,
+            resume_working_memory=resume_wm,
+            last_success_step=meta.get("last_success_step") if isinstance(meta.get("last_success_step"), dict) else None,
+            last_failed_step=meta.get("last_failed_step") if isinstance(meta.get("last_failed_step"), dict) else None,
+            last_success_stage=str(meta.get("last_success_stage") or "").strip(),
+            last_failed_stage=str(meta.get("last_failed_stage") or "").strip(),
+            per_kp_state=meta.get("per_kp_state") if isinstance(meta.get("per_kp_state"), dict) else {},
+            search_summary_by_kp=meta.get("search_summary_by_kp") if isinstance(meta.get("search_summary_by_kp"), dict) else {},
+            first_seq=1,
+            last_seq=last_seq,
         )
 
     async def stream(
@@ -779,12 +1038,65 @@ class StudyMaterialsTaskManager:
                     sections=[x for x in sections if isinstance(x, dict)],
                     acceptance=acceptance,
                 )
-        except Exception:
-            logger.warning(
-                "study_materials_archive_upsert_failed",
-                extra={"task_id": task.task_id},
-                exc_info=True,
-            )
+        except Exception as exc:
+            self._record_persistence_warning(task, target="archive_upsert", error=exc, meta=meta)
+
+    def _workflow_state_from_archive(
+        self,
+        archive: Dict[str, Any],
+        *,
+        preset: str,
+        query: str,
+        subject: str,
+        archive_current: bool,
+    ) -> Dict[str, Any]:
+        """从历史归档合成 staged workflow 状态（归档复用/冷续作共用）。
+
+        B18: coverage_map 必须来自真实小节拆分（coverage.split_sections_by_kp），
+        只为能匹配到小节的知识点记 True——质量门会把 coverage_map 与小节拆分交叉
+        校验（coverage_map_mismatch），伪造的全 True map 会在复验时直接失败。
+        """
+
+        markdown = str(archive.get("markdown") or "").strip()
+        sections = archive.get("sections") if isinstance(archive.get("sections"), list) else []
+        point_titles = [
+            str(item.get("knowledge_point") or item.get("title") or "").strip()
+            for item in sections
+            if isinstance(item, dict) and str(item.get("knowledge_point") or item.get("title") or "").strip()
+        ]
+        if not point_titles:
+            point_titles = [str(query or archive.get("topic") or "").strip()] if str(query or archive.get("topic") or "").strip() else []
+        plan_points = [
+            {"id": f"kp-{index + 1}", "title": title, "queries": [f"{title} {subject}".strip()]}
+            for index, title in enumerate(point_titles[:15])
+        ]
+        acceptance = _dict(archive.get("acceptance"))
+        workflow_state: Dict[str, Any] = {
+            "version": WORKFLOW_VERSION,
+            "stage": "completed" if archive_current else "research",
+            "last_successful_stage": "accept" if acceptance else "",
+            "preset": preset,
+            "plan": {"knowledge_points": plan_points},
+            "research": {},
+            "markdown": markdown,
+            "review": {},
+            "quality_report": {},
+            "acceptance": acceptance,
+            "revision_attempts": 0,
+            "last_failure": {},
+        }
+        sections_by_kp = split_sections_by_kp(markdown, point_titles) if point_titles else {}
+        coverage_map = {
+            point["id"]: bool(str(sections_by_kp.get(point["title"]) or "").strip())
+            for point in plan_points
+        }
+        if coverage_map and any(coverage_map.values()):
+            workflow_state["coverage_map"] = coverage_map
+        # 整篇都匹配不到小节时（如旧归档没有编号二级标题）索性不写 coverage_map：
+        # 缺失/空 map 在质量门里同样按未覆盖处理，避免“全 True”的假阳性。
+        if workflow_state["stage"] != "completed":
+            workflow_state["resume_after_research"] = "review"
+        return workflow_state
 
     async def _run_task(self, task: RuntimeTask) -> None:
         meta = task.meta if isinstance(task.meta, dict) else {}

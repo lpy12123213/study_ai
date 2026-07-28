@@ -45,11 +45,24 @@ class TestStudyMaterialsResumeState(unittest.TestCase):
             "markdown": "# doc",
         }
 
-        pruned = tm._prune_resume_working_memory(wm, mode="retry_search", last_failed_stage="write")
+        # 失败在检索链路：回到 search，丢弃检索及全部下游产物。
+        pruned = tm._prune_resume_working_memory(wm, mode="retry_search", last_failed_stage="read")
         self.assertIn("split_knowledge_points", pruned)
         self.assertNotIn("web_search_knowledge", pruned)
         self.assertNotIn("aggregate_knowledge", pruned)
         self.assertNotIn("generate_study_material", pruned)
+        # 丢弃前的成品封存到 previous_attempt，仍可回看上一版。
+        self.assertEqual(pruned["previous_attempt"]["dropped_at_stage"], "search")
+        self.assertEqual(pruned["previous_attempt"]["keys"]["markdown"], "# doc")
+
+        # 失败在 write：B9 之后不再误毁检索产物，只丢 write 下游键。
+        pruned_write = tm._prune_resume_working_memory(wm, mode="retry_search", last_failed_stage="write")
+        self.assertIn("web_search_knowledge", pruned_write)
+        self.assertIn("aggregate_knowledge", pruned_write)
+        self.assertIn("outlines", pruned_write)
+        self.assertNotIn("generate_study_material", pruned_write)
+        self.assertNotIn("markdown", pruned_write)
+        self.assertEqual(pruned_write["previous_attempt"]["dropped_at_stage"], "write")
 
     def test_resume_failed_stage_prefers_nested_workflow_stage(self) -> None:
         from backend.generation.study_materials.resume import _set_workflow_resume_stage
