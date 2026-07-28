@@ -114,6 +114,16 @@ class StudyMaterialsWorkflow:
                 "last_failure": {},
             }
 
+        # B8: deepen_research 续作把检索广度提升到 research profile（state preset），
+        # 但既有内容的验收仍按原始 preset（options["acceptance_preset"]）评估；
+        # 同时开启新的改进周期，修订次数从零计起。
+        acceptance_preset = normalize_preset(self.options.get("acceptance_preset")) if str(
+            self.options.get("acceptance_preset") or ""
+        ).strip() else ""
+        self._acceptance_preset_override = acceptance_preset or None
+        if str(self.options.get("continue_mode") or "").strip().lower() == "deepen_research":
+            self.state["revision_attempts"] = 0
+
         self.tool_executor = tool_executor or StudyMaterialsToolExecutor(
             topic=self.topic,
             subject=self.subject,
@@ -122,6 +132,11 @@ class StudyMaterialsWorkflow:
             options=self.options,
             resume_working_memory=self.resume_working_memory,
         )
+
+    def _acceptance_gate_preset(self) -> str:
+        """B8: 验收门实际采用的 preset——deepen 续作用原 preset，否则用 state preset。"""
+
+        return self._acceptance_preset_override or self.preset
 
     def _resume_snapshot(self) -> Dict[str, Any]:
         tool_memory = getattr(self.tool_executor, "working_memory", {})
@@ -313,7 +328,10 @@ class StudyMaterialsWorkflow:
                     event_sink=self.event_sink,
                 )
                 self.state["review"] = dict(review)
-                report = evaluate_acceptance(state=self.state)
+                report = evaluate_acceptance(
+                    state=self.state,
+                    preset_override=self._acceptance_preset_override,
+                )
                 self.state["quality_report"] = dict(report)
                 await self.event_sink({"type": "quality_report", "event": "quality_report", "data": report})
                 await self._checkpoint()
@@ -377,7 +395,10 @@ class StudyMaterialsWorkflow:
                 continue
 
             if stage == ACCEPT:
-                report = evaluate_acceptance(state=self.state)
+                report = evaluate_acceptance(
+                    state=self.state,
+                    preset_override=self._acceptance_preset_override,
+                )
                 self.state["quality_report"] = dict(report)
                 if not report["passed"]:
                     if str(self.state.get("markdown") or "").strip():
@@ -404,7 +425,11 @@ class StudyMaterialsWorkflow:
                     )
                     await self._fail(failure)
                     raise failure
-                acceptance = build_acceptance_record(report=report, preset=self.preset, options=self.options)
+                acceptance = build_acceptance_record(
+                    report=report,
+                    preset=self._acceptance_gate_preset(),
+                    options=self.options,
+                )
                 self.state["acceptance"] = acceptance
                 await self._set_stage(COMPLETED, successful=ACCEPT)
                 return self._accepted_result()
@@ -413,7 +438,7 @@ class StudyMaterialsWorkflow:
                 archive = {"acceptance": self.state.get("acceptance") or {}}
                 if acceptance_record_is_current(
                     archive=archive,
-                    preset=self.preset,
+                    preset=self._acceptance_gate_preset(),
                     markdown=str(self.state.get("markdown") or ""),
                     options=self.options,
                 ):

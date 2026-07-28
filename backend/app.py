@@ -335,6 +335,8 @@ def create_app() -> FastAPI:
             "X-LLM-API-Key",
             "X-Moonshot-API-Key",
         ],
+        # 流式 generate/continue 响应通过 X-Task-Id 头暴露新任务 id，浏览器跨源读取需显式 expose。
+        expose_headers=["X-Task-Id"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(InputValidationMiddleware)

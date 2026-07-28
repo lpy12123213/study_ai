@@ -81,3 +81,25 @@ class TestStudyMaterialsResumeState(unittest.TestCase):
         )
 
         self.assertEqual(resumed["study_materials_workflow"]["stage"], "draft")
+
+    def test_deepen_research_resets_revision_attempts_for_new_cycle(self) -> None:
+        from backend.generation.study_materials.resume import _set_workflow_resume_stage
+
+        resumed = _set_workflow_resume_stage(
+            {
+                "study_materials_workflow": {
+                    "version": 1,
+                    "stage": "completed",
+                    "last_failure": {},
+                    "markdown": "# 成稿",
+                    "revision_attempts": 2,
+                }
+            },
+            mode="deepen_research",
+            last_failed_stage="",
+        )
+
+        workflow = resumed["study_materials_workflow"]
+        self.assertEqual(workflow["stage"], "research")
+        self.assertEqual(workflow["revision_attempts"], 0)
+        self.assertEqual(workflow["resume_after_research"], "review")

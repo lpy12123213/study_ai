@@ -155,8 +155,21 @@ def _knowledge_points(state: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     return [dict(item) for item in points if isinstance(item, dict)]
 
 
-def evaluate_research(*, state: Dict[str, Any]) -> Dict[str, Any]:
-    preset = normalize_preset(state.get("preset"))
+def _gate_preset(state: Dict[str, Any], preset_override: Any = None) -> str:
+    """Resolve the preset a gate evaluation runs under.
+
+    B8: ``preset_override``（ deepen_research 续作传入的原始 preset）让既有内容的
+    验收沿用原质量标准；缺省时回退 workflow 状态里的 preset。
+    """
+
+    override = str(preset_override or "").strip().lower()
+    if override:
+        return normalize_preset(override)
+    return normalize_preset(state.get("preset"))
+
+
+def evaluate_research(*, state: Dict[str, Any], preset_override: Any = None) -> Dict[str, Any]:
+    preset = _gate_preset(state, preset_override)
     profile = PRESET_PROFILES[preset]
     research = state.get("research") if isinstance(state.get("research"), dict) else {}
     failed_checks: List[str] = []
@@ -202,8 +215,8 @@ def _kp_present_dimensions(entry: Any) -> set[str]:
     return _review_dimension_names(entry) - {"present", "missing", "facts_total"}
 
 
-def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
-    preset = normalize_preset(state.get("preset"))
+def evaluate_acceptance(*, state: Dict[str, Any], preset_override: Any = None) -> Dict[str, Any]:
+    preset = _gate_preset(state, preset_override)
     profile = PRESET_PROFILES[preset]
     markdown = str(state.get("markdown") or "")
     review = state.get("review") if isinstance(state.get("review"), dict) else {}
@@ -211,7 +224,8 @@ def evaluate_acceptance(*, state: Dict[str, Any]) -> Dict[str, Any]:
 
     failed_checks: List[str] = []
     per_knowledge_point: Dict[str, Any] = {}
-    research_report = evaluate_research(state=state)
+    # 验收内嵌的检索复核同样按验收 preset 计（检索广度已由 RESEARCH 阶段门单独把关）。
+    research_report = evaluate_research(state=state, preset_override=preset_override)
     failed_checks.extend(research_report["failed_checks"])
     points = list(_knowledge_points(state))
     kp_titles = [str(point.get("title") or point.get("knowledge_point") or "").strip() for point in points]

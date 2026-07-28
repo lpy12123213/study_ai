@@ -22,9 +22,13 @@ from backend.api.question_library_schemas import (
 from backend.api.schemas import DeepThinkRequest
 from backend.api.sse_polling import next_poll_delay, wait_for_task_event_or_timeout
 from backend.api.sse_utils import is_sse_client_disconnected
-from backend.api.study_materials_schemas import StudyMaterialsContinueRequest, StudyMaterialsGenerateRequest
+from backend.api.study_materials_schemas import (
+    StudyMaterialsContinueRequest,
+    StudyMaterialsGenerateRequest,
+    build_study_materials_options,
+    invalid_continue_mode_detail,
+)
 from backend.core.logging_utils import get_logger
-from backend.core.text_utils import clip_text as _clip_text
 from backend.core.time_utils import utcnow_naive
 from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.database.repositories.system.tasks import (
@@ -358,26 +362,9 @@ async def submit_study_materials(request: StudyMaterialsGenerateRequest, user: d
         raise HTTPException(status_code=400, detail="Empty query")
 
     subject = (request.subject or "").strip()
-    options = {}
-    if (request.preset or "").strip():
-        options["preset"] = str(request.preset or "").strip()
-    if (request.requirements or "").strip():
-        options["requirements"] = _clip_text(str(request.requirements or "").strip(), max_chars=600)
-    if request.with_questions is not None:
-        options["with_questions"] = bool(request.with_questions)
-    if request.with_diagrams is not None:
-        options["with_diagrams"] = bool(request.with_diagrams)
-    if request.enable_extra_tools is not None:
-        options["enable_extra_tools"] = bool(request.enable_extra_tools)
-    if request.max_points is not None:
-        try:
-            n = int(request.max_points)
-        except (TypeError, ValueError):
-            n = 0
-        if n > 0:
-            options["max_points"] = max(1, min(n, 15))
-    if request.prefer_local_archive is not None:
-        options["preferLocalArchive"] = bool(request.prefer_local_archive)
+    # Shared with the streaming surface (backend/api/study_materials.py) so both
+    # endpoints normalize options identically.
+    options = build_study_materials_options(request)
 
     from backend.generation.study_materials.orchestrator_singleton import study_material_tasks
 
@@ -411,6 +398,8 @@ async def continue_study_materials_task(
             raise HTTPException(status_code=409, detail="Task still running")
         if msg == "task_not_resumable":
             raise HTTPException(status_code=400, detail="Task not resumable")
+        if msg == "invalid_continue_mode":
+            raise HTTPException(status_code=400, detail=invalid_continue_mode_detail(mode))
         raise HTTPException(status_code=400, detail=msg)
 
     return {"success": True, "taskId": new_task.task_id}

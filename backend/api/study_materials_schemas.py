@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from backend.core.text_utils import clip_text as _clip_text
+
 
 class StudyMaterialsGenerateRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="要学习的知识点/主题（自然语言即可）")
@@ -45,3 +47,44 @@ class StudyMaterialsContinueRequest(BaseModel):
             "继续模式：improve|deepen_research|fix_export|skip_export|resume_failed_stage|retry_search|replan_from_failure"
         ),
     )
+
+
+def build_study_materials_options(request: StudyMaterialsGenerateRequest) -> dict:
+    """Build the orchestrator options dict shared by both HTTP surfaces.
+
+    `POST /api/study-materials/generate`（流式）与
+    `POST /api/tasks/study-materials/generate`（任务提交）必须产出完全一致的
+    options：requirements 截断到 600 字符，max_points 夹在 1-15，非法/非正
+    max_points 直接丢弃。
+    """
+
+    options: dict = {}
+    if (request.preset or "").strip():
+        options["preset"] = str(request.preset or "").strip()
+    if (request.requirements or "").strip():
+        options["requirements"] = _clip_text(str(request.requirements or "").strip(), max_chars=600)
+    if request.with_questions is not None:
+        options["with_questions"] = bool(request.with_questions)
+    if request.with_diagrams is not None:
+        options["with_diagrams"] = bool(request.with_diagrams)
+    if request.enable_extra_tools is not None:
+        options["enable_extra_tools"] = bool(request.enable_extra_tools)
+    if request.max_points is not None:
+        try:
+            n = int(request.max_points)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            options["max_points"] = max(1, min(n, 15))
+    if request.prefer_local_archive is not None:
+        options["preferLocalArchive"] = bool(request.prefer_local_archive)
+    return options
+
+
+def invalid_continue_mode_detail(mode: str) -> str:
+    """400 detail for unknown continue modes (keeps the stable `invalid_continue_mode` prefix)."""
+
+    from backend.generation.study_materials.orchestrator import _CONTINUE_MODES
+
+    valid = ",".join(sorted(_CONTINUE_MODES))
+    return f"invalid_continue_mode: 未知续作模式 {str(mode or '').strip()!r}；可选模式：{valid}"

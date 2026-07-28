@@ -326,9 +326,10 @@ class StudyMaterialsToolExecutorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class _WorkflowToolExecutor:
-    def __init__(self, *, reviews: list[dict], enough_research: bool = True) -> None:
+    def __init__(self, *, reviews: list[dict], enough_research: bool = True, evidence: list[dict] | None = None) -> None:
         self.reviews = list(reviews)
         self.enough_research = enough_research
+        self.evidence = evidence
         self.working_memory: dict = {}
         self.step_results: list[dict] = []
         self.research_calls = 0
@@ -338,6 +339,8 @@ class _WorkflowToolExecutor:
     async def research(self, *, plan: dict, event_sink, only_point_ids=None, attempt: int = 0) -> dict:
         self.research_calls += 1
         self.research_kwargs.append({"only_point_ids": only_point_ids, "attempt": attempt})
+        if self.evidence is not None:
+            return {"kp-1": [dict(item) for item in self.evidence]}
         if not self.enough_research:
             return {"kp-1": []}
         return {
@@ -689,6 +692,128 @@ class StudyMaterialsWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(raised.exception.recoverable)
         self.assertIn("tool_unavailable:web_search_knowledge", raised.exception.issues)
         self.assertEqual(workflow.state["last_failure"]["code"], "research_tool_outage")
+
+    @staticmethod
+    def _research_profile_evidence() -> list[dict]:
+        # research profile 要求 min_sources=4 / min_source_classes=3。
+        return [
+            {
+                "source_class": source_class,
+                "url": f"https://example.test/{source_class}/{index}",
+                "title": f"资料 {index}",
+                "snippet": f"增函数的第 {index} 条证据，含定义与说明。",
+            }
+            for index, source_class in enumerate(["web", "wikipedia", "mediawiki", "web"])
+        ]
+
+    @staticmethod
+    def _deepen_resume_state() -> dict:
+        markdown = "# 函数单调性\n\n## 增函数\n\n定义、性质、条件、反例和例题。"
+        return {
+            "version": 1,
+            "stage": "research",
+            "last_successful_stage": "accept",
+            "preset": "standard",
+            "plan": {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]},
+            "research": {},
+            "markdown": markdown,
+            "coverage_map": {"kp-1": True},
+            "review": {},
+            "quality_report": {},
+            "acceptance": {},
+            "revision_attempts": 1,
+            "research_attempts": 0,
+            "research_retry_points": [],
+            "last_failure": {},
+            "resume_after_research": "review",
+        }
+
+    async def test_deepen_continuation_evaluates_existing_draft_under_original_preset(self) -> None:
+        """B8: deepen_research 续作——既有 standard 成稿按原 preset 验收，不得被 research 门误杀。"""
+
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow
+
+        stages: list[str] = []
+
+        async def stage_runner(**kwargs):
+            stages.append(kwargs["stage"])
+            raise AssertionError("deepen 续作成稿已存在，不应重新 plan/draft")
+
+        async def sink(_event: dict) -> None:
+            return None
+
+        async def checkpoint(_state: dict, _resume: dict) -> None:
+            return None
+
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-deepen",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="research",
+            options={"acceptance_preset": "standard", "continue_mode": "deepen_research"},
+            resume_working_memory={"study_materials_workflow": self._deepen_resume_state()},
+            stage_runner=stage_runner,
+            tool_executor=_WorkflowToolExecutor(
+                reviews=[_passing_review()],
+                evidence=self._research_profile_evidence(),
+            ),
+            event_sink=sink,
+            checkpoint_sink=checkpoint,
+        )
+
+        result = await workflow.run()
+
+        # 验收沿用 standard：_passing_review 只有 5 个维度，research preset（8 个）会失败。
+        self.assertEqual(stages, [])
+        self.assertTrue(result["acceptance"]["accepted"])
+        self.assertEqual(result["acceptance"]["preset"], "standard")
+        self.assertTrue(result["quality_report"]["passed"])
+        self.assertEqual(result["quality_report"]["preset"], "standard")
+        # 新改进周期：revision_attempts 从 0 起算（续作状态里残留的是 1）。
+        self.assertEqual(workflow.state["revision_attempts"], 0)
+        self.assertEqual(workflow.state["stage"], "completed")
+
+    async def test_deepen_continuation_research_gate_still_uses_research_profile(self) -> None:
+        """B8: 检索广度仍按 research profile——standard 级别证据在检索门被拦下。"""
+
+        from backend.generation.study_materials.workflow import StudyMaterialsWorkflow, WorkflowFailure
+
+        async def stage_runner(**kwargs):
+            return {"knowledge_points": [{"id": "kp-1", "title": "增函数", "queries": ["增函数"]}]}
+
+        events: list[dict] = []
+
+        async def sink(event: dict) -> None:
+            events.append(event)
+
+        async def checkpoint(_state: dict, _resume: dict) -> None:
+            return None
+
+        tool_executor = _WorkflowToolExecutor(reviews=[], enough_research=True)  # 2 来源/2 类，仅够 standard
+        workflow = StudyMaterialsWorkflow(
+            task_id="task-deepen-breadth",
+            user_id="u-1",
+            topic="函数单调性",
+            subject="高中数学",
+            preset="research",
+            options={"acceptance_preset": "standard", "continue_mode": "deepen_research"},
+            resume_working_memory={"study_materials_workflow": self._deepen_resume_state()},
+            stage_runner=stage_runner,
+            tool_executor=tool_executor,
+            event_sink=sink,
+            checkpoint_sink=checkpoint,
+        )
+
+        with self.assertRaisesRegex(WorkflowFailure, "quality_gate_not_met") as raised:
+            await workflow.run()
+
+        self.assertEqual(raised.exception.stage, "research")
+        # research preset 允许 3 次重试：首次 + 3 次重试共 4 次调用。
+        self.assertEqual(tool_executor.research_calls, 4)
+        retry_events = [event for event in events if event.get("type") == "research_retry_required"]
+        self.assertEqual(len(retry_events), 3)
+        self.assertEqual(workflow.state["preset"], "research")
 
 
 if __name__ == "__main__":

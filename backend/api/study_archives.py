@@ -18,12 +18,15 @@ router = APIRouter(prefix="/study-archives", tags=["study-archives"], dependenci
 async def list_archives(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, le=10_000),
+    base_fingerprint: Optional[str] = Query(None),
     user: dict = Depends(require_auth),
 ) -> dict:
     user_id = str((user or {}).get("user_id") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid_or_expired_token")
-    rows = await list_study_archives(user_id=user_id, limit=limit, offset=offset)
+    # 空串/纯空白视为未传参（前端常驻 ?base_fingerprint=，可能带空值）。
+    fp = str(base_fingerprint or "").strip() or None
+    rows = await list_study_archives(user_id=user_id, limit=limit, offset=offset, base_fingerprint=fp)
     return {"items": rows, "count": len(rows)}
 
 

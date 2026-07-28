@@ -3,6 +3,11 @@
 This router supports **resumable** generation:
 - `POST /api/study-materials/generate` starts a task and streams SSE events
 - `GET  /api/study-materials/tasks/{task_id}/stream` can resume after refresh
+
+Auth model: this is a local app — `require_auth` never rejects. Missing or
+stale tokens fall back to the built-in local user (see `backend.api.auth`), so
+handlers can rely on a non-empty `user_id` and intentionally carry no 401
+branches.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from backend.agent.executor import Executor
-from backend.agent.types import CompressedContext, PlanStep, UserProfile, agent_event
+from backend.agent.types import CompressedContext, PlanStep, UserProfile
 from backend.api.auth import require_auth
 from backend.api.sse_utils import is_sse_client_disconnected
 from backend.api.study_materials_schemas import (
@@ -25,9 +30,10 @@ from backend.api.study_materials_schemas import (
     StudyMaterialsConvertMarkdownToLatexRequest,
     StudyMaterialsConvertMarkdownToLatexResponse,
     StudyMaterialsGenerateRequest,
+    build_study_materials_options,
+    invalid_continue_mode_detail,
 )
 from backend.core.logging_utils import get_logger
-from backend.core.text_utils import clip_text as _clip_text
 from backend.generation.study_materials.orchestrator_singleton import study_material_tasks as _tasks
 
 router = APIRouter(prefix="/study-materials", tags=["study-materials"], dependencies=[Depends(require_auth)])
@@ -68,37 +74,20 @@ async def generate_study_materials(
     """Start a new study-materials generation task and stream events."""
 
     user_id = str((user or {}).get("user_id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     query = (request.query or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="Empty query")
 
     subject = (request.subject or "").strip()
-    options = {}
-    if (request.preset or "").strip():
-        options["preset"] = str(request.preset or "").strip()
-    if (request.requirements or "").strip():
-        options["requirements"] = _clip_text(str(request.requirements or "").strip(), max_chars=600)
-    if request.with_questions is not None:
-        options["with_questions"] = bool(request.with_questions)
-    if request.with_diagrams is not None:
-        options["with_diagrams"] = bool(request.with_diagrams)
-    if request.enable_extra_tools is not None:
-        options["enable_extra_tools"] = bool(request.enable_extra_tools)
-    if request.max_points is not None:
-        try:
-            n = int(request.max_points)
-        except (TypeError, ValueError):
-            n = 0
-        if n > 0:
-            options["max_points"] = max(1, min(n, 15))
-    if request.prefer_local_archive is not None:
-        options["preferLocalArchive"] = bool(request.prefer_local_archive)
+    options = build_study_materials_options(request)
 
     task = await _tasks.create_task(query=query, user_id=user_id, subject=subject, options=options)
-    return await _stream_task(task.task_id, user_id=user_id, after_seq=0, request=http_request)
+    response = await _stream_task(task.task_id, user_id=user_id, after_seq=0, request=http_request)
+    # POST-as-stream creates the task id server-side; expose it so clients can
+    # re-attach via GET /tasks/{task_id}/stream without parsing the event flow.
+    response.headers["X-Task-Id"] = task.task_id
+    return response
 
 
 @router.post("/convert-markdown-to-latex", response_model=StudyMaterialsConvertMarkdownToLatexResponse)
@@ -107,8 +96,6 @@ async def convert_markdown_to_latex(
     user: dict = Depends(require_auth),
 ):
     user_id = str((user or {}).get("user_id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     markdown = (request.markdown or "").strip()
     if not markdown:
@@ -145,8 +132,6 @@ async def convert_markdown_to_latex_stream(
     user: dict = Depends(require_auth),
 ):
     user_id = str((user or {}).get("user_id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     markdown = (request.markdown or "").strip()
     if not markdown:
@@ -166,21 +151,38 @@ async def convert_markdown_to_latex_stream(
     )
 
     executor = Executor()
+    heartbeat_s = float(os.getenv("STUDY_MATERIALS_SSE_HEARTBEAT_S") or "4.0")
 
     async def event_generator():
+        # Standard task-stream envelope (same convention as `_stream_task` /
+        # `orchestrator.stream`): {taskId, seq, type, data} frames, a ping
+        # heartbeat while the tool runs, and a terminal `data: [DONE]` marker.
         step_id = f"convert_markdown_to_latex-{uuid.uuid4().hex[:8]}"
+        stream_id = step_id
         t0 = time.monotonic()
+        seq = 0
+
+        def frame(kind: str, data: dict) -> str:
+            nonlocal seq
+            seq += 1
+            payload = {"taskId": stream_id, "seq": seq, "type": kind, "data": data}
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        def ping_frame() -> str:
+            # Heartbeats do not advance the sequence (matches task-runtime pings).
+            payload = {"taskId": stream_id, "seq": seq, "type": "ping", "data": {"status": "running", "last_seq": seq}}
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         try:
             if await is_sse_client_disconnected(http_request):
                 return
-            yield f"data: {json.dumps(agent_event('status', {'content': '开始转换 LaTeX…'}), ensure_ascii=False)}\n\n"
+            yield frame("status", {"content": "开始转换 LaTeX…"})
             if await is_sse_client_disconnected(http_request):
                 return
-            yield f"data: {json.dumps(agent_event('progress', {'percent': 1, 'stage': '准备'}), ensure_ascii=False)}\n\n"
+            yield frame("progress", {"percent": 1, "stage": "准备"})
             if await is_sse_client_disconnected(http_request):
                 return
-            yield f"data: {json.dumps(agent_event('tool_call', {'step_id': step_id, 'name': 'convert_markdown_to_latex', 'title': 'Markdown → LaTeX（ElegantBook）', 'arguments': {'topic': topic, 'subject': subject}}), ensure_ascii=False)}\n\n"
+            yield frame("tool_call", {"step_id": step_id, "name": "convert_markdown_to_latex", "title": "Markdown → LaTeX（ElegantBook）", "arguments": {"topic": topic, "subject": subject}})
 
             event_queue: "asyncio.Queue[dict]" = asyncio.Queue()
 
@@ -205,7 +207,15 @@ async def convert_markdown_to_latex_stream(
                 done, _pending = await asyncio.wait(
                     {tool_task, queue_task},
                     return_when=asyncio.FIRST_COMPLETED,
+                    timeout=max(0.5, float(heartbeat_s or 4.0)),
                 )
+
+                if not done:
+                    # Heartbeat tick while the tool call is still in flight.
+                    if await is_sse_client_disconnected(http_request):
+                        return
+                    yield ping_frame()
+                    continue
 
                 if queue_task in done:
                     evt = None
@@ -216,7 +226,10 @@ async def convert_markdown_to_latex_stream(
                     if isinstance(evt, dict) and evt.get("event"):
                         if await is_sse_client_disconnected(http_request):
                             return
-                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                        yield frame(
+                            str(evt.get("event") or ""),
+                            evt.get("data") if isinstance(evt.get("data"), dict) else {},
+                        )
                     queue_task = asyncio.create_task(event_queue.get())
                     continue
 
@@ -229,7 +242,10 @@ async def convert_markdown_to_latex_stream(
                 while True:
                     evt = event_queue.get_nowait()
                     if isinstance(evt, dict) and evt.get("event"):
-                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                        yield frame(
+                            str(evt.get("event") or ""),
+                            evt.get("data") if isinstance(evt.get("data"), dict) else {},
+                        )
             except asyncio.QueueEmpty:
                 pass
 
@@ -237,27 +253,31 @@ async def convert_markdown_to_latex_stream(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             if await is_sse_client_disconnected(http_request):
                 return
-            yield f"data: {json.dumps(agent_event('tool_result', {'step_id': step_id, 'name': 'convert_markdown_to_latex', 'title': 'Markdown → LaTeX（ElegantBook）', 'success': bool(step_result.success), 'elapsed_ms': elapsed_ms, 'output': step_result.output, 'error': step_result.error}), ensure_ascii=False)}\n\n"
+            yield frame("tool_result", {"step_id": step_id, "name": "convert_markdown_to_latex", "title": "Markdown → LaTeX（ElegantBook）", "success": bool(step_result.success), "elapsed_ms": elapsed_ms, "output": step_result.output, "error": step_result.error})
 
             if not step_result.success:
                 msg = str(step_result.error or "convert_failed")
                 if await is_sse_client_disconnected(http_request):
                     return
-                yield f"data: {json.dumps(agent_event('error', {'message': msg}), ensure_ascii=False)}\n\n"
-                return
-
-            out = step_result.output if isinstance(step_result.output, dict) else {}
-            if await is_sse_client_disconnected(http_request):
-                return
-            yield f"data: {json.dumps(agent_event('progress', {'percent': 100, 'stage': '完成'}), ensure_ascii=False)}\n\n"
-            if await is_sse_client_disconnected(http_request):
-                return
-            yield f"data: {json.dumps(agent_event('done', out), ensure_ascii=False)}\n\n"
+                yield frame("error", {"message": msg})
+            else:
+                out = step_result.output if isinstance(step_result.output, dict) else {}
+                if await is_sse_client_disconnected(http_request):
+                    return
+                yield frame("progress", {"percent": 100, "stage": "完成"})
+                if await is_sse_client_disconnected(http_request):
+                    return
+                yield frame("done", out)
         except Exception as exc:
             logger.exception("study_materials_latex_stream_failed")
             if await is_sse_client_disconnected(http_request):
                 return
-            yield f"data: {json.dumps(agent_event('error', {'message': str(exc)}), ensure_ascii=False)}\n\n"
+            yield frame("error", {"message": str(exc)})
+
+        # Terminal marker (matches the chat-stream `data: [DONE]` convention).
+        if await is_sse_client_disconnected(http_request):
+            return
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -276,8 +296,6 @@ async def stream_study_materials_task(
     """Resume a running/completed task and replay SSE events after `after_seq`."""
 
     user_id = str((user or {}).get("user_id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     task = await _tasks.get_task(task_id, user_id=user_id)
     if not task:
@@ -288,8 +306,6 @@ async def stream_study_materials_task(
 @router.get("/tasks/{task_id}")
 async def get_study_materials_task(task_id: str, user: dict = Depends(require_auth)):
     user_id = str((user or {}).get("user_id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
 
     task = await _tasks.get_task(task_id, user_id=user_id)
     if not task:
@@ -365,8 +381,6 @@ async def continue_study_materials_task(
     """Continue a completed/failed task with one bounded improvement iteration (streams SSE events)."""
 
     user_id = str((user or {}).get("user_id") or "").strip()
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
     mode = str(request.mode or "").strip() or "improve"
 
     try:
@@ -379,6 +393,11 @@ async def continue_study_materials_task(
             raise HTTPException(status_code=409, detail="Task still running")
         if msg == "task_not_resumable":
             raise HTTPException(status_code=400, detail="Task not resumable")
+        if msg == "invalid_continue_mode":
+            raise HTTPException(status_code=400, detail=invalid_continue_mode_detail(mode))
         raise HTTPException(status_code=400, detail=msg)
 
-    return await _stream_task(new_task.task_id, user_id=user_id, after_seq=0, request=http_request)
+    response = await _stream_task(new_task.task_id, user_id=user_id, after_seq=0, request=http_request)
+    # POST-as-stream: the follow-up task id is otherwise only visible in-stream.
+    response.headers["X-Task-Id"] = new_task.task_id
+    return response
