@@ -34,11 +34,45 @@ from backend.generation.question_library.session_utils import (
     normalize_draft_questions,
     normalize_practice_attempts,
     normalize_review_status,
+    resolve_requested_count,
     serialize_session_preview,
     serialize_session_summary,
 )
 
 logger = get_logger(__name__)
+
+_COMMIT_VALIDATION_FLAGS = (
+    "scope_ok",
+    "answer_correct",
+    "answer_analysis_consistent",
+    "conditions_sufficient",
+    "unambiguous",
+    "transfer_valid",
+    "intuition_aligned",
+    "structural_depth",
+    "request_aligned",
+)
+
+
+def _require_commit_ready_intuition_packet(draft: dict, *, allow_partial_questions: bool) -> None:
+    """Keep AI drafts behind the same hard gate used during generation.
+
+    Media imports do not carry an intuition packet and remain on their existing
+    review path. AI drafts fail closed so an old, regenerated, or otherwise
+    unvalidated packet cannot be committed by a later approval endpoint.
+    """
+
+    if allow_partial_questions:
+        return
+
+    packet = draft.get("intuition_packet") if isinstance(draft.get("intuition_packet"), dict) else None
+    validation = packet.get("validation") if isinstance(packet, dict) and isinstance(packet.get("validation"), dict) else None
+    if not isinstance(validation, dict):
+        raise HTTPException(status_code=409, detail="intuition_validation_required")
+
+    status = str(validation.get("status") or "").strip().lower()
+    if status != "passed" or not all(validation.get(name) is True for name in _COMMIT_VALIDATION_FLAGS):
+        raise HTTPException(status_code=409, detail="intuition_validation_failed")
 
 
 async def list_question_library_sessions(*, user_id: str) -> dict:
@@ -62,7 +96,12 @@ async def get_question_library_session(*, user_id: str, session_id: str) -> dict
     task_ids = list(session.get("task_ids") or []) if isinstance(session.get("task_ids"), list) else []
     task_events = await _load_session_task_events(str(user_id or "").strip(), task_ids)
     payload = dict(session)
-    payload["draft_questions"] = normalize_draft_questions(session.get("draft_questions"))
+    drafts = normalize_draft_questions(session.get("draft_questions"))
+    draft_count = len(drafts)
+    payload["draft_questions"] = drafts
+    payload["count"] = draft_count
+    payload["requested_count"] = resolve_requested_count(session, draft_count=draft_count)
+    payload["draft_count"] = draft_count
     payload["practice_attempts"] = normalize_practice_attempts(session.get("practice_attempts"))
     payload["task_events"] = task_events
     return {"success": True, "session": payload}
@@ -151,9 +190,15 @@ async def commit_preview_to_library(
             selected_ids.append(qid)
         if review_status == "committed":
             continue
-        stem = str(q.get("stem") or "").strip()
-        answer = str(q.get("answer") or "").strip()
-        analysis = str(q.get("analysis") or "").strip()
+        canonical = preview_by_id[qid]
+        _require_commit_ready_intuition_packet(canonical, allow_partial_questions=allow_partial_questions)
+        stem = str(canonical.get("stem") or "").strip()
+        answer = str(canonical.get("answer") or "").strip()
+        analysis = str(canonical.get("analysis") or "").strip()
+        for key, canonical_value in (("stem", stem), ("answer", answer), ("analysis", analysis)):
+            submitted_value = str(q.get(key) or "").strip()
+            if submitted_value and submitted_value != canonical_value:
+                raise HTTPException(status_code=409, detail="question_content_changed_after_validation")
         if not stem or ((not allow_partial_questions) and (not answer or not analysis)):
             continue
         inserted_ids.append(qid)
@@ -626,6 +671,7 @@ async def _commit_single_draft_to_library(*, user_id: str, session: dict, draft:
     allow_partial_questions = str(session.get("source_type") or "").strip() == "media_import"
     if not stem or ((not allow_partial_questions) and (not answer or not analysis)):
         raise HTTPException(status_code=400, detail="draft_incomplete_for_commit")
+    _require_commit_ready_intuition_packet(draft, allow_partial_questions=allow_partial_questions)
 
     await upsert_question_cache(
         [

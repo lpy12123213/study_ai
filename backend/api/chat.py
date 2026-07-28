@@ -15,6 +15,7 @@ from backend.database.repositories.content.conversations import (
     get_conversation,
     get_messages,
 )
+from backend.workspace.chat.cancel_registry import get_chat_cancel_registry
 from backend.workspace.chat.service import ChatService, get_chat_service
 from backend.workspace.chat.titles import update_title_for_first_user_message
 
@@ -72,79 +73,121 @@ async def chat_endpoint(
         logger.exception("Failed to persist user message")
 
     async def generate():
-        async for chunk in service.chat(
-            history,
-            user_message,
-            user_id=user_id,
-            subject=subject,
-            model=model_override,
-            sub_model=sub_model_override,
-        ):
-            chunk_type = chunk.get("type")
+        registry = get_chat_cancel_registry()
+        cancel_event = registry.register(user_id, conv_id)
+        try:
+            async for chunk in service.chat(
+                history,
+                user_message,
+                user_id=user_id,
+                subject=subject,
+                model=model_override,
+                sub_model=sub_model_override,
+                intent=(request.intent or "").strip() or None,
+                cancel_event=cancel_event,
+            ):
+                chunk_type = chunk.get("type")
 
-            if chunk_type == "assistant":
-                # Persist each tool-call round as an assistant message so the frontend can render tool nodes later.
-                tool_calls = chunk.get("tool_calls") or []
-                if tool_calls:
+                if chunk_type == "assistant":
+                    # Persist each tool-call round as an assistant message so the frontend can render tool nodes later.
+                    tool_calls = chunk.get("tool_calls") or []
+                    if tool_calls:
+                        try:
+                            await add_message(
+                                user_id=user_id,
+                                conv_id=conv_id,
+                                role="assistant",
+                                content=chunk.get("content", "") or "",
+                                tool_calls=json.dumps(tool_calls, ensure_ascii=False),
+                            )
+                        except Exception:
+                            logger.exception("Failed to persist assistant tool_calls message")
+                    if await is_sse_client_disconnected(http_request):
+                        return
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
+
+                if chunk_type in {
+                    "tool_start",
+                    "tool_result",
+                    "stream_start",
+                    "text_delta",
+                    "thinking_delta",
+                    "iteration",
+                    "error",
+                }:
+                    if chunk_type == "tool_result":
+                        # Persist tool results as tool-role messages (indexed by tool_call_id).
+                        try:
+                            await add_message(
+                                user_id=user_id,
+                                conv_id=conv_id,
+                                role="tool",
+                                content=json.dumps(chunk.get("result"), ensure_ascii=False),
+                                tool_call_id=chunk.get("tool_call_id", ""),
+                            )
+                        except Exception:
+                            logger.exception("Failed to persist tool_result message")
+                    if await is_sse_client_disconnected(http_request):
+                        return
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
+
+                if chunk_type == "cancelled":
+                    # 服务端取消确认（视觉规划 §9.2）：落一条说明性 assistant 消息，
+                    # 保证刷新后历史里这轮以明确的停止状态收尾。
                     try:
                         await add_message(
                             user_id=user_id,
                             conv_id=conv_id,
                             role="assistant",
-                            content=chunk.get("content", "") or "",
-                            tool_calls=json.dumps(tool_calls, ensure_ascii=False),
+                            content=chunk.get("content", "") or "（已按用户要求停止生成。）",
                         )
                     except Exception:
-                        logger.exception("Failed to persist assistant tool_calls message")
-                if await is_sse_client_disconnected(http_request):
-                    return
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                continue
+                        logger.exception("Failed to persist cancelled note")
+                    if await is_sse_client_disconnected(http_request):
+                        return
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
 
-            if chunk_type in {
-                "tool_start",
-                "tool_result",
-                "stream_start",
-                "text_delta",
-                "thinking_delta",
-                "iteration",
-                "error",
-            }:
-                if chunk_type == "tool_result":
-                    # Persist tool results as tool-role messages (indexed by tool_call_id).
+                if chunk_type == "assistant_final":
+                    final_content = chunk.get("content", "")
                     try:
-                        await add_message(
-                            user_id=user_id,
-                            conv_id=conv_id,
-                            role="tool",
-                            content=json.dumps(chunk.get("result"), ensure_ascii=False),
-                            tool_call_id=chunk.get("tool_call_id", ""),
-                        )
+                        await add_message(user_id=user_id, conv_id=conv_id, role="assistant", content=final_content)
                     except Exception:
-                        logger.exception("Failed to persist tool_result message")
-                if await is_sse_client_disconnected(http_request):
-                    return
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                continue
+                        logger.exception("Failed to persist assistant final message")
 
-            if chunk_type == "assistant_final":
-                final_content = chunk.get("content", "")
-                try:
-                    await add_message(user_id=user_id, conv_id=conv_id, role="assistant", content=final_content)
-                except Exception:
-                    logger.exception("Failed to persist assistant final message")
+                    if await is_sse_client_disconnected(http_request):
+                        return
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
 
-                if await is_sse_client_disconnected(http_request):
-                    return
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                continue
-
-        if await is_sse_client_disconnected(http_request):
-            return
-        yield "data: [DONE]\n\n"
+            if await is_sse_client_disconnected(http_request):
+                return
+            yield "data: [DONE]\n\n"
+        finally:
+            registry.release(user_id, conv_id, cancel_event)
 
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+@router.post("/chat/{conversation_id}/cancel")
+async def cancel_chat(
+    conversation_id: int,
+    user: dict = Depends(require_auth),
+) -> dict:
+    """请求取消该会话当前进行中的生成。
+
+    返回 accepted=True 表示已向活动运行发出取消信号；实际停止由流内的
+    `cancelled` 事件确认（协作式：正在执行的写类工具会先完整结束）。
+    没有活动运行时返回 accepted=False（幂等，不视为错误）。
+    """
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    accepted = get_chat_cancel_registry().cancel(user_id, conversation_id)
+    return {"success": True, "accepted": accepted}

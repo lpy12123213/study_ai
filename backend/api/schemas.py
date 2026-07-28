@@ -61,6 +61,9 @@ class ChatRequest(BaseModel):
     # When omitted/empty, backend defaults from env are used.
     model: Optional[str] = Field(default=None, max_length=200)
     sub_model: Optional[str] = Field(default=None, max_length=200)
+    # Structured intent for semantic confirmations (e.g. "confirm_create_paper").
+    # When present it bypasses keyword-based confirmation matching entirely.
+    intent: Optional[str] = Field(default=None, max_length=40)
 
 
 class DeepThinkRequest(BaseModel):

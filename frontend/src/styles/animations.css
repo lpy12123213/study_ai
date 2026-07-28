@@ -1,7 +1,0 @@
-:root.reduce-motion *,
-:root.reduce-motion *::before,
-:root.reduce-motion *::after {
-  transition-duration: 0ms !important;
-  scroll-behavior: auto !important;
-}
-

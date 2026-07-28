@@ -41,8 +41,37 @@ def _quick_validation(*, passed: bool = True, issues: list[str] | None = None) -
         "conditions_sufficient": passed,
         "unambiguous": passed,
         "transfer_valid": passed,
+        "intuition_aligned": passed,
+        "structural_depth": passed,
+        "request_aligned": passed,
         "issues": list(issues or ([] if passed else ["answer_incorrect"])),
         "summary": "ok" if passed else "needs repair",
+    }
+
+
+def _grounded_request_alignment(stem: str, *, requested_clause: str = "导数") -> dict:
+    evidence = str(stem or "").strip()
+    return {
+        "request_aligned": True,
+        "request_alignment": {
+            "topic_bindings": [
+                {
+                    "requested_clause": requested_clause,
+                    "stem_evidence": evidence,
+                    "analysis_evidence": "",
+                    "necessary": True,
+                }
+            ],
+            "knowledge_points_used": [],
+            "goal_check": {
+                "practice_goal": "structural_intuition",
+                "passed": True,
+                "non_mechanical_core": True,
+                "routes": [],
+                "comparison_criterion": "",
+                "comparison_evidence": "",
+            },
+        },
     }
 
 
@@ -487,7 +516,15 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         from backend.generation.question_library.generation import generate_questions
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
-            _ = messages, kwargs
+            _ = kwargs
+            try:
+                review_payload = json.loads(str((messages or [])[-1].get("content") or "{}"))
+            except (AttributeError, IndexError, json.JSONDecodeError):
+                review_payload = {}
+            reviewed_stem = str(
+                ((review_payload.get("question") or {}) if isinstance(review_payload, dict) else {}).get("stem")
+                or ""
+            )
             if req_id_prefix == "qlg":
                 return json.dumps(
                     {"questions": [{"stem": "题干-难度不匹配", "answer": "答案", "analysis": "解析"}]},
@@ -500,9 +537,9 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             if req_id_prefix == "ql_judge":
                 return json.dumps(
                     {
-                        "pass": True,
+                        **_quick_validation(passed=True),
+                        **_grounded_request_alignment(reviewed_stem),
                         "overall_score": 75,
-                        "issues": [],
                         "summary": "题目可用但偏简单",
                         "difficulty_estimate": "简单",
                         "novelty_score": 8,
@@ -615,16 +652,20 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
 
                 return json.dumps(
                     {
+                        **_quick_validation(passed=overall >= 80),
+                        **(
+                            _grounded_request_alignment(reviewed_stem)
+                            if overall >= 80
+                            else {}
+                        ),
                         "verdict": "好题" if overall >= 80 else "普通题",
                         "overall_score": overall,
                         "dimensions": dims,
                         "highlights": [],
-                        "issues": [],
                         "summary": "ok",
                         "difficulty_estimate": "困难" if overall >= 85 else "中等",
                         "novelty_score": 8 if overall >= 85 else 3,
                         "reasoning_depth": 9 if overall >= 85 else 4,
-                        "pass": overall >= 80,
                     },
                     ensure_ascii=False,
                 )
@@ -704,7 +745,15 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         qlg_calls = 0
 
         async def fake_chat_completion_text(*, messages, req_id_prefix: str = "", **kwargs):  # type: ignore[no-untyped-def]
-            _ = messages, kwargs
+            _ = kwargs
+            try:
+                review_payload = json.loads(str((messages or [])[-1].get("content") or "{}"))
+            except (AttributeError, IndexError, json.JSONDecodeError):
+                review_payload = {}
+            reviewed_stem = str(
+                ((review_payload.get("question") or {}) if isinstance(review_payload, dict) else {}).get("stem")
+                or ""
+            )
             nonlocal qlg_calls
             if req_id_prefix == "qlg":
                 qlg_calls += 1
@@ -720,7 +769,12 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 return json.dumps({"ambiguous": False, "issues": [], "summary": "ok"}, ensure_ascii=False)
             if req_id_prefix == "ql_judge":
                 return json.dumps(
-                    {"pass": True, "overall_score": 90, "issues": [], "summary": "ok"},
+                    {
+                        **_quick_validation(passed=True),
+                        **_grounded_request_alignment(reviewed_stem),
+                        "overall_score": 90,
+                        "summary": "ok",
+                    },
                     ensure_ascii=False,
                 )
             if req_id_prefix == "ql_distill":
@@ -782,9 +836,8 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
             if req_id_prefix == "ql_judge":
                 return json.dumps(
                     {
-                        "pass": False,
+                        **_quick_validation(passed=False),
                         "overall_score": 92,
-                        "issues": [],
                         "summary": "题目质量高",
                         "novelty_score": 9,
                         "reasoning_depth": 9,
@@ -852,7 +905,11 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
                 return json.dumps({"ambiguous": False, "issues": [], "summary": "ok"}, ensure_ascii=False)
             if req_id_prefix == "ql_judge":
                 return json.dumps(
-                    {"pass": False, "overall_score": 45, "issues": ["low_quality"], "summary": "低分"},
+                    {
+                        **_quick_validation(passed=False, issues=["low_quality"]),
+                        "overall_score": 45,
+                        "summary": "低分",
+                    },
                     ensure_ascii=False,
                 )
             if req_id_prefix == "ql_repair":

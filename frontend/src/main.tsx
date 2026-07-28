@@ -1,35 +1,20 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { MotionConfig } from 'framer-motion'
-import { QueryProvider } from '@/components/QueryProvider'
-import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
-import { UserSettingsBootstrap } from '@/components/shared/UserSettingsBootstrap'
-import { I18nProvider } from '@/i18n'
-import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore'
-import App from './App'
-import './index.css'
-import { registerStudyAiServiceWorker } from './pwa'
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { RouterProvider } from "react-router";
 
-function RootApp() {
-  const reduceMotion = useUiPreferencesStore((s) => s.reduceMotion)
-  return (
-    <MotionConfig reducedMotion={reduceMotion ? 'always' : 'user'}>
-      <UserSettingsBootstrap />
-      <App />
-    </MotionConfig>
-  )
-}
+import { registerHttpObservers } from "@/app/api/http-observers";
+import { AppProviders } from "@/app/providers/app-providers";
+import { router } from "@/router";
 
-createRoot(document.getElementById('root')!).render(
+import "katex/dist/katex.min.css";
+import "@/styles/globals.css";
+
+registerHttpObservers();
+
+createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ErrorBoundary>
-      <QueryProvider>
-        <I18nProvider>
-          <RootApp />
-        </I18nProvider>
-      </QueryProvider>
-    </ErrorBoundary>
+    <AppProviders>
+      <RouterProvider router={router} />
+    </AppProviders>
   </StrictMode>,
-)
-
-registerStudyAiServiceWorker()
+);

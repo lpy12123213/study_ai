@@ -33,7 +33,7 @@ worktrees/
 
 # Frontend build/output
 frontend/dist/
-frontend/node_modules/
+node_modules/
 
 # TypeScript incremental build info
 *.tsbuildinfo
@@ -76,6 +76,8 @@ backend/crawler/.playwright_data/
 # Debug
 debug.png
 *.png
+!docs/plans/assets/*.png
+!frontend/e2e/visual.spec.ts-snapshots/materials*.png
 screenshots/
 
 # OS

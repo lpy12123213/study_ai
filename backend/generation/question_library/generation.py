@@ -451,6 +451,9 @@ async def generate_questions(
                         "conditions_sufficient": False,
                         "unambiguous": False,
                         "transfer_valid": False,
+                        "intuition_aligned": False,
+                        "structural_depth": False,
+                        "request_aligned": False,
                         "issues": packet_issues,
                         "summary": "直觉练习包结构不完整。",
                         "overall_score": 0,
@@ -473,6 +476,9 @@ async def generate_questions(
                             "conditions_sufficient": False,
                             "unambiguous": False,
                             "transfer_valid": False,
+                            "intuition_aligned": False,
+                            "structural_depth": False,
+                            "request_aligned": False,
                             "issues": [f"quick_validation_exception:{str(exc)}"],
                             "summary": "",
                             "overall_score": 0,
@@ -549,6 +555,9 @@ async def generate_questions(
                     ("条件充分", "conditions_sufficient"),
                     ("无致命歧义", "unambiguous"),
                     ("迁移有效", "transfer_valid"),
+                    ("直觉一致", "intuition_aligned"),
+                    ("结构深度", "structural_depth"),
+                    ("请求契约", "request_aligned"),
                 ]
                 keep["review"] = {
                     "verdict": "可练习" if judge_pass else "需修复",
@@ -599,6 +608,8 @@ async def generate_questions(
                 current = await refine_draft(
                     current,
                     judge,
+                    spec=spec,
+                    source_pack=source_pack,
                     stream_reasoning=stream_reasoning,
                     on_reasoning_event=on_reasoning_event,
                 )

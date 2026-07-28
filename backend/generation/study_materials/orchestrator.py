@@ -19,10 +19,7 @@ from backend.database.repositories.content.study_archives import (
 )
 from backend.database.repositories.system.tasks import get_task as db_get_task
 from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
-from backend.generation.agentic.codex_runtime import (
-    is_codex_runtime_agent_runtime,
-    legacy_agent_fallback_enabled,
-)
+from backend.generation.agentic.codex_runtime import legacy_agent_fallback_enabled
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
 from backend.generation.study_materials.codex_stages import StageResultError
 from backend.generation.study_materials.quality_gate import (
@@ -44,6 +41,20 @@ from backend.media.generated import default_generated_media_ttl_s, publish_gener
 from backend.shared.tasks import RuntimeTask, task_runtime
 
 logger = get_logger(__name__)
+
+
+_CODEX_RUNTIME_NAMES = {"codex", "codex_runtime", "codexruntime", "claude", "claude_code", "claudecode"}
+
+
+def _study_materials_codex_enabled() -> bool:
+    """资料生成默认走不依赖 Codex CLI 的 legacy AgentCore 路径。
+
+    仅当显式设置 ``STUDY_MATERIALS_AGENT_RUNTIME`` 为 codex 系取值时，
+    才启用 Codex staged workflow（plan/draft/revise 由 Codex CLI 执行）。
+    """
+
+    raw = str(os.getenv("STUDY_MATERIALS_AGENT_RUNTIME") or "").strip().lower().replace("-", "_")
+    return raw in _CODEX_RUNTIME_NAMES
 
 
 def _now_s() -> float:
@@ -811,6 +822,10 @@ class StudyMaterialsTaskManager:
                 return False
 
             workflow_state = _dict(resume_wm.get("study_materials_workflow"))
+            if not workflow_state:
+                # legacy AgentCore 产物没有 staged workflow 状态与验收记录；
+                # 导出续作交回 AgentCore 的 export_only / skip_export 原生路径。
+                return False
             markdown = str(
                 workflow_state.get("markdown")
                 or resume_wm.get("assemble_study_archive")
@@ -1042,7 +1057,7 @@ class StudyMaterialsTaskManager:
             if await _maybe_reuse_local_archive():
                 return
 
-            if is_codex_runtime_agent_runtime():
+            if _study_materials_codex_enabled():
                 async def _workflow_event_sink(evt: Dict[str, Any]) -> None:
                     if task.status != "running":
                         raise asyncio.CancelledError

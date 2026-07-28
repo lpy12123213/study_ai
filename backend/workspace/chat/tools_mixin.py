@@ -63,6 +63,20 @@ class ChatToolsMixin:
             return TOOLS
         return self._tools_by_names(BASE_VISIBLE_CHAT_TOOLS)
 
+    def _determine_tools_for_intent(self, history: List[Dict[str, Any]], intent: str) -> List[Dict[str, Any]]:
+        """结构化 intent 的确定性工具集判定：完全绕过确认词子串匹配。
+
+        - confirm_create_paper 且历史存在可解析方案 → 开放完整工具集；
+        - 其他 intent（revise_plan / view_candidates 等）→ 基础工具集，
+          即使消息文本包含「好的/可以」等确认词也不视为确认。
+        """
+        normalized = str(intent or "").strip()
+        if normalized == "confirm_create_paper":
+            plan = self._extract_last_plan_from_history(history)  # type: ignore[attr-defined]
+            if plan is not None:
+                return TOOLS
+        return self._tools_by_names(BASE_VISIBLE_CHAT_TOOLS)
+
     async def _get_crawler(self, subject: Optional[str] = None, *, edu_level: str = ""):
         from backend.integrations.crawler.manager import get_crawler
 

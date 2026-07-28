@@ -158,7 +158,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         async def fake_complete(runtime_task, **_kwargs):
             runtime_task.status = "completed"
 
-        with patch.object(orchestrator, "AgentCore", side_effect=AssertionError("legacy AgentCore should not run")), patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "codex_runtime"}, clear=False), patch.object(orchestrator, "AgentCore", side_effect=AssertionError("legacy AgentCore should not run")), patch.object(
             orchestrator,
             "get_study_archive_by_fingerprint",
             new=AsyncMock(return_value=None),
@@ -206,7 +206,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         async def fake_fail(runtime_task, *_args, **_kwargs):
             runtime_task.status = "failed"
 
-        with patch.object(orchestrator, "AgentCore", side_effect=AssertionError("legacy AgentCore should not run")), patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "codex_runtime"}, clear=False), patch.object(orchestrator, "AgentCore", side_effect=AssertionError("legacy AgentCore should not run")), patch.object(
             orchestrator,
             "get_study_archive_by_fingerprint",
             new=AsyncMock(return_value=None),
@@ -247,7 +247,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         async def fake_fail(runtime_task, *_args, **_kwargs):
             runtime_task.status = "failed"
 
-        with patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "codex_runtime"}, clear=False), patch.object(
             orchestrator,
             "AgentCore",
             side_effect=AssertionError("legacy AgentCore should not run"),
@@ -275,6 +275,100 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fail.await_args.kwargs["error"]["stage"], "draft")
         self.assertEqual(fail.await_args.kwargs["error"]["detail"], "stage_contract_mismatch")
         self.assertTrue(fail.await_args.kwargs.get("emit_event", True))
+
+    async def test_run_task_defaults_to_legacy_agent_core_when_runtime_unset(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task()
+
+        async def fake_agent_run(*_args, **_kwargs):
+            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 1}}}
+
+        async def fake_complete(runtime_task, **_kwargs):
+            runtime_task.status = "completed"
+
+        agent = SimpleNamespace(run=fake_agent_run, last_context=None)
+
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False), patch.object(
+            orchestrator,
+            "AgentCore",
+            return_value=agent,
+        ) as agent_cls, patch.object(
+            orchestrator,
+            "get_study_archive_by_fingerprint",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            orchestrator,
+            "run_study_materials_workflow",
+            new=AsyncMock(side_effect=AssertionError("codex workflow should not run")),
+            create=True,
+        ), patch.object(orchestrator.task_runtime, "append_event", new=AsyncMock()), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(side_effect=fake_complete),
+        ) as complete, patch.object(
+            orchestrator.task_runtime,
+            "fail_task",
+            new=AsyncMock(),
+        ) as fail, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        agent_cls.assert_called_once_with()
+        complete.assert_awaited_once()
+        fail.assert_not_awaited()
+
+    def test_study_materials_codex_enabled_defaults_off(self) -> None:
+        from backend.generation.study_materials.orchestrator import _study_materials_codex_enabled
+
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False):
+            self.assertFalse(_study_materials_codex_enabled())
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "legacy"}, clear=False):
+            self.assertFalse(_study_materials_codex_enabled())
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "codex_runtime"}, clear=False):
+            self.assertTrue(_study_materials_codex_enabled())
+
+    async def test_fix_export_falls_through_to_legacy_agent_core_without_workflow_state(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task(
+            task_id="study-legacy-fix-export",
+            options={"preset": "standard", "continue_mode": "fix_export"},
+            meta={"resume_working_memory": {"markdown": "# 旧稿", "assemble_study_archive": "# 旧稿"}},
+        )
+
+        async def fake_agent_run(*_args, **_kwargs):
+            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 2}}}
+
+        async def fake_complete(runtime_task, **_kwargs):
+            runtime_task.status = "completed"
+
+        agent = SimpleNamespace(run=fake_agent_run, last_context=None)
+
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False), patch.object(
+            orchestrator,
+            "AgentCore",
+            return_value=agent,
+        ) as agent_cls, patch.object(
+            orchestrator,
+            "_export_markdown_to_media",
+            new=AsyncMock(),
+        ) as export, patch.object(orchestrator.task_runtime, "append_event", new=AsyncMock()), patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(side_effect=fake_complete),
+        ) as complete, patch.object(
+            orchestrator.task_runtime,
+            "fail_task",
+            new=AsyncMock(),
+        ) as fail, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        export.assert_not_awaited()
+        agent_cls.assert_called_once_with()
+        complete.assert_awaited_once()
+        fail.assert_not_awaited()
 
     async def test_current_accepted_local_archive_keeps_fast_path(self) -> None:
         from backend.generation.study_materials import orchestrator
@@ -334,7 +428,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         async def fake_complete(runtime_task, **_kwargs):
             runtime_task.status = "completed"
 
-        with patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "codex_runtime"}, clear=False), patch.object(
             orchestrator,
             "get_study_archive_by_fingerprint",
             new=AsyncMock(return_value=archive),

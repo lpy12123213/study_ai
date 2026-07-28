@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from backend.workspace.chat.llm_mixin import ChatLLMMixin
@@ -97,6 +99,8 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
     ) -> Dict[str, Any]:
         tool_name = str(prepared.get("tool_name") or "").strip()
         tool_args = prepared.get("arguments") if isinstance(prepared.get("arguments"), dict) else {}
+        started_at = time.time()
+        t0 = time.monotonic()
         try:
             result = await self.execute_tool(
                 tool_name,
@@ -107,10 +111,15 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
         except Exception as exc:
             logger.warning("chat_tool_call_failed", extra={"tool_name": tool_name}, exc_info=True)
             result = {"success": False, "error": str(exc or "tool_failed")}
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         return {
             "tool_call_id": str(prepared.get("tool_call_id") or "").strip(),
             "tool_name": tool_name,
             "result": result,
+            # 服务端权威耗时（视觉规划 §7.5–7.6 协议扩展）
+            "started_at": started_at,
+            "finished_at": started_at + elapsed_ms / 1000,
+            "elapsed_ms": elapsed_ms,
         }
 
     async def chat(
@@ -122,6 +131,8 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
         user_id: str,
         model: Optional[str] = None,
         sub_model: Optional[str] = None,
+        intent: Optional[str] = None,
+        cancel_event: Optional[asyncio.Event] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         self.current_subject = subject
         uid = str(user_id or "").strip()
@@ -134,9 +145,23 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
         messages = self._build_messages(history, user_message, subject=subject)
         iteration = 0
         all_tool_results: List[Dict[str, Any]] = []
-        tools_override = self._determine_tools_for_request(history, user_message)
+        if intent:
+            # 结构化 intent（视觉规划 §9.1）：由客户端明确声明确认语义，
+            # 绕过确认词子串匹配，杜绝否定句误命中。
+            tools_override = self._determine_tools_for_intent(history, intent)
+        else:
+            tools_override = self._determine_tools_for_request(history, user_message)
+
+        def _cancel_requested() -> bool:
+            return cancel_event is not None and cancel_event.is_set()
+
+        def _cancelled_payload() -> Dict[str, Any]:
+            return {"type": "cancelled", "content": "已按用户要求停止生成。", "iteration": iteration}
 
         while iteration < int(MAX_TOOL_ITERATIONS or 10):
+            if _cancel_requested():
+                yield _cancelled_payload()
+                return
             iteration += 1
 
             if iteration > 1:
@@ -183,11 +208,22 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                     on_reasoning_delta=on_reasoning_delta,
                 )
             )
+            cancelled_during_llm = False
             while not api_task.done():
+                if _cancel_requested():
+                    api_task.cancel()
+                    cancelled_during_llm = True
+                    break
                 try:
                     yield await asyncio.wait_for(delta_queue.get(), timeout=0.05)
                 except asyncio.TimeoutError:
                     continue
+
+            if cancelled_during_llm:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await api_task
+                yield _cancelled_payload()
+                return
 
             while not delta_queue.empty():
                 yield delta_queue.get_nowait()
@@ -229,7 +265,13 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                 }
 
                 prepared_calls = [self._prepare_tool_call(tc) for tc in tool_calls if isinstance(tc, dict)]
+                concurrent = self._can_execute_tool_calls_concurrently(prepared_calls)
+                # 并行/串行在执行前即可判定（视觉规划 §7.5 协议扩展）；wire 上显式声明
+                execution_mode = "parallel" if concurrent else "sequential"
                 tool_results_by_id: Dict[str, Dict[str, Any]] = {}
+                if _cancel_requested():
+                    yield _cancelled_payload()
+                    return
                 for prepared in prepared_calls:
                     yield {
                         "type": "tool_start",
@@ -237,22 +279,47 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                         "tool_name": prepared.get("tool_name", ""),
                         "arguments": prepared.get("arguments", {}),
                         "iteration": iteration,
+                        "execution_mode": execution_mode,
                     }
 
-                if self._can_execute_tool_calls_concurrently(prepared_calls):
-                    executed = await asyncio.gather(
-                        *[
-                            self._execute_prepared_tool_call(
-                                prepared,
-                                sub_model=sub_model_effective,
-                                user_id=uid,
-                            )
-                            for prepared in prepared_calls
-                        ]
+                cancelled_mid_batch = False
+                if concurrent:
+                    gather_task = asyncio.ensure_future(
+                        asyncio.gather(
+                            *[
+                                self._execute_prepared_tool_call(
+                                    prepared,
+                                    sub_model=sub_model_effective,
+                                    user_id=uid,
+                                )
+                                for prepared in prepared_calls
+                            ]
+                        )
                     )
+                    if cancel_event is None:
+                        executed = await gather_task
+                    else:
+                        cancel_wait = asyncio.ensure_future(cancel_event.wait())
+                        done, _pending = await asyncio.wait(
+                            {gather_task, cancel_wait}, return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if gather_task in done:
+                            cancel_wait.cancel()
+                            executed = gather_task.result()
+                        else:
+                            # 并行批只含可安全中断的读类工具（create_paper 永不并行）
+                            gather_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await gather_task
+                            executed = []
+                            cancelled_mid_batch = True
                 else:
                     executed = []
                     for prepared in prepared_calls:
+                        if _cancel_requested():
+                            # 串行批（可能含写操作）：当前工具完整结束后不再开始下一个
+                            cancelled_mid_batch = True
+                            break
                         executed.append(
                             await self._execute_prepared_tool_call(
                                 prepared,
@@ -271,6 +338,11 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                         "tool_name": tool_name,
                         "result": tool_result,
                         "iteration": iteration,
+                        "execution_mode": execution_mode,
+                        # 服务端权威单工具耗时（epoch 秒 + 毫秒时长）
+                        "started_at": item.get("started_at"),
+                        "finished_at": item.get("finished_at"),
+                        "elapsed_ms": item.get("elapsed_ms"),
                     }
 
                     tool_results_by_id[tool_id] = {
@@ -278,6 +350,10 @@ class ChatService(ChatLLMMixin, ChatToolsMixin):
                         "role": "tool",
                         "content": json.dumps(tool_result, ensure_ascii=False),
                     }
+
+                if cancelled_mid_batch:
+                    yield _cancelled_payload()
+                    return
 
                 tool_results: List[Dict[str, Any]] = []
                 for prepared in prepared_calls:

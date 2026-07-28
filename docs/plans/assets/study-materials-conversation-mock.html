@@ -1,0 +1,1911 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>自学资料生成 · 对话式工作台 — 设计原型</title>
+<style>
+/* ============================================================
+   Warm Spectral Workspace 设计令牌
+   与 frontend/src/styles/globals.css 保持一致（亮色）
+   ============================================================ */
+:root {
+  --canvas: #f6f1e8;
+  --surface: #fffcf7;
+  --surface-mist: #edf1f7;
+  --surface-raised: #ffffff;
+  --ink: #20242c;
+  --ink-muted: #667085;
+  --spectral: #5664e9;
+  --spectral-edge: #65c7d5;
+  --hairline: rgba(31, 37, 48, 0.11);
+  --success: #3d9b70;
+  --warning: #c38a2f;
+  --danger: #d95757;
+
+  --thinking-surface: #eef1f6;
+  --thinking-border: rgba(31, 37, 48, 0.08);
+  --thinking-foreground: #4a5261;
+
+  --tool-idle: #98a2b3;
+  --tool-running: #5664e9;
+  --tool-success: #3d9b70;
+  --tool-error: #d95757;
+
+  --timeline-rail: rgba(86, 100, 233, 0.18);
+  --timeline-marker: #5664e9;
+
+  --chrome-surface: #fbf8f1;
+  --composer-surface: #ffffff;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-shell: 28px;
+  --radius-pill: 999px;
+
+  --shadow-soft: 0 1px 2px rgba(31, 37, 48, 0.04), 0 4px 16px -4px rgba(31, 37, 48, 0.06);
+  --shadow-lift: 0 2px 4px rgba(31, 37, 48, 0.05), 0 12px 32px -8px rgba(31, 37, 48, 0.12);
+
+  --font-sans: "Inter Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Noto Serif SC", "Songti SC", SimSun, serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  background-color: var(--canvas);
+  /* 2% 暖墨点阵纹理（与 globals.css 一致） */
+  background-image: radial-gradient(rgba(31, 37, 48, 0.02) 1px, transparent 1px);
+  background-size: 22px 22px;
+  overflow: hidden;
+}
+
+::selection { background: rgba(86, 100, 233, 0.18); }
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+button:focus-visible, a:focus-visible {
+  outline: 2px solid rgba(86, 100, 233, 0.5);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+svg.icon {
+  width: 18px; height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+svg.icon.sm { width: 14px; height: 14px; }
+svg.icon.lg { width: 20px; height: 20px; }
+
+/* ============================================================
+   应用骨架：64 rail + 208 context + workspace
+   ============================================================ */
+.shell { display: flex; height: 100dvh; }
+
+/* --- 图标轨 --- */
+.rail {
+  width: 64px;
+  flex: none;
+  background: var(--chrome-surface);
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 4px;
+  z-index: 30;
+}
+.rail .logo {
+  width: 40px; height: 40px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--spectral), #7c88ee);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  margin-bottom: 12px;
+  box-shadow: 0 4px 12px -4px rgba(86, 100, 233, 0.5);
+}
+.rail button {
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  transition: background 140ms, color 140ms, transform 140ms;
+  position: relative;
+}
+.rail button:hover { background: rgba(31, 37, 48, 0.05); color: var(--ink); }
+.rail button.active {
+  background: rgba(86, 100, 233, 0.12);
+  color: var(--spectral);
+}
+.rail button.active::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  width: 3px; height: 20px;
+  border-radius: 0 3px 3px 0;
+  background: var(--spectral);
+}
+.rail .spacer { flex: 1; }
+
+/* --- 上下文栏 --- */
+.context {
+  width: 208px;
+  flex: none;
+  background: var(--chrome-surface);
+  border-right: 1px solid var(--hairline);
+  padding: 16px 10px;
+  overflow-y: auto;
+  z-index: 20;
+}
+.context .group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 8px 10px 6px;
+}
+.context .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+  width: 100%;
+  text-align: left;
+  transition: background 140ms;
+}
+.context .nav-item:hover { background: rgba(31, 37, 48, 0.05); }
+.context .nav-item.active {
+  background: rgba(86, 100, 233, 0.1);
+  color: var(--spectral);
+  font-weight: 600;
+}
+.context .nav-item svg.icon { width: 16px; height: 16px; opacity: 0.75; }
+.context .nav-item.active svg.icon { opacity: 1; }
+
+.context .recent {
+  margin-top: 4px;
+}
+.context .recent-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  transition: background 140ms;
+}
+.context .recent-item:hover { background: rgba(31, 37, 48, 0.05); }
+.context .recent-item .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  margin-top: 7px;
+  flex: none;
+}
+.context .recent-item .t {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.context .recent-item .meta {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  margin-top: 1px;
+  font-family: var(--font-mono);
+}
+.dot.ok { background: var(--success); }
+.dot.run { background: var(--spectral); box-shadow: 0 0 0 3px rgba(86,100,233,0.18); animation: pulse 1.6s infinite; }
+.dot.fail { background: var(--danger); }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(86,100,233,0.06); } }
+
+/* --- 主区域 --- */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.topbar {
+  height: 64px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--hairline);
+  background: rgba(246, 241, 232, 0.8);
+  backdrop-filter: blur(12px);
+  z-index: 10;
+}
+.topbar .title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.topbar .crumb { color: var(--ink-muted); font-size: 13px; }
+.topbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.topbar .search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  transition: box-shadow 140ms, border-color 140ms;
+}
+.topbar .search:hover { border-color: rgba(86,100,233,0.4); box-shadow: var(--shadow-soft); }
+.topbar kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--hairline);
+  background: var(--canvas);
+}
+.topbar .icon-btn {
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  transition: background 140ms, color 140ms;
+}
+.topbar .icon-btn:hover { background: rgba(31,37,48,0.05); color: var(--ink); }
+.topbar .avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #e8b06a, #d97757);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+/* ============================================================
+   对话工作区
+   ============================================================ */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.conversation {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 32px 24px 24px;
+}
+.stream::-webkit-scrollbar, .context::-webkit-scrollbar { width: 8px; }
+.stream::-webkit-scrollbar-thumb, .context::-webkit-scrollbar-thumb {
+  background: rgba(31,37,48,0.14);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.column {
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.column.wide { max-width: 880px; }
+
+/* 进入动效 */
+.reveal {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: rise 480ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes rise { to { opacity: 1; transform: none; } }
+
+/* --- 空态 --- */
+.hero { padding: 48px 0 8px; }
+.hero .kicker {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--spectral);
+  font-weight: 600;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hero .kicker::before {
+  content: "";
+  width: 22px; height: 1.5px;
+  background: var(--spectral);
+  display: inline-block;
+}
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: 38px;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 12px;
+}
+.hero h1 em {
+  font-style: normal;
+  background: linear-gradient(120deg, var(--spectral), var(--spectral-edge));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero .sub {
+  font-size: 14.5px;
+  color: var(--ink-muted);
+  max-width: 56ch;
+}
+
+/* 预设卡 */
+.presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.preset-card {
+  text-align: left;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  transition: border-color 140ms, box-shadow 140ms, transform 140ms;
+}
+.preset-card:hover { border-color: rgba(86,100,233,0.4); transform: translateY(-1px); }
+.preset-card.selected {
+  border-color: var(--spectral);
+  box-shadow: 0 0 0 3px rgba(86,100,233,0.14), var(--shadow-soft);
+}
+.preset-card .name {
+  font-size: 13.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.preset-card .name .tick { color: var(--spectral); opacity: 0; transition: opacity 140ms; }
+.preset-card.selected .tick { opacity: 1; }
+.preset-card .desc {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  margin-top: 3px;
+  line-height: 1.5;
+}
+
+/* 示例 chips */
+.examples { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.examples .label { font-size: 12px; color: var(--ink-muted); margin-right: 2px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  transition: border-color 140ms, background 140ms, transform 140ms;
+}
+.chip:hover {
+  border-color: rgba(86,100,233,0.5);
+  background: rgba(86,100,233,0.06);
+  transform: translateY(-1px);
+}
+
+/* 最近成果 */
+.recent-works { display: flex; flex-direction: column; gap: 8px; }
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.section-head .t { font-size: 13px; font-weight: 600; }
+.section-head .more {
+  font-size: 12px;
+  color: var(--spectral);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 500;
+}
+.work-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  transition: box-shadow 160ms, border-color 160ms, transform 160ms;
+  cursor: pointer;
+}
+.work-row:hover { box-shadow: var(--shadow-lift); border-color: rgba(86,100,233,0.35); transform: translateY(-1px); }
+.work-row .badge-icon {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: rgba(86,100,233,0.1);
+  color: var(--spectral);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.work-row .body { min-width: 0; flex: 1; }
+.work-row .topic {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.work-row .meta {
+  display: flex;
+  gap: 6px;
+  margin-top: 3px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(86,100,233,0.1);
+  color: var(--spectral);
+}
+.badge.mist { background: rgba(31,37,48,0.06); color: var(--ink-muted); }
+.badge.success { background: rgba(61,155,112,0.12); color: var(--success); }
+.badge.warn { background: rgba(195,138,47,0.14); color: var(--warning); }
+.badge.danger { background: rgba(217,87,87,0.12); color: var(--danger); }
+.work-row .time { font-family: var(--font-mono); font-size: 11px; color: var(--ink-muted); flex: none; }
+
+/* --- 消息：用户 --- */
+.turn-user { display: flex; justify-content: flex-end; }
+.turn-user .bubble {
+  max-width: 80%;
+  background: var(--spectral);
+  color: #fff;
+  border-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-sm);
+  padding: 12px 16px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  box-shadow: var(--shadow-soft);
+}
+.turn-user .config-chips {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.turn-user .config-chips .c {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.turn-user .wrap { max-width: 80%; display: flex; flex-direction: column; align-items: flex-end; }
+.turn-user .wrap .bubble { max-width: 100%; }
+
+/* --- 消息：助手 --- */
+.turn-assistant { display: flex; gap: 14px; }
+.assistant-avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(86,100,233,0.1);
+  color: var(--spectral);
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-top: 2px;
+}
+.assistant-body { flex: 1; min-width: 0; max-width: 68ch; display: flex; flex-direction: column; gap: 16px; }
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.status-line .spin { color: var(--spectral); }
+.status-line strong { color: var(--ink); font-weight: 600; }
+
+/* 阶段步进器（由当前工具活动推断，诚实标注） */
+.stage-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.stage-stepper::-webkit-scrollbar { display: none; }
+.stage-node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.stage-node .node-icon {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.stage-node.done { color: var(--ink); }
+.stage-node.done .node-icon { background: rgba(61,155,112,0.14); color: var(--success); }
+.stage-node.current { color: var(--spectral); font-weight: 600; }
+.stage-node.current .node-icon { background: rgba(86,100,233,0.12); color: var(--spectral); }
+.stage-node.todo .node-icon { border: 1.5px solid var(--hairline); }
+.stage-node.failed { color: var(--danger); font-weight: 600; }
+.stage-node.failed .node-icon { background: rgba(217,87,87,0.12); color: var(--danger); }
+.stage-link { width: 12px; height: 1.5px; background: var(--hairline); margin: 0 6px; flex: none; }
+.stage-link.done { background: rgba(61,155,112,0.5); }
+.stage-note {
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-top: 6px;
+  padding-left: 2px;
+}
+
+/* 思考文本 */
+.thinking {
+  background: var(--thinking-surface);
+  border: 1px solid var(--thinking-border);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+}
+.thinking .head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--thinking-foreground);
+  margin-bottom: 6px;
+}
+.thinking .head .live-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--spectral);
+  animation: blink 1.2s infinite;
+}
+@keyframes blink { 50% { opacity: 0.25; } }
+.thinking .head .secs { font-family: var(--font-mono); font-weight: 500; color: var(--ink-muted); margin-left: auto; }
+.thinking .text {
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--thinking-foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.thinking .text .cursor {
+  display: inline-block;
+  width: 7px; height: 15px;
+  background: var(--spectral);
+  border-radius: 2px;
+  vertical-align: -2px;
+  margin-left: 2px;
+  animation: blink 0.9s infinite;
+}
+.thinking .expand {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--spectral);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 轮次时间线 */
+.timeline {
+  position: relative;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  border-radius: var(--radius-xl);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-soft);
+}
+.timeline .tl-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.timeline .tl-head .t { font-size: 13px; font-weight: 600; }
+.timeline .tl-head .elapsed { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-muted); }
+.timeline .tl-head .collapse-btn {
+  margin-left: auto;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  transition: background 140ms;
+}
+.timeline .tl-head .collapse-btn:hover { background: rgba(31,37,48,0.05); }
+.iteration { position: relative; padding-left: 26px; padding-bottom: 14px; }
+.iteration:last-child { padding-bottom: 2px; }
+.iteration::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 26px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--timeline-rail);
+  border-radius: 2px;
+}
+.iteration:last-child::before { display: none; }
+.iteration .marker {
+  position: absolute;
+  left: 3px;
+  top: 4px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--timeline-marker);
+  z-index: 1;
+}
+.iteration.done .marker { background: var(--success); border-color: var(--success); }
+.iteration.failed .marker { background: var(--danger); border-color: var(--danger); }
+.iteration.running .marker { box-shadow: 0 0 0 4px rgba(86,100,233,0.14); }
+.iteration.queued .marker { border-color: var(--hairline); }
+.iteration .it-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.iteration .it-name { font-size: 13px; font-weight: 600; }
+.iteration .it-state { font-size: 11.5px; color: var(--ink-muted); }
+.iteration .it-state.run { color: var(--spectral); font-weight: 600; }
+.iteration .it-state.ok { color: var(--success); }
+.iteration .it-state.bad { color: var(--danger); }
+
+/* 工具行 */
+.tool-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  transition: background 140ms;
+}
+.tool-row:hover { background: var(--surface-mist); }
+.tool-row + .tool-row { margin-top: 2px; }
+.tool-row .ticon {
+  width: 22px; height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-top: 1px;
+}
+.tool-row .ticon.ok { background: rgba(61,155,112,0.12); color: var(--tool-success); }
+.tool-row .ticon.run { background: rgba(86,100,233,0.1); color: var(--tool-running); }
+.tool-row .ticon.wait { background: rgba(31,37,48,0.05); color: var(--tool-idle); }
+.tool-row .ticon.bad { background: rgba(217,87,87,0.1); color: var(--tool-error); }
+.tool-row .tbody { flex: 1; min-width: 0; }
+.tool-row .tname { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool-row .tname .state-text { font-size: 11.5px; font-weight: 500; color: var(--ink-muted); }
+.tool-row .tname .state-text.run { color: var(--spectral); }
+.tool-row .tname .state-text.ok { color: var(--success); }
+.tool-row .tname .state-text.bad { color: var(--danger); }
+.tool-row .tintent { font-size: 12px; color: var(--ink-muted); margin-top: 1px; }
+.tool-row .tsummary {
+  font-size: 12px;
+  color: var(--ink);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tool-row .tsummary .mono { font-family: var(--font-mono); font-size: 11px; color: var(--ink-muted); }
+.tool-row .detail-btn {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--spectral);
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  transition: border-color 140ms, background 140ms;
+  margin-top: 2px;
+}
+.tool-row .detail-btn:hover { border-color: rgba(86,100,233,0.4); background: rgba(86,100,233,0.06); }
+
+/* KP chips */
+.kp-strip { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 0 12px; }
+.kp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 500;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink-muted);
+  transition: border-color 140ms;
+}
+.kp-chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+.kp-chip.done { color: var(--ink); border-color: rgba(61,155,112,0.4); }
+.kp-chip.done .dot { background: var(--success); }
+.kp-chip.running { color: var(--spectral); border-color: rgba(86,100,233,0.45); font-weight: 600; }
+.kp-chip.running .dot { background: var(--spectral); animation: blink 1.2s infinite; }
+.kp-chip.todo .dot { background: var(--tool-idle); }
+.kp-chip.failed { color: var(--danger); border-color: rgba(217,87,87,0.45); }
+.kp-chip.failed .dot { background: var(--danger); }
+
+.spin-arc {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(86,100,233,0.2);
+  border-top-color: var(--spectral);
+  animation: rotate 0.9s linear infinite;
+}
+@keyframes rotate { to { transform: rotate(360deg); } }
+
+/* 折叠的完成时间线 */
+.timeline-fold {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+  transition: box-shadow 140ms;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+.timeline-fold:hover { box-shadow: var(--shadow-soft); }
+.timeline-fold .ok-ic { color: var(--success); flex: none; }
+.timeline-fold .fold-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.timeline-fold .mono { font-family: var(--font-mono); font-size: 11px; flex: none; white-space: nowrap; }
+.timeline-fold .chev { margin-left: auto; color: var(--ink-muted); }
+
+/* 成果卡 */
+.result-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+.result-card .rc-head {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--hairline);
+  background:
+    radial-gradient(120% 160% at 0% 0%, rgba(86,100,233,0.06), transparent 55%),
+    radial-gradient(120% 160% at 100% 0%, rgba(101,199,213,0.08), transparent 55%);
+}
+.result-card .rc-kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--spectral);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.result-card h2 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 10px;
+}
+.result-card .rc-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.result-card .rc-body { padding: 20px 24px; }
+.md-preview {
+  position: relative;
+  max-height: 300px;
+  overflow: hidden;
+  font-size: 14.5px;
+  line-height: 1.8;
+}
+.md-preview::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 90px;
+  background: linear-gradient(transparent, var(--surface-raised));
+}
+.md-preview h3 { font-size: 17px; font-weight: 650; margin: 14px 0 8px; }
+.md-preview h4 { font-size: 14.5px; font-weight: 650; margin: 12px 0 6px; }
+.md-preview p { margin: 8px 0; color: #333947; }
+.md-preview ul { padding-left: 20px; margin: 8px 0; color: #333947; }
+.md-preview .defbox {
+  border-left: 3px solid var(--spectral);
+  background: rgba(86,100,233,0.05);
+  padding: 10px 14px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin: 10px 0;
+  font-size: 13.5px;
+}
+.md-preview .formula { font-family: var(--font-mono); font-size: 13px; background: var(--surface-mist); padding: 1px 6px; border-radius: 5px; }
+.md-preview table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+.md-preview th, .md-preview td { border: 1px solid var(--hairline); padding: 6px 10px; text-align: left; }
+.md-preview th { background: var(--surface-mist); font-weight: 600; }
+.expand-reading {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--spectral);
+}
+.result-card .rc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--hairline);
+  background: var(--chrome-surface);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  transition: box-shadow 140ms, transform 140ms, background 140ms, border-color 140ms;
+  border: 1px solid transparent;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn.primary { background: var(--spectral); color: #fff; box-shadow: 0 4px 14px -4px rgba(86,100,233,0.5); }
+.btn.primary:hover { box-shadow: 0 8px 20px -6px rgba(86,100,233,0.55); }
+.btn.outline { border-color: var(--hairline); background: var(--surface-raised); color: var(--ink); }
+.btn.outline:hover { border-color: rgba(86,100,233,0.45); box-shadow: var(--shadow-soft); }
+.btn.ghost { color: var(--ink-muted); }
+.btn.ghost:hover { background: rgba(31,37,48,0.05); color: var(--ink); }
+.btn.danger { background: var(--danger); color: #fff; box-shadow: 0 4px 14px -4px rgba(217,87,87,0.45); }
+.btn.sm { height: 30px; padding: 0 12px; font-size: 12px; border-radius: 10px; }
+.archive-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px 16px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: var(--chrome-surface);
+}
+.archive-note .ok { color: var(--success); }
+.archive-note a { color: var(--spectral); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+
+/* 继续操作 chips（发送普通用户消息） */
+.follow-ups { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.follow-ups .label { font-size: 12px; color: var(--ink-muted); }
+.follow-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(86,100,233,0.35);
+  background: rgba(86,100,233,0.05);
+  color: var(--spectral);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background 140ms, transform 140ms, border-color 140ms;
+}
+.follow-chip:hover { background: rgba(86,100,233,0.12); transform: translateY(-1px); border-color: rgba(86,100,233,0.6); }
+.follow-chip.mist {
+  border-color: var(--hairline);
+  background: var(--surface);
+  color: var(--ink-muted);
+}
+.follow-chip.mist:hover { color: var(--ink); border-color: rgba(31,37,48,0.3); background: var(--surface); }
+
+/* 错误卡 */
+.error-card {
+  border: 1px solid rgba(217,87,87,0.35);
+  background: rgba(217,87,87,0.05);
+  border-radius: var(--radius-xl);
+  padding: 16px 20px;
+}
+.error-card .ec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.error-card .ec-icon {
+  width: 30px; height: 30px;
+  border-radius: 10px;
+  background: rgba(217,87,87,0.14);
+  color: var(--danger);
+  display: grid;
+  place-items: center;
+}
+.error-card .ec-title { font-size: 14px; font-weight: 650; color: var(--danger); }
+.error-card .ec-stage { font-size: 11.5px; font-weight: 600; color: var(--danger); background: rgba(217,87,87,0.12); padding: 2px 8px; border-radius: var(--radius-pill); }
+.error-card .ec-desc { font-size: 13px; color: #57404a; line-height: 1.7; }
+.error-card .ec-desc .mono { font-family: var(--font-mono); font-size: 12px; background: rgba(217,87,87,0.08); padding: 1px 5px; border-radius: 4px; }
+.error-card .ec-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+/* 可恢复横幅 */
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-mist);
+  border: 1px solid var(--thinking-border);
+  font-size: 12.5px;
+  color: var(--thinking-foreground);
+}
+.resume-banner .info { flex: 1; min-width: 0; }
+.resume-banner strong { color: var(--ink); }
+
+/* Composer */
+.composer-dock {
+  flex: none;
+  padding: 12px 24px 20px;
+  background: linear-gradient(transparent, var(--canvas) 30%);
+}
+.composer {
+  max-width: 880px;
+  margin: 0 auto;
+  background: var(--composer-surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-lift);
+  padding: 14px 16px 10px;
+  transition: border-color 160ms, box-shadow 160ms;
+}
+.composer:focus-within {
+  border-color: rgba(86,100,233,0.5);
+  box-shadow: 0 0 0 4px rgba(86,100,233,0.08), var(--shadow-lift);
+}
+.composer .input-area {
+  min-height: 64px;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+.composer .input-area .placeholder { color: var(--ink-muted); }
+.composer .typed { color: var(--ink); }
+.composer .bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.composer .opt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  transition: border-color 140ms, background 140ms;
+}
+.composer .opt-chip:hover { border-color: rgba(86,100,233,0.45); background: rgba(86,100,233,0.05); }
+.composer .opt-chip .val { color: var(--spectral); font-weight: 600; }
+.composer .opt-chip.on .dot-on { color: var(--success); }
+.composer .send-btn {
+  margin-left: auto;
+  height: 36px;
+  padding: 0 18px;
+  border-radius: var(--radius-pill);
+  background: var(--spectral);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  box-shadow: 0 4px 14px -4px rgba(86,100,233,0.5);
+  transition: box-shadow 140ms, transform 140ms;
+}
+.composer .send-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 22px -6px rgba(86,100,233,0.6); }
+.composer .stop-btn {
+  margin-left: auto;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  box-shadow: 0 4px 14px -4px rgba(217,87,87,0.4);
+}
+.composer .hint {
+  max-width: 880px;
+  margin: 8px auto 0;
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+/* 检查器（附着式 380px） */
+.inspector {
+  width: 380px;
+  flex: none;
+  border-left: 1px solid var(--hairline);
+  background: var(--chrome-surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.inspector .insp-head {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.inspector .insp-title { font-size: 13.5px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.inspector .insp-sub { font-size: 11.5px; color: var(--ink-muted); margin-top: 2px; font-family: var(--font-mono); }
+.inspector .tabs {
+  display: flex;
+  gap: 2px;
+  padding: 10px 14px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.inspector .tab {
+  height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  border-radius: 9px 9px 0 0;
+  position: relative;
+  transition: color 140ms, background 140ms;
+}
+.inspector .tab:hover { color: var(--ink); background: rgba(31,37,48,0.04); }
+.inspector .tab.active { color: var(--spectral); font-weight: 600; }
+.inspector .tab.active::after {
+  content: "";
+  position: absolute;
+  left: 8px; right: 8px; bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--spectral);
+}
+.inspector .insp-body { flex: 1; overflow-y: auto; padding: 14px; }
+.source-item {
+  display: flex;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  margin-bottom: 8px;
+  transition: box-shadow 140ms, border-color 140ms;
+  cursor: pointer;
+}
+.source-item:hover { box-shadow: var(--shadow-soft); border-color: rgba(86,100,233,0.35); }
+.source-item .favicon {
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+  flex: none;
+}
+.source-item .s-title { font-size: 12.5px; font-weight: 600; line-height: 1.45; }
+.source-item .s-url {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--spectral);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-item .s-snippet {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  line-height: 1.55;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.source-kind { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 5px; background: rgba(31,37,48,0.06); color: var(--ink-muted); margin-left: 6px; vertical-align: 1px; }
+.insp-note { font-size: 11px; color: var(--ink-muted); padding: 4px 2px 10px; line-height: 1.5; }
+
+/* 原型状态切换（不属于最终实现） */
+.proto-nav {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(32, 36, 44, 0.92);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-lift);
+}
+.proto-nav .pn-label {
+  color: rgba(255,255,255,0.55);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 0 8px 0 10px;
+  letter-spacing: 0.06em;
+}
+.proto-nav a {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 13px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.72);
+  text-decoration: none;
+  transition: background 140ms, color 140ms;
+}
+.proto-nav a:hover { color: #fff; }
+.proto-nav a.active { background: #fff; color: var(--ink); }
+
+/* 状态切换 */
+.state { display: none; height: 100%; }
+body[data-state="idle"] #state-idle,
+body[data-state="running"] #state-running,
+body[data-state="done"] #state-done,
+body[data-state="failed"] #state-failed { display: block; }
+
+/* 响应式 */
+@media (max-width: 1439px) {
+  .context { display: none; }
+}
+@media (max-width: 1250px) {
+  .inspector { display: none; }
+}
+@media (max-width: 767px) {
+  .rail, .context, .inspector, .topbar .search { display: none; }
+  .stream { padding: 20px 14px 12px; }
+  .composer-dock { padding: 8px 12px 76px; }
+  .hero { padding-top: 24px; }
+  .hero h1 { font-size: 28px; }
+  .presets { grid-template-columns: repeat(2, 1fr); }
+  .bottom-nav { display: flex; }
+  .proto-nav { right: 12px; bottom: 84px; }
+}
+.bottom-nav {
+  display: none;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: 64px;
+  background: rgba(251, 248, 241, 0.92);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--hairline);
+  z-index: 40;
+  align-items: center;
+  justify-content: space-around;
+}
+.bottom-nav button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+.bottom-nav button.active { color: var(--spectral); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body data-state="idle">
+
+<!-- SVG 图标库 -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M12 2l2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2z"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H8.5L4 20z"/></symbol>
+  <symbol id="i-compose" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h7a3 3 0 0 1 3 3v13a2.5 2.5 0 0 0-2.5-2.5H2z"/><path d="M22 4h-7a3 3 0 0 0-3 3v13a2.5 2.5 0 0 1 2.5-2.5H22z"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-files" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 24 24"><path d="M3 6h7M3 12h7M3 18h7"/><path d="m14 15 2 2 4-4"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12.5 5 5L20 6.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3 3.6 3 14.4 0 18"/><path d="M12 3c-3 3.6-3 14.4 0 18"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 3v5h-5"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18.5h.01"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v4h4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 13v7H4V6h7"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M9 3a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3c1 0 2-.4 3-1 1 .6 2 1 3 1a3 3 0 0 0 3-3 3 3 0 0 0 2-5 3 3 0 0 0-2-5 3 3 0 0 0-3-3c-1 0-2 .4-3 1-1-.6-2-1-3-1z"/><path d="M12 8v8"/></symbol>
+</svg>
+
+<div class="shell">
+  <!-- 图标轨 -->
+  <nav class="rail" aria-label="主导航">
+    <div class="logo"><svg class="icon lg"><use href="#i-logo"/></svg></div>
+    <button title="首页"><svg class="icon"><use href="#i-home"/></svg></button>
+    <button title="对话"><svg class="icon"><use href="#i-chat"/></svg></button>
+    <button title="组卷"><svg class="icon"><use href="#i-compose"/></svg></button>
+    <button class="active" title="学习资料"><svg class="icon"><use href="#i-book"/></svg></button>
+    <button title="题库"><svg class="icon"><use href="#i-db"/></svg></button>
+    <button title="任务"><svg class="icon"><use href="#i-tasks"/></svg></button>
+    <div class="spacer"></div>
+    <button title="设置"><svg class="icon"><use href="#i-sliders"/></svg></button>
+  </nav>
+
+  <!-- 上下文栏 -->
+  <aside class="context">
+    <div class="group-label">创作</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-chat"/></svg>对话</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-compose"/></svg>组卷</button>
+    <button class="nav-item active"><svg class="icon"><use href="#i-book"/></svg>学习资料</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-brain"/></svg>DeepThink</button>
+    <div class="group-label" style="margin-top:14px">资源</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-db"/></svg>题库</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-files"/></svg>试卷库</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-bookmark"/></svg>资料档案</button>
+
+    <div class="group-label" style="margin-top:14px">最近生成</div>
+    <div class="recent">
+      <button class="recent-item">
+        <span class="dot run"></span>
+        <span><span class="t">函数单调性 · 自学讲义</span><div class="meta">进行中 · 刚刚</div></span>
+      </button>
+      <button class="recent-item">
+        <span class="dot ok"></span>
+        <span><span class="t">牛顿第二定律应用</span><div class="meta">已完成 · 2 小时前</div></span>
+      </button>
+      <button class="recent-item">
+        <span class="dot fail"></span>
+        <span><span class="t">英语虚拟语气精讲</span><div class="meta">检索失败 · 昨天</div></span>
+      </button>
+      <button class="recent-item">
+        <span class="dot ok"></span>
+        <span><span class="t">光合作用与呼吸作用</span><div class="meta">已完成 · 3 天前</div></span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <span class="title">学习资料</span>
+      <span class="crumb">/ 对话式生成</span>
+      <div class="right">
+        <button class="search"><svg class="icon sm"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></button>
+        <button class="icon-btn" title="任务"><svg class="icon"><use href="#i-tasks"/></svg></button>
+        <button class="icon-btn" title="主题"><svg class="icon"><use href="#i-moon"/></svg></button>
+        <div class="avatar">李</div>
+      </div>
+    </header>
+
+    <!-- ================= 状态 1：空态 ================= -->
+    <section class="state" id="state-idle">
+      <div class="workspace">
+        <div class="conversation">
+          <div class="stream">
+            <div class="column wide">
+              <div class="hero reveal" style="--d:0ms">
+                <div class="kicker">Study Materials</div>
+                <h1>说出想学的主题，<br/>为你写成一份<em>可以下载的讲义</em>。</h1>
+                <p class="sub">我会先拆解知识点，再逐点联网检索权威资料、匹配题库例题，最后写成带讲解与练习的 Markdown 讲义，并保存到你的资料档案。</p>
+              </div>
+
+              <div class="presets reveal" style="--d:90ms">
+                <button class="preset-card">
+                  <div class="name">快速<svg class="icon sm tick"><use href="#i-check"/></svg></div>
+                  <div class="desc">更短更快，适合课前概览</div>
+                </button>
+                <button class="preset-card selected">
+                  <div class="name">标准<svg class="icon sm tick"><use href="#i-check"/></svg></div>
+                  <div class="desc">深度与速度平衡，推荐</div>
+                </button>
+                <button class="preset-card">
+                  <div class="name">深入<svg class="icon sm tick"><use href="#i-check"/></svg></div>
+                  <div class="desc">更细的推导与拓展</div>
+                </button>
+                <button class="preset-card">
+                  <div class="name">研究<svg class="icon sm tick"><use href="#i-check"/></svg></div>
+                  <div class="desc">更重资料来源与覆盖</div>
+                </button>
+              </div>
+
+              <div class="examples reveal" style="--d:160ms">
+                <span class="label">试试</span>
+                <button class="chip"><svg class="icon sm"><use href="#i-zap"/></svg>函数单调性</button>
+                <button class="chip">受力分析入门</button>
+                <button class="chip">英语定语从句</button>
+                <button class="chip">光合作用与呼吸作用</button>
+              </div>
+
+              <div class="recent-works reveal" style="--d:240ms">
+                <div class="section-head">
+                  <span class="t">最近成果</span>
+                  <a class="more">全部档案<svg class="icon sm"><use href="#i-chev-r"/></svg></a>
+                </div>
+                <div class="work-row">
+                  <div class="badge-icon"><svg class="icon"><use href="#i-file"/></svg></div>
+                  <div class="body">
+                    <div class="topic">牛顿第二定律应用 · 自学讲义</div>
+                    <div class="meta"><span class="badge mist">高中物理</span><span class="badge">标准</span><span>4 个知识点</span></div>
+                  </div>
+                  <span class="time">2h</span>
+                </div>
+                <div class="work-row">
+                  <div class="badge-icon"><svg class="icon"><use href="#i-file"/></svg></div>
+                  <div class="body">
+                    <div class="topic">光合作用与呼吸作用对比</div>
+                    <div class="meta"><span class="badge mist">高中生物</span><span class="badge">深入</span><span>含示意图</span></div>
+                  </div>
+                  <span class="time">3d</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-dock">
+            <div class="composer reveal" style="--d:200ms">
+              <div class="input-area"><span class="placeholder">例如：函数单调性 / 牛顿第二定律 / 英语虚拟语气… 也可以补充「偏高考难度，多配例题」这样的要求。</span></div>
+              <div class="bar">
+                <button class="opt-chip">学科<span class="val">高中数学</span><svg class="icon sm"><use href="#i-chev-d"/></svg></button>
+                <button class="opt-chip">预设<span class="val">标准</span><svg class="icon sm"><use href="#i-chev-d"/></svg></button>
+                <button class="opt-chip on" title="生成选项"><svg class="icon sm"><use href="#i-sliders"/></svg>选项<span class="val">3 项</span></button>
+                <button class="send-btn">开始生成<svg class="icon sm"><use href="#i-send"/></svg></button>
+              </div>
+            </div>
+            <div class="hint">Enter 发送 · Shift+Enter 换行 · 内容由 AI 生成，仅供参考</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 状态 2：生成中 ================= -->
+    <section class="state" id="state-running">
+      <div class="workspace">
+        <div class="conversation">
+          <div class="stream">
+            <div class="column">
+              <div class="turn-user reveal" style="--d:0ms">
+                <div class="wrap">
+                  <div class="bubble">帮我生成一份《函数单调性》的自学讲义，偏高考难度，多配典型例题。</div>
+                  <div class="config-chips">
+                    <span class="c">高中数学</span><span class="c">标准</span><span class="c">含例题</span><span class="c">示意图</span><span class="c">扩展来源</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="turn-assistant reveal" style="--d:80ms">
+                <div class="assistant-avatar"><svg class="icon sm"><use href="#i-logo"/></svg></div>
+                <div class="assistant-body">
+                  <div class="status-line">
+                    <span class="spin"><span class="spin-arc" style="display:block"></span></span>
+                    <span>正在检索并研究 <strong>4 个知识点</strong> · 第 3 个进行中…</span>
+                  </div>
+
+                  <div>
+                    <div class="stage-stepper">
+                      <div class="stage-node done"><span class="node-icon"><svg class="icon sm"><use href="#i-check"/></svg></span>规划</div>
+                      <div class="stage-link done"></div>
+                      <div class="stage-node current"><span class="node-icon"><span class="spin-arc" style="width:10px;height:10px;border-width:1.5px"></span></span>检索与研究</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>聚合大纲</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>写作</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>审查</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>导出</div>
+                    </div>
+                    <div class="stage-note">阶段由当前工具活动推断，实际进度以下方时间线为准。</div>
+                  </div>
+
+                  <div class="thinking">
+                    <div class="head"><span class="live-dot"></span>思考中<span class="secs">00:42</span></div>
+                    <div class="text">我把函数单调性拆成了 4 个核心知识点：定义与判定、单调性的证明方法、复合函数单调性、高考常见误区。前两个知识点的资料已经足够权威（教材定义 + 百科 + 教学笔记），现在开始研究「复合函数单调性」，重点找同增异减法则的严谨表述和典型例题<span class="cursor"></span></div>
+                    <button class="expand">展开全部<svg class="icon sm"><use href="#i-chev-d"/></svg></button>
+                  </div>
+
+                  <div class="timeline">
+                    <div class="tl-head">
+                      <span class="t">执行时间线</span>
+                      <span class="elapsed">已进行 2 分 14 秒</span>
+                      <button class="collapse-btn" title="折叠"><svg class="icon sm"><use href="#i-chev-d"/></svg></button>
+                    </div>
+
+                    <div class="iteration done">
+                      <span class="marker"></span>
+                      <div class="it-head"><span class="it-name">规划</span><span class="it-state ok">已完成 · 8 秒</span></div>
+                      <div class="tool-row">
+                        <span class="ticon ok"><svg class="icon sm"><use href="#i-check"/></svg></span>
+                        <div class="tbody">
+                          <div class="tname">拆分并识别核心知识点<span class="state-text ok">已完成</span></div>
+                          <div class="tintent">主题：函数单调性 · 学科：高中数学 · 上限 6 个</div>
+                          <div class="tsummary">拆出 4 个知识点<span class="mono">split_knowledge_points</span></div>
+                        </div>
+                        <button class="detail-btn">查看详情</button>
+                      </div>
+                    </div>
+
+                    <div class="iteration running">
+                      <span class="marker"></span>
+                      <div class="it-head"><span class="it-name">检索与研究</span><span class="it-state run">进行中 · 第 3 / 4 个知识点</span></div>
+
+                      <div class="tool-row">
+                        <span class="ticon ok"><svg class="icon sm"><use href="#i-check"/></svg></span>
+                        <div class="tbody">
+                          <div class="tname">联网搜索相关学习资料<span class="state-text ok">已完成 · 3 次检索</span></div>
+                          <div class="tintent">「函数单调性 定义 判定 高中数学」等 6 组查询</div>
+                          <div class="tsummary">聚合 <strong>18 个来源</strong> · 教材 / 百科 / 教学笔记<span class="mono">web_search_knowledge</span></div>
+                        </div>
+                        <button class="detail-btn">查看详情</button>
+                      </div>
+
+                      <div class="tool-row">
+                        <span class="ticon ok"><svg class="icon sm"><use href="#i-check"/></svg></span>
+                        <div class="tbody">
+                          <div class="tname">从题库检索关联题目<span class="state-text ok">已完成</span></div>
+                          <div class="tintent">按知识点匹配高考真题与模拟题</div>
+                          <div class="tsummary">匹配 <strong>12 道题</strong> · 选择 6 / 填空 4 / 解答 2<span class="mono">search_questions_by_knowledge</span></div>
+                        </div>
+                        <button class="detail-btn">查看详情</button>
+                      </div>
+
+                      <div class="tool-row">
+                        <span class="ticon run"><span class="spin-arc" style="width:12px;height:12px"></span></span>
+                        <div class="tbody">
+                          <div class="tname">深入研究知识点细节<span class="state-text run">执行中 · 复合函数单调性</span></div>
+                          <div class="tintent">同增异减法则的严谨表述 + 典型例题</div>
+                          <div class="tsummary"><span class="mono">research_knowledge_point · 3/4</span></div>
+                        </div>
+                        <button class="detail-btn">查看详情</button>
+                      </div>
+
+                      <div class="kp-strip">
+                        <span class="kp-chip done"><span class="dot"></span>定义与判定</span>
+                        <span class="kp-chip done"><span class="dot"></span>证明方法</span>
+                        <span class="kp-chip running"><span class="dot"></span>复合函数单调性</span>
+                        <span class="kp-chip todo"><span class="dot"></span>常见误区</span>
+                      </div>
+                    </div>
+
+                    <div class="iteration queued">
+                      <span class="marker"></span>
+                      <div class="it-head"><span class="it-name">聚合与大纲</span><span class="it-state">等待中</span></div>
+                    </div>
+                    <div class="iteration queued">
+                      <span class="marker"></span>
+                      <div class="it-head"><span class="it-name">写作 · 审查 · 导出</span><span class="it-state">等待中</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-dock">
+            <div class="composer">
+              <div class="input-area"><span class="placeholder">生成完成后可以继续提出修改，例如「例题换成近三年高考真题」…</span></div>
+              <div class="bar">
+                <button class="opt-chip">学科<span class="val">高中数学</span></button>
+                <button class="opt-chip">预设<span class="val">标准</span></button>
+                <button class="stop-btn"><svg class="icon sm"><use href="#i-stop"/></svg>停止接收</button>
+              </div>
+            </div>
+            <div class="hint">停止接收只中断本地接收，服务端任务可能仍在执行 · 可刷新页面后继续接收</div>
+          </div>
+        </div>
+
+        <!-- 右侧工具检查器（来源标签页） -->
+        <aside class="inspector">
+          <div class="insp-head">
+            <div class="insp-title"><svg class="icon sm"><use href="#i-globe"/></svg>联网搜索相关学习资料</div>
+            <div class="insp-sub">web_search_knowledge · 已完成 · 观察 26.4 秒</div>
+          </div>
+          <div class="tabs">
+            <button class="tab">概览</button>
+            <button class="tab">参数</button>
+            <button class="tab">结果</button>
+            <button class="tab active">来源<span class="badge" style="margin-left:4px;height:16px;padding:0 6px;font-size:10px">18</span></button>
+            <button class="tab">详情</button>
+          </div>
+          <div class="insp-body">
+            <div class="insp-note">来源取自工具结果中的检索记录，可点击打开原始网页核对。</div>
+            <div class="source-item">
+              <div class="favicon" style="background:#5664e9">人</div>
+              <div>
+                <div class="s-title">函数的单调性 · 人民教育出版社 高中数学必修第一册<span class="source-kind">教材</span></div>
+                <div class="s-url">pep.com.cn/gzsx/jszx/monotonicity</div>
+                <div class="s-snippet">一般地，设函数 f(x) 的定义域为 I，如果对于定义域 I 内某个区间 D 上的任意两个自变量的值 x₁、x₂…</div>
+              </div>
+            </div>
+            <div class="source-item">
+              <div class="favicon" style="background:#3d9b70">百</div>
+              <div>
+                <div class="s-title">单调函数 · 百度百科<span class="source-kind">百科</span></div>
+                <div class="s-url">baike.baidu.com/item/单调函数</div>
+                <div class="s-snippet">单调函数是指对于整个定义域而言，函数具有单调性的函数，分为增函数和减函数两种…</div>
+              </div>
+            </div>
+            <div class="source-item">
+              <div class="favicon" style="background:#c38a2f">知</div>
+              <div>
+                <div class="s-title">复合函数单调性「同增异减」怎么理解？<span class="source-kind">问答</span></div>
+                <div class="s-url">zhihu.com/question/复合函数单调性</div>
+                <div class="s-snippet">判断复合函数 y=f(g(x)) 的单调性，关键看内外层函数的单调性组合：同向为增，异向为减…</div>
+              </div>
+            </div>
+            <div class="source-item">
+              <div class="favicon" style="background:#20242c">笔</div>
+              <div>
+                <div class="s-title">高考数学：单调性证明的三种方法<span class="source-kind">公开笔记</span></div>
+                <div class="s-url">note.example.com/monotonicity-proof</div>
+                <div class="s-snippet">定义法、导数法与图像法的适用场景对比，附 5 道高考真题解析…</div>
+              </div>
+            </div>
+            <div class="source-item">
+              <div class="favicon" style="background:#65c7d5">库</div>
+              <div>
+                <div class="s-title">题库匹配：12 道相关题目<span class="source-kind">题库</span></div>
+                <div class="s-url">内部来源 · 本地题库</div>
+                <div class="s-snippet">2023 新课标卷 · 2022 全国乙卷 · 2021 天津卷等，难度 0.42–0.68</div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= 状态 3：完成态 ================= -->
+    <section class="state" id="state-done">
+      <div class="workspace">
+        <div class="conversation">
+          <div class="stream">
+            <div class="column">
+              <div class="turn-user">
+                <div class="wrap">
+                  <div class="bubble">帮我生成一份《函数单调性》的自学讲义，偏高考难度，多配典型例题。</div>
+                  <div class="config-chips">
+                    <span class="c">高中数学</span><span class="c">标准</span><span class="c">含例题</span><span class="c">示意图</span><span class="c">扩展来源</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="turn-assistant reveal" style="--d:60ms">
+                <div class="assistant-avatar"><svg class="icon sm"><use href="#i-logo"/></svg></div>
+                <div class="assistant-body">
+                  <button class="timeline-fold">
+                    <svg class="icon ok-ic"><use href="#i-check"/></svg>
+                    <span class="fold-text">执行时间线 · <strong style="color:var(--ink)">6 个阶段全部完成</strong></span>
+                    <span class="mono">6 分 02 秒 · 14 个工具调用</span>
+                    <svg class="icon sm chev"><use href="#i-chev-r"/></svg>
+                  </button>
+
+                  <div class="result-card reveal" style="--d:140ms">
+                    <div class="rc-head">
+                      <div class="rc-kicker">讲义已完成</div>
+                      <h2>函数单调性 · 自学讲义</h2>
+                      <div class="rc-badges">
+                        <span class="badge">标准</span>
+                        <span class="badge mist">高中数学</span>
+                        <span class="badge mist">4 个知识点</span>
+                        <span class="badge mist">6 道例题</span>
+                        <span class="badge success">审查通过</span>
+                      </div>
+                    </div>
+                    <div class="rc-body">
+                      <div class="md-preview">
+                        <h3>一、单调性的定义与判定</h3>
+                        <div class="defbox"><strong>定义</strong>　设函数 <span class="formula">f(x)</span> 的定义域为 I：若对区间 D ⊆ I 上任意 <span class="formula">x₁ &lt; x₂</span>，都有 <span class="formula">f(x₁) &lt; f(x₂)</span>，则 f(x) 在 D 上是<strong>增函数</strong>…</div>
+                        <p>理解单调性的关键在于「任意」二字——不能只取两个特殊值就下结论。判定单调性的三条路径：</p>
+                        <ul>
+                          <li><strong>定义法</strong>：作差 f(x₁) − f(x₂)，变形定号；</li>
+                          <li><strong>导数法</strong>：f′(x) &gt; 0 则增（下章系统学习）；</li>
+                          <li><strong>图像法</strong>：适合选择题快速判断。</li>
+                        </ul>
+                        <h3>二、复合函数单调性：同增异减</h3>
+                        <table>
+                          <tr><th>内层 g(x)</th><th>外层 f(u)</th><th>复合 f(g(x))</th></tr>
+                          <tr><td>增</td><td>增</td><td>增</td></tr>
+                          <tr><td>增</td><td>减</td><td>减</td></tr>
+                        </table>
+                        <h4>例题 1（2023 新课标卷节选）</h4>
+                        <p>判断函数 <span class="formula">f(x) = √(x² − 2x − 3)</span> 的单调区间…</p>
+                      </div>
+                      <button class="expand-reading">展开阅读全文<svg class="icon sm"><use href="#i-chev-d"/></svg></button>
+                    </div>
+                    <div class="archive-note" style="padding-top:0">
+                      <svg class="icon sm ok"><use href="#i-check"/></svg>
+                      <span>已自动保存到资料档案 · <a>在档案中查看<svg class="icon sm"><use href="#i-ext"/></svg></a></span>
+                    </div>
+                    <div class="rc-actions">
+                      <button class="btn primary"><svg class="icon sm"><use href="#i-download"/></svg>下载 Markdown</button>
+                      <button class="btn outline"><svg class="icon sm"><use href="#i-download"/></svg>下载 PDF</button>
+                      <button class="btn outline"><svg class="icon sm"><use href="#i-file"/></svg>转 LaTeX</button>
+                    </div>
+                  </div>
+
+                  <div class="follow-ups reveal" style="--d:220ms">
+                    <span class="label">接下来可以</span>
+                    <button class="follow-chip"><svg class="icon sm"><use href="#i-refresh"/></svg>继续迭代优化</button>
+                    <button class="follow-chip"><svg class="icon sm"><use href="#i-zap"/></svg>加深研究</button>
+                    <button class="follow-chip mist">例题换成近三年高考真题</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-dock">
+            <div class="composer">
+              <div class="input-area"><span class="placeholder">继续修改这份讲义，例如「把常见误区部分再展开一些」…</span></div>
+              <div class="bar">
+                <button class="opt-chip">学科<span class="val">高中数学</span></button>
+                <button class="opt-chip">预设<span class="val">标准</span></button>
+                <button class="opt-chip on"><svg class="icon sm"><use href="#i-sliders"/></svg>选项</button>
+                <button class="send-btn">发送<svg class="icon sm"><use href="#i-send"/></svg></button>
+              </div>
+            </div>
+            <div class="hint">修改类消息会以当前讲义为基础继续迭代 · Enter 发送</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 状态 4：失败与恢复 ================= -->
+    <section class="state" id="state-failed">
+      <div class="workspace">
+        <div class="conversation">
+          <div class="stream">
+            <div class="column">
+              <div class="resume-banner reveal" style="--d:0ms">
+                <svg class="icon"><use href="#i-clock"/></svg>
+                <div class="info"><strong>检测到未完成的生成任务</strong>（函数单调性 · 自学讲义），可继续接收输出，支持刷新恢复。</div>
+                <button class="btn primary sm">继续接收</button>
+                <button class="btn ghost sm">放弃</button>
+              </div>
+
+              <div class="turn-user">
+                <div class="wrap">
+                  <div class="bubble">帮我生成一份《英语虚拟语气》的自学讲义。</div>
+                  <div class="config-chips"><span class="c">高中英语</span><span class="c">标准</span></div>
+                </div>
+              </div>
+
+              <div class="turn-assistant reveal" style="--d:60ms">
+                <div class="assistant-avatar"><svg class="icon sm"><use href="#i-logo"/></svg></div>
+                <div class="assistant-body">
+                  <div>
+                    <div class="stage-stepper">
+                      <div class="stage-node done"><span class="node-icon"><svg class="icon sm"><use href="#i-check"/></svg></span>规划</div>
+                      <div class="stage-link done"></div>
+                      <div class="stage-node failed"><span class="node-icon"><svg class="icon sm"><use href="#i-x"/></svg></span>检索与研究</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>聚合大纲</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>写作</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>审查</div>
+                      <div class="stage-link"></div>
+                      <div class="stage-node todo"><span class="node-icon"></span>导出</div>
+                    </div>
+                  </div>
+
+                  <div class="timeline">
+                    <div class="tl-head"><span class="t">执行时间线</span><span class="elapsed">1 分 47 秒后中断</span></div>
+                    <div class="iteration done">
+                      <span class="marker"></span>
+                      <div class="it-head"><span class="it-name">规划</span><span class="it-state ok">已完成</span></div>
+                      <div class="tool-row">
+                        <span class="ticon ok"><svg class="icon sm"><use href="#i-check"/></svg></span>
+                        <div class="tbody">
+                          <div class="tname">拆分并识别核心知识点<span class="state-text ok">已完成</span></div>
+                          <div class="tsummary">拆出 3 个知识点</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="iteration failed">
+                      <span class="marker"></span>
+                      <div class="it-head"><span class="it-name">检索与研究</span><span class="it-state bad">失败</span></div>
+                      <div class="tool-row">
+                        <span class="ticon ok"><svg class="icon sm"><use href="#i-check"/></svg></span>
+                        <div class="tbody">
+                          <div class="tname">联网搜索相关学习资料<span class="state-text ok">部分完成</span></div>
+                          <div class="tsummary">已聚合 7 个来源</div>
+                        </div>
+                        <button class="detail-btn">查看详情</button>
+                      </div>
+                      <div class="tool-row">
+                        <span class="ticon bad"><svg class="icon sm"><use href="#i-x"/></svg></span>
+                        <div class="tbody">
+                          <div class="tname">深入研究知识点细节<span class="state-text bad">失败</span></div>
+                          <div class="tintent">虚拟语气在条件句中的时态搭配</div>
+                          <div class="tsummary" style="color:var(--danger)">检索服务请求超时<span class="mono">research_knowledge_point</span></div>
+                        </div>
+                        <button class="detail-btn">查看详情</button>
+                      </div>
+                      <div class="kp-strip">
+                        <span class="kp-chip done"><span class="dot"></span>if 条件句</span>
+                        <span class="kp-chip failed"><span class="dot"></span>时态搭配</span>
+                        <span class="kp-chip todo"><span class="dot"></span>wish / 虚拟式</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="error-card reveal" style="--d:140ms">
+                    <div class="ec-head">
+                      <span class="ec-icon"><svg class="icon"><use href="#i-alert"/></svg></span>
+                      <span class="ec-title">生成失败</span>
+                      <span class="ec-stage">检索阶段</span>
+                    </div>
+                    <div class="ec-desc">
+                      第 2 个知识点的深入研究在检索外部资料时连续超时（<span class="mono">llm_request_failed</span>）。已完成的规划与部分检索结果已保留，可以从失败阶段继续，无需从头再来。
+                    </div>
+                    <div class="ec-actions">
+                      <button class="btn danger"><svg class="icon sm"><use href="#i-refresh"/></svg>从失败阶段继续</button>
+                      <button class="btn outline"><svg class="icon sm"><use href="#i-zap"/></svg>重试检索</button>
+                      <button class="btn ghost">重新规划</button>
+                      <button class="btn ghost">查看详情</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-dock">
+            <div class="composer">
+              <div class="input-area"><span class="placeholder">也可以直接告诉我要怎么做，例如「换个资料来源再试一次」…</span></div>
+              <div class="bar">
+                <button class="opt-chip">学科<span class="val">高中英语</span></button>
+                <button class="opt-chip">预设<span class="val">标准</span></button>
+                <button class="send-btn">发送<svg class="icon sm"><use href="#i-send"/></svg></button>
+              </div>
+            </div>
+            <div class="hint">恢复操作会创建关联的续跑任务，不会丢失已完成部分</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- 移动端底部导航 -->
+<nav class="bottom-nav">
+  <button><svg class="icon"><use href="#i-home"/></svg>首页</button>
+  <button><svg class="icon"><use href="#i-chat"/></svg>对话</button>
+  <button class="active"><svg class="icon"><use href="#i-book"/></svg>资料</button>
+  <button><svg class="icon"><use href="#i-db"/></svg>题库</button>
+  <button><svg class="icon"><use href="#i-sliders"/></svg>设置</button>
+</nav>
+
+<!-- 原型状态切换（仅评审用，不属于实现） -->
+<nav class="proto-nav" aria-label="原型状态切换">
+  <span class="pn-label">原型状态</span>
+  <a href="#idle" data-nav="idle">空态</a>
+  <a href="#running" data-nav="running">生成中</a>
+  <a href="#done" data-nav="done">完成</a>
+  <a href="#failed" data-nav="failed">失败恢复</a>
+</nav>
+
+<script>
+(function () {
+  var states = ["idle", "running", "done", "failed"];
+  function apply() {
+    var hash = (location.hash || "#idle").slice(1);
+    if (states.indexOf(hash) < 0) hash = "idle";
+    document.body.dataset.state = hash;
+    document.querySelectorAll("[data-nav]").forEach(function (a) {
+      a.classList.toggle("active", a.dataset.nav === hash);
+    });
+  }
+  window.addEventListener("hashchange", apply);
+  apply();
+})();
+</script>
+</body>
+</html>

@@ -31,6 +31,13 @@ def _normalize_seed(item: Any) -> Optional[dict]:
     skill_hint = str(item.get("skill_hint") or item.get("skillHint") or item.get("skill") or "").strip()
     reasoning_hint = str(item.get("reasoning_hint") or item.get("reasoningHint") or item.get("reasoning") or "").strip()
     novelty_note = str(item.get("novelty_note") or item.get("novelty") or item.get("note") or "").strip()
+    mother_question_demand = str(
+        item.get("mother_question_demand")
+        or item.get("motherQuestionDemand")
+        or item.get("core_question_demand")
+        or ""
+    ).strip()
+    topic_binding = str(item.get("topic_binding") or item.get("topicBinding") or "").strip()
 
     atom = normalize_intuition_atom(
         item.get("intuition_atom"),
@@ -52,6 +59,8 @@ def _normalize_seed(item: Any) -> Optional[dict]:
         "skill_hint": _clip(skill_hint, 80),
         "reasoning_hint": _clip(reasoning_hint, 120),
         "novelty_note": _clip(novelty_note, 180),
+        "mother_question_demand": _clip(mother_question_demand, 180),
+        "topic_binding": _clip(topic_binding, 180),
         "intuition_atom": atom,
     }
 
@@ -74,7 +83,7 @@ async def brainstorm_creative_seeds(
 
     sp = source_pack if isinstance(source_pack, dict) else {}
     subject = str(sp.get("subject") or "").strip() or "高中数学"
-    topic = str(sp.get("topic") or "").strip()
+    topic = str(sp.get("requested_topic") or sp.get("topic") or "").strip()
     family = infer_subject_family(subject)
     bank = get_subject_bank(subject)
 
@@ -112,7 +121,9 @@ async def brainstorm_creative_seeds(
                     "seed_tag": "string (一句话标签，便于 beam-search 分桶)",
                     "skill_hint": "string (关键方法或能力点)",
                     "reasoning_hint": "string (关键推理结构/步骤分布)",
-                    "novelty_note": "string (避免模板的具体做法)",
+                    "novelty_note": "string (如何隐藏决定性结构并避免公式代入/完整方法泄露)",
+                    "mother_question_demand": "string (母题本身要求学生发现什么隐藏关系；不得只是练习包中的附加思考)",
+                    "topic_binding": "string (逐项说明 topic 中各内容限定如何直接进入母题条件与设问)",
                     "intuition_atom": {
                         "concept": "string (学生需要在脑中操作的知识对象)",
                         "internal_model": "string (希望学生形成的内部模型)",
@@ -132,6 +143,15 @@ async def brainstorm_creative_seeds(
 
     # Keep system prompt compact: this stage is short and shouldn't bloat tokens.
     role = str(bank.system_role or "").strip() or "You are a senior high-school curriculum researcher."
+    selected_goal_contract = ""
+    if practice_config["practice_goal"] == "solution_appreciation":
+        selected_goal_contract = (
+            "  <selected_goal_contract>Because practice_goal=solution_appreciation, every seed is invalid unless "
+            "mother_question_demand explicitly makes the learner produce, distinguish, and compare two genuinely "
+            "different routes or representations as a scored part of the mother question. Do not name the two "
+            "routes in advance; ask the learner to find them. First ensure the underlying object still requires a "
+            "non-mechanical symmetry, invariant, relationship, boundary, or representation insight.</selected_goal_contract>\n"
+        )
     system_content = (
         _prompt("question.brainstorm.v1")
         + "\n\n"
@@ -148,11 +168,35 @@ async def brainstorm_creative_seeds(
         "    Data must be reasonable, verifiable, and convertible into clear mathematical/subject conditions.</scenario_design>\n"
         "  <intuition>Intuition is a trainable internal representation, not fast guessing or a memorized problem type.\n"
         "    The decisive cue must support a first prediction before full calculation, and formal_anchor must provide a short correction signal.</intuition>\n"
-        "  <transfer>transfer_mutation must preserve the decisive structure while changing at least two surface features. Do not merely change numbers.</transfer>\n"
+        "  <low_floor_high_thought>Low entry means curriculum-accessible prerequisites and a short final check; it does not mean low thinking.\n"
+        "    Reject an atom whose eventual question can be completed by substituting data into a named or displayed formula, following a fully prescribed method, or doing arithmetic without first inferring a hidden relationship.</low_floor_high_thought>\n"
+        "  <hidden_structure>Keep decisive_cue in the private design atom. The eventual stem may contain evidence from which the learner can discover it,\n"
+        "    but must not state the invariant, symmetry, boundary mechanism, representation switch, or complete solution route that is supposed to be noticed.</hidden_structure>\n"
+        "  <mother_question>The final mother question must itself require the target mental action even if its intuition packet is removed.\n"
+        "    Fill mother_question_demand with the non-routine demand carried by the stem: what relationship must be inferred, representation reorganized, invariant detected,\n"
+        "    boundary located, counterexample constructed, or genuinely different routes compared. A routine calculation followed by an intuition-themed packet is invalid.</mother_question>\n"
+        "  <topic_binding>Treat every substantive clause in the requested topic as a hard design constraint, not a menu of optional keywords.\n"
+        "    Fill topic_binding by mapping each clause to a condition or scored demand in the mother question. If topic explicitly requests symmetry and invariants,\n"
+        "    the learner must actually discover or use a symmetry and an invariant; mentioning those words only in the packet, feedback, or solution commentary does not count.</topic_binding>\n"
+        "  <subpart_integrity>Do not plan standard preliminary subparts that pre-solve the insight, such as first finding parameters/general terms and then substituting them into\n"
+        "    a sum, extremum, probability, or formula task. Every retained subpart must contribute evidence, test a conjecture, expose a boundary, or compare representations;\n"
+        "    removing a subpart must not reveal that it was only mechanical scaffolding.</subpart_integrity>\n"
+        "  <structural_depth>Require a genuine mental reorganization: infer a non-explicit relationship, change representation, detect an invariant or symmetry,\n"
+        "    locate a boundary, or construct/test a counterexample. The insight may be compact and must remain inside curriculum scope.</structural_depth>\n"
+        "  <transfer>transfer_mutation must preserve the target mental action while changing at least one relationship, constraint direction, boundary regime, or representation,\n"
+        "    plus a surface feature when useful. Do not merely change numbers, names, or story context.</transfer>\n"
+        "  <appreciation>If the atom supports solution comparison, propose two genuinely different representations or reasoning routes, such as algebraic versus geometric\n"
+        "    or local versus global. Do not compare cosmetic rewrites of one formula or a formula substitution with the same substitution written longer.</appreciation>\n"
+        "  <appreciation_not_rescue>solution_appreciation cannot rescue a routine base task. First require a structurally non-routine mother question; only then may appreciation\n"
+        "    compare routes that illuminate that same hidden structure. For medium difficulty, reject 'given a general term, find the extremum of S_n, then compare two standard methods'.</appreciation_not_rescue>\n"
+        + selected_goal_contract
+        + "  <rejection_examples>Reject direct formula substitution, a stem that says exactly which complete methods to use, number-only transfer,\n"
+        "    and a comparison whose preferred answer is already announced in the prompt.</rejection_examples>\n"
         "  <subject_adapter>For math use representation, invariants, symmetry, boundary, estimation, or counterexamples.\n"
         "    For physics use process, dimensions, limits, and graph direction; for chemistry use particle models, conservation, and equilibrium direction;\n"
         "    for biology use systems, feedback, and causal evidence; for language subjects use discourse expectation followed by textual evidence.</subject_adapter>\n"
-        "  <self_practice>Prefer low-entry tasks with one decisive insight and a short verification. Do not force long or advanced derivations.</self_practice>\n"
+        "  <self_practice>Prefer accessible tasks with one non-obvious decisive insight and a short verification. Do not force long or advanced derivations,\n"
+        "    but never reduce the central mathematical or subject-specific action to execution of an already supplied recipe.</self_practice>\n"
         "  <curriculum>Respect curriculum_context: question_requirements, knowledge_scope, and prerequisites.</curriculum>\n"
         "  <reference_use>If reference patterns/examples are provided, learn only their question structure and wording style. Do not copy original values or conclusions.\n"
         "    You may borrow the way conditions are combined, but must apply an innovative transformation.</reference_use>\n"

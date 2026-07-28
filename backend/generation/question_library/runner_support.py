@@ -65,7 +65,13 @@ def _ensure_session(
     session["topic"] = topic
     session["difficulty"] = difficulty
     session["question_type"] = question_type
-    session["count"] = int(count or 0)
+    requested_count = max(0, int(count or 0))
+    draft_count = len(normalize_draft_questions(session.get("draft_questions")))
+    session["requested_count"] = requested_count
+    session["draft_count"] = draft_count
+    # ``count`` remains the backwards-compatible visible draft total.  The
+    # amount requested for the current batch lives in ``requested_count``.
+    session["count"] = draft_count
     session["use_study_archive"] = bool(use_study_archive)
     session["use_reference_questions"] = bool(use_reference_questions)
     session["reference_source"] = str(reference_source or "any").strip() or "any"

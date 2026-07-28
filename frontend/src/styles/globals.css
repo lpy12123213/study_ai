@@ -1,0 +1,522 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Study AI design tokens — Warm Spectral Workspace
+ * 暖纸编辑部（暖象牙画布、深墨文字、发丝分隔线）
+ * × 冷雾光谱（冷雾次级表面、靛蓝→微青焦点边缘、AI 状态层）
+ * 详见 docs/plans/2026-07-25-frontend-visual-conversation-design.md §6。
+ *
+ * 迁移原则：既有 shadcn 语义变量（background/card/primary/...）保留并映射到
+ * 新基础色板，组件类名无需立即改动；新增 thinking/tool/timeline/chrome/composer
+ * 专用语义 token 与角色型圆角。
+ */
+
+:root {
+  /* ---- 基础色板（暖象牙 + 冷雾 + 克制光谱） ---- */
+  --canvas: #f6f1e8;
+  --surface: #fffcf7;
+  --surface-mist: #edf1f7;
+  --surface-raised: #ffffff;
+  --ink: #20242c;
+  --ink-muted: #667085;
+  --spectral: #5664e9;
+  --spectral-edge: #65c7d5;
+  --hairline: rgba(31, 37, 48, 0.11);
+
+  /* ---- AI 状态与结构语义 token ---- */
+  --thinking-surface: var(--surface-mist);
+  --thinking-border: rgba(31, 37, 48, 0.08);
+  --thinking-foreground: #4a5261;
+  --tool-idle: var(--ink-muted);
+  --tool-running: var(--spectral);
+  --tool-success: #3d9b70;
+  --tool-error: #d95757;
+  --timeline-rail: rgba(31, 37, 48, 0.14);
+  --timeline-marker: var(--spectral);
+  --chrome-surface: #fbf8f1;
+  --composer-surface: var(--surface-raised);
+
+  /* ---- 既有 shadcn 语义变量：映射到新色板（类名兼容） ---- */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink);
+  --muted: #f0ebe1;
+  --muted-foreground: var(--ink-muted);
+  --border: var(--hairline);
+  --input: rgba(31, 37, 48, 0.16);
+  --primary: var(--spectral);
+  --primary-foreground: #f7f7fd;
+  --secondary: var(--surface-mist);
+  --secondary-foreground: #2b3040;
+  --accent: color-mix(in oklch, var(--spectral) 10%, var(--surface));
+  --accent-foreground: #3f4bc4;
+  --destructive: #d95757;
+  --destructive-foreground: #fff7f5;
+  --success: #3d9b70;
+  --success-foreground: #f4fdf8;
+  --warning: #c38a2f;
+  --warning-foreground: #2b2110;
+  --ring: var(--spectral);
+  --sidebar: #f2ede3;
+  --sidebar-foreground: #3a3f4c;
+  --sidebar-border: rgba(31, 37, 48, 0.09);
+  --sidebar-accent: color-mix(in oklch, var(--spectral) 10%, var(--sidebar));
+  --sidebar-accent-foreground: #3f4bc4;
+
+  /* ---- 角色型圆角（主行动越圆，信息越密集越克制） ---- */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-shell: 28px;
+  --radius-pill: 999px;
+}
+
+.dark {
+  --canvas: #111318;
+  --surface: #181b22;
+  --surface-mist: #20242c;
+  --surface-raised: #1f2330;
+  --ink: #f1eee7;
+  --ink-muted: #9ca3af;
+  --spectral: #7c88ee;
+  --spectral-edge: #65c7d5;
+  --hairline: rgba(241, 238, 231, 0.1);
+
+  --thinking-surface: var(--surface-mist);
+  --thinking-border: rgba(241, 238, 231, 0.08);
+  --thinking-foreground: #b7bcc7;
+  --tool-idle: var(--ink-muted);
+  --tool-running: var(--spectral);
+  --tool-success: #4cb183;
+  --tool-error: #e06b6b;
+  --timeline-rail: rgba(241, 238, 231, 0.14);
+  --timeline-marker: var(--spectral);
+  --chrome-surface: #15171d;
+  --composer-surface: var(--surface-raised);
+
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink);
+  --muted: var(--surface-mist);
+  --muted-foreground: var(--ink-muted);
+  --border: var(--hairline);
+  --input: rgba(241, 238, 231, 0.16);
+  --primary: var(--spectral);
+  --primary-foreground: #14162b;
+  --secondary: var(--surface-mist);
+  --secondary-foreground: #e8e6df;
+  --accent: rgba(124, 136, 238, 0.16);
+  --accent-foreground: #b9c0f5;
+  --destructive: #e06b6b;
+  --destructive-foreground: #221114;
+  --success: #4cb183;
+  --success-foreground: #0d1f16;
+  --warning: #d1a04a;
+  --warning-foreground: #241a08;
+  --ring: var(--spectral);
+  --sidebar: #15171d;
+  --sidebar-foreground: #c9cdd6;
+  --sidebar-border: rgba(241, 238, 231, 0.08);
+  --sidebar-accent: rgba(124, 136, 238, 0.16);
+  --sidebar-accent-foreground: #b9c0f5;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --sidebar-border: var(--sidebar-border);
+  --sidebar-accent: var(--sidebar-accent);
+  --sidebar-accent-foreground: var(--sidebar-accent-foreground);
+
+  /* Warm Spectral 语义色 */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-mist: var(--surface-mist);
+  --color-surface-raised: var(--surface-raised);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-spectral: var(--spectral);
+  --color-spectral-edge: var(--spectral-edge);
+  --color-thinking-surface: var(--thinking-surface);
+  --color-thinking-border: var(--thinking-border);
+  --color-thinking-foreground: var(--thinking-foreground);
+  --color-tool-idle: var(--tool-idle);
+  --color-tool-running: var(--tool-running);
+  --color-tool-success: var(--tool-success);
+  --color-tool-error: var(--tool-error);
+  --color-timeline-rail: var(--timeline-rail);
+  --color-timeline-marker: var(--timeline-marker);
+  --color-chrome-surface: var(--chrome-surface);
+  --color-composer-surface: var(--composer-surface);
+
+  /* 字体角色：UI / 展示（衬线，仅首页问候与少量标题） / 等宽 */
+  --font-sans:
+    "Inter Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", "Hiragino Sans GB", sans-serif;
+  --font-display: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, "SF Mono", "Cascadia Code", Consolas,
+    "Liberation Mono", monospace;
+
+  /* 角色型圆角 → rounded-* 工具类 */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: var(--radius-2xl);
+  --radius-shell: var(--radius-shell);
+  --radius-pill: var(--radius-pill);
+
+  --shadow-soft: 0 1px 2px rgba(31, 37, 48, 0.04), 0 4px 16px -4px rgba(31, 37, 48, 0.06);
+  --shadow-lift: 0 2px 4px rgba(31, 37, 48, 0.05), 0 12px 32px -8px rgba(31, 37, 48, 0.12);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  /* §12：prefers-reduced-motion 下禁用位移与持续动效 */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* 轻纸张纹理：极淡暖墨点阵，透明度 ≤2%，不影响文字对比度；深色主题不叠加 */
+  :root:not(.dark) body {
+    background-image: radial-gradient(rgba(31, 37, 48, 0.02) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--color-primary) 18%, transparent);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--color-foreground) 18%, transparent) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--color-foreground) 16%, transparent);
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@utility animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+@utility animate-slide-up {
+  animation: slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@utility animate-overlay-in {
+  animation: fade-in 0.15s ease-out;
+}
+
+@utility animate-dialog-in {
+  animation: dialog-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@utility animate-popover-in {
+  animation: popover-in 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@utility animate-sheet-in {
+  animation: sheet-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@utility animate-sheet-in-bottom {
+  animation: sheet-in-bottom 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@utility animate-accordion-down {
+  animation: accordion-down 0.18s ease-out;
+}
+
+@utility animate-accordion-up {
+  animation: accordion-up 0.18s ease-out;
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes sheet-in-bottom {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- Markdown 排版（学习资料 / 对话 / 题干） ---------- */
+.markdown-body {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--color-foreground);
+  word-break: break-word;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5 {
+  font-weight: 650;
+  line-height: 1.35;
+  margin: 1.6em 0 0.6em;
+  letter-spacing: -0.01em;
+}
+.markdown-body h1 {
+  font-size: 1.5rem;
+}
+.markdown-body h2 {
+  font-size: 1.25rem;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--color-border);
+}
+.markdown-body h3 {
+  font-size: 1.1rem;
+}
+.markdown-body h4 {
+  font-size: 1rem;
+}
+.markdown-body p {
+  margin: 0.75em 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.75em 0;
+  padding-left: 1.5em;
+}
+.markdown-body ul {
+  list-style: disc;
+}
+.markdown-body ol {
+  list-style: decimal;
+}
+.markdown-body li {
+  margin: 0.3em 0;
+}
+.markdown-body li::marker {
+  color: var(--color-muted-foreground);
+}
+.markdown-body a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.markdown-body strong {
+  font-weight: 650;
+}
+.markdown-body blockquote {
+  margin: 1em 0;
+  padding: 0.15em 0 0.15em 1em;
+  border-left: 3px solid color-mix(in oklch, var(--color-primary) 45%, transparent);
+  color: var(--color-muted-foreground);
+}
+.markdown-body code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background-color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.markdown-body pre {
+  margin: 1em 0;
+  padding: 0.9em 1em;
+  background-color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.markdown-body pre code {
+  font-family: var(--font-mono);
+  background: none;
+  border: none;
+  padding: 0;
+}
+.markdown-body table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--color-border);
+  padding: 0.45em 0.75em;
+  text-align: left;
+}
+.markdown-body th {
+  background-color: var(--color-muted);
+  font-weight: 600;
+}
+.markdown-body img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+.markdown-body hr {
+  margin: 1.6em 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+}
+.markdown-body .katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+.markdown-body mark {
+  background-color: color-mix(in oklch, var(--color-warning) 35%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* 题干 HTML（后端已消毒，图片走媒体代理） */
+.stem-html img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+.stem-html p {
+  margin: 0.4em 0;
+}

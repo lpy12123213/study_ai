@@ -75,7 +75,7 @@ QUESTION_GENERATION_STAGES = [
         label="快速校验",
         group="quality",
         order=9,
-        description="轻量检查课内范围、答案解析一致、条件充分和致命歧义，失败时最多修复一次。",
+        description="轻量检查课内正确性、直觉原子与题目一致、真实结构发现及有效迁移，失败时最多修复一次。",
     ),
     QuestionGenerationStage(
         stage_id="final_selection",

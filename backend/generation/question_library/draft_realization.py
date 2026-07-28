@@ -274,8 +274,10 @@ def build_generation_messages(
         # math / generic
         return [
             "<core_requirements>",
-            "  <intuition_first>Allow a low-entry first prediction before full calculation. A one-step decisive insight followed by a short proof is preferred over forced lengthy derivation.</intuition_first>",
+            "  <intuition_first>Allow a curriculum-accessible first prediction before full calculation. Low entry is not low thought: require the learner to discover a non-explicit relationship before a short proof.</intuition_first>",
             "  <internal_model>Make the learner manipulate a mathematical object through comparison, transformation, symmetry, invariants, estimation, limits, boundaries, or counterexamples.</internal_model>",
+            "  <method_concealment>Do not state the decisive invariant, symmetry, representation switch, named formula, or complete method sequence in the stem when discovering it is the intended mathematical action.</method_concealment>",
+            "  <routine_rejection>Reject a design whose central demand is only substituting given values into a displayed/named formula or carrying out a fully prescribed algorithm.</routine_rejection>",
             "  <answer_determinacy>Conditions must be sufficient and non-contradictory; the derivation path must be reproducible and the conclusion unique and clear.</answer_determinacy>",
             "</core_requirements>",
         ]
@@ -333,6 +335,10 @@ def build_generation_messages(
             "brainstorm_angle": str((spec or {}).get("brainstorm_angle") or "").strip(),
             "brainstorm_scenario": str((spec or {}).get("brainstorm_scenario") or "").strip(),
             "brainstorm_novelty_note": str((spec or {}).get("brainstorm_novelty_note") or "").strip(),
+            "brainstorm_mother_question_demand": str(
+                (spec or {}).get("brainstorm_mother_question_demand") or ""
+            ).strip(),
+            "brainstorm_topic_binding": str((spec or {}).get("brainstorm_topic_binding") or "").strip(),
             "brainstorm_skill_hint": str((spec or {}).get("brainstorm_skill_hint") or "").strip(),
             "brainstorm_reasoning_hint": str((spec or {}).get("brainstorm_reasoning_hint") or "").strip(),
             "intuition_alignment": float((spec or {}).get("intuition_alignment") or 0.0),
@@ -408,6 +414,18 @@ def build_generation_messages(
         },
     }
 
+    selected_goal_contract = ""
+    if practice_config["practice_goal"] == "solution_appreciation":
+        selected_goal_contract = (
+            "  <selected_goal_contract>For this selected goal, the stem itself MUST contain a scored demand that asks "
+            "the learner to find or construct two genuinely different routes/representations, compare them under one "
+            "or more explicit structural criteria, and justify the comparison using steps from this problem. The stem "
+            "must not name the intended routes or preferred winner. This is not forbidden method leakage: the learner, "
+            "not the stem, supplies the routes. Before that comparison, the core object must independently require the "
+            "requested hidden symmetry, invariant, relation, boundary, or representation insight. If either requirement "
+            "is absent, do not output the draft.</selected_goal_contract>\n"
+        )
+
     system_content = (
         _prompt("question.draft.realize.v1")
         + "\n\n"
@@ -453,7 +471,18 @@ def build_generation_messages(
         "<!-- Intuition calibration packet -->\n"
         "<intuition_training>\n"
         "  <definition>Intuition is a trainable internal representation: predict, expose what is mentally seen, receive a short logical correction signal, then transfer. It is not fast guessing.</definition>\n"
-        "  <atom>Use intuition_atom as the single design kernel. The decisive cue must actually determine the conclusion; do not add a decorative intuition label to a routine exercise.</atom>\n"
+        "  <atom>Use intuition_atom as the single design kernel. The decisive cue must actually determine the conclusion and must match the stem and every practice stage; do not attach an unrelated or decorative atom to a routine exercise.</atom>\n"
+        "  <mother_question_contract>The mother question in stem must independently force the selected mental action before any practice-stage prompt is shown.\n"
+        "    Apply this removal test: if intuition_packet is deleted, a student must still need to infer a hidden relationship, reorganize a representation, detect an invariant or boundary,\n"
+        "    construct/test a counterexample, or compare genuinely different routes to answer the scored demand. The packet may unpack that thinking; it must never supply all the thinking missing from a routine mother question.</mother_question_contract>\n"
+        "  <requested_topic_contract>Parse the requested topic into substantive clauses and satisfy every clause in the mother question's conditions and scored demand.\n"
+        "    A clause is not satisfied by copying its keyword into intuition_packet, a hint, feedback, analysis, or an appreciation comparison. For example, when topic requests symmetry and invariants,\n"
+        "    solving the stem must necessarily discover/use both; a generic extremum calculation followed by a comment about symmetry is off-topic.</requested_topic_contract>\n"
+        "  <low_floor_high_thought>Accessible prerequisites and a short formal check are desirable, but the learner must still infer a hidden relationship, reorganize a representation, detect an invariant/boundary, or test a counterexample.\n"
+        "    Do not equate self-practice with one-step formula substitution, routine arithmetic, or following an already supplied recipe.</low_floor_high_thought>\n"
+        "  <do_not_leak>decisive_cue, formal_anchor, answer, and full solution route are private authoring information.\n"
+        "    The stem and perception prompt may provide sufficient evidence, but must not name or paraphrase the exact invariant, symmetry, key pairing, representation switch, boundary mechanism, formula, or complete sequence the learner is meant to discover.\n"
+        "    Do not write instructions such as 'use formula X', 'use method A and method B', or an ordered list that performs the intended insight for the learner.</do_not_leak>\n"
         f"  <practice_goal selected=\"{practice_config['practice_goal']}\">\n"
         "    <fluency>Build quick facility with basic objects, mental operations, and representations, but never reward memorized template matching.</fluency>\n"
         "    <structural_intuition>Make relationships, transformations, and invariants carry the conclusion.</structural_intuition>\n"
@@ -461,27 +490,38 @@ def build_generation_messages(
         "    <transfer>Preserve one decisive structure while changing the surface representation and context.</transfer>\n"
         "    <solution_appreciation>Compare correct approaches and make the learner articulate why one is more natural under explicit structural criteria.</solution_appreciation>\n"
         "  </practice_goal>\n"
-        f"  <feedback_mode selected=\"{practice_config['feedback_mode']}\">\n"
+        + selected_goal_contract
+        + f"  <feedback_mode selected=\"{practice_config['feedback_mode']}\">\n"
         "    <guided>Give progressive hints; the first hint must not reveal the final answer or decisive step.</guided>\n"
         "    <concise>Give only the decisive cue followed by a short calibration statement.</concise>\n"
         "    <reflective>Use follow-up questions that make the learner restate and revise the internal model; a reference answer may still be shown after submission.</reflective>\n"
         "  </feedback_mode>\n"
         f"  <packet_size>Output exactly {practice_config['packet_size']} stage objects.</packet_size>\n"
         "  <required_stages>The stages list must include perception, model_externalization, and transfer in that order.\n"
-        "    perception asks for a first prediction before full work; model_externalization asks what object/relationship the learner sees and requires the shortest convincing check;\n"
-        "    transfer preserves the decisive structure while changing at least two surface features.</required_stages>\n"
+        "    perception asks for a first prediction before full work without leaking the decisive cue; model_externalization asks the learner to articulate the hidden object/relationship and give the shortest convincing check;\n"
+        "    transfer preserves the target mental action but must alter at least one relationship, constraint direction, boundary regime, or representation. Changing only numbers, labels, or story context is invalid.</required_stages>\n"
         "  <optional_stages>When packet_size is 4 or 5, add minimal_check and/or appreciation according to practice_goal and intuition_kinds.\n"
-        "    For mathematics, appreciation must compare two correct approaches using explicit criteria: simplicity, symmetry, unification, invariants, generalizability, and necessity of conditions;\n"
-        "    ask which approach is more natural and why, rather than requesting a subjective beauty score. For other subjects use evidential economy, model explanatory power, and structural consistency.</optional_stages>\n"
+        "    For mathematics, appreciation must compare two genuinely different correct representations or reasoning routes (for example algebraic/geometric, local/global, constructive/invariant-based)\n"
+        "    using explicit criteria: simplicity, symmetry, unification, invariants, generalizability, and necessity of conditions. Cosmetic rewrites of the same formula, or formula substitution versus the same substitution written longer, do not count.\n"
+        "    Ask which approach is more natural and why without announcing the preferred conclusion in the question. For other subjects use evidential economy, model explanatory power, and structural consistency.</optional_stages>\n"
+        "  <appreciation_gate>Generate appreciation only after the base mother question passes the removal test and topic contract. Method comparison is an analysis lens, not a source of difficulty.\n"
+        "    It cannot upgrade a routine stem. At medium difficulty, explicitly reject a stem equivalent to 'given \\(a_{n}\\), find the extremum of \\(S_{n}\\), then compare a quadratic method and a sign method',\n"
+        "    unless the scored question independently forces discovery/use of every requested structural clause such as symmetry or an invariant.</appreciation_gate>\n"
         "  <feedback>Feedback must identify what the first feeling captured, where it drifted, and the decisive structure to reuse. Never shame a wrong first guess.</feedback>\n"
-        "  <anti_template>Do not create a textbook example with different numbers. Transfer must not be a number-only replacement.</anti_template>\n"
-        "  <self_practice>Keep the entry point accessible and the formal check short. Do not force advanced proof machinery, long calculation, or artificial competition-level complexity.</self_practice>\n"
+        "  <anti_template>Do not create a textbook example with different numbers. Reject direct formula substitution, a fully specified method route, number-only transfer, and comparisons of cosmetically identical methods.</anti_template>\n"
+        "  <subpart_rule>For a multi-part stem, every subpart must preserve or deepen the same hidden structural demand.\n"
+        "    Reject standard scaffolds such as '(1) find the parameters/general term; (2) use it to find a sum/extremum' when part (1) is only routine algebra and part (2) becomes formula substitution.\n"
+        "    A preliminary subpart is allowed only when it asks the learner to conjecture a relationship, produce/select a representation, test a boundary, or justify an invariant—and it must not name the intended method.</subpart_rule>\n"
+        "  <self_practice>Keep the entry point accessible and the formal check short. Do not force advanced proof machinery, long calculation, or artificial competition-level complexity.\n"
+        "    Short is allowed; intellectually pre-solved is not.</self_practice>\n"
         "  <compatibility>stem, answer, and analysis must remain a self-contained consolidated rendering of the same packet for existing clients. They must not contradict any stage.</compatibility>\n"
         "</intuition_training>\n"
         "<brainstorm_guidance>\n"
         "  If spec contains brainstorm_concept, brainstorm_angle, or brainstorm_scenario:\n"
         "    The creative context must appear in stem constraints or the order of sub-questions.\n"
         "    Turn the idea into solvable conditions and conclusions. Do not pile up background story.\n"
+        "  If brainstorm_mother_question_demand is present, realize it as a scored demand in stem itself, not merely as an intuition_packet prompt or an analysis comment.\n"
+        "  If brainstorm_topic_binding is present, treat every mapping in it as mandatory and check it against the requested topic before output.\n"
         "  If brainstorm_novelty_note is present, treat it as a hard requirement for question uniqueness, not a suggestion.\n"
         "</brainstorm_guidance>\n"
         "\n"
@@ -525,6 +565,9 @@ def build_generation_messages(
         "  <step id='3'>Check word-by-word that the answer field exactly matches the final conclusion of analysis.</step>\n"
         "  <step id='4'>Check all formulas against latex_rules, including delimiters, braces, and standard notation.</step>\n"
         "  <step id='5'>Check that the JSON structure is fully closed and strings contain no unescaped special characters.</step>\n"
+        "  <step id='6'>Delete intuition_packet mentally and check the mother question alone: it still forces the target observation/invariant/representation/boundary/counterexample/comparison; no preliminary subpart merely computes parameters or a general formula for later substitution.</step>\n"
+        "  <step id='7'>Check structural depth: the stem does not reveal the decisive cue or prescribe the complete method; transfer changes a relationship/boundary/representation; appreciation routes are genuinely distinct.</step>\n"
+        "  <step id='8'>Check every substantive requested-topic clause is necessary to solve a scored mother-question demand; reject method comparison bolted onto an otherwise routine task.</step>\n"
         "  <on_error>If verification finds an error, fix it before output. If the question is unsolvable, contradictory, or too complex, replace it instead of forcing a repair.</on_error>\n"
         "</verification_process>\n"
         "\n"

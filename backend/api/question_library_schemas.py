@@ -76,6 +76,9 @@ class QuestionLibraryIntuitionValidation(BaseModel):
     conditions_sufficient: bool = False
     unambiguous: bool = False
     transfer_valid: bool = False
+    intuition_aligned: bool = False
+    structural_depth: bool = False
+    request_aligned: bool = False
     issues: List[str] = Field(default_factory=list)
     repaired: bool = False
 
@@ -235,6 +238,8 @@ class QuestionLibraryPreviewData(BaseModel):
     reference_source: Literal["any", "gaokao", "mock", "joint"] = "any"
     reference_year_range: Literal["all", "3", "5"] = "all"
     count: int = 0
+    requested_count: int = 0
+    draft_count: int = 0
     intuition_practice: QuestionLibraryIntuitionPracticeConfig = Field(
         default_factory=QuestionLibraryIntuitionPracticeConfig
     )

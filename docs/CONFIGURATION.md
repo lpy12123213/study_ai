@@ -141,9 +141,10 @@ python scripts/check_config.py --strict
 
 ## Agent Runtime
 
-中/重型 agent 任务默认使用本机 Codex runtime，而不是把 agent 简单切到某个模型字符串。覆盖范围包括自学资料、DeepThink、教案、组卷/一键出卷、知识视频、AI 出题、题库评分和好题鉴别；普通导出、作文批改等非 agent 流程不受影响。
+中/重型 agent 任务默认使用本机 Codex runtime，而不是把 agent 简单切到某个模型字符串。覆盖范围包括 DeepThink、教案、组卷/一键出卷、知识视频、AI 出题、题库评分和好题鉴别；普通导出、作文批改等非 agent 流程不受影响。
 
 - `AGENT_RUNTIME`: 默认 `codex_runtime`。设为 `legacy` 时才允许走旧 agent/service 分支。
+- `STUDY_MATERIALS_AGENT_RUNTIME`: 自学资料生成的专用开关。默认（留空）走不依赖 Codex CLI 的 legacy AgentCore 路径；显式设为 `codex_runtime` 时才启用 Codex 分阶段工作流（规划/起草/修订由 Codex CLI 执行，检索/审查仍由后端工具执行）。
 - `CODEX_RUNTIME_COMMAND`: 默认 `codex`，可指向本机 Codex CLI。
 - `CODEX_RUNTIME_MODEL`: 默认空，表示沿用本机 Codex 配置；需要固定模型时填写。
 - `CODEX_RUNTIME_EFFORT`: 默认 `high`，保留给运行时策略与 metadata。

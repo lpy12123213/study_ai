@@ -11,6 +11,26 @@ from backend.app import create_app
 from backend.generation.question_library import preview_store
 
 
+def _passed_intuition_packet() -> dict:
+    return {
+        "version": "1.0",
+        "validation": {
+            "status": "passed",
+            "scope_ok": True,
+            "answer_correct": True,
+            "answer_analysis_consistent": True,
+            "conditions_sufficient": True,
+            "unambiguous": True,
+            "transfer_valid": True,
+            "intuition_aligned": True,
+            "structural_depth": True,
+            "request_aligned": True,
+            "issues": [],
+            "repaired": False,
+        },
+    }
+
+
 class TestQuestionLibraryApi(unittest.TestCase):
     def setUp(self) -> None:
         self._runtime_patch = patch.dict("os.environ", {"AGENT_RUNTIME": "legacy"}, clear=False)
@@ -185,6 +205,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
     def test_generate_creates_persisted_session_and_discard_archives_it(self) -> None:
         app = create_app()
         self._override_auth(app)
+        requested_topic = "导数\n第二行硬约束：迁移必须改变边界或表征，不能只换数字。"
+        captured_source_packs: list[dict] = []
         llm_source_pack = {
             "subject": "高中数学",
             "topic": "导数",
@@ -194,14 +216,35 @@ class TestQuestionLibraryApi(unittest.TestCase):
             "common_mistakes": [],
             "forbidden_patterns": [],
         }
-        drafts = [{"stem": "题干 A", "answer": "答案 A", "analysis": "解析 A"}]
+        candidates = [
+            {
+                "question_id": f"candidate-{index}",
+                "stem": f"题干 {index}",
+                "answer": f"答案 {index}",
+                "analysis": f"解析 {index}",
+            }
+            for index in range(1, 4)
+        ]
+
+        async def fake_generate_questions(**kwargs):
+            captured_source_packs.append(dict(kwargs.get("source_pack") or {}))
+            callback = kwargs.get("on_candidate_accepted")
+            if callable(callback):
+                for candidate in candidates:
+                    await callback(candidate)
+            # Simulate select_final choosing only one of three accepted
+            # candidates for a standard count=1 request.
+            return [candidates[1]]
 
         tmp, original_previews, original_sessions = self._with_temp_preview_dirs()
         try:
             with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
                 "backend.generation.question_library.runner.build_source_pack", new=AsyncMock(return_value=llm_source_pack)
             ), patch(
-                "backend.generation.question_library.runner.generate_questions", new=AsyncMock(return_value=drafts)
+                "backend.generation.question_library.runner.build_curriculum_context", new=AsyncMock(return_value={})
+            ), patch(
+                "backend.generation.question_library.runner.generate_questions",
+                new=AsyncMock(side_effect=fake_generate_questions),
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()
             ), patch("backend.shared.tasks.db_store.db_update_task_status", new=AsyncMock()), patch(
@@ -213,7 +256,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     "/api/question-library/generate",
                     json={
                         "subject": "高中数学",
-                        "topic": "导数",
+                        "topic": requested_topic,
                         "count": 1,
                         "mode": "standard",
                         "stream_reasoning": True,
@@ -231,13 +274,23 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 done_event = __import__("json").loads(payload)
                 session_id = str(done_event["data"]["session_id"])
                 preview_id = str(done_event["data"]["preview_id"])
+                self.assertEqual(done_event["data"]["count"], 1)
+                self.assertEqual(captured_source_packs[0]["topic"], "导数")
+                self.assertEqual(captured_source_packs[0]["requested_topic"], requested_topic)
 
                 session_resp = client.get(f"/api/question-library/sessions/{session_id}")
                 self.assertEqual(session_resp.status_code, 200)
                 session_data = session_resp.json()["session"]
                 self.assertEqual(session_data["session_id"], session_id)
                 self.assertEqual(session_data["status"], "pending_review")
+                self.assertEqual(session_data["topic"], requested_topic)
                 self.assertEqual(len(session_data["draft_questions"]), 1)
+                self.assertEqual(session_data["draft_questions"][0]["stem"], "题干 2")
+
+                preview_data = preview_store.load_preview(preview_id)
+                self.assertIsInstance(preview_data, dict)
+                self.assertEqual(len(preview_data["draft_questions"]), 1)
+                self.assertEqual(preview_data["draft_questions"][0]["stem"], "题干 2")
 
                 discard_resp = client.post(f"/api/question-library/previews/{preview_id}/discard")
                 self.assertEqual(discard_resp.status_code, 200)
@@ -292,7 +345,17 @@ class TestQuestionLibraryApi(unittest.TestCase):
             )
 
             async def fake_generate_questions(*args, **kwargs):  # type: ignore[no-untyped-def]
-                _ = args, kwargs
+                _ = args
+                callback = kwargs.get("on_candidate_accepted")
+                if callable(callback):
+                    await callback(
+                        {
+                            "question_id": "candidate-not-selected",
+                            "stem": "临时候选题干",
+                            "answer": "临时候选答案",
+                            "analysis": "临时候选解析",
+                        }
+                    )
                 session = preview_store.load_session("sess-append-1") or {}
                 session["stop_requested"] = True
                 preview_store.save_session(session)
@@ -311,6 +374,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                         "forbidden_patterns": [],
                     }
                 ),
+            ), patch(
+                "backend.generation.question_library.runner.build_curriculum_context", new=AsyncMock(return_value={})
             ), patch(
                 "backend.generation.question_library.runner.generate_questions",
                 new=AsyncMock(side_effect=fake_generate_questions),
@@ -339,8 +404,29 @@ class TestQuestionLibraryApi(unittest.TestCase):
 
                 session_resp = client.get("/api/question-library/sessions/sess-append-1")
                 self.assertEqual(session_resp.status_code, 200)
-                draft_questions = session_resp.json()["session"]["draft_questions"]
+                session_data = session_resp.json()["session"]
+                draft_questions = session_data["draft_questions"]
                 self.assertEqual(len(draft_questions), 2)
+                self.assertEqual({item["stem"] for item in draft_questions}, {"旧题干", "新题干"})
+                self.assertEqual(session_data["count"], 2)
+                self.assertEqual(session_data["requested_count"], 1)
+                self.assertEqual(session_data["draft_count"], 2)
+
+                preview_resp = client.get("/api/question-library/previews/pv-append-1")
+                self.assertEqual(preview_resp.status_code, 200)
+                preview_data = preview_resp.json()
+                self.assertEqual(preview_data["count"], 2)
+                self.assertEqual(preview_data["requested_count"], 1)
+                self.assertEqual(preview_data["draft_count"], 2)
+
+                sessions_resp = client.get("/api/question-library/sessions")
+                self.assertEqual(sessions_resp.status_code, 200)
+                summary = next(
+                    item for item in sessions_resp.json()["sessions"] if item["session_id"] == "sess-append-1"
+                )
+                self.assertEqual(summary["count"], 2)
+                self.assertEqual(summary["requested_count"], 1)
+                self.assertEqual(summary["draft_count"], 2)
         finally:
             preview_store._PREVIEWS_DIR = original_previews
             if original_sessions is not None:
@@ -357,8 +443,18 @@ class TestQuestionLibraryApi(unittest.TestCase):
 
             async def fake_generate_questions(*args, **kwargs):  # type: ignore[no-untyped-def]
                 nonlocal generate_calls
-                _ = args, kwargs
+                _ = args
                 generate_calls += 1
+                callback = kwargs.get("on_candidate_accepted")
+                if callable(callback):
+                    await callback(
+                        {
+                            "question_id": f"transient-{generate_calls}",
+                            "stem": f"临时候选 {generate_calls}",
+                            "answer": "临时候选答案",
+                            "analysis": "临时候选解析",
+                        }
+                    )
                 if generate_calls == 1:
                     raise RuntimeError("batch_boom")
                 if generate_calls == 2:
@@ -381,6 +477,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                         "forbidden_patterns": [],
                     }
                 ),
+            ), patch(
+                "backend.generation.question_library.runner.build_curriculum_context", new=AsyncMock(return_value={})
             ), patch(
                 "backend.generation.question_library.runner.generate_questions",
                 new=AsyncMock(side_effect=fake_generate_questions),
@@ -441,6 +539,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                             "stem": "题干",
                             "answer": "答案",
                             "analysis": "解析",
+                            "intuition_packet": _passed_intuition_packet(),
                             "review_status": "pending_review",
                         },
                         {
@@ -468,6 +567,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                                 "stem": "题干",
                                 "answer": "答案",
                                 "analysis": "解析",
+                                "intuition_packet": _passed_intuition_packet(),
                                 "review_status": "pending_review",
                             },
                             {
@@ -534,6 +634,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                             "stem": "题干",
                             "answer": "答案",
                             "analysis": "解析",
+                            "intuition_packet": _passed_intuition_packet(),
                             "review_status": "pending_review",
                         }
                     ],
@@ -554,6 +655,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                                 "stem": "题干",
                                 "answer": "答案",
                                 "analysis": "解析",
+                                "intuition_packet": _passed_intuition_packet(),
                                 "review_status": "pending_review",
                             }
                         ],
@@ -581,6 +683,115 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 session_resp = client.get("/api/question-library/sessions/sess-confirm-1")
                 self.assertEqual(session_resp.status_code, 200)
                 self.assertEqual(session_resp.json()["session"]["status"], "committed")
+        finally:
+            preview_store._PREVIEWS_DIR = original_previews
+            if original_sessions is not None:
+                preview_store._SESSIONS_DIR = original_sessions
+            app.dependency_overrides.clear()
+            tmp.cleanup()
+
+    def test_confirm_rejects_legacy_packet_missing_new_hard_gates(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        tmp, original_previews, original_sessions = self._with_temp_preview_dirs()
+        try:
+            legacy_packet = _passed_intuition_packet()
+            legacy_packet["validation"].pop("intuition_aligned")
+            legacy_packet["validation"].pop("structural_depth")
+            legacy_packet["validation"].pop("request_aligned")
+            preview_store.save_session(
+                {
+                    "session_id": "sess-legacy-gate-1",
+                    "user_id": "u-1",
+                    "status": "pending_review",
+                    "subject": "高中数学",
+                    "topic": "数列",
+                    "draft_questions": [
+                        {
+                            "question_id": "q-legacy",
+                            "stem": "旧题干",
+                            "answer": "旧答案",
+                            "analysis": "旧解析",
+                            "intuition_packet": legacy_packet,
+                            "review": {"verdict": "可练习"},
+                            "review_status": "pending_review",
+                        }
+                    ],
+                }
+            )
+
+            client = TestClient(app)
+            with patch(
+                "backend.generation.question_library.session_service.upsert_question_cache", new=AsyncMock()
+            ) as cache_mock, patch(
+                "backend.generation.question_library.session_service.upsert_question_library_items", new=AsyncMock()
+            ):
+                response = client.post(
+                    "/api/question-library/sessions/sess-legacy-gate-1/questions/q-legacy/confirm"
+                )
+
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["detail"], "intuition_validation_failed")
+            cache_mock.assert_not_awaited()
+        finally:
+            preview_store._PREVIEWS_DIR = original_previews
+            if original_sessions is not None:
+                preview_store._SESSIONS_DIR = original_sessions
+            app.dependency_overrides.clear()
+            tmp.cleanup()
+
+    def test_batch_commit_rejects_content_changed_after_validation(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        tmp, original_previews, original_sessions = self._with_temp_preview_dirs()
+        try:
+            preview_store.save_preview(
+                {
+                    "preview_id": "pv-tamper-1",
+                    "session_id": "sess-tamper-1",
+                    "status": "pending_review",
+                    "user_id": "u-1",
+                    "subject": "高中数学",
+                    "topic": "等差数列",
+                    "difficulty": "中等",
+                    "question_type": "解答题",
+                    "draft_questions": [
+                        {
+                            "question_id": "q-tamper",
+                            "stem": "已校验题干",
+                            "answer": "已校验答案",
+                            "analysis": "已校验解析",
+                            "intuition_packet": _passed_intuition_packet(),
+                            "review_status": "pending_review",
+                        }
+                    ],
+                }
+            )
+
+            client = TestClient(app)
+            with patch(
+                "backend.generation.question_library.session_service.upsert_question_cache", new=AsyncMock()
+            ) as cache_mock, patch(
+                "backend.generation.question_library.session_service.upsert_question_library_items", new=AsyncMock()
+            ):
+                response = client.post(
+                    "/api/question-library/previews/pv-tamper-1/commit",
+                    json={
+                        "questions": [
+                            {
+                                "question_id": "q-tamper",
+                                "stem": "篡改后的机械套公式题",
+                                "answer": "已校验答案",
+                                "analysis": "已校验解析",
+                                "keep": True,
+                            }
+                        ]
+                    },
+                )
+
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["detail"], "question_content_changed_after_validation")
+            cache_mock.assert_not_awaited()
         finally:
             preview_store._PREVIEWS_DIR = original_previews
             if original_sessions is not None:
@@ -759,19 +970,20 @@ class TestQuestionLibraryApi(unittest.TestCase):
             async def fake_generate_questions(**kwargs):
                 callback = kwargs.get("on_candidate_accepted")
                 if callable(callback):
-                    maybe_result = callback(
-                        {
-                            "stem": "中途保留题干",
-                            "answer": "中途保留答案",
-                            "analysis": "中途保留解析",
-                            "question_id": "accepted-1",
-                            "skill": "分类讨论",
-                            "reasoning": "多步推导",
-                            "surface": "综合题",
-                        }
-                    )
-                    if hasattr(maybe_result, "__await__"):
-                        await maybe_result
+                    for index in range(3):
+                        maybe_result = callback(
+                            {
+                                "stem": f"中途保留题干 {index + 1}",
+                                "answer": f"中途保留答案 {index + 1}",
+                                "analysis": f"中途保留解析 {index + 1}",
+                                "question_id": f"accepted-{index + 1}",
+                                "skill": "分类讨论",
+                                "reasoning": "多步推导",
+                                "surface": "综合题",
+                            }
+                        )
+                        if hasattr(maybe_result, "__await__"):
+                            await maybe_result
                 raise RuntimeError("judge_stage_boom")
 
             with patch("backend.generation.question_library.runner.is_llm_configured", return_value=True), patch(
@@ -787,6 +999,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                         "forbidden_patterns": [],
                     }
                 ),
+            ), patch(
+                "backend.generation.question_library.runner.build_curriculum_context", new=AsyncMock(return_value={})
             ), patch(
                 "backend.generation.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
@@ -817,6 +1031,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                 self.assertIsInstance(session_obj, dict)
                 self.assertEqual(session_obj["status"], "partial_failure")
                 self.assertEqual(len(session_obj["draft_questions"]), 1)
+                self.assertEqual(session_obj["draft_questions"][0]["stem"], "中途保留题干 1")
         finally:
             preview_store._PREVIEWS_DIR = original_previews
             if original_sessions is not None:

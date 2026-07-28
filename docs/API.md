@@ -101,7 +101,7 @@
 - `POST /api/tasks/export/papers/{paper_id}`
 - `POST /api/tasks/export/study-archives/{archive_id}`
 
-DeepThink、教案、组卷、一键出卷、知识视频、自学资料、AI 出题/评分和好题鉴别属于中型或重型 AI 任务。默认 `AGENT_RUNTIME=codex_runtime` 时，这些 agent 入口由本机 Codex runtime 非交互执行；普通导出、作文批改等非 agent 流程不受影响。任务启动事件会携带 `data.native_agentic=true` 与 `data.agent_run_spec`，用于描述原生 agentic 的 domain、goal、roles、tool_policy、budget、output_contract、resume_state 和 metadata。`agent_run_spec.metadata.runtime` 为 `codex_runtime`，并包含可忽略的 `codex_runtime_version`、`approval_policy` 与 `sandbox_mode`。客户端可忽略新增字段以保持兼容；任务进度仍以既有 SSE 事件继续输出。
+DeepThink、教案、组卷、一键出卷、知识视频、AI 出题/评分和好题鉴别属于中型或重型 AI 任务。默认 `AGENT_RUNTIME=codex_runtime` 时，这些 agent 入口由本机 Codex runtime 非交互执行；普通导出、作文批改等非 agent 流程不受影响。自学资料生成默认不走 Codex runtime（见下文 `STUDY_MATERIALS_AGENT_RUNTIME` 说明）。任务启动事件会携带 `data.native_agentic=true` 与 `data.agent_run_spec`，用于描述原生 agentic 的 domain、goal、roles、tool_policy、budget、output_contract、resume_state 和 metadata。`agent_run_spec.metadata.runtime` 为 `codex_runtime`，并包含可忽略的 `codex_runtime_version`、`approval_policy` 与 `sandbox_mode`。客户端可忽略新增字段以保持兼容；任务进度仍以既有 SSE 事件继续输出。
 
 状态与控制：
 
@@ -132,8 +132,17 @@ SSE 事件包含递增 `seq`。客户端应保存最后处理过的 `seq`，重�
 - `GET /api/conversations/{conv_id}/messages`
 - `POST /api/conversations/{conv_id}/fork`
 - `POST /api/chat`
+- `POST /api/chat/{conversation_id}/cancel`
 
-`POST /api/chat` 返回 SSE，常见事件类型包括 `stream_start`、`text_delta`、`tool_start`、`tool_result`、`assistant_final` 和 `error`。
+`POST /api/chat` 返回 SSE，常见事件类型包括 `stream_start`、`text_delta`、`thinking_delta`、`iteration`、`assistant`、`tool_start`、`tool_result`、`assistant_final`、`cancelled` 和 `error`。
+
+补充契约（2026-07-26）：
+
+- 请求体可选 `intent` 字段（如 `confirm_create_paper`）：结构化语义确认。提供时服务端据此确定性判定是否开放完整工具集（历史中需存在可解析的 `<EXAM_PAPER_PLAN>` 方案），完全绕过确认词子串匹配；未提供时沿用确认词匹配（带否定守卫，「不可以 / 不要开始」不再误命中）。
+- `tool_start` / `tool_result` 携带 `execution_mode`（`parallel` | `sequential`），在执行前判定并显式声明同轮工具的执行方式。
+- `tool_result` 携带服务端权威单工具耗时：`started_at` / `finished_at`（epoch 秒）与 `elapsed_ms`（毫秒）。
+- `assistant_final` 达到最大轮数时带 `max_reached: true`。
+- `POST /api/chat/{conversation_id}/cancel` 请求取消该会话进行中的生成，返回 `{success, accepted}`；`accepted=true` 仅表示取消信号已发出。实际停止以流内 `cancelled` 事件为准（协作式取消：正在执行的串行写类工具会先完整结束，未开始的工具不再执行；并行只读批会被中断）。取消确认后会落一条说明性 assistant 消息，随后流以 `[DONE]` 结束。
 
 ## 试卷与导出
 
@@ -223,7 +232,9 @@ AI 出题任务的 `progress` SSE 事件会携带结构化阶段字段：`stage_
 - `POST /api/study-materials/convert-markdown-to-latex`
 - `POST /api/study-materials/convert-markdown-to-latex/stream`
 
-当 `AGENT_RUNTIME=codex_runtime` 时，自学资料由后端状态机依次执行规划、检索、写作、独立审查、修订和验收。Codex 子进程返回 `completed` 只表示当前阶段结束；只有当前 Markdown 满足 preset 对应的来源覆盖、内容覆盖，并且独立审查通过后，任务才会进入 `completed`。
+自学资料生成默认（`STUDY_MATERIALS_AGENT_RUNTIME` 留空）走不依赖 Codex CLI 的 legacy AgentCore 路径：由后端 agent 依次执行规划、检索、逐知识点研究、写作、反思自检与导出，事件流为 `status` / `thinking` / `tool_call` / `tool_result` / `subagent_start` / `subagent_end` / `progress` / `done` / `error`，最终 Markdown 与下载链接在 `done.data.material` 中返回。
+
+仅当显式设置 `STUDY_MATERIALS_AGENT_RUNTIME=codex_runtime` 时，自学资料才由 Codex 分阶段工作流执行：后端状态机依次执行规划、检索、写作、独立审查、修订和验收。Codex 子进程返回 `completed` 只表示当前阶段结束；只有当前 Markdown 满足 preset 对应的来源覆盖、内容覆盖，并且独立审查通过后，任务才会进入 `completed`。
 
 该流程会追加以下 SSE 事件，同时保留原有事件兼容性：
 

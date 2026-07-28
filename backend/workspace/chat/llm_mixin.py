@@ -122,7 +122,17 @@ class ChatLLMMixin:
         if not msg:
             return False
         keywords = {"确认", "开始", "开始组卷", "可以", "好的", "ok", "yes", "go"}
-        return any(k in msg for k in keywords)
+        # 否定守卫：紧邻关键词前出现否定字（不/别/勿/莫）时该次命中不算确认，
+        # 避免「不可以」「不要开始」误触发。结构化 intent（§9.1）不经过本函数。
+        negation_chars = ("不", "别", "勿", "莫")
+        for keyword in keywords:
+            idx = msg.find(keyword)
+            while idx != -1:
+                window = msg[max(0, idx - 2) : idx]
+                if not any(neg in window for neg in negation_chars):
+                    return True
+                idx = msg.find(keyword, idx + 1)
+        return False
 
     def _build_messages(self, history: List[Dict[str, Any]], user_message: str, subject: str) -> List[Dict[str, Any]]:
         system_prompt = get_system_prompt(subject)

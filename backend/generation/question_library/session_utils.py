@@ -176,8 +176,22 @@ def normalize_draft_questions(input_value: Any) -> List[dict]:
     return out
 
 
+def resolve_requested_count(container: Any, *, draft_count: int) -> int:
+    raw = container if isinstance(container, dict) else {}
+    value = raw.get("requested_count")
+    if value is None:
+        # Legacy sessions stored the batch request in ``count``.  New payloads
+        # expose both fields, so this fallback is only for pre-migration data.
+        value = raw.get("count")
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, int(draft_count))
+
+
 def serialize_session_preview(obj: dict) -> dict:
     drafts = normalize_draft_questions(obj.get("draft_questions") if isinstance(obj, dict) else [])
+    draft_count = len(drafts)
     return {
         "preview_id": str((obj or {}).get("preview_id") or "").strip(),
         "session_id": str((obj or {}).get("session_id") or "").strip(),
@@ -191,7 +205,9 @@ def serialize_session_preview(obj: dict) -> dict:
         "use_reference_questions": bool((obj or {}).get("use_reference_questions", True)),
         "reference_source": str((obj or {}).get("reference_source") or "any").strip() or "any",
         "reference_year_range": str((obj or {}).get("reference_year_range") or "all").strip() or "all",
-        "count": len(drafts),
+        "count": draft_count,
+        "requested_count": resolve_requested_count(obj, draft_count=draft_count),
+        "draft_count": draft_count,
         "intuition_practice": normalize_intuition_practice_config((obj or {}).get("intuition_practice")),
         "draft_questions": drafts,
     }
@@ -199,6 +215,7 @@ def serialize_session_preview(obj: dict) -> dict:
 
 def serialize_session_summary(session: dict) -> dict:
     drafts = normalize_draft_questions(session.get("draft_questions") if isinstance(session, dict) else [])
+    draft_count = len(drafts)
     reasoning_blocks = session.get("reasoning_blocks") if isinstance(session.get("reasoning_blocks"), list) else []
     return {
         "session_id": str((session or {}).get("session_id") or "").strip(),
@@ -208,7 +225,9 @@ def serialize_session_summary(session: dict) -> dict:
         "subject": str((session or {}).get("subject") or "").strip(),
         "topic": str((session or {}).get("topic") or "").strip(),
         "intuition_practice": normalize_intuition_practice_config((session or {}).get("intuition_practice")),
-        "count": len(drafts),
+        "count": draft_count,
+        "requested_count": resolve_requested_count(session, draft_count=draft_count),
+        "draft_count": draft_count,
         "task_ids": list(session.get("task_ids") or []) if isinstance(session.get("task_ids"), list) else [],
         "latest_task_id": str((session or {}).get("latest_task_id") or "").strip(),
         "updated_at_s": float((session or {}).get("updated_at_s") or (session or {}).get("created_at_s") or 0.0),

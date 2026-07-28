@@ -57,7 +57,9 @@ def _expand_field(
 
 def seed_root_specs(source_pack: dict, count: int, difficulty: str, question_type: str) -> List[dict]:
     subj = str((source_pack or {}).get("subject") or "").strip()
-    top = str((source_pack or {}).get("topic") or "").strip()
+    top = str(
+        (source_pack or {}).get("requested_topic") or (source_pack or {}).get("topic") or ""
+    ).strip()
     specs: List[dict] = []
     # Root seeding should create a small, diverse set of candidates (4-6) before expansion.
     target = max(1, min(int(count or 1), 10))
@@ -99,7 +101,9 @@ def seed_root_specs_from_brainstorm(
     """
 
     subj = str((source_pack or {}).get("subject") or "").strip()
-    top = str((source_pack or {}).get("topic") or "").strip()
+    top = str(
+        (source_pack or {}).get("requested_topic") or (source_pack or {}).get("topic") or ""
+    ).strip()
     target = max(1, min(int(count or 1), 10))
     n = max(4, min(10, max(4, target)))
 
@@ -122,6 +126,8 @@ def seed_root_specs_from_brainstorm(
         angle = str(seed.get("angle") or seed.get("reasoning_angle") or "").strip()
         scenario = str(seed.get("scenario") or "").strip()
         novelty = str(seed.get("novelty_note") or seed.get("novelty") or "").strip()
+        mother_question_demand = str(seed.get("mother_question_demand") or "").strip()
+        topic_binding = str(seed.get("topic_binding") or "").strip()
         seed_tag = str(seed.get("seed_tag") or seed.get("seedTag") or "").strip()
         if not seed_tag:
             seed_tag = concept or f"创意种子{i + 1}"
@@ -139,6 +145,8 @@ def seed_root_specs_from_brainstorm(
             "brainstorm_angle": angle,
             "brainstorm_scenario": scenario,
             "brainstorm_novelty_note": novelty,
+            "brainstorm_mother_question_demand": mother_question_demand,
+            "brainstorm_topic_binding": topic_binding,
             "brainstorm_skill_hint": str(seed.get("skill_hint") or "").strip(),
             "brainstorm_reasoning_hint": str(seed.get("reasoning_hint") or "").strip(),
             "intuition_practice": practice_config,
@@ -157,22 +165,51 @@ def expand_skill_layer(specs: List[dict], config: dict) -> List[dict]:
     if not specs:
         return []
     subj = str((specs[0] or {}).get("subject") or "").strip()
-    options = get_skills(subj) or ["概念辨析", "性质判定", "计算推导", "条件反推", "综合应用"]
-    return _expand_field(
-        specs,
+    fallback_options = get_skills(subj) or ["概念辨析", "性质判定", "计算推导", "条件反推", "综合应用"]
+    # A brainstorm seed is already topic-aware. Do not overwrite its skill with
+    # an unrelated subject-wide branch (for example probability/statistics on an
+    # arithmetic-sequence request) merely because the generic option scores well.
+    hinted: List[dict] = []
+    fallback: List[dict] = []
+    for spec in specs:
+        skill_hint = str((spec or {}).get("brainstorm_skill_hint") or "").strip()
+        if skill_hint:
+            child = dict(spec)
+            child["skill"] = skill_hint
+            child["layer"] = "skill"
+            parent_id = str(child.get("spec_id") or "spec")
+            child["spec_id"] = f"{parent_id}/skill:{_stable_child_id(skill_hint)}"
+            hinted.append(child)
+        else:
+            fallback.append(spec)
+    expanded_fallback = _expand_field(
+        fallback,
         field="skill",
         layer="skill",
-        options=options,
+        options=fallback_options,
         branch_factor=int((config or {}).get("skill_branch_factor") or DEFAULT_SEARCH_CONFIG["skill_branch_factor"]),
         budget=int((config or {}).get("expand_budget") or DEFAULT_SEARCH_CONFIG["expand_budget"]),
     )
+    return [*hinted, *expanded_fallback]
 
 
 def expand_reasoning_layer(specs: List[dict], config: dict) -> List[dict]:
     if not specs:
         return []
     subj = str((specs[0] or {}).get("subject") or "").strip()
-    if "数学" in subj or subj.lower() in {"math", "mathematics"}:
+    practice_goal = str(
+        (((specs[0] or {}).get("intuition_practice") or {}) if isinstance((specs[0] or {}).get("intuition_practice"), dict) else {}).get(
+            "practice_goal"
+        )
+        or ""
+    ).strip()
+    if practice_goal == "solution_appreciation":
+        options = [
+            "先发现同一决定性结构，再比较两种不同表征",
+            "自行构造局部与整体两条路线并评价结构可见性",
+            "比较不变量法与另一种组织对象不同的解法",
+        ]
+    elif "数学" in subj or subj.lower() in {"math", "mathematics"}:
         # Do not inherit the legacy subject-bank bias toward long derivations.
         options = [
             "先估计再验证",
@@ -190,21 +227,45 @@ def expand_reasoning_layer(specs: List[dict], config: dict) -> List[dict]:
             "检查边界与反例",
             "比较两种解释的证据简约性",
         ]
-    return _expand_field(
-        specs,
+    hinted: List[dict] = []
+    fallback: List[dict] = []
+    for spec in specs:
+        reasoning_hint = str((spec or {}).get("brainstorm_reasoning_hint") or "").strip()
+        if reasoning_hint:
+            child = dict(spec)
+            child["reasoning"] = reasoning_hint
+            child["layer"] = "reasoning"
+            parent_id = str(child.get("spec_id") or "spec")
+            child["spec_id"] = f"{parent_id}/reasoning:{_stable_child_id(reasoning_hint)}"
+            hinted.append(child)
+        else:
+            fallback.append(spec)
+    expanded_fallback = _expand_field(
+        fallback,
         field="reasoning",
         layer="reasoning",
         options=options,
         branch_factor=int((config or {}).get("reasoning_branch_factor") or DEFAULT_SEARCH_CONFIG["reasoning_branch_factor"]),
         budget=int((config or {}).get("expand_budget") or DEFAULT_SEARCH_CONFIG["expand_budget"]),
     )
+    return [*hinted, *expanded_fallback]
 
 
 def expand_trap_layer(specs: List[dict], config: dict) -> List[dict]:
     if not specs:
         return []
     subj = str((specs[0] or {}).get("subject") or "").strip()
-    options = get_traps(subj) or ["边界遗漏", "条件方向错误", "概念混淆", "范围忽略"]
+    practice_goal = str(
+        (((specs[0] or {}).get("intuition_practice") or {}) if isinstance((specs[0] or {}).get("intuition_practice"), dict) else {}).get(
+            "practice_goal"
+        )
+        or ""
+    ).strip()
+    options = (
+        ["把同一公式改写误当两种解法", "只在附加练习包中谈结构"]
+        if practice_goal == "solution_appreciation"
+        else (get_traps(subj) or ["边界遗漏", "条件方向错误", "概念混淆", "范围忽略"])
+    )
     return _expand_field(
         specs,
         field="trap",
@@ -219,7 +280,17 @@ def expand_surface_layer(specs: List[dict], config: dict) -> List[dict]:
     if not specs:
         return []
     subj = str((specs[0] or {}).get("subject") or "").strip()
-    options = get_surfaces(subj) or ["综合题", "探究题", "应用题", "辨析题"]
+    practice_goal = str(
+        (((specs[0] or {}).get("intuition_practice") or {}) if isinstance((specs[0] or {}).get("intuition_practice"), dict) else {}).get(
+            "practice_goal"
+        )
+        or ""
+    ).strip()
+    options = (
+        ["结构探究与解法品鉴题", "两种表征辨析题"]
+        if practice_goal == "solution_appreciation"
+        else (get_surfaces(subj) or ["综合题", "探究题", "应用题", "辨析题"])
+    )
     return _expand_field(
         specs,
         field="surface",

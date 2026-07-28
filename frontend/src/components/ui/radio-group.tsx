@@ -1,78 +1,36 @@
-import * as React from 'react'
-import { Circle } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import * as React from "react";
+import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
+import { Circle } from "lucide-react";
 
-type RadioGroupContextValue = {
-  value: string
-  onValueChange?: (value: string) => void
-  name: string
-}
+import { cn } from "@/lib/utils";
 
-const RadioGroupContext = React.createContext<RadioGroupContextValue | null>(null)
+const RadioGroup = React.forwardRef<
+  React.ComponentRef<typeof RadioGroupPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>
+>(({ className, ...props }, ref) => {
+  return <RadioGroupPrimitive.Root className={cn("grid gap-2", className)} {...props} ref={ref} />;
+});
+RadioGroup.displayName = RadioGroupPrimitive.Root.displayName;
 
-interface RadioGroupProps extends React.HTMLAttributes<HTMLDivElement> {
-  value?: string
-  defaultValue?: string
-  onValueChange?: (value: string) => void
-  name?: string
-}
-
-const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
-  ({ className, value, defaultValue = '', onValueChange, name, children, ...props }, ref) => {
-    const [internalValue, setInternalValue] = React.useState(defaultValue)
-    const current = value ?? internalValue
-    const groupName = React.useId()
-    const ctx = React.useMemo(
-      () => ({
-        value: current,
-        onValueChange: (next: string) => {
-          setInternalValue(next)
-          onValueChange?.(next)
-        },
-        name: name || groupName,
-      }),
-      [current, groupName, name, onValueChange]
-    )
-    return (
-      <RadioGroupContext.Provider value={ctx}>
-        <div ref={ref} role="radiogroup" className={cn('aurora-ui-radio-group grid gap-2', className)} {...props}>
-          {children}
-        </div>
-      </RadioGroupContext.Provider>
-    )
-  }
-)
-RadioGroup.displayName = 'RadioGroup'
-
-interface RadioGroupItemProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'onChange'> {
-  value: string
-}
-
-const RadioGroupItem = React.forwardRef<HTMLInputElement, RadioGroupItemProps>(({ className, value, ...props }, ref) => {
-  const ctx = React.useContext(RadioGroupContext)
-  const checked = ctx?.value === value
+const RadioGroupItem = React.forwardRef<
+  React.ComponentRef<typeof RadioGroupPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
+>(({ className, ...props }, ref) => {
   return (
-    <span
+    <RadioGroupPrimitive.Item
+      ref={ref}
       className={cn(
-        'aurora-ui-radio-item inline-flex h-4 w-4 items-center justify-center rounded-full border border-primary text-primary',
-        checked && 'aurora-ui-radio-item-checked bg-primary text-primary-foreground',
-        className
+        "aspect-square size-4 cursor-pointer rounded-full border border-input bg-card text-primary shadow-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
+        className,
       )}
+      {...props}
     >
-      <input
-        ref={ref}
-        type="radio"
-        className="sr-only"
-        name={ctx?.name}
-        value={value}
-        checked={checked}
-        onChange={() => ctx?.onValueChange?.(value)}
-        {...props}
-      />
-      {checked && <Circle className="h-2 w-2 fill-current" />}
-    </span>
-  )
-})
-RadioGroupItem.displayName = 'RadioGroupItem'
+      <RadioGroupPrimitive.Indicator className="flex items-center justify-center">
+        <Circle className="size-2.5 fill-primary text-primary" />
+      </RadioGroupPrimitive.Indicator>
+    </RadioGroupPrimitive.Item>
+  );
+});
+RadioGroupItem.displayName = RadioGroupPrimitive.Item.displayName;
 
-export { RadioGroup, RadioGroupItem }
+export { RadioGroup, RadioGroupItem };

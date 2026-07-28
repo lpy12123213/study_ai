@@ -322,6 +322,9 @@ def normalize_intuition_packet(
         "conditions_sufficient": bool(validation_raw.get("conditions_sufficient", False)),
         "unambiguous": bool(validation_raw.get("unambiguous", False)),
         "transfer_valid": bool(validation_raw.get("transfer_valid", False)),
+        "intuition_aligned": bool(validation_raw.get("intuition_aligned", False)),
+        "structural_depth": bool(validation_raw.get("structural_depth", False)),
+        "request_aligned": bool(validation_raw.get("request_aligned", False)),
         "issues": [
             _text(item, limit=300)
             for item in (validation_raw.get("issues") or [])
@@ -379,6 +382,9 @@ def attach_quick_validation(packet: dict, report: dict, *, repaired: bool) -> di
         "conditions_sufficient": bool((report or {}).get("conditions_sufficient")),
         "unambiguous": bool((report or {}).get("unambiguous")),
         "transfer_valid": bool((report or {}).get("transfer_valid")),
+        "intuition_aligned": bool((report or {}).get("intuition_aligned")),
+        "structural_depth": bool((report or {}).get("structural_depth")),
+        "request_aligned": bool((report or {}).get("request_aligned")),
         "issues": [
             _text(item, limit=300)
             for item in ((report or {}).get("issues") or [])

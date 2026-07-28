@@ -383,12 +383,17 @@ async def create_media_import_task(
     save_session(current_session)
 
     def _save_snapshot(*, session_status: str, preview_status: str, drafts: List[dict]) -> None:
+        normalized_drafts = normalize_draft_questions(drafts)
+        draft_count = len(normalized_drafts)
         session = load_session(session_id) or {}
         if isinstance(session, dict):
             session = dict(session)
             session["status"] = session_status
             session["source_type"] = "media_import"
-            session["draft_questions"] = normalize_draft_questions(drafts)
+            session["draft_questions"] = normalized_drafts
+            session["requested_count"] = count
+            session["draft_count"] = draft_count
+            session["count"] = draft_count
             save_session(session)
 
         save_preview(
@@ -407,7 +412,10 @@ async def create_media_import_task(
                 "reference_source": "any",
                 "reference_year_range": "all",
                 "source_type": "media_import",
-                "draft_questions": normalize_draft_questions(drafts),
+                "count": draft_count,
+                "requested_count": count,
+                "draft_count": draft_count,
+                "draft_questions": normalized_drafts,
             }
         )
 
@@ -512,6 +520,8 @@ async def create_media_import_task(
                         "question_type": question_type,
                         "use_study_archive": False,
                         "count": len(drafts),
+                        "requested_count": count,
+                        "draft_count": len(drafts),
                         "draft_questions": drafts,
                     },
                 },
@@ -894,14 +904,27 @@ async def create_generate_task(
 
     async def runner_factory(task: RuntimeTask) -> None:
         draft_key_to_id: Dict[str, str] = {}
-        progress_drafts = normalize_draft_questions(
+        persisted_drafts = normalize_draft_questions(
             ((existing_preview or {}).get("draft_questions") if isinstance(existing_preview, dict) else [])
             or ((current_session or {}).get("draft_questions") if isinstance(current_session, dict) else [])
         )
+        # A standard run is a fresh selection whose final size is governed by
+        # ``count``.  Append/infinite runs, on the other hand, build on drafts
+        # that were already selected in a previous run/batch.
+        progress_drafts = persisted_drafts if append_mode or mode == "infinite" else []
+        batch_base_drafts = [dict(item) for item in progress_drafts]
 
-        def _save_snapshot(*, session_status: str, preview_status: str, new_drafts: Optional[List[dict]] = None) -> None:
+        def _save_snapshot(
+            *,
+            session_status: str,
+            preview_status: str,
+            new_drafts: Optional[List[dict]] = None,
+            replace_drafts: Optional[List[dict]] = None,
+        ) -> None:
             nonlocal progress_drafts
-            if new_drafts:
+            if replace_drafts is not None:
+                progress_drafts = normalize_draft_questions(replace_drafts)
+            elif new_drafts:
                 progress_drafts = merge_drafts(progress_drafts, new_drafts)
 
             session = load_session(session_id) or {}
@@ -909,6 +932,9 @@ async def create_generate_task(
                 session = dict(session)
                 session["status"] = str(session_status or "").strip() or session.get("status") or "running"
                 session["draft_questions"] = progress_drafts
+                session["requested_count"] = count
+                session["draft_count"] = len(progress_drafts)
+                session["count"] = len(progress_drafts)
                 session.setdefault("reasoning_blocks", [])
                 save_session(session)
 
@@ -929,6 +955,9 @@ async def create_generate_task(
                     "reference_year_range": reference_year_range,
                     "intuition_practice": intuition_practice,
                     "study_markdown": "",
+                    "count": len(progress_drafts),
+                    "requested_count": count,
+                    "draft_count": len(progress_drafts),
                     "draft_questions": progress_drafts,
                 }
             )
@@ -1049,6 +1078,9 @@ async def create_generate_task(
                 on_reasoning_event=_on_reasoning_event,
             )
             source_pack = enrich_source_pack_with_curriculum(source_pack, curriculum)
+            # Keep the compact topic for retrieval/curriculum lookup, but carry
+            # the complete user-authored contract through generation and judging.
+            source_pack["requested_topic"] = topic_raw
             source_pack["knowledge_points"] = list(knowledge_points)
             source_pack["grade_id"] = grade_id
             source_pack["textbook_version_id"] = textbook_version_id
@@ -1105,6 +1137,11 @@ async def create_generate_task(
                 if await _stop_requested():
                     break
                 batches += 1
+                # Candidate callbacks are intentionally visible while a batch
+                # is running, but only select_final's return value may survive
+                # a successful batch.  Keep the selected baseline so transient
+                # accepted candidates can be discarded afterwards.
+                batch_base_drafts = [dict(item) for item in progress_drafts]
                 try:
                     finals = await generate_questions(
                         source_pack=source_pack,
@@ -1130,20 +1167,37 @@ async def create_generate_task(
                         }
                     )
                     if mode == "infinite":
+                        _save_snapshot(
+                            session_status="running",
+                            preview_status="running",
+                            replace_drafts=batch_base_drafts,
+                        )
                         await asyncio.sleep(0.2)
                         continue
                     raise
 
                 finals = [dict(x) for x in (finals or []) if isinstance(x, dict)]
                 if not finals:
+                    _save_snapshot(
+                        session_status="running",
+                        preview_status="running",
+                        replace_drafts=batch_base_drafts,
+                    )
                     if mode == "infinite":
                         await asyncio.sleep(0.2)
                         continue
                     break
 
-                materialized, _ = _materialize_drafts(finals, existing_drafts=progress_drafts, draft_key_to_id=draft_key_to_id)
-                if materialized:
-                    _save_snapshot(session_status="running", preview_status="running", new_drafts=materialized)
+                materialized, _ = _materialize_drafts(
+                    finals,
+                    existing_drafts=batch_base_drafts,
+                    draft_key_to_id=draft_key_to_id,
+                )
+                _save_snapshot(
+                    session_status="running",
+                    preview_status="running",
+                    replace_drafts=merge_drafts(batch_base_drafts, materialized),
+                )
 
                 if mode != "infinite":
                     break
@@ -1176,6 +1230,8 @@ async def create_generate_task(
                     "reference_year_range": reference_year_range,
                     "intuition_practice": intuition_practice,
                     "count": len(progress_drafts),
+                    "requested_count": count,
+                    "draft_count": len(progress_drafts),
                 },
                 user_id=user_id,
                 persist_task_id=task_id,
@@ -1197,9 +1253,15 @@ async def create_generate_task(
         except Exception as exc:  # pragma: no cover
             try:
                 # Preserve any accepted drafts for the review UI, even when the
-                # pipeline fails mid-way (e.g., judge stage crash).
+                # pipeline fails mid-way (e.g., judge stage crash), but do not
+                # let the transient accepted pool bypass the requested count.
                 if progress_drafts:
-                    _save_snapshot(session_status="partial_failure", preview_status="pending_review")
+                    partial_limit = len(batch_base_drafts) + count
+                    _save_snapshot(
+                        session_status="partial_failure",
+                        preview_status="pending_review",
+                        replace_drafts=progress_drafts[:partial_limit],
+                    )
                 else:
                     _save_snapshot(session_status="failed", preview_status="pending_review")
             except Exception:

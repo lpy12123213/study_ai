@@ -1,6 +1,0 @@
-export { AccuracyByTypePanel } from '@/features/insights/components/AccuracyByTypePanel'
-export { ActivityPanel } from '@/features/insights/components/ActivityPanel'
-export { EssayPanel } from '@/features/insights/components/EssayPanel'
-export { ExamTrendPanel } from '@/features/insights/components/ExamTrendPanel'
-export { WrongbookMasteryPanel } from '@/features/insights/components/WrongbookMasteryPanel'
-export { useInsights } from '@/features/insights/hooks/useInsights'
