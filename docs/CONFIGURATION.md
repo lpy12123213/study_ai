@@ -193,12 +193,17 @@ python scripts/check_config.py --strict
 - `STUDY_MATERIALS_STEP_TIMEOUT_S`
 - `STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S`
 - `STUDY_MATERIALS_SSE_HEARTBEAT_S`
+- `STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS`: 默认 `30000`。单阶段 Codex worker 提示词载荷上限（字符）；超出时先按知识点裁剪研究证据、再按剩余预算截断正文。
 
 任务池：
 
 - `STUDY_MATERIALS_TASK_TTL_S`
 - `STUDY_MATERIALS_MAX_TASKS`
 - `STUDY_MATERIALS_TASK_MAX_EVENTS`
+
+归档复用：
+
+- `STUDY_MATERIALS_ARCHIVE_MAX_AGE_S`: 默认 `1209600`（14 天）。本地归档自动复用的新鲜度上限，超过该年龄的归档不再直接复用；`0` 表示不做时间过期。
 
 ## 教案
 

@@ -668,8 +668,16 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         必须有日志与任务事件，且 AgentCore 真正跑起来完成任务（不再靠位置静默落入）。
         """
 
+        import logging
+
         from backend.generation.study_materials import orchestrator
         from backend.generation.study_materials.codex_stages import StageResultError
+
+        # 全量套件里 alembic env.py 的 fileConfig（disable_existing_loggers=True，
+        # 见 test_database_alembic）可能已把该 logger 置为 disabled；assertLogs
+        # 只恢复 handlers/level/propagate，不会复位 disabled，这里显式复位，
+        # 保证本用例与测试执行顺序无关。
+        logging.getLogger("backend.generation.study_materials.orchestrator").disabled = False
 
         manager = StudyMaterialsTaskManager()
         task = _task(task_id="study-fallback")

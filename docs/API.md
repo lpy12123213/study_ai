@@ -227,10 +227,29 @@ AI 出题任务的 `progress` SSE 事件会携带结构化阶段字段：`stage_
 
 自学资料：
 
-- `POST /api/tasks/study-materials/generate`
-- `POST /api/tasks/study-materials/{task_id}/continue`
+- `POST /api/tasks/study-materials/generate`：canonical 任务提交，返回 `{success, taskId}`。
+- `POST /api/tasks/study-materials/{task_id}/continue`：canonical 续作提交，返回 `{success, taskId}`。
+- `POST /api/study-materials/generate`：兼容流式入口（POST 即 SSE）。
+- `POST /api/study-materials/tasks/{task_id}/continue`：兼容流式续作（POST 即 SSE）。
+- `GET /api/study-materials/tasks/{task_id}`：兼容状态视图。
+- `GET /api/study-materials/tasks/{task_id}/stream?after_seq=0`：兼容续流/回放。
 - `POST /api/study-materials/convert-markdown-to-latex`
 - `POST /api/study-materials/convert-markdown-to-latex/stream`
+
+两个 generate 入口共享同一个 options 规范化函数（`build_study_materials_options`）：`requirements` 截断到 600 字符，`max_points` 夹在 1-15，非法/非正值直接丢弃，两个入口行为完全一致。
+
+两个 POST 即流接口在响应头携带 `X-Task-Id`（generate 为新任务 id，continue 为续作任务 id），客户端无需解析事件流即可拿到任务 id，随后用 GET 流重连；浏览器跨源读取依赖 CORS `expose_headers` 已暴露该头。
+
+`convert-markdown-to-latex/stream` 使用与任务流一致的标准信封：每帧 `data: {taskId, seq, type, data}`（`taskId` 为本次转换的合成 id），事件类型包括 `status` / `progress` / `tool_call` / `tool_result` / `done` / `error`；工具执行期间按 `STUDY_MATERIALS_SSE_HEARTBEAT_S`（默认 4 秒）发送 `ping` 心跳（不推进 `seq`，`data` 为 `{status: "running", last_seq}`），流以 `data: [DONE]` 结束。
+
+自学资料归档：
+
+- `GET /api/study-archives?limit=&offset=&base_fingerprint=`
+- `GET /api/study-archives/{archive_id}`
+- `POST /api/study-archives`
+- `POST /api/study-archives/{archive_id}/clone`
+
+`GET /api/study-archives` 返回 `{items, count}`；`base_fingerprint` 按 subject+topic+requirements 的确定性指纹过滤同一主题的归档版本，空串/纯空白视为未传参。
 
 自学资料生成默认（`STUDY_MATERIALS_AGENT_RUNTIME` 留空）走不依赖 Codex CLI 的 legacy AgentCore 路径：由后端 agent 依次执行规划、检索、逐知识点研究、写作、反思自检与导出，事件流为 `status` / `thinking` / `tool_call` / `tool_result` / `subagent_start` / `subagent_end` / `progress` / `done` / `error`，最终 Markdown 与下载链接在 `done.data.material` 中返回。
 
@@ -238,12 +257,32 @@ AI 出题任务的 `progress` SSE 事件会携带结构化阶段字段：`stage_
 
 该流程会追加以下 SSE 事件，同时保留原有事件兼容性：
 
-- `workflow_stage`：当前阶段、最近成功阶段和修订次数。
-- `quality_report`：逐知识点的来源覆盖与未通过检查。
-- `revision_required`：审查问题和剩余修订次数。
-- `recovery_available`：可恢复失败的阶段、错误码和问题列表。
+- `workflow_stage`：`{stage, last_successful_stage, revision_attempts, research_attempts}`。
+- `quality_report`：质量门报告 `{passed, failed_checks, per_knowledge_point, preset, quality_policy_version}`；`per_knowledge_point` 以知识点 id 为键，值为 `{passed, failed_checks, source_count, source_classes}`；验收阶段报告另含 `draft_hash`、`review_schema_version`、`dimension_count`、`lint_flags`。
+- `research_retry_required`：检索质量门未过且仍有重试额度，`data` 为 `{point_ids, attempt, remaining_attempts}`。
+- `revision_required`：审查问题和剩余修订次数 `{issues, remaining_attempts}`。
+- `quality_degraded`：修订次数耗尽但已有成稿时的降级交付，`data` 为 `{issues, revision_attempts}`。
+- `recovery_available`：可恢复失败的 `{code, stage, issues, recoverable}`；`code` 包括 `research_tool_outage`（检索工具不可用）、`quality_gate_not_met`（质量门未过）、`invalid_workflow_stage`、`workflow_iteration_limit`。
+- `codex_fallback_to_legacy`：Codex 阶段结果缺失且允许回退时显式切换到内置生成流程，`data` 为 `{stage, detail, content}`。
 
-若来源不足、审查持续不通过或修订次数耗尽，任务以可恢复的 `quality_gate_not_met` 失败结束，并保留工作流快照；它不会以部分 Markdown 冒充成功。历史归档只有在草稿哈希、preset、质量策略版本和审查版本均匹配时才能直接复用，否则作为候选草稿重新检索和验收。
+任务流中还可能穿插运维告警事件：`persistence_warning`（快照/归档持久化失败，不再静默；`data` 为 `{target, error}`，`target` 为 `snapshot_load` / `snapshot_persist` / `archive_upsert`）和 `export_failed`（Markdown 导出重试 2 次仍失败，`data` 为 `{target: "markdown_export", error}`；导出失败不再拖垮任务，任务仍以 Markdown 结果完成）。
+
+完成与降级契约：
+
+- `done.data.material` 始终携带 `{topic, subject, markdown, iteration, passed, issues, error}` 与下载链接字段。
+- 验收通过时 `material.passed=true` 且 `done.data.acceptance` 为验收记录；降级交付时 `done.data.degraded=true`、`material.passed=false`、`material.issues` 列出未通过项、`acceptance` 为空。
+- 降级产物不写验收记录，归档永不被直接复用；同指纹再生成时仅作为候选草稿重新过质量门。
+
+检索来源不足、检索重试额度耗尽，或修订次数耗尽且无成稿时，任务以可恢复的 `quality_gate_not_met` 失败结束并保留工作流快照。历史归档只有在草稿哈希、preset、质量策略版本、审查版本与 options 指纹均匹配、且未超过新鲜度预算（`STUDY_MATERIALS_ARCHIVE_MAX_AGE_S`，默认 14 天，0 表示不做时间过期）时才能直接复用，否则作为候选草稿重新检索和验收。
+
+续作（continue）语义：
+
+- 两个 continue 入口共用同一实现；`mode` 可选 `improve`（默认）、`deepen_research`、`fix_export`、`skip_export`、`resume_failed_stage`、`retry_search`、`replan_from_failure`。
+- 未知 `mode` 返回 400，detail 以 `invalid_continue_mode` 为前缀并列出全部可选模式。
+- 已完成/失败/取消/暂停的任务均可续作；仅 `running` 状态返回 409 `Task still running`。
+- 磁盘快照只是缓存：快照缺失或过期时从 DB 任务行冷重建续作上下文（依次尝试结果载荷、同指纹归档、事件流回放），不再因快照过期返回 404；仅当 DB 行也不存在或无可重建内容时返回 404 `Task not found`，找到续作源但工作记忆为空时返回 400 `Task not resumable`。
+
+兼容状态视图 `GET /api/study-materials/tasks/{task_id}` 返回 `{status, error, first_seq, last_seq, resumable, recovery_available, last_success_step, last_failed_step, last_success_stage, last_failed_stage, per_kp_state, search_summary_by_kp, ...}`。快照缺失时同样回退 DB 构建视图；无快照且无可重建内容时 `resumable=false`（`recovery_available` 仅在任务失败且 `last_failure.recoverable` 非 false 时为 true）。
 
 教案：
 
