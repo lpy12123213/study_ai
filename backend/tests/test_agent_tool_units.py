@@ -347,10 +347,13 @@ class TestWebSearchKnowledgeMixin(unittest.IsolatedAsyncioTestCase):
             "limit": 5,
         }
 
-        with patch("backend.agent.tools.search.web_search_knowledge_impl.is_llm_configured", return_value=False):
-            with patch("backend.integrations.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
-                with patch("backend.integrations.mcp.search.tavily.tavily_search", tavily_search):
-                    result = await agent._tool_web_search_knowledge(args, ctx)
+        # 钉住搜索模式：部署 .env 可能显式设置 STUDY_MATERIALS_SEARCH_MODE（如 exa），
+        # 否则测试会绕过 tavily mock 并发起真实网络调用。
+        with patch.dict("os.environ", {"STUDY_MATERIALS_SEARCH_MODE": ""}):
+            with patch("backend.agent.tools.search.web_search_knowledge_impl.is_llm_configured", return_value=False):
+                with patch("backend.integrations.mcp.search.tavily.TAVILY_API_KEY", "tvly-test"):
+                    with patch("backend.integrations.mcp.search.tavily.tavily_search", tavily_search):
+                        result = await agent._tool_web_search_knowledge(args, ctx)
 
         item = result["items"][0]
         self.assertEqual(item["provider"], "tavily-search")

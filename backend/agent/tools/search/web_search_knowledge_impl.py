@@ -25,6 +25,82 @@ from backend.llm.prompts import create_default_prompt_registry
 logger = get_logger(__name__)
 
 
+# Permanent LLM misconfig signatures (deprecated model id / auth). Centralized so the
+# decompose health flag and the provider health cache share one matcher.
+_PERMANENT_LLM_ERROR_RE = re.compile(
+    r"http_status_(?:400|401|403|404)\b"
+    r"|\bstatus[=:\s]?(?:400|401|403|404)\b"
+    r"|model_not_found"
+    r"|does not exist"
+    r"|supported api model names"
+    r"|invalid[ _-]?model",
+    re.IGNORECASE,
+)
+
+# Explicit permanent auth failure (401/403). Quota-style errors do NOT qualify here;
+# Metaso is only skipped on this stricter signature (it has no key in this deployment).
+_PROVIDER_AUTH_ERROR_RE = re.compile(
+    r"(?:api error|api http|http_status|status)[:\s=_]*\(?\s*(?:401|403)\b"
+    r"|unauthorized"
+    r"|invalid[ _-]?api[ _-]?key",
+    re.IGNORECASE,
+)
+
+# Quota/auth failure for keyed search providers (Tavily 432/401/403, Exa 401/403).
+_PROVIDER_QUOTA_ERROR_RE = re.compile(
+    r"(?:api error|api http|http_status|status)[:\s=_]*\(?\s*(?:401|403|432)\b"
+    r"|unauthorized"
+    r"|invalid[ _-]?api[ _-]?key"
+    r"|quota[ _-]?(?:exceeded|limit)"
+    r"|insufficient[ _-]?(?:credits|quota|balance)",
+    re.IGNORECASE,
+)
+
+
+def _is_permanent_llm_error(err: Any) -> bool:
+    """True for permanent LLM misconfig (bad model/auth); never for timeouts/5xx/parse issues."""
+
+    return bool(err) and bool(_PERMANENT_LLM_ERROR_RE.search(str(err)))
+
+
+def _is_provider_quota_error(err: Any) -> bool:
+    """True when a search provider failure looks like quota/auth (e.g. Tavily 432)."""
+
+    return bool(err) and bool(_PROVIDER_QUOTA_ERROR_RE.search(str(err)))
+
+
+def _is_provider_auth_error(err: Any) -> bool:
+    """True only for explicit permanent auth failures (401/403); quota does not qualify."""
+
+    return bool(err) and bool(_PROVIDER_AUTH_ERROR_RE.search(str(err)))
+
+
+def _is_llm_origin_error(err: Any) -> bool:
+    """True for errors raised by the LLM layer (decompose/strategy), not the search provider.
+
+    A provider-level ``except`` can also catch exceptions from the decompose LLM call
+    (strict mode re-raises them before the provider was ever invoked). Those must
+    never mark the provider down.
+    """
+
+    s = str(err or "").strip()
+    if not s:
+        return False
+    return (
+        "llm_request_failed" in s
+        or "llm_decompose_failed" in s
+        or "llm_not_configured" in s
+        or _is_permanent_llm_error(s)
+    )
+
+
+# Fallback health store for contexts without working_memory. The primary store is the
+# task-scoped ctx.working_memory (it survives into resume snapshots); this module-level
+# dict keyed by task id is a size-capped last resort.
+_TASK_HEALTH_FALLBACK: Dict[str, Dict[str, Any]] = {}
+_TASK_HEALTH_FALLBACK_MAX_TASKS = 64
+
+
 def _web_subquestion_system_prompt() -> str:
     return create_default_prompt_registry().render("search.web_subquestion.decompose.v1").content
 
@@ -170,8 +246,87 @@ class WebSearchKnowledgeToolsMixin:
             # Avoid returning empty if our heuristic was too aggressive.
             return cleaned or raw
 
+        # --- Task-scoped health state -------------------------------------------
+        # Primary store: ctx.working_memory (task-scoped, survives into resume
+        # snapshots). Fallback: size-capped module-level dict keyed by task id.
+        def _health_task_id() -> str:
+            return str(getattr(ctx, "current_task", "") or "").strip() or "default"
+
+        def _health_peek() -> Dict[str, Any]:
+            wm = getattr(ctx, "working_memory", None)
+            if isinstance(wm, dict):
+                store = wm.get("_web_search_health")
+                return store if isinstance(store, dict) else {}
+            store = _TASK_HEALTH_FALLBACK.get(_health_task_id())
+            return store if isinstance(store, dict) else {}
+
+        def _health_store_locked() -> Dict[str, Any]:
+            wm = getattr(ctx, "working_memory", None)
+            if isinstance(wm, dict):
+                store = wm.get("_web_search_health")
+                if not isinstance(store, dict):
+                    store = {}
+                    wm["_web_search_health"] = store
+                return store
+            key = _health_task_id()
+            store = _TASK_HEALTH_FALLBACK.get(key)
+            if not isinstance(store, dict):
+                while len(_TASK_HEALTH_FALLBACK) >= _TASK_HEALTH_FALLBACK_MAX_TASKS:
+                    _TASK_HEALTH_FALLBACK.pop(next(iter(_TASK_HEALTH_FALLBACK)), None)
+                store = {}
+                _TASK_HEALTH_FALLBACK[key] = store
+            return store
+
+        def _llm_decompose_down() -> bool:
+            return bool(_health_peek().get("llm_decompose_down"))
+
+        async def _mark_llm_decompose_down(reason: str) -> None:
+            async with ctx.working_memory_lock:
+                store = _health_store_locked()
+                first = not store.get("llm_decompose_down")
+                store["llm_decompose_down"] = str(reason)[:200]
+            if first:
+                logger.warning(
+                    "web_search_decompose_llm_down",
+                    extra={"task": _health_task_id(), "reason": str(reason)[:200]},
+                )
+
+        def _provider_down_reason(name: str) -> str:
+            downs = _health_peek().get("providers_down")
+            if not isinstance(downs, dict):
+                return ""
+            return str(downs.get(name) or "")
+
+        async def _mark_provider_down(name: str, reason: str) -> None:
+            async with ctx.working_memory_lock:
+                store = _health_store_locked()
+                downs = store.setdefault("providers_down", {})
+                if not isinstance(downs, dict):
+                    downs = {}
+                    store["providers_down"] = downs
+                first = name not in downs
+                downs.setdefault(name, str(reason)[:200])
+            if first:
+                logger.warning(
+                    "web_search_provider_down",
+                    extra={"task": _health_task_id(), "provider": name, "reason": str(reason)[:200]},
+                )
+
+        # Sub-questions for a knowledge point are computed once per tool invocation and
+        # reused across provider fallbacks (Tavily -> Exa -> Metaso) in the same call.
+        decompose_cache: Dict[str, List[str]] = {}
+
         async def _decompose_sub_questions(*, knowledge_point: str, base_query: str) -> List[str]:
             """Use the LLM (DeepSeek v3.2) to refine a broad knowledge point into smaller askable questions."""
+
+            cache_key = f"{knowledge_point}\n{base_query}"
+            cached = decompose_cache.get(cache_key)
+            if cached:
+                return list(cached)
+
+            def _finish(questions: List[str]) -> List[str]:
+                decompose_cache[cache_key] = list(questions)
+                return questions
 
             # Allow overriding the "thinking" model separately (some providers expose a thinking variant).
             thinking_model = str(
@@ -186,6 +341,20 @@ class WebSearchKnowledgeToolsMixin:
                 min_value=2,
                 max_value=25,
             )
+
+            def _template_questions() -> List[str]:
+                # Deterministic split for when the LLM path is unavailable or unhealthy.
+                tpl = [
+                    f"{knowledge_point} 的定义与符号约定是什么？适用条件是什么？",
+                    f"{knowledge_point} 的直观理解/几何意义是什么？",
+                    f"{knowledge_point} 的关键结论/性质有哪些？每条结论的使用前提是什么？",
+                    f"{knowledge_point} 常见误区有哪些？各给一个反例或纠错点。",
+                    f"{knowledge_point} 常用方法/步骤是什么？",
+                    f"{knowledge_point} 的等价表述/充分必要条件有哪些？",
+                    f"{knowledge_point} 的边界情况/反例/不适用场景有哪些？",
+                    f"{knowledge_point} 的推导/证明思路（非细节）如何组织？",
+                ]
+                return tpl[:sub_n]
 
             # If LLM isn't configured, fall back to a deterministic template split (non-strict only).
             if not is_llm_configured():
@@ -203,8 +372,13 @@ class WebSearchKnowledgeToolsMixin:
                 ]
                 # Research presets: encourage deeper angles.
                 if preset in {"deep", "research"}:
-                    return tpl[:sub_n]
-                return tpl[:sub_n]
+                    return _finish(tpl[:sub_n])
+                return _finish(tpl[:sub_n])
+
+            # A permanent LLM misconfig (bad model/auth) marks the decompose LLM down for
+            # the rest of this task; later knowledge points go straight to templates.
+            if _llm_decompose_down():
+                return _finish(_template_questions())
 
             prompt = {
                 "subject": subject,
@@ -228,17 +402,29 @@ class WebSearchKnowledgeToolsMixin:
 
             last_err = ""
             for attempt in range(3):
-                text = await self._call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _web_subquestion_system_prompt()},
-                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                    ],
-                    model=thinking_model,
-                    temperature=0.2,
-                    max_tokens=1600,
-                    response_format={"type": "json_object"},
-                    raise_on_fail=strict_llm,
-                )
+                try:
+                    # Always raise_on_fail here so the real error string (status/api msg)
+                    # is visible for permanent-misconfig detection; non-strict mode still
+                    # falls back to templates below instead of propagating.
+                    text = await self._call_llm_text(
+                        messages=[
+                            {"role": "system", "content": _web_subquestion_system_prompt()},
+                            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                        ],
+                        model=thinking_model,
+                        temperature=0.2,
+                        max_tokens=1600,
+                        response_format={"type": "json_object"},
+                        raise_on_fail=True,
+                    )
+                except Exception as exc:
+                    err_text = str(exc) or "llm_decompose_exception"
+                    if _is_permanent_llm_error(err_text):
+                        await _mark_llm_decompose_down(err_text)
+                    last_err = err_text
+                    if strict_llm:
+                        raise
+                    break
                 obj = self._extract_json_obj(text)
                 items = obj.get("sub_questions")
                 if isinstance(items, list):
@@ -253,7 +439,7 @@ class WebSearchKnowledgeToolsMixin:
                         out.append(s)
                     # Ensure we always return something usable.
                     if len(out) >= 2:
-                        return out[:sub_n]
+                        return _finish(out[:sub_n])
                     last_err = f"too_few_items got={len(out)}"
                     if strict_llm and attempt < 2:
                         continue
@@ -267,17 +453,7 @@ class WebSearchKnowledgeToolsMixin:
                 raise RuntimeError(f"llm_decompose_failed: {last_err or 'unknown'} model={thinking_model}")
 
             # LLM failed to follow schema; use templates as fallback.
-            tpl = [
-                f"{knowledge_point} 的定义与符号约定是什么？适用条件是什么？",
-                f"{knowledge_point} 的直观理解/几何意义是什么？",
-                f"{knowledge_point} 的关键结论/性质有哪些？每条结论的使用前提是什么？",
-                f"{knowledge_point} 常见误区有哪些？各给一个反例或纠错点。",
-                f"{knowledge_point} 常用方法/步骤是什么？",
-                f"{knowledge_point} 的等价表述/充分必要条件有哪些？",
-                f"{knowledge_point} 的边界情况/反例/不适用场景有哪些？",
-                f"{knowledge_point} 的推导/证明思路（非细节）如何组织？",
-            ]
-            return tpl[:sub_n]
+            return _finish(_template_questions())
 
         # Best-effort cache for repeated searches inside a single (or continued) run.
         # Stored in working_memory so continuation tasks can reuse results without re-querying.
@@ -398,8 +574,14 @@ class WebSearchKnowledgeToolsMixin:
                 max_value=40,
             )
 
-            def _provider_error(provider: str, error: str, *, errors: Optional[List[str]] = None) -> Dict[str, Any]:
-                return {
+            def _provider_error(
+                provider: str,
+                error: str,
+                *,
+                errors: Optional[List[str]] = None,
+                provider_errors: Optional[List[str]] = None,
+            ) -> Dict[str, Any]:
+                out: Dict[str, Any] = {
                     "knowledge_point": point,
                     "base_query": base_query,
                     "query": query,
@@ -411,6 +593,32 @@ class WebSearchKnowledgeToolsMixin:
                     "errors": (errors or [])[:6],
                     "error": error,
                 }
+                if provider_errors:
+                    # Raw provider-reported errors (no sub-question prefix). The provider
+                    # health matchers must run on these, never on the "errors" entries.
+                    out["provider_errors"] = provider_errors[:6]
+                return out
+
+            # Providers that are down (task-scoped) or failed permanently during this call.
+            providers_permanent: List[str] = []
+
+            def _note_provider_permanent(name: str) -> None:
+                if name not in providers_permanent:
+                    providers_permanent.append(name)
+
+            def _all_providers_permanent(names: tuple[str, ...]) -> bool:
+                return all((n in providers_permanent) or bool(_provider_down_reason(n)) for n in names)
+
+            def _provider_errors_text(out: Dict[str, Any]) -> str:
+                # Match only raw provider-reported errors. The "errors" entries are
+                # composites prefixed with the sub-question text (f"{sub_q}: {err}"),
+                # and the sub-question itself may contain words like "unauthorized"
+                # or "invalid api key" — matching those would misread transient
+                # failures as permanent quota/auth outages.
+                parts = [str(e) for e in (out.get("provider_errors") or []) if str(e or "").strip()]
+                if not parts:
+                    parts = [str(out.get("error") or "")]
+                return "; ".join(p for p in parts if p)
 
             def _previous_research_state() -> tuple[List[str], str]:
                 prev_item: Dict[str, Any] = {}
@@ -510,6 +718,9 @@ class WebSearchKnowledgeToolsMixin:
                     provider_value,
                     str((deep or {}).get("error") or f"{provider_value}_failed"),
                     errors=list((deep or {}).get("errors") or []) if isinstance(deep, dict) else [],
+                    provider_errors=(
+                        list((deep or {}).get("provider_errors") or []) if isinstance(deep, dict) else []
+                    ),
                 )
 
             async def _run_direct_search_with_provider(
@@ -575,6 +786,7 @@ class WebSearchKnowledgeToolsMixin:
                 cleaned_results: List[Dict[str, Any]] = []
                 summary_parts: List[str] = []
                 errors: List[str] = []
+                provider_raw_errors: List[str] = []
                 queries: List[str] = []
 
                 for sub_q, res in zip(sub_questions, calls):
@@ -588,6 +800,7 @@ class WebSearchKnowledgeToolsMixin:
                             else default_error
                         )
                         errors.append(f"{sub_q}: {err}")
+                        provider_raw_errors.append(err)
                         continue
 
                     this_results: List[Dict[str, Any]] = []
@@ -633,6 +846,7 @@ class WebSearchKnowledgeToolsMixin:
                     "results": deduped,
                     "sub_questions": sub_questions,
                     "errors": errors[:6],
+                    "provider_errors": provider_raw_errors[:6],
                 }
                 if summary_value or deduped:
                     return {k: v for k, v in out.items() if v not in ("", None, [], {})}
@@ -648,7 +862,16 @@ class WebSearchKnowledgeToolsMixin:
                     try:
                         from backend.integrations.mcp.search.tavily import TAVILY_API_KEY, tavily_search
 
-                        if not TAVILY_API_KEY:
+                        tavily_down_reason = _provider_down_reason("tavily")
+                        if tavily_down_reason:
+                            # Provider marked down earlier in this task; skip the attempt.
+                            provider_errors.append(f"tavily_down: {tavily_down_reason}")
+                            _note_provider_permanent("tavily")
+                            if force_search_mode and search_mode == "tavily":
+                                return _provider_error(
+                                    "tavily-search", "search_providers_unavailable", errors=provider_errors
+                                )
+                        elif not TAVILY_API_KEY:
                             tavily_missing = "TAVILY_API_KEY not configured"
                             provider_errors.append(tavily_missing)
                             if force_search_mode and search_mode == "tavily":
@@ -671,6 +894,10 @@ class WebSearchKnowledgeToolsMixin:
                             if tavily_deep.get("results"):
                                 return tavily_deep
                             provider_errors.append(str(tavily_deep.get("error") or "tavily_deepresearch_failed"))
+                            tavily_detail = _provider_errors_text(tavily_deep)
+                            if _is_provider_quota_error(tavily_detail):
+                                await _mark_provider_down("tavily", tavily_detail)
+                                _note_provider_permanent("tavily")
                         else:
 
                             async def _tavily_ask_one(sub_q: str, per_query_results: int) -> Dict[str, Any]:
@@ -691,12 +918,30 @@ class WebSearchKnowledgeToolsMixin:
                             if tavily_direct.get("results"):
                                 return tavily_direct
                             provider_errors.append(str(tavily_direct.get("error") or "tavily_search_failed"))
+                            tavily_detail = _provider_errors_text(tavily_direct)
+                            if _is_provider_quota_error(tavily_detail):
+                                await _mark_provider_down("tavily", tavily_detail)
+                                _note_provider_permanent("tavily")
+                                # Forced mode: tavily is the only allowed provider, so a
+                                # permanent failure means the search layer is unavailable.
+                                tavily_direct["error"] = "search_providers_unavailable"
                             if force_search_mode:
                                 return tavily_direct
                     except Exception as exc:
                         provider_errors.append(str(exc) or "tavily_search_exception")
+                        # Only mark down on the provider's own failure. An LLM error from
+                        # the strict-mode decompose call also lands here (it is raised
+                        # before Tavily was ever invoked) and must not ban the provider.
+                        if _is_provider_quota_error(str(exc)) and not _is_llm_origin_error(str(exc)):
+                            await _mark_provider_down("tavily", str(exc))
+                            _note_provider_permanent("tavily")
                         if force_search_mode and search_mode == "tavily":
-                            return _provider_error("tavily-search", str(exc) or "tavily_search_exception")
+                            err = (
+                                "search_providers_unavailable"
+                                if "tavily" in providers_permanent
+                                else str(exc) or "tavily_search_exception"
+                            )
+                            return _provider_error("tavily-search", err)
                         logger.warning(
                             "Tavily search failed; falling back",
                             extra={"knowledge_point": point, "error": str(exc)},
@@ -706,7 +951,18 @@ class WebSearchKnowledgeToolsMixin:
                 try:
                     from backend.integrations.mcp.search.exa import EXA_API_KEY, exa_search
 
-                    if not EXA_API_KEY:
+                    exa_down_reason = _provider_down_reason("exa")
+                    if exa_down_reason:
+                        # Provider marked down earlier in this task; skip the attempt.
+                        provider_errors.append(f"exa_down: {exa_down_reason}")
+                        _note_provider_permanent("exa")
+                        if force_search_mode:
+                            return _provider_error(
+                                "exa-deepresearch" if search_mode == "deepresearch" else "exa",
+                                "search_providers_unavailable",
+                                errors=provider_errors,
+                            )
+                    elif not EXA_API_KEY:
                         if force_search_mode:
                             return {
                                 "knowledge_point": point,
@@ -738,6 +994,11 @@ class WebSearchKnowledgeToolsMixin:
                             if exa_deep.get("results"):
                                 return exa_deep
                             provider_errors.append(str(exa_deep.get("error") or "exa_deepresearch_failed"))
+                            exa_detail = _provider_errors_text(exa_deep)
+                            if _is_provider_quota_error(exa_detail):
+                                await _mark_provider_down("exa", exa_detail)
+                                _note_provider_permanent("exa")
+                                exa_deep["error"] = "search_providers_unavailable"
                             if force_search_mode:
                                 return exa_deep
                         elif search_mode in {"tavily", "exa"}:
@@ -761,9 +1022,19 @@ class WebSearchKnowledgeToolsMixin:
                             if exa_direct.get("results"):
                                 return exa_direct
                             provider_errors.append(str(exa_direct.get("error") or "exa_search_failed"))
+                            exa_detail = _provider_errors_text(exa_direct)
+                            if _is_provider_quota_error(exa_detail):
+                                await _mark_provider_down("exa", exa_detail)
+                                _note_provider_permanent("exa")
+                                exa_direct["error"] = "search_providers_unavailable"
                             if force_search_mode:
                                 return exa_direct
                 except Exception as exc:
+                    # Same guard as the Tavily branch: strict-mode decompose LLM errors
+                    # surface here before Exa was called; never mark Exa down for those.
+                    if _is_provider_quota_error(str(exc)) and not _is_llm_origin_error(str(exc)):
+                        await _mark_provider_down("exa", str(exc))
+                        _note_provider_permanent("exa")
                     if force_search_mode:
                         return {
                             "knowledge_point": point,
@@ -774,7 +1045,9 @@ class WebSearchKnowledgeToolsMixin:
                             "scope": scope,
                             "include_summary": include_summary,
                             "results": [],
-                            "error": str(exc) or "exa_search_exception",
+                            "error": "search_providers_unavailable"
+                            if "exa" in providers_permanent
+                            else str(exc) or "exa_search_exception",
                         }
                     if not disable_metaso:
                         logger.warning(
@@ -784,10 +1057,20 @@ class WebSearchKnowledgeToolsMixin:
                         )
 
                 if force_search_mode and search_mode == "deepresearch":
+                    if _all_providers_permanent(("tavily", "exa")):
+                        return _provider_error("deepresearch", "search_providers_unavailable", errors=provider_errors)
                     return _provider_error("deepresearch", "; ".join(provider_errors) or "deepresearch_failed")
 
             metaso: Dict[str, Any] = {}
-            if not disable_metaso:
+            # Metaso is only skipped on an explicit permanent auth failure (401/403);
+            # quota-style errors never mark it down (no API key in this deployment).
+            metaso_down_reason = _provider_down_reason("metaso")
+            metaso_blocked = disable_metaso or bool(metaso_down_reason)
+            if metaso_down_reason and not disable_metaso and search_mode == "metaso":
+                return _provider_error(
+                    "metaso", "search_providers_unavailable", errors=[f"metaso_down: {metaso_down_reason}"]
+                )
+            if not metaso_blocked:
                 metaso_mode = (
                     str(args.get("metaso_mode") or os.getenv("STUDY_MATERIALS_METASO_MODE") or "ask").strip().lower()
                 )
@@ -887,6 +1170,7 @@ class WebSearchKnowledgeToolsMixin:
                     cleaned_results: List[Dict[str, Any]] = []
                     summary_parts: List[str] = []
                     errors: List[str] = []
+                    provider_raw_errors: List[str] = []
                     queries: List[str] = []
 
                     for sub_q, res in zip(sub_questions, metaso_calls):
@@ -900,6 +1184,7 @@ class WebSearchKnowledgeToolsMixin:
                                 else "metaso ask failed"
                             )
                             errors.append(f"{sub_q}: {err}")
+                            provider_raw_errors.append(err)
                             continue
 
                         ans = _clean_metaso_answer(str(res.get("answer") or "").strip())
@@ -911,6 +1196,14 @@ class WebSearchKnowledgeToolsMixin:
                             if not isinstance(r, dict):
                                 continue
                             cleaned_results.append(_normalize_result(r, provider=provider_value, source_query=sub_q))
+
+                    # Every sub-question failing with an explicit auth error means Metaso is
+                    # permanently misconfigured for this task; transient/quota errors do not count.
+                    # Match on the raw provider errors only: the "errors" entries are prefixed
+                    # with the sub-question text, which may itself contain auth-looking words.
+                    auth_errors = [e for e in provider_raw_errors if _is_provider_auth_error(e)]
+                    if provider_raw_errors and len(auth_errors) == len(provider_raw_errors):
+                        await _mark_provider_down("metaso", "; ".join(auth_errors))
 
                     # Deduplicate results by URL and keep bounded.
                     deduped: List[Dict[str, Any]] = []
@@ -941,11 +1234,20 @@ class WebSearchKnowledgeToolsMixin:
                         "results": deduped,
                         "sub_questions": sub_questions,
                         "errors": errors[:6],
+                        "provider_errors": provider_raw_errors[:6],
                     }
+                    if not deduped and search_mode != "metaso" and _all_providers_permanent(("tavily", "exa")):
+                        # Primary providers are down on permanent errors and Metaso could not
+                        # cover: surface a distinct outage signal, not a per-provider error.
+                        out["error"] = "search_providers_unavailable"
                     return {k: v for k, v in out.items() if v not in ("", None, [], {})}
 
                 # metaso_mode == "search"
                 metaso = await metaso_search(query=query, scope=scope, include_summary=include_summary, size=limit)
+
+                metaso_err = str(metaso.get("error") or "") if isinstance(metaso, dict) else ""
+                if _is_provider_auth_error(metaso_err):
+                    await _mark_provider_down("metaso", metaso_err)
 
                 if isinstance(metaso, dict) and metaso.get("success"):
                     cleaned_results: List[Dict[str, Any]] = []
@@ -993,6 +1295,14 @@ class WebSearchKnowledgeToolsMixin:
                         "error": str(metaso.get("error") or "").strip() if isinstance(metaso, dict) else "",
                     }
 
+                if isinstance(metaso, dict):
+                    final_error = str(metaso.get("error") or "web search failed").strip()
+                else:
+                    final_error = "web search failed"
+                if search_mode != "metaso" and metaso_blocked and _all_providers_permanent(("tavily", "exa")):
+                    # Every usable provider is down on permanent quota/auth errors: surface a
+                    # distinct outage signal so upstream can distinguish it from poor results.
+                    final_error = "search_providers_unavailable"
                 return {
                     "knowledge_point": point,
                     "base_query": base_query,
@@ -1002,9 +1312,7 @@ class WebSearchKnowledgeToolsMixin:
                     "scope": scope,
                     "include_summary": include_summary,
                     "results": [],
-                    "error": str(metaso.get("error") or "web search failed").strip()
-                    if isinstance(metaso, dict)
-                    else "web search failed",
+                    "error": final_error,
                 }
             except Exception as exc:  # pragma: no cover
                 logger.warning("BigModel search failed", extra={"knowledge_point": point, "error": str(exc)}, exc_info=True)

@@ -121,6 +121,9 @@ async def chat_completion(
     )
     headers = request_headers(resolved_provider, resolved_api_key)
     dropped_reasoning = dropped_response_format = retried_with_v1 = False
+    # Tracks (status, api_msg) signatures of permanent 4xx errors seen by this call so
+    # handle_http_status can fail fast when the identical error survives a mutation.
+    permanent_signatures: set = set()
     emit_chars = max(1, int(reasoning_emit_chars or 240))
     emit_interval_s = max(0.05, min(float(reasoning_emit_interval_s or 0.25), 2.0))
     request_base_url = str(resolved_base_url or "").strip().rstrip("/")
@@ -218,7 +221,7 @@ async def chat_completion(
                 request_base_url=request_base_url, retried_with_v1=retried_with_v1,
                 dropped_response_format=dropped_response_format, dropped_reasoning=dropped_reasoning,
                 attempt=attempt, max_retries=max_retries, req_id=req_id, start_ts=start_ts,
-                retry_statuses=retry_statuses,
+                retry_statuses=retry_statuses, permanent_signatures=permanent_signatures,
             )
             if handled["retry"]:
                 if int(getattr(exc.response, "status_code", 0) or 0) in retry_statuses:

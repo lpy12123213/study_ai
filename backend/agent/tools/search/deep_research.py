@@ -373,11 +373,11 @@ async def deep_research(
 
     async def recurse(seed: str, *, breadth_now: int, depth_now: int, learnings_now: List[str]) -> Dict[str, Any]:
         if depth_now <= 0:
-            return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+            return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": [], "provider_errors": []}
 
         remaining = await remaining_budget()
         if remaining <= 0:
-            return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+            return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": [], "provider_errors": []}
 
         want = max(1, min(int(breadth_now or 0), remaining))
         serp = await _generate_serp_queries(
@@ -396,7 +396,7 @@ async def deep_research(
             llm_sem=llm_sem,
         )
         if not serp:
-            return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": []}
+            return {"learnings": [], "queries": [], "results": [], "summary_parts": [], "errors": [], "directions": [], "provider_errors": []}
 
         async def one(serp_item: Dict[str, str]) -> Dict[str, Any]:
             q = str(serp_item.get("query") or "").strip()
@@ -409,6 +409,7 @@ async def deep_research(
                     "summary_parts": [],
                     "errors": [],
                     "directions": [],
+                    "provider_errors": [],
                 }
             ok = await reserve(q)
             if not ok:
@@ -419,6 +420,7 @@ async def deep_research(
                     "summary_parts": [],
                     "errors": [],
                     "directions": [],
+                    "provider_errors": [],
                 }
 
             res = await run_search(q)
@@ -434,8 +436,13 @@ async def deep_research(
                 cleaned.append(_postprocess_web_search_result(rr))
 
             errors: List[str] = []
+            provider_errors: List[str] = []
             if isinstance(res, dict) and res.get("error") and not cleaned:
-                errors.append(f"{q}: {str(res.get('error') or '').strip()}")
+                raw_err = str(res.get("error") or "").strip()
+                # "errors" keeps the query context for observability; "provider_errors"
+                # stays raw so provider health matchers never see the query text.
+                errors.append(f"{q}: {raw_err}")
+                provider_errors.append(raw_err)
 
             learnings, directions = (
                 await _extract_learnings(
@@ -483,6 +490,7 @@ async def deep_research(
                     "summary_parts": [],
                     "errors": [],
                     "directions": [],
+                    "provider_errors": [],
                 }
 
             return {
@@ -492,6 +500,7 @@ async def deep_research(
                 "summary_parts": [*summary_parts, *list(deeper.get("summary_parts") or [])],
                 "errors": [*errors, *list(deeper.get("errors") or [])],
                 "directions": [*directions, *list(deeper.get("directions") or [])],
+                "provider_errors": [*provider_errors, *list(deeper.get("provider_errors") or [])],
             }
 
         branches = await asyncio.gather(*[one(it) for it in serp])
@@ -502,11 +511,12 @@ async def deep_research(
             "summary_parts": [],
             "errors": [],
             "directions": [],
+            "provider_errors": [],
         }
         for b in branches:
             if not isinstance(b, dict):
                 continue
-            for k in ("learnings", "queries", "results", "summary_parts", "errors", "directions"):
+            for k in ("learnings", "queries", "results", "summary_parts", "errors", "directions", "provider_errors"):
                 if isinstance(b.get(k), list):
                     merged[k].extend(b.get(k) or [])
         return merged
@@ -517,6 +527,7 @@ async def deep_research(
     all_queries = _dedup_strings([str(x or "") for x in ([*reserved, *list(deep.get("queries") or [])])], keep=60)
     all_results = _dedup_results([x for x in (deep.get("results") or []) if isinstance(x, dict)], keep=keep_sources)
     errors = _dedup_strings([str(x or "") for x in (deep.get("errors") or [])], keep=12)
+    provider_errors = _dedup_strings([str(x or "") for x in (deep.get("provider_errors") or [])], keep=12)
     directions = _dedup_strings([str(x or "") for x in (deep.get("directions") or [])], keep=12)
 
     summary_parts = _dedup_strings([str(x or "") for x in (deep.get("summary_parts") or [])], keep=30)
@@ -538,6 +549,7 @@ async def deep_research(
         "learnings": all_learnings[:40],
         "directions": directions[:12],
         "errors": errors[:6],
+        "provider_errors": provider_errors[:6],
         "depth": depth_n,
         "breadth": breadth_n,
         "max_queries": max_q,

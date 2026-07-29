@@ -69,6 +69,29 @@ async def handle_http_status(**kwargs: Any) -> Dict[str, Any]:
     req_id, start_ts = kwargs["req_id"], kwargs["start_ts"]
     base_url, model, provider = kwargs["request_base_url"], kwargs["model"], kwargs["provider"]
     v1_url = maybe_append_v1_base_url(base_url)
+    if status in {401, 403}:
+        # Auth errors: no payload/base-url mutation can rescue a bad key. Fail fast.
+        llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=api_msg or last_error)
+        return {"retry": False, "status": status, "api_msg": api_msg, "last_error": last_error, "model": model}
+    if status in {400, 404, 422}:
+        # Permanent-4xx fail-fast: the adaptive mutations below each fire at most once.
+        # If the identical error (same status + same provider message) comes back after a
+        # mutation, it is a permanent misconfig (e.g. a deprecated model id) — stop here
+        # instead of burning the remaining adaptive budget on identical failures.
+        seen = kwargs.get("permanent_signatures")
+        if isinstance(seen, set):
+            signature = (status, str(api_msg or "").strip().lower()[:200])
+            if signature in seen:
+                llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=api_msg or last_error)
+                return {
+                    "retry": False,
+                    "status": status,
+                    "api_msg": api_msg,
+                    "last_error": last_error,
+                    "model": model,
+                    "permanent": True,
+                }
+            seen.add(signature)
     if status in {404, 405} and v1_url and not kwargs["retried_with_v1"] and v1_url != base_url:
         llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=api_msg or last_error)
         await asyncio.sleep(DEFAULT_RETRY_POLICY.adaptation_delay())

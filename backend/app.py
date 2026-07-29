@@ -202,6 +202,78 @@ class _CachedAssetFiles(StaticFiles):
         return resp
 
 
+def _study_materials_model_self_check_enabled() -> bool:
+    """Startup model self-check is skipped under pytest/TestClient and via env opt-out."""
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+    if "pytest" in sys.modules:
+        return False
+    return env_bool("STUDY_MATERIALS_MODEL_SELF_CHECK", default=True)
+
+
+async def _study_materials_model_self_check() -> None:
+    """Ping the study-materials thinking/writer models once (max_tokens=1).
+
+    A deprecated or misspelled model id makes every LLM call fail permanently (4xx);
+    without this check that only surfaces as each knowledge point burning its full
+    step timeout. Log loudly at startup instead. Never raises.
+    """
+    from backend.core import settings as _settings
+    from backend.llm import client as _llm_client
+
+    candidates = [
+        ("STUDY_MATERIALS_THINKING_MODEL", str(_settings.STUDY_MATERIALS_THINKING_MODEL or "").strip()),
+        ("STUDY_MATERIALS_WRITER_MODEL", str(_settings.STUDY_MATERIALS_WRITER_MODEL or "").strip()),
+    ]
+    checked: set = set()
+    for env_name, model in candidates:
+        if not model or model in checked:
+            continue
+        checked.add(model)
+        try:
+            result = await _llm_client.chat_completion(
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                temperature=0.0,
+                max_tokens=1,
+                retries=1,
+                raise_on_fail=False,
+                req_id_prefix="selfcheck",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("study_materials_model_self_check_error", extra={"model": model, "env": env_name})
+            continue
+        error_code = str(getattr(result, "error_code", "") or "")
+        if error_code == "4xx":
+            logger.error(
+                "study_materials_model_self_check_failed",
+                extra={
+                    "model": model,
+                    "env": env_name,
+                    "status": error_code,
+                    "hint": f"模型调用永久失败（4xx）：请检查 {env_name}（当前={model}）是否为已下线或拼错的模型 ID",
+                },
+            )
+        elif error_code:
+            logger.warning(
+                "study_materials_model_self_check_degraded",
+                extra={"model": model, "env": env_name, "error_code": error_code},
+            )
+
+
+async def _run_study_materials_model_self_check() -> None:
+    try:
+        await asyncio.wait_for(_study_materials_model_self_check(), timeout=15.0)
+    except asyncio.TimeoutError:
+        logger.warning("study_materials_model_self_check_timeout", extra={"timeout_s": 15.0})
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("study_materials_model_self_check_unexpected_error")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await init_db()
@@ -245,6 +317,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await study_material_tasks.restore_tasks_from_disk()
     except Exception:
         logger.exception("study_material_tasks_restore_failed")
+
+    # Non-blocking startup self-check: a deprecated study-materials model id fails every
+    # LLM call permanently, so surface it as one loud log line instead of per-step timeouts.
+    self_check_task: Optional[asyncio.Task] = None
+    if _study_materials_model_self_check_enabled():
+        self_check_task = asyncio.create_task(_run_study_materials_model_self_check())
 
     stop = asyncio.Event()
     worker_task: Optional[asyncio.Task] = None
@@ -291,6 +369,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 logger.info("cleanup_task_cancelled")
             except Exception:
                 logger.exception("cleanup_task_shutdown_failed")
+        if self_check_task is not None:
+            try:
+                await asyncio.wait_for(self_check_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                self_check_task.cancel()
+            except asyncio.CancelledError:
+                logger.info("study_materials_model_self_check_cancelled")
+            except Exception:
+                logger.exception("study_materials_model_self_check_shutdown_failed")
         await close_crawler()
         await close_shared_llm_http_client()
         await close_proxy_http_client()
