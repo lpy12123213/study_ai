@@ -1574,6 +1574,27 @@ class StudyMaterialsTaskManager:
                         except (TypeError, ValueError):
                             pass
 
+                # 空成果诚实失败：legacy 路径工具失败会被 ReAct 吞掉继续，全部写作失败时
+                # done 里可能是空 markdown——不能标 completed 冒充成功（线上已出现两次）。
+                # 仅对 generation 形态的 done（含 material 字典）检查；export 形态不受影响。
+                material_obj = data.get("material") if isinstance(data, dict) else None
+                if isinstance(material_obj, dict) and not str(material_obj.get("markdown") or "").strip():
+                    issues = ["生成结束但正文为空：写作步骤可能全部失败（可检查 LLM 配置后重试）"]
+                    await task_runtime.append_event(
+                        task,
+                        agent_event(
+                            "recovery_available",
+                            {"code": "empty_material", "stage": "write", "issues": issues, "recoverable": True},
+                        ),
+                    )
+                    await task_runtime.fail_task(
+                        task,
+                        "empty_material",
+                        error={"message": "empty_material", "code": "empty_material", "recoverable": True, "issues": issues},
+                        emit_event=False,
+                    )
+                    return
+
                 await self._upsert_archive_from_resume_state(
                     task, meta=meta, query=ctx.query, subject=ctx.subject, options=ctx.options
                 )

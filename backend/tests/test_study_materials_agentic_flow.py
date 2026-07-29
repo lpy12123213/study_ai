@@ -283,7 +283,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         task = _task()
 
         async def fake_agent_run(*_args, **_kwargs):
-            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 1}}}
+            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 1, "markdown": "# 函数单调性"}}}
 
         async def fake_complete(runtime_task, **_kwargs):
             runtime_task.status = "completed"
@@ -318,6 +318,52 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         complete.assert_awaited_once()
         fail.assert_not_awaited()
 
+    async def test_legacy_done_with_empty_material_fails_honestly(self) -> None:
+        """legacy 路径工具失败被 ReAct 吞掉后，done 里空 markdown 不得标 completed。"""
+
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task()
+
+        async def fake_agent_run(*_args, **_kwargs):
+            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 1, "markdown": "  "}}}
+
+        agent = SimpleNamespace(run=fake_agent_run, last_context=None)
+
+        async def fake_fail(runtime_task, *_args, **_kwargs):
+            # 真实 fail_task 会把任务置为 failed，外层 finally 据此不再二次失败。
+            runtime_task.status = "failed"
+
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False), patch.object(
+            orchestrator,
+            "AgentCore",
+            return_value=agent,
+        ), patch.object(
+            orchestrator,
+            "get_study_archive_by_fingerprint",
+            new=AsyncMock(return_value=None),
+        ), patch.object(orchestrator.task_runtime, "append_event", new=AsyncMock()) as append_event, patch.object(
+            orchestrator.task_runtime,
+            "complete_task",
+            new=AsyncMock(),
+        ) as complete, patch.object(
+            orchestrator.task_runtime,
+            "fail_task",
+            new=AsyncMock(side_effect=fake_fail),
+        ) as fail, patch.object(manager, "_persist_snapshot"):
+            await manager._run_task(task)
+
+        complete.assert_not_awaited()
+        fail.assert_awaited_once()
+        self.assertEqual(fail.await_args.kwargs["error"]["code"], "empty_material")
+        recovery_events = [
+            call.args[1] for call in append_event.await_args_list if call.args[1].get("event") == "recovery_available"
+        ]
+        self.assertTrue(recovery_events)
+        self.assertEqual(recovery_events[0]["data"]["code"], "empty_material")
+        self.assertTrue(recovery_events[0]["data"]["recoverable"])
+
     def test_study_materials_codex_enabled_defaults_off(self) -> None:
         from backend.generation.study_materials.orchestrator import _study_materials_codex_enabled
 
@@ -339,7 +385,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def fake_agent_run(*_args, **_kwargs):
-            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 2}}}
+            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 2, "markdown": "# 函数单调性"}}}
 
         async def fake_complete(runtime_task, **_kwargs):
             runtime_task.status = "completed"
@@ -688,7 +734,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def fake_agent_run(*_args, **_kwargs):
-            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 1}}}
+            yield {"event": "done", "data": {"material": {"topic": "函数单调性", "iteration": 1, "markdown": "# 函数单调性"}}}
 
         async def fake_complete(runtime_task, **_kwargs):
             runtime_task.status = "completed"
