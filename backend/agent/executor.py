@@ -350,6 +350,16 @@ class Executor:
         reasoning_emit_interval_s = float(os.getenv("STUDY_MATERIALS_REASONING_EMIT_INTERVAL_S") or "0.25")
         reasoning_emit_interval_s = max(0.05, min(reasoning_emit_interval_s, 2.0))
 
+        # 推理恒开模型（如 deepseek-v4 系列）的隐藏 reasoning tokens 也计入 max_tokens：
+        # 结构化输出（json_object）若上限太小，预算会被思考吃光，返回空/截断 JSON。
+        # 对 json_object 调用抬高下限，给「推理 + 正文」留出余量（不削减生成上限，只抬地板）。
+        if isinstance(response_format, dict) and str(response_format.get("type") or "") == "json_object":
+            try:
+                structured_floor = int(os.getenv("AGENT_STRUCTURED_JSON_MIN_TOKENS") or "3000")
+            except (TypeError, ValueError):
+                structured_floor = 3000
+            max_tokens = max(int(max_tokens or 0), max(256, structured_floor))
+
         return await chat_completion(
             messages=messages,
             model=normalized_model,

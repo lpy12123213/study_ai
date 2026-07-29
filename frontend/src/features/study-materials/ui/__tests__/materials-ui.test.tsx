@@ -270,7 +270,8 @@ describe("study-materials conversation UI", () => {
     expect(screen.getByText(/可重新接收输出并恢复视图/)).toBeInTheDocument();
     unmount();
     render(<ResumeBanner title="函数单调性" status="running" onResume={vi.fn()} onDiscard={vi.fn()} />);
-    expect(screen.getByText("检测到未完成的生成任务")).toBeInTheDocument();
+    expect(screen.getByText("生成仍在进行中")).toBeInTheDocument();
+    expect(screen.getByText("继续接收生成")).toBeInTheDocument();
   });
 
   it("请求回声展示全部参数并支持编辑重跑", () => {

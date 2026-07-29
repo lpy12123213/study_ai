@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { BookOpenText, Clock3, FileText, Sparkles } from "lucide-react";
+import { BookOpenText, FileText, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -138,26 +138,39 @@ export function MaterialsWelcome({
             最近生成
           </h2>
           <div className="flex flex-wrap gap-2">
-            {recentTasks.slice(0, 4).map((task) => (
-              <Tooltip key={task.id}>
-                <TooltipTrigger asChild>
-                  <Link
-                    to={`/materials?task=${encodeURIComponent(task.id)}`}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                  >
-                    {task.status === "running" ? (
-                      <Clock3 className="size-3 text-tool-running" />
-                    ) : (
-                      <BookOpenText className="size-3 text-tool-success" />
-                    )}
-                    <span className="max-w-48 truncate">{task.title || "学习资料"}</span>
-                  </Link>
-                </TooltipTrigger>
-                <TooltipContent>
-                  状态：{TASK_STATUS_LABELS[task.status] ?? task.status} · 点击恢复视图
-                </TooltipContent>
-              </Tooltip>
-            ))}
+            {[...recentTasks]
+              .sort((a, b) => Number(b.status === "running") - Number(a.status === "running"))
+              .slice(0, 4)
+              .map((task) => (
+                <Tooltip key={task.id}>
+                  <TooltipTrigger asChild>
+                    <Link
+                      to={`/materials?task=${encodeURIComponent(task.id)}`}
+                      className={
+                        task.status === "running"
+                          ? "inline-flex max-w-full items-center gap-1.5 rounded-full border-2 border-spectral/60 bg-spectral/10 px-3 py-1.5 text-xs font-medium text-foreground shadow-soft transition-colors hover:bg-spectral/20"
+                          : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                      }
+                    >
+                      {task.status === "running" ? (
+                        <span className="relative flex size-2.5">
+                          <span className="absolute inline-flex size-full animate-ping rounded-full bg-spectral/60" />
+                          <span className="relative inline-flex size-2.5 rounded-full bg-spectral" />
+                        </span>
+                      ) : (
+                        <BookOpenText className="size-3 text-tool-success" />
+                      )}
+                      <span className="max-w-48 truncate">{task.title || "学习资料"}</span>
+                      {task.status === "running" ? <span className="text-spectral">继续接收</span> : null}
+                    </Link>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {task.status === "running"
+                      ? "正在生成中 · 点击继续接收输出"
+                      : `状态：${TASK_STATUS_LABELS[task.status] ?? task.status} · 点击恢复视图`}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
           </div>
         </section>
       ) : null}

@@ -112,6 +112,42 @@ def _archive_max_age_s() -> float:
         return 1209600.0
 
 
+def _stream_compact_threshold() -> int:
+    """SSE 追赶压缩阈值：落后事件数超过该值时折叠瞬态/快照类事件。0 关闭。"""
+
+    raw = str(os.getenv("STUDY_MATERIALS_STREAM_COMPACT_THRESHOLD") or "").strip()
+    if not raw:
+        return 800
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 800
+
+
+# 追赶阶段只保留各自最新一条的事件类型：
+# thinking/status 是每秒数条的瞬态文本；text_delta 是完整文档快照（可达几十 KB）；
+# quality_report/progress 只有最新值有意义。全量回放数千条会让重连极慢。
+_CATCHUP_LATEST_ONLY_TYPES = frozenset(
+    {"thinking", "thinking_delta", "reasoning_delta", "status", "text_delta", "quality_report", "progress"}
+)
+
+
+def _compact_catchup_events(events: list) -> tuple:
+    """折叠追赶事件流：瞬态/快照类只留最新一条，状态演进类（tool/subagent/stage/done 等）全量保留。"""
+
+    latest_idx: Dict[str, int] = {}
+    for idx, evt in enumerate(events):
+        etype = str(evt.get("type") or "")
+        if etype in _CATCHUP_LATEST_ONLY_TYPES:
+            latest_idx[etype] = idx
+    keep = set(latest_idx.values())
+    compacted = [
+        evt
+        for idx, evt in enumerate(events)
+        if idx in keep or str(evt.get("type") or "") not in _CATCHUP_LATEST_ONLY_TYPES
+    ]
+    return compacted, len(events) - len(compacted)
+
 
 async def _export_markdown_to_media(*, markdown: str, user_id: str) -> Dict[str, Any]:
     published = await publish_generated_text(
@@ -975,6 +1011,8 @@ class StudyMaterialsTaskManager:
 
         last_sent = max(0, int(after_seq or 0))
         last_ping_at = 0.0
+        compact_threshold = _stream_compact_threshold()
+        compact_pending = compact_threshold > 0
         while True:
             task = await db_get_task(user_id=uid, task_id=tid, include_events=False)
             if not task:
@@ -985,6 +1023,33 @@ class StudyMaterialsTaskManager:
                     return
                 yield {"taskId": tid, "seq": last_sent, "type": "error", "data": {"error": "task_not_found"}}
                 return
+
+            # 追赶压缩：落后过多时一次性拉取并折叠瞬态/快照事件，避免全量回放数千条导致重连极慢。
+            if compact_pending:
+                compact_pending = False
+                task_last_seq = int(task.get("last_seq") or 0)
+                if task_last_seq - last_sent > compact_threshold:
+                    buffered: list = []
+                    cursor = last_sent
+                    while True:
+                        page = await db_list_task_events(user_id=uid, task_id=tid, after_seq=cursor, limit=500)
+                        if not page:
+                            break
+                        buffered.extend(page)
+                        cursor = int(page[-1].get("seq") or cursor)
+                        if len(page) < 500:
+                            break
+                    kept, skipped = _compact_catchup_events(buffered)
+                    if skipped > 0:
+                        yield {"taskId": tid, "seq": last_sent, "type": "catch_up", "data": {"skipped": skipped}}
+                    for evt in kept:
+                        seq = int(evt.get("seq") or 0)
+                        if seq <= last_sent:
+                            continue
+                        last_sent = seq
+                        yield evt
+                    if str(task.get("status") or "") != "running":
+                        return
 
             events = await db_list_task_events(user_id=uid, task_id=tid, after_seq=last_sent, limit=500)
             for evt in events:

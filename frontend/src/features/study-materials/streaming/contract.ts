@@ -149,6 +149,15 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         ...(subject ? { subject } : {}),
       };
     }
+    // 服务端追赶压缩标记：瞬态/快照历史事件被折叠时给出可见说明。
+    case "catch_up": {
+      const skipped = typeof data.skipped === "number" ? data.skipped : 0;
+      return {
+        kind: "status",
+        content:
+          skipped > 0 ? `已跳过 ${skipped} 条历史过程事件，正在恢复视图…` : "正在恢复视图…",
+      };
+    }
 
     case "status":
       return { kind: "status", content: asString(data.content) ?? asString(data.message) ?? "" };

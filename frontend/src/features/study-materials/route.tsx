@@ -72,6 +72,7 @@ import {
   selectStageSummary,
   selectToolCount,
 } from "./model/selectors";
+import { resolveResumeAfterSeq } from "./model/resume";
 import type { StudyMaterialsProjection } from "./model/types";
 import { decodeStudyMaterialsEvent } from "./streaming/contract";
 import { KnowledgePointBoard } from "./ui/knowledge-point-board";
@@ -397,28 +398,41 @@ export function StudyMaterialsRoute() {
       toast({ title: "LaTeX 转换失败", description: errorText(error), variant: "destructive" }),
   });
 
-  const dispatchProjection = useCallback(
+  const applyProjection = useCallback(
     (action: StudyMaterialsProjectionAction): StudyMaterialsProjection => {
       const next = studyMaterialsProjectionReducer(projectionRef.current, action);
       projectionRef.current = next;
-      setProjection(next);
       return next;
     },
     [],
   );
 
+  const dispatchProjection = useCallback(
+    (action: StudyMaterialsProjectionAction): StudyMaterialsProjection => {
+      const next = applyProjection(action);
+      setProjection(next);
+      return next;
+    },
+    [applyProjection],
+  );
+
+  // 高频事件下节流持久化：全量回放时避免每事件一次同步 localStorage 写 + URL 更新。
+  const lastPersistAtRef = useRef(0);
   const persistTask = useCallback(
     (taskId: string, lastSeq: number) => {
       const request = activeRequestRef.current;
       if (!request) return;
+      const now = Date.now();
+      if (now - lastPersistAtRef.current < 500) return;
+      lastPersistAtRef.current = now;
       writePersistedRun({ ...request, taskId, lastSeq });
       setSearchParams({ task: taskId }, { replace: true });
     },
     [setSearchParams],
   );
 
-  const handleWireEvent = useCallback(
-    (event: TaskEvent) => {
+  const processWireEvent = useCallback(
+    (event: TaskEvent, opts: { render: boolean }) => {
       const decoded = decodeStudyMaterialsEvent(event);
       if (!decoded) return;
 
@@ -435,12 +449,13 @@ export function StudyMaterialsRoute() {
         if (event.type !== "text_delta") taskStore.applyEvent(taskId, event);
       }
 
-      const next = dispatchProjection({
+      const next = applyProjection({
         type: "event",
         event: decoded,
         seq: event.seq,
         at: Date.now(),
       });
+      if (opts.render) setProjection(next);
 
       if (next.taskId) persistTask(next.taskId, next.lastSeq);
       if (decoded.kind === "done") {
@@ -450,7 +465,7 @@ export function StudyMaterialsRoute() {
         void queryClient.invalidateQueries({ queryKey: ["tasks"] });
       }
     },
-    [dispatchProjection, persistTask, queryClient],
+    [applyProjection, persistTask, queryClient],
   );
 
   const probeRecovery = useCallback(
@@ -505,11 +520,33 @@ export function StudyMaterialsRoute() {
     [dispatchProjection, probeRecovery],
   );
 
+  // 事件合帧队列：重连全量回放可能瞬间涌入数千事件，逐事件 setState 会卡死主线程。
+  // 先在 ref 中顺序应用 reducer，每帧只做一次渲染（live 事件最多延迟 32ms，无感）。
+  const replayQueueRef = useRef<TaskEvent[]>([]);
+  const replayFlushScheduledRef = useRef(false);
+
+  const flushReplayQueue = useCallback(
+    (epoch: number) => {
+      replayFlushScheduledRef.current = false;
+      const queue = replayQueueRef.current;
+      replayQueueRef.current = [];
+      if (!queue.length || epoch !== streamEpochRef.current) return;
+      for (const event of queue) processWireEvent(event, { render: false });
+      setProjection(projectionRef.current);
+    },
+    [processWireEvent],
+  );
+
   const streamHandlers = useCallback(
     (controller: AbortController, epoch: number) => ({
       signal: controller.signal,
       onEvent: (event: TaskEvent) => {
-        if (epoch === streamEpochRef.current) handleWireEvent(event);
+        if (epoch !== streamEpochRef.current) return;
+        replayQueueRef.current.push(event);
+        if (!replayFlushScheduledRef.current) {
+          replayFlushScheduledRef.current = true;
+          setTimeout(() => flushReplayQueue(epoch), 32);
+        }
       },
       onError: (error: Error) => {
         if (epoch !== streamEpochRef.current) return;
@@ -523,12 +560,15 @@ export function StudyMaterialsRoute() {
         reason: StudyMaterialsStreamEndReason;
         error?: Error;
       }) => {
-        if (epoch === streamEpochRef.current) {
-          settleStream(termination.reason, termination.error);
+        if (epoch !== streamEpochRef.current) return;
+        // settle 前先排空队列，保证终态包含所有已接收事件。
+        if (replayFlushScheduledRef.current || replayQueueRef.current.length) {
+          flushReplayQueue(epoch);
         }
+        settleStream(termination.reason, termination.error);
       },
     }),
-    [handleWireEvent, settleStream, toast],
+    [flushReplayQueue, settleStream, toast],
   );
 
   /** 以完整请求启动生成；重试/重新生成复用同一入口，保证参数一致。 */
@@ -666,7 +706,13 @@ export function StudyMaterialsRoute() {
       }
 
       const continuingSameTask = projectionRef.current.taskId === target;
-      const afterSeq = continuingSameTask ? projectionRef.current.lastSeq : 0;
+      // 重新进入时投影为空，从 localStorage 持久化的进度续播，而不是从 0 全量回放。
+      const afterSeq = resolveResumeAfterSeq({
+        currentTaskId: projectionRef.current.taskId ?? null,
+        currentLastSeq: projectionRef.current.lastSeq,
+        targetTaskId: target,
+        persistedLastSeq: saved?.lastSeq,
+      });
       if (!continuingSameTask) {
         projectionRef.current = initialStudyMaterialsProjection();
         setProjection(projectionRef.current);
