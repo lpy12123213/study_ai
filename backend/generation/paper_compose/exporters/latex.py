@@ -221,14 +221,14 @@ def _find_latex_engine() -> Optional[str]:
 def _resolve_paper_export_latex_timeout_s(timeout_s: Optional[float]) -> float:
     raw = str(os.getenv("PAPER_EXPORT_LATEX_TIMEOUT_S") or "").strip()
     if timeout_s is None or float(timeout_s or 0) <= 0:
-        # Default: keep it short to avoid accidental long hangs in API exports.
-        # Users can override via env when they have a full TeX distribution and want longer runs.
+        # 真实文档（宏包装载/CJK 字体/tikz）编译常需数分钟，30s 默认会误杀正常编译。
+        # 与 compile_latex_to_pdf 的执行器步超时（同为 600s 默认）保持一致；可用 env 覆盖。
         try:
-            timeout_s = float(raw) if raw else 30.0
+            timeout_s = float(raw) if raw else 600.0
         except (TypeError, ValueError):
-            timeout_s = 30.0
+            timeout_s = 600.0
 
-    timeout_s = float(timeout_s or 30.0)
+    timeout_s = float(timeout_s or 600.0)
     return max(5.0, min(timeout_s, 60.0 * 20.0))
 
 

@@ -212,7 +212,9 @@ class Executor:
             latex_step_timeout_s = max(60.0 * 5.0, min(latex_step_timeout_s, 60.0 * 30.0))
             timeout_s = max(timeout_s, latex_step_timeout_s)
 
-        # PDF compilation should have a tighter default (avoid hanging on TeX package installs).
+        # PDF compilation of real documents (packages, CJK fonts, tikz) routinely takes
+        # minutes; a 30s step budget kills compiles long before the tool's own 600s
+        # subprocess timeout can fire. Default matches the tool's internal budget.
         if tool == "compile_latex_to_pdf":
             compile_timeout_raw = (
                 os.getenv("AGENT_LATEX_COMPILE_TIMEOUT_S")
@@ -225,7 +227,7 @@ class Executor:
             except (TypeError, ValueError):
                 compile_timeout_s = 0.0
             if compile_timeout_s <= 0:
-                compile_timeout_s = 30.0
+                compile_timeout_s = 600.0
             compile_timeout_s = max(30.0, min(compile_timeout_s, 60.0 * 20.0))
             timeout_s = compile_timeout_s
 
