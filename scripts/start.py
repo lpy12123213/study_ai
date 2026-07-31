@@ -88,7 +88,10 @@ def ensure_venv(root: Path) -> Path:
 def ensure_backend_deps(root: Path, vpy: Path) -> None:
     print("[setup] Checking backend deps...")
 
+    lock_file = root / "requirements-lock.txt"
     req_files = [root / "requirements.txt"]
+    if lock_file.exists():
+        req_files.append(lock_file)
     if (root / "requirements-dev.txt").exists():
         req_files.append(root / "requirements-dev.txt")
 
@@ -99,7 +102,11 @@ def ensure_backend_deps(root: Path, vpy: Path) -> None:
     if expected != installed:
         print("[setup] Installing backend Python packages...")
         _run_checked([str(vpy), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], cwd=root)
-        _run_checked([str(vpy), "-m", "pip", "install", "-r", str(root / "requirements.txt")], cwd=root)
+        if lock_file.exists():
+            # 锁定文件存在时按锁定版本安装，保证环境可复现；删除它即回退到区间解析
+            _run_checked([str(vpy), "-m", "pip", "install", "-r", str(lock_file)], cwd=root)
+        else:
+            _run_checked([str(vpy), "-m", "pip", "install", "-r", str(root / "requirements.txt")], cwd=root)
         if (root / "requirements-dev.txt").exists():
             _run_checked([str(vpy), "-m", "pip", "install", "-r", str(root / "requirements-dev.txt")], cwd=root)
         _write_text(stamp, expected)
@@ -218,9 +225,9 @@ def doctor(root: Path) -> None:
 
     # Best-effort Ruff; if not installed, skip without failing.
     try:
-        print("[doctor] python -m ruff check backend (maintained paths)")
+        print("[doctor] python -m ruff check backend scripts")
         _run_checked(
-            [str(vpy), "-m", "ruff", "check", "backend/api", "backend/workspace/chat", "backend/core", "backend/tests"],
+            [str(vpy), "-m", "ruff", "check", "backend", "scripts"],
             cwd=root,
         )
     except RuntimeError:

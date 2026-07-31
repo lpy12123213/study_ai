@@ -6,10 +6,10 @@ import json
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from backend.workspace.chat.llm_mixin import ChatLLMMixin
-from backend.workspace.chat.tools_mixin import ChatToolsMixin
 from backend.core.logging_utils import get_logger
 from backend.core.settings import MAIN_MODEL, MAX_TOOL_ITERATIONS
+from backend.workspace.chat.llm_mixin import ChatLLMMixin
+from backend.workspace.chat.tools_mixin import ChatToolsMixin
 
 MUTUALLY_EXCLUSIVE_CHAT_TOOLS = {"create_paper"}
 logger = get_logger(__name__)

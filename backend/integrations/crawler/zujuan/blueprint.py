@@ -7,10 +7,10 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.generation.paper_compose.slot_selection import select_slot_with_relax
 from backend.integrations.crawler.zujuan.utils import (
     _safe_int,
 )
-from backend.generation.paper_compose.slot_selection import select_slot_with_relax
 
 
 def _split_kps(value: Any) -> List[str]:

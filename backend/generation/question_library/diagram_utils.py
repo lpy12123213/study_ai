@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from backend.core.logging_utils import get_logger
-from backend.media.diagram_cache import canonical_spec_hash, lookup as cache_lookup, record as cache_record
+from backend.media.diagram_cache import canonical_spec_hash
+from backend.media.diagram_cache import lookup as cache_lookup
+from backend.media.diagram_cache import record as cache_record
 from backend.media.diagram_source import write_source_sidecar
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 from backend.shared.diagrams.static_render import (

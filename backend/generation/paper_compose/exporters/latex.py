@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from backend.core.logging_utils import get_logger
-from backend.generation.paper_compose.exam_templates import format_answer_key_section, format_exam_header, get_exam_preamble
+from backend.generation.paper_compose.exam_templates import (
+    format_answer_key_section,
+    format_exam_header,
+    get_exam_preamble,
+)
 from backend.generation.paper_compose.exporters.tex_escape import _smart_tex_escape
 from backend.generation.paper_compose.latex_safety import ensure_latex_is_safe
 from backend.generation.paper_compose.latex_sandbox import (

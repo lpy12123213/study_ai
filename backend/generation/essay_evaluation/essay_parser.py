@@ -12,7 +12,6 @@ import re
 from dataclasses import dataclass
 from typing import List
 
-
 # Sentence terminators: full-width punctuation (CJK) and ASCII counterparts.
 # Splits at the boundary right after the terminator regardless of whether the
 # next character is whitespace, since CJK essays typically run sentences

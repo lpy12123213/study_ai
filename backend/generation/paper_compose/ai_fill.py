@@ -4,9 +4,9 @@ import hashlib
 from typing import List
 
 from backend.core.logging_utils import get_logger
-from backend.integrations.crawler.manager import get_crawler
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, build_ai_question_id
 from backend.generation.question_library.generation import generate_questions
+from backend.integrations.crawler.manager import get_crawler
 
 logger = get_logger(__name__)
 

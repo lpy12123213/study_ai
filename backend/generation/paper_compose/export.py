@@ -4,13 +4,13 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from backend.database.repositories.question.question_cache import get_question_cache
-from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
 from backend.generation.paper_compose.exporters.docx import render_paper_docx_bytes
 from backend.generation.paper_compose.exporters.latex import (
     compile_latex_to_pdf as compile_latex_to_pdf,
 )
 from backend.generation.paper_compose.exporters.latex import compile_latex_to_pdf_async, render_paper_latex
 from backend.generation.paper_compose.exporters.markdown import render_paper_markdown
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes, publish_generated_text
 
 
 def _canonical_export_format(fmt: str) -> str:

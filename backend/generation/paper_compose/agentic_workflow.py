@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.agent.executor import Executor
 from backend.agent.types import CompressedContext, UserProfile
+from backend.core.logging_utils import get_logger
 from backend.generation.agentic.codex_runtime import (
     is_codex_runtime_agent_runtime,
     legacy_agent_fallback_enabled,
@@ -18,6 +19,8 @@ from backend.generation.agentic.types import AgentRunSpec, AgentTraceEvent
 from backend.llm.client import chat_completion_text, is_llm_configured
 from backend.llm.json_utils import extract_first_json_object
 from backend.llm.prompts import create_default_prompt_registry
+
+logger = get_logger(__name__)
 
 
 def _now_iso() -> str:
@@ -130,6 +133,7 @@ class PaperComposePlanner:
                 req_id_prefix="paper_agent_planner",
             )
         except Exception:
+            logger.warning("paper_compose_agentic_planner_llm_failed", exc_info=True)
             return None
         obj = extract_first_json_object(text, default={}) or {}
         if not isinstance(obj, dict):
@@ -252,6 +256,7 @@ class PaperComposeToolExecutor:
         try:
             output = await self.executor.tool_registry.call_tool(name=name, arguments=arguments, ctx=self.context)
         except Exception as exc:
+            logger.warning("paper_compose_agentic_tool_failed", extra={"tool": name}, exc_info=True)
             return ToolResult(success=False, error=str(exc))
 
         outputs = state.get("tool_outputs")

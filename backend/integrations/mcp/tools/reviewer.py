@@ -17,8 +17,8 @@ from backend.core.settings import (
     REVIEW_PROVIDER,
     REVIEW_TIMEOUT,
 )
-from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion
+from backend.llm.prompts import create_default_prompt_registry
 
 logger = get_logger(__name__)
 

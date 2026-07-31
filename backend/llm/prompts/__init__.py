@@ -1,11 +1,5 @@
 from __future__ import annotations
 
-from backend.llm.prompts.registry import (
-    LlmPromptRecord,
-    LlmPromptRegistry,
-    create_llm_prompt_registry,
-    hash_prompt_content,
-)
 from backend.llm.prompts.agentic_registry import (
     EDU_MATH_FORMAT_GUARDRAIL,
     JSON_ONLY_GUARDRAIL,
@@ -22,6 +16,12 @@ from backend.llm.prompts.agentic_registry import (
     PromptTemplate,
     create_default_prompt_registry,
     repo_root_from_here,
+)
+from backend.llm.prompts.registry import (
+    LlmPromptRecord,
+    LlmPromptRegistry,
+    create_llm_prompt_registry,
+    hash_prompt_content,
 )
 
 __all__ = [

@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 
-
 AI_SYNTHESIS_REVIEW_NOTE = "※ 本题答案由 AI 生成，请复核。"
 
 

@@ -9,9 +9,9 @@ from typing import Any, Dict
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.lesson_plan.common import GENERATED_DIR, lesson_plan_infinite_max_tokens
 from backend.generation.lesson_plan.llm import call_llm_text
+from backend.llm.prompts import create_default_prompt_registry
 from backend.media.generated import default_generated_media_ttl_s
 from backend.media.generated import publish_generated_bytes as _publish_bytes
 from backend.media.generated import publish_generated_text as _publish_text

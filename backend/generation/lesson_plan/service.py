@@ -14,7 +14,11 @@ from backend.generation.lesson_plan.export import (
     publish_generated_text,
     refine_latex,
 )
-from backend.generation.lesson_plan.planning import research_knowledge_point, review_knowledge_points, split_knowledge_points
+from backend.generation.lesson_plan.planning import (
+    research_knowledge_point,
+    review_knowledge_points,
+    split_knowledge_points,
+)
 from backend.generation.lesson_plan.writing import generate_lesson_plan_json, lesson_plan_to_markdown
 from backend.llm.client import is_llm_configured
 

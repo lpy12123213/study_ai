@@ -7,13 +7,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.generation.question_library.diagram_utils import render_tikz_to_url  # noqa: E402
-from backend.generation.question_library.preview_store import load_preview, load_session, save_preview, save_session  # noqa: E402
+from backend.generation.question_library.preview_store import (  # noqa: E402
+    load_preview,
+    load_session,
+    save_preview,
+    save_session,
+)
 
 
 def _as_str(v: Any) -> str:

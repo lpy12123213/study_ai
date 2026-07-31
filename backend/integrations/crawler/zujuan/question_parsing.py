@@ -71,21 +71,24 @@ def _extract_option_html(root: Any, content_node: Any) -> str:
     for selector in explicit_selectors:
         try:
             nodes = root.select(selector)
-        except Exception:
+        except Exception:  # soup 解析防御：单个 selector 失败不应拖垮整体抽取，但必须可见
+            logger.warning("zujuan_option_selector_failed", extra={"selector": selector}, exc_info=True)
             nodes = []
         for node in nodes:
             _add(node)
 
     try:
         parents = root.find_all(["ul", "ol", "div", "table"], recursive=True)
-    except Exception:
+    except Exception:  # soup 解析防御：结构异常时退回空列表，但必须可见
+        logger.warning("zujuan_option_parent_scan_failed", exc_info=True)
         parents = []
     for parent in parents:
         if parent is root or _inside_content(parent):
             continue
         try:
             children = parent.find_all(["li", "p", "div", "tr"], recursive=False)
-        except Exception:
+        except Exception:  # soup 解析防御：单个子树失败不应拖垮整体抽取，但必须可见
+            logger.warning("zujuan_option_children_scan_failed", exc_info=True)
             children = []
         labels: set[str] = set()
         for child in children:

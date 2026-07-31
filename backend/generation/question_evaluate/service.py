@@ -8,8 +8,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from backend.api.question_evaluate_schemas import QuestionEvaluation, QuestionInput
 from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
 from backend.core.subjects import resolve_subject
-from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.client import chat_completion_text
+from backend.llm.prompts import create_default_prompt_registry
 
 ProgressCallback = Callable[[int, int, QuestionEvaluation], Awaitable[None]]
 

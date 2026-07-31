@@ -9,6 +9,7 @@ module cache so other tests in the suite are not affected.
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import sys
 import tempfile
@@ -16,6 +17,8 @@ import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+
+logger = logging.getLogger(__name__)
 
 _RELOAD_MODULES = [
     "backend.app",
@@ -61,7 +64,7 @@ class TestInputLengthLimits(unittest.TestCase):
         try:
             cls.client.close()
         except Exception:
-            pass
+            logger.warning("test_client_close_failed", exc_info=True)
 
         for name in _RELOAD_MODULES:
             sys.modules.pop(name, None)

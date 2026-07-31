@@ -21,7 +21,6 @@ from backend.generation.question_library.generation import (
     generate_questions,
 )
 
-
 DIFFICULTY_RANKS = {
     "基础": 1,
     "简单": 1,

@@ -6,15 +6,15 @@ from typing import Any, Dict, List
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import STUDY_MATERIALS_THINKING_EFFORT_DEFAULT
-from backend.llm.json_utils import strip_code_fences
-from backend.llm.runner import run_text, run_tool_use
-from backend.integrations.mcp.tools.python_scientific_compute import openai_tool_spec as scientific_compute_tool_spec
-from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
 from backend.generation.question_library.gen_utils import (
     ReasoningEventHandler,
     _format_generation_tool_call_log,
     _format_generation_tool_result_log,
 )
+from backend.integrations.mcp.tools.python_scientific_compute import openai_tool_spec as scientific_compute_tool_spec
+from backend.integrations.mcp.tools.python_scientific_compute import python_scientific_compute
+from backend.llm.json_utils import strip_code_fences
+from backend.llm.runner import run_text, run_tool_use
 
 chat_completion = run_tool_use
 chat_completion_text = run_text

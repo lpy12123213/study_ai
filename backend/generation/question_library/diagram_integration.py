@@ -3,13 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import LESSON_PLAN_MODEL
-from backend.llm.client import is_llm_configured
-from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.diagram_utils import (
     render_asy_to_url,
     render_matplotlib_2d_to_url,
@@ -19,6 +16,8 @@ from backend.generation.question_library.gen_llm import _chat_json_with_reasonin
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.subject_knowledge import infer_subject_family
 from backend.generation.question_library.verify_diagram import verify_diagram_with_vision
+from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 from backend.shared.diagrams.static_render import check_asy_tools, check_tikz_tools
 
 logger = get_logger(__name__)

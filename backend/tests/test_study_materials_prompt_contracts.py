@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import unittest
 
-
 # 每个 study-materials 角色提示词必须提及的输出契约关键词（角色新增时必须同步补充）。
 _ROLE_OUTPUT_KEYWORDS = {
     "planner": ["rationale", "steps"],

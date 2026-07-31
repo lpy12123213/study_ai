@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 
-
 LATEX_BLOCKLIST_PATTERNS = [
     r"\\(?:input|include)\s*\{",
     r"\\openin\b",

@@ -16,12 +16,12 @@ from backend.generation.agentic.codex_runtime import (
 from backend.generation.deepthink.service import deepthink_service
 from backend.generation.knowledge_video.service import run_knowledge_video_task as run_knowledge_video_generation_task
 from backend.generation.lesson_plan.service import generate_lesson_plan_stream
-from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
+from backend.generation.paper_compose.agentic_workflow import run_agentic_blueprint_paper_events
 from backend.generation.paper_compose.export import export_paper as export_paper_doc
 from backend.generation.paper_compose.export import export_paper_bundle
-from backend.generation.paper_compose.agentic_workflow import run_agentic_blueprint_paper_events
 from backend.generation.paper_compose.full_paper_workflow import generate_full_paper_events
 from backend.generation.paper_compose.workflow import compose_paper_events
+from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
 from backend.shared.tasks import RuntimeTask, task_runtime
 
 logger = get_logger(__name__)

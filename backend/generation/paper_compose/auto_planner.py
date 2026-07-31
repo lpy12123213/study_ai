@@ -5,11 +5,11 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.core.subjects import resolve_subject
-from backend.llm.client import is_llm_configured
-from backend.llm.prompts import create_default_prompt_registry
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.subject_knowledge import infer_subject_family
+from backend.llm.client import is_llm_configured
+from backend.llm.prompts import create_default_prompt_registry
 
 
 def _slot_points_total(slots: List[dict]) -> int:

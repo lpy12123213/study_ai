@@ -468,6 +468,7 @@ async def generate_questions(
                             on_reasoning_event=on_reasoning_event,
                         )
                     except Exception as exc:
+                        logger.warning("question_library_quick_validation_failed", exc_info=True)
                         validation_result = {
                             "pass": False,
                             "scope_ok": False,

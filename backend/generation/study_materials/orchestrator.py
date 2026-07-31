@@ -362,15 +362,9 @@ class StudyMaterialsTaskManager:
         meta: Optional[Dict[str, Any]] = None,
         task_id: str = "",
     ) -> None:
-        """B4: 持久化失败不再静默——记日志、写 meta.warnings，并尽力广播 warning 事件。"""
+        """B4: 持久化失败不再静默——调用方负责带 exc_info 记日志；这里写 meta.warnings，并尽力广播 warning 事件。"""
 
         message = str(error or "").strip() or type(error).__name__
-        tid = str(task_id or getattr(task, "task_id", "") or "")
-        logger.warning(
-            "study_materials_persistence_warning",
-            extra={"task_id": tid, "target": target, "error": message},
-            exc_info=True,
-        )
         if isinstance(meta, dict):
             warnings = meta.setdefault("warnings", [])
             if isinstance(warnings, list):
@@ -407,6 +401,7 @@ class StudyMaterialsTaskManager:
             return obj if isinstance(obj, dict) else None
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
             # 此处尚无 task/meta 上下文（调用方随后会走 DB 兜底），只能先留日志。
+            logger.warning("study_materials_snapshot_load_failed", extra={"task_id": task_id}, exc_info=True)
             self._record_persistence_warning(None, target="snapshot_load", error=exc, task_id=task_id)
             return None
 
@@ -481,6 +476,11 @@ class StudyMaterialsTaskManager:
 
             meta["_persisted_at_s"] = now
         except Exception as exc:
+            logger.warning(
+                "study_materials_snapshot_persist_failed",
+                extra={"task_id": getattr(task, "task_id", "")},
+                exc_info=True,
+            )
             self._record_persistence_warning(task, target="snapshot_persist", error=exc, meta=meta)
 
     def _cleanup_snapshots(self) -> int:
@@ -1104,6 +1104,11 @@ class StudyMaterialsTaskManager:
                     acceptance=acceptance,
                 )
         except Exception as exc:
+            logger.warning(
+                "study_materials_archive_upsert_failed",
+                extra={"task_id": getattr(task, "task_id", "")},
+                exc_info=True,
+            )
             self._record_persistence_warning(task, target="archive_upsert", error=exc, meta=meta)
 
     def _workflow_state_from_archive(
@@ -1221,6 +1226,7 @@ class StudyMaterialsTaskManager:
                 logger.warning(
                     "study_materials_export_attempt_failed",
                     extra={"task_id": task.task_id, "attempt": attempt + 1, "error": str(exc)},
+                    exc_info=True,
                 )
         message = str(last_error or "").strip() or (type(last_error).__name__ if last_error else "export_failed")
         meta["export_error"] = message

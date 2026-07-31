@@ -11,7 +11,9 @@ from backend.database.schema import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False：作为库被进程内调用时（CI/测试套件）不得
+    # 关闭宿主进程既有 logger，否则后续 assertLogs 等日志断言会静默失效。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
 from backend.generation.question_library.curriculum_reference import (
-    CURRICULUM_REFERENCE_ARTICLE,
     CURRICULUM_STANDARD,
     get_curriculum_reference_article,
 )

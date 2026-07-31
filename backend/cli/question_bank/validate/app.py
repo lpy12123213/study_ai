@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Iterable, List, Mapping, Optional
 
 from backend.cli.common import _console, _prompt_bool, _rich_available, _safe_user_id
 from backend.database.repositories.question.question_cache import get_question_cache

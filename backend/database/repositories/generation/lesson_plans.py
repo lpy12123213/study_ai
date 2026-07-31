@@ -21,7 +21,6 @@ from backend.database.engine import async_session_maker
 from backend.database.repositories.user_ids import normalize_user_id
 from backend.database.schema import LessonPlanRecord
 
-
 # --------------------------------------------------------------------------- #
 # helpers                                                                      #
 # --------------------------------------------------------------------------- #

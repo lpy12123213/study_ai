@@ -10,10 +10,10 @@ from typing import Any, Dict, List, Optional
 from httpx import HTTPError
 
 from backend.core.logging_utils import get_logger
-from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import list_question_library_items
 from backend.generation.question_library.gen_common import _clip_unique
+from backend.integrations.crawler.manager import get_crawler
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _REFERENCE_CACHE_DIR = (_REPO_ROOT / ".local" / "reference_cache").resolve()
