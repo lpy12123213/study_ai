@@ -21,6 +21,7 @@ from backend.core.logging_utils import get_logger
 from backend.core.settings import STUDY_MATERIALS_THINKING_MODEL, env_bool
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
+from backend.shared.numparse import clamp_int as _clamp_int
 
 logger = get_logger(__name__)
 
@@ -105,6 +106,151 @@ def _web_subquestion_system_prompt() -> str:
     return create_default_prompt_registry().render("search.web_subquestion.decompose.v1").content
 
 
+
+
+def _normalize_result(r: Dict[str, Any], *, provider: str, source_query: str) -> Dict[str, Any]:
+    rr = dict(r or {})
+    if source_query:
+        rr.setdefault("source_query", source_query)
+    pr = _postprocess_web_search_result(rr)
+    if provider:
+        pr.setdefault("provider", provider)
+    return pr
+
+
+def _clean_metaso_answer(text: str) -> str:
+    """Best-effort cleanup for Metaso /ask answers.
+
+    Metaso often returns answers with:
+    - blockquote prefixes (already handled in metaso_ask)
+    - evidence markers like [[1]]
+    - meta narration: "我需要/用户/证据/搜索到的资料..."
+    """
+
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    # Drop simple evidence markers.
+    raw = re.sub(r"\[\[\s*\d+\s*\]\]", "", raw)
+    raw = re.sub(r"\(\[\[\s*\d+\s*\]\]\)", "", raw)
+    # Keep newlines (Metaso answers are often structured); only collapse horizontal spaces/tabs.
+    raw = re.sub(r"[ \t]{2,}", " ", raw).strip()
+
+    meta_tokens = (
+        "用户",
+        "证据",
+        "资料",
+        "搜索到",
+        "我需要",
+        "我将",
+        "让我",
+        "Let's",
+        "the user",
+        "evidence",
+    )
+    content_markers = ("定义", "直观", "关键", "误区", "方法", "结论", "应用", "例", "注意")
+
+    lines = [ln.rstrip() for ln in raw.splitlines()]
+    out: List[str] = []
+    started = False
+    for ln in lines:
+        s = (ln or "").strip()
+        if not s:
+            continue
+
+        # Skip leading meta narration before the first useful marker appears.
+        if not started:
+            if any(tok in s for tok in content_markers):
+                started = True
+            elif any(tok in s for tok in meta_tokens) and len(s) <= 140:
+                continue
+            elif s.startswith(("好的", "Okay", "首先")) and len(s) <= 80:
+                continue
+
+        # Skip in-body meta sentences that are short and clearly process narration.
+        if any(tok in s for tok in meta_tokens) and len(s) <= 120:
+            continue
+
+        out.append(s)
+
+    cleaned = "\n".join(out).strip()
+    # Avoid returning empty if our heuristic was too aggressive.
+    return cleaned or raw
+
+
+class _WebSearchHealth:
+    """Task-scoped web-search health state (LLM/provider down markers).
+
+    Primary store: ctx.working_memory (task-scoped, survives into resume
+    snapshots). Fallback: size-capped module-level dict keyed by task id.
+    """
+
+    def __init__(self, ctx: CompressedContext) -> None:
+        self._ctx = ctx
+
+    def task_id(self) -> str:
+        return str(getattr(self._ctx, "current_task", "") or "").strip() or "default"
+
+    def peek(self) -> Dict[str, Any]:
+        wm = getattr(self._ctx, "working_memory", None)
+        if isinstance(wm, dict):
+            store = wm.get("_web_search_health")
+            return store if isinstance(store, dict) else {}
+        store = _TASK_HEALTH_FALLBACK.get(self.task_id())
+        return store if isinstance(store, dict) else {}
+
+    def store_locked(self) -> Dict[str, Any]:
+        wm = getattr(self._ctx, "working_memory", None)
+        if isinstance(wm, dict):
+            store = wm.get("_web_search_health")
+            if not isinstance(store, dict):
+                store = {}
+                wm["_web_search_health"] = store
+            return store
+        key = self.task_id()
+        store = _TASK_HEALTH_FALLBACK.get(key)
+        if not isinstance(store, dict):
+            while len(_TASK_HEALTH_FALLBACK) >= _TASK_HEALTH_FALLBACK_MAX_TASKS:
+                _TASK_HEALTH_FALLBACK.pop(next(iter(_TASK_HEALTH_FALLBACK)), None)
+            store = {}
+            _TASK_HEALTH_FALLBACK[key] = store
+        return store
+
+    def llm_decompose_down(self) -> bool:
+        return bool(self.peek().get("llm_decompose_down"))
+
+    async def mark_llm_decompose_down(self, reason: str) -> None:
+        async with self._ctx.working_memory_lock:
+            store = self.store_locked()
+            first = not store.get("llm_decompose_down")
+            store["llm_decompose_down"] = str(reason)[:200]
+        if first:
+            logger.warning(
+                "web_search_decompose_llm_down",
+                extra={"task": self.task_id(), "reason": str(reason)[:200]},
+            )
+
+    def provider_down_reason(self, name: str) -> str:
+        downs = self.peek().get("providers_down")
+        if not isinstance(downs, dict):
+            return ""
+        return str(downs.get(name) or "")
+
+    async def mark_provider_down(self, name: str, reason: str) -> None:
+        async with self._ctx.working_memory_lock:
+            store = self.store_locked()
+            downs = store.setdefault("providers_down", {})
+            if not isinstance(downs, dict):
+                downs = {}
+                store["providers_down"] = downs
+            first = name not in downs
+            downs.setdefault(name, str(reason)[:200])
+        if first:
+            logger.warning(
+                "web_search_provider_down",
+                extra={"task": self.task_id(), "provider": name, "reason": str(reason)[:200]},
+            )
 class WebSearchKnowledgeToolsMixin:
     async def _tool_web_search_knowledge(self, args: Dict[str, Any], ctx: CompressedContext) -> Dict[str, Any]:
         """网络搜索知识点（Tavily 优先，可选 deepresearch 多轮；Exa/Metaso/智谱兜底）。
@@ -164,14 +310,6 @@ class WebSearchKnowledgeToolsMixin:
 
         from backend.integrations.mcp.search.metaso import metaso_ask, metaso_search
 
-        def _normalize_result(r: Dict[str, Any], *, provider: str, source_query: str) -> Dict[str, Any]:
-            rr = dict(r or {})
-            if source_query:
-                rr.setdefault("source_query", source_query)
-            pr = _postprocess_web_search_result(rr)
-            if provider:
-                pr.setdefault("provider", provider)
-            return pr
 
         disable_metaso_raw = args.get("disable_metaso")
         if disable_metaso_raw is None:
@@ -179,138 +317,20 @@ class WebSearchKnowledgeToolsMixin:
         else:
             disable_metaso = str(disable_metaso_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
-        def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
-            try:
-                n = int(value)
-            except (TypeError, ValueError):
-                n = default
-            return max(min_value, min(max_value, n))
 
-        def _clean_metaso_answer(text: str) -> str:
-            """Best-effort cleanup for Metaso /ask answers.
 
-            Metaso often returns answers with:
-            - blockquote prefixes (already handled in metaso_ask)
-            - evidence markers like [[1]]
-            - meta narration: "我需要/用户/证据/搜索到的资料..."
-            """
-
-            raw = (text or "").strip()
-            if not raw:
-                return ""
-
-            # Drop simple evidence markers.
-            raw = re.sub(r"\[\[\s*\d+\s*\]\]", "", raw)
-            raw = re.sub(r"\(\[\[\s*\d+\s*\]\]\)", "", raw)
-            # Keep newlines (Metaso answers are often structured); only collapse horizontal spaces/tabs.
-            raw = re.sub(r"[ \t]{2,}", " ", raw).strip()
-
-            meta_tokens = (
-                "用户",
-                "证据",
-                "资料",
-                "搜索到",
-                "我需要",
-                "我将",
-                "让我",
-                "Let's",
-                "the user",
-                "evidence",
-            )
-            content_markers = ("定义", "直观", "关键", "误区", "方法", "结论", "应用", "例", "注意")
-
-            lines = [ln.rstrip() for ln in raw.splitlines()]
-            out: List[str] = []
-            started = False
-            for ln in lines:
-                s = (ln or "").strip()
-                if not s:
-                    continue
-
-                # Skip leading meta narration before the first useful marker appears.
-                if not started:
-                    if any(tok in s for tok in content_markers):
-                        started = True
-                    elif any(tok in s for tok in meta_tokens) and len(s) <= 140:
-                        continue
-                    elif s.startswith(("好的", "Okay", "首先")) and len(s) <= 80:
-                        continue
-
-                # Skip in-body meta sentences that are short and clearly process narration.
-                if any(tok in s for tok in meta_tokens) and len(s) <= 120:
-                    continue
-
-                out.append(s)
-
-            cleaned = "\n".join(out).strip()
-            # Avoid returning empty if our heuristic was too aggressive.
-            return cleaned or raw
 
         # --- Task-scoped health state -------------------------------------------
         # Primary store: ctx.working_memory (task-scoped, survives into resume
         # snapshots). Fallback: size-capped module-level dict keyed by task id.
-        def _health_task_id() -> str:
-            return str(getattr(ctx, "current_task", "") or "").strip() or "default"
-
-        def _health_peek() -> Dict[str, Any]:
-            wm = getattr(ctx, "working_memory", None)
-            if isinstance(wm, dict):
-                store = wm.get("_web_search_health")
-                return store if isinstance(store, dict) else {}
-            store = _TASK_HEALTH_FALLBACK.get(_health_task_id())
-            return store if isinstance(store, dict) else {}
-
-        def _health_store_locked() -> Dict[str, Any]:
-            wm = getattr(ctx, "working_memory", None)
-            if isinstance(wm, dict):
-                store = wm.get("_web_search_health")
-                if not isinstance(store, dict):
-                    store = {}
-                    wm["_web_search_health"] = store
-                return store
-            key = _health_task_id()
-            store = _TASK_HEALTH_FALLBACK.get(key)
-            if not isinstance(store, dict):
-                while len(_TASK_HEALTH_FALLBACK) >= _TASK_HEALTH_FALLBACK_MAX_TASKS:
-                    _TASK_HEALTH_FALLBACK.pop(next(iter(_TASK_HEALTH_FALLBACK)), None)
-                store = {}
-                _TASK_HEALTH_FALLBACK[key] = store
-            return store
-
-        def _llm_decompose_down() -> bool:
-            return bool(_health_peek().get("llm_decompose_down"))
-
-        async def _mark_llm_decompose_down(reason: str) -> None:
-            async with ctx.working_memory_lock:
-                store = _health_store_locked()
-                first = not store.get("llm_decompose_down")
-                store["llm_decompose_down"] = str(reason)[:200]
-            if first:
-                logger.warning(
-                    "web_search_decompose_llm_down",
-                    extra={"task": _health_task_id(), "reason": str(reason)[:200]},
-                )
-
-        def _provider_down_reason(name: str) -> str:
-            downs = _health_peek().get("providers_down")
-            if not isinstance(downs, dict):
-                return ""
-            return str(downs.get(name) or "")
-
-        async def _mark_provider_down(name: str, reason: str) -> None:
-            async with ctx.working_memory_lock:
-                store = _health_store_locked()
-                downs = store.setdefault("providers_down", {})
-                if not isinstance(downs, dict):
-                    downs = {}
-                    store["providers_down"] = downs
-                first = name not in downs
-                downs.setdefault(name, str(reason)[:200])
-            if first:
-                logger.warning(
-                    "web_search_provider_down",
-                    extra={"task": _health_task_id(), "provider": name, "reason": str(reason)[:200]},
-                )
+        _health = _WebSearchHealth(ctx)
+        _health_task_id = _health.task_id
+        _health_peek = _health.peek
+        _health_store_locked = _health.store_locked
+        _llm_decompose_down = _health.llm_decompose_down
+        _mark_llm_decompose_down = _health.mark_llm_decompose_down
+        _provider_down_reason = _health.provider_down_reason
+        _mark_provider_down = _health.mark_provider_down
 
         # Sub-questions for a knowledge point are computed once per tool invocation and
         # reused across provider fallbacks (Tavily -> Exa -> Metaso) in the same call.

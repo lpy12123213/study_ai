@@ -8,17 +8,14 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from backend.core.logging_utils import get_logger
 from backend.core.subjects import resolve_subject
 from backend.core.text_lint import lint_many
-from backend.integrations.crawler.manager import get_crawler
 from backend.database.repositories.question.papers import add_questions_to_paper, get_paper, save_paper
 from backend.database.repositories.question.question_cache import (
     get_question_cache,
     mark_used_questions,
     upsert_question_cache,
 )
-from backend.llm.runner import run_json
-from backend.llm.prompts import create_default_prompt_registry
-from backend.generation.paper_compose.answer_synthesis import synthesize_missing_answers
 from backend.generation.paper_compose.ai_fill import fill_slot_with_ai
+from backend.generation.paper_compose.answer_synthesis import synthesize_missing_answers
 from backend.generation.paper_compose.auto_review import review_questions
 from backend.generation.paper_compose.balance import apply_balance_corrections
 from backend.generation.paper_compose.numeric_verification import verify_numeric_answers
@@ -43,6 +40,9 @@ from backend.generation.paper_compose.workflow_support import (
     _stem_fingerprint,
     _truthy,
 )
+from backend.integrations.crawler.manager import get_crawler
+from backend.llm.prompts import create_default_prompt_registry
+from backend.llm.runner import run_json
 
 logger = get_logger(__name__)
 
@@ -193,6 +193,44 @@ def _filter_or_replace_rejected_questions(slot_results: List[Dict[str, Any]]) ->
 
     return summary
 
+
+
+def _maybe_json_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x or "").strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                obj = json.loads(raw)
+                if isinstance(obj, list):
+                    return [str(x).strip() for x in obj if str(x or "").strip()]
+            except json.JSONDecodeError:
+                return []
+    return []
+
+
+def _q_quality(q: Dict[str, Any]) -> int:
+    try:
+        return int(q.get("quality_score") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _allow_candidate(q: Dict[str, Any]) -> bool:
+    # Avoid selecting questions that are likely unusable (login wall / broken formulas / missing options).
+    flags = q.get("quality_flags") or []
+    if isinstance(flags, list) and flags:
+        norm_flags = [str(x or "").strip() for x in flags if str(x or "").strip()]
+        hard_prefixes = ("formula_unconverted:", "unknown_tokens:", "choice_options_incomplete:")
+        hard_exact = {
+            "missing_stem",
+            "login_required_content",
+            "choice_missing_options",
+        }
+        if any((f in hard_exact) or f.startswith(hard_prefixes) for f in norm_flags):
+            return False
+    return True
 
 
 async def compose_paper_events(
@@ -578,7 +616,7 @@ async def compose_paper_events(
                     slot_index=slot.index,
                     fallback_to_crawler=False,
                 )
-            except Exception as exc:
+            except Exception:
                 logger.warning("paper_compose_ai_backfill_failed", extra={"task_id": task_id}, exc_info=True)
                 raise
 
@@ -611,6 +649,7 @@ async def compose_paper_events(
                 try:
                     ai_items = await _generate_ai_items(missing)
                 except Exception as exc:
+                    logger.warning("paper_compose_ai_generation_failed", extra={"slot_index": slot.index}, exc_info=True)
                     yield {
                         "type": "step",
                         "step": {
@@ -698,19 +737,6 @@ async def compose_paper_events(
             logger.warning("paper_compose_question_cache_prefetch_failed", extra={"task_id": task_id}, exc_info=True)
             cache_map = {}
 
-        def _maybe_json_list(value: Any) -> List[str]:
-            if isinstance(value, list):
-                return [str(x).strip() for x in value if str(x or "").strip()]
-            if isinstance(value, str):
-                raw = value.strip()
-                if raw.startswith("[") and raw.endswith("]"):
-                    try:
-                        obj = json.loads(raw)
-                        if isinstance(obj, list):
-                            return [str(x).strip() for x in obj if str(x or "").strip()]
-                    except json.JSONDecodeError:
-                        return []
-            return []
 
         if cache_map:
             for q in candidates:
@@ -758,11 +784,6 @@ async def compose_paper_events(
                     except (TypeError, json.JSONDecodeError):
                         q["quality_flags"] = cached.get("quality_flags")
 
-        def _q_quality(q: Dict[str, Any]) -> int:
-            try:
-                return int(q.get("quality_score") or 0)
-            except (TypeError, ValueError):
-                return 0
 
         if required_kps:
             for q in candidates:
@@ -778,20 +799,6 @@ async def compose_paper_events(
         else:
             candidates.sort(key=_q_quality, reverse=True)
 
-        def _allow_candidate(q: Dict[str, Any]) -> bool:
-            # Avoid selecting questions that are likely unusable (login wall / broken formulas / missing options).
-            flags = q.get("quality_flags") or []
-            if isinstance(flags, list) and flags:
-                norm_flags = [str(x or "").strip() for x in flags if str(x or "").strip()]
-                hard_prefixes = ("formula_unconverted:", "unknown_tokens:", "choice_options_incomplete:")
-                hard_exact = {
-                    "missing_stem",
-                    "login_required_content",
-                    "choice_missing_options",
-                }
-                if any((f in hard_exact) or f.startswith(hard_prefixes) for f in norm_flags):
-                    return False
-            return True
 
         async def _fetch_more(pages: int):
             return await _fetch_slot_candidates(slot, search_limit=search_limit, max_pages_value=int(pages or 1))
@@ -856,6 +863,7 @@ async def compose_paper_events(
                 try:
                     ai_items = await _generate_ai_items(missing)
                 except Exception as exc:
+                    logger.warning("paper_compose_ai_generation_failed", extra={"slot_index": slot.index}, exc_info=True)
                     yield {
                         "type": "step",
                         "step": {

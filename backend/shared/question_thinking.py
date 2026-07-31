@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from backend.shared.numparse import clamp_int_optional as _clamp_int
+
 THINKING_DEPTH_DIMENSION_NAME = "思维深度"
 _THINKING_ALIASES = {"思维深度", "思维含量", "思维含金量", "方法稀有度"}
 
@@ -14,11 +16,7 @@ def _as_int(value: Any, default: Optional[int] = None) -> Optional[int]:
         return default
 
 
-def _clamp_int(value: Any, *, default: Optional[int], min_v: int, max_v: int) -> Optional[int]:
-    n = _as_int(value, default)
-    if n is None:
-        return None
-    return max(min_v, min(max_v, n))
+
 
 
 def _parse_dimensions(value: Any) -> List[dict]:
@@ -46,7 +44,7 @@ def extract_thinking_depth(dimensions: Any) -> Dict[str, Any]:
         if not _is_thinking_dimension(name):
             continue
         return {
-            "score": _clamp_int(item.get("score"), default=None, min_v=1, max_v=10),
+            "score": _clamp_int(item.get("score"), default=None, min_value=1, max_value=10),
             "comment": str(item.get("comment") or "").strip(),
             "method_family": str(item.get("method_family") or item.get("family") or "").strip(),
             "method_signature": str(item.get("method_signature") or item.get("signature") or "").strip(),
@@ -79,7 +77,7 @@ def build_thinking_depth_dimension(
 ) -> Dict[str, Any]:
     return {
         "name": THINKING_DEPTH_DIMENSION_NAME,
-        "score": _clamp_int(score, default=1, min_v=1, max_v=10) or 1,
+        "score": _clamp_int(score, default=1, min_value=1, max_value=10) or 1,
         "comment": str(comment or "").strip(),
         "method_family": str(method_family or "").strip(),
         "method_signature": str(method_signature or "").strip(),

@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from backend.database.repositories.question.question_library import set_hidden, upsert_question_library_items
 from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.runner import run_json
+from backend.shared.numparse import clamp_int as _clamp_int
 from backend.shared.question_thinking import (
     extract_thinking_depth,
     merge_method_context,
@@ -38,9 +39,7 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
-def _clamp_int(value: Any, *, default: int, min_v: int, max_v: int) -> int:
-    n = _as_int(value, default)
-    return max(min_v, min(max_v, n))
+
 
 
 def _normalize_questions(questions: List[dict]) -> List[dict]:
@@ -113,7 +112,7 @@ def _normalize_scored_item(raw: dict, *, fallback_qid: str) -> dict:
     dimensions = replace_thinking_depth_dimension(
         base_dimensions,
         {
-            "score": _clamp_int(thinking_score, default=1, min_v=1, max_v=10),
+            "score": _clamp_int(thinking_score, default=1, min_value=1, max_value=10),
             "comment": depth_comment,
             "method_family": method_family,
             "method_signature": method_signature,
@@ -126,7 +125,7 @@ def _normalize_scored_item(raw: dict, *, fallback_qid: str) -> dict:
     return {
         "question_id": qid,
         "verdict": str(raw.get("verdict") or "").strip(),
-        "overall_score": _clamp_int(raw.get("overall_score"), default=0, min_v=0, max_v=100),
+        "overall_score": _clamp_int(raw.get("overall_score"), default=0, min_value=0, max_value=100),
         "dimensions": dimensions,
         "highlights": list(raw.get("highlights") or []) if isinstance(raw.get("highlights"), list) else [],
         "issues": list(raw.get("issues") or []) if isinstance(raw.get("issues"), list) else [],

@@ -4,25 +4,15 @@ import html
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.shared.numparse import clamp_float as _clamp_float
+from backend.shared.numparse import clamp_int as _clamp_int
+
 
 def _as_str(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = default
-    return max(min_value, min(max_value, n))
 
-
-def _clamp_float(value: Any, *, default: float, min_value: float, max_value: float) -> float:
-    try:
-        n = float(value)
-    except (TypeError, ValueError):
-        n = default
-    return max(min_value, min(max_value, n))
 
 
 def _safe_text(value: Any) -> str:

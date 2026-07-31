@@ -19,6 +19,7 @@ import httpx
 from backend.core.http_fetch import normalize_public_http_url
 from backend.core.logging_utils import get_logger
 from backend.core.settings import METASO_API_KEY, METASO_BASE_URL, METASO_TIMEOUT
+from backend.shared.numparse import clamp_int as _clamp_int
 
 logger = get_logger(__name__)
 
@@ -36,12 +37,7 @@ def _as_str(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = default
-    return max(min_value, min(max_value, n))
+
 
 
 def _strip_markdown_blockquotes(text: str) -> str:

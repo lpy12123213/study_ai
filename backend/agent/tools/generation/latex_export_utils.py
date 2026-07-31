@@ -5,16 +5,12 @@ from typing import Any, List
 
 from backend.core.logging_utils import get_logger
 from backend.llm.json_utils import strip_code_fences
+from backend.shared.numparse import clamp_int as _clamp_int  # noqa: F401  # re-export for latex_export_convert/refine
 
 logger = get_logger(__name__)
 
 
-def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = default
-    return max(min_value, min(max_value, n))
+
 
 
 _BEGIN_BODY_RE = re.compile(r"%\s*---\s*BEGIN_BODY\s*---", re.IGNORECASE)

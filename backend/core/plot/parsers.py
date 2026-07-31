@@ -1,29 +1,16 @@
 from __future__ import annotations
 
-import math
 from typing import Any, List, Tuple
+
+from backend.shared.numparse import clamp_float as _clamp_float
+from backend.shared.numparse import clamp_int as _clamp_int  # noqa: F401  # re-export for charts/geometry/schematic
 
 
 def _as_str(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = default
-    return max(min_value, min(max_value, n))
 
-
-def _clamp_float(value: Any, *, default: float, min_value: float, max_value: float) -> float:
-    try:
-        n = float(value)
-    except (TypeError, ValueError):
-        n = default
-    if math.isnan(n) or math.isinf(n):
-        n = default
-    return max(min_value, min(max_value, n))
 
 
 def _parse_range(value: Any, *, default: Tuple[float, float], min_span: float = 1e-6) -> Tuple[float, float]:

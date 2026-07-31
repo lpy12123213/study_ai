@@ -13,6 +13,8 @@ from backend.generation.question_library.session_utils import (
     normalize_draft_questions,
     normalize_review_status,
 )
+from backend.shared.numparse import clamp_float_optional as _clamp_float  # noqa: F401  # re-export for runner.py
+from backend.shared.numparse import clamp_int as _clamp_int  # noqa: F401  # re-export for runner.py
 from backend.shared.tasks import RuntimeTask, task_runtime
 
 
@@ -138,22 +140,7 @@ class RunnerError(Exception):
         self.status_code = int(status_code or 400)
 
 
-def _clamp_int(value: Any, *, default: int, min_v: int, max_v: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = int(default)
-    return max(int(min_v), min(int(max_v), parsed))
 
-
-def _clamp_float(value: Any, *, default: Optional[float], min_v: float, max_v: float) -> Optional[float]:
-    if value is None:
-        return default
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return default
-    return max(float(min_v), min(float(max_v), parsed))
 
 
 def _now_iso_z() -> str:

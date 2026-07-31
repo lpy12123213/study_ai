@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.tools.utils.text_utils import _clip_text, _postprocess_web_search_result
 from backend.llm.prompts import create_default_prompt_registry
+from backend.shared.numparse import clamp_int as _clamp_int
 
 CallLLMText = Callable[..., Awaitable[str]]
 ExtractJsonObj = Callable[[str], Dict[str, Any]]
@@ -73,16 +74,7 @@ def deepresearch_defaults(preset: str) -> Tuple[int, int, int]:
     return (3, 1, 6)
 
 
-def _as_int(value: Any, *, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
-
-def _clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> int:
-    n = _as_int(value, default=default)
-    return max(min_value, min(max_value, n))
 
 
 def _norm_query(text: str) -> str:

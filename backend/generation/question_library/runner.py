@@ -143,11 +143,11 @@ async def create_crawl_task(
 
     difficulty = str(req.get("difficulty") or "").strip()
     question_type = str(req.get("question_type") or "").strip()
-    limit = _clamp_int(req.get("limit"), default=30, min_v=1, max_v=200)
-    max_pages = _clamp_int(req.get("max_pages"), default=2, min_v=1, max_v=50)
-    min_quality_score = _clamp_int(req.get("min_quality_score"), default=0, min_v=0, max_v=100)
-    difficulty_value_min = _clamp_float(req.get("difficulty_value_min"), default=None, min_v=0.0, max_v=1.0)
-    difficulty_value_max = _clamp_float(req.get("difficulty_value_max"), default=None, min_v=0.0, max_v=1.0)
+    limit = _clamp_int(req.get("limit"), default=30, min_value=1, max_value=200)
+    max_pages = _clamp_int(req.get("max_pages"), default=2, min_value=1, max_value=50)
+    min_quality_score = _clamp_int(req.get("min_quality_score"), default=0, min_value=0, max_value=100)
+    difficulty_value_min = _clamp_float(req.get("difficulty_value_min"), default=None, min_value=0.0, max_value=1.0)
+    difficulty_value_max = _clamp_float(req.get("difficulty_value_max"), default=None, min_value=0.0, max_value=1.0)
     if difficulty_value_min is not None and difficulty_value_max is not None and difficulty_value_min > difficulty_value_max:
         difficulty_value_min, difficulty_value_max = difficulty_value_max, difficulty_value_min
     require_difficulty_value = bool(req.get("require_difficulty_value")) and (
@@ -331,10 +331,10 @@ async def create_media_import_task(
     topic = str(req.get("topic") or "").strip() or "图片/PDF 录入"
     difficulty = str(req.get("difficulty") or "").strip()
     question_type = str(req.get("question_type") or "").strip()
-    count = _clamp_int(req.get("count"), default=10, min_v=1, max_v=30)
+    count = _clamp_int(req.get("count"), default=10, min_value=1, max_value=30)
     task_id = safe_media_import_task_id(str(req.get("task_id") or "").strip())
-    max_pdf_pages = _clamp_int(req.get("max_pdf_pages"), default=12, min_v=1, max_v=30)
-    max_images = _clamp_int(req.get("max_images"), default=12, min_v=1, max_v=30)
+    max_pdf_pages = _clamp_int(req.get("max_pdf_pages"), default=12, min_value=1, max_value=30)
+    max_images = _clamp_int(req.get("max_images"), default=12, min_value=1, max_value=30)
 
     raw_files = req.get("files") if isinstance(req.get("files"), list) else []
     file_refs: List[MediaFileRef] = []
@@ -582,12 +582,12 @@ async def create_score_task(
     if not subject:
         raise RunnerError("subject_required", status_code=400)
 
-    limit = _clamp_int(req.get("limit"), default=50, min_v=1, max_v=500)
-    batch_size = _clamp_int(req.get("batch_size"), default=50, min_v=1, max_v=50)
+    limit = _clamp_int(req.get("limit"), default=50, min_value=1, max_value=500)
+    batch_size = _clamp_int(req.get("batch_size"), default=50, min_value=1, max_value=50)
     only_unscored = bool(req.get("only_unscored"))
     task_id = str(req.get("task_id") or "").strip() or f"ql_score_{uuid.uuid4().hex[:12]}"
 
-    threshold = _clamp_int(os.getenv("QUESTION_LIBRARY_HIDE_THRESHOLD") or 70, default=70, min_v=0, max_v=100)
+    threshold = _clamp_int(os.getenv("QUESTION_LIBRARY_HIDE_THRESHOLD") or 70, default=70, min_value=0, max_value=100)
     model = str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
     agent_spec = build_agent_run_spec_for_task(task_type="question_library_score", request=req)
 
@@ -841,7 +841,7 @@ async def create_generate_task(
         if inferred:
             question_type = inferred
 
-    count = _clamp_int(req.get("count"), default=5, min_v=1, max_v=10)
+    count = _clamp_int(req.get("count"), default=5, min_value=1, max_value=10)
     mode = str(req.get("mode") or "standard").strip() or "standard"
     if mode not in {"standard", "infinite"}:
         mode = "standard"
