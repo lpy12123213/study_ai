@@ -6,6 +6,11 @@
 - 使用 /zujuan-api/question/list POST 拉取题目列表（返回 HTML），从中解析题号
 - 使用 ZujuanCrawler 的 HTTP client 获取题目详情
 - 支持导出题目到组卷网题篮（需要登录）
+
+注意：本文件对兄弟模块（question_list / search / formulas / basket 等）统一采用
+函数内延迟 import。这是有意为之——测试在调用期 patch 兄弟模块属性（如
+backend.integrations.crawler.zujuan.search.search_by_keyword），顶层 import 会把
+名字绑定到本模块命名空间导致 patch 失效。不要为了“整洁”把它们提升到模块顶部。
 """
 
 from __future__ import annotations

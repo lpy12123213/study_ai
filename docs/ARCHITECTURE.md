@@ -44,7 +44,7 @@ Study AI backend modules
 - 后端应用入口：`backend/app.py`
 - API 聚合入口：`backend/api/router.py`
 - 前端入口：`frontend/src/main.tsx`
-- 前端路由：`frontend/src/App.tsx`，并逐步向 `frontend/src/router/` 收敛
+- 前端路由：`frontend/src/router.tsx`，路由 catalog 单一真源在 `frontend/src/app/router/`
 - MCP 入口：`python -m backend.mcp.stdio_server`
 - 启动器：`scripts/start.py`
 

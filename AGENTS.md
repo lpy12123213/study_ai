@@ -2,11 +2,11 @@
 
 ## Project Structure & Module Organization
 
-Study AI is a local-first FastAPI backend plus a clean-room rewritten frontend. `backend/app.py` starts the API; backend domains live under `backend/api/`, `backend/generation/`, `backend/tasks/`, `backend/database/`, `backend/integrations/`, `backend/shared/`, and `backend/mcp/`. Backend tests are in `backend/tests/test_*.py`. The frontend lives in `frontend/` (Vite 6 + React 18 + TypeScript strict; Tailwind CSS v4 + Radix primitives; React Router v7; TanStack Query v5 for server state; Zustand v5 for client/streaming state): `src/lib/api/` holds the typed `apiFetch` client and per-domain endpoint modules derived from current `backend/api/**` contracts, `src/lib/sse.ts` unifies the three SSE shapes, `src/stores/` holds the auth/ui/tasks stores, `src/components/ui/` the design-system primitives, `src/components/layout/` the app shell, and `src/pages/` the route pages wired in `src/router.tsx`. Follow `FRONTEND_CLEAN_ROOM_REWRITE.md` for the rewrite boundary and progress. Documentation lives in `docs/`, helper scripts in `scripts/`, and local/generated data in ignored paths such as `.local/`, `output/`, `artifacts/`, `data/`, and `venv/`.
+Study AI is a local-first FastAPI backend plus a clean-room rewritten frontend. `backend/app.py` starts the API; backend domains live under `backend/api/`, `backend/generation/`, `backend/tasks/`, `backend/database/`, `backend/integrations/`, `backend/shared/`, and `backend/mcp/`. Backend tests are in `backend/tests/test_*.py`. The frontend lives in `frontend/` (Vite 6 + React 18 + TypeScript strict; Tailwind CSS v4 + Radix primitives; React Router v7; TanStack Query v5 for server state; Zustand v5 for client/streaming state): `src/shared/api/` holds the typed `apiFetch` HTTP client and API types, `src/features/*/api.ts` the per-domain endpoint modules, `src/shared/streaming/task-coordinator.ts` the unified SSE/task watch layer, `src/stores/` the auth/ui/tasks stores, `src/components/ui/` the design-system primitives, `src/components/layout/` the app shell, and `src/pages/` plus `src/features/` the route views wired in `src/router.tsx` (route catalog in `src/app/router/`). Documentation lives in `docs/`, helper scripts in `scripts/`, and local/generated data in ignored paths such as `.local/`, `output/`, `artifacts/`, `data/`, and `venv/`.
 
 ## Build, Test, and Development Commands
 
-- `start.bat setup`: install the repository dependencies on Windows.
+- `start.bat setup`: install the repository dependencies on Windows (prefers the pinned `requirements-lock.txt` snapshot when present; delete it to resolve fresh ranges from `requirements.txt`).
 - `start.bat doctor`: run the repo smoke and quality checks.
 - `python -m uvicorn backend.app:app --reload --port 8000`: manual backend start.
 - `cd frontend && npm install`: install frontend dependencies.
@@ -20,7 +20,7 @@ Follow `.editorconfig`: UTF-8, LF line endings, spaces, 2-space defaults, and 4 
 
 ## Testing Guidelines
 
-Backend tests use `unittest`: `python -m unittest discover -s backend/tests -p "test_*.py"`. For small changes, run the focused backend test file plus `git diff --check`; for release-level confidence, run `start.bat doctor`. The frontend has no unit tests yet; verify it with `cd frontend && npm run build` (includes `tsc`) and `npm run lint`.
+Backend tests use `unittest`: `python -m unittest discover -s backend/tests -p "test_*.py"`. For small changes, run the focused backend test file plus `git diff --check`; for release-level confidence, run `start.bat doctor`. Python lint covers the full tree: `python -m ruff check backend scripts`. Frontend unit tests use Vitest (`cd frontend && npm run test`); visual e2e uses Playwright (`npm run test:e2e`, Windows `*-win32.png` snapshots — run on Windows); also verify the frontend with `npm run build` (includes `tsc`) and `npm run lint`.
 
 ## Commit & Pull Request Guidelines
 

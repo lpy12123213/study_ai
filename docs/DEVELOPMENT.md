@@ -156,20 +156,14 @@ frontend/src/pages/<domain>/<Page>.tsx
 
 新增路由时同步：
 
-- `frontend/src/App.tsx`
+- `frontend/src/router.tsx` 与 `frontend/src/app/router/catalog.ts`
 - 导航或命令面板，如适用
 - 相关测试
 
 ### 前端轮询频率
 
-轮询间隔统一从 `frontend/src/hooks/useRunningTasks.ts` 引入常量：
-
-- 运行中任务：`RUNNING_TASKS_REFETCH_INTERVAL_MS`，固定 5 秒。
-- dashboard 汇总：`DASHBOARD_REFETCH_INTERVAL_MS`，固定 15 秒。
-- 非紧迫资源列表：`DEFAULT_RESOURCE_REFETCH_INTERVAL_MS`，默认 30 秒。
-
-查询运行中任务时优先使用 `useRunningTasks()`，需要更多条目时传 `limit`，不要在组件内重新写
-`listTasks({ status: 'running' })` 和新的 `refetchInterval`。
+轮询按页面需要就地配置 `refetchInterval`（任务中心按运行态动态调整，首页汇总为 60 秒）。
+长任务进度优先走任务事件流（`frontend/src/shared/streaming/task-coordinator.ts`），不要把轮询当流式进度的替代品。
 
 ### PWA 缓存
 
