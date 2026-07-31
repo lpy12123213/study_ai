@@ -678,6 +678,904 @@ async def _handle_search_questions(
     return result
 
 
+
+
+_UNHANDLED = object()
+
+
+async def _dispatch_question_bank(server: Any, name: str, arguments: Dict[str, Any], ensure_crawler_initialized) -> Any:
+    """题库/组卷网检索与题目管理分支；命中分支返回结果载荷，未命中返回 _UNHANDLED。"""
+    if name == "search_questions_by_keyword":
+        outcome = await _handle_search_questions(server, arguments, ensure_crawler_initialized, mode="keyword")
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    elif name == "search_questions_by_knowledge":
+        outcome = await _handle_search_questions(server, arguments, ensure_crawler_initialized, mode="knowledge")
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    elif name == "filter_questions":
+        await ensure_crawler_initialized()
+        result = await server.crawler.filter_questions(
+            question_ids=_required_list(arguments, "question_ids"),
+            difficulty=arguments.get("difficulty", ""),
+            question_type=arguments.get("question_type", ""),
+            limit=arguments.get("limit", 10),
+        )
+
+    elif name == "get_question_info":
+        await ensure_crawler_initialized()
+        result = await server.crawler.get_question_info(question_id=_required(arguments, "question_id"))
+
+    elif name == "create_paper":
+        from backend.database.repositories.question.papers import save_paper
+
+        paper_id = await save_paper(
+            user_id="1",
+            paper_name=_required(arguments, "paper_name"),
+            questions=_required_list(arguments, "question_ids"),
+        )
+        result = {
+            "success": True,
+            "paper_id": paper_id,
+            "message": f"试卷 '{_required(arguments, 'paper_name')}' 创建成功",
+        }
+
+    elif name == "get_question_details":
+        await ensure_crawler_initialized()
+        # 批量获取题目详情
+        question_ids = _required_list(arguments, "question_ids", max_items=10)  # 限制最多10个
+        details = await server.crawler.batch_get_question_details(question_ids)
+        result = details
+
+    elif name == "select_best_question":
+        await ensure_crawler_initialized()
+        # 子AI选题功能
+        question_ids = _required_list(arguments, "question_ids", max_items=5)  # 限制最多5个候选
+        requirement = _required(arguments, "requirement")
+
+        # 先获取题目详情
+        details_result = await server.crawler.batch_get_question_details(question_ids)
+        questions = details_result.get("questions", [])
+
+        if not questions:
+            result = {"success": False, "error": "无法获取候选题目详情"}
+        else:
+            # 调用子AI选择最佳题目
+            result = await select_best_question(questions=questions, requirement=requirement)
+
+            # 添加说明信息
+            if result.get("success"):
+                result["message"] = f"子AI已从{len(questions)}道候选题目中选择了最符合要求的题目"
+
+    elif name == "export_to_zujuan":
+        outcome = await _handle_export_to_zujuan(server, arguments, ensure_crawler_initialized)
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    elif name == "review_paper":
+        outcome = await _handle_review_paper(server, arguments, ensure_crawler_initialized)
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    elif name == "list_subjects":
+        # 列出所有支持的学科
+        edu_level = arguments.get("edu_level", "")
+        subjects = get_all_subjects()
+
+        if edu_level:
+            # 按学段筛选
+            subjects = [s for s in subjects if s["name"].startswith(edu_level)]
+
+        result = {
+            "success": True,
+            "current_subject": server.current_subject,
+            "subjects": subjects,
+            "count": len(subjects),
+            "edu_levels": ["小学", "初中", "高中"],
+        }
+
+    elif name == "set_subject":
+        # 切换学科
+        subject = arguments["subject"]
+
+        if subject not in SUBJECTS:
+            # 尝试模糊匹配
+            matched = None
+            for name_key in SUBJECTS.keys():
+                if subject in name_key or name_key in subject:
+                    matched = name_key
+                    break
+
+            if matched:
+                subject = matched
+            else:
+                result = {
+                    "success": False,
+                    "error": f"未找到学科: {subject}",
+                    "available_subjects": list(SUBJECTS.keys()),
+                    "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
+                }
+                return result
+
+        # 切换学科
+        await ensure_crawler_initialized(subject=subject)
+        config = get_subject_config(subject)
+
+        result = {
+            "success": True,
+            "message": f"已切换到 {subject}",
+            "current_subject": subject,
+            "bank_id": config["bank_id"],
+            "edu_id": config["edu_id"],
+        }
+
+    elif name == "get_current_subject":
+        # 获取当前学科
+        config = get_subject_config(server.current_subject)
+        result = {
+            "success": True,
+            "current_subject": server.current_subject,
+            "short_name": config.get("short_name", ""),
+            "bank_id": config["bank_id"],
+            "edu_id": config["edu_id"],
+        }
+
+    elif name == "get_available_filters":
+        edu_level = (arguments.get("edu_level") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        try:
+            resolved_subject = resolve_subject(
+                subject_input or server.current_subject,
+                edu_level=edu_level,
+                strict=True,
+            )
+        except ValueError as exc:
+            result = {
+                "success": False,
+                "error": str(exc),
+                "current_subject": server.current_subject,
+                "available_subjects": list(SUBJECTS.keys()),
+                "allowed_edu_levels": list(EDU_LEVELS.keys()),
+            }
+            return result
+
+        await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
+
+        result = await server.crawler.get_available_filters()
+        result["current_subject"] = server.current_subject
+
+    else:
+        return _UNHANDLED
+    return result
+
+
+async def _dispatch_paper_compose(server: Any, name: str, arguments: Dict[str, Any], ensure_crawler_initialized) -> Any:
+    """蓝图组卷分支；命中分支返回结果载荷，未命中返回 _UNHANDLED。"""
+    if name == "compose_paper_blueprint":
+        edu_level = (arguments.get("edu_level") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        try:
+            resolved_subject = resolve_subject(
+                subject_input or server.current_subject,
+                edu_level=edu_level,
+                strict=True,
+            )
+        except ValueError as exc:
+            result = {
+                "success": False,
+                "error": str(exc),
+                "current_subject": server.current_subject,
+                "available_subjects": list(SUBJECTS.keys()),
+                "allowed_edu_levels": list(EDU_LEVELS.keys()),
+            }
+            return result
+
+        await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
+
+        result = await server.crawler.compose_paper_blueprint(
+            blueprint=arguments.get("blueprint") or [],
+            subject=resolved_subject,
+            edu_level=edu_level,
+            learn_grade=arguments.get("learn_grade", ""),
+            learn_grade_id=arguments.get("learn_grade_id", 0),
+            textbook_version=arguments.get("textbook_version", ""),
+            elective_mode=arguments.get("elective_mode", ""),
+            elective_keywords=arguments.get("elective_keywords"),
+            exclude_elective=bool(arguments.get("exclude_elective", False)),
+            year=arguments.get("year", 0),
+            province=arguments.get("province", ""),
+            province_id=arguments.get("province_id", -1),
+            paper_type_id=arguments.get("paper_type_id", 0),
+            term=arguments.get("term", 0),
+            order_by=arguments.get("order_by", 2),
+            max_pages=arguments.get("max_pages", 2),
+            per_slot_expand=arguments.get("per_slot_expand", 3),
+            min_quality_score=arguments.get("min_quality_score", 0),
+            dedup_by_stem=bool(arguments.get("dedup_by_stem", True)),
+            strict_subject=bool(arguments.get("strict_subject", True)),
+        )
+        result["current_subject"] = server.current_subject
+
+    else:
+        return _UNHANDLED
+    return result
+
+
+async def _dispatch_agent_knowledge(server: Any, name: str, arguments: Dict[str, Any], ensure_crawler_initialized) -> Any:
+    """知识检索/讲解/用户画像等 Agent 分支；命中分支返回结果载荷，未命中返回 _UNHANDLED。"""
+    if name == "retrieve_knowledge":
+        topic = (arguments.get("topic") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        difficulty = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip() or DEFAULT_DIFFICULTY
+        if not topic:
+            result = {"success": False, "error": "missing_topic"}
+        elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            result = {
+                "success": True,
+                "topic": topic,
+                "subject": subject_input or server.current_subject,
+                "difficulty": difficulty,
+                "definition": "",
+                "key_points": [],
+                "prerequisites": [],
+                "common_mistakes": [],
+                "methods": [],
+                "source": "fallback",
+                "note": "未配置 LESSON_PLAN_API_KEY，返回为空。",
+            }
+        else:
+            prompt = _render_prompt(
+                "mcp.retrieve_knowledge.user.v1",
+                topic=topic,
+                subject=subject_input or server.current_subject,
+                difficulty=difficulty,
+            )
+            text = await call_llm_text(
+                messages=[
+                    {"role": "system", "content": _prompt("mcp.knowledge_facts.v1")},
+                    {"role": "user", "content": prompt},
+                ],
+                model=SUB_MODEL,
+                temperature=0.2,
+                max_tokens=900,
+            )
+            obj = extract_json_obj(text)
+            result = {
+                "success": True,
+                "topic": topic,
+                "subject": subject_input or server.current_subject,
+                "difficulty": difficulty,
+                "definition": str(obj.get("definition") or ""),
+                "key_points": list(obj.get("key_points") or []),
+                "prerequisites": list(obj.get("prerequisites") or []),
+                "common_mistakes": list(obj.get("common_mistakes") or []),
+                "methods": list(obj.get("methods") or []),
+                "source": "llm",
+            }
+
+    elif name == "search_examples":
+        topic = (arguments.get("topic") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        difficulty_input = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip()
+        limit = int(arguments.get("limit", 3) or 3)
+        limit = max(1, min(5, limit))
+        try:
+            resolved_subject = resolve_subject(subject_input or server.current_subject, strict=True)
+            difficulty = normalize_difficulty(difficulty_input or DEFAULT_DIFFICULTY, strict=True)
+        except ValueError as exc:
+            result = {"success": False, "error": str(exc)}
+            return result
+        await ensure_crawler_initialized(subject=resolved_subject)
+        res = await server.crawler.search_by_keyword(
+            keyword=topic,
+            subject=resolved_subject,
+            limit=max(12, limit * 4),
+            difficulty=difficulty,
+            max_pages=2,
+            dedup_by_stem=True,
+            min_quality_score=10,
+            with_quality=True,
+            require_difficulty=True,
+            strict_subject=True,
+        )
+        questions = list(res.get("questions") or [])
+        result = {
+            "success": True,
+            "topic": topic,
+            "subject": resolved_subject,
+            "difficulty": difficulty,
+            "examples": pick_questions(questions, limit=limit),
+        }
+
+    elif name == "search_exercises":
+        topic = (arguments.get("topic") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        difficulty_input = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip()
+        limit = int(arguments.get("limit", 10) or 10)
+        limit = max(5, min(30, limit))
+        try:
+            resolved_subject = resolve_subject(subject_input or server.current_subject, strict=True)
+            difficulty = normalize_difficulty(difficulty_input or DEFAULT_DIFFICULTY, strict=True)
+        except ValueError as exc:
+            result = {"success": False, "error": str(exc)}
+            return result
+        await ensure_crawler_initialized(subject=resolved_subject)
+        res = await server.crawler.search_by_keyword(
+            keyword=topic,
+            subject=resolved_subject,
+            limit=max(20, limit * 3),
+            difficulty=difficulty,
+            max_pages=2,
+            dedup_by_stem=True,
+            min_quality_score=10,
+            with_quality=True,
+            require_difficulty=True,
+            strict_subject=True,
+        )
+        questions = list(res.get("questions") or [])
+        result = {
+            "success": True,
+            "topic": topic,
+            "subject": resolved_subject,
+            "difficulty": difficulty,
+            "exercises": pick_questions(questions, limit=limit),
+        }
+
+    elif name == "analyze_topic":
+        topic = (arguments.get("topic") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            result = {
+                "success": True,
+                "topic": topic,
+                "subject": subject_input,
+                "outline": ["概念与定义", "方法小结", "例题精讲", "分层练习"],
+                "confusions": [],
+                "source": "fallback",
+            }
+        else:
+            payload = {
+                "topic": topic,
+                "subject": subject_input or server.current_subject,
+                "required_output": {
+                    "outline": "string[]",
+                    "confusions": "string[]",
+                    "teaching_order": "string[]",
+                },
+            }
+            text = await call_llm_text(
+                messages=[
+                    {"role": "system", "content": _prompt("lesson_plan.activity_planner.v1")},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                model=LESSON_PLAN_MODEL,
+                temperature=0.2,
+                max_tokens=900,
+            )
+            obj = extract_json_obj(text)
+            result = {
+                "success": True,
+                "topic": topic,
+                "subject": subject_input or server.current_subject,
+                "outline": list(obj.get("outline") or []),
+                "confusions": list(obj.get("confusions") or []),
+                "teaching_order": list(obj.get("teaching_order") or []),
+                "source": "llm",
+            }
+
+    elif name == "generate_explanation":
+        topic = (arguments.get("topic") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        knowledge = arguments.get("knowledge") if isinstance(arguments.get("knowledge"), dict) else {}
+        analysis = arguments.get("analysis") if isinstance(arguments.get("analysis"), dict) else {}
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            result = {
+                "success": True,
+                "markdown": f"## 一、知识点讲解：{topic}\n\n（未配置模型，无法生成详细讲解。）\n",
+                "source": "fallback",
+            }
+        else:
+            prompt = {
+                "topic": topic,
+                "subject": subject_input or server.current_subject,
+                "knowledge": knowledge,
+                "analysis": analysis,
+                "instructions": "Generate a Markdown section for knowledge-point explanation. Include definition, key points, common misconceptions, and method summary. Do not output exercises. Match the user's/topic language.",
+            }
+            text = await call_llm_text(
+                messages=[
+                    {"role": "system", "content": _prompt("mcp.study_section.v1")},
+                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+                ],
+                model=LESSON_PLAN_MODEL,
+                temperature=0.4,
+                max_tokens=1500,
+            )
+            result = {"success": True, "markdown": (text or "").strip(), "source": "llm"}
+
+    elif name == "generate_solution":
+        stem = (arguments.get("stem") or "").strip()
+        subject_input = (arguments.get("subject") or "").strip()
+        topic = (arguments.get("topic") or "").strip()
+        if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            result = {"success": True, "markdown": "（未配置模型，无法生成解答。）", "source": "fallback"}
+        else:
+            prompt = f"""Write a detailed step-by-step solution for the problem below in Markdown.\n\nRequirements:\n- Explain what each step is doing.\n- If the problem statement lacks information, state what needs to be added.\n- Match the language of the problem statement unless the caller explicitly requires another language.\n\nSubject: {subject_input or server.current_subject}\nKnowledge point: {topic or "(unspecified)"}\n\nProblem:\n{stem}\n"""
+            text = await call_llm_text(
+                messages=[
+                    {"role": "system", "content": _prompt("mcp.solve_stepwise.v1")},
+                    {"role": "user", "content": prompt},
+                ],
+                model=LESSON_PLAN_MODEL,
+                temperature=0.3,
+                max_tokens=1200,
+            )
+            result = {"success": True, "markdown": (text or "").strip(), "source": "llm"}
+
+    elif name == "review_content":
+        topic = (arguments.get("topic") or "").strip()
+        markdown = (arguments.get("markdown") or "").strip()
+        if not markdown:
+            result = {"success": False, "error": "missing_markdown"}
+        elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            result = {"success": True, "passed": True, "issues": [], "suggestions": [], "source": "fallback"}
+        else:
+            prompt = f"""Review the self-study Markdown below and identify:\n1) Logical jumps or unclear parts.\n2) Possible errors or imprecise wording.\n3) Improvement suggestions, up to 5.\n\nRequirements: output strict JSON only, not Markdown. Fields: passed(bool), issues(string[]), suggestions(string[]). Match issue/suggestion language to the material language.\n\nTopic: {topic}\n\nMarkdown:\n{markdown}\n"""
+            text = await call_llm_text(
+                messages=[
+                    {"role": "system", "content": _prompt("mcp.review_study_material.v1")},
+                    {"role": "user", "content": prompt},
+                ],
+                model=LESSON_PLAN_MODEL,
+                temperature=0.1,
+                max_tokens=900,
+            )
+            obj = extract_json_obj(text)
+            result = {
+                "success": True,
+                "passed": bool(obj.get("passed")) if "passed" in obj else True,
+                "issues": list(obj.get("issues") or []),
+                "suggestions": list(obj.get("suggestions") or []),
+                "source": "llm",
+            }
+
+    elif name == "get_user_profile":
+        user_id = (arguments.get("user_id") or "").strip()
+        store = MemoryStore()
+        profile = await store.get_user_profile(user_id=user_id or "anonymous")
+        result = {"success": True, "profile": profile.to_dict()}
+
+    elif name == "update_user_profile":
+        user_id = (arguments.get("user_id") or "").strip()
+        patch = arguments.get("patch") if isinstance(arguments.get("patch"), dict) else {}
+        store = MemoryStore()
+        profile = await store.update_user_profile(user_id=user_id or "anonymous", patch=patch)
+        result = {"success": True, "profile": profile.to_dict()}
+
+    else:
+        return _UNHANDLED
+    return result
+
+
+async def _dispatch_search_compute(server: Any, name: str, arguments: Dict[str, Any], ensure_crawler_initialized) -> Any:
+    """上下文压缩、联网搜索与科学计算分支；命中分支返回结果载荷，未命中返回 _UNHANDLED。"""
+    if name == "compress_context":
+        messages = arguments.get("messages") if isinstance(arguments.get("messages"), list) else []
+        target_chars = int(arguments.get("target_chars", 220) or 220)
+        target_chars = max(80, min(2000, target_chars))
+        if not messages:
+            result = {"success": True, "summary": ""}
+        elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            parts = []
+            for m in messages[-6:]:
+                role = str((m or {}).get("role") or "unknown")
+                content = str((m or {}).get("content") or "")[:120]
+                if content:
+                    parts.append(f"{role}: {content}")
+            summary = " | ".join(parts)[:target_chars]
+            result = {"success": True, "summary": summary, "source": "fallback"}
+        else:
+            prompt = f"""Compress the conversation/log below into one concise summary of about {target_chars} characters. Preserve:\n- The user's main goals and constraints.\n- Key decisions.\n- Important tool results or errors.\n\nOutput a plain-text summary only, not Markdown. Match the dominant conversation language.\n\nLog:\n{json.dumps(messages, ensure_ascii=False)}\n"""
+            text = await call_llm_text(
+                messages=[
+                    {"role": "system", "content": _prompt("mcp.context_summarize.v1")},
+                    {"role": "user", "content": prompt},
+                ],
+                model=SUB_MODEL,
+                temperature=0.2,
+                max_tokens=400,
+            )
+            result = {"success": True, "summary": (text or "").strip(), "source": "llm"}
+
+    elif name == "web_search":
+        query = (arguments.get("query") or "").strip()
+        limit = max(1, min(int(arguments.get("limit", 5) or 5), 10))
+        provider_in = str(arguments.get("provider") or "auto").strip().lower() or "auto"
+        if provider_in not in {"auto", "tavily", "exa", "bigmodel"}:
+            provider_in = "auto"
+        mode_in = str(arguments.get("mode") or "trending").strip()
+        if mode_in not in {"trending", "patterns"}:
+            mode_in = "trending"
+        recency_days = max(1, min(int(arguments.get("recency_days", 180) or 180), 3650))
+        model = (arguments.get("model") or "").strip()
+        result = await run_web_search(
+            query=query,
+            limit=limit,
+            provider=provider_in,
+            mode=mode_in,
+            recency_days=recency_days,
+            model=model,
+        )
+
+    elif name == "python_scientific_compute":
+        code = (arguments.get("code") or "").strip()
+        purpose = (arguments.get("purpose") or "").strip()
+        timeout_seconds = int(arguments.get("timeout_seconds") or 5)
+        result = await python_scientific_compute(
+            code=code,
+            purpose=purpose,
+            timeout_seconds=timeout_seconds,
+        )
+
+    elif name == "zhihu_fetch":
+        url = (arguments.get("url") or "").strip()
+        cookies = (arguments.get("cookies") or "").strip() or (os.getenv("ZHIHU_COOKIES") or "").strip()
+        timeout_seconds = int(arguments.get("timeout_seconds") or 30)
+        timeout_seconds = max(5, min(timeout_seconds, 60))
+
+        if not url:
+            result = {"success": False, "error": "url 不能为空"}
+        else:
+            try:
+                from backend.integrations.mcp.search.zhihu import ZhihuFetcher
+
+                fetcher = ZhihuFetcher(cookies=cookies, timeout_seconds=timeout_seconds)
+                res = await fetcher.fetch(url, cookies=cookies)
+                result = res.to_dict()
+                if result.get("success") is False and result.get("error") == "cookies_required" and not cookies:
+                    result["note"] = "需要登录态：请在环境变量或 .env 配置 ZHIHU_COOKIES，或通过参数 cookies 传入"
+            except Exception as exc:
+                logger.warning("stdio_zhihu_fetch_failed", extra={"tool": name}, exc_info=True)
+                result = {"success": False, "error": f"zhihu_fetch failed: {exc}"}
+
+    else:
+        return _UNHANDLED
+    return result
+
+
+async def _dispatch_paper_analysis(server: Any, name: str, arguments: Dict[str, Any], ensure_crawler_initialized) -> Any:
+    """试卷求解/课标对齐/试卷对比分支；命中分支返回结果载荷，未命中返回 _UNHANDLED。"""
+    if name == "solve_paper":
+        outcome = await _handle_solve_paper(server, arguments, ensure_crawler_initialized)
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    elif name == "align_to_curriculum":
+        outcome = await _handle_align_to_curriculum(server, arguments)
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    elif name == "paper_diff":
+        outcome = await _handle_paper_diff(server, arguments, ensure_crawler_initialized)
+        if isinstance(outcome, list):
+            return outcome
+        result = outcome
+
+    else:
+        return _UNHANDLED
+    return result
+
+
+async def _dispatch_diagram(server: Any, name: str, arguments: Dict[str, Any], ensure_crawler_initialized) -> Any:
+    """绘图/图表渲染/导出诊断分支；命中分支返回结果载荷，未命中返回 _UNHANDLED。"""
+    if name == "plot_function":
+        from backend.generation.question_library.diagram_utils import render_matplotlib_2d_to_url
+
+        expr = str(arguments.get("expr") or "").strip()
+        if not expr:
+            result = {"success": False, "error": "expr 不能为空"}
+        else:
+            x_range = arguments.get("x_range") or [-5, 5]
+            y_range = arguments.get("y_range")
+            title = str(arguments.get("title") or "").strip()
+            label = str(arguments.get("label") or "").strip()
+            alt = str(arguments.get("alt") or "plot").strip() or "plot"
+            spec: Dict[str, Any] = {
+                "x_range": x_range,
+                "title": title,
+                "curves": [{"expr": expr, **({"label": label} if label else {})}],
+            }
+            if isinstance(y_range, list) and len(y_range) == 2:
+                spec["y_range"] = y_range
+            published = await render_matplotlib_2d_to_url(spec=spec, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = {
+                    "success": False,
+                    "error": str(published.get("error") or "plot_failed"),
+                    "warnings": published.get("warnings") or [],
+                }
+
+    elif name == "render_tikz":
+        from backend.generation.question_library.diagram_utils import render_tikz_to_url
+
+        tikz = str(arguments.get("tikz") or "").strip()
+        if not tikz:
+            result = {"success": False, "error": "tikz 不能为空"}
+        else:
+            preamble = str(arguments.get("preamble") or "").strip()
+            alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
+            published = await render_tikz_to_url(tikz=tikz, user_id="1", alt=alt, preamble=preamble)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "render_chemistry":
+        from backend.generation.question_library.diagram_utils import render_chemistry_to_url
+
+        expression = str(arguments.get("expression") or "").strip()
+        if not expression:
+            result = {"success": False, "error": "expression 不能为空"}
+        else:
+            alt = str(arguments.get("alt") or "化学方程式").strip() or "化学方程式"
+            published = await render_chemistry_to_url(expression=expression, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "render_graphviz":
+        from backend.generation.question_library.diagram_utils import render_graphviz_to_url
+
+        dot_code = str(arguments.get("dot") or "").strip()
+        if not dot_code:
+            result = {"success": False, "error": "dot 不能为空"}
+        else:
+            engine = str(arguments.get("engine") or "dot").strip().lower() or "dot"
+            alt = str(arguments.get("alt") or "流程图").strip() or "流程图"
+            published = await render_graphviz_to_url(dot_code=dot_code, user_id="1", alt=alt, engine=engine)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "engine": engine,
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "verify_diagram":
+        url = str(arguments.get("url") or "").strip()
+        description = str(arguments.get("description") or "").strip()
+        strictness = max(1, min(int(arguments.get("strictness") or 3), 5))
+        if not url or not description:
+            result = {"success": False, "error": "url 和 description 都必填"}
+        elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
+            result = {
+                "success": False,
+                "error": "missing_llm_config",
+                "hint": "verify_diagram 依赖 vision-capable LLM，需要 LESSON_PLAN_API_KEY 或 MOONSHOT_API_KEY",
+            }
+        else:
+            try:
+                from backend.generation.question_library.verify_diagram import verify_diagram_with_vision
+
+                verdict = await verify_diagram_with_vision(
+                    diagram_url=url,
+                    description=description,
+                    strictness=strictness,
+                )
+                result = {"success": True, **verdict}
+            except ImportError:
+                result = {
+                    "success": False,
+                    "error": "verify_diagram_module_missing",
+                    "hint": "backend.generation.question_library.verify_diagram 尚未启用",
+                }
+            except Exception as exc:
+                logger.warning("verify_diagram_failed", exc_info=True)
+                result = {"success": False, "error": f"verify_failed: {exc}"}
+
+    elif name == "render_asy":
+        from backend.generation.question_library.diagram_utils import render_asy_to_url
+
+        asy_code = str(arguments.get("asy") or "").strip()
+        if not asy_code:
+            result = {"success": False, "error": "asy 不能为空"}
+        else:
+            alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
+            published = await render_asy_to_url(asy=asy_code, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "render_circuit":
+        from backend.generation.question_library.diagram_utils import render_circuit_to_url
+
+        circuit_body = str(arguments.get("circuit_body") or "").strip()
+        if not circuit_body:
+            result = {"success": False, "error": "circuit_body 不能为空"}
+        else:
+            alt = str(arguments.get("alt") or "电路图").strip() or "电路图"
+            published = await render_circuit_to_url(circuit_code=circuit_body, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "render_matplotlib_3d":
+        from backend.generation.question_library.diagram_utils import render_matplotlib_3d_to_url
+
+        spec = arguments.get("spec")
+        if not isinstance(spec, dict) or not spec:
+            result = {"success": False, "error": "spec 必须是非空对象"}
+        else:
+            alt = str(arguments.get("alt") or "plot").strip() or "plot"
+            published = await render_matplotlib_3d_to_url(spec=spec, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "render_svg_diagram":
+        from backend.generation.question_library.diagram_utils import render_svg_to_url
+
+        spec = arguments.get("spec")
+        if not isinstance(spec, dict) or not spec:
+            result = {"success": False, "error": "spec 必须是非空对象"}
+        else:
+            alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
+            published = await render_svg_to_url(spec=spec, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "render_schematic":
+        from backend.generation.question_library.diagram_utils import render_schematic_to_url
+
+        spec = arguments.get("spec")
+        if not isinstance(spec, dict) or not spec:
+            result = {"success": False, "error": "spec 必须是非空对象"}
+        else:
+            alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
+            published = await render_schematic_to_url(spec=spec, user_id="1", alt=alt)
+            if published.get("success"):
+                result = {
+                    "success": True,
+                    "url": str(published.get("url") or ""),
+                    "markdown": str(published.get("markdown") or ""),
+                    "filename": str(published.get("filename") or ""),
+                    "cached": bool(published.get("cached")),
+                    "bytes": int(published.get("bytes") or 0),
+                }
+            else:
+                result = dict(published)
+
+    elif name == "generate_image":
+        from backend.media.image_generate import generate_image_via_seedream
+
+        prompt = str(arguments.get("prompt") or "").strip()
+        if not prompt:
+            result = {"success": False, "error": "prompt 不能为空"}
+        else:
+            alt = str(arguments.get("alt") or "image").strip() or "image"
+            caption = str(arguments.get("caption") or "").strip()
+            model_override = str(arguments.get("model") or "").strip()
+            size = str(arguments.get("size") or "").strip()
+            response_format = str(arguments.get("response_format") or "").strip()
+            try:
+                n_val = int(arguments.get("n") or 1)
+            except (TypeError, ValueError):
+                n_val = 1
+            result = await generate_image_via_seedream(
+                prompt=prompt,
+                user_id="1",
+                alt=alt,
+                caption=caption,
+                model=model_override,
+                size=size,
+                n=n_val,
+                response_format=response_format,
+            )
+
+    elif name == "revise_diagram":
+        filename = str(arguments.get("filename") or "").strip()
+        user_request = str(arguments.get("user_request") or "").strip()
+        alt_override = str(arguments.get("alt") or "").strip()
+        if not filename or not user_request:
+            result = {"success": False, "error": "filename 和 user_request 都必填"}
+        else:
+            try:
+                from backend.generation.question_library.diagram_revise import revise_diagram_source
+
+                result = await revise_diagram_source(
+                    filename=filename,
+                    user_request=user_request,
+                    user_id="1",
+                    alt=alt_override or None,
+                )
+            except ImportError:
+                result = {
+                    "success": False,
+                    "error": "diagram_revise_module_missing",
+                    "hint": "backend.generation.question_library.diagram_revise 尚未启用",
+                }
+            except Exception as exc:
+                logger.warning("revise_diagram_failed", exc_info=True)
+                result = {"success": False, "error": f"revise_failed: {exc}"}
+
+    elif name == "diagnose_export":
+        # 诊断导出功能
+        result = await server._diagnose_export(test_question_id=arguments.get("test_question_id", "70287"))
+
+    else:
+        return _UNHANDLED
+    return result
+
 async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[TextContent]:
     """处理工具调用"""
 
@@ -692,860 +1590,25 @@ async def handle_tool_call(server: Any, name: str, arguments: Any) -> Sequence[T
     arguments = arguments if isinstance(arguments, dict) else {}
 
     try:
-        if name == "search_questions_by_keyword":
-            outcome = await _handle_search_questions(server, arguments, ensure_crawler_initialized, mode="keyword")
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "search_questions_by_knowledge":
-            outcome = await _handle_search_questions(server, arguments, ensure_crawler_initialized, mode="knowledge")
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "filter_questions":
-            await ensure_crawler_initialized()
-            result = await server.crawler.filter_questions(
-                question_ids=_required_list(arguments, "question_ids"),
-                difficulty=arguments.get("difficulty", ""),
-                question_type=arguments.get("question_type", ""),
-                limit=arguments.get("limit", 10),
-            )
-
-        elif name == "get_question_info":
-            await ensure_crawler_initialized()
-            result = await server.crawler.get_question_info(question_id=_required(arguments, "question_id"))
-
-        elif name == "create_paper":
-            from backend.database.repositories.question.papers import save_paper
-
-            paper_id = await save_paper(
-                user_id="1",
-                paper_name=_required(arguments, "paper_name"),
-                questions=_required_list(arguments, "question_ids"),
-            )
-            result = {
-                "success": True,
-                "paper_id": paper_id,
-                "message": f"试卷 '{_required(arguments, 'paper_name')}' 创建成功",
-            }
-
-        elif name == "get_question_details":
-            await ensure_crawler_initialized()
-            # 批量获取题目详情
-            question_ids = _required_list(arguments, "question_ids", max_items=10)  # 限制最多10个
-            details = await server.crawler.batch_get_question_details(question_ids)
-            result = details
-
-        elif name == "select_best_question":
-            await ensure_crawler_initialized()
-            # 子AI选题功能
-            question_ids = _required_list(arguments, "question_ids", max_items=5)  # 限制最多5个候选
-            requirement = _required(arguments, "requirement")
-
-            # 先获取题目详情
-            details_result = await server.crawler.batch_get_question_details(question_ids)
-            questions = details_result.get("questions", [])
-
-            if not questions:
-                result = {"success": False, "error": "无法获取候选题目详情"}
-            else:
-                # 调用子AI选择最佳题目
-                result = await select_best_question(questions=questions, requirement=requirement)
-
-                # 添加说明信息
-                if result.get("success"):
-                    result["message"] = f"子AI已从{len(questions)}道候选题目中选择了最符合要求的题目"
-
-        elif name == "export_to_zujuan":
-            outcome = await _handle_export_to_zujuan(server, arguments, ensure_crawler_initialized)
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "review_paper":
-            outcome = await _handle_review_paper(server, arguments, ensure_crawler_initialized)
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "list_subjects":
-            # 列出所有支持的学科
-            edu_level = arguments.get("edu_level", "")
-            subjects = get_all_subjects()
-
-            if edu_level:
-                # 按学段筛选
-                subjects = [s for s in subjects if s["name"].startswith(edu_level)]
-
-            result = {
-                "success": True,
-                "current_subject": server.current_subject,
-                "subjects": subjects,
-                "count": len(subjects),
-                "edu_levels": ["小学", "初中", "高中"],
-            }
-
-        elif name == "set_subject":
-            # 切换学科
-            subject = arguments["subject"]
-
-            if subject not in SUBJECTS:
-                # 尝试模糊匹配
-                matched = None
-                for name_key in SUBJECTS.keys():
-                    if subject in name_key or name_key in subject:
-                        matched = name_key
-                        break
-
-                if matched:
-                    subject = matched
-                else:
-                    result = {
-                        "success": False,
-                        "error": f"未找到学科: {subject}",
-                        "available_subjects": list(SUBJECTS.keys()),
-                        "hint": "请使用完整学科名，如：高中数学、初中物理、小学语文",
-                    }
-                    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            # 切换学科
-            await ensure_crawler_initialized(subject=subject)
-            config = get_subject_config(subject)
-
-            result = {
-                "success": True,
-                "message": f"已切换到 {subject}",
-                "current_subject": subject,
-                "bank_id": config["bank_id"],
-                "edu_id": config["edu_id"],
-            }
-
-        elif name == "get_current_subject":
-            # 获取当前学科
-            config = get_subject_config(server.current_subject)
-            result = {
-                "success": True,
-                "current_subject": server.current_subject,
-                "short_name": config.get("short_name", ""),
-                "bank_id": config["bank_id"],
-                "edu_id": config["edu_id"],
-            }
-
-        elif name == "get_available_filters":
-            edu_level = (arguments.get("edu_level") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            try:
-                resolved_subject = resolve_subject(
-                    subject_input or server.current_subject,
-                    edu_level=edu_level,
-                    strict=True,
-                )
-            except ValueError as exc:
-                result = {
-                    "success": False,
-                    "error": str(exc),
-                    "current_subject": server.current_subject,
-                    "available_subjects": list(SUBJECTS.keys()),
-                    "allowed_edu_levels": list(EDU_LEVELS.keys()),
-                }
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
-
-            result = await server.crawler.get_available_filters()
-            result["current_subject"] = server.current_subject
-
-        elif name == "compose_paper_blueprint":
-            edu_level = (arguments.get("edu_level") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            try:
-                resolved_subject = resolve_subject(
-                    subject_input or server.current_subject,
-                    edu_level=edu_level,
-                    strict=True,
-                )
-            except ValueError as exc:
-                result = {
-                    "success": False,
-                    "error": str(exc),
-                    "current_subject": server.current_subject,
-                    "available_subjects": list(SUBJECTS.keys()),
-                    "allowed_edu_levels": list(EDU_LEVELS.keys()),
-                }
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-
-            await ensure_crawler_initialized(subject=resolved_subject, edu_level=edu_level)
-
-            result = await server.crawler.compose_paper_blueprint(
-                blueprint=arguments.get("blueprint") or [],
-                subject=resolved_subject,
-                edu_level=edu_level,
-                learn_grade=arguments.get("learn_grade", ""),
-                learn_grade_id=arguments.get("learn_grade_id", 0),
-                textbook_version=arguments.get("textbook_version", ""),
-                elective_mode=arguments.get("elective_mode", ""),
-                elective_keywords=arguments.get("elective_keywords"),
-                exclude_elective=bool(arguments.get("exclude_elective", False)),
-                year=arguments.get("year", 0),
-                province=arguments.get("province", ""),
-                province_id=arguments.get("province_id", -1),
-                paper_type_id=arguments.get("paper_type_id", 0),
-                term=arguments.get("term", 0),
-                order_by=arguments.get("order_by", 2),
-                max_pages=arguments.get("max_pages", 2),
-                per_slot_expand=arguments.get("per_slot_expand", 3),
-                min_quality_score=arguments.get("min_quality_score", 0),
-                dedup_by_stem=bool(arguments.get("dedup_by_stem", True)),
-                strict_subject=bool(arguments.get("strict_subject", True)),
-            )
-            result["current_subject"] = server.current_subject
-
-        elif name == "retrieve_knowledge":
-            topic = (arguments.get("topic") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            difficulty = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip() or DEFAULT_DIFFICULTY
-            if not topic:
-                result = {"success": False, "error": "missing_topic"}
-            elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {
-                    "success": True,
-                    "topic": topic,
-                    "subject": subject_input or server.current_subject,
-                    "difficulty": difficulty,
-                    "definition": "",
-                    "key_points": [],
-                    "prerequisites": [],
-                    "common_mistakes": [],
-                    "methods": [],
-                    "source": "fallback",
-                    "note": "未配置 LESSON_PLAN_API_KEY，返回为空。",
-                }
-            else:
-                prompt = _render_prompt(
-                    "mcp.retrieve_knowledge.user.v1",
-                    topic=topic,
-                    subject=subject_input or server.current_subject,
-                    difficulty=difficulty,
-                )
-                text = await call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _prompt("mcp.knowledge_facts.v1")},
-                        {"role": "user", "content": prompt},
-                    ],
-                    model=SUB_MODEL,
-                    temperature=0.2,
-                    max_tokens=900,
-                )
-                obj = extract_json_obj(text)
-                result = {
-                    "success": True,
-                    "topic": topic,
-                    "subject": subject_input or server.current_subject,
-                    "difficulty": difficulty,
-                    "definition": str(obj.get("definition") or ""),
-                    "key_points": list(obj.get("key_points") or []),
-                    "prerequisites": list(obj.get("prerequisites") or []),
-                    "common_mistakes": list(obj.get("common_mistakes") or []),
-                    "methods": list(obj.get("methods") or []),
-                    "source": "llm",
-                }
-
-        elif name == "search_examples":
-            topic = (arguments.get("topic") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            difficulty_input = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip()
-            limit = int(arguments.get("limit", 3) or 3)
-            limit = max(1, min(5, limit))
-            try:
-                resolved_subject = resolve_subject(subject_input or server.current_subject, strict=True)
-                difficulty = normalize_difficulty(difficulty_input or DEFAULT_DIFFICULTY, strict=True)
-            except ValueError as exc:
-                result = {"success": False, "error": str(exc)}
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            await ensure_crawler_initialized(subject=resolved_subject)
-            res = await server.crawler.search_by_keyword(
-                keyword=topic,
-                subject=resolved_subject,
-                limit=max(12, limit * 4),
-                difficulty=difficulty,
-                max_pages=2,
-                dedup_by_stem=True,
-                min_quality_score=10,
-                with_quality=True,
-                require_difficulty=True,
-                strict_subject=True,
-            )
-            questions = list(res.get("questions") or [])
-            result = {
-                "success": True,
-                "topic": topic,
-                "subject": resolved_subject,
-                "difficulty": difficulty,
-                "examples": pick_questions(questions, limit=limit),
-            }
-
-        elif name == "search_exercises":
-            topic = (arguments.get("topic") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            difficulty_input = (arguments.get("difficulty") or DEFAULT_DIFFICULTY).strip()
-            limit = int(arguments.get("limit", 10) or 10)
-            limit = max(5, min(30, limit))
-            try:
-                resolved_subject = resolve_subject(subject_input or server.current_subject, strict=True)
-                difficulty = normalize_difficulty(difficulty_input or DEFAULT_DIFFICULTY, strict=True)
-            except ValueError as exc:
-                result = {"success": False, "error": str(exc)}
-                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            await ensure_crawler_initialized(subject=resolved_subject)
-            res = await server.crawler.search_by_keyword(
-                keyword=topic,
-                subject=resolved_subject,
-                limit=max(20, limit * 3),
-                difficulty=difficulty,
-                max_pages=2,
-                dedup_by_stem=True,
-                min_quality_score=10,
-                with_quality=True,
-                require_difficulty=True,
-                strict_subject=True,
-            )
-            questions = list(res.get("questions") or [])
-            result = {
-                "success": True,
-                "topic": topic,
-                "subject": resolved_subject,
-                "difficulty": difficulty,
-                "exercises": pick_questions(questions, limit=limit),
-            }
-
-        elif name == "analyze_topic":
-            topic = (arguments.get("topic") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {
-                    "success": True,
-                    "topic": topic,
-                    "subject": subject_input,
-                    "outline": ["概念与定义", "方法小结", "例题精讲", "分层练习"],
-                    "confusions": [],
-                    "source": "fallback",
-                }
-            else:
-                payload = {
-                    "topic": topic,
-                    "subject": subject_input or server.current_subject,
-                    "required_output": {
-                        "outline": "string[]",
-                        "confusions": "string[]",
-                        "teaching_order": "string[]",
-                    },
-                }
-                text = await call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _prompt("lesson_plan.activity_planner.v1")},
-                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                    ],
-                    model=LESSON_PLAN_MODEL,
-                    temperature=0.2,
-                    max_tokens=900,
-                )
-                obj = extract_json_obj(text)
-                result = {
-                    "success": True,
-                    "topic": topic,
-                    "subject": subject_input or server.current_subject,
-                    "outline": list(obj.get("outline") or []),
-                    "confusions": list(obj.get("confusions") or []),
-                    "teaching_order": list(obj.get("teaching_order") or []),
-                    "source": "llm",
-                }
-
-        elif name == "generate_explanation":
-            topic = (arguments.get("topic") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            knowledge = arguments.get("knowledge") if isinstance(arguments.get("knowledge"), dict) else {}
-            analysis = arguments.get("analysis") if isinstance(arguments.get("analysis"), dict) else {}
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {
-                    "success": True,
-                    "markdown": f"## 一、知识点讲解：{topic}\n\n（未配置模型，无法生成详细讲解。）\n",
-                    "source": "fallback",
-                }
-            else:
-                prompt = {
-                    "topic": topic,
-                    "subject": subject_input or server.current_subject,
-                    "knowledge": knowledge,
-                    "analysis": analysis,
-                    "instructions": "Generate a Markdown section for knowledge-point explanation. Include definition, key points, common misconceptions, and method summary. Do not output exercises. Match the user's/topic language.",
-                }
-                text = await call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _prompt("mcp.study_section.v1")},
-                        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                    ],
-                    model=LESSON_PLAN_MODEL,
-                    temperature=0.4,
-                    max_tokens=1500,
-                )
-                result = {"success": True, "markdown": (text or "").strip(), "source": "llm"}
-
-        elif name == "generate_solution":
-            stem = (arguments.get("stem") or "").strip()
-            subject_input = (arguments.get("subject") or "").strip()
-            topic = (arguments.get("topic") or "").strip()
-            if not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {"success": True, "markdown": "（未配置模型，无法生成解答。）", "source": "fallback"}
-            else:
-                prompt = f"""Write a detailed step-by-step solution for the problem below in Markdown.\n\nRequirements:\n- Explain what each step is doing.\n- If the problem statement lacks information, state what needs to be added.\n- Match the language of the problem statement unless the caller explicitly requires another language.\n\nSubject: {subject_input or server.current_subject}\nKnowledge point: {topic or "(unspecified)"}\n\nProblem:\n{stem}\n"""
-                text = await call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _prompt("mcp.solve_stepwise.v1")},
-                        {"role": "user", "content": prompt},
-                    ],
-                    model=LESSON_PLAN_MODEL,
-                    temperature=0.3,
-                    max_tokens=1200,
-                )
-                result = {"success": True, "markdown": (text or "").strip(), "source": "llm"}
-
-        elif name == "review_content":
-            topic = (arguments.get("topic") or "").strip()
-            markdown = (arguments.get("markdown") or "").strip()
-            if not markdown:
-                result = {"success": False, "error": "missing_markdown"}
-            elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {"success": True, "passed": True, "issues": [], "suggestions": [], "source": "fallback"}
-            else:
-                prompt = f"""Review the self-study Markdown below and identify:\n1) Logical jumps or unclear parts.\n2) Possible errors or imprecise wording.\n3) Improvement suggestions, up to 5.\n\nRequirements: output strict JSON only, not Markdown. Fields: passed(bool), issues(string[]), suggestions(string[]). Match issue/suggestion language to the material language.\n\nTopic: {topic}\n\nMarkdown:\n{markdown}\n"""
-                text = await call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _prompt("mcp.review_study_material.v1")},
-                        {"role": "user", "content": prompt},
-                    ],
-                    model=LESSON_PLAN_MODEL,
-                    temperature=0.1,
-                    max_tokens=900,
-                )
-                obj = extract_json_obj(text)
-                result = {
-                    "success": True,
-                    "passed": bool(obj.get("passed")) if "passed" in obj else True,
-                    "issues": list(obj.get("issues") or []),
-                    "suggestions": list(obj.get("suggestions") or []),
-                    "source": "llm",
-                }
-
-        elif name == "get_user_profile":
-            user_id = (arguments.get("user_id") or "").strip()
-            store = MemoryStore()
-            profile = await store.get_user_profile(user_id=user_id or "anonymous")
-            result = {"success": True, "profile": profile.to_dict()}
-
-        elif name == "update_user_profile":
-            user_id = (arguments.get("user_id") or "").strip()
-            patch = arguments.get("patch") if isinstance(arguments.get("patch"), dict) else {}
-            store = MemoryStore()
-            profile = await store.update_user_profile(user_id=user_id or "anonymous", patch=patch)
-            result = {"success": True, "profile": profile.to_dict()}
-
-        elif name == "compress_context":
-            messages = arguments.get("messages") if isinstance(arguments.get("messages"), list) else []
-            target_chars = int(arguments.get("target_chars", 220) or 220)
-            target_chars = max(80, min(2000, target_chars))
-            if not messages:
-                result = {"success": True, "summary": ""}
-            elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                parts = []
-                for m in messages[-6:]:
-                    role = str((m or {}).get("role") or "unknown")
-                    content = str((m or {}).get("content") or "")[:120]
-                    if content:
-                        parts.append(f"{role}: {content}")
-                summary = " | ".join(parts)[:target_chars]
-                result = {"success": True, "summary": summary, "source": "fallback"}
-            else:
-                prompt = f"""Compress the conversation/log below into one concise summary of about {target_chars} characters. Preserve:\n- The user's main goals and constraints.\n- Key decisions.\n- Important tool results or errors.\n\nOutput a plain-text summary only, not Markdown. Match the dominant conversation language.\n\nLog:\n{json.dumps(messages, ensure_ascii=False)}\n"""
-                text = await call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _prompt("mcp.context_summarize.v1")},
-                        {"role": "user", "content": prompt},
-                    ],
-                    model=SUB_MODEL,
-                    temperature=0.2,
-                    max_tokens=400,
-                )
-                result = {"success": True, "summary": (text or "").strip(), "source": "llm"}
-
-        elif name == "web_search":
-            query = (arguments.get("query") or "").strip()
-            limit = max(1, min(int(arguments.get("limit", 5) or 5), 10))
-            provider_in = str(arguments.get("provider") or "auto").strip().lower() or "auto"
-            if provider_in not in {"auto", "tavily", "exa", "bigmodel"}:
-                provider_in = "auto"
-            mode_in = str(arguments.get("mode") or "trending").strip()
-            if mode_in not in {"trending", "patterns"}:
-                mode_in = "trending"
-            recency_days = max(1, min(int(arguments.get("recency_days", 180) or 180), 3650))
-            model = (arguments.get("model") or "").strip()
-            result = await run_web_search(
-                query=query,
-                limit=limit,
-                provider=provider_in,
-                mode=mode_in,
-                recency_days=recency_days,
-                model=model,
-            )
-
-        elif name == "python_scientific_compute":
-            code = (arguments.get("code") or "").strip()
-            purpose = (arguments.get("purpose") or "").strip()
-            timeout_seconds = int(arguments.get("timeout_seconds") or 5)
-            result = await python_scientific_compute(
-                code=code,
-                purpose=purpose,
-                timeout_seconds=timeout_seconds,
-            )
-
-        elif name == "zhihu_fetch":
-            url = (arguments.get("url") or "").strip()
-            cookies = (arguments.get("cookies") or "").strip() or (os.getenv("ZHIHU_COOKIES") or "").strip()
-            timeout_seconds = int(arguments.get("timeout_seconds") or 30)
-            timeout_seconds = max(5, min(timeout_seconds, 60))
-
-            if not url:
-                result = {"success": False, "error": "url 不能为空"}
-            else:
-                try:
-                    from backend.integrations.mcp.search.zhihu import ZhihuFetcher
-
-                    fetcher = ZhihuFetcher(cookies=cookies, timeout_seconds=timeout_seconds)
-                    res = await fetcher.fetch(url, cookies=cookies)
-                    result = res.to_dict()
-                    if result.get("success") is False and result.get("error") == "cookies_required" and not cookies:
-                        result["note"] = "需要登录态：请在环境变量或 .env 配置 ZHIHU_COOKIES，或通过参数 cookies 传入"
-                except Exception as exc:
-                    logger.warning("stdio_zhihu_fetch_failed", extra={"tool": name}, exc_info=True)
-                    result = {"success": False, "error": f"zhihu_fetch failed: {exc}"}
-
-        elif name == "solve_paper":
-            outcome = await _handle_solve_paper(server, arguments, ensure_crawler_initialized)
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "align_to_curriculum":
-            outcome = await _handle_align_to_curriculum(server, arguments)
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "paper_diff":
-            outcome = await _handle_paper_diff(server, arguments, ensure_crawler_initialized)
-            if isinstance(outcome, list):
-                return outcome
-            result = outcome
-
-        elif name == "plot_function":
-            from backend.generation.question_library.diagram_utils import render_matplotlib_2d_to_url
-
-            expr = str(arguments.get("expr") or "").strip()
-            if not expr:
-                result = {"success": False, "error": "expr 不能为空"}
-            else:
-                x_range = arguments.get("x_range") or [-5, 5]
-                y_range = arguments.get("y_range")
-                title = str(arguments.get("title") or "").strip()
-                label = str(arguments.get("label") or "").strip()
-                alt = str(arguments.get("alt") or "plot").strip() or "plot"
-                spec: Dict[str, Any] = {
-                    "x_range": x_range,
-                    "title": title,
-                    "curves": [{"expr": expr, **({"label": label} if label else {})}],
-                }
-                if isinstance(y_range, list) and len(y_range) == 2:
-                    spec["y_range"] = y_range
-                published = await render_matplotlib_2d_to_url(spec=spec, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = {
-                        "success": False,
-                        "error": str(published.get("error") or "plot_failed"),
-                        "warnings": published.get("warnings") or [],
-                    }
-
-        elif name == "render_tikz":
-            from backend.generation.question_library.diagram_utils import render_tikz_to_url
-
-            tikz = str(arguments.get("tikz") or "").strip()
-            if not tikz:
-                result = {"success": False, "error": "tikz 不能为空"}
-            else:
-                preamble = str(arguments.get("preamble") or "").strip()
-                alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
-                published = await render_tikz_to_url(tikz=tikz, user_id="1", alt=alt, preamble=preamble)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "render_chemistry":
-            from backend.generation.question_library.diagram_utils import render_chemistry_to_url
-
-            expression = str(arguments.get("expression") or "").strip()
-            if not expression:
-                result = {"success": False, "error": "expression 不能为空"}
-            else:
-                alt = str(arguments.get("alt") or "化学方程式").strip() or "化学方程式"
-                published = await render_chemistry_to_url(expression=expression, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "render_graphviz":
-            from backend.generation.question_library.diagram_utils import render_graphviz_to_url
-
-            dot_code = str(arguments.get("dot") or "").strip()
-            if not dot_code:
-                result = {"success": False, "error": "dot 不能为空"}
-            else:
-                engine = str(arguments.get("engine") or "dot").strip().lower() or "dot"
-                alt = str(arguments.get("alt") or "流程图").strip() or "流程图"
-                published = await render_graphviz_to_url(dot_code=dot_code, user_id="1", alt=alt, engine=engine)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "engine": engine,
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "verify_diagram":
-            url = str(arguments.get("url") or "").strip()
-            description = str(arguments.get("description") or "").strip()
-            strictness = max(1, min(int(arguments.get("strictness") or 3), 5))
-            if not url or not description:
-                result = {"success": False, "error": "url 和 description 都必填"}
-            elif not (LESSON_PLAN_API_KEY or MOONSHOT_API_KEY):
-                result = {
-                    "success": False,
-                    "error": "missing_llm_config",
-                    "hint": "verify_diagram 依赖 vision-capable LLM，需要 LESSON_PLAN_API_KEY 或 MOONSHOT_API_KEY",
-                }
-            else:
-                try:
-                    from backend.generation.question_library.verify_diagram import verify_diagram_with_vision
-
-                    verdict = await verify_diagram_with_vision(
-                        diagram_url=url,
-                        description=description,
-                        strictness=strictness,
-                    )
-                    result = {"success": True, **verdict}
-                except ImportError:
-                    result = {
-                        "success": False,
-                        "error": "verify_diagram_module_missing",
-                        "hint": "backend.generation.question_library.verify_diagram 尚未启用",
-                    }
-                except Exception as exc:
-                    logger.warning("verify_diagram_failed", exc_info=True)
-                    result = {"success": False, "error": f"verify_failed: {exc}"}
-
-        elif name == "render_asy":
-            from backend.generation.question_library.diagram_utils import render_asy_to_url
-
-            asy_code = str(arguments.get("asy") or "").strip()
-            if not asy_code:
-                result = {"success": False, "error": "asy 不能为空"}
-            else:
-                alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
-                published = await render_asy_to_url(asy=asy_code, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "render_circuit":
-            from backend.generation.question_library.diagram_utils import render_circuit_to_url
-
-            circuit_body = str(arguments.get("circuit_body") or "").strip()
-            if not circuit_body:
-                result = {"success": False, "error": "circuit_body 不能为空"}
-            else:
-                alt = str(arguments.get("alt") or "电路图").strip() or "电路图"
-                published = await render_circuit_to_url(circuit_code=circuit_body, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "render_matplotlib_3d":
-            from backend.generation.question_library.diagram_utils import render_matplotlib_3d_to_url
-
-            spec = arguments.get("spec")
-            if not isinstance(spec, dict) or not spec:
-                result = {"success": False, "error": "spec 必须是非空对象"}
-            else:
-                alt = str(arguments.get("alt") or "plot").strip() or "plot"
-                published = await render_matplotlib_3d_to_url(spec=spec, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "render_svg_diagram":
-            from backend.generation.question_library.diagram_utils import render_svg_to_url
-
-            spec = arguments.get("spec")
-            if not isinstance(spec, dict) or not spec:
-                result = {"success": False, "error": "spec 必须是非空对象"}
-            else:
-                alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
-                published = await render_svg_to_url(spec=spec, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "render_schematic":
-            from backend.generation.question_library.diagram_utils import render_schematic_to_url
-
-            spec = arguments.get("spec")
-            if not isinstance(spec, dict) or not spec:
-                result = {"success": False, "error": "spec 必须是非空对象"}
-            else:
-                alt = str(arguments.get("alt") or "diagram").strip() or "diagram"
-                published = await render_schematic_to_url(spec=spec, user_id="1", alt=alt)
-                if published.get("success"):
-                    result = {
-                        "success": True,
-                        "url": str(published.get("url") or ""),
-                        "markdown": str(published.get("markdown") or ""),
-                        "filename": str(published.get("filename") or ""),
-                        "cached": bool(published.get("cached")),
-                        "bytes": int(published.get("bytes") or 0),
-                    }
-                else:
-                    result = dict(published)
-
-        elif name == "generate_image":
-            from backend.media.image_generate import generate_image_via_seedream
-
-            prompt = str(arguments.get("prompt") or "").strip()
-            if not prompt:
-                result = {"success": False, "error": "prompt 不能为空"}
-            else:
-                alt = str(arguments.get("alt") or "image").strip() or "image"
-                caption = str(arguments.get("caption") or "").strip()
-                model_override = str(arguments.get("model") or "").strip()
-                size = str(arguments.get("size") or "").strip()
-                response_format = str(arguments.get("response_format") or "").strip()
-                try:
-                    n_val = int(arguments.get("n") or 1)
-                except (TypeError, ValueError):
-                    n_val = 1
-                result = await generate_image_via_seedream(
-                    prompt=prompt,
-                    user_id="1",
-                    alt=alt,
-                    caption=caption,
-                    model=model_override,
-                    size=size,
-                    n=n_val,
-                    response_format=response_format,
-                )
-
-        elif name == "revise_diagram":
-            filename = str(arguments.get("filename") or "").strip()
-            user_request = str(arguments.get("user_request") or "").strip()
-            alt_override = str(arguments.get("alt") or "").strip()
-            if not filename or not user_request:
-                result = {"success": False, "error": "filename 和 user_request 都必填"}
-            else:
-                try:
-                    from backend.generation.question_library.diagram_revise import revise_diagram_source
-
-                    result = await revise_diagram_source(
-                        filename=filename,
-                        user_request=user_request,
-                        user_id="1",
-                        alt=alt_override or None,
-                    )
-                except ImportError:
-                    result = {
-                        "success": False,
-                        "error": "diagram_revise_module_missing",
-                        "hint": "backend.generation.question_library.diagram_revise 尚未启用",
-                    }
-                except Exception as exc:
-                    logger.warning("revise_diagram_failed", exc_info=True)
-                    result = {"success": False, "error": f"revise_failed: {exc}"}
-
-        elif name == "diagnose_export":
-            # 诊断导出功能
-            result = await server._diagnose_export(test_question_id=arguments.get("test_question_id", "70287"))
-
+        for _dispatch in (
+            _dispatch_question_bank,
+            _dispatch_paper_compose,
+            _dispatch_agent_knowledge,
+            _dispatch_search_compute,
+            _dispatch_paper_analysis,
+            _dispatch_diagram,
+        ):
+            outcome = await _dispatch(server, name, arguments, ensure_crawler_initialized)
+            if outcome is not _UNHANDLED:
+                break
         else:
+            outcome = _UNHANDLED
+        if outcome is _UNHANDLED:
             result = {"error": f"未知工具: {name}"}
+        elif isinstance(outcome, list):
+            return outcome
+        else:
+            result = outcome
 
         return [
             TextContent(
