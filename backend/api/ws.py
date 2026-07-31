@@ -13,7 +13,7 @@ import time
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from backend.api.auth import validate_ws_token
+from backend.api.auth import AUTH_ACCESS_COOKIE_NAME, validate_ws_token
 from backend.core.logging_utils import get_logger
 from backend.database.repositories.system.tasks import (
     get_task as db_get_task,
@@ -29,6 +29,19 @@ logger = get_logger(__name__)
 _TASK_STREAM_HEARTBEAT_SECONDS = 10.0
 _TASK_STREAM_POLL_SECONDS = 0.5
 _TASK_STREAM_MAX_SECONDS = 60.0 * 60.0 * 2.0
+
+
+def _resolve_ws_token(websocket: WebSocket, token: str) -> str:
+    """Prefer the HttpOnly auth cookie over the legacy ``?token=`` query param.
+
+    Query-string tokens land in access logs of any proxy/server that does not
+    scrub them, so browser clients should authenticate via the cookie and leave
+    the query param empty.
+    """
+    raw = str(token or "").strip()
+    if raw:
+        return raw
+    return str(websocket.cookies.get(AUTH_ACCESS_COOKIE_NAME) or "").strip()
 
 
 async def _send_event(websocket: WebSocket, event: dict) -> bool:
@@ -151,14 +164,14 @@ async def ws_task_stream(
     """WebSocket endpoint for streaming task events.
 
     Connection protocol:
-    1. Client connects with `?token=<jwt>&after_seq=<n>`
+    1. Client connects with the auth cookie (preferred) or legacy `?token=<jwt>`; `after_seq=<n>` resumes
     2. Server validates token, accepts connection
     3. Server streams events as JSON messages (durable: from DB events table)
     4. Server sends `{type: "ping"}` every ~10s as a heartbeat
     5. Server closes connection when task completes/fails/is-cancelled
     """
 
-    user = validate_ws_token(token)
+    user = validate_ws_token(_resolve_ws_token(websocket, token))
     if not user:
         await websocket.close(code=4001, reason="unauthorized")
         return
@@ -186,12 +199,12 @@ async def ws_task_stream(
                 if isinstance(msg, dict) and msg.get("type") == "ping":
                     try:
                         await websocket.send_json({"type": "pong"})
-                    except Exception:  # noqa: BLE001 - pong is best-effort; any send failure means the socket is gone, so stop draining
+                    except (WebSocketDisconnect, RuntimeError):  # pong is best-effort; a send failure means the socket is gone, so stop draining
                         return
         except WebSocketDisconnect:
             return
         except Exception:  # noqa: BLE001 - terminal drain-loop guard; never let a background reader crash the connection
-            logger.debug("ws_drain_client_messages_stopped", exc_info=True)
+            logger.warning("ws_drain_client_messages_stopped", exc_info=True)
             return
 
     try:
@@ -208,7 +221,7 @@ async def ws_task_stream(
         logger.exception("ws_task_stream_error", extra={"task_id": task_id, "user_id": user_id})
         try:
             await websocket.send_json({"type": "error", "data": {"error": "internal_error"}})
-        except Exception:  # noqa: BLE001 - terminal error-notify; socket may already be closing, nothing more to do
+        except (WebSocketDisconnect, RuntimeError):  # terminal error-notify; socket may already be closing, nothing more to do
             logger.debug("ws_task_stream_error_notify_failed", exc_info=True)
     finally:
         for task in (receive_task, stream_task):
@@ -216,11 +229,13 @@ async def ws_task_stream(
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001 - cleanup join of cancelled task; swallow to guarantee close
+                except asyncio.CancelledError:
                     pass
+                except Exception:  # noqa: BLE001 - cleanup join of failed task; log and swallow to guarantee close
+                    logger.warning("ws_task_cleanup_join_failed", exc_info=True)
         try:
             await websocket.close()
-        except Exception:  # noqa: BLE001 - terminal cleanup, swallow to guarantee socket close
+        except RuntimeError:  # terminal cleanup; already-closed socket raises RuntimeError
             pass
 
 
@@ -238,7 +253,7 @@ async def ws_chat_stream(
     4. Server sends `{"type": "done"}` when complete
     """
 
-    user = validate_ws_token(token)
+    user = validate_ws_token(_resolve_ws_token(websocket, token))
     if not user:
         await websocket.close(code=4001, reason="unauthorized")
         return
@@ -311,7 +326,7 @@ async def ws_chat_stream(
                             history_count=len(history),
                         )
                     except Exception:  # noqa: BLE001 - title is cosmetic; never fail the chat stream over it
-                        logger.debug("ws_chat_update_title_failed", exc_info=True)
+                        logger.warning("ws_chat_update_title_failed", exc_info=True)
                 except Exception:
                     logger.exception("ws_chat_persist_user_message_failed")
 
@@ -373,7 +388,7 @@ async def ws_chat_stream(
                     logger.exception("ws_chat_error", extra={"user_id": user_id})
                     try:
                         await websocket.send_json({"type": "error", "data": {"error": str(exc)}})
-                    except Exception:  # noqa: BLE001 - terminal error-notify; socket may already be closing, nothing more to do
+                    except (WebSocketDisconnect, RuntimeError):  # terminal error-notify; socket may already be closing, nothing more to do
                         logger.debug("ws_chat_error_notify_failed", exc_info=True)
                     return
                 continue
@@ -389,5 +404,5 @@ async def ws_chat_stream(
     finally:
         try:
             await websocket.close()
-        except Exception:  # noqa: BLE001 - terminal cleanup, swallow to guarantee socket close
+        except RuntimeError:  # terminal cleanup; already-closed socket raises RuntimeError
             pass

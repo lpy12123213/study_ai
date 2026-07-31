@@ -118,6 +118,13 @@ def _sanitize_value(value: Any, *, depth: int = 0) -> Any:  # noqa: ANN401
     return value
 
 
+class _ScrubbingTextFormatter(logging.Formatter):
+    """Plain-text formatter that redacts credentials (tokens, cookies, keys)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _scrub_text(super().format(record))
+
+
 class JsonFormatter(logging.Formatter):
     _reserved = {
         "args",
@@ -201,7 +208,7 @@ def configure_logging(*, force: bool = False) -> None:
     if fmt == "json":
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter(fmt="%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setFormatter(_ScrubbingTextFormatter(fmt="%(asctime)s %(levelname)s %(name)s: %(message)s"))
 
     root.handlers = [handler]
     root.setLevel(level)

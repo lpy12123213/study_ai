@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { registerHttpObservers } from "@/app/api/http-observers";
 import { apiFetch, resetHttpClient } from "@/shared/api/http-client";
-import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
-/** app 层接线行为：鉴权头注入、429 toast、组卷网登录态标记。 */
+/** app 层接线行为：cookie 鉴权（无 Bearer）、429 toast、组卷网登录态标记。 */
 
 function jsonResponse(payload: unknown, init: { status?: number } = {}) {
   return new Response(JSON.stringify(payload), {
@@ -16,7 +15,6 @@ function jsonResponse(payload: unknown, init: { status?: number } = {}) {
 
 beforeEach(() => {
   useUiStore.setState({ toasts: [], zujuanLoginRequired: false });
-  useAuthStore.setState({ token: null });
   registerHttpObservers();
 });
 
@@ -26,12 +24,11 @@ afterEach(() => {
 });
 
 describe("registerHttpObservers", () => {
-  it("auth store 有 token 时请求携带 Authorization 头", async () => {
-    useAuthStore.setState({ token: "tok-9" });
+  it("会话依赖 HttpOnly cookie，请求不附加 Authorization 头", async () => {
     const spy = vi.fn(async (_input: unknown, _init?: unknown) => jsonResponse({}));
     vi.stubGlobal("fetch", spy);
     await apiFetch("/api/x");
-    expect((spy.mock.calls[0][1] as RequestInit).headers).toMatchObject({ Authorization: "Bearer tok-9" });
+    expect((spy.mock.calls[0][1] as RequestInit).headers).not.toHaveProperty("Authorization");
   });
 
   it("429 且未 silent 时推送限流 toast", async () => {

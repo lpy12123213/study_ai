@@ -1,11 +1,11 @@
 /**
  * app 层 HTTP 观察者接线（架构 Phase 1）。
  *
- * shared/api 的纯 client 不感知 store；这里把鉴权令牌、组卷网登录态检查、
- * 429 限流提示接到对应 store。应用启动时调用一次 registerHttpObservers()。
+ * shared/api 的纯 client 不感知 store；这里把组卷网登录态检查、429 限流提示
+ * 接到对应 store。鉴权依赖 HttpOnly cookie（credentials: "same-origin"），
+ * 不注入 Bearer 令牌。应用启动时调用一次 registerHttpObservers()。
  */
 import { configureHttpClient } from "@/shared/api/http-client";
-import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 
 /** 成功或失败响应里都可能携带组卷网登录态标记。 */
@@ -20,7 +20,6 @@ function inspectZujuanPayload(payload: unknown) {
 
 export function registerHttpObservers(): void {
   configureHttpClient({
-    getAccessToken: () => useAuthStore.getState().token,
     onPayload: inspectZujuanPayload,
     onError: (error, { silent }) => {
       if (error.status === 429 && !silent) {

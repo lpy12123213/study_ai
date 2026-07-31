@@ -269,7 +269,7 @@ async def require_auth(
 
 
 def validate_ws_token(token: str) -> Optional[dict]:
-    """Validate a WebSocket auth token (passed as query param).
+    """Validate a WebSocket auth token (from the auth cookie, or the legacy query param).
 
     Returns user dict or None if invalid. Falls back to local user when
     login is disabled (same behavior as require_auth).
