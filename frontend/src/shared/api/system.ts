@@ -24,9 +24,10 @@ export const systemApi = {
       method: "PUT",
       body: { settings },
     }),
-  search: (q: string, types?: string, limit = 30) =>
+  search: (q: string, types?: string, limit = 30, signal?: AbortSignal) =>
     apiFetch<{ query: string; results: GlobalSearchResult[]; count: number }>("/api/search", {
       query: { q, types, limit },
+      signal,
     }),
   recordSearchHistory: (search_type: string, search_query: string, result_count: number) =>
     apiFetch("/api/search-history", {

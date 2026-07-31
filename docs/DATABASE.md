@@ -25,6 +25,14 @@ python -m alembic -c alembic.ini upgrade head
 
 它不是新 schema 的权威来源。新增列如果必须同步加入 fallback，应同时在同一个变更中加入 Alembic revision，并在 PR 说明里解释 fallback 的删除窗口。
 
+## FTS5 派生索引表的例外
+
+全文搜索表（`messages_fts`、`paper_questions_fts`、`study_archives_fts`、`question_library_fts`）
+及其同步触发器是**派生索引**，不承载权威数据：内容可随时从源表重建，且建表依赖运行时
+SQLite 是否启用 FTS5（不可用时降级为 LIKE 搜索）。因此它们只存在于 fallback 层，不进 Alembic
+revision；对它们的重建/改定义（如 2026-07 把 title/subject/knowledge_point 改为可索引列）
+也不需要 Alembic revision。新增权威内容表时不得援引此例外。
+
 ## 现有 Fallback 盘点
 
 截至 2026-05，`sync_migrate_db_schema()` 仍包含若干 `_add_col` 兼容路径，主要覆盖：

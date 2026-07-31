@@ -19,6 +19,8 @@ const TYPE_META: Record<string, { label: string; icon: React.ComponentType<{ cla
 
 const MARK_OPEN = String.fromCharCode(1);
 const MARK_CLOSE = String.fromCharCode(2);
+const SEARCH_DEBOUNCE_MS = 80;
+const SEARCH_CACHE_MS = 30_000;
 
 /** 后端 snippet 用 \u0001/\u0002 包裹高亮词，转成 <mark>。 */
 function HighlightedSnippet({ text }: { text: string }) {
@@ -57,7 +59,7 @@ export function GlobalSearch() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), 250);
+    const t = setTimeout(() => setDebounced(q.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [q]);
 
@@ -71,8 +73,9 @@ export function GlobalSearch() {
 
   const { data, isFetching } = useQuery({
     queryKey: ["global-search", debounced],
-    queryFn: () => systemApi.search(debounced),
+    queryFn: ({ signal }) => systemApi.search(debounced, undefined, 30, signal),
     enabled: open && debounced.length > 0,
+    staleTime: SEARCH_CACHE_MS,
   });
 
   const results = data?.results ?? [];

@@ -118,6 +118,75 @@ class QuestionLibraryFtsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["question_id"] for row in new_rows], ["q-refresh"])
         self.assertEqual(old_rows, [])
 
+    async def test_zero_fts_matches_does_not_fall_back_to_like(self) -> None:
+        await self._seed_question(
+            user_id="user-a",
+            question_id="q-substring-only",
+            stem="prefixsubstringfallbackneedlepostfix",
+        )
+        await self._run_migrations()
+
+        rows = await self._search_questions("user-a", "substringfallbackneedle")
+
+        self.assertEqual(rows, [])
+
+    async def test_search_supports_prefix_matching_for_longer_chinese_tokens(self) -> None:
+        await self._seed_question(
+            user_id="user-a",
+            question_id="q-chinese-prefix",
+            stem="函数单调性综合题",
+        )
+        await self._run_migrations()
+
+        rows = await self._search_questions("user-a", "函数")
+
+        self.assertEqual([row["question_id"] for row in rows], ["q-chinese-prefix"])
+        self.assertLess(rows[0]["score"], 1000000.0)
+
+    async def test_migration_rebuilds_legacy_unindexed_search_fields(self) -> None:
+        await self._seed_question(
+            user_id="user-a",
+            question_id="q-legacy-index",
+            stem="综合题",
+            knowledge_point="函数单调性",
+        )
+        async with self.engine.begin() as conn:
+            await conn.exec_driver_sql(
+                "CREATE VIRTUAL TABLE question_library_fts USING fts5("
+                "user_id UNINDEXED,"
+                "question_id UNINDEXED,"
+                "subject UNINDEXED,"
+                "knowledge_point UNINDEXED,"
+                "hidden UNINDEXED,"
+                "content,"
+                "tokenize='unicode61 remove_diacritics 2'"
+                ")"
+            )
+
+        await self._run_migrations()
+
+        async with self.engine.begin() as conn:
+            table_sql = (
+                await conn.exec_driver_sql(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='question_library_fts'"
+                )
+            ).scalar_one()
+        rows = await self._search_questions("user-a", "函数")
+
+        self.assertNotIn("knowledge_point UNINDEXED", table_sql)
+        self.assertEqual([row["question_id"] for row in rows], ["q-legacy-index"])
+
+    async def test_like_fallback_remains_available_when_fts_table_is_missing(self) -> None:
+        await self._seed_question(
+            user_id="user-a",
+            question_id="q-like-fallback",
+            stem="standalonefallbackneedle",
+        )
+
+        rows = await self._search_questions("user-a", "standalonefallbackneedle")
+
+        self.assertEqual([row["question_id"] for row in rows], ["q-like-fallback"])
+
     async def test_question_fts_migration_is_idempotent(self) -> None:
         await self._seed_question(
             user_id="user-a",

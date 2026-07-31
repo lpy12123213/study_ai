@@ -22,6 +22,7 @@ def _add_col(conn, *, table: str, name: str, ddl: str, existing_cols: Iterable[s
     try:
         conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
     except SQLAlchemyError:
+        logger.warning("migration: failed to add column %s.%s (%s)", table, name, ddl, exc_info=True)
         return
 
 
@@ -29,6 +30,7 @@ def _ensure_index(conn, *, name: str, table: str, columns: str) -> None:
     try:
         conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
     except SQLAlchemyError:
+        logger.warning("migration: failed to create index %s on %s (%s)", name, table, columns, exc_info=True)
         return
 
 
@@ -283,12 +285,56 @@ def sync_migrate_db_schema(conn) -> None:
     # Full-text search (SQLite FTS5) — best-effort. If the runtime SQLite build lacks FTS5,
     # we silently skip and fall back to LIKE-based search in the API.
     try:
+        # Legacy FTS tables indexed only long-form content. Rebuild the derived
+        # index once so titles, subjects, and knowledge points stay searchable
+        # without falling back to slow substring scans.
+        legacy_index_markers = {
+            "messages_fts": ("title unindexed",),
+            "paper_questions_fts": ("paper_name unindexed", "knowledge_point unindexed"),
+            "question_library_fts": ("subject unindexed", "knowledge_point unindexed"),
+        }
+        rebuild_fts = False
+        for table, markers in legacy_index_markers.items():
+            row = conn.exec_driver_sql(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?",
+                (table,),
+            ).first()
+            table_sql = str(row[0] or "").lower() if row else ""
+            if table_sql and any(marker in table_sql for marker in markers):
+                rebuild_fts = True
+                break
+
+        if rebuild_fts:
+            for trigger in (
+                "messages_ai",
+                "messages_ad",
+                "messages_au",
+                "paper_questions_ai",
+                "paper_questions_ad",
+                "paper_questions_au",
+                "study_archives_ai",
+                "study_archives_ad",
+                "study_archives_au",
+                "question_library_ai",
+                "question_library_ad",
+                "question_library_au",
+                "question_cache_au_question_library_fts",
+            ):
+                conn.exec_driver_sql(f"DROP TRIGGER IF EXISTS {trigger}")
+            for table in (
+                "messages_fts",
+                "paper_questions_fts",
+                "study_archives_fts",
+                "question_library_fts",
+            ):
+                conn.exec_driver_sql(f"DROP TABLE IF EXISTS {table}")
+
         conn.exec_driver_sql(
             "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5("
             "user_id UNINDEXED,"
             "conversation_id UNINDEXED,"
             "message_id UNINDEXED,"
-            "title UNINDEXED,"
+            "title,"
             "content,"
             "tokenize='unicode61 remove_diacritics 2'"
             ")"
@@ -298,8 +344,8 @@ def sync_migrate_db_schema(conn) -> None:
             "user_id UNINDEXED,"
             "paper_id UNINDEXED,"
             "question_id UNINDEXED,"
-            "paper_name UNINDEXED,"
-            "knowledge_point UNINDEXED,"
+            "paper_name,"
+            "knowledge_point,"
             "content,"
             "tokenize='unicode61 remove_diacritics 2'"
             ")"
@@ -319,8 +365,8 @@ def sync_migrate_db_schema(conn) -> None:
             "CREATE VIRTUAL TABLE IF NOT EXISTS question_library_fts USING fts5("
             "user_id UNINDEXED,"
             "question_id UNINDEXED,"
-            "subject UNINDEXED,"
-            "knowledge_point UNINDEXED,"
+            "subject,"
+            "knowledge_point,"
             "hidden UNINDEXED,"
             "content,"
             "tokenize='unicode61 remove_diacritics 2'"

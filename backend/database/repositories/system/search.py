@@ -37,7 +37,9 @@ def _build_fts_match(query: str) -> str:
     safe = []
     for t in tokens[:12]:
         t = t.replace('"', '""')
-        safe.append(f'"{t}"')
+        # Prefix matching preserves type-ahead behavior without falling back to
+        # expensive substring scans (for example, 函数 -> 函数单调性).
+        safe.append(f'"{t}"*')
     return " AND ".join(safe)
 
 
@@ -73,13 +75,15 @@ async def search_fulltext(
 
     results: List[dict] = []
 
-    async def try_query(stmt: str, params: Dict[str, Any]) -> List[dict]:
+    async def try_query(stmt: str, params: Dict[str, Any]) -> Optional[List[dict]]:
         try:
             res = await session.execute(text(stmt), params)
             rows = res.mappings().all()
             return [dict(r) for r in rows]
         except SQLAlchemyError:
-            return []
+            return None
+
+    fts_unavailable: set[str] = set()
 
     if "conversation" in want:
         rows = await try_query(
@@ -98,7 +102,10 @@ async def search_fulltext(
             """,
             {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
         )
-        results.extend(rows)
+        if rows is None:
+            fts_unavailable.add("conversation")
+        else:
+            results.extend(rows)
 
     if "paper" in want:
         rows = await try_query(
@@ -117,7 +124,10 @@ async def search_fulltext(
             """,
             {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
         )
-        results.extend(rows)
+        if rows is None:
+            fts_unavailable.add("paper")
+        else:
+            results.extend(rows)
 
     if "study_archive" in want:
         rows = await try_query(
@@ -135,7 +145,10 @@ async def search_fulltext(
             """,
             {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
         )
-        results.extend(rows)
+        if rows is None:
+            fts_unavailable.add("study_archive")
+        else:
+            results.extend(rows)
 
     if "question" in want:
         rows = await try_query(
@@ -155,9 +168,12 @@ async def search_fulltext(
             """,
             {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
         )
-        results.extend(rows)
+        if rows is None:
+            fts_unavailable.add("question")
+        else:
+            results.extend(rows)
 
-    if results:
+    if not fts_unavailable:
         # Merge across types by bm25 score (smaller is better).
         def score_key(r: dict) -> float:
             try:
@@ -168,7 +184,9 @@ async def search_fulltext(
         results.sort(key=score_key)
         return results[: int(limit or 50)]
 
-    # Fallback: if FTS isn't available, try LIKE-based search (best-effort).
+    # Fall back only for entity types whose FTS query failed. A successful FTS
+    # query with zero matches is authoritative and must not trigger table scans.
+    want = fts_unavailable
     like = f"%{q}%"
 
     if "conversation" in want:
@@ -191,7 +209,7 @@ async def search_fulltext(
             """,
             {"user_id": uid, "like": like, "limit": int(limit or 50)},
         )
-        results.extend(rows)
+        results.extend(rows or [])
 
     if "paper" in want:
         rows = await try_query(
@@ -212,7 +230,7 @@ async def search_fulltext(
             """,
             {"user_id": uid, "like": like, "limit": int(limit or 50)},
         )
-        results.extend(rows)
+        results.extend(rows or [])
 
     if "question" in want:
         rows = await try_query(
@@ -243,7 +261,7 @@ async def search_fulltext(
             """,
             {"user_id": uid, "like": like, "limit": int(limit or 50)},
         )
-        results.extend(rows)
+        results.extend(rows or [])
 
     if "study_archive" in want:
         rows = await try_query(
@@ -262,7 +280,7 @@ async def search_fulltext(
             """,
             {"user_id": uid, "like": like, "limit": int(limit or 50)},
         )
-        results.extend(rows)
+        results.extend(rows or [])
 
     # Merge across types by bm25 score (smaller is better).
     def score_key(r: dict) -> float:
