@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import {
   AlertCircle,
@@ -18,8 +18,12 @@ import {
 } from "lucide-react";
 
 import { solveDeepThink } from "@/features/deepthink/api";
+import {
+  deepthinkProjectionReducer,
+  initialDeepthinkProjection,
+  type DtNode,
+} from "@/features/deepthink/model/projection";
 import { ApiError } from "@/shared/api/http-client";
-import type { TaskEvent } from "@/shared/api/types";
 import { formatDuration } from "@/lib/format";
 import { proxyImageUrl } from "@/lib/media";
 import { cn } from "@/lib/utils";
@@ -34,41 +38,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownView } from "@/components/markdown/markdown-view";
 import { SubjectSelect } from "@/components/question/subject-select";
-
-type Phase = "idle" | "running" | "done" | "error";
-
-/** 探索节点（镜像后端 ThoughtNode 事件载荷：node_generated / node_evaluated / node_pruned / node_selected）。 */
-interface DtNode {
-  id: string;
-  parentId: string | null;
-  depth: number;
-  thought: string;
-  reasoning: string;
-  status: string; // pending | evaluated | selected | pruned | final
-  isFinal: boolean;
-  score: number | null;
-  evalReasoning: string;
-  issues: string[];
-  pruneReason: string;
-}
-
-interface SearchInfo {
-  question: string;
-  subject: string;
-  config?: Record<string, unknown>;
-}
-
-interface DepthInfo {
-  depth: number;
-  frontierSize: number;
-  totalNodes: number;
-}
-
-interface DoneInfo {
-  elapsed?: number;
-  bestScore?: number;
-  totalNodes?: number;
-}
 
 function nodeStatusIcon(status: string) {
   switch (status) {
@@ -158,19 +127,22 @@ export function DeepthinkPage() {
   const [subject, setSubject] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
-  // 运行区
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [stopped, setStopped] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [searchInfo, setSearchInfo] = useState<SearchInfo | null>(null);
-  const [depthInfo, setDepthInfo] = useState<DepthInfo | null>(null);
-  const [nodes, setNodes] = useState<DtNode[]>([]);
-  const [bestPathIds, setBestPathIds] = useState<Set<string> | null>(null);
-  const [answerStarted, setAnswerStarted] = useState(false);
-  const [answer, setAnswer] = useState("");
-  const [reasoning, setReasoning] = useState("");
+  // 运行区：事件投影收敛到 reducer（对齐 chat/study-materials 模式）
+  const [run, dispatch] = useReducer(deepthinkProjectionReducer, initialDeepthinkProjection());
+  const {
+    phase,
+    stopped,
+    errorMsg,
+    searchInfo,
+    depthInfo,
+    nodes,
+    bestPathIds,
+    answerStarted,
+    answer,
+    reasoning,
+    doneInfo,
+  } = run;
   const [reasoningOpen, setReasoningOpen] = useState(false);
-  const [doneInfo, setDoneInfo] = useState<DoneInfo | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const nodeListRef = useRef<HTMLDivElement | null>(null);
@@ -196,130 +168,6 @@ export function DeepthinkPage() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [answer, phase]);
 
-  const updateNode = (id: string, patch: Partial<DtNode>) => {
-    setNodes((prev) => prev.map((n) => (n.id === id ? { ...n, ...patch } : n)));
-  };
-
-  const applyEvent = (ev: TaskEvent) => {
-    const d = (ev.data ?? {}) as Record<string, unknown>;
-    switch (ev.type) {
-      case "search_start": {
-        setSearchInfo({
-          question: typeof d.question === "string" ? d.question : "",
-          subject: typeof d.subject === "string" ? d.subject : "",
-          config: d.config && typeof d.config === "object" ? (d.config as Record<string, unknown>) : undefined,
-        });
-        break;
-      }
-      case "node_generated": {
-        const raw = d.node as Record<string, unknown> | undefined;
-        if (!raw || typeof raw.id !== "string") break;
-        const node: DtNode = {
-          id: raw.id,
-          parentId: typeof raw.parentId === "string" ? raw.parentId : null,
-          depth: typeof raw.depth === "number" ? raw.depth : 0,
-          thought: typeof raw.thought === "string" ? raw.thought : "",
-          reasoning: typeof raw.reasoning === "string" ? raw.reasoning : "",
-          status: typeof raw.status === "string" ? raw.status : "pending",
-          isFinal: raw.isFinal === true,
-          score: null,
-          evalReasoning: "",
-          issues: [],
-          pruneReason: "",
-        };
-        setNodes((prev) => (prev.some((n) => n.id === node.id) ? prev : [...prev, node]));
-        break;
-      }
-      case "node_evaluated": {
-        const id = typeof d.nodeId === "string" ? d.nodeId : "";
-        if (!id) break;
-        const patch: Partial<DtNode> = { status: "evaluated" };
-        if (typeof d.score === "number") patch.score = d.score;
-        if (typeof d.evalReasoning === "string") patch.evalReasoning = d.evalReasoning;
-        if (Array.isArray(d.issues)) patch.issues = d.issues.map(String);
-        updateNode(id, patch);
-        break;
-      }
-      case "node_pruned": {
-        const id = typeof d.nodeId === "string" ? d.nodeId : "";
-        if (!id) break;
-        const patch: Partial<DtNode> = {
-          status: "pruned",
-          pruneReason: typeof d.reason === "string" ? d.reason : "",
-        };
-        if (typeof d.score === "number") patch.score = d.score;
-        updateNode(id, patch);
-        break;
-      }
-      case "node_selected": {
-        const id = typeof d.nodeId === "string" ? d.nodeId : "";
-        if (id) updateNode(id, { status: "selected" });
-        break;
-      }
-      case "depth_complete": {
-        setDepthInfo({
-          depth: typeof d.depth === "number" ? d.depth : 0,
-          frontierSize: typeof d.frontierSize === "number" ? d.frontierSize : 0,
-          totalNodes: typeof d.totalNodes === "number" ? d.totalNodes : 0,
-        });
-        break;
-      }
-      case "search_complete": {
-        const id = typeof d.nodeId === "string" ? d.nodeId : "";
-        if (id) updateNode(id, { status: "final" });
-        break;
-      }
-      case "best_path": {
-        const ids = new Set<string>();
-        if (Array.isArray(d.path)) {
-          for (const item of d.path) {
-            const nodeId = (item as Record<string, unknown> | null)?.nodeId;
-            if (typeof nodeId === "string") ids.add(nodeId);
-          }
-        }
-        setBestPathIds(ids);
-        break;
-      }
-      case "answer_start": {
-        setAnswerStarted(true);
-        break;
-      }
-      case "answer_delta": {
-        const chunk = typeof d.content === "string" ? d.content : "";
-        if (chunk) setAnswer((prev) => prev + chunk);
-        break;
-      }
-      case "thinking":
-      case "thinking_delta":
-      case "reasoning":
-      case "reasoning_delta": {
-        const chunk =
-          typeof d.content === "string" ? d.content : typeof d.text === "string" ? d.text : "";
-        if (chunk) setReasoning((prev) => prev + chunk);
-        break;
-      }
-      case "done": {
-        setDoneInfo({
-          elapsed: typeof d.elapsed === "number" ? d.elapsed : undefined,
-          bestScore: typeof d.bestScore === "number" ? d.bestScore : undefined,
-          totalNodes: typeof d.totalNodes === "number" ? d.totalNodes : undefined,
-        });
-        setPhase("done");
-        break;
-      }
-      case "error": {
-        const raw =
-          typeof d.message === "string" ? d.message : typeof d.error === "string" ? d.error : "解题失败，请重试";
-        setErrorMsg(raw === "llm_not_configured" ? "未配置 LLM 服务，请先在设置页配置模型后再试" : raw);
-        setPhase("error");
-        break;
-      }
-      default:
-        // step / ping / progress 等信封事件与本页无关
-        break;
-    }
-  };
-
   const start = () => {
     const q = question.trim();
     if (!q) {
@@ -330,18 +178,8 @@ export function DeepthinkPage() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    setPhase("running");
-    setStopped(false);
-    setErrorMsg(null);
-    setSearchInfo(null);
-    setDepthInfo(null);
-    setNodes([]);
-    setBestPathIds(null);
-    setAnswerStarted(false);
-    setAnswer("");
-    setReasoning("");
+    dispatch({ type: "start" });
     setReasoningOpen(false);
-    setDoneInfo(null);
 
     const payload: { question: string; subject?: string; image_url?: string } = { question: q };
     if (subject) payload.subject = subject;
@@ -350,38 +188,26 @@ export function DeepthinkPage() {
 
     void solveDeepThink(payload, {
       signal: ctrl.signal,
-      onEvent: applyEvent,
+      onEvent: (ev) => dispatch({ type: "event", ev }),
       onDone: () => {
         // 正常结束（done 事件已置终态）或用户停止 / 流意外结束的兜底
-        setPhase((p) => (p === "running" ? "done" : p));
+        dispatch({ type: "stream_done" });
       },
       onError: (err) => {
-        setErrorMsg(friendlyStreamError(err));
-        setPhase("error");
+        dispatch({ type: "stream_error", message: friendlyStreamError(err) });
       },
     });
   };
 
   const stop = () => {
     abortRef.current?.abort();
-    setStopped(true);
-    setPhase("done");
+    dispatch({ type: "stopped" });
   };
 
   const resetAll = () => {
     abortRef.current?.abort();
-    setPhase("idle");
-    setStopped(false);
-    setErrorMsg(null);
-    setSearchInfo(null);
-    setDepthInfo(null);
-    setNodes([]);
-    setBestPathIds(null);
-    setAnswerStarted(false);
-    setAnswer("");
-    setReasoning("");
+    dispatch({ type: "clear" });
     setReasoningOpen(false);
-    setDoneInfo(null);
     setQuestion("");
     setSubject("");
     setImageUrl("");
@@ -389,7 +215,7 @@ export function DeepthinkPage() {
 
   const backToEdit = () => {
     abortRef.current?.abort();
-    setPhase("idle");
+    dispatch({ type: "back_to_edit" });
   };
 
   const copyAnswer = async () => {

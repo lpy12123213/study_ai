@@ -100,7 +100,7 @@ export const useTasksStore = create<TasksState>()((set, get) => ({
         }
         case "progress": {
           const p = d.progress ?? d.percent ?? d.value;
-          next.progress = normalizeProgress(typeof p === "number" ? p : next.progress / 100 > 1 ? next.progress : p);
+          // 仅在事件携带数值时更新进度，避免无值事件把进度重置为 0
           if (typeof p === "number") next.progress = normalizeProgress(p);
           break;
         }
