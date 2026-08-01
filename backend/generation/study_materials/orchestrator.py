@@ -124,6 +124,21 @@ def _stream_compact_threshold() -> int:
         return 800
 
 
+def study_materials_trace_ttl_s() -> float:
+    """全量 trace 事件的保留时长（秒）。默认 0 表示不清理。
+
+    清理器尚未实现；该 helper 仅集中读取开关，供后续清理任务复用。
+    """
+
+    raw = str(os.getenv("STUDY_MATERIALS_TRACE_TTL_S") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # 追赶阶段只保留各自最新一条的事件类型：
 # thinking/status 是每秒数条的瞬态文本；text_delta 是完整文档快照（可达几十 KB）；
 # quality_report/progress 只有最新值有意义。全量回放数千条会让重连极慢。
@@ -131,20 +146,25 @@ _CATCHUP_LATEST_ONLY_TYPES = frozenset(
     {"thinking", "thinking_delta", "reasoning_delta", "status", "text_delta", "quality_report", "progress"}
 )
 
+# author 流水线的结构化 trace 事件是「完整 trace 永不丢失」的载体：
+# 即使未来被误加入 _CATCHUP_LATEST_ONLY_TYPES，追赶压缩也不得折叠它们。
+_NEVER_COMPACT_EVENT_TYPES = frozenset({"note_write", "todo_update", "figure_trace", "section_fill"})
+
 
 def _compact_catchup_events(events: list) -> tuple:
     """折叠追赶事件流：瞬态/快照类只留最新一条，状态演进类（tool/subagent/stage/done 等）全量保留。"""
 
+    latest_only_types = _CATCHUP_LATEST_ONLY_TYPES - _NEVER_COMPACT_EVENT_TYPES
     latest_idx: Dict[str, int] = {}
     for idx, evt in enumerate(events):
         etype = str(evt.get("type") or "")
-        if etype in _CATCHUP_LATEST_ONLY_TYPES:
+        if etype in latest_only_types:
             latest_idx[etype] = idx
     keep = set(latest_idx.values())
     compacted = [
         evt
         for idx, evt in enumerate(events)
-        if idx in keep or str(evt.get("type") or "") not in _CATCHUP_LATEST_ONLY_TYPES
+        if idx in keep or str(evt.get("type") or "") not in latest_only_types
     ]
     return compacted, len(events) - len(compacted)
 
@@ -1071,6 +1091,52 @@ class StudyMaterialsTaskManager:
                 yield {"taskId": tid, "seq": last_sent, "type": "ping", "data": {"status": "running", "last_seq": last_sent}}
 
             await asyncio.sleep(0.5)
+
+    async def get_events_after(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        after_seq: int = 0,
+        limit: int = 500,
+    ) -> Optional[Dict[str, Any]]:
+        """全量 trace 分页读取：按 seq 过滤，不做任何压缩（压缩只发生在实时 SSE 追赶通道）。
+
+        返回 ``{"events": [...], "next_after_seq": int, "has_more": bool}``；
+        任务不存在或不属于该用户时返回 None（API 层映射 404）。
+        """
+
+        tid = str(task_id or "").strip()
+        uid = str(user_id or "").strip()
+        if not tid or not uid:
+            return None
+
+        try:
+            db_task = await db_get_task(user_id=uid, task_id=tid, include_events=False)
+        except Exception:
+            logger.warning(
+                "study_materials_task_db_lookup_failed",
+                extra={"task_id": tid, "user_id": uid},
+                exc_info=True,
+            )
+            return None
+        if not isinstance(db_task, dict):
+            # 与 stream 一致：尚未落库的运行时任务允许读（事件表暂空），其余一律视为不存在。
+            runtime_task = await task_runtime.get_task(tid)
+            if not runtime_task or str(runtime_task.user_id or "") != uid:
+                return None
+
+        try:
+            limit_safe = max(1, min(int(limit), 500))
+        except (TypeError, ValueError):
+            limit_safe = 500
+        cursor = max(0, int(after_seq or 0))
+        # 多取 1 条判断 has_more，避免「恰好整页」时多一次空翻页。
+        page = await db_list_task_events(user_id=uid, task_id=tid, after_seq=cursor, limit=limit_safe + 1)
+        has_more = len(page) > limit_safe
+        events = page[:limit_safe]
+        next_after_seq = int(events[-1].get("seq") or cursor) if events else cursor
+        return {"events": events, "next_after_seq": next_after_seq, "has_more": has_more}
 
     async def _upsert_archive_from_resume_state(
         self,

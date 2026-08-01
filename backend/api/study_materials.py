@@ -303,6 +303,36 @@ async def stream_study_materials_task(
     return await _stream_task(task.task_id, user_id=user_id, after_seq=after_seq, request=request)
 
 
+@router.get("/tasks/{task_id}/trace")
+async def get_study_materials_task_trace(
+    task_id: str,
+    after_seq: int = Query(0, ge=0),
+    limit: int = Query(500),
+    user: dict = Depends(require_auth),
+):
+    """Page the full event history verbatim (never compacted) for the process panel.
+
+    The SSE stream folds transient events when a reconnecting client lags far
+    behind; this endpoint reads the event-sourced store as-is so no trace event
+    is ever lost. `limit` is clamped to 1..500.
+    """
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+
+    task = await _tasks.get_task(task_id, user_id=user_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        limit_safe = max(1, min(int(limit), 500))
+    except (TypeError, ValueError):
+        limit_safe = 500
+    page = await _tasks.get_events_after(task.task_id, user_id=user_id, after_seq=after_seq, limit=limit_safe)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return page
+
+
 @router.get("/tasks/{task_id}")
 async def get_study_materials_task(task_id: str, user: dict = Depends(require_auth)):
     user_id = str((user or {}).get("user_id") or "").strip()
