@@ -9,6 +9,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.generation.study_materials.author.figures import FigureForge
 from backend.generation.study_materials.author.pipeline import (
@@ -17,6 +18,7 @@ from backend.generation.study_materials.author.pipeline import (
 )
 from backend.generation.study_materials.author.research_tools import ResearchToolbox
 from backend.generation.study_materials.author.todos import TodoList
+from backend.generation.study_materials.quality_gate import draft_hash
 
 BLUEPRINT_JSON = json.dumps(
     {
@@ -222,6 +224,85 @@ class AuthorPipelineTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["code"], "blueprint_invalid")
+
+
+class AuthorAcceptanceGateTests(unittest.TestCase):
+    """W1：ACCEPT 段改用 author 专用门 evaluate_author_acceptance 决定交付终态。"""
+
+    def _run(self, tmp, events, llm_func=None):
+        return asyncio.run(
+            run_author_pipeline(
+                _ctx(tmp),
+                llm_func=llm_func or _fake_llm(),
+                toolbox=_fake_toolbox(),
+                emit=events.append,
+                forge=_fake_forge(events),
+            )
+        )
+
+    def test_happy_path_not_degraded_and_has_acceptance(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events)
+
+        self.assertEqual(result["status"], "ok")
+        # todos 全清、无占位符残留 → author 门通过，不再恒定 degraded
+        self.assertFalse(result.get("degraded"), msg=result.get("quality_report"))
+        acceptance = result.get("acceptance") or {}
+        self.assertTrue(acceptance.get("accepted"), msg=result.get("acceptance"))
+        self.assertEqual(acceptance.get("draft_hash"), draft_hash(result["markdown"]))
+        self.assertTrue(result["quality_report"]["passed"])
+
+    def test_uncleared_todo_degrades_delivery(self):
+        async def flaky_fill_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            if "汇编缺少小节" in user:
+                return FILL_BODY  # 汇编补写成功，保证流程走到 ACCEPT
+            if "极限的直观概念" in user:
+                return ""  # sec-1 填充与作者改写均交空 → fill todo 以 failed 终态残留
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events, llm_func=flaky_fill_llm)
+
+        # 明确降级终态，不静默成功
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["degraded"])
+        self.assertFalse(result.get("acceptance"))
+        self.assertIn("todos_not_cleared", result["quality_report"]["failed_checks"])
+        self.assertIn("todos_not_cleared", result["material"]["issues"])
+
+    def test_legacy_acceptance_kept_as_diagnostic_only(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events)
+
+        legacy = result.get("legacy_acceptance")
+        self.assertIsInstance(legacy, dict)
+        self.assertIn("passed", legacy)
+        # legacy 门因缺 review.dimensions 不过，但不再决定交付终态
+        self.assertFalse(legacy["passed"])
+        self.assertFalse(result["degraded"])
+
+    def test_legacy_acceptance_failure_does_not_block(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "backend.generation.study_materials.author.pipeline.evaluate_acceptance",
+                side_effect=RuntimeError("boom"),
+            ):
+                result = self._run(tmp, events)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["degraded"])
+        self.assertTrue((result.get("acceptance") or {}).get("accepted"))
+        self.assertIn("error", result["legacy_acceptance"])
 
 
 if __name__ == "__main__":

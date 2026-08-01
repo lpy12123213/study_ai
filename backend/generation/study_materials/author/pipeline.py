@@ -3,8 +3,9 @@
 主 agent（作者）驱动全程：先检索并把事实落进研究笔记，再写蓝图与全书主干；
 小节正文委托 FillRunner 有界并行填充（交不出的节由作者亲自补写），配图委托
 FigureForge 异步生成（失败不阻塞，移除对应 ``[[FIG:n]]`` 行并记入 quality notes）；
-最后由确定性汇编器替换占位符并渲染书目。验收复用现有
-``quality_gate.evaluate_acceptance``（勿与 author 专用门混淆）；所有 LLM/工具
+最后由确定性汇编器替换占位符并渲染书目。验收由 author 专用门
+``quality_gate.evaluate_author_acceptance`` 决定交付终态（legacy
+``evaluate_acceptance`` 仍调用一次，仅作诊断挂回 ``legacy_acceptance``）；所有 LLM/工具
 调用都伴随统一 trace 事件（todo_update/note_write/section_fill/figure_trace/
 text_delta），无隐藏调用（设计稿 §9）。
 
@@ -37,6 +38,7 @@ from backend.generation.study_materials.quality_gate import (
     build_acceptance_record,
     draft_hash,
     evaluate_acceptance,
+    evaluate_author_acceptance,
 )
 
 BLUEPRINT_PROMPT_ID = "study.author.blueprint.v1"
@@ -530,15 +532,10 @@ class _AuthorPipeline:
             "dimensions": {},
             "issues": [str(c.get("text") or "") for c in self.unsupported_claims],
         }
-        gate_state = {
-            "preset": self.ctx.preset,
-            "plan": {"knowledge_points": plan_points},
-            "research": self.research_evidence,
-            "markdown": document,
-            "review": review,
-            "coverage_map": coverage_map,
-        }
-        report = evaluate_acceptance(state=gate_state)
+        # author 专用验收门决定交付终态：硬门槛为 todos 未清零与占位符残留。
+        report = evaluate_author_acceptance(todos=self.todos, markdown=document, blueprint=bp)
+        report["draft_hash"] = review["draft_hash"]  # build_acceptance_record 需要该字段
+        legacy_report = self._legacy_acceptance_diagnostic(plan_points, review, coverage_map, document)
         degraded = not report["passed"]
         acceptance = (
             {}
@@ -572,6 +569,7 @@ class _AuthorPipeline:
             },
             "quality_notes": list(self.quality_notes),
             "quality_report": report,
+            "legacy_acceptance": legacy_report,
             "review": review,
             "acceptance": acceptance,
             "degraded": degraded,
@@ -580,6 +578,29 @@ class _AuthorPipeline:
             "research": self.research_evidence,
             "coverage_map": coverage_map,
         }
+
+    def _legacy_acceptance_diagnostic(
+        self,
+        plan_points: List[Dict[str, Any]],
+        review: Dict[str, Any],
+        coverage_map: Dict[str, bool],
+        document: str,
+    ) -> Dict[str, Any]:
+        """legacy ``evaluate_acceptance`` 仅作诊断：author 流水线没有 review.dimensions，
+        该门恒定不过，故不再决定交付终态；调用本身失败也不阻断交付。"""
+
+        gate_state = {
+            "preset": self.ctx.preset,
+            "plan": {"knowledge_points": plan_points},
+            "research": self.research_evidence,
+            "markdown": document,
+            "review": review,
+            "coverage_map": coverage_map,
+        }
+        try:
+            return evaluate_acceptance(state=gate_state)
+        except Exception as exc:  # noqa: BLE001 — 诊断门，失败不阻断交付
+            return {"passed": None, "failed_checks": [], "error": f"{type(exc).__name__}: {exc}"}
 
     @staticmethod
     def _extract_references(research_text: str) -> List[Dict[str, str]]:
