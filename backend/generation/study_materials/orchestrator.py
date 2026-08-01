@@ -23,6 +23,9 @@ from backend.database.repositories.system.tasks import get_task as db_get_task
 from backend.database.repositories.system.tasks import list_task_events as db_list_task_events
 from backend.generation.agentic.codex_runtime import legacy_agent_fallback_enabled
 from backend.generation.agentic.study_materials import build_study_materials_agent_spec
+from backend.generation.study_materials.author.figures import FigureForge
+from backend.generation.study_materials.author.pipeline import AuthorPipelineContext, run_author_pipeline
+from backend.generation.study_materials.author.research_tools import ResearchToolbox
 from backend.generation.study_materials.codex_stages import StageResultError
 from backend.generation.study_materials.coverage import split_sections_by_kp
 from backend.generation.study_materials.quality_gate import (
@@ -58,6 +61,16 @@ def _study_materials_codex_enabled() -> bool:
 
     raw = str(os.getenv("STUDY_MATERIALS_AGENT_RUNTIME") or "").strip().lower().replace("-", "_")
     return raw in _CODEX_RUNTIME_NAMES
+
+
+_AUTHOR_RUNTIME_NAMES = {"author"}
+
+
+def _study_materials_author_enabled() -> bool:
+    """``STUDY_MATERIALS_AGENT_RUNTIME=author`` 时启用作者流水线（author/pipeline.py）。"""
+
+    raw = str(os.getenv("STUDY_MATERIALS_AGENT_RUNTIME") or "").strip().lower().replace("-", "_")
+    return raw in _AUTHOR_RUNTIME_NAMES
 
 
 def _now_s() -> float:
@@ -1607,6 +1620,168 @@ class StudyMaterialsTaskManager:
         await task_runtime.append_event(task, agent_event("done", result))
         await task_runtime.complete_task(task, result=result)
 
+    async def _run_author_staged(self, ctx: _TaskRunContext) -> None:
+        """作者流水线 路径（research→blueprint→backbone→fill∥fig→assemble→audit→accept）。
+
+        形状仿 _run_codex_staged：事件经同一总线发射、快照落盘、完成后走现有归档
+        upsert 路径；任务快照目录下建 notes/ 与 todos.json。pipeline 返回
+        status=failed 时置任务 failed 终态（recoverable），不抛未捕获异常。
+        """
+
+        task = ctx.task
+        meta = ctx.meta
+
+        async def _author_event_forward(evt: Dict[str, Any]) -> None:
+            try:
+                await task_runtime.append_event(task, evt)
+            except Exception:
+                logger.warning(
+                    "study_materials_author_event_append_failed",
+                    extra={"task_id": task.task_id},
+                    exc_info=True,
+                )
+
+        def _author_emit(evt: Dict[str, Any]) -> None:
+            # pipeline 的 emit 是同步回调；任务不再 running 时同步抛 CancelledError 终止流水线。
+            if task.status != "running":
+                raise asyncio.CancelledError
+            asyncio.get_running_loop().create_task(_author_event_forward(evt))
+
+        async def _author_llm(system_prompt: str, user_prompt: str) -> str:
+            # 延迟导入：注入假 llm_func 的测试不触碰 LLM 栈。
+            from backend.core.settings import LESSON_PLAN_MODEL
+            from backend.llm.client import chat_completion_text
+
+            return await chat_completion_text(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                model=str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini",
+                temperature=0.2,
+                max_tokens=0,
+                req_id_prefix="study_author",
+            )
+
+        preset = str(ctx.options.get("preset") or "standard").strip() or "standard"
+        requirements = str(ctx.options.get("requirements") or "")
+        pipeline_ctx = AuthorPipelineContext(
+            task_id=task.task_id,
+            topic=ctx.query,
+            subject=ctx.subject,
+            work_dir=_TASK_SNAPSHOTS_DIR / task.task_id,
+            user_id=task.user_id,
+            preset=preset,
+            requirements=requirements,
+            options=ctx.options,
+            knowledge_points=[ctx.query] if ctx.query else [],
+        )
+        result = await run_author_pipeline(
+            pipeline_ctx,
+            llm_func=_author_llm,
+            toolbox=ResearchToolbox(),
+            emit=_author_emit,
+            forge=FigureForge(on_trace=_author_emit),
+        )
+        if not result.get("success"):
+            error = _dict(result.get("error"))
+            code = str(error.get("code") or "author_pipeline_failed")
+            await task_runtime.fail_task(
+                task,
+                code,
+                error={
+                    "message": code,
+                    "code": code,
+                    "stage": str(error.get("stage") or ""),
+                    "issues": list(error.get("issues") or []),
+                    "recoverable": True,
+                },
+            )
+            return
+
+        markdown = str(result.get("markdown") or "")
+        material = _dict(result.get("material"))
+        acceptance = _dict(result.get("acceptance"))
+        quality_report = _dict(result.get("quality_report"))
+        workflow_state = {
+            "version": WORKFLOW_VERSION,
+            "stage": "completed",
+            "last_successful_stage": "accept",
+            "preset": preset,
+            "plan": _dict(result.get("plan")),
+            "research": _dict(result.get("research")),
+            "markdown": markdown,
+            "review": _dict(result.get("review")),
+            "quality_report": quality_report,
+            "acceptance": acceptance,
+            "revision_attempts": int(result.get("revision_attempts") or 0),
+            "last_failure": {},
+            "coverage_map": _dict(result.get("coverage_map")),
+            "runtime": "author",
+        }
+        sections = [
+            {"knowledge_point": str(item.get("title") or "").strip(), "title": str(item.get("title") or "").strip()}
+            for item in (result.get("sections") or [])
+            if isinstance(item, dict) and str(item.get("title") or "").strip()
+        ]
+        existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+        meta["resume_working_memory"] = _merge_resume_working_memory(
+            existing,
+            {
+                "study_options": {"preset": preset, "requirements": requirements},
+                "assemble_study_archive": markdown,
+                "markdown": markdown,
+                "generate_study_material": {
+                    "topic": ctx.query,
+                    "subject": ctx.subject,
+                    "preset": preset,
+                    "requirements": requirements,
+                    "sections": sections,
+                },
+                "study_materials_workflow": workflow_state,
+            },
+        )
+        meta["study_materials_workflow"] = workflow_state
+        meta["iterations_done"] = int(material.get("iteration") or 0) or (ctx.iteration_offset + 1)
+        _refresh_resume_meta(meta=meta)
+        await self._upsert_archive_from_resume_state(
+            task, meta=meta, query=ctx.query, subject=ctx.subject, options=ctx.options
+        )
+        self._persist_snapshot(task, force=True)
+
+        done_payload: Dict[str, Any] = {
+            "success": True,
+            "material": material,
+            "quality_report": quality_report,
+            "review": _dict(result.get("review")),
+            "acceptance": acceptance,
+            "workflow": workflow_state,
+            "author": {
+                "todos": result.get("todos") or [],
+                "references": result.get("references") or [],
+                "audit": _dict(result.get("audit")),
+                "quality_notes": result.get("quality_notes") or [],
+                "blueprint": _dict(result.get("blueprint")),
+            },
+        }
+        if result.get("degraded"):
+            # 与 codex workflow 相同的降级交付：done 前先广播 quality_degraded，
+            # degraded / material.passed 同时出现在 done 载荷与 complete_task 结果里。
+            done_payload["degraded"] = True
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "quality_degraded",
+                    "event": "quality_degraded",
+                    "data": {
+                        "issues": list(material.get("issues") or []),
+                        "revision_attempts": int(result.get("revision_attempts") or 0),
+                    },
+                },
+            )
+        await task_runtime.append_event(task, agent_event("done", done_payload))
+        await task_runtime.complete_task(task, result=done_payload)
+
     async def _run_legacy_agent(self, ctx: _TaskRunContext) -> None:
         """legacy AgentCore 路径（默认；也是 codex staged 显式回退的目标）。"""
 
@@ -1693,6 +1868,10 @@ class StudyMaterialsTaskManager:
             if await self._preflight_export_continuation(ctx):
                 return
             if await self._preflight_archive_reuse(ctx):
+                return
+
+            if _study_materials_author_enabled():
+                await self._run_author_staged(ctx)
                 return
 
             if _study_materials_codex_enabled():
