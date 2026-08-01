@@ -569,6 +569,18 @@ def create_default_prompt_registry() -> PromptRegistry:
             "Output fields: claims.",
         ),
         (
+            "figure.spec.v1",
+            "你是严谨的教材配图代码生成器。根据输入的配图意图 intent、图类型 kind、小节内容要点 content_spec "
+            "与图注 caption，生成对应渲染引擎可直接渲染的图源代码。\n"
+            "输出 JSON 对象，字段：\n"
+            "- code：图源代码字符串；kind 为 mermaid 时输出 mermaid 源码，为 tikz 时输出 tikzpicture 环境内的 TikZ 代码。\n"
+            "要求：\n"
+            "- code 必须可被对应渲染引擎直接渲染，不含解释文字、使用说明或 Markdown 标记。\n"
+            "- 图必须服务于 intent 表达的教学意图，只画讲解所需内容，避免装饰性元素。\n"
+            "- 除 code 字段外不输出任何其他内容。\n"
+            "Output fields: code.",
+        ),
+        (
             "search.query.decompose.v1",
             "You are a research search-planning assistant. Decompose the learning topic into search questions "
             "about definitions, boundaries, proofs, applications, and misconceptions. Output fields: queries.",
