@@ -1,0 +1,98 @@
+{
+  "id": "eigen_decomposition",
+  "title": "特征值、特征向量与对角化",
+  "query": "自学特征值与特征向量：定义与求法、代数重数与几何重数、可对角化的判定、谱定理，以及不可对角化的反例",
+  "subject": "线性代数",
+  "preset": "deep",
+  "options": {"with_questions": false, "with_diagrams": false, "max_points": 7, "prefer_local_archive": false},
+  "expected_knowledge_points": [
+    "特征值与特征向量的定义",
+    "特征多项式与求法",
+    "代数重数与几何重数",
+    "可对角化的判定",
+    "谱定理",
+    "不可对角化的反例"
+  ],
+  "min_unique_sources": 10,
+  "expected_domains": ["wikipedia.org", "math.stackexchange.com", "ocw.mit.edu"],
+  "required_facts": [
+    {
+      "id": "eigen_definition",
+      "description": "定义：Av = λv（v ≠ 0），λ 为特征值，v 为特征向量",
+      "match": {"all": ["特征值", "特征向量"], "any": ["Av ?= ?λv", "A\\\\mathbf\\{v\\}", "非零"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/特征值和特征向量"]
+    },
+    {
+      "id": "char_polynomial",
+      "description": "特征值是特征多项式 det(A − λI) = 0 的根",
+      "match": {"any": ["det\\(A ?- ?λI\\)|det\\\\left\\( ?A ?- ?\\\\lambda", "特征多项式"], "all": ["行列式|det"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/特征多项式"]
+    },
+    {
+      "id": "trace_det",
+      "description": "迹等于特征值之和、行列式等于特征值之积（计代数重数）",
+      "match": {"any": ["迹.{0,12}特征值.{0,4}和", "行列式.{0,12}特征值.{0,4}积", "迹等于|行列式等于"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/特征值和特征向量"]
+    },
+    {
+      "id": "multiplicities",
+      "description": "代数重数（根的重数）与几何重数（特征子空间维数），几何重数 ≤ 代数重数",
+      "match": {"all": ["代数重数", "几何重数"], "any": ["≤|\\\\le|小于等于|不超过"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Eigenvalues_and_eigenvectors"]
+    },
+    {
+      "id": "diagonalizable_iff",
+      "description": "可对角化 ⟺ 存在 n 个线性无关的特征向量（各特征值几何重数之和为 n）",
+      "match": {"all": ["对角化"], "any": ["n ?个线性无关", "线性无关.{0,8}特征向量", "当且仅当|充要条件"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/可对角化矩阵"]
+    },
+    {
+      "id": "distinct_eigenvalues",
+      "description": "n 个互异特征值是可对角化的充分条件（非必要）",
+      "match": {"any": ["互异|互不相同|两两不同", "充分条件"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/可对角化矩阵"]
+    },
+    {
+      "id": "spectral_theorem",
+      "description": "谱定理：实对称矩阵必可正交对角化，特征值全为实数",
+      "match": {"all": ["对称"], "any": ["谱定理", "正交对角化|正交相似"], "none": []},
+      "source_urls": ["https://zh.wikipedia.org/wiki/谱定理"]
+    },
+    {
+      "id": "jordan_counterexample",
+      "description": "不可对角化的反例：Jordan 块/剪切矩阵（几何重数 < 代数重数）",
+      "match": {"any": ["Jordan|若尔当|若当", "剪切|shear"], "all": ["不可对角化"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/若尔当标准形"]
+    }
+  ],
+  "traps": [
+    {
+      "id": "all_diagonalizable",
+      "description": "误解：所有方阵都可对角化",
+      "wrong_pattern": "(所有|任意|任何).{0,4}(方阵|矩阵).{0,4}都(可以|能).{0,2}对角化",
+      "correct_pattern": "不可对角化|几何重数|Jordan|若尔当|剪切"
+    },
+    {
+      "id": "distinct_necessary",
+      "description": "误解：互异特征值是可对角化的必要条件",
+      "wrong_pattern": "(只有|必须).{0,6}特征值.{0,4}(互异|不同).{0,4}才(能|可以).{0,2}对角化",
+      "correct_pattern": "充分|不必要|不是必要"
+    },
+    {
+      "id": "eigenvector_zero",
+      "description": "误解：零向量也是特征向量",
+      "wrong_pattern": "零向量.{0,4}(也|皆)?是.{0,2}特征向量",
+      "correct_pattern": "非零|v ?≠ ?0|v ?\\\\ne ?0"
+    }
+  ],
+  "contrasts": [
+    ["代数重数", "几何重数"],
+    ["可对角化", "正交对角化"]
+  ],
+  "format_requirements": {
+    "key_formulas": ["\\\\lambda|λ", "\\\\det", "A\\\\mathbf|Av|特征向量"],
+    "min_figures": 0,
+    "min_tables": 1,
+    "min_chars": 7000
+  }
+}

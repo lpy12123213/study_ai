@@ -66,7 +66,7 @@ def _search_result(urls: list[str]) -> dict:
 class CaseSchemaTests(unittest.TestCase):
     def test_all_shipped_cases_load_and_validate(self) -> None:
         cases = load_cases(_CASE_DIR)
-        self.assertEqual(len(cases), 6)
+        self.assertGreaterEqual(len(cases), 6)
         for case in cases:
             self.assertTrue(case.required_facts, case.id)
             self.assertTrue(case.traps, case.id)
