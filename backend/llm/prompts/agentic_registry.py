@@ -544,6 +544,31 @@ def create_default_prompt_registry() -> PromptRegistry:
             "conditions, misconceptions, and applications. Output fields: passed, issues, suggestions.",
         ),
         (
+            "study.author.blueprint.v1",
+            "你是严谨的自学教材总编。根据输入的主题、学科、preset 与研究笔记，为全书设计写作蓝图。\n"
+            "输出 JSON 对象，字段：\n"
+            "- narrative：全书叙事主线（一段话）。\n"
+            "- terminology：术语表，每项含 symbol/meaning，symbol 必须与后文写作保持一致。\n"
+            "- sections：小节列表，每项含 id/title/purpose/key_points/target_chars/difficulty/misconceptions/"
+            "frontier；misconceptions 每项含 claim/source_url。\n"
+            "- figures：配图计划，每项含 n/sec_id/intent/kind/caption。\n"
+            "要求：\n"
+            "- 小节顺序即叙事顺序，前后小节必须构成连贯的学习路径。\n"
+            "- 易错点只能来自研究笔记中带出处的条目；没有可靠出处就留空数组（诚实省略，禁止编造）。\n"
+            "- 对置信度低或证据不足的小节，将 frontier 标记为 true。\n"
+            "Output fields: narrative, terminology, sections, figures.",
+        ),
+        (
+            "study.author.audit.v1",
+            "你是严谨的事实核查员。输入一个小节的正文与该小节的研究笔记切片，逐条核查正文中的事实性断言。\n"
+            "输出 JSON 对象，字段 claims：断言列表，每项含 text/verdict/fix；"
+            "verdict 只能是 supported、unsupported、uncertain 之一，fix 给出可执行的修订建议。\n"
+            "要求：\n"
+            "- 蓝图中 frontier 标记的小节必须逐条全查，不得抽样。\n"
+            "- 判定只能依据给定的研究笔记切片：笔记无法支持的标 unsupported，证据不足的标 uncertain。\n"
+            "Output fields: claims.",
+        ),
+        (
             "search.query.decompose.v1",
             "You are a research search-planning assistant. Decompose the learning topic into search questions "
             "about definitions, boundaries, proofs, applications, and misconceptions. Output fields: queries.",
@@ -929,6 +954,34 @@ def create_default_prompt_registry() -> PromptRegistry:
             True,
             "You are a professional academic content editor. Precisely revise the complete self-study Markdown "
             "according to the review issues.",
+        ),
+        (
+            "study.author.backbone.v1",
+            True,
+            "你是严谨的自学教材作者。根据给定蓝图撰写全书骨架，输出 Markdown，依次包含：\n"
+            "- 书名与 meta 信息；\n"
+            "- 全书导言；\n"
+            "- 每章导语与学习目标；\n"
+            "- 节间衔接段；\n"
+            "- 每小节开头的引入段；\n"
+            "- 全书总结章；\n"
+            "- 术语表。\n"
+            "小节正文位置只留占位符 [[FILL:sec-id]]（sec-id 为蓝图中的 section id），图位留占位符 [[FIG:n]]。\n"
+            "蓝图中每个 section 必须恰好对应一个 [[FILL:sec-id]] 占位符，不得多也不得少。\n"
+            "不要撰写任何小节正文，不要输出 URL 或参考文献。",
+        ),
+        (
+            "study.author.fill.v1",
+            True,
+            "你是严谨的自学教材作者。只为指定的某一个小节撰写核心讲解正文，输出 Markdown。\n"
+            "要求：\n"
+            "- 严格遵守给定的术语符号表，符号用法与全书保持一致。\n"
+            "- 易错点仅可使用给定研究笔记切片中带出处的条目；没有带出处的就不要写（诚实省略，禁止编造）。\n"
+            "- 必须包含 [EXn] 带步骤例题、[Qn] 分层自测题（基础/应用/迁移）、[An] 答案与评分点，"
+            "编号 n 均从 1 起连续递增且一一对应。\n"
+            "- 数学公式用 LaTeX：行内 $...$，独立 $$...$$。\n"
+            "- 不输出 URL、参考文献或 [[1]] 之类的引用标记。\n"
+            "- 只写该小节正文，不要输出书名、章节标题或其他小节的内容。",
         ),
         (
             "lesson_plan.latex_convert.v1",
