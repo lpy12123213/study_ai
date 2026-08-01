@@ -159,6 +159,40 @@ def _extract_points(args: Dict[str, Any], ctx: CompressedContext) -> List[str]:
     return [topic] if topic else []
 
 
+def _items_from_search_memory(ctx: CompressedContext) -> List[Dict[str, Any]]:
+    """从检索类工具的工作记忆重建 per-kp 写作素材。
+
+    ReAct 直写路径下模型常跳过 aggregate_knowledge/synthesize_sources 直接调
+    写作工具；此时 web_search_knowledge / wikipedia_search / mediawiki_search
+    的 per-kp 结果已经躺在工作记忆里（按 kp merge 过），弃之不用会导致
+    写作工具 0 素材静默返回空 sections（线上实测 21 次空调用）。
+    """
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    for wm_key, item_key in (
+        ("web_search_knowledge", "web_search"),
+        ("wikipedia_search", "wikipedia"),
+        ("mediawiki_search", "mediawiki"),
+    ):
+        blob = ctx.working_memory.get(wm_key)
+        if not isinstance(blob, dict):
+            continue
+        entries = blob.get("items") if isinstance(blob.get("items"), list) else []
+        for it in entries:
+            if not isinstance(it, dict):
+                continue
+            kp = str(it.get("knowledge_point") or "").strip()
+            if not kp:
+                continue
+            entry = merged.setdefault(kp, {"knowledge_point": kp})
+            prev = entry.get(item_key)
+            # 保留已有非空检索结果，避免后续空结果覆盖。
+            if isinstance(prev, dict) and prev.get("results"):
+                continue
+            entry[item_key] = dict(it)
+    return list(merged.values())
+
+
 def _heuristic_knowledge_type(kp: str) -> str:
     s = (kp or "").strip()
     if not s:
@@ -624,6 +658,8 @@ class StudyMaterialGenerationToolsMixin:
         if not items_in:
             items_in = synthesized.get("items") if isinstance(synthesized.get("items"), list) else []
             items_in = [x for x in items_in if isinstance(x, dict)]
+        if not items_in:
+            items_in = _items_from_search_memory(ctx)
 
         study_opts = ctx.working_memory.get("study_options")
         study_opts = dict(study_opts) if isinstance(study_opts, dict) else {}
@@ -635,10 +671,7 @@ class StudyMaterialGenerationToolsMixin:
         if len(requirements) > 600:
             requirements = requirements[:599].rstrip() + "…"
 
-        requested = args.get("knowledge_points")
-        if isinstance(requested, list) and requested:
-            wanted = {str(x or "").strip() for x in requested if str(x or "").strip()}
-            items_in = [x for x in items_in if str(x.get("knowledge_point") or "").strip() in wanted]
+        # requested 过滤推迟到所有素材回退（含 source_briefs/source_facts）之后统一应用。
 
         max_points = max(1, min(int(args.get("max_points") or 8), 15))
         max_web_results = max(3, min(int(args.get("max_web_results") or 8), 25))
@@ -709,6 +742,22 @@ class StudyMaterialGenerationToolsMixin:
             items_from_briefs = [{"knowledge_point": kp} for kp in source_briefs.keys() if str(kp or "").strip()]
             items_from_facts = [{"knowledge_point": kp} for kp in source_facts.keys() if str(kp or "").strip()]
             items_in = items_from_briefs or items_from_facts
+
+        # requested 过滤统一落在所有素材回退之后（此前在回退前过滤，会把
+        # briefs/facts 回退的 kp 一并误杀）。
+        requested = args.get("knowledge_points")
+        if isinstance(requested, list) and requested:
+            wanted = {str(x or "").strip() for x in requested if str(x or "").strip()}
+            items_in = [x for x in items_in if str(x.get("knowledge_point") or "").strip() in wanted]
+
+        if not items_in:
+            # 诚实失败：0 素材时静默返回空 sections 会让上层误以为写作成功
+            # （线上实测 ReAct 连续 21 次 6ms 空调用后产出空壳档案）。
+            raise RuntimeError(
+                "generate_study_material 缺少可用检索素材：请先按知识点调用 "
+                "web_search_knowledge / wikipedia_search（或用 aggregate_knowledge / "
+                "synthesize_sources 汇总）后再写作"
+            )
         outlines = ctx.working_memory.get("outlines")
         outlines = dict(outlines) if isinstance(outlines, dict) else {}
         knowledge_types = ctx.working_memory.get("knowledge_types")
@@ -1004,21 +1053,26 @@ class StudyMaterialGenerationToolsMixin:
                         'Output strict JSON: {"passed": bool, "issues": [string], "suggestions": [string]}.',
                     ],
                 }
-                raw = await self._call_llm_text(
-                    messages=[
-                        {"role": "system", "content": _section_reviewer_system_prompt()},
-                        {"role": "user", "content": json.dumps(review_payload, ensure_ascii=False)},
-                    ],
-                    model=writer_model,
-                    temperature=0.1,
-                    max_tokens=900,
-                    response_format={"type": "json_object"},
-                    raise_on_fail=strict_llm,
-                )
-                obj = self._extract_json_obj(str(raw or ""))
-                if strict_llm and not obj:
-                    raise RuntimeError(f"writer_review_failed: invalid_json knowledge_point={kp}")
+                obj: Dict[str, Any] = {}
+                for _attempt in range(2):
+                    raw = await self._call_llm_text(
+                        messages=[
+                            {"role": "system", "content": _section_reviewer_system_prompt()},
+                            {"role": "user", "content": json.dumps(review_payload, ensure_ascii=False)},
+                        ],
+                        model=writer_model,
+                        temperature=0.1,
+                        max_tokens=900,
+                        response_format={"type": "json_object"},
+                        raise_on_fail=strict_llm,
+                    )
+                    obj = self._extract_json_obj(str(raw or ""))
+                    if obj:
+                        break
                 if not obj:
+                    # 审阅 JSON 偶发解析失败（推理模型截断/围栏输出）只降级为启发式通过，
+                    # 不再上升为整跑致命错误——单 kp 的审阅 flake 不应击沉整条生成管线。
+                    # strict_llm 仍约束 LLM 调用本身（传输/配置错误照常抛出）。
                     return {"passed": True, "issues": [], "suggestions": [], "source": "invalid_json_fallback"}
                 return {
                     "passed": bool(obj.get("passed")) if "passed" in obj else True,

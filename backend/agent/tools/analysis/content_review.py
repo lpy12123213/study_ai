@@ -4,10 +4,13 @@ import json
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.logging_utils import get_logger
 from backend.core.text_lint import lint_text
 from backend.generation.study_materials.coverage import evaluate_kp_dimensions, split_sections_by_kp
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
+
+logger = get_logger(__name__)
 
 
 def _content_review_system_prompt() -> str:
@@ -277,10 +280,14 @@ class ContentReviewToolsMixin:
                 "4. 结构清晰：保持原有章节层次，必要时可微调段落顺序以增强连贯性。",
                 "5. 表述严谨：对不确定内容使用'可能/通常/在某些情况下'等限定词。",
                 "6. Formatting: keep Markdown syntax correct and preserve complete code-block, formula, and list formatting.",
-                "Output the complete revised Markdown document directly. Do not output JSON or add explanations."
+                "Output the complete revised Markdown document directly. Do not output JSON or add explanations.",
             ),
             "markdown": markdown,
         }
+        input_chars = len(markdown)
+        # 输出预算随原稿长度放大：全文修订 8k token 对长文档必然截断
+        # （实测 8 知识点档案四轮 revise 后被逐轮截短到只剩 1 节）。
+        dyn_max_tokens = max(8000, min(int(input_chars * 1.6), 64000))
         text = await self._call_llm_text(
             messages=[
                 {"role": "system", "content": _markdown_revision_system_prompt()},
@@ -288,10 +295,17 @@ class ContentReviewToolsMixin:
             ],
             model=self.config.planner_model,
             temperature=0.2,
-            max_tokens=8000,
+            max_tokens=dyn_max_tokens,
         )
         revised = (text or "").strip()
-        if revised:
+        # 长度护栏：修订稿短于原稿 70% 基本是输出被截断或过度压缩，接受它会
+        # 把完整档案改写成残稿——宁可保留原稿并把问题留到下一轮。
+        if revised and len(revised) >= int(input_chars * 0.7):
             ctx.working_memory["markdown"] = revised
             return revised
+        if revised:
+            logger.warning(
+                "revise_markdown_rejected_suspicious_shrink",
+                extra={"input_chars": input_chars, "revised_chars": len(revised)},
+            )
         return markdown

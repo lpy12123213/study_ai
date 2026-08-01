@@ -176,9 +176,11 @@ async def maybe_handle_step_failure(
         "split_knowledge_points",
         "review_knowledge_points",
         "generate_outline",
-        "generate_study_material",
         "assemble_study_archive",
     }
+    # generate_study_material 刻意不在 fatal_tools：ReAct 按知识点逐个调用，
+    # 单 kp 失败应让其余 kp 与 assemble 继续（空小节会在档案里诚实标注），
+    # 而不是整跑中止——此前一次审阅 JSON flake 就会葬送全部已写内容。
     non_fatal_llm_tools = {"refine_latex", "compile_latex_to_pdf"}
 
     if tool_name in fatal_tools or (strict_llm and is_llm_error and tool_name not in non_fatal_llm_tools):

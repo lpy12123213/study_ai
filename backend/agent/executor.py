@@ -197,6 +197,21 @@ class Executor:
             timeout_s = float(API_TIMEOUT or 120)
         timeout_s = max(30.0, min(timeout_s, 60.0 * 30.0))  # clamp to [30s, 30m]
 
+        # Study-material section writing fans out several long LLM calls per knowledge
+        # point (draft → review → revise × rounds + continuations); the generic budget
+        # was routinely exceeded on deep/research presets（实测一次 legacy 运行连续
+        # 14 次 240s 硬超时）, so give the writer stage a latex-style long budget.
+        if tool == "generate_study_material":
+            write_timeout_raw = os.getenv("STUDY_MATERIALS_WRITE_STEP_TIMEOUT_S") or ""
+            try:
+                write_timeout_s = float(write_timeout_raw) if write_timeout_raw.strip() else 0.0
+            except (TypeError, ValueError):
+                write_timeout_s = 0.0
+            if write_timeout_s <= 0:
+                write_timeout_s = 60.0 * 20.0
+            write_timeout_s = max(60.0 * 5.0, min(write_timeout_s, 60.0 * 30.0))
+            timeout_s = max(timeout_s, write_timeout_s)
+
         # LaTeX export pipeline can involve multiple long LLM calls (chunking + continuations).
         if tool in {"convert_markdown_to_latex", "refine_latex"}:
             latex_step_timeout_raw = os.getenv("STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S") or ""

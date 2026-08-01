@@ -720,6 +720,11 @@ class AgentCore:
             )
             archive_path = resolved["archive_path"]
             markdown = resolved["markdown"]
+            # done.material.markdown 必须是真实成稿（空时保持空串）：orchestrator 据此
+            # 区分"真实归档产出"与"全部写作失败"（empty_material），不能用占位稿冒充。
+            real_markdown = results.artifacts.get("markdown") or ctx.working_memory.get("markdown") or ""
+            if not isinstance(real_markdown, str):
+                real_markdown = ""
 
             try:
                 semantic_timeout_s = float(os.getenv("AGENT_SEMANTIC_UPSERT_TIMEOUT_S") or "3.0")
@@ -760,6 +765,7 @@ class AgentCore:
                 {
                     "material": {
                         "topic": user_input,
+                        "markdown": real_markdown,
                         "archive_path": archive_path,
                         "md_url": md_url,
                         "md_filename": md_filename,
