@@ -68,6 +68,14 @@ python -m backend.evals.study_materials.runner --case all --llm-judge --check-li
 | `french_revolution_causes` | 世界历史 | standard | 多因素归因（反单一归因陷阱）、1788 歉收、中英文多源交叉 |
 | `gradient_descent_variants` | 机器学习 | deep | 更新公式、偏差修正、学习率调度、"Adam 总是更优"陷阱 |
 
+## 第二批用例
+
+| 用例 | 学科 | preset | 考察点 |
+|---|---|---|---|
+| `eigen_decomposition` | 线性代数 | deep | 对角化判定、代数/几何重数辨析、"所有矩阵可对角化"陷阱、谱定理 |
+| `photosynthesis` | 生物学 | standard | O₂ 来自水光解（非 CO₂）、暗反应间接需光、C3/C4/CAM 与光呼吸 |
+| `bayes_medical_screening` | 概率论 | standard | 基础概率谬误、灵敏度 ≠ 阳性预测值、低患病率下假阳性占多数 |
+
 用例事实点均锚定学术来源（`source_urls`：Wikipedia/RFC/Nobel Prize/Nature 等），
 编写时已逐条核实（RFC 5681/6582/8312、Komor 2016、Anzalone 2019、1788 歉收等）。
 
@@ -100,6 +108,22 @@ python -m backend.evals.study_materials.runner --case all --llm-judge --check-li
   SSE 裁剪大 tool_result 导致来源统计漏计（改由 `task_info.search_summary_by_kp` 补全）；
   空壳骨架靠标题/目录的 query 回显在 K 维度蹭分（知识判定改为剥离标题与目录后的正文）。
   复评已落盘运行用 `--regrade <run_dir>`（不重新生成），成稿缺失时自动回退 `md_url` 下载。
+
+- 2026-08-01：基线暴露的生成缺陷修复后复跑（分支 `feat/study-materials-benchmark`）：
+
+  | 模型 | 用例 | 总分 | 说明 |
+  |---|---|---|---|
+  | deepseek-v4-pro | tcp_congestion_control | **44.9** | 五处缺陷修复后首次真实成稿 |
+  | deepseek-v4-pro | lebesgue_integral | **36.8** | 同上 |
+  | deepseek-v4-flash | tcp_congestion_control | 20.0 | 受修订截断缺陷污染的中间结果（成稿被 revise 截短） |
+
+  修复的缺陷（详见 `backend/tests/test_study_materials_write_path_fixes.py` 回归）：
+  写作 240s 超时预算、直写路径 0 素材静默成功、审阅 JSON flake 判死整跑、
+  done 不携成稿误判 empty_material、revise_markdown 截断（输出预算按原稿放大 + 70% 长度护栏）。
+
+  运维注意：多进程共享同一 sqlite 库时，任一进程启动（含 `--reload` 重载、
+  `TestClient(create_app())` 测试）都会触发 `restart_recovery` 把 running 任务标记为
+  `server_restarted` 杀掉——benchmark 运行期间不要并行跑测试套件或重启同库服务。
 
 ## 已知边界（后续扩展）
 
