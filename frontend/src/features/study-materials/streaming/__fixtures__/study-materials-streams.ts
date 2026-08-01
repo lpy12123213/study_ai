@@ -352,6 +352,140 @@ export const degradedRevisionStream: StudyMaterialsWireEvent[] = [
   },
 ];
 
+/**
+ * 3 个知识点并行子代理的带标事件流：
+ * subagent_start/end 携带 subagent_id / index / total / kind，
+ * 子代理内 tool_call/tool_result 注入 subagent_id + knowledge_point。
+ */
+export const parallelTaggedStream: StudyMaterialsWireEvent[] = [
+  {
+    taskId: "materials-parallel-1",
+    seq: 1,
+    type: "task_started",
+    data: { taskId: "materials-parallel-1", query: "光合作用", status: "running" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 2,
+    type: "workflow_stage",
+    data: { stage: "research", last_successful_stage: "plan" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 3,
+    type: "subagent_start",
+    data: { knowledge_point: "光反应", subagent_id: "sa-1", index: 1, total: 3, kind: "knowledge_research" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 4,
+    type: "subagent_start",
+    data: { knowledge_point: "暗反应", subagent_id: "sa-2", index: 2, total: 3, kind: "knowledge_research" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 5,
+    type: "subagent_start",
+    data: { knowledge_point: "C4 途径", subagent_id: "sa-3", index: 3, total: 3, kind: "knowledge_research" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 6,
+    type: "tool_call",
+    data: {
+      step_id: "sa1-web-1",
+      name: "web_search_knowledge",
+      subagent_id: "sa-1",
+      knowledge_point: "光反应",
+      arguments: { topic: "光合作用", knowledge_points: ["光反应"] },
+    },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 7,
+    type: "tool_call",
+    data: {
+      step_id: "sa2-web-1",
+      name: "web_search_knowledge",
+      subagent_id: "sa-2",
+      knowledge_point: "暗反应",
+      arguments: { topic: "光合作用", knowledge_points: ["暗反应"] },
+    },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 8,
+    type: "tool_result",
+    data: {
+      step_id: "sa1-web-1",
+      name: "web_search_knowledge",
+      subagent_id: "sa-1",
+      knowledge_point: "光反应",
+      success: true,
+      elapsed_ms: 1200,
+      output: { results: [{ title: "光反应的机理", url: "https://example.edu/light" }] },
+    },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 9,
+    type: "tool_result",
+    data: {
+      step_id: "sa2-web-1",
+      name: "web_search_knowledge",
+      subagent_id: "sa-2",
+      knowledge_point: "暗反应",
+      success: true,
+      elapsed_ms: 900,
+      output: { results: [{ title: "暗反应的卡尔文循环", url: "https://example.edu/calvin" }] },
+    },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 10,
+    type: "tool_call",
+    data: {
+      step_id: "sa3-web-1",
+      name: "web_search_knowledge",
+      subagent_id: "sa-3",
+      knowledge_point: "C4 途径",
+      arguments: { topic: "光合作用", knowledge_points: ["C4 途径"] },
+    },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 11,
+    type: "tool_result",
+    data: {
+      step_id: "sa3-web-1",
+      name: "web_search_knowledge",
+      subagent_id: "sa-3",
+      knowledge_point: "C4 途径",
+      success: true,
+      elapsed_ms: 1500,
+      output: { results: [{ title: "C4 植物解剖学", url: "https://example.edu/c4" }] },
+    },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 12,
+    type: "subagent_end",
+    data: { knowledge_point: "光反应", subagent_id: "sa-1", index: 1, total: 3, kind: "knowledge_research" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 13,
+    type: "subagent_end",
+    data: { knowledge_point: "暗反应", subagent_id: "sa-2", index: 2, total: 3, kind: "knowledge_research" },
+  },
+  {
+    taskId: "materials-parallel-1",
+    seq: 14,
+    type: "subagent_end",
+    data: { knowledge_point: "C4 途径", subagent_id: "sa-3", index: 3, total: 3, kind: "knowledge_research" },
+  },
+];
+
 /** 检索服务故障：research_tool_outage 恢复码与质量门文案必须区分。 */
 export const researchOutageStream: StudyMaterialsWireEvent[] = [
   {

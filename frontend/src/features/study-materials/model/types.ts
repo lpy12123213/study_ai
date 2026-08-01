@@ -53,6 +53,14 @@ export interface StudyMaterialsToolView extends ToolStepView {
 export interface StudyMaterialsKnowledgePointView {
   title: string;
   status: "running" | "done" | "error";
+  /** 带 subagent_id 的并行子代理才持有；旧事件（仅 knowledge_point）不产出该字段。 */
+  subagentId?: string;
+  index?: number;
+  total?: number;
+  /** 子代理类型（knowledge_research / export）。 */
+  agentKind?: string;
+  /** 子代理内的嵌套工具时间线（按 subagent_id 归因的 tool_call/tool_result）。 */
+  steps?: ToolStepView[];
 }
 
 export interface NormalizedStudyResult {

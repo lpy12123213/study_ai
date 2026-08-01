@@ -6,6 +6,7 @@ import type {
 import type { StudyMaterialsStreamEvent } from "../streaming/contract";
 import type {
   NormalizedStudyResult,
+  StudyMaterialsKnowledgePointView,
   StudyMaterialsPreviousResult,
   StudyMaterialsProjection,
   StudyMaterialsRecoveryView,
@@ -50,6 +51,9 @@ export const STUDY_MATERIALS_STAGES: ReadonlyArray<{
 }> = STUDY_STAGE_ORDER.map((id) => ({ id, label: STUDY_STAGE_LABELS[id] }));
 
 const STAGE_INDEX = new Map(STUDY_MATERIALS_STAGES.map((stage, index) => [stage.id, index]));
+
+/** 单个知识点条目的嵌套 steps 上限：超出丢弃最旧、保留最新（与 tasks store MAX_EVENTS 截尾语义一致）。 */
+const MAX_KP_STEPS = 50;
 
 export function inferStudyMaterialsStage(toolName: string): StudyMaterialsStageId | undefined {
   return inferStageFromTool(toolName) || undefined;
@@ -230,6 +234,75 @@ function patchFlatTool(
     : [...tools, next];
 }
 
+type SubagentToolEvent = Extract<StudyMaterialsStreamEvent, { kind: "tool_call" | "tool_result" }>;
+
+/**
+ * 子代理内的嵌套工具步骤：镜像扁平 tool_result 构造（displayName/summary/耗时），
+ * iteration 无阶段意义，固定为 0（ToolStep 渲染不依赖它）。
+ */
+function buildKpStep(
+  ev: SubagentToolEvent,
+  prior: ToolStepView | undefined,
+  at: number,
+): ToolStepView {
+  const name = ev.kind === "tool_result" ? (ev.name ?? prior?.name ?? "") : ev.name;
+  const displayName = ev.title ?? prior?.displayName ?? studyToolDisplayName(name);
+  if (ev.kind === "tool_call") {
+    return {
+      id: ev.stepId,
+      iteration: 0,
+      name,
+      displayName,
+      intent: studyToolIntent(name, ev.arguments),
+      status: "running",
+      arguments: ev.arguments,
+      observedStartAt: at,
+    };
+  }
+  return {
+    id: ev.stepId,
+    iteration: 0,
+    name,
+    displayName,
+    ...(prior?.intent ? { intent: prior.intent } : {}),
+    status: ev.success ? "success" : "error",
+    ...(prior?.arguments !== undefined ? { arguments: prior.arguments } : {}),
+    result: ev.result,
+    summary: ev.success ? summarizeStudyToolResult(name, ev.result) : ev.error ?? "执行失败",
+    observedStartAt: prior?.observedStartAt ?? at,
+    observedResultAt: at,
+    ...(ev.elapsedMs !== undefined ? { serverDurationMs: ev.elapsedMs } : {}),
+  };
+}
+
+/** 按 subagent_id 把嵌套工具步骤挂到对应知识点条目（无匹配条目时原样返回）。 */
+function patchKpSteps(
+  kpItems: StudyMaterialsKnowledgePointView[],
+  subagentId: string,
+  stepId: string,
+  build: (prior: ToolStepView | undefined) => ToolStepView,
+): StudyMaterialsKnowledgePointView[] {
+  return kpItems.map((item) => {
+    if (item.subagentId !== subagentId) return item;
+    const prior = item.steps?.find((step) => step.id === stepId);
+    const step = build(prior);
+    return {
+      ...item,
+      steps: prior
+        ? (item.steps ?? []).map((existing) => (existing.id === stepId ? step : existing))
+        : [...(item.steps ?? []).slice(-(MAX_KP_STEPS - 1)), step],
+    };
+  });
+}
+
+/** 子代理条目匹配：优先 subagentId，缺省回退 knowledge_point 标题。 */
+function matchKpItem(
+  item: StudyMaterialsKnowledgePointView,
+  event: Extract<StudyMaterialsStreamEvent, { kind: "subagent_start" | "subagent_end" }>,
+): boolean {
+  return event.subagentId ? item.subagentId === event.subagentId : item.title === event.knowledgePoint;
+}
+
 function markActiveTools(
   turn: StudyMaterialsTurnView,
   status: "error" | "interrupted",
@@ -255,6 +328,18 @@ function markActiveTools(
         completedAt: iteration.completedAt ?? at,
       };
     }),
+    kpItems: turn.kpItems.map((item) =>
+      item.steps && item.steps.length > 0
+        ? {
+            ...item,
+            steps: item.steps.map((step) =>
+              step.status === "running" || step.status === "queued"
+                ? { ...step, status, observedResultAt: step.observedResultAt ?? at }
+                : step,
+            ),
+          }
+        : item,
+    ),
   };
 }
 
@@ -286,6 +371,18 @@ function markComplete(state: StudyMaterialsProjection, at: number): StudyMateria
       tool.status === "running" || tool.status === "queued"
         ? { ...tool, status: "success", observedResultAt: tool.observedResultAt ?? at }
         : tool,
+    ),
+    kpItems: state.turn.kpItems.map((item) =>
+      item.steps && item.steps.length > 0
+        ? {
+            ...item,
+            steps: item.steps.map((step) =>
+              step.status === "running" || step.status === "queued"
+                ? { ...step, status: "success", observedResultAt: step.observedResultAt ?? at }
+                : step,
+            ),
+          }
+        : item,
     ),
   };
   const reachedStages = new Set<StudyStageKey>(turn.tools.map((tool) => tool.stage));
@@ -422,10 +519,16 @@ function applyEvent(
         };
       });
       const flatTool: StudyMaterialsToolView = { ...tool, stage };
+      const kpItems = event.subagentId
+        ? patchKpSteps(staged.turn.kpItems, event.subagentId, event.stepId, (prior) =>
+            buildKpStep(event, prior, at),
+          )
+        : staged.turn.kpItems;
       return {
         ...staged,
         turn: {
           ...turn,
+          kpItems,
           tools: patchFlatTool(staged.turn.tools, event.stepId, () => flatTool),
         },
       };
@@ -487,7 +590,12 @@ function applyEvent(
           : {}),
         stage,
       }));
-      return { ...staged, stages, turn: { ...turn, tools: flatTools } };
+      const kpItems = event.subagentId
+        ? patchKpSteps(staged.turn.kpItems, event.subagentId, event.stepId, (prior) =>
+            buildKpStep(event, prior, at),
+          )
+        : staged.turn.kpItems;
+      return { ...staged, stages, turn: { ...turn, kpItems, tools: flatTools } };
     }
 
     case "text_snapshot":
@@ -535,13 +643,27 @@ function applyEvent(
 
     case "subagent_start": {
       const staged = setCurrentStage(state, "research");
-      const prior = staged.turn.kpItems.find((item) => item.title === event.knowledgePoint);
-      const kpItems = prior
-        ? staged.turn.kpItems.map((item) =>
-            item.title === event.knowledgePoint ? { ...item, status: "running" as const } : item,
-          )
-        : [...staged.turn.kpItems, { title: event.knowledgePoint, status: "running" as const }];
-      return { ...staged, turn: { ...staged.turn, kpItems } };
+      const prior = staged.turn.kpItems.find((item) => matchKpItem(item, event));
+      if (prior) {
+        // 同一 kp/subagentId 再次 start（重规划/多 foreach 块复用 id）视为新一轮：清空嵌套 steps、状态归 running。
+        const kpItems = staged.turn.kpItems.map((item) =>
+          matchKpItem(item, event)
+            ? { ...item, status: "running" as const, ...(item.steps ? { steps: [] } : {}) }
+            : item,
+        );
+        return { ...staged, turn: { ...staged.turn, kpItems } };
+      }
+      const item: StudyMaterialsKnowledgePointView = {
+        title: event.knowledgePoint,
+        status: "running",
+        ...(event.subagentId ? { subagentId: event.subagentId } : {}),
+        ...(event.index !== undefined ? { index: event.index } : {}),
+        ...(event.total !== undefined ? { total: event.total } : {}),
+        ...(event.agentKind ? { agentKind: event.agentKind } : {}),
+        // 嵌套工具时间线仅在带 subagent_id 的（并行）子代理上建立。
+        ...(event.subagentId ? { steps: [] } : {}),
+      };
+      return { ...staged, turn: { ...staged.turn, kpItems: [...staged.turn.kpItems, item] } };
     }
 
     case "subagent_end":
@@ -550,7 +672,7 @@ function applyEvent(
         turn: {
           ...state.turn,
           kpItems: state.turn.kpItems.map((item) =>
-            item.title === event.knowledgePoint ? { ...item, status: "done" } : item,
+            matchKpItem(item, event) ? { ...item, status: "done" } : item,
           ),
         },
       };

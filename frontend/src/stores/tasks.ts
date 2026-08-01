@@ -8,6 +8,27 @@ import type { TaskEvent, TaskStatus, TaskStep } from "@/shared/api/types";
 
 const MAX_EVENTS = 300;
 const MAX_TEXT = 200_000;
+/** 单个子代理 record 的 steps 上限：超出丢弃最旧、保留最新（与 MAX_EVENTS 截尾语义一致，防长任务卡片无限增长）。 */
+const MAX_SUBAGENT_STEPS = 50;
+
+export interface SubAgentStep {
+  stepId: string;
+  name: string;
+  title?: string;
+  status: string;
+  success?: boolean;
+  summary?: string;
+  elapsedMs?: number;
+}
+
+export interface SubAgentRecord {
+  kp: string;
+  kind?: string;
+  index?: number;
+  total?: number;
+  status: "running" | "done" | "error";
+  steps: SubAgentStep[];
+}
 
 export interface ActiveTask {
   taskId: string;
@@ -18,6 +39,8 @@ export interface ActiveTask {
   steps: TaskStep[];
   /** 近期事件（封顶 MAX_EVENTS），供时间线展示 */
   events: TaskEvent[];
+  /** 子代理执行分组（SubAgentPanel 数据源）；旧事件无字段时保持空对象。 */
+  subagents?: Record<string, SubAgentRecord>;
   /** 增量文本（text_delta / answer_delta 追加） */
   text: string;
   /** 推理流（reasoning_delta / thinking 追加） */
@@ -54,6 +77,7 @@ function emptyTask(taskId: string, meta?: { type?: string; title?: string }): Ac
     progress: 0,
     steps: [],
     events: [],
+    subagents: {},
     text: "",
     reasoning: "",
     statusText: "",
@@ -63,6 +87,23 @@ function emptyTask(taskId: string, meta?: { type?: string; title?: string }): Ac
     lastSeq: 0,
     streaming: false,
   };
+}
+
+/** 子代理事件的 data 辅助（defensive parse）。 */
+function subagentIdOf(d: Record<string, unknown>): string | undefined {
+  return typeof d.subagent_id === "string" && d.subagent_id ? d.subagent_id : undefined;
+}
+
+function subagentStepId(d: Record<string, unknown>): string | undefined {
+  const id =
+    typeof d.step_id === "string" && d.step_id
+      ? d.step_id
+      : typeof d.id === "string" && d.id
+        ? d.id
+        : typeof d.tool_use_id === "string" && d.tool_use_id
+          ? d.tool_use_id
+          : undefined;
+  return id;
 }
 
 export const useTasksStore = create<TasksState>()((set, get) => ({
@@ -139,6 +180,80 @@ export const useTasksStore = create<TasksState>()((set, get) => ({
           break;
         }
         case "warning": {
+          break;
+        }
+        case "subagent_start":
+        case "subagent_end": {
+          // 无 subagent_id 的旧事件（含 lesson_plan 形状）降级为现状：不建 SubAgentRecord。
+          const subagentId = subagentIdOf(d);
+          if (!subagentId) break;
+          const kp =
+            (typeof d.knowledge_point === "string" && d.knowledge_point ? d.knowledge_point : "") ||
+            (typeof d.title === "string" && d.title ? d.title : "");
+          const prior = next.subagents?.[subagentId];
+          const record: SubAgentRecord = {
+            kp: kp || prior?.kp || "",
+            ...(typeof d.kind === "string" && d.kind ? { kind: d.kind } : prior?.kind ? { kind: prior.kind } : {}),
+            ...(typeof d.index === "number" ? { index: d.index } : prior?.index !== undefined ? { index: prior.index } : {}),
+            ...(typeof d.total === "number" ? { total: d.total } : prior?.total !== undefined ? { total: prior.total } : {}),
+            status: ev.type === "subagent_start" ? "running" : "done",
+            // 同一 subagent_id 再次 start（重规划/多 foreach 块复用 id）视为新一轮：steps 清空，而非向旧 record 追加。
+            steps: ev.type === "subagent_start" ? [] : (prior?.steps ?? []),
+          };
+          next.subagents = { ...(next.subagents ?? {}), [subagentId]: record };
+          break;
+        }
+        case "tool_call": {
+          const subagentId = subagentIdOf(d);
+          if (!subagentId || !next.subagents?.[subagentId]) break;
+          const stepId = subagentStepId(d);
+          if (!stepId) break;
+          const record = next.subagents[subagentId];
+          // 不可变替换 record（record 级选择器依赖引用变化）；steps 封顶，超出丢弃最旧。
+          const steps: SubAgentStep[] = [
+            ...record.steps.slice(-(MAX_SUBAGENT_STEPS - 1)),
+            {
+              stepId,
+              name: typeof d.name === "string" ? d.name : "",
+              ...(typeof d.title === "string" && d.title ? { title: d.title } : {}),
+              status: "running",
+            },
+          ];
+          next.subagents = { ...next.subagents, [subagentId]: { ...record, steps } };
+          break;
+        }
+        case "tool_result": {
+          const subagentId = subagentIdOf(d);
+          if (!subagentId || !next.subagents?.[subagentId]) break;
+          const stepId = subagentStepId(d);
+          if (!stepId) break;
+          const record = next.subagents[subagentId];
+          const idx = record.steps.findIndex((step) => step.stepId === stepId);
+          const success =
+            typeof d.success === "boolean" ? d.success : typeof d.is_error === "boolean" ? !d.is_error : false;
+          const err =
+            typeof d.error === "string" && d.error
+              ? d.error
+              : d.error && typeof d.error === "object"
+                ? String((d.error as { message?: unknown }).message ?? "")
+                : "";
+          const patch: SubAgentStep = {
+            stepId,
+            name: record.steps[idx]?.name ?? (typeof d.name === "string" ? d.name : ""),
+            ...((record.steps[idx]?.title ?? (typeof d.title === "string" ? d.title : ""))
+              ? { title: record.steps[idx]?.title ?? (typeof d.title === "string" ? d.title : "") }
+              : {}),
+            status: success ? "success" : "error",
+            success,
+            summary: err || (success ? "执行完成" : "执行失败"),
+            ...(typeof d.elapsed_ms === "number" ? { elapsedMs: d.elapsed_ms } : {}),
+          };
+          // 同 tool_call：不可变替换 record；迟到结果补建 step 时同样封顶截尾。
+          const steps =
+            idx >= 0
+              ? record.steps.map((step, i) => (i === idx ? { ...step, ...patch } : step))
+              : [...record.steps.slice(-(MAX_SUBAGENT_STEPS - 1)), patch];
+          next.subagents = { ...next.subagents, [subagentId]: { ...record, steps } };
           break;
         }
         default:

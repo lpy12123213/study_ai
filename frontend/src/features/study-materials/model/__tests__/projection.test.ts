@@ -15,7 +15,11 @@ import {
   selectTimelineFoldSummary,
   selectTimelineGroups,
 } from "../selectors";
-import { degradedRevisionStream, type StudyMaterialsWireEvent } from "../../streaming/__fixtures__/study-materials-streams";
+import {
+  degradedRevisionStream,
+  parallelTaggedStream,
+  type StudyMaterialsWireEvent,
+} from "../../streaming/__fixtures__/study-materials-streams";
 
 interface WireEvent {
   type: string;
@@ -238,6 +242,105 @@ describe("study projection：中断与失败", () => {
     expect(selectStatusLine(state.turn)).toBe("规划学习路径…");
     const noStatus = project(partialStream.slice(2));
     expect(selectStatusLine(noStatus.turn)).toContain("联网搜索相关学习资料");
+  });
+});
+
+describe("study projection：并行打标子代理", () => {
+  it("kpItems 携带 subagentId/index/total，嵌套 steps 按 subagent_id 归因不串", () => {
+    // 截至 sa-3 tool_result（三个子代理都未 end），全部仍 running。
+    const state = projectWire(parallelTaggedStream.slice(0, 11));
+    expect(state.turn.kpItems).toHaveLength(3);
+    const sa1 = state.turn.kpItems.find((item) => item.subagentId === "sa-1");
+    expect(sa1).toMatchObject({ title: "光反应", status: "running", index: 1, total: 3 });
+    expect(sa1?.steps).toHaveLength(1);
+    expect(sa1?.steps?.[0]).toMatchObject({ id: "sa1-web-1", name: "web_search_knowledge", status: "success" });
+    const sa2 = state.turn.kpItems.find((item) => item.subagentId === "sa-2");
+    expect(sa2?.steps?.[0]).toMatchObject({ id: "sa2-web-1", status: "success" });
+    const sa3 = state.turn.kpItems.find((item) => item.subagentId === "sa-3");
+    expect(sa3?.steps?.[0]).toMatchObject({ id: "sa3-web-1", status: "success" });
+    // 无跨 kp 泄漏：sa-1 只持有自己的步骤。
+    expect(sa1?.steps?.map((step) => step.id)).toEqual(["sa1-web-1"]);
+  });
+
+  it("subagent_end 后全部置 done", () => {
+    const state = projectWire(parallelTaggedStream);
+    expect(state.turn.kpItems.every((item) => item.status === "done")).toBe(true);
+  });
+
+  it("legacy degradedRevisionStream 仍产出 {title, status} 形状", () => {
+    const state = projectWire(degradedRevisionStream);
+    expect(state.turn.kpItems).toEqual([{ title: "定义与判定", status: "done" }]);
+  });
+
+  it("settled aborted 把嵌套 running 步骤标记 interrupted", () => {
+    // 截至 sa-3 tool_call（无对应 tool_result），该步骤仍 running。
+    const running = projectWire(parallelTaggedStream.slice(0, 10));
+    expect(running.turn.kpItems.find((item) => item.subagentId === "sa-3")?.steps?.[0]?.status).toBe("running");
+    const aborted = settle(running, "aborted");
+    expect(aborted.turn.kpItems.find((item) => item.subagentId === "sa-3")?.steps?.[0]?.status).toBe("interrupted");
+  });
+
+  it("error 事件把嵌套 running 步骤标记 error", () => {
+    const running = projectWire(parallelTaggedStream.slice(0, 10));
+    const failed = studyProjectionReducer(running, {
+      type: "event",
+      event: { kind: "error", message: "llm_request_failed" },
+      at: 100_000,
+    });
+    expect(failed.turn.kpItems.find((item) => item.subagentId === "sa-3")?.steps?.[0]?.status).toBe("error");
+  });
+
+  it("未知 subagentId 的 tool_call 不污染任何 kp 的 steps，仍进扁平 tools 管线", () => {
+    const state = projectWire([
+      ...parallelTaggedStream.slice(0, 3),
+      {
+        type: "tool_call",
+        seq: 4,
+        data: { step_id: "ghost-1", name: "web_search_knowledge", subagent_id: "sa-ghost", knowledge_point: "不存在" },
+      },
+    ]);
+    expect(state.turn.kpItems.find((item) => item.subagentId === "sa-1")?.steps).toEqual([]);
+    expect(state.turn.tools.some((tool) => tool.id === "ghost-1")).toBe(true);
+  });
+
+  it("同一 subagentId 再次 subagent_start：嵌套 steps 清空、状态归 running（契约锁定）", () => {
+    const state = projectWire([
+      ...parallelTaggedStream.slice(0, 9), // sa-1 已有 1 个成功 step
+      { type: "subagent_end", seq: 10, data: { knowledge_point: "光反应", subagent_id: "sa-1", index: 1, total: 3 } },
+      // 重规划复用同一 subagent_id：新一轮重置，不新建重复条目。
+      { type: "subagent_start", seq: 11, data: { knowledge_point: "光反应", subagent_id: "sa-1", index: 1, total: 3, kind: "knowledge_research" } },
+    ]);
+    const sa1 = state.turn.kpItems.find((item) => item.subagentId === "sa-1");
+    expect(sa1?.status).toBe("running");
+    expect(sa1?.steps).toEqual([]);
+    expect(state.turn.kpItems.filter((item) => item.subagentId === "sa-1")).toHaveLength(1);
+  });
+
+  it("subagent_end 后迟到的 tool_result 仍修补嵌套 step 状态", () => {
+    const state = projectWire([
+      ...parallelTaggedStream.slice(0, 8),
+      { type: "tool_call", seq: 9, data: { step_id: "sa1-web-2", name: "web_search_knowledge", subagent_id: "sa-1", knowledge_point: "光反应", arguments: {} } },
+      { type: "subagent_end", seq: 10, data: { knowledge_point: "光反应", subagent_id: "sa-1", index: 1, total: 3 } },
+      { type: "tool_result", seq: 11, data: { step_id: "sa1-web-2", name: "web_search_knowledge", subagent_id: "sa-1", success: true, elapsed_ms: 300, output: {} } },
+    ]);
+    const sa1 = state.turn.kpItems.find((item) => item.subagentId === "sa-1");
+    expect(sa1?.status).toBe("done");
+    expect(sa1?.steps?.find((step) => step.id === "sa1-web-2")).toMatchObject({ status: "success", serverDurationMs: 300 });
+  });
+
+  it("kp 嵌套 steps 超过 50 上限：丢弃最旧、保留最新", () => {
+    const state = projectWire([
+      ...parallelTaggedStream.slice(0, 3),
+      ...Array.from({ length: 55 }, (_, i) => ({
+        type: "tool_call",
+        seq: 4 + i,
+        data: { step_id: `sa1-t-${i + 1}`, name: "web_search_knowledge", subagent_id: "sa-1", knowledge_point: "光反应", arguments: {} },
+      })),
+    ]);
+    const steps = state.turn.kpItems.find((item) => item.subagentId === "sa-1")?.steps ?? [];
+    expect(steps).toHaveLength(50);
+    expect(steps[0]?.id).toBe("sa1-t-6");
+    expect(steps[49]?.id).toBe("sa1-t-55");
   });
 });
 

@@ -943,7 +943,12 @@ export function StudyMaterialsRoute() {
                           />
                         ) : null}
 
-                        {showKpBoard ? <KnowledgePointBoard board={kpBoard} /> : null}
+                        {showKpBoard ? (
+                          <KnowledgePointBoard
+                            board={kpBoard}
+                            onInspect={(tool: ToolStepView) => setInspectorToolId(tool.id)}
+                          />
+                        ) : null}
 
                         {showRevisionStrip ? (
                           <RevisionStrip

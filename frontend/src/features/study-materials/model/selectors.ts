@@ -1,4 +1,5 @@
 import type { StudyMaterialResult } from "@/shared/api/types";
+import type { ToolStepView } from "@/features/chat/model/types";
 import type {
   StudyMaterialsProjection,
   StudyMaterialsTurnView,
@@ -59,6 +60,12 @@ export interface KnowledgePointBoardItem {
   sourceCount?: number;
   sourceClasses: string[];
   failedChecks: string[];
+  /** 并行子代理归因（quality_report/服务端快照分支不产出）。 */
+  subagentId?: string;
+  index?: number;
+  total?: number;
+  /** 嵌套工具时间线；缺省时行不可展开。 */
+  steps?: ToolStepView[];
 }
 
 export interface KnowledgePointBoardView {
@@ -122,6 +129,10 @@ export function selectKnowledgePointBoard(
         key: item.title,
         title: item.title,
         status: item.status,
+        ...(item.subagentId ? { subagentId: item.subagentId } : {}),
+        ...(item.index !== undefined ? { index: item.index } : {}),
+        ...(item.total !== undefined ? { total: item.total } : {}),
+        ...(item.steps && item.steps.length > 0 ? { steps: item.steps } : {}),
         sourceClasses: [],
         failedChecks: [],
       })),

@@ -34,6 +34,7 @@ import { useTasksStore } from "@/stores/tasks";
 import { useUiStore } from "@/stores/ui";
 import { MarkdownView } from "@/components/markdown/markdown-view";
 import { TaskProgressPanel } from "@/components/task/task-progress-panel";
+import { SubAgentPanel } from "@/components/task/sub-agent-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -299,6 +300,8 @@ function TaskDetailPanel({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         <TaskProgressPanel taskId={taskId} />
+
+        <SubAgentPanel taskId={taskId} />
 
         {live?.error ? (
           <Alert variant="destructive">

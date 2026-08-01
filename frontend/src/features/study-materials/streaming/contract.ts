@@ -34,6 +34,10 @@ export type StudyMaterialsStreamEvent =
       name: string;
       title?: string;
       arguments: unknown;
+      /** 子代理内转发的工具事件：归属子代理（无此字段为主 agent 步骤）。 */
+      subagentId?: string;
+      /** 冗余知识点名，便于展示与旧逻辑兼容。 */
+      knowledgePoint?: string;
     }
   | {
       kind: "tool_result";
@@ -44,6 +48,10 @@ export type StudyMaterialsStreamEvent =
       result: unknown;
       error?: string;
       elapsedMs?: number;
+      /** 子代理内转发的工具事件：归属子代理（无此字段为主 agent 步骤）。 */
+      subagentId?: string;
+      /** 冗余知识点名，便于展示与旧逻辑兼容。 */
+      knowledgePoint?: string;
     }
   | { kind: "text_snapshot"; content: string }
   | { kind: "quality_report"; report: Record<string, unknown> }
@@ -56,8 +64,26 @@ export type StudyMaterialsStreamEvent =
       remainingAttempts?: number;
     }
   | { kind: "quality_degraded"; issues: string[]; revisionAttempts?: number }
-  | { kind: "subagent_start"; knowledgePoint: string }
-  | { kind: "subagent_end"; knowledgePoint: string }
+  | {
+      kind: "subagent_start";
+      knowledgePoint: string;
+      /** 稳定子代理 id（sa-{index} 或 sa-export）。 */
+      subagentId?: string;
+      index?: number;
+      total?: number;
+      /** 子代理类型（knowledge_research / export）；与事件判别字段区分命名。 */
+      agentKind?: string;
+    }
+  | {
+      kind: "subagent_end";
+      knowledgePoint: string;
+      /** 稳定子代理 id（sa-{index} 或 sa-export）。 */
+      subagentId?: string;
+      index?: number;
+      total?: number;
+      /** 子代理类型（knowledge_research / export）；与事件判别字段区分命名。 */
+      agentKind?: string;
+    }
   | { kind: "done"; result: StudyMaterialResult }
   | {
       kind: "error";
@@ -200,11 +226,15 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         `tool-${ev.seq || "pending"}`;
       const name = asString(data.name) ?? asString(data.tool) ?? "";
       const title = asString(data.title);
+      const subagentId = asString(data.subagent_id);
+      const knowledgePoint = asString(data.knowledge_point);
       return {
         kind: "tool_call",
         stepId,
         name,
         ...(title ? { title } : {}),
+        ...(subagentId ? { subagentId } : {}),
+        ...(knowledgePoint ? { knowledgePoint } : {}),
         arguments: data.arguments ?? data.input ?? {},
       };
     }
@@ -217,6 +247,8 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         `tool-${ev.seq || "pending"}`;
       const name = asString(data.name) ?? asString(data.tool);
       const title = asString(data.title);
+      const subagentId = asString(data.subagent_id);
+      const knowledgePoint = asString(data.knowledge_point);
       const explicitSuccess = asBoolean(data.success);
       const isError = asBoolean(data.is_error);
       const success = explicitSuccess ?? !(isError ?? false);
@@ -233,6 +265,8 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         stepId,
         ...(name ? { name } : {}),
         ...(title ? { title } : {}),
+        ...(subagentId ? { subagentId } : {}),
+        ...(knowledgePoint ? { knowledgePoint } : {}),
         success,
         result,
         ...(error ? { error } : {}),
@@ -281,9 +315,17 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
     case "subagent_end": {
       const knowledgePoint = asString(data.knowledge_point) ?? asString(data.title) ?? "";
       if (!knowledgePoint) return null;
+      const subagentId = asString(data.subagent_id);
+      const index = asNumber(data.index);
+      const total = asNumber(data.total);
+      const agentKind = asString(data.kind);
       return {
         kind: ev.type === "subagent_start" ? "subagent_start" : "subagent_end",
         knowledgePoint,
+        ...(subagentId ? { subagentId } : {}),
+        ...(index !== undefined ? { index } : {}),
+        ...(total !== undefined ? { total } : {}),
+        ...(agentKind ? { agentKind } : {}),
       };
     }
 

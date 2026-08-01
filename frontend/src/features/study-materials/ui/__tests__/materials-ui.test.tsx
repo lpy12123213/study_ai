@@ -17,6 +17,7 @@ import {
   codexSnapshotStream,
   degradedRevisionStream,
   legacyStudyMaterialsStream,
+  parallelTaggedStream,
   type StudyMaterialsWireEvent,
 } from "../../streaming/__fixtures__/study-materials-streams";
 import { KnowledgePointBoard } from "../knowledge-point-board";
@@ -148,6 +149,28 @@ describe("study-materials conversation UI", () => {
     expect(screen.getByText("网页检索")).toBeInTheDocument();
     expect(screen.getAllByText("检索证据不足（kp-1）").length).toBeGreaterThan(0);
     expect(screen.getByText(/未通过检查/)).toBeInTheDocument();
+  });
+
+  it("知识点看板：并行打标流每行展示 index/total，展开显示嵌套工具时间线", () => {
+    const state = projectWire(parallelTaggedStream);
+    renderWithProviders(<KnowledgePointBoard board={selectKnowledgePointBoard(state)} />);
+    expect(screen.getByText("光反应")).toBeInTheDocument();
+    expect(screen.getByText("暗反应")).toBeInTheDocument();
+    expect(screen.getByText("C4 途径")).toBeInTheDocument();
+    expect(screen.getByText("1/3")).toBeInTheDocument();
+    expect(screen.getByText("3/3")).toBeInTheDocument();
+    // 默认折叠：工具名不可见。
+    expect(screen.queryByText("联网搜索相关学习资料")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /展开 光反应/ }));
+    // 展开后显示 sa-1 的嵌套工具步骤（web_search_knowledge 的中文显示名）。
+    expect(screen.getByText("联网搜索相关学习资料")).toBeInTheDocument();
+  });
+
+  it("知识点看板：legacy 行（无 steps）不可展开", () => {
+    const legacy = projectWire(degradedRevisionStream.slice(0, 3));
+    renderWithProviders(<KnowledgePointBoard board={selectKnowledgePointBoard(legacy)} />);
+    expect(screen.getByText("定义与判定")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /展开/ })).not.toBeInTheDocument();
   });
 
   it("修订条：审查未通过带剩余次数，检索补充带进度", () => {
