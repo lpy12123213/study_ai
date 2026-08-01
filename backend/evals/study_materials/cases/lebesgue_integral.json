@@ -1,0 +1,111 @@
+{
+  "id": "lebesgue_integral",
+  "title": "勒贝格积分与测度论基础",
+  "query": "系统自学勒贝格积分：从测度、可测函数到单调收敛定理与控制收敛定理，并讲清它与黎曼积分的关系",
+  "subject": "数学分析",
+  "preset": "deep",
+  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "expected_knowledge_points": [
+    "测度",
+    "可测函数",
+    "勒贝格积分的定义",
+    "单调收敛定理",
+    "法图引理",
+    "控制收敛定理",
+    "黎曼积分与勒贝格积分的关系"
+  ],
+  "min_unique_sources": 12,
+  "expected_domains": ["wikipedia.org", "math.stackexchange.com", "arxiv.org"],
+  "required_facts": [
+    {
+      "id": "measure_def",
+      "description": "测度的定义：非负、空集为零、可数可加（σ-可加）",
+      "match": {"all": ["测度"], "any": ["可数可加|可列可加|σ-可加|sigma-可加"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/测度"]
+    },
+    {
+      "id": "measurable_function",
+      "description": "可测函数的定义（开集/区间原像可测）",
+      "match": {"all": ["可测函数"], "any": ["原像|逆像|水平集"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/可测函数"]
+    },
+    {
+      "id": "simple_approximation",
+      "description": "非负可测函数可用简单函数单调递增逼近",
+      "match": {"all": ["简单函数"], "any": ["逼近", "单调递增.*极限", "逐点收敛"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Simple_function"]
+    },
+    {
+      "id": "mct",
+      "description": "单调收敛定理（非负单调递增可测函数列积分与极限可换序）",
+      "match": {"all": ["单调收敛定理"], "any": ["非负", "单调递增"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/单调收敛定理"]
+    },
+    {
+      "id": "fatou",
+      "description": "法图引理（非负可测函数列积分的下极限 ≤ 下极限的积分）",
+      "match": {"any": ["法图|Fatou|法图引理"], "all": ["下极限|liminf|lim inf"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/法图引理"]
+    },
+    {
+      "id": "dct",
+      "description": "控制收敛定理（存在可积控制函数时积分与极限可换序）",
+      "match": {"all": ["控制收敛定理|支配收敛定理"], "any": ["控制函数|支配函数", "可积"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/控制收敛定理"]
+    },
+    {
+      "id": "dirichlet_function",
+      "description": "Dirichlet 函数：黎曼不可积但勒贝格可积（积分值为 0）",
+      "match": {"all": ["Dirichlet|狄利克雷|狄里克雷"], "any": ["黎曼不可积|不.*黎曼可积|黎曼积分不存在"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/狄利克雷函数"]
+    },
+    {
+      "id": "riemann_implies_lebesgue",
+      "description": "黎曼可积函数必勒贝格可积且积分值相等（勒贝格积分是推广）",
+      "match": {"any": ["黎曼可积[\\s\\S]{0,40}勒贝格可积", "推广[\\s\\S]{0,20}黎曼", "黎曼积分[\\s\\S]{0,20}推广"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/勒贝格积分"]
+    },
+    {
+      "id": "almost_everywhere",
+      "description": "“几乎处处”概念（零测集外成立）",
+      "match": {"any": ["几乎处处", "a\\.e\\.", "almost everywhere"], "all": ["零测"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/几乎处处"]
+    },
+    {
+      "id": "exchange_conditions",
+      "description": "明确指出极限与积分换序需要条件（三大收敛定理给出的充分条件）",
+      "match": {"any": ["换序[\\s\\S]{0,30}(条件|定理)", "(不能|未必|不一定)[\\s\\S]{0,20}(交换|换序)", "积分号下取极限[\\s\\S]{0,30}条件"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/控制收敛定理"]
+    }
+  ],
+  "traps": [
+    {
+      "id": "continuous_only",
+      "description": "误解：只有连续函数才可积",
+      "wrong_pattern": "(只有|仅).{0,6}连续函数才.{0,8}(可积|积分)",
+      "correct_pattern": "可测"
+    },
+    {
+      "id": "lebesgue_is_special_case",
+      "description": "误解：勒贝格积分是黎曼积分的特例（方向说反）",
+      "wrong_pattern": "勒贝格积分.{0,12}黎曼积分.{0,4}特例|黎曼积分.{0,8}更一般",
+      "correct_pattern": "推广|扩展|一般化"
+    },
+    {
+      "id": "swap_unconditional",
+      "description": "误解：极限与积分总可无条件交换",
+      "wrong_pattern": "(极限|积分).{0,6}(与|和).{0,6}(积分|极限).{0,6}(总|都|恒|任意情况下均)可(以)?(交换|换序)",
+      "correct_pattern": "条件|收敛定理|定理"
+    }
+  ],
+  "contrasts": [
+    ["黎曼积分", "勒贝格积分"],
+    ["单调收敛定理", "控制收敛定理"]
+  ],
+  "format_requirements": {
+    "key_formulas": ["\\\\int", "\\\\lim", "\\\\mu", "\\\\sum"],
+    "min_figures": 1,
+    "min_tables": 1,
+    "min_chars": 8000
+  }
+}

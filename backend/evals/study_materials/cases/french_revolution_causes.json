@@ -1,0 +1,97 @@
+{
+  "id": "french_revolution_causes",
+  "title": "法国大革命的成因",
+  "query": "自学法国大革命（1789）的成因：财政危机、社会等级制度、启蒙思想与 1788 年农业危机等多重因素如何共同作用",
+  "subject": "世界历史",
+  "preset": "standard",
+  "options": {"with_questions": false, "with_diagrams": false, "max_points": 6, "prefer_local_archive": false},
+  "expected_knowledge_points": [
+    "财政危机与三级会议",
+    "社会等级制度",
+    "启蒙思想",
+    "1788 年农业危机与粮价",
+    "美国独立战争的影响"
+  ],
+  "min_unique_sources": 8,
+  "expected_domains": ["wikipedia.org", "britannica.com", "history.com"],
+  "required_facts": [
+    {
+      "id": "fiscal_crisis",
+      "description": "王室财政危机（巨额债务，含支持美国独立战争的开销）是直接政治导火索",
+      "match": {"all": ["财政危机|财政破产|国库空虚|财政困难"], "any": ["债务|赤字|破产", "美国独立战争|援美"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
+    },
+    {
+      "id": "estates_general",
+      "description": "1789 年 5 月召开三级会议（175 年来首次）",
+      "match": {"all": ["三级会议"], "any": ["1789"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Estates-General_of_1789"]
+    },
+    {
+      "id": "three_estates",
+      "description": "三个等级：第一等级教士、第二等级贵族、第三等级（占人口绝大多数）",
+      "match": {"all": ["第三等级"], "any": ["第一等级|教士", "第二等级|贵族"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Estates_of_the_realm"]
+    },
+    {
+      "id": "enlightenment",
+      "description": "启蒙思想（卢梭、伏尔泰、孟德斯鸠等）提供了思想武器",
+      "match": {"all": ["启蒙"], "any": ["卢梭", "伏尔泰", "孟德斯鸠", "百科全书"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
+    },
+    {
+      "id": "harvest_1788",
+      "description": "1788 年农业歉收（旱灾/冰雹）与随后严冬导致粮价、面包价格暴涨",
+      "match": {"all": ["1788"], "any": ["歉收|旱灾|干旱|冰雹", "粮价|面包|粮食价格"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
+    },
+    {
+      "id": "american_influence",
+      "description": "美国独立战争的示范效应与财政连带影响",
+      "match": {"all": ["美国独立|北美独立|美利坚"], "any": ["示范|影响|启发|激励|思想", "财政|军费|债务"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
+    },
+    {
+      "id": "bastille",
+      "description": "1789 年 7 月 14 日攻占巴士底狱（革命爆发的标志）",
+      "match": {"all": ["巴士底"], "any": ["7 ?月 ?14", "1789"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Storming_of_the_Bastille"]
+    },
+    {
+      "id": "multifactor",
+      "description": "明确呈现多因素共同作用（而非单一归因）",
+      "match": {"any": ["多重因素|多因素|多种因素|共同作用|相互叠加|合力", "长期.{0,8}(原因|因素).{0,12}(短期|直接)"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
+    }
+  ],
+  "traps": [
+    {
+      "id": "single_cause",
+      "description": "误解：革命由某一个原因单独导致",
+      "wrong_pattern": "(根本|唯一|真正)原因(就是|是|在于)",
+      "correct_pattern": "多重|多因素|多种因素|共同"
+    },
+    {
+      "id": "marie_caused",
+      "description": "误解：玛丽王后的奢靡是革命的主要原因",
+      "wrong_pattern": "玛丽.{0,4}(王后|安托瓦内特|安东).{0,16}(导致|引发|造成|引起).{0,4}革命",
+      "correct_pattern": "财政|结构性|制度|多重"
+    },
+    {
+      "id": "poor_only",
+      "description": "误解：革命只是贫民/农民的暴动（忽视资产阶级与精英分裂）",
+      "wrong_pattern": "(只有|只是|仅仅是).{0,6}(贫民|农民|穷人|底层).{0,8}(发动|推动|掀起|参与).{0,4}革命",
+      "correct_pattern": "资产阶级|第三等级|市民|精英"
+    }
+  ],
+  "contrasts": [
+    ["第一等级", "第三等级"],
+    ["短期导火索", "长期结构性原因"]
+  ],
+  "format_requirements": {
+    "key_formulas": [],
+    "min_figures": 0,
+    "min_tables": 1,
+    "min_chars": 6000
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "id": "quantum_harmonic_oscillator",
+  "title": "量子谐振子",
+  "query": "系统自学量子谐振子：定态薛定谔方程求解、能级与零点能、升降算符方法、波函数性质，并与经典谐振子对比",
+  "subject": "量子力学",
+  "preset": "deep",
+  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "expected_knowledge_points": [
+    "定态薛定谔方程与谐振子势",
+    "能级与零点能",
+    "升降算符",
+    "波函数与 Hermite 多项式",
+    "与经典谐振子的对比"
+  ],
+  "min_unique_sources": 12,
+  "expected_domains": ["wikipedia.org", "phys.libretexts.org", "arxiv.org"],
+  "required_facts": [
+    {
+      "id": "energy_levels",
+      "description": "能级公式 E_n = (n + 1/2)ħω，n = 0,1,2,...",
+      "match": {"all": ["能级"], "any": ["E_n", "E_\\{n\\}", "\\\\hbar|ℏ"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/量子谐振子"]
+    },
+    {
+      "id": "equally_spaced",
+      "description": "能级等间距，间距为 ħω",
+      "match": {"any": ["等间距|间距.{0,12}(恒定|相同|相等|均匀)"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/量子谐振子"]
+    },
+    {
+      "id": "zero_point_energy",
+      "description": "零点能 E_0 = ħω/2，基态能量不为零（不确定性原理的必然结果）",
+      "match": {"all": ["零点能"], "any": ["1/2", "\\\\frac\\{1\\}\\{2\\}", "一半"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Zero-point_energy"]
+    },
+    {
+      "id": "ladder_operators",
+      "description": "升降算符（产生/湮灭算符）方法及其对易关系 [a, a†]=1",
+      "match": {"any": ["升降算符", "产生.{0,4}湮灭", "湮灭.{0,4}产生"], "all": ["对易"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Creation_and_annihilation_operators"]
+    },
+    {
+      "id": "hermite",
+      "description": "定态波函数由 Hermite 多项式 × 高斯包络给出",
+      "match": {"all": ["Hermite|厄米|埃尔米特|埃米"], "any": ["多项式", "高斯|Gauss"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/量子谐振子"]
+    },
+    {
+      "id": "schrodinger_equation",
+      "description": "定态（不含时）薛定谔方程是本征值方程 Ĥψ = Eψ",
+      "match": {"all": ["薛定谔|Schrödinger|Schrodinger"], "any": ["定态|不含时|时间无关", "本征"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/薛定谔方程"]
+    },
+    {
+      "id": "potential_form",
+      "description": "势能 V(x) = (1/2)mω²x²（抛物线势阱）",
+      "match": {"any": ["V\\(x\\)", "势能", "势阱"], "all": ["\\\\omega\\^?2|ω\\^?2|ω²", "x\\^?2|x²"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/量子谐振子"]
+    },
+    {
+      "id": "parity",
+      "description": "定态波函数有确定宇称：n 偶为偶宇称，n 奇为奇宇称",
+      "match": {"any": ["宇称|奇偶|parity"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Quantum_harmonic_oscillator"]
+    },
+    {
+      "id": "uncertainty_link",
+      "description": "零点能与不确定性原理的关系（位置和动量不能同时确定）",
+      "match": {"any": ["不确定(性)?(原理|关系)|测不准"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/不确定性原理"]
+    },
+    {
+      "id": "classical_turning_point",
+      "description": "经典谐振子在转折点附近停留时间最长（概率最大），与量子基态分布不同",
+      "match": {"all": ["经典"], "any": ["转折点.{0,20}(概率|几率|停留)", "(概率|几率).{0,20}转折点"]},
+      "source_urls": ["https://phys.libretexts.org/Bookshelves/Quantum_Mechanics"]
+    }
+  ],
+  "traps": [
+    {
+      "id": "ground_state_zero",
+      "description": "误解：基态能量为零/粒子在基态静止",
+      "wrong_pattern": "基态.{0,12}(能量)?(为|等于)?零|基态.{0,12}(粒子|振子).{0,4}静止",
+      "correct_pattern": "零点能|不为零|1/2"
+    },
+    {
+      "id": "quantum_turning_point",
+      "description": "误解：量子基态在转折点概率最大（把经典结论套到量子）",
+      "wrong_pattern": "(量子|基态).{0,12}转折点.{0,8}(概率|几率).{0,4}(最|较)大",
+      "correct_pattern": "经典.{0,20}转折点|基态.{0,12}(原点|平衡点|x ?= ?0)"
+    },
+    {
+      "id": "unequal_spacing",
+      "description": "误解：量子谐振子能级间距随 n 增大/减小",
+      "wrong_pattern": "能级间距.{0,8}(随 ?n|递增|递减|增大|减小|不均匀)",
+      "correct_pattern": "等间距|间距.{0,6}(恒定|相同|相等)|ħω|\\\\hbar\\\\omega"
+    }
+  ],
+  "contrasts": [
+    ["经典谐振子", "量子谐振子"],
+    ["产生算符", "湮灭算符"]
+  ],
+  "format_requirements": {
+    "key_formulas": ["\\\\hbar|ℏ", "\\\\omega|ω", "\\\\psi|ψ", "\\\\hat"],
+    "min_figures": 1,
+    "min_tables": 1,
+    "min_chars": 8000
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "id": "crispr_cas9",
+  "title": "CRISPR-Cas9 基因编辑",
+  "query": "系统自学 CRISPR-Cas9：天然起源、分子机制（gRNA/PAM/双链断裂与修复）、脱靶问题、碱基编辑与引导编辑的演进及伦理争议",
+  "subject": "分子生物学",
+  "preset": "deep",
+  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "expected_knowledge_points": [
+    "CRISPR 的天然起源",
+    "gRNA 与 PAM",
+    "双链断裂与修复路径",
+    "脱靶效应",
+    "碱基编辑与引导编辑",
+    "伦理与监管"
+  ],
+  "min_unique_sources": 12,
+  "expected_domains": ["ncbi.nlm.nih.gov", "nature.com", "nobelprize.org", "wikipedia.org"],
+  "required_facts": [
+    {
+      "id": "natural_origin",
+      "description": "CRISPR-Cas 是细菌/古菌抵御噬菌体的适应性免疫系统",
+      "match": {"all": ["细菌|古菌|原核"], "any": ["适应性免疫|获得性免疫", "噬菌体|病毒"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/CRISPR"]
+    },
+    {
+      "id": "pam",
+      "description": "PAM（如 SpCas9 的 5'-NGG-3'）是 Cas9 识别与切割的必要条件",
+      "match": {"all": ["PAM|原间隔序列相邻基序|前间隔序列邻近基序"], "any": ["NGG", "必要|必须|依赖"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Protospacer_adjacent_motif"]
+    },
+    {
+      "id": "grna_structure",
+      "description": "gRNA 由 crRNA 与 tracrRNA 构成（常融合为 sgRNA）",
+      "match": {"all": ["gRNA|向导RNA|引导RNA|sgRNA"], "any": ["crRNA", "tracrRNA"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Guide_RNA"]
+    },
+    {
+      "id": "dsb_repair",
+      "description": "Cas9 造成 DNA 双链断裂，主要经 NHEJ 或 HDR 两条路径修复",
+      "match": {"all": ["双链断裂|DSB"], "any": ["NHEJ|非同源末端连接", "HDR|同源重组|同源定向修复"]},
+      "source_urls": ["https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7468381/"]
+    },
+    {
+      "id": "nobel_2020",
+      "description": "2020 年诺贝尔化学奖授予 Charpentier 与 Doudna（CRISPR 基因编辑）",
+      "match": {"all": ["诺贝尔化学奖"], "any": ["2020", "Charpentier|沙尔庞捷|夏庞蒂埃|沙彭提耶", "Doudna|杜德纳|杜德娜|道德纳"]},
+      "source_urls": ["https://www.nobelprize.org/prizes/chemistry/2020/summary/"]
+    },
+    {
+      "id": "offtarget",
+      "description": "脱靶效应：非预期位点的编辑及其检测/缓解",
+      "match": {"all": ["脱靶"], "any": ["效应|风险|突变|非预期"]},
+      "source_urls": ["https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7468381/"]
+    },
+    {
+      "id": "base_editing",
+      "description": "碱基编辑（2016，Komor 等）：脱氨酶融合 nCas9，不产生双链断裂的单碱基替换",
+      "match": {"all": ["碱基编辑|单碱基编辑|base ?editing"], "any": ["2016|Komor|脱氨酶|deaminase"]},
+      "source_urls": ["https://www.nature.com/articles/nature17946"]
+    },
+    {
+      "id": "prime_editing",
+      "description": "引导编辑（2019，Anzalone 等）：逆转录酶 + pegRNA，可安装小片段插入/删除与所有点突变",
+      "match": {"all": ["引导编辑|先导编辑|prime ?editing"], "any": ["2019|Anzalone|逆转录酶|pegRNA"]},
+      "source_urls": ["https://www.nature.com/articles/s41586-019-1711-4"]
+    },
+    {
+      "id": "hnh_ruvc",
+      "description": "Cas9 的两个切割结构域：HNH 切互补链、RuvC 切非互补链",
+      "match": {"all": ["HNH"], "any": ["RuvC"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Cas9"]
+    },
+    {
+      "id": "ethics",
+      "description": "伦理与监管讨论（如生殖系编辑争议，贺建奎事件）",
+      "match": {"any": ["伦理", "生殖系|种系|胚胎", "贺建奎"]},
+      "source_urls": ["https://zh.wikipedia.org/wiki/CRISPR"]
+    }
+  ],
+  "traps": [
+    {
+      "id": "cas9_anywhere",
+      "description": "误解：Cas9 可以切割任意位点（忽略 PAM 限制）",
+      "wrong_pattern": "Cas9.{0,10}(可以|能|可).{0,6}(任意|任何).{0,4}(位点|序列|位置)",
+      "correct_pattern": "PAM"
+    },
+    {
+      "id": "nobel_medicine",
+      "description": "误解：CRISPR 获诺贝尔生理学或医学奖（实为化学奖）",
+      "wrong_pattern": "诺贝尔(生理学或医学奖|医学奖|生理奖)",
+      "correct_pattern": "化学奖"
+    },
+    {
+      "id": "purely_artificial",
+      "description": "误解：CRISPR 是完全人工发明的技术（忽视其天然免疫起源）",
+      "wrong_pattern": "CRISPR.{0,10}(完全|纯粹|纯).{0,4}人工.{0,4}(发明|合成|设计)",
+      "correct_pattern": "细菌|古菌|天然|进化|免疫系统"
+    }
+  ],
+  "contrasts": [
+    ["碱基编辑", "引导编辑"],
+    ["NHEJ", "HDR"]
+  ],
+  "format_requirements": {
+    "key_formulas": ["PAM", "gRNA|sgRNA", "Cas9"],
+    "min_figures": 1,
+    "min_tables": 1,
+    "min_chars": 8000
+  }
+}

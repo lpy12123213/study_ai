@@ -1,0 +1,104 @@
+{
+  "id": "gradient_descent_variants",
+  "title": "梯度下降及其变体",
+  "query": "系统自学梯度下降：批量/随机/小批量梯度下降、Momentum、Adam 的更新公式与直觉、学习率与调度策略、收敛性与常见误区",
+  "subject": "机器学习",
+  "preset": "deep",
+  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "expected_knowledge_points": [
+    "梯度下降基本原理",
+    "批量/随机/小批量梯度下降",
+    "Momentum",
+    "Adam",
+    "学习率与调度",
+    "收敛性与鞍点"
+  ],
+  "min_unique_sources": 10,
+  "expected_domains": ["arxiv.org", "wikipedia.org", "cs231n.github.io", "ruder.io"],
+  "required_facts": [
+    {
+      "id": "gd_update",
+      "description": "参数更新公式 θ ← θ − η∇J(θ)",
+      "match": {"all": ["θ|\\\\theta"], "any": ["\\\\nabla|梯度", "\\\\eta|学习率|learning ?rate"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Gradient_descent"]
+    },
+    {
+      "id": "lr_tradeoff",
+      "description": "学习率过大震荡/发散，过小收敛慢",
+      "match": {"all": ["学习率"], "any": ["过大.{0,12}(震荡|振荡|发散|不收敛)", "(震荡|振荡|发散).{0,12}学习率", "过小.{0,8}(慢|收敛)"]},
+      "source_urls": ["https://cs231n.github.io/neural-networks-3/"]
+    },
+    {
+      "id": "sgd_vs_batch",
+      "description": "批量/随机/小批量梯度下降的区别（每次更新所用样本量）",
+      "match": {"all": ["随机梯度下降|SGD"], "any": ["小批量|mini-?batch", "批量梯度下降|batch gradient"]},
+      "source_urls": ["https://ruder.io/optimizing-gradient-descent/"]
+    },
+    {
+      "id": "momentum",
+      "description": "Momentum：累积梯度的指数加权平均（速度项）以抑制震荡、加速收敛",
+      "match": {"all": ["动量|Momentum"], "any": ["指数加权|惯性|累积|速度", "\\\\beta"]},
+      "source_urls": ["https://ruder.io/optimizing-gradient-descent/"]
+    },
+    {
+      "id": "adam",
+      "description": "Adam：结合一阶矩（动量）与二阶矩（自适应学习率）估计",
+      "match": {"all": ["Adam"], "any": ["一阶矩|二阶矩", "自适应"]},
+      "source_urls": ["https://arxiv.org/abs/1412.6980"]
+    },
+    {
+      "id": "bias_correction",
+      "description": "Adam 需要偏差修正（m̂ = m/(1−β₁ᵗ)）",
+      "match": {"all": ["偏差修正|偏置修正|bias ?correction"], "any": ["1 ?- ?\\\\?beta|1 ?- ?β", "\\\\hat"]},
+      "source_urls": ["https://arxiv.org/abs/1412.6980"]
+    },
+    {
+      "id": "lr_schedule",
+      "description": "学习率调度/衰减策略（阶梯、指数、余弦退火等）",
+      "match": {"any": ["学习率.{0,6}(衰减|调度|退火)", "(衰减|调度|退火).{0,6}学习率"], "all": ["余弦|阶梯|指数|step|cosine"]},
+      "source_urls": ["https://cs231n.github.io/neural-networks-3/"]
+    },
+    {
+      "id": "convergence_caveats",
+      "description": "非凸情形下只能保证收敛到驻点；存在局部最优与鞍点问题",
+      "match": {"all": ["收敛"], "any": ["鞍点", "局部最优|局部极小", "驻点|临界点"]},
+      "source_urls": ["https://en.wikipedia.org/wiki/Gradient_descent"]
+    },
+    {
+      "id": "generalization_note",
+      "description": "指出自适应方法（Adam）与 SGD 在泛化上的争议/差异",
+      "match": {"any": ["泛化", "Adam.{0,20}SGD|SGD.{0,20}Adam"]},
+      "source_urls": ["https://arxiv.org/abs/1705.08292"]
+    }
+  ],
+  "traps": [
+    {
+      "id": "adam_always_better",
+      "description": "误解：Adam 总是优于 SGD",
+      "wrong_pattern": "Adam.{0,8}(总是|一定|必然|永远|任何情况下).{0,4}(优于|好于|强于|胜过)",
+      "correct_pattern": "未必|并不总是|泛化|因任务|SGD"
+    },
+    {
+      "id": "lr_bigger_better",
+      "description": "误解：学习率越大训练越快越好",
+      "wrong_pattern": "学习率.{0,4}(越大|调高).{0,4}(越好|越快|收敛越快)",
+      "correct_pattern": "过大.{0,8}(震荡|振荡|发散|不收敛)|合适|权衡"
+    },
+    {
+      "id": "gd_global_min",
+      "description": "误解：梯度下降保证找到全局最小值",
+      "wrong_pattern": "梯度下降.{0,10}(总能|一定能|保证|必定).{0,6}(找到|收敛到)?.{0,4}全局.{0,2}(最小|最优)",
+      "correct_pattern": "凸.{0,8}(才|时|情形)|局部|鞍点|驻点"
+    }
+  ],
+  "contrasts": [
+    ["Momentum", "Adam"],
+    ["批量梯度下降", "随机梯度下降"]
+  ],
+  "format_requirements": {
+    "key_formulas": ["\\\\nabla", "\\\\eta|\\\\alpha", "\\\\beta", "\\\\theta"],
+    "min_figures": 1,
+    "min_tables": 1,
+    "min_chars": 8000
+  }
+}

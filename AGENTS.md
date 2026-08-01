@@ -13,6 +13,7 @@ Study AI is a local-first FastAPI backend plus a clean-room rewritten frontend. 
 - `cd frontend && npm run dev`: Vite dev server on port 5173 (proxies `/api`, including ws, to 8000).
 - `cd frontend && npm run build`: typecheck (`tsc -b`) and bundle to `frontend/dist` (served by FastAPI).
 - `cd frontend && npm run lint`: ESLint over the frontend sources.
+- `python -m backend.evals.study_materials.runner --case all --dry-run`: validate the study-materials benchmark cases; run the benchmark against a live backend with `--case <id|all> --base-url http://127.0.0.1:8000` (see `docs/STUDY_MATERIALS_BENCHMARK.md`).
 
 ## Coding Style & Naming Conventions
 
