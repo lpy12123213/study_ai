@@ -752,7 +752,7 @@ class WebSearchKnowledgeToolsMixin:
             ) -> Dict[str, Any]:
                 decompose = args.get("decompose")
                 if decompose is None:
-                    decompose = env_bool("STUDY_MATERIALS_WEB_DECOMPOSE", True)
+                    decompose = env_bool("STUDY_MATERIALS_WEB_DECOMPOSE", False)
                 decompose = bool(decompose)
                 provider_value = f"{provider_base}+decompose" if decompose else provider_base
 
@@ -1102,7 +1102,7 @@ class WebSearchKnowledgeToolsMixin:
                     # Sub-agent behavior: decompose the knowledge point into smaller questions, then ask.
                     decompose = args.get("decompose")
                     if decompose is None:
-                        decompose = env_bool("STUDY_MATERIALS_WEB_DECOMPOSE", True)
+                        decompose = env_bool("STUDY_MATERIALS_WEB_DECOMPOSE", False)
                     decompose = bool(decompose)
                     provider_value = "metaso-ask+decompose" if decompose else "metaso-ask"
 

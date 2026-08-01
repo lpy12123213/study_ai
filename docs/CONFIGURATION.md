@@ -144,7 +144,7 @@ python scripts/check_config.py --strict
 中/重型 agent 任务默认使用本机 Codex runtime，而不是把 agent 简单切到某个模型字符串。覆盖范围包括 DeepThink、教案、组卷/一键出卷、知识视频、AI 出题、题库评分和好题鉴别；普通导出、作文批改等非 agent 流程不受影响。
 
 - `AGENT_RUNTIME`: 默认 `codex_runtime`。设为 `legacy` 时才允许走旧 agent/service 分支。
-- `STUDY_MATERIALS_AGENT_RUNTIME`: 自学资料生成的专用开关。默认（留空）走不依赖 Codex CLI 的 legacy AgentCore 路径；显式设为 `codex_runtime` 时才启用 Codex 分阶段工作流（规划/起草/修订由 Codex CLI 执行，检索/审查仍由后端工具执行）。
+- `STUDY_MATERIALS_AGENT_RUNTIME`: 自学资料生成的专用开关。默认（留空）走 author 作者流水线（research→blueprint→backbone→fill→assemble→audit→accept，见 `backend/generation/study_materials/author/`）；显式设为 `legacy` 回退不依赖 Codex CLI 的 legacy AgentCore 路径，设为 `codex_runtime` 时启用 Codex 分阶段工作流（规划/起草/修订由 Codex CLI 执行，检索/审查仍由后端工具执行）。2026-08 之前默认是 legacy。
 - `CODEX_RUNTIME_COMMAND`: 默认 `codex`，可指向本机 Codex CLI。
 - `CODEX_RUNTIME_MODEL`: 默认空，表示沿用本机 Codex 配置；需要固定模型时填写。
 - `CODEX_RUNTIME_EFFORT`: 默认 `high`，保留给运行时策略与 metadata。
@@ -180,12 +180,17 @@ python scripts/check_config.py --strict
 
 ## 自学资料
 
+运行时（2026-08 起）：
+
+- `STUDY_MATERIALS_AGENT_RUNTIME`: 默认 `author`（留空即走 author 作者流水线）。显式回退值：`legacy`（旧 AgentCore 路径）、`codex_runtime`（Codex 分阶段工作流）。
+- `STUDY_MATERIALS_TRACE_TTL_S`: 默认 `0`（不清理）。author runtime trace 事件骨架的保留时长（秒）；目前只留开关，清理器未实现。
+- `STUDY_MATERIALS_WEB_DECOMPOSE`: 默认 `0`（此前默认 `1`）。检索默认不再为每个知识点调 LLM 拆子问题；显式设为 `1` 恢复拆分，或在工具入参里逐次传 `decompose`。
+
 常用配置：
 
 - `STUDY_MATERIALS_PRESET`: `quick` / `standard` / `deep` / `research`
 - `STUDY_MATERIALS_SUBAGENT_CONCURRENCY`
 - `STUDY_MATERIALS_SEARCH_MODE`: `tavily` / `exa` / `deepresearch` / `metaso`
-- `STUDY_MATERIALS_WEB_DECOMPOSE`
 - `STUDY_MATERIALS_WEB_SUBQUERIES`
 - `STUDY_MATERIALS_THINKING_MODEL`
 - `STUDY_MATERIALS_WRITER_MODEL`

@@ -276,7 +276,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fail.await_args.kwargs["error"]["detail"], "stage_contract_mismatch")
         self.assertTrue(fail.await_args.kwargs.get("emit_event", True))
 
-    async def test_run_task_defaults_to_legacy_agent_core_when_runtime_unset(self) -> None:
+    async def test_run_task_uses_legacy_agent_core_when_runtime_legacy(self) -> None:
         from backend.generation.study_materials import orchestrator
 
         manager = StudyMaterialsTaskManager()
@@ -290,7 +290,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
 
         agent = SimpleNamespace(run=fake_agent_run, last_context=None)
 
-        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False), patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "legacy"}, clear=False), patch.object(
             orchestrator,
             "AgentCore",
             return_value=agent,
@@ -335,7 +335,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
             # 真实 fail_task 会把任务置为 failed，外层 finally 据此不再二次失败。
             runtime_task.status = "failed"
 
-        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False), patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "legacy"}, clear=False), patch.object(
             orchestrator,
             "AgentCore",
             return_value=agent,
@@ -392,7 +392,7 @@ class StudyMaterialsAgenticFlowTests(unittest.IsolatedAsyncioTestCase):
 
         agent = SimpleNamespace(run=fake_agent_run, last_context=None)
 
-        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": ""}, clear=False), patch.object(
+        with patch.dict("os.environ", {"STUDY_MATERIALS_AGENT_RUNTIME": "legacy"}, clear=False), patch.object(
             orchestrator,
             "AgentCore",
             return_value=agent,

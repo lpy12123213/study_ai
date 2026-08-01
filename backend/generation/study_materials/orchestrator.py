@@ -53,9 +53,7 @@ _CODEX_RUNTIME_NAMES = {"codex", "codex_runtime", "codexruntime", "claude", "cla
 
 
 def _study_materials_codex_enabled() -> bool:
-    """资料生成默认走不依赖 Codex CLI 的 legacy AgentCore 路径。
-
-    仅当显式设置 ``STUDY_MATERIALS_AGENT_RUNTIME`` 为 codex 系取值时，
+    """仅当显式设置 ``STUDY_MATERIALS_AGENT_RUNTIME`` 为 codex 系取值时，
     才启用 Codex staged workflow（plan/draft/revise 由 Codex CLI 执行）。
     """
 
@@ -64,13 +62,20 @@ def _study_materials_codex_enabled() -> bool:
 
 
 _AUTHOR_RUNTIME_NAMES = {"author"}
+_LEGACY_RUNTIME_NAMES = {"legacy"}
 
 
 def _study_materials_author_enabled() -> bool:
-    """``STUDY_MATERIALS_AGENT_RUNTIME=author`` 时启用作者流水线（author/pipeline.py）。"""
+    """作者流水线（author/pipeline.py）是默认 runtime。
+
+    ``STUDY_MATERIALS_AGENT_RUNTIME`` 未设置（或取值为 author / 未识别值）时启用；
+    显式设为 legacy 或 codex 系取值时分别回退到 AgentCore / Codex staged 路径。
+    """
 
     raw = str(os.getenv("STUDY_MATERIALS_AGENT_RUNTIME") or "").strip().lower().replace("-", "_")
-    return raw in _AUTHOR_RUNTIME_NAMES
+    if not raw or raw in _AUTHOR_RUNTIME_NAMES:
+        return True
+    return raw not in _CODEX_RUNTIME_NAMES and raw not in _LEGACY_RUNTIME_NAMES
 
 
 def _now_s() -> float:

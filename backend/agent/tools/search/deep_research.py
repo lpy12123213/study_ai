@@ -1,3 +1,9 @@
+"""内嵌 deep-research 多轮检索引擎。
+
+Deprecated: T15 起 author 成为自学资料默认 runtime，默认链路不再引用本模块；
+仅保留给 ``web_search_knowledge`` 显式 ``search_mode=deepresearch`` 使用，删除留待观察期后单独 PR。
+"""
+
 from __future__ import annotations
 
 import asyncio

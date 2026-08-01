@@ -30,7 +30,17 @@
 6. accept：复评通过则落验收记录并归档；修订预算用尽但已有成稿时降级交付。
 7. 可选导出 Markdown / LaTeX / PDF。
 
-`STUDY_MATERIALS_AGENT_RUNTIME` 留空时走不依赖 Codex CLI 的 legacy AgentCore 路径。Codex 阶段结果缺失且 `CODEX_RUNTIME_FALLBACK_LEGACY=1` 时显式回退 legacy：回退一定留 `study_materials_codex_fallback_to_legacy` 日志和 `codex_fallback_to_legacy` 任务事件，绝不静默切换。
+`STUDY_MATERIALS_AGENT_RUNTIME` 留空时走 author 作者流水线（2026-08 起为默认 runtime；此前默认走不依赖 Codex CLI 的 legacy AgentCore 路径）。Codex 阶段结果缺失且 `CODEX_RUNTIME_FALLBACK_LEGACY=1` 时显式回退 legacy：回退一定留 `study_materials_codex_fallback_to_legacy` 日志和 `codex_fallback_to_legacy` 任务事件，绝不静默切换。
+
+## 运行时收敛（2026-08）
+
+自学资料生成默认 runtime 已切换为 author 作者流水线（`backend/generation/study_materials/author/`：research→blueprint→backbone→fill∥fig→assemble→audit→accept）。`STUDY_MATERIALS_AGENT_RUNTIME` 留空即走 author；`legacy`（AgentCore）与 `codex_runtime`（Codex 分阶段工作流）保留为显式回退值，未识别取值按默认 author 处理。
+
+伴随变更：
+
+- `STUDY_MATERIALS_WEB_DECOMPOSE` 默认由 `1` 翻为 `0`：检索默认不再为每个知识点调 LLM 拆子问题；显式设为 `1` 或在 `web_search_knowledge` 入参传 `decompose: true` 可恢复。
+- `STUDY_MATERIALS_TRACE_TTL_S`：trace 事件骨架保留时长（秒），默认 `0` 不清理；目前只留配置开关，清理器未实现。
+- 内嵌 deep-research 引擎（`backend/agent/tools/search/deep_research.py`）标记 deprecated：默认链路不再引用，仅保留给显式 `search_mode=deepresearch`。
 
 质量与稳定性机制（2026-07 起）：
 
@@ -150,11 +160,12 @@
 ## 关键配置
 
 ```bash
+STUDY_MATERIALS_AGENT_RUNTIME=
 STUDY_MATERIALS_PRESET=standard
 STUDY_MATERIALS_SUBAGENT_CONCURRENCY=3
 STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS=30000
 STUDY_MATERIALS_SEARCH_MODE=
-STUDY_MATERIALS_WEB_DECOMPOSE=1
+STUDY_MATERIALS_WEB_DECOMPOSE=0
 STUDY_MATERIALS_WEB_SUBQUERIES=4
 STUDY_MATERIALS_THINKING_MODEL=
 STUDY_MATERIALS_WRITER_MODEL=
@@ -163,10 +174,14 @@ STUDY_MATERIALS_SSE_HEARTBEAT_S=4
 STUDY_MATERIALS_TASK_TTL_S=3600
 STUDY_MATERIALS_TASK_MAX_EVENTS=8000
 STUDY_MATERIALS_ARCHIVE_MAX_AGE_S=1209600
+STUDY_MATERIALS_TRACE_TTL_S=0
 ```
 
 说明：
 
+- `STUDY_MATERIALS_AGENT_RUNTIME`：默认（留空）走 author 作者流水线；显式回退值 `legacy` / `codex_runtime`。
+- `STUDY_MATERIALS_WEB_DECOMPOSE`：默认 `0`（2026-08 起；此前默认 `1`），检索默认不再按知识点拆子问题。
+- `STUDY_MATERIALS_TRACE_TTL_S`：trace 事件骨架保留时长（默认 0 = 不清理；仅开关，清理器未实现）。
 - `STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS`：单阶段 Codex worker 提示词载荷上限（默认 30000），超出时先按知识点裁剪研究证据、再按剩余预算截断正文。
 - `STUDY_MATERIALS_ARCHIVE_MAX_AGE_S`：归档自动复用的新鲜度上限（默认 1209600 = 14 天，0 表示不做时间过期）。
 - 各 preset 的质量门预算（min_sources / max_review_cycles / max_research_cycles 等）在 `quality_gate.py` 的 `PRESET_PROFILES` 中，不是环境变量。
