@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -7,8 +8,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.logging_utils import get_logger
 from backend.database.engine import async_session_maker
 from backend.database.repositories.user_ids import normalize_user_id
+
+logger = get_logger(__name__)
 
 
 def _normalize_user_id(user_id: str) -> str:
@@ -20,6 +24,40 @@ def _require_user_id(user_id: str) -> str:
     if not uid:
         raise ValueError("missing_user_id")
     return uid
+
+
+def _group_rows(rows: List[dict], *, group_key: str) -> List[dict]:
+    """Group 1:N entity rows (conversation/paper) and keep the best row.
+
+    Input rows are expected best-first (bm25 ascending; fallback by id desc).
+    Each kept row gains `match_count` (# matching child rows).
+    """
+    grouped: List[dict] = []
+    index: Dict[Any, int] = {}
+    for row in rows:
+        key = row.get(group_key)
+        if key is None:
+            continue
+        pos = index.get(key)
+        if pos is None:
+            index[key] = len(grouped)
+            row["match_count"] = 1
+            grouped.append(row)
+        else:
+            grouped[pos]["match_count"] = int(grouped[pos].get("match_count") or 0) + 1
+    return grouped
+
+
+def _quota_rows(rows: List[dict], *, group_key: Optional[str], per_type: int) -> List[dict]:
+    """Add `match_count` and cap each entity type at `per_type` before cross-type sort."""
+    if not rows:
+        return rows
+    if group_key is None:
+        # study_archive / question are 1:1 per entity; no grouping needed.
+        for r in rows:
+            r["match_count"] = 1
+        return rows[:per_type]
+    return _group_rows(rows, group_key=group_key)[:per_type]
 
 
 def _build_fts_match(query: str) -> str:
@@ -64,6 +102,10 @@ async def search_fulltext(
     want = {str(t or "").strip() for t in (types or []) if str(t or "").strip()}
     if not want:
         want = {"conversation", "paper", "study_archive", "question"}
+    limit = int(limit or 50)
+    # Per-type quota applied before the cross-type sort so one long conversation
+    # or paper cannot crowd out every other result.
+    per_type = max(1, math.ceil(limit / max(1, len(want))))
 
     match = _build_fts_match(q)
     if not match:
@@ -75,12 +117,13 @@ async def search_fulltext(
 
     results: List[dict] = []
 
-    async def try_query(stmt: str, params: Dict[str, Any]) -> Optional[List[dict]]:
+    async def try_query(stmt: str, params: Dict[str, Any], *, entity: str) -> Optional[List[dict]]:
         try:
             res = await session.execute(text(stmt), params)
             rows = res.mappings().all()
             return [dict(r) for r in rows]
         except SQLAlchemyError:
+            logger.warning("search_fallback_failed", extra={"entity": entity}, exc_info=True)
             return None
 
     fts_unavailable: set[str] = set()
@@ -100,12 +143,19 @@ async def search_fulltext(
             ORDER BY score
             LIMIT :limit
             """,
-            {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
+            {
+                "user_id": uid,
+                "match": match,
+                "limit": limit,
+                "hl_start": hl_start,
+                "hl_end": hl_end,
+            },
+            entity="conversation",
         )
         if rows is None:
             fts_unavailable.add("conversation")
         else:
-            results.extend(rows)
+            results.extend(_quota_rows(rows, group_key="conversation_id", per_type=per_type))
 
     if "paper" in want:
         rows = await try_query(
@@ -122,12 +172,19 @@ async def search_fulltext(
             ORDER BY score
             LIMIT :limit
             """,
-            {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
+            {
+                "user_id": uid,
+                "match": match,
+                "limit": limit,
+                "hl_start": hl_start,
+                "hl_end": hl_end,
+            },
+            entity="paper",
         )
         if rows is None:
             fts_unavailable.add("paper")
         else:
-            results.extend(rows)
+            results.extend(_quota_rows(rows, group_key="paper_id", per_type=per_type))
 
     if "study_archive" in want:
         rows = await try_query(
@@ -143,12 +200,19 @@ async def search_fulltext(
             ORDER BY score
             LIMIT :limit
             """,
-            {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
+            {
+                "user_id": uid,
+                "match": match,
+                "limit": limit,
+                "hl_start": hl_start,
+                "hl_end": hl_end,
+            },
+            entity="study_archive",
         )
         if rows is None:
             fts_unavailable.add("study_archive")
         else:
-            results.extend(rows)
+            results.extend(_quota_rows(rows, group_key=None, per_type=per_type))
 
     if "question" in want:
         rows = await try_query(
@@ -166,12 +230,19 @@ async def search_fulltext(
             ORDER BY score
             LIMIT :limit
             """,
-            {"user_id": uid, "match": match, "limit": int(limit or 50), "hl_start": hl_start, "hl_end": hl_end},
+            {
+                "user_id": uid,
+                "match": match,
+                "limit": limit,
+                "hl_start": hl_start,
+                "hl_end": hl_end,
+            },
+            entity="question",
         )
         if rows is None:
             fts_unavailable.add("question")
         else:
-            results.extend(rows)
+            results.extend(_quota_rows(rows, group_key=None, per_type=per_type))
 
     if not fts_unavailable:
         # Merge across types by bm25 score (smaller is better).
@@ -182,11 +253,12 @@ async def search_fulltext(
                 return 1e9
 
         results.sort(key=score_key)
-        return results[: int(limit or 50)]
+        return results[:limit]
 
     # Fall back only for entity types whose FTS query failed. A successful FTS
     # query with zero matches is authoritative and must not trigger table scans.
     want = fts_unavailable
+    per_type = max(1, math.ceil(limit / max(1, len(want))))
     like = f"%{q}%"
 
     if "conversation" in want:
@@ -207,9 +279,10 @@ async def search_fulltext(
             ORDER BY m.id DESC
             LIMIT :limit
             """,
-            {"user_id": uid, "like": like, "limit": int(limit or 50)},
+            {"user_id": uid, "like": like, "limit": limit},
+            entity="conversation",
         )
-        results.extend(rows or [])
+        results.extend(_quota_rows(rows or [], group_key="conversation_id", per_type=per_type))
 
     if "paper" in want:
         rows = await try_query(
@@ -224,13 +297,14 @@ async def search_fulltext(
             FROM paper_questions pq
             JOIN papers p ON p.id = pq.paper_id
             WHERE p.user_id = :user_id
-              AND (p.name LIKE :like OR pq.stem LIKE :like OR pq.knowledge_point LIKE :like)
+              AND (p.paper_name LIKE :like OR pq.stem LIKE :like OR pq.knowledge_point LIKE :like)
             ORDER BY pq.id DESC
             LIMIT :limit
             """,
-            {"user_id": uid, "like": like, "limit": int(limit or 50)},
+            {"user_id": uid, "like": like, "limit": limit},
+            entity="paper",
         )
-        results.extend(rows or [])
+        results.extend(_quota_rows(rows or [], group_key="paper_id", per_type=per_type))
 
     if "question" in want:
         rows = await try_query(
@@ -259,9 +333,10 @@ async def search_fulltext(
             ORDER BY ql.updated_at DESC
             LIMIT :limit
             """,
-            {"user_id": uid, "like": like, "limit": int(limit or 50)},
+            {"user_id": uid, "like": like, "limit": limit},
+            entity="question",
         )
-        results.extend(rows or [])
+        results.extend(_quota_rows(rows or [], group_key=None, per_type=per_type))
 
     if "study_archive" in want:
         rows = await try_query(
@@ -278,9 +353,10 @@ async def search_fulltext(
             ORDER BY sa.id DESC
             LIMIT :limit
             """,
-            {"user_id": uid, "like": like, "limit": int(limit or 50)},
+            {"user_id": uid, "like": like, "limit": limit},
+            entity="study_archive",
         )
-        results.extend(rows or [])
+        results.extend(_quota_rows(rows or [], group_key=None, per_type=per_type))
 
     # Merge across types by bm25 score (smaller is better).
     def score_key(r: dict) -> float:
@@ -290,4 +366,4 @@ async def search_fulltext(
             return 1e9
 
     results.sort(key=score_key)
-    return results[: int(limit or 50)]
+    return results[:limit]

@@ -23,6 +23,8 @@
 | 试卷管理 | 查看、导出、删除试卷 | Markdown/LaTeX/PDF/DOCX |
 | 任务中心 | 追踪长任务 | 任务状态、事件 |
 
+旧版入口会自动跳转到新入口：`/blueprint` → `/compose`、`/study-materials` → `/materials`、`/question-library` → `/library`、`/ai-generate` → `/library?tab=generate`，旧书签无需修改。
+
 ## 登录
 
 启动后进入前端页面，使用 `.env` 中的管理员账号登录：
@@ -51,7 +53,7 @@
 
 ## 蓝图组卷
 
-入口：`/blueprint`
+入口：`/compose`（蓝图 标签页；旧 `/blueprint` 自动跳转）
 
 适用于按结构化规则组卷，例如：
 
@@ -70,7 +72,7 @@
 
 ## 自学资料
 
-入口：`/study-materials`
+入口：`/materials`（旧 `/study-materials` 自动跳转）
 
 适用场景：
 
@@ -87,7 +89,7 @@
 
 ## 教案
 
-入口：`/lesson-plans`
+规划中：后端 API 已完整，前端页面尚未上线。
 
 适用场景：
 
@@ -114,7 +116,7 @@
 
 ## 本地题库
 
-入口：`/question-library`
+入口：`/library`（旧 `/question-library` 自动跳转）
 
 功能：
 
@@ -133,7 +135,7 @@
 
 ## AI 出题
 
-入口：`/ai-generate`
+入口：`/library?tab=generate`（旧 `/ai-generate` 自动跳转）
 
 流程：
 
@@ -189,7 +191,7 @@
 
 ## 学习画布
 
-入口：`/canvas`
+规划中：前端页面尚未上线。
 
 适用场景：
 
@@ -201,9 +203,7 @@
 
 ## 知识视频
 
-入口：`/knowledge-videos`
-
-适用于生成知识点讲解视频任务。该功能依赖后端视频生成链路和本机渲染环境，失败时优先查看任务事件和后端日志。
+规划中：生成任务 API 已存在，页面尚未上线。该功能依赖后端视频生成链路和本机渲染环境，失败时优先查看任务事件和后端日志。
 
 ## 设置
 

@@ -92,7 +92,7 @@ npm run dev
 
 ```ts
 {
-  path: '/study-materials',
+  path: '/materials',
   label: '自学资料',
   layout: 'wide',
   sidebar: true,

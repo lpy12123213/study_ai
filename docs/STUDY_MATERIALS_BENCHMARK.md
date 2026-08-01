@@ -1,137 +1,205 @@
 # 自学资料生成质量 Benchmark
 
-对 `POST /api/study-materials/generate` 生成的自学资料做**困难但便于评分**的离线评测：
-用例驱动、确定性评分为主、百分制报告。benchmark 只观察、不修改生成链路。
+对 `POST /api/study-materials/generate` 的真实生成结果做困难、可重复、便于定位的离线评测。
+Challenge v2 同时报告两种分数：
+
+- **原始诊断分**：六个维度直接相加，用于观察局部能力进展。
+- **最终成熟度分**：原始诊断分再受四个必要质量门槛封顶，用于回答“现在能否交给学习者”。
+
+这种形式避免检索次数、篇幅或 Markdown 外形抵消截断、知识错误、无来源、无练习反馈等
+致命问题。benchmark 只观察生成链路，不修改生成实现。
 
 ## 快速开始
 
 ```bash
-# 1. 校验用例（不跑生成，离线）
+# 1. 校验 40 个用例和评分契约（不跑生成）
 python -m backend.evals.study_materials.runner --case all --dry-run
 
-# 2. 启动后端后跑单个用例（真实生成，SSE 采集）
+# 2. 启动后端后跑轻量回归套件（8 例，默认自动 4 并发）
 python -m uvicorn backend.app:app --port 8000
-python -m backend.evals.study_materials.runner --case lebesgue_integral
+python -m backend.evals.study_materials.runner --case light
 
-# 3. 全量 + LLM 复核 + 参考文献链接抽查
-python -m backend.evals.study_materials.runner --case all --llm-judge --check-links
+# 3. 跑单例，或对已落盘结果复评而不重新生成
+python -m backend.evals.study_materials.runner --case lebesgue_integral
+python -m backend.evals.study_materials.runner \
+  --regrade artifacts/evals/study_materials/<case_id>/<timestamp>
+
+# 4. 可选 LLM 语义复核与联网链接诊断
+python -m backend.evals.study_materials.runner --case light --llm-judge --check-links
 ```
 
 每个用例在 `artifacts/evals/study_materials/<case_id>/<timestamp>/` 产出：
-`events.jsonl`（SSE 事件流）、`final.md`（成稿）、`meta.json`、`task_info.json`、
-`score.json`、`report.md`（逐项得分与扣分原因）。
+`events.jsonl`、`final.md`、`meta.json`、`task_info.json`、`score.json` 和 `report.md`。
+报告包含成熟度分、原始诊断分、实际封顶、逐门槛证据、逐项扣分和不计分的过程诊断。
 
-## 评分体系（100 分）
+### 轻量、重量与分片
 
-| 维度 | 分值 | 评分方式 |
-|---|---|---|
-| R 多步检索过程 | 15 | 事件流：来源类别数 ≥3、每 kp 深读 `browse_web_pages`、唯一来源 URL 数、检索轮次 ≥2×kp、权威域名命中（用例 `expected_domains`） |
-| K 知识理解 | 35 | K1 用例锚定事实点（正则匹配，可选 LLM 复核）×**可溯源门控**；K2 常见误解陷阱（写错或未驳正均判 0）；K3 概念辨析（对比对须在小窗口内共现） |
-| S 子代理使用 | 15 | 事件流：subagent_start/end、per-kp 覆盖率 ≥80%、子代理摘要 |
-| F 结构与格式 | 12 | 必备骨架、目录锚点可跳转 + 标题层级、数学 lint + 关键公式（复用 `backend.core.text_lint` 与 `coverage.split_sections_by_kp`）、篇幅 |
-| A 美观与可读性 | 10 | 图/表/图注计数；排版质量（确定性代理：`--llm-judge` 可换 LLM rubric） |
-| C 引用与学术规范 | 13 | 参考文献小节 + URL、内联引用标记与文末一一对应、链接可访问性抽查（`--check-links`） |
+runner 把生成等待视为 I/O 密集任务：`--parallel 0`（默认）在单例时串行，在多例时自动使用
+`min(4, 用例数)` 个线程。可用 `--parallel 1` 强制串行，或显式指定服务端能够承受的并发数。
+离线 `--dry-run` 只解析并编译评分正则，不发 HTTP 请求。
 
-### 可溯源门控（K1）
+负载套件按运行规模划分，不改变题目难度、评分权重或成熟度门槛：`light` 包含 8 个代表例，
+`heavy` 包含其余 32 个难例；两者互斥，且并集严格等于 `all`。因此日常反馈跑 `light`，
+夜间或发布前可以跑 `heavy` 补齐覆盖；需要一条命令完成发布门禁时直接跑 `all`。
 
-`K1得分 = 命中比例 × (0.15 + 0.85 × 内联引用比例)`。立场：自学资料的关键论断必须
-可溯源；没有内联引用的"裸论断"最多只值 15%。门控系数见
-`backend/evals/study_materials/graders/knowledge.py` 的 `_TRACE_FLOOR`。
+```bash
+# 轻量：8 个跨学科代表例，自动 4 并发
+python -m backend.evals.study_materials.runner --case light
 
-## 难度设计（为什么当前系统得分 <20 是预期）
+# 重量：其余 32 例；可在 CI 中继续分片
+python -m backend.evals.study_materials.runner --case heavy --shard-count 4 --shard-index 0
 
-每个低分机制都对应代码中的真实缺口，而非刻意刁难：
+# 完整 40 例；显式把本机并发限制到 2
+python -m backend.evals.study_materials.runner --case all --parallel 2
 
-- **S ≈ 0**：默认 ReAct 路径不派发子代理；subagent 事件仅 plan 模式
-  `foreach_knowledge_point` 步骤块触发（`backend/agent/execution_strategy.py`）。
-- **C ≈ 0**：汇编收集了 `refs_by_kp` 但从不渲染（`backend/agent/tools/knowledge/study_archive.py:71-86`），
-  成稿无参考文献小节；小节写手 prompt 明确禁止输出引用标记。
-- **K1 被门控到 15%**：上面两条叠加，事实点即使有内容正确也只能拿零头。
-- **F2 锚点 0 分**：现行目录是纯文本 bullet，无 `[文本](#锚点)` 链接。
-- **A1 图 0 分**：TikZ/SVG 工具链缺失时只写降级说明。
-- **用例本身难**：研究级主题 + 陷阱题（如"勒贝格积分是黎曼积分特例"）
-  + 权威域名要求（RFC/nobelprize/nature）+ 时效性要求（base/prime editing 年份）。
+# CI/多机稳定分成 4 片；index 为 0-based，各片互斥且并集恰为所选套件
+python -m backend.evals.study_materials.runner --case all --shard-count 4 --shard-index 0
+python -m backend.evals.study_materials.runner --case all --shard-count 4 --shard-index 1
+```
 
-难度旋钮集中在两处：`graders/common.py` 的 `DIMENSION_MAX`（维度权重）与
-各用例 JSON 的阈值字段（`min_unique_sources` / `expected_domains` / `required_facts`）。
-模拟现行默认链路产物的离线锚点测试见
-`backend/tests/test_study_materials_evals.py::ScorecardTests::test_current_style_run_scores_below_20`。
+分片先按 case id 排序再取模，因此不受文件顺序影响。`--llm-judge` 和 `--check-links` 默认关闭；
+它们分别增加模型调用与网络请求，仅建议用于发布前抽查。已有 artifacts 调权后优先用 `--regrade`，
+无需再次承担完整生成时间。
 
-## 首批用例（`backend/evals/study_materials/cases/`）
+## 原始诊断分（100 分）
 
-| 用例 | 学科 | preset | 考察点 |
-|---|---|---|---|
-| `lebesgue_integral` | 数学分析 | deep | 三大收敛定理、Dirichlet 函数、黎曼 vs 勒贝格辨析、换序条件陷阱 |
-| `quantum_harmonic_oscillator` | 量子力学 | deep | 能级公式、零点能、升降算符、经典/量子概率分布陷阱 |
-| `tcp_congestion_control` | 计算机网络 | standard | 慢启动/拥塞避免/快恢复、RFC 权威来源、rwnd/cwnd 混淆陷阱 |
-| `crispr_cas9` | 分子生物学 | deep | PAM/gRNA/DSB 修复、2020 诺贝尔化学奖陷阱、base vs prime editing 时效性 |
-| `french_revolution_causes` | 世界历史 | standard | 多因素归因（反单一归因陷阱）、1788 歉收、中英文多源交叉 |
-| `gradient_descent_variants` | 机器学习 | deep | 更新公式、偏差修正、学习率调度、"Adam 总是更优"陷阱 |
+| 维度 | 分值 | 确定性评分方式 |
+|---|---:|---|
+| R 多步检索过程 | 10 | 来源类别、逐知识点深读、唯一来源、检索轮次、权威域名 |
+| K 知识理解 | 35 | 事实锚点与逐事实引用、明确纠错语境、显式概念对比 |
+| L 学习闭环 | 20 | 学习目标、前置知识、带步骤例题、分层自测、Q/A 对应与评分点 |
+| F 结构与格式 | 15 | 骨架、知识点小节、目录锚点、层级、数学 lint、关键公式、篇幅 |
+| A 美观与可读性 | 5 | 图表计数和排版质量代理；可选 LLM rubric |
+| C 引用与学术规范 | 15 | 参考文献数量、有效内联对应、用例指定权威域名 |
 
-## 第二批用例
+子代理使用（S）保留在 `process_diagnostics`，但不计入百分制。子代理是一种实现策略，
+不是学习者可见质量，不能因为采用某种编排方式就给成稿加质量分。
 
-| 用例 | 学科 | preset | 考察点 |
-|---|---|---|---|
-| `eigen_decomposition` | 线性代数 | deep | 对角化判定、代数/几何重数辨析、"所有矩阵可对角化"陷阱、谱定理 |
-| `photosynthesis` | 生物学 | standard | O₂ 来自水光解（非 CO₂）、暗反应间接需光、C3/C4/CAM 与光呼吸 |
-| `bayes_medical_screening` | 概率论 | standard | 基础概率谬误、灵敏度 ≠ 阳性预测值、低患病率下假阳性占多数 |
+### 逐事实可溯源门控
 
-用例事实点均锚定学术来源（`source_urls`：Wikipedia/RFC/Nobel Prize/Nature 等），
-编写时已逐条核实（RFC 5681/6582/8312、Komor 2016、Anzalone 2019、1788 歉收等）。
+K1 会在每条事实所在段落寻找能映射到文末带 URL 定义的 `[^n]` 或 `[n]` 标记。
+有事实且有对应引用时得该事实满分；只有事实、没有有效引用时仅保留 15% 草稿分。
+文档其他位置的引用不能给所有事实统一增加“溯源分”。
 
-## 新增用例
+C 维度也不再以“两条 URL”作为满分：参考文献数量使用用例的 `min_unique_sources`，
+有效内联引用目标为事实点数量的 80%，权威域名目标为 `expected_domains` 的三分之二。
+`--check-links` 仅把可访问性写进诊断，不因实时网络波动改变离线分数。
 
-复制任一 JSON 修改即可；schema 校验规则（`case_schema.py`）：
-`required_facts` 至少 1 条且 id 唯一、正则必须可编译、`preset ∈ quick|standard|deep|research`、
-`expected_knowledge_points` 非空。建议每个用例配 8-12 条事实点、2-3 条陷阱、2 组辨析对。
+## 最终成熟度门槛
 
-注意：`options.prefer_local_archive` 必须保持 `false`，否则命中历史归档会跳过真实生成。
+计算公式：
+
+```text
+最终成熟度分 = min(原始诊断分, 所有未通过门槛的最低封顶)
+```
+
+| 门槛 | 通过条件 | 未通过时封顶 |
+|---|---|---:|
+| G0 完整交付 | 成功终态、篇幅达标、至少 80% 知识点有正文、无截断/占位符/坏 Markdown lint | 9 |
+| G1 核心正确性 | 至少 80% 事实命中、80% 误区明确驳正、80% 概念对比成立 | 19 |
+| G2 证据闭环 | 参考文献达到 75%、有效内联对应达到 75%、权威域名达到 50% | 19 |
+| G3 学习反馈闭环 | L 维度达到 70%，且题目—答案—评分点子项达到 70% | 39 |
+
+因此，“内容很长但截断”的文件最多 9 分；完整但存在关键知识缺口或不可核验的文件最多
+19 分。原始诊断分仍会完整展示，不会因为压分而掩盖已有局部能力。
+
+## 可评分输出协议
+
+runner 会把统一的 Challenge v2 协议写入生成请求 `requirements`，并强制
+`with_questions=true`。协议保持在 API 的 600 字符限制内，要求：
+
+- 学习目标和前置知识；
+- 至少两个带完整步骤、标为 `[EX1]` 起的例题；
+- 至少六道标为 `[Q1]` 起的自测题，并覆盖 `[基础]`、`[应用]`、`[迁移]`；
+- 标为 `[A1]` 起且与题号一一对应的答案和评分点；
+- 关键事实句后的 `[^n]` 引文，以及文末含标题与 URL 的脚注；
+- 明确的边界条件、误区和反例。
+
+标签用于确定性定位，不替代内容评分。即使标签齐全，事实、误区、对比、来源和交付门槛
+仍会独立判定。测试中同时有“当前风格低分锚点”和“可通过全部门槛的 golden fixture”，
+避免 benchmark 退化成谁都过不了的格式陷阱。
+
+## 为什么当前系统低于 20 分是合理结果
+
+这些失分对应真实生成缺口，而非单纯调低权重：
+
+- 汇编收集 `refs_by_kp`，但没有把它渲染进最终 Markdown；小节写手 prompt 还明确禁止
+  URL 和引用标记，因此检索结果与最终论断之间没有证据闭环。
+- 生成阶段收集 `examples`/`exercises`，汇编却没有渲染它们；旧用例还普遍关闭题目。
+  v2 全部开启题目，并要求答案、评分点和难度层级。
+- 旧分数允许篇幅、标题层级、检索轮次独立加分。v2 的 G0 联合检查终态、知识点小节覆盖、
+  篇幅和 lint，长文本不能掩盖只写了一部分或末尾截断。
+- 正确关键词不再自动通过误区与对比项：误区必须有明确纠错语境，对比必须有比较语义。
+- 目录仍是纯文本 bullet，且图形工具缺失时通常只有降级说明，这些继续反映在 F/A 维度。
+
+难度旋钮集中在三处：`graders/common.py` 的维度权重、`scorecard.py` 的门槛与封顶，
+以及用例 JSON/schema 中的来源、事实、学习和格式阈值。
+
+## 用例集
+
+共有 40 个逻辑用例。9 个独立 JSON 保留用于重点校准，31 个新增用例收在
+`cases/challenge_v2_extended_pack.json`；pack 只复用 preset、生成选项和学习/格式门槛，
+每个主题仍有独立知识点、事实正则、来源、误区和辨析对。
+
+| selector | 数量 | 选择规则 | 用途 |
+|---|---:|---|---|
+| `light` | 8 | `tier=smoke` | 日常/PR 的轻量真实回归 |
+| `heavy` | 32 | `tier=core` 或 `extended` | 夜间或发布前补齐重负载覆盖 |
+| `smoke` | 8 | `light` 的兼容别名 | 最快的跨学科真实回归 |
+| `core` | 12 | smoke 8 + `tier=core` 4 | 主干质量门禁 |
+| `extended` | 28 | 仅 `tier=extended` | 扩展主题专项覆盖 |
+| `all` | 40 | 全部 tier | 发布前全量评测 |
+
+主题覆盖如下：
+
+- 原 9 例：勒贝格积分、量子谐振子、TCP、CRISPR、法国大革命、梯度下降、特征分解、
+  光合作用、医学筛查 Bayes。
+- 数学与统计 6 例：中心极限定理、傅里叶/采样、群同态、ODE 数值稳定性、KKT、PCA/SVD。
+- 物理与化学 7 例：狭义相对论、麦克斯韦方程、热力学熵、PN 结、化学平衡、
+  Nernst 方程、SN1/SN2/E1/E2。
+- 生命科学 4 例：孟德尔连锁、免疫与疫苗、细胞呼吸、Hardy–Weinberg 平衡。
+- 计算机与 AI 6 例：事务/MVCC、Raft、虚拟内存、密码散列与签名、编译器、Transformer。
+- 社会/地球/跨学科 8 例：货币政策、比较优势、因果 DAG、宪政分权、板块构造、
+  气候反馈、实验设计、信息论。
+
+新增单例可复制任一独立 JSON；批量扩展可在 case pack 的 `defaults` 下追加 `cases`，嵌套对象会
+深合并、数组由具体用例替换。`required_facts` 至少一条且 id 唯一，每条至少有一个
+`source_url`；正则必须可编译，`traps`、`contrasts`、`expected_domains` 和
+`expected_knowledge_points` 都不能为空。挑战用例建议配置至少 5 个事实点、2–3 个陷阱和
+2 组辨析对。runner 会强制 `prefer_local_archive=false`，避免历史归档跳过真实生成。
 
 ## 校准记录
 
-- 2026-08-01：benchmark 初版落地。离线锚点测试（模拟现行默认链路产物形态）总分 <20 通过。
-- 2026-08-01：真实链路首次校准（deepseek 生产配置、默认 legacy ReAct 路径）：
+### Challenge v1
 
-  | 用例 | 总分 | R | K | S | F | A | C | 运行目录 |
-  |---|---|---|---|---|---|---|---|---|
-  | lebesgue_integral（deep） | **10.0** | 10.0 | 0 | 0 | 0 | 0 | 0 | `artifacts/evals/study_materials/lebesgue_integral/20260801_103739/` |
-  | tcp_congestion_control（standard） | **15.2** | 8.8 | 0 | 0 | 4.9 | 1.5 | 0 | `artifacts/evals/study_materials/tcp_congestion_control/20260801_105148/` |
+2026-08-01 的首次真实校准中，生成失败/空壳产物分别为 10.0 和 15.2。修复写作超时、
+零素材静默成功、审阅 JSON flake、done 空正文和 revise 截断后，同批主题的旧评分升至：
 
-  基线均 <20，无需调整权重。校准暴露的两个真实生成缺陷（比分数更有价值）：
+| 模型 | 用例 | v1 分数 |
+|---|---|---:|
+| deepseek-v4-pro | tcp_congestion_control | 44.9 |
+| deepseek-v4-pro | lebesgue_integral | 36.8 |
+| deepseek-v4-flash | tcp_congestion_control | 20.0（受 revise 截断污染的中间结果） |
 
-  1. **写作步骤硬超时（lebesgue）**：`generate_study_material` 连续 14 次
-     `Tool timeout after 240s`，成稿为空，orchestrator 诚实判 `empty_material`。
-  2. **知识点拆分塌缩（tcp）**：`split_knowledge_points` 未生效，整条 query 被当作
-     唯一知识点，21 次写作调用产出 354 字符空壳骨架（仅标题/目录/使用建议）。
+旧评分上升暴露出独立加分可抵消致命缺陷的问题，因此引入 v2 门槛，而不是继续向缺口维度
+机械增加权重。
 
-  校准同时修正了评分器三处公平性问题（均已回归测试覆盖）：空稿在 A2 误得分；
-  SSE 裁剪大 tool_result 导致来源统计漏计（改由 `task_info.search_summary_by_kp` 补全）；
-  空壳骨架靠标题/目录的 query 回显在 K 维度蹭分（知识判定改为剥离标题与目录后的正文）。
-  复评已落盘运行用 `--regrade <run_dir>`（不重新生成），成稿缺失时自动回退 `md_url` 下载。
+### Challenge v2
 
-- 2026-08-01：基线暴露的生成缺陷修复后复跑（分支 `feat/study-materials-benchmark`）：
+2026-08-01 对修复后的同批真实 artifacts 离线复评（未重新生成）：
 
-  | 模型 | 用例 | 总分 | 成稿 | R | K | S | F | A | C |
-  |---|---|---|---|---|---|---|---|---|---|
-  | deepseek-v4-pro | tcp_congestion_control | **44.9** | 10768 字符 | 8.8 | 19.2 | 0 | 9.9 | 7.0 | 0 |
-  | deepseek-v4-pro | lebesgue_integral | **36.8** | 9358 字符 | 8.5 | 13.1 | 0 | 8.7 | 6.5 | 0 |
-  | deepseek-v4-flash | tcp_congestion_control | **41.6** | 14920 字符 | 10.0 | 16.8 | 0 | 8.3 | 6.5 | 0 |
-  | deepseek-v4-flash | lebesgue_integral | **40.4** | 22468 字符 | 10.0 | 17.2 | 0 | 8.8 | 4.5 | 0 |
+| 用例 | v1 当前分 | v2 原始诊断 | v2 成熟度 | 关键门槛证据 |
+|---|---:|---:|---:|---|
+| tcp_congestion_control | 41.6 | 37.1 | **9.0** | 仅 4/7 知识点小节，含占位符且末尾截断；无证据/学习闭环 |
+| lebesgue_integral | 36.8 | 30.6 | **9.0** | 任务状态 failed，仅 1/7 小节；事实命中 40%，无证据/学习闭环 |
 
-  失分地图（修复后）：S（无子代理事件）与 C（无参考文献/内联引用）为结构性 0 分；
-  K1 受 0.15 溯源门控压制；R 缺深读与权威域名命中。下一步提升主攻：引用体系
-  （渲染 refs_by_kp + 内联标记）、plan 模式子代理、每 kp 深读。
+两个当前产物都低于 20 分，原始诊断分仍显示它们在检索、局部知识和格式上的进展。
+合成 golden fixture 能通过全部四个门槛并获得 85 分以上，证明高分路径可达。
 
-  修复的缺陷（详见 `backend/tests/test_study_materials_write_path_fixes.py` 回归）：
-  写作 240s 超时预算、直写路径 0 素材静默成功、审阅 JSON flake 判死整跑、
-  done 不携成稿误判 empty_material、revise_markdown 截断（输出预算按原稿放大 + 70% 长度护栏）。
+## 已知边界
 
-  运维注意：多进程共享同一 sqlite 库时，任一进程启动（含 `--reload` 重载、
-  `TestClient(create_app())` 测试）都会触发 `restart_recovery` 把 running 任务标记为
-  `server_restarted` 杀掉——benchmark 运行期间不要并行跑测试套件或重启同库服务。
-
-## 已知边界（后续扩展）
-
-- 仅 HTTP/SSE 模式；in-process 模式（直接驱动 `StudyMaterialsTaskManager`）留待后续。
-- A2 默认是确定性代理；渲染版式（HTML/PDF）视觉评审未实现。
-- LLM judge 是可选增强（`--llm-judge`），默认关闭以保证完全可复现。
+- 仅支持 HTTP/SSE 采集；in-process runner 尚未实现。
+- A2 是 Markdown 结构代理，尚无 HTML/PDF 渲染后的视觉评分。
+- LLM judge 默认关闭以保证复现；启用后只补救语义表述，不会替没有证据的事实解除溯源门控。
+- 多进程共享同一 SQLite 时，进程启动可能触发 `restart_recovery` 并中止 running 任务；
+  benchmark 运行期间不要并行启动测试套件或重启同库服务。

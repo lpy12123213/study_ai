@@ -78,4 +78,41 @@ describe("ChatPage 冒烟", () => {
     expect(screen.getByRole("button", { name: /发送/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /停止接收/ })).not.toBeInTheDocument();
   });
+
+  it("携带 ?message= 锚点时历史加载后滚动并短暂高亮目标消息", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.startsWith("/api/conversations/7/messages")) {
+          return jsonResponse({
+            conversation: { id: 7, title: "数列讨论" },
+            messages: [
+              { id: 1, role: "user", content: "讲讲数列", created_at: "2026-07-26T00:00:00Z" },
+              { id: 2, role: "assistant", content: "数列是按一定次序排列的一列数。", created_at: "2026-07-26T00:00:01Z" },
+            ],
+          });
+        }
+        if (url.startsWith("/api/conversations")) {
+          return jsonResponse([
+            { id: 7, title: "数列讨论", created_at: "2026-07-26T00:00:00Z", updated_at: "2026-07-26T00:00:00Z" },
+          ]);
+        }
+        return jsonResponse({});
+      }),
+    );
+    renderChat("/chat/7?message=2");
+    expect(await screen.findByText("数列是按一定次序排列的一列数。")).toBeInTheDocument();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    const target = document.querySelector('[data-message-id="2"]');
+    expect(target).not.toBeNull();
+    expect(target?.getAttribute("data-message-id")).toBe("2");
+    // 高亮类短暂出现后由定时器清除
+    expect(target?.className).toContain("ring-primary");
+
+    Element.prototype.scrollIntoView = undefined as unknown as typeof Element.prototype.scrollIntoView;
+  });
 });

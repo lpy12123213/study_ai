@@ -1,4 +1,5 @@
 import { ApiError, authHeaders } from "@/shared/api/http-client";
+import { buildEventSourceUrl, joinApiUrl, resolveCredentials } from "@/shared/api/config";
 import type { TaskEvent } from "@/shared/api/types";
 
 /**
@@ -85,7 +86,7 @@ export interface StreamHandlers {
 export async function streamPost(path: string, body: unknown, handlers: StreamHandlers = {}): Promise<void> {
   const { onEvent, onDone, onError, onSettled, signal, headers } = handlers;
   try {
-    const res = await fetch(path, {
+    const res = await fetch(joinApiUrl(path), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -95,7 +96,7 @@ export async function streamPost(path: string, body: unknown, handlers: StreamHa
       },
       body: JSON.stringify(body ?? {}),
       signal,
-      credentials: "same-origin",
+      credentials: resolveCredentials(),
     });
 
     if (!res.ok || !res.body) {
@@ -161,7 +162,7 @@ export async function streamPost(path: string, body: unknown, handlers: StreamHa
 export async function streamGet(path: string, handlers: StreamHandlers = {}): Promise<void> {
   const { onEvent, onDone, onError, onSettled, signal, headers } = handlers;
   try {
-    const res = await fetch(path, {
+    const res = await fetch(joinApiUrl(path), {
       method: "GET",
       headers: {
         Accept: "text/event-stream",
@@ -169,7 +170,7 @@ export async function streamGet(path: string, handlers: StreamHandlers = {}): Pr
         ...headers,
       },
       signal,
-      credentials: "same-origin",
+      credentials: resolveCredentials(),
     });
 
     if (!res.ok || !res.body) {
@@ -264,7 +265,12 @@ export function streamTask(taskId: string, opts: TaskStreamOptions): TaskStreamH
 
   const connect = () => {
     if (stopped || terminal) return;
-    es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream?after_seq=${lastSeq}`);
+    es = new EventSource(
+      buildEventSourceUrl(`/api/tasks/${encodeURIComponent(taskId)}/stream`, { after_seq: lastSeq }),
+    );
+    // withCredentials 同源是 no-op；跨域部署时携带 cookie。
+    // TS 的 DOM lib 将 withCredentials 声明为 readonly，但运行时浏览器允许设置，故经 Object.assign 赋值。
+    Object.assign(es, { withCredentials: resolveCredentials() === "include" });
     es.onmessage = (msg) => {
       const raw = typeof msg.data === "string" ? msg.data : "";
       if (!raw || raw.trim() === "[DONE]") return;

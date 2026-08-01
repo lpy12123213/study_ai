@@ -2,9 +2,10 @@
   "id": "photosynthesis",
   "title": "光合作用的机制",
   "query": "自学光合作用：光反应与卡尔文循环的场所与产物、水的光解、ATP 与 NADPH 的作用、C3/C4/CAM 途径差异与光呼吸",
+  "tier": "smoke",
   "subject": "生物学",
   "preset": "standard",
-  "options": {"with_questions": false, "with_diagrams": true, "max_points": 7, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 7, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "光反应",
     "卡尔文循环",

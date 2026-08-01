@@ -2,9 +2,10 @@
   "id": "french_revolution_causes",
   "title": "法国大革命的成因",
   "query": "自学法国大革命（1789）的成因：财政危机、社会等级制度、启蒙思想与 1788 年农业危机等多重因素如何共同作用",
+  "tier": "smoke",
   "subject": "世界历史",
   "preset": "standard",
-  "options": {"with_questions": false, "with_diagrams": false, "max_points": 6, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": false, "max_points": 6, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "财政危机与三级会议",
     "社会等级制度",

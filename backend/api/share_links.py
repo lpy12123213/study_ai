@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.api.auth import require_auth
 from backend.api.middleware.rate_limit import SlidingWindowRateLimiter
+from backend.core.client_ip import client_ip
 from backend.core.logging_utils import get_logger
 from backend.database.repositories.content.study_archives import get_study_archive as db_get_study_archive
 from backend.database.repositories.content.templates import get_template as db_get_template
@@ -47,11 +48,8 @@ def _public_meta(link: dict) -> dict:
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = str(request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
-    if forwarded:
-        return forwarded[:80]
-    client = getattr(request, "client", None)
-    return str(getattr(client, "host", "") or "unknown")[:80]
+    """Client IP via the shared trusted-proxy-aware helper (fail-closed by default)."""
+    return client_ip(request)
 
 
 @share_links_router.post("", response_model=dict)

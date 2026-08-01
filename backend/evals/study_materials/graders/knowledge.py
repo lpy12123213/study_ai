@@ -1,15 +1,10 @@
 """知识理解评分：K 维度。
 
-判定前先经 ``_content_text`` 剥离标题行与目录 bullet——骨架文字（往往是
-用户 query 的回显）不算"讲解"，防止空壳成稿靠标题蹭分。
+标题与目录不算讲解；参考文献标题之后的内容也不参与知识命中。
 
-- K1 事实检查点：用例锚定的正则确定性匹配；``llm_judge`` 开启时，
-  确定性判定失败的检查点交 LLM 复核（语义表述可能不同），复核通过仍给分。
-  K1 受**可溯源门控**：成稿没有内联引用时，事实点只按 ``_TRACE_FLOOR``
-  的比例计分——benchmark 的立场是自学资料的关键论断必须可溯源。
-- K2 陷阱：把常见误解写成事实且未驳正判 0；提到误解并驳正判满分；
-  完全未触及同样判 0（用例指定的误解是合格讲义必须覆盖的）。
-- K3 概念辨析：对比对必须在小窗口内共现（真正做了对比，而非各讲各的）。
+- K1：事实锚点逐条匹配，并按事实所在段落是否带有效内联引用逐条门控。
+- K2：正确关键词还必须与“误区/并非/而是”等纠错语境相邻。
+- K3：两个术语除在小窗口共现外，还必须出现明确的对比语义。
 """
 
 from __future__ import annotations
@@ -18,6 +13,7 @@ import re
 from typing import Callable, List, Optional
 
 from backend.evals.study_materials.case_schema import BenchmarkCase, RequiredFact
+from backend.evals.study_materials.graders.citations import valid_inline_citation_ids
 from backend.evals.study_materials.graders.common import DIMENSION_MAX, CheckResult, DimensionResult, make_dimension
 
 # (markdown, fact_description, source_urls) -> 是否满足事实点
@@ -25,20 +21,29 @@ LlmFactJudge = Callable[[str, str, List[str]], bool]
 
 _CONTRAST_WINDOW = 800
 
-# K1 可溯源门控下限：无任何内联引用时事实点只计 15%。
+# 无有效内联引用的事实仍保留 15%“草稿内容”分，但不能冒充可核验知识。
 _TRACE_FLOOR = 0.15
 
 _HEADING_LINE_RE = re.compile(r"^#{1,6}\s")
 _TOC_HEADING_RE = re.compile(r"^#{2,4}\s*.*(知识点目录|目录)\s*$")
+_REFERENCES_HEADING_RE = re.compile(
+    r"^#{1,4}\s*(参考文献|参考资料|引用文献|引用来源|来源|References|Bibliography|Sources)\s*$",
+    re.IGNORECASE,
+)
 _BULLET_RE = re.compile(r"^[-*+]\s")
+_CORRECTION_CUE_RE = re.compile(
+    r"误区|误解|易错|澄清|注意|并非|不是|不等于|不能|不可|而是|区别|混淆|切勿|不要|避免"
+)
+_CONTRAST_CUE_RE = re.compile(
+    r"对比|比较|区别|不同|相同|相比|相较|而非|而是|前者|后者|vs\.?|versus",
+    re.IGNORECASE,
+)
+_INLINE_FOOTNOTE_RE = re.compile(r"\[\^([^\]]+)\]")
+_INLINE_NUMERIC_RE = re.compile(r"\[(\d{1,2})\]")
 
 
 def _content_text(markdown: str) -> str:
-    """剥离标题行与目录 bullet 后的正文文本。
-
-    知识维度只应对正文判定：标题/目录里出现的概念名（往往来自用户 query 的
-    原样回显）不代表资料真正讲解了它。代码块内容保留（可能含公式）。
-    """
+    """剥离标题、目录 bullet 与参考文献后的正文，保留代码块内容。"""
     lines: List[str] = []
     in_fence = False
     in_toc = False
@@ -52,6 +57,8 @@ def _content_text(markdown: str) -> str:
             lines.append(line)
             continue
         if _HEADING_LINE_RE.match(stripped):
+            if _REFERENCES_HEADING_RE.match(stripped):
+                break
             in_toc = bool(_TOC_HEADING_RE.match(stripped))
             continue
         if in_toc and _BULLET_RE.match(stripped):
@@ -65,25 +72,49 @@ def _fact_passed(fact: RequiredFact, text: str) -> bool:
     for pattern in match.all:
         if not re.search(pattern, text, re.IGNORECASE):
             return False
-    if match.any and not any(re.search(p, text, re.IGNORECASE) for p in match.any):
+    if match.any and not any(re.search(pattern, text, re.IGNORECASE) for pattern in match.any):
         return False
-    return not any(re.search(p, text, re.IGNORECASE) for p in match.none)
+    return not any(re.search(pattern, text, re.IGNORECASE) for pattern in match.none)
 
 
-def _trap_score(wrong_hit: bool, correct_hit: bool) -> float:
-    if wrong_hit and not correct_hit:
-        return 0.0  # 把误解写成了事实
-    if correct_hit:
-        return 1.0  # 明确给出正确论断（无论是否点名误解）
-    return 0.0  # 未触及：用例指定的误解是合格讲义必须覆盖的
+def _valid_markers_in(text: str) -> set[str]:
+    markers = {f"f:{value}" for value in _INLINE_FOOTNOTE_RE.findall(text)}
+    markers.update(f"n:{value}" for value in _INLINE_NUMERIC_RE.findall(text))
+    return markers
+
+
+def _fact_trace_hit(fact: RequiredFact, text: str, valid_markers: set[str]) -> bool:
+    if not valid_markers:
+        return False
+    # 输出契约要求“关键事实句后引用”；按段落/表格行定位，避免文档级引用漂移。
+    chunks = [
+        chunk.strip()
+        for chunk in re.split(r"\n\s*\n|(?=^\s*\|)", text, flags=re.MULTILINE)
+        if chunk.strip()
+    ]
+    return any(
+        _fact_passed(fact, chunk) and bool(_valid_markers_in(chunk) & valid_markers)
+        for chunk in chunks
+    )
+
+
+def _explicit_correction_hit(pattern: str, text: str) -> bool:
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        window = text[max(0, match.start() - 180): min(len(text), match.end() + 180)]
+        if _CORRECTION_CUE_RE.search(window):
+            return True
+    return False
 
 
 def _contrast_hit(pair: List[str], text: str) -> bool:
     a, b = pair[0].casefold(), pair[1].casefold()
     folded = text.casefold()
-    for m in re.finditer(re.escape(a), folded):
-        window = folded[max(0, m.start() - _CONTRAST_WINDOW // 2): m.end() + _CONTRAST_WINDOW // 2]
-        if b in window:
+    for match in re.finditer(re.escape(a), folded):
+        window = folded[
+            max(0, match.start() - _CONTRAST_WINDOW // 2):
+            match.end() + _CONTRAST_WINDOW // 2
+        ]
+        if b in window and _CONTRAST_CUE_RE.search(window):
             return True
     return False
 
@@ -95,23 +126,21 @@ def grade_knowledge(
     llm_judge: Optional[LlmFactJudge] = None,
     citation_ratio: float = 0.0,
 ) -> DimensionResult:
-    """K 维度：知识理解（满分 DIMENSION_MAX['K']）。
-
-    ``citation_ratio`` 是 C2 内联引用得分比例（0..1，由 scorecard 注入），
-    对 K1 做门控：无引用的"裸论断"事实点只按 _TRACE_FLOOR 计分。
-    """
+    """K 维度：事实、误区与辨析；事实溯源按段落逐条判定。"""
     dim = make_dimension("K")
     total_max = DIMENSION_MAX["K"]
     text = _content_text(markdown or "")
-    trace_factor = _TRACE_FLOOR + (1.0 - _TRACE_FLOOR) * max(0.0, min(1.0, citation_ratio))
+    valid_markers = valid_inline_citation_ids(markdown or "")
 
     facts = case.required_facts
     per_fact = (total_max * 0.6) / max(1, len(facts))
     passed_n = 0
+    grounded_n = 0
     llm_rescued = 0
     failed_details: List[str] = []
     for fact in facts:
-        ok = _fact_passed(fact, text)
+        deterministic_ok = _fact_passed(fact, text)
+        ok = deterministic_ok
         if not ok and llm_judge is not None:
             try:
                 ok = bool(llm_judge(text, fact.description, fact.source_urls))
@@ -119,15 +148,31 @@ def grade_knowledge(
             except Exception:  # noqa: BLE001 - judge 故障不拖垮评分
                 ok = False
         passed_n += 1 if ok else 0
+        grounded_n += 1 if deterministic_ok and _fact_trace_hit(fact, text, valid_markers) else 0
         if not ok:
             failed_details.append(fact.id)
+
     detail = "未命中: " + "、".join(failed_details) if failed_details else "全部命中"
     if llm_rescued:
         detail += f"（其中 {llm_rescued} 条经 LLM 复核通过）"
-    detail += f"；溯源系数 ×{trace_factor:.2f}（内联引用比例 {citation_ratio:.2f}）"
+    detail += (
+        f"；逐事实溯源 {grounded_n}/{passed_n or 0}；"
+        f"文档 C2 比例 {max(0.0, min(1.0, citation_ratio)):.2f}"
+    )
+    k1_score = per_fact * (passed_n * _TRACE_FLOOR + grounded_n * (1.0 - _TRACE_FLOOR))
     dim.checks.append(CheckResult(
-        "K1_facts", f"事实检查点 {passed_n}/{len(facts)} 命中（锚定学术来源，可溯源门控）",
-        per_fact * passed_n * trace_factor, total_max * 0.6, detail,
+        "K1_facts",
+        f"事实检查点 {passed_n}/{len(facts)} 命中（逐事实可溯源门控）",
+        k1_score,
+        total_max * 0.6,
+        detail,
+        metrics={
+            "matched_count": passed_n,
+            "grounded_count": grounded_n,
+            "total": len(facts),
+            "matched_ratio": round(passed_n / max(1, len(facts)), 4),
+            "grounded_ratio": round(grounded_n / max(1, len(facts)), 4),
+        },
     ))
 
     traps = case.traps
@@ -136,26 +181,37 @@ def grade_knowledge(
     for trap in traps:
         wrong_hit = bool(re.search(trap.wrong_pattern, text, re.IGNORECASE))
         correct_hit = bool(re.search(trap.correct_pattern, text, re.IGNORECASE))
-        s = _trap_score(wrong_hit, correct_hit)
-        trap_scores.append(s)
-        if s == 0.0 and wrong_hit:
-            trap_notes.append(f"{trap.id} 把误解写成事实")
-        elif s == 0.0:
+        correction_hit = correct_hit and _explicit_correction_hit(trap.correct_pattern, text)
+        score = 1.0 if correction_hit else 0.0
+        trap_scores.append(score)
+        if score == 0.0 and wrong_hit:
+            trap_notes.append(f"{trap.id} 把误解写成事实或未在邻近语境纠正")
+        elif score == 0.0 and correct_hit:
+            trap_notes.append(f"{trap.id} 仅出现正确关键词，缺少明确纠错语境")
+        elif score == 0.0:
             trap_notes.append(f"{trap.id} 未驳正")
     k2_max = total_max * 0.2
     k2 = k2_max * (sum(trap_scores) / max(1, len(trap_scores))) if traps else 0.0
     dim.checks.append(CheckResult(
-        "K2_traps", "常见误解陷阱（写错或未驳正均判 0）",
-        k2, k2_max, "；".join(trap_notes) if trap_notes else "全部驳正",
+        "K2_traps",
+        "常见误解陷阱（须在明确纠错语境中驳正）",
+        k2,
+        k2_max,
+        "；".join(trap_notes) if trap_notes else "全部明确驳正",
+        metrics={"addressed_count": int(sum(trap_scores)), "total": len(traps)},
     ))
 
     contrasts = case.contrasts
     contrast_hits = sum(1 for pair in contrasts if _contrast_hit(pair, text))
     k3_max = total_max * 0.2
     k3 = k3_max * (contrast_hits / max(1, len(contrasts))) if contrasts else 0.0
-    missed = [" vs ".join(p) for p in contrasts if not _contrast_hit(p, text)]
+    missed = [" vs ".join(pair) for pair in contrasts if not _contrast_hit(pair, text)]
     dim.checks.append(CheckResult(
-        "K3_contrasts", f"概念辨析 {contrast_hits}/{len(contrasts)} 组在上下文窗口内真正对比",
-        k3, k3_max, ("未辨析: " + "、".join(missed)) if missed else "全部辨析",
+        "K3_contrasts",
+        f"概念辨析 {contrast_hits}/{len(contrasts)} 组含明确对比语义",
+        k3,
+        k3_max,
+        ("未辨析: " + "、".join(missed)) if missed else "全部辨析",
+        metrics={"contrast_count": contrast_hits, "total": len(contrasts)},
     ))
     return dim

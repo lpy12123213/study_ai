@@ -56,23 +56,39 @@ export interface DeepthinkProjection {
   answer: string;
   reasoning: string;
   doneInfo: DoneInfo | null;
+  /** 持久化长任务 id（POST /api/tasks/deepthink 提交后记录）。 */
+  taskId: string | null;
+  /** 已消费的最新事件 seq（续播 after_seq / 本地持久化用）。 */
+  lastSeq: number;
+  /** 用户点击「停止接收」但服务端取消尚未确认。 */
+  stopIntent: boolean;
+  /** 服务端已确认取消（cancel API 成功或校准到 canceled）。 */
+  serverCancelConfirmed: boolean;
 }
 
 export type DeepthinkAction =
-  /** 开始一次运行：清空运行区并进入 running */
-  | { type: "start" }
+  /** 开始一次运行：清空运行区并进入 running（携带持久化任务 id） */
+  | { type: "start"; taskId?: string }
+  /** 从持久化进度恢复投影并续播（挂载后刷新恢复） */
+  | { type: "restore"; taskId: string; lastSeq: number }
   /** 全部清空回 idle（新问题） */
   | { type: "clear" }
   /** 中断并返回输入视图（运行数据保留，但不可见） */
   | { type: "back_to_edit" }
-  /** 用户手动停止：保留已有内容并进入 done */
+  /** 用户点击「停止接收」：标记意图，等待服务端取消或连接断开 */
+  | { type: "stop_requested" }
+  /** 服务端已确认取消（cancel API 成功）：保留已有内容并进入 done */
+  | { type: "server_cancel_confirmed" }
+  /** 用户手动停止接收：保留已有内容并进入 done */
   | { type: "stopped" }
   /** 流正常收尾（done 事件未置终态时的兜底） */
   | { type: "stream_done" }
   /** 传输层失败（与 error 事件区分：这里是 fetch/SSE 层面的异常） */
   | { type: "stream_error"; message: string }
   /** 服务端任务事件 */
-  | { type: "event"; ev: TaskEvent };
+  | { type: "event"; ev: TaskEvent }
+  /** REST 校准发现任务已非 running（canceled/completed/failed 等），据此对齐投影 */
+  | { type: "calibrate"; status: string };
 
 export function initialDeepthinkProjection(): DeepthinkProjection {
   return {
@@ -87,6 +103,10 @@ export function initialDeepthinkProjection(): DeepthinkProjection {
     answer: "",
     reasoning: "",
     doneInfo: null,
+    taskId: null,
+    lastSeq: 0,
+    stopIntent: false,
+    serverCancelConfirmed: false,
   };
 }
 
@@ -217,26 +237,71 @@ function applyEvent(state: DeepthinkProjection, ev: TaskEvent): DeepthinkProject
   }
 }
 
+/** REST 校准对齐：canceled → 停止接收；completed → 完成；failed → 错误；其余保留投影。 */
+function applyCalibration(state: DeepthinkProjection, status: string): DeepthinkProjection {
+  const s = String(status || "").trim().toLowerCase();
+  if (s === "completed") {
+    return { ...state, phase: "done", serverCancelConfirmed: false };
+  }
+  if (s === "canceled" || s === "cancelled") {
+    return { ...state, stopped: true, phase: "done", serverCancelConfirmed: true };
+  }
+  if (s === "failed") {
+    return { ...state, phase: "error", errorMsg: state.errorMsg ?? "任务执行失败" };
+  }
+  // running / paused / pending_review：不改变投影
+  return state;
+}
+
 export function deepthinkProjectionReducer(
   state: DeepthinkProjection,
   action: DeepthinkAction,
 ): DeepthinkProjection {
   switch (action.type) {
     case "start":
-      return { ...initialDeepthinkProjection(), phase: "running" };
+      return {
+        ...initialDeepthinkProjection(),
+        phase: "running",
+        ...(action.taskId ? { taskId: action.taskId } : {}),
+      };
+    case "restore":
+      return {
+        ...initialDeepthinkProjection(),
+        phase: "running",
+        taskId: action.taskId,
+        lastSeq: action.lastSeq,
+      };
     case "clear":
       return initialDeepthinkProjection();
     case "back_to_edit":
       return { ...state, phase: "idle" };
+    case "stop_requested":
+      return { ...state, stopIntent: true };
+    case "server_cancel_confirmed":
+      if (!state.stopIntent) return state;
+      return { ...state, stopped: true, phase: "done", serverCancelConfirmed: true };
     case "stopped":
       return { ...state, stopped: true, phase: "done" };
     case "stream_done":
       return state.phase === "running" ? { ...state, phase: "done" } : state;
     case "stream_error":
       return { ...state, errorMsg: action.message, phase: "error" };
-    case "event":
+    case "calibrate":
+      return applyCalibration(state, action.status);
+    case "event": {
       // 事件只在运行中改变投影（终态/编辑态下的残留帧忽略）
-      return state.phase === "running" ? applyEvent(state, action.ev) : state;
+      if (state.phase !== "running") return state;
+      const withTaskId = state.taskId
+        ? state
+        : action.ev.taskId
+          ? { ...state, taskId: action.ev.taskId }
+          : state;
+      const next = applyEvent(withTaskId, action.ev);
+      return {
+        ...next,
+        lastSeq: action.ev.seq && action.ev.seq > next.lastSeq ? action.ev.seq : next.lastSeq,
+      };
+    }
     default:
       return state;
   }

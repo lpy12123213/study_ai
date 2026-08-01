@@ -24,6 +24,7 @@ function jsonResponse(payload: unknown, init: { status?: number } = {}) {
 
 afterEach(() => {
   resetHttpClient();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -178,6 +179,22 @@ describe("apiFetch", () => {
     vi.stubGlobal("fetch", spy);
     await apiFetch("/api/x");
     expect(spy.mock.calls[0][0]).toBe("https://api.example.com/api/x");
+  });
+
+  it("跨域 baseUrl 时凭证策略为 include（同源默认仍为 same-origin）", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.com");
+    configureHttpClient({ baseUrl: "https://api.example.com" });
+    const spy = vi.fn(async (_input: unknown, _init?: unknown) => jsonResponse({}));
+    vi.stubGlobal("fetch", spy);
+    await apiFetch("/api/x");
+    expect(spy.mock.calls[0][0]).toBe("https://api.example.com/api/x");
+    expect((spy.mock.calls[0][1] as RequestInit).credentials).toBe("include");
+
+    vi.stubEnv("VITE_API_BASE_URL", "");
+    configureHttpClient({ baseUrl: "" });
+    await apiFetch("/api/y");
+    expect(spy.mock.calls[1][0]).toBe("/api/y");
+    expect((spy.mock.calls[1][1] as RequestInit).credentials).toBe("same-origin");
   });
 
   it("观察者抛错不阻断请求链路", async () => {

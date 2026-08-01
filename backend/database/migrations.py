@@ -309,6 +309,7 @@ def sync_migrate_db_schema(conn) -> None:
                 "messages_ai",
                 "messages_ad",
                 "messages_au",
+                "conversations_title_au",
                 "paper_questions_ai",
                 "paper_questions_ad",
                 "paper_questions_au",
@@ -408,6 +409,14 @@ def sync_migrate_db_schema(conn) -> None:
             "(SELECT title FROM conversations WHERE id=NEW.conversation_id),"
             "NEW.content "
             "WHERE NEW.role <> 'tool'; "
+            "END;"
+        )
+
+        # conversations → messages_fts title (rename propagates to every message of the conversation)
+        conn.exec_driver_sql(
+            "CREATE TRIGGER IF NOT EXISTS conversations_title_au AFTER UPDATE OF title ON conversations "
+            "BEGIN "
+            "UPDATE messages_fts SET title = NEW.title WHERE conversation_id = OLD.id; "
             "END;"
         )
 
@@ -565,5 +574,18 @@ def sync_migrate_db_schema(conn) -> None:
                 "INSERT OR REPLACE INTO study_archives_fts(rowid,user_id,archive_id,subject,topic,requirements,markdown) "
                 "SELECT id, user_id, id, subject, topic, requirements, markdown FROM study_archives"
             )
+
+        # One-time guarded resync: conversations may have been renamed before the
+        # conversations_title_au trigger existed, leaving stale titles in the FTS
+        # index. The `title IS NOT (...)` guard makes this a cheap no-op when in sync.
+        try:
+            conn.exec_driver_sql(
+                "UPDATE messages_fts SET title = "
+                "(SELECT c.title FROM conversations c WHERE c.id = messages_fts.conversation_id) "
+                "WHERE title IS NOT "
+                "(SELECT c.title FROM conversations c WHERE c.id = messages_fts.conversation_id)"
+            )
+        except SQLAlchemyError:
+            logger.warning("fts_title_resync_failed", exc_info=True)
     except SQLAlchemyError:
         return

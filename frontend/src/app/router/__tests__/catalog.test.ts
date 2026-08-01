@@ -1,6 +1,7 @@
+import { matchPath } from "react-router";
 import { describe, expect, it } from "vitest";
 
-import { APP_ROUTES, NAV_GROUPS, bottomNavItems, contentModeForPath, navGroups, routeTitle } from "../catalog";
+import { APP_ROUTES, NAV_GROUPS, REDIRECTS, bottomNavItems, contentModeForPath, navGroups, routeTitle } from "../catalog";
 
 describe("route catalog", () => {
   it("路由 id 全局唯一且 path 不重复", () => {
@@ -57,6 +58,24 @@ describe("route catalog", () => {
     for (const item of items) {
       expect(item.label).toBeTruthy();
       expect(item.icon).toBeTruthy();
+    }
+  });
+
+  it("REDIRECTS 的 from 路径唯一且不与 APP_ROUTES 冲突", () => {
+    expect(REDIRECTS.length).toBeGreaterThan(0);
+    const froms = REDIRECTS.map((r) => r.from);
+    expect(new Set(froms).size).toBe(froms.length);
+    const routePaths = APP_ROUTES.map((r) => r.path);
+    for (const from of froms) {
+      expect(routePaths, `REDIRECTS.from ${from} 与 APP_ROUTES 冲突`).not.toContain(from);
+    }
+  });
+
+  it("REDIRECTS 的每个 to 路径都能匹配 APP_ROUTES 中的路径", () => {
+    for (const r of REDIRECTS) {
+      const pathname = r.to.split("?")[0];
+      const matched = APP_ROUTES.some((route) => matchPath({ path: route.path, end: true }, pathname));
+      expect(matched, `REDIRECTS.to ${r.to} 未匹配到任何 APP_ROUTES 路径`).toBe(true);
     }
   });
 });

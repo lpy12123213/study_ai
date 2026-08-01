@@ -66,5 +66,83 @@ class FrontendDistStalenessTests(unittest.TestCase):
         self.assertEqual("", message)
 
 
+class SelectedRequirementFilesTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.start = load_start_module()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def write(self, name: str) -> None:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("content\n", encoding="utf-8")
+
+    def names(self, files: list[Path]) -> list[str]:
+        return [p.name for p in files]
+
+    def test_win32_selects_win_lock(self) -> None:
+        self.write("requirements.txt")
+        self.write("requirements-lock-win.txt")
+        self.write("requirements-dev.txt")
+
+        files = self.start._selected_requirement_files(self.root, "win32")
+
+        self.assertEqual(
+            ["requirements.txt", "requirements-lock-win.txt", "requirements-dev.txt"],
+            self.names(files),
+        )
+
+    def test_win32_falls_back_when_only_linux_lock_present(self) -> None:
+        self.write("requirements.txt")
+        self.write("requirements-lock-linux.txt")
+        self.write("requirements-dev.txt")
+
+        files = self.start._selected_requirement_files(self.root, "win32")
+
+        self.assertEqual(["requirements.txt", "requirements-dev.txt"], self.names(files))
+
+    def test_linux_selects_linux_lock(self) -> None:
+        self.write("requirements.txt")
+        self.write("requirements-lock-win.txt")
+        self.write("requirements-lock-linux.txt")
+
+        files = self.start._selected_requirement_files(self.root, "linux")
+
+        self.assertEqual(["requirements.txt", "requirements-lock-linux.txt"], self.names(files))
+
+    def test_darwin_selects_mac_lock(self) -> None:
+        self.write("requirements.txt")
+        self.write("requirements-lock-mac.txt")
+
+        files = self.start._selected_requirement_files(self.root, "darwin")
+
+        self.assertEqual(["requirements.txt", "requirements-lock-mac.txt"], self.names(files))
+
+    def test_no_lock_falls_back_to_ranges(self) -> None:
+        self.write("requirements.txt")
+        self.write("requirements-dev.txt")
+
+        files = self.start._selected_requirement_files(self.root, "win32")
+
+        self.assertEqual(["requirements.txt", "requirements-dev.txt"], self.names(files))
+
+    def test_unknown_platform_never_selects_a_lock(self) -> None:
+        self.write("requirements.txt")
+        self.write("requirements-lock-win.txt")
+
+        files = self.start._selected_requirement_files(self.root, "freebsd")
+
+        self.assertEqual(["requirements.txt"], self.names(files))
+
+    def test_platform_lock_name_mapping(self) -> None:
+        self.assertEqual("requirements-lock-win.txt", self.start._platform_lock_name("win32"))
+        self.assertEqual("requirements-lock-linux.txt", self.start._platform_lock_name("linux"))
+        self.assertEqual("requirements-lock-mac.txt", self.start._platform_lock_name("darwin"))
+        self.assertIsNone(self.start._platform_lock_name("freebsd"))
+
+
 if __name__ == "__main__":
     unittest.main()

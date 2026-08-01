@@ -35,8 +35,8 @@ docker build -t study-ai/latex-sandbox:latest docker/latex-sandbox
 当前支持并维护的部署模型：
 
 - 本地开发：Vite 前端 + Uvicorn 后端。
-- 同源部署：后端托管 `frontend/dist`，浏览器使用 `/api`。
-- 前后端分离部署：前端设置绝对 `VITE_API_BASE_URL`。
+- 同源部署（默认）：后端托管 `frontend/dist`，浏览器使用相对 `/api`，无需设置 `VITE_API_BASE_URL`。
+- 跨站部署：前端构建时设置 `VITE_API_BASE_URL` 指向后端 origin，后端开启 `CORS_ORIGINS` allowlist 与 `AUTH_COOKIE_SAMESITE=none`。
 
 当前不提供正式容器化生产入口。容器化部署需要另行维护 Dockerfile、卷、健康检查和 CI 验证。
 
@@ -103,26 +103,46 @@ python -m backend.mcp.stdio_server
 
 ## 前端部署方式
 
-### 同源部署
+前端与后端之间有两种受支持的模式。
 
-推荐同源部署：前端构建产物放在 `frontend/dist`，API 使用默认 `/api`。后端可以同时服务静态资源和 API，浏览器不会遇到跨域问题。
+### 模式一：同源反向代理（推荐）
 
-### 前后端分离
+前端构建产物放在 `frontend/dist`，由后端同时托管静态资源与 `/api`，浏览器使用相对地址，不会遇到跨域问题。此模式无需设置 `VITE_API_BASE_URL`（默认），认证 Cookie 使用 `SameSite=Lax`。
 
-如果前端独立托管：
+### 模式二：跨站部署
+
+前端与后端分别托管在不同 origin（例如前端 `https://app.example.com`、后端 `https://api.example.com`）。前端、后端与 Cookie 需要一起配置：
+
+- 前端构建时把 `VITE_API_BASE_URL` 设为后端 origin，所有 REST、下载、POST SSE、EventSource 与 WebSocket 请求都会指向该地址。
+- 后端用 `CORS_ORIGINS` 白名单只允许前端 origin，并为跨站请求开启携带凭证。
+- 设置 `AUTH_COOKIE_SAMESITE=none`：`none` 隐含 `Secure`，因此跨站部署必须启用 HTTPS。
+- 前端跨站请求使用 `credentials: include`，EventSource 使用 `withCredentials`，才能携带认证 Cookie。
+
+注意：`CORS_ORIGINS=*` 与携带凭证的请求不能同时使用（`*` + 凭证的 CORS 组合无效），必须显式列出前端 origin。
 
 ```bash
-VITE_API_BASE_URL=https://your-backend.example/api
+VITE_API_BASE_URL=https://api.example.com   # 前端构建时
+AUTH_COOKIE_SAMESITE=none                    # 后端；隐含 Secure，要求 HTTPS
+CORS_ORIGINS=https://app.example.com         # 后端 allowlist
 ```
 
-然后重新构建前端：
+修改 `VITE_API_BASE_URL` 后重新构建前端：
 
 ```bash
 cd frontend
 npm run build
 ```
 
-后端需要允许对应来源访问，并确认 SSE 不被代理缓冲。
+开发环境下跨站分离仍走 Vite dev proxy（`VITE_DEV_PROXY_TARGET`），不涉及跨站 Cookie。
+
+### 部署相关环境变量
+
+| 变量 | 位置 | 说明 |
+| --- | --- | --- |
+| `VITE_API_BASE_URL` | 前端构建时 | 后端 origin；默认留空表示同源相对 `/api` |
+| `VITE_DEV_PROXY_TARGET` | 前端开发 | Vite dev server 的 `/api` 代理目标，默认 `http://localhost:8000` |
+| `AUTH_COOKIE_SAMESITE` | 后端 | `lax`（默认）或 `none`；`none` 隐含 `Secure`，跨站部署需要 HTTPS |
+| `CORS_ORIGINS` | 后端 | 允许跨站访问的 origin allowlist，逗号分隔 |
 
 ## 反向代理
 

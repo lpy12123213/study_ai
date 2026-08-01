@@ -2,9 +2,10 @@
   "id": "lebesgue_integral",
   "title": "勒贝格积分与测度论基础",
   "query": "系统自学勒贝格积分：从测度、可测函数到单调收敛定理与控制收敛定理，并讲清它与黎曼积分的关系",
+  "tier": "smoke",
   "subject": "数学分析",
   "preset": "deep",
-  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "测度",
     "可测函数",

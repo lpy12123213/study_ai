@@ -6,7 +6,7 @@ Study AI is a local-first FastAPI backend plus a clean-room rewritten frontend. 
 
 ## Build, Test, and Development Commands
 
-- `start.bat setup`: install the repository dependencies on Windows (prefers the pinned `requirements-lock.txt` snapshot when present; delete it to resolve fresh ranges from `requirements.txt`).
+- `start.bat setup`: install the repository dependencies on the current platform, preferring the matching per-platform lock file `requirements-lock-<platform>.txt` (`requirements-lock-win.txt` on Windows, `requirements-lock-linux.txt` on Linux/macOS) when present; deleting the lock file (or its absence) resolves fresh ranges from `requirements.txt`.
 - `start.bat doctor`: run the repo smoke and quality checks.
 - `python -m uvicorn backend.app:app --reload --port 8000`: manual backend start.
 - `cd frontend && npm install`: install frontend dependencies.

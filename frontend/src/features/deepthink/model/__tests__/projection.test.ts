@@ -91,4 +91,65 @@ describe("deepthinkProjectionReducer", () => {
     expect(s.phase).toBe("idle");
     expect(s.answer).toBe("x");
   });
+
+  it("start 携带 taskId 并随事件推进 lastSeq", () => {
+    const s = run([
+      { type: "start", taskId: "deepthink-1" },
+      { type: "event", ev: { type: "node_generated", data: { node: { id: "n1" } }, seq: 3 } },
+      { type: "event", ev: { type: "answer_delta", data: { content: "解：" }, seq: 4 } },
+    ]);
+    expect(s.taskId).toBe("deepthink-1");
+    expect(s.lastSeq).toBe(4);
+    expect(s.nodes).toHaveLength(1);
+    expect(s.answer).toBe("解：");
+  });
+
+  it("事件未带 taskId 时从信封回填；restore 从持久化进度恢复投影", () => {
+    let s = run([{ type: "start" }, { type: "event", ev: ev("search_start", { question: "Q" }) }]);
+    // start 未传 taskId、事件也无 taskId 时保持 null
+    expect(s.taskId).toBeNull();
+    s = run([{ type: "event", ev: { type: "search_start", data: { question: "Q" }, seq: 0, taskId: "deepthink-2" } }], s);
+    expect(s.taskId).toBe("deepthink-2");
+
+    const restored = run([{ type: "restore", taskId: "deepthink-9", lastSeq: 12 }]);
+    expect(restored.phase).toBe("running");
+    expect(restored.taskId).toBe("deepthink-9");
+    expect(restored.lastSeq).toBe(12);
+  });
+
+  it("cancel-arrived-via-calibration：校准 canceled 对齐到已停止接收", () => {
+    const s = run([
+      { type: "start", taskId: "deepthink-1" },
+      { type: "event", ev: ev("node_generated", { node: { id: "n1" } }) },
+      { type: "calibrate", status: "canceled" },
+    ]);
+    expect(s.phase).toBe("done");
+    expect(s.stopped).toBe(true);
+    expect(s.serverCancelConfirmed).toBe(true);
+    expect(s.nodes).toHaveLength(1);
+  });
+
+  it("校准 completed 置完成态但不算已停止；校准 failed 置错误", () => {
+    const completed = run([{ type: "start", taskId: "t1" }, { type: "calibrate", status: "completed" }]);
+    expect(completed.phase).toBe("done");
+    expect(completed.stopped).toBe(false);
+
+    const failed = run([{ type: "start", taskId: "t1" }, { type: "calibrate", status: "failed" }]);
+    expect(failed.phase).toBe("error");
+    // 校准 running/paused 不改变投影
+    expect(run([{ type: "calibrate", status: "paused" }], completed).phase).toBe("done");
+  });
+
+  it("stop_requested 标记意图；server_cancel_confirmed 进入停止终态", () => {
+    let s = run([{ type: "start", taskId: "deepthink-1" }, { type: "stop_requested" }]);
+    expect(s.stopIntent).toBe(true);
+    expect(s.phase).toBe("running");
+    s = run([{ type: "server_cancel_confirmed" }], s);
+    expect(s.phase).toBe("done");
+    expect(s.stopped).toBe(true);
+    expect(s.serverCancelConfirmed).toBe(true);
+    // 未请求停止时 server_cancel_confirmed 不应误伤投影
+    const fresh = run([{ type: "start", taskId: "deepthink-1" }, { type: "server_cancel_confirmed" }]);
+    expect(fresh.phase).toBe("running");
+  });
 });

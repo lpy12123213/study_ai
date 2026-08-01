@@ -13,7 +13,13 @@ from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlsplit
 
 from backend.evals.study_materials.case_schema import BenchmarkCase
-from backend.evals.study_materials.graders.common import DIMENSION_MAX, CheckResult, DimensionResult, make_dimension
+from backend.evals.study_materials.graders.common import (
+    DIMENSION_MAX,
+    PROCESS_DIMENSION_MAX,
+    CheckResult,
+    DimensionResult,
+    make_dimension,
+)
 
 # 检索类工具 → 来源类别。browse 单列：它代表"深读网页"而非一次新检索。
 SEARCH_TOOL_CLASSES: Dict[str, str] = {
@@ -200,7 +206,7 @@ def grade_research(
 
 
 def grade_subagents(case: BenchmarkCase, events: List[Dict[str, Any]]) -> DimensionResult:
-    """S 维度：子代理使用（满分 DIMENSION_MAX['S']）。
+    """S 过程诊断：子代理使用（不计入最终百分制）。
 
     默认 ReAct 路径不产生 subagent 事件（仅 plan 模式 foreach 块触发），
     这是"真实需要"缺口之一：本维度对当前系统天然接近 0 分。
@@ -208,7 +214,7 @@ def grade_subagents(case: BenchmarkCase, events: List[Dict[str, Any]]) -> Dimens
     stats = EventStats(events)
     kp_count = max(1, len(case.expected_knowledge_points))
     dim = make_dimension("S")
-    total_max = DIMENSION_MAX["S"]
+    total_max = PROCESS_DIMENSION_MAX["S"]
     part = total_max / 3.0
 
     n_start = len(stats.subagent_starts)

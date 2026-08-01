@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
@@ -165,11 +165,12 @@ function ToolRecordRow({ message }: { message: ChatMessage }) {
   );
 }
 
-function HistoryRow({ message }: { message: ChatMessage }) {
-  if (message.role === "user") return <UserBubble content={message.content} />;
-  if (message.role === "tool") return <ToolRecordRow message={message} />;
-  if (message.role === "assistant") {
-    return (
+function HistoryRow({ message, highlight = false }: { message: ChatMessage; highlight?: boolean }) {
+  let body: ReactNode;
+  if (message.role === "user") body = <UserBubble content={message.content} />;
+  else if (message.role === "tool") body = <ToolRecordRow message={message} />;
+  else if (message.role === "assistant") {
+    body = (
       <AssistantShell>
         <ToolCallsChips toolCalls={message.tool_calls} />
         {message.content ? (
@@ -179,8 +180,14 @@ function HistoryRow({ message }: { message: ChatMessage }) {
         ) : null}
       </AssistantShell>
     );
+  } else {
+    body = null;
   }
-  return null;
+  return (
+    <div data-message-id={message.id} className={cn(highlight && "rounded-lg ring-2 ring-primary/40")}>
+      {body}
+    </div>
+  );
 }
 
 /** 流式中的 assistant 轮次：思考文本 + 轮次时间线 + 最终答案（只消费投影，不解释原始事件） */
@@ -350,6 +357,10 @@ export function ChatPage() {
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  /** 全局搜索携带 ?message= 锚点：历史加载后滚动并短暂高亮该条消息 */
+  const [searchParams] = useSearchParams();
+  const targetMessageId = searchParams.get("message") ? Number(searchParams.get("message")) : null;
+  const [highlightMsgId, setHighlightMsgId] = useState<number | null>(null);
   /** 小屏会话列表 Sheet（<1024px 时左栏隐藏） */
   const [convListOpen, setConvListOpen] = useState(false);
   /** 工具检查器：选中的工具 + 打开时的轮次快照（流式期间随投影刷新，落库后保留快照） */
@@ -468,6 +479,17 @@ export function ChatPage() {
     const el = scrollRef.current;
     if (el && pinnedToBottom) el.scrollTop = el.scrollHeight;
   }, [displayHistory.length, live, pinnedToBottom]);
+
+  // 全局搜索携带 ?message= 锚点进入：历史加载完成后滚动并短暂高亮该条消息
+  useEffect(() => {
+    if (targetMessageId == null || !Number.isInteger(targetMessageId) || displayHistory.length === 0) return;
+    const el = document.querySelector(`[data-message-id="${targetMessageId}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightMsgId(targetMessageId);
+    const t = window.setTimeout(() => setHighlightMsgId(null), 2200);
+    return () => window.clearTimeout(t);
+  }, [targetMessageId, displayHistory.length]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -711,7 +733,7 @@ export function ChatPage() {
                       </div>
                     ) : null}
                     {displayHistory.map((m) => (
-                      <HistoryRow key={m.id} message={m} />
+                      <HistoryRow key={m.id} message={m} highlight={m.id === highlightMsgId} />
                     ))}
                     {live.map((m) =>
                       m.role === "user" ? (

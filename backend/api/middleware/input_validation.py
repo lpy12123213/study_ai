@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -108,6 +109,12 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
                 out[key] = self._sanitize(v, depth=depth + 1)
             return out
 
+        if isinstance(value, bool):
+            # bool is an int subclass; keep unchanged.
+            return value
+        if isinstance(value, float) and not math.isfinite(value):
+            # `json.loads` accepts Infinity/NaN literals; reject non-finite numbers.
+            raise ValueError("non_finite_number")
         # Numbers/bools/null/etc: keep unchanged.
         return value
 

@@ -2,9 +2,10 @@
   "id": "tcp_congestion_control",
   "title": "TCP 拥塞控制",
   "query": "自学 TCP 拥塞控制：慢启动、拥塞避免、快重传/快恢复的工作原理与状态机，Tahoe/Reno/CUBIC 的演进，以及拥塞控制与流量控制的区别",
+  "tier": "smoke",
   "subject": "计算机网络",
   "preset": "standard",
-  "options": {"with_questions": false, "with_diagrams": true, "max_points": 7, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 7, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "慢启动",
     "拥塞避免",

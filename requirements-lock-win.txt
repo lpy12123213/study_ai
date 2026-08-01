@@ -1,7 +1,11 @@
-# Locked dependency snapshot of a known-good local venv (pip freeze).
+# Locked Windows dependency snapshot (pip freeze in a Windows venv).
 # start.bat setup prefers this file when present; delete it to fall back to
 # range resolution from requirements.txt. Regenerate after upgrades with:
-#   venv/Scripts/python.exe -m pip freeze --exclude-editable > requirements-lock.txt
+#   venv/Scripts/python.exe -m pip freeze --exclude-editable > requirements-lock-win.txt
+# Other platforms use their own lock: requirements-lock-linux.txt is generated
+# by CI (and then committed), requirements-lock-mac.txt likewise. When the
+# matching lock is absent, setup falls back to range resolution. pywin32 is
+# pinned with a win32 marker so non-Windows installs never see it.
 aiosqlite==0.22.1
 alembic==1.18.4
 annotated-doc==0.0.4
@@ -48,8 +52,6 @@ matplotlib==3.10.9
 mcp==1.27.1
 mdurl==0.1.2
 mpmath==1.3.0
-mypy==2.1.0
-mypy_extensions==1.1.0
 nodeenv==1.10.0
 numpy==2.4.6
 openai==1.109.1
@@ -74,7 +76,7 @@ python-dateutil==2.9.0.post0
 python-discovery==1.3.1
 python-dotenv==1.2.2
 python-multipart==0.0.29
-pywin32==311
+pywin32==311; sys_platform == 'win32'
 PyYAML==6.0.3
 referencing==0.37.0
 requests==2.34.2

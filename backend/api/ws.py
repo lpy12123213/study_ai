@@ -38,10 +38,17 @@ def _resolve_ws_token(websocket: WebSocket, token: str) -> str:
     scrub them, so browser clients should authenticate via the cookie and leave
     the query param empty.
     """
+    cookie = str(websocket.cookies.get(AUTH_ACCESS_COOKIE_NAME) or "").strip()
     raw = str(token or "").strip()
-    if raw:
-        return raw
-    return str(websocket.cookies.get(AUTH_ACCESS_COOKIE_NAME) or "").strip()
+    if cookie and raw:
+        # Legacy query token is ignored in favor of the cookie (deprecation window).
+        logger.warning(
+            "ws_token_query_param_deprecated",
+            extra={"hint": "cookie token wins; legacy ?token= is ignored"},
+        )
+    if cookie:
+        return cookie
+    return raw
 
 
 async def _send_event(websocket: WebSocket, event: dict) -> bool:

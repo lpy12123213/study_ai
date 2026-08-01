@@ -1,5 +1,5 @@
-import { useEffect, useReducer, useRef, useState } from "react";
-import { useLocation } from "react-router";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useLocation, useSearchParams } from "react-router";
 import {
   AlertCircle,
   Brain,
@@ -17,13 +17,16 @@ import {
   XCircle,
 } from "lucide-react";
 
-import { solveDeepThink } from "@/features/deepthink/api";
+import { submitDeepThink } from "@/features/deepthink/api";
 import {
   deepthinkProjectionReducer,
   initialDeepthinkProjection,
   type DtNode,
 } from "@/features/deepthink/model/projection";
+import { tasksApi } from "@/features/task-center/api";
 import { ApiError } from "@/shared/api/http-client";
+import { watchTask, type TaskWatchHandle } from "@/shared/streaming/task-coordinator";
+import { useTasksStore } from "@/stores/tasks";
 import { formatDuration } from "@/lib/format";
 import { proxyImageUrl } from "@/lib/media";
 import { cn } from "@/lib/utils";
@@ -38,6 +41,48 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownView } from "@/components/markdown/markdown-view";
 import { SubjectSelect } from "@/components/question/subject-select";
+
+const ACTIVE_RUN_KEY = "study-ai:deepthink:active-run";
+
+interface PersistedRun {
+  taskId: string;
+  lastSeq: number;
+  question: string;
+  subject: string;
+}
+
+function readPersistedRun(): PersistedRun | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_RUN_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PersistedRun>;
+    if (typeof value.taskId !== "string" || typeof value.question !== "string") return null;
+    return {
+      taskId: value.taskId,
+      lastSeq: typeof value.lastSeq === "number" ? value.lastSeq : 0,
+      question: value.question,
+      subject: typeof value.subject === "string" ? value.subject : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedRun(run: PersistedRun): void {
+  try {
+    localStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
+  } catch {
+    // 本地存储不可用不阻塞生成。
+  }
+}
+
+function clearPersistedRun(): void {
+  try {
+    localStorage.removeItem(ACTIVE_RUN_KEY);
+  } catch {
+    // 本地存储不可用时无需额外处理。
+  }
+}
 
 function nodeStatusIcon(status: string) {
   switch (status) {
@@ -119,6 +164,7 @@ function friendlyStreamError(err: Error): string {
 export function DeepthinkPage() {
   const toast = useUiStore((s) => s.toast);
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // 输入区（question 支持首页 Intent Workspace 预填）
   const [question, setQuestion] = useState(
@@ -145,13 +191,19 @@ export function DeepthinkPage() {
   const [reasoningOpen, setReasoningOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const watcherRef = useRef<TaskWatchHandle | null>(null);
+  // 权威的当前任务 id：提交返回后即写入，不等首个事件回填，stop 才能准确取消。
+  const taskIdRef = useRef<string | null>(null);
+  const resumeProbeRef = useRef("");
+  const lastPersistAtRef = useRef(0);
   const nodeListRef = useRef<HTMLDivElement | null>(null);
   const answerScrollRef = useRef<HTMLDivElement | null>(null);
 
-  // 卸载时中断未完成的流（流只能由用户动作触发，effect 里不启动 SSE）
+  // 卸载时中断提交并关闭事件流（流只能由用户动作/恢复触发，effect 里不启动 SSE）
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      watcherRef.current?.close();
     };
   }, []);
 
@@ -168,7 +220,57 @@ export function DeepthinkPage() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [answer, phase]);
 
-  const start = () => {
+  /** 节流持久化 {taskId,lastSeq,question,subject} 并同步 URL 深链。 */
+  const persistRun = useCallback(
+    (taskId: string, lastSeq: number, q: string, subj: string) => {
+      const now = Date.now();
+      if (now - lastPersistAtRef.current < 500) return;
+      lastPersistAtRef.current = now;
+      writePersistedRun({ taskId, lastSeq, question: q, subject: subj });
+      setSearchParams({ task: taskId }, { replace: true });
+    },
+    [setSearchParams],
+  );
+
+  /**
+   * 用 Task Coordinator 订阅任务流：REST 校准 + 断线重连，事件归一到投影，
+   * 同时转发给任务中心 store 以支持深链。
+   */
+  const beginWatch = useCallback(
+    (taskId: string, afterSeq: number, q: string, subj: string) => {
+      watcherRef.current?.close();
+      const taskStore = useTasksStore.getState();
+      taskStore.register(taskId, { type: "deepthink", title: `深度解题：${subj || "高中数学"}` });
+      const watcher = watchTask(taskId, {
+        afterSeq,
+        getStatus: async (id) => {
+          const detail = await tasksApi.get(id);
+          return { status: String(detail.status || ""), result: detail.result, error: detail.error };
+        },
+        onEvent: (ev) => {
+          dispatch({ type: "event", ev });
+          // answer/reasoning 增量事件可送入任务中心 store；DeepThink 无 text_delta 快照。
+          if (ev.type !== "text_delta") taskStore.applyEvent(taskId, ev);
+          persistRun(taskId, ev.seq || afterSeq, q, subj);
+        },
+        onCalibrated: (rest) => {
+          // 校准发现终态（completed/canceled/failed）：投影据此对齐
+          dispatch({ type: "calibrate", status: String(rest.status || "") });
+        },
+        onTerminal: () => {
+          clearPersistedRun();
+          setSearchParams({}, { replace: true });
+        },
+        onGaveUp: () => {
+          dispatch({ type: "stream_error", message: "连接断开；服务端任务可能仍在继续运行" });
+        },
+      });
+      watcherRef.current = watcher;
+    },
+    [persistRun, setSearchParams],
+  );
+
+  const start = async () => {
     const q = question.trim();
     if (!q) {
       toast({ title: "请输入题目", description: "题目内容不能为空", variant: "warning" });
@@ -177,37 +279,62 @@ export function DeepthinkPage() {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    watcherRef.current?.close();
+    watcherRef.current = null;
 
     dispatch({ type: "start" });
     setReasoningOpen(false);
+    clearPersistedRun();
+    setSearchParams({}, { replace: true });
 
     const payload: { question: string; subject?: string; image_url?: string } = { question: q };
     if (subject) payload.subject = subject;
     const img = imageUrl.trim();
     if (img) payload.image_url = img;
 
-    void solveDeepThink(payload, {
-      signal: ctrl.signal,
-      onEvent: (ev) => dispatch({ type: "event", ev }),
-      onDone: () => {
-        // 正常结束（done 事件已置终态）或用户停止 / 流意外结束的兜底
-        dispatch({ type: "stream_done" });
-      },
-      onError: (err) => {
-        dispatch({ type: "stream_error", message: friendlyStreamError(err) });
-      },
-    });
+    try {
+      const { taskId } = await submitDeepThink(payload, { signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      taskIdRef.current = taskId;
+      // 阻止恢复探测重复 watch 刚提交的任务
+      resumeProbeRef.current = taskId;
+      writePersistedRun({ taskId, lastSeq: 0, question: q, subject });
+      setSearchParams({ task: taskId }, { replace: true });
+      beginWatch(taskId, 0, q, subject);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      dispatch({ type: "stream_error", message: friendlyStreamError(err instanceof Error ? err : new Error(String(err))) });
+    }
   };
 
-  const stop = () => {
-    abortRef.current?.abort();
+  const stop = async () => {
+    const taskId = taskIdRef.current ?? run.taskId;
+    dispatch({ type: "stop_requested" });
+    if (taskId) {
+      try {
+        await tasksApi.cancel(taskId);
+        dispatch({ type: "server_cancel_confirmed" });
+      } catch {
+        // 取消请求失败（离线等）也要中断本地接收，不能死路。
+      }
+    }
+    watcherRef.current?.close();
+    watcherRef.current = null;
+    taskIdRef.current = null;
     dispatch({ type: "stopped" });
+    clearPersistedRun();
+    setSearchParams({}, { replace: true });
   };
 
   const resetAll = () => {
     abortRef.current?.abort();
+    watcherRef.current?.close();
+    watcherRef.current = null;
+    taskIdRef.current = null;
     dispatch({ type: "clear" });
     setReasoningOpen(false);
+    clearPersistedRun();
+    setSearchParams({}, { replace: true });
     setQuestion("");
     setSubject("");
     setImageUrl("");
@@ -215,7 +342,12 @@ export function DeepthinkPage() {
 
   const backToEdit = () => {
     abortRef.current?.abort();
+    watcherRef.current?.close();
+    watcherRef.current = null;
+    taskIdRef.current = null;
     dispatch({ type: "back_to_edit" });
+    clearPersistedRun();
+    setSearchParams({}, { replace: true });
   };
 
   const copyAnswer = async () => {
@@ -226,6 +358,53 @@ export function DeepthinkPage() {
       toast({ title: "复制失败", description: "浏览器拒绝访问剪贴板", variant: "destructive" });
     }
   };
+
+  // 刷新/深链恢复：存在持久化或 URL taskId 时探测状态，running/completed 续播（全量回放重建投影），
+  // canceled/failed 对齐投影。
+  useEffect(() => {
+    const persisted = readPersistedRun();
+    const taskId = searchParams.get("task") || persisted?.taskId;
+    if (!taskId || resumeProbeRef.current === taskId) return;
+    resumeProbeRef.current = taskId;
+
+    let cancelled = false;
+    void (async () => {
+      let status = "";
+      try {
+        const detail = await tasksApi.get(taskId);
+        status = String(detail.status || "");
+      } catch {
+        if (!cancelled) {
+          clearPersistedRun();
+          setSearchParams({}, { replace: true });
+        }
+        return;
+      }
+      if (cancelled) return;
+
+      if (status === "running" || status === "completed") {
+        const q = persisted?.question ?? "";
+        const subj = persisted?.subject ?? "";
+        if (q) setQuestion(q);
+        if (subj) setSubject(subj);
+        taskIdRef.current = taskId;
+        dispatch({ type: "restore", taskId, lastSeq: 0 });
+        setReasoningOpen(false);
+        // 空投影全量回放，重建节点与解答内容
+        beginWatch(taskId, 0, q, subj);
+      } else if (status === "canceled" || status === "failed") {
+        dispatch({ type: "calibrate", status });
+        clearPersistedRun();
+        setSearchParams({}, { replace: true });
+      } else {
+        clearPersistedRun();
+        setSearchParams({}, { replace: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, beginWatch, setSearchParams]);
 
   // ---------------- 输入视图 ----------------
   if (phase === "idle") {
@@ -248,7 +427,7 @@ export function DeepthinkPage() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                start();
+                void start();
               }}
               className="space-y-4"
             >
@@ -332,13 +511,13 @@ export function DeepthinkPage() {
             <span className="text-sm text-muted-foreground">DeepThink 正在多路径探索解题…</span>
             <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={stop}>
               <Square />
-              停止
+              停止接收
             </Button>
           </>
         ) : null}
         {phase === "done" ? (
           <>
-            <Badge variant={stopped ? "warning" : "success"}>{stopped ? "已停止" : "已完成"}</Badge>
+            <Badge variant={stopped ? "warning" : "success"}>{stopped ? "已停止接收" : "已完成"}</Badge>
             {doneInfo?.elapsed != null ? (
               <span className="text-xs text-muted-foreground">耗时 {formatDuration(doneInfo.elapsed)}</span>
             ) : null}
@@ -475,7 +654,7 @@ export function DeepthinkPage() {
             )}
 
             {stopped && phase === "done" ? (
-              <p className="text-xs text-muted-foreground">已手动停止，以上内容可能不完整。</p>
+              <p className="text-xs text-muted-foreground">已停止接收；服务端任务可能仍在运行，以上内容可能不完整。</p>
             ) : null}
           </CardContent>
         </Card>

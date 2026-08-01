@@ -5,6 +5,7 @@
  * 组卷网登录态检查）通过 configureHttpClient 注入，由 app 层 observers 接线。
  * 见 src/app/api/http-observers.ts。
  */
+import { joinApiUrl, resolveCredentials } from "./config";
 
 /** 规范化后的 API 错误。后端错误载荷同时含 code / detail / error.code，这里统一收敛。 */
 export class ApiError extends Error {
@@ -123,7 +124,7 @@ function notifyError(error: ApiError, silent: boolean) {
 
 export async function apiFetch<T = any>(path: string, fetchOptions: ApiFetchOptions = {}): Promise<T> {
   const { method = "GET", body, query, headers, signal, silent } = fetchOptions;
-  const url = `${options.baseUrl ?? ""}${path}${buildQuery(query)}`;
+  const url = `${joinApiUrl(path, options.baseUrl ?? "")}${buildQuery(query)}`;
 
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
   const finalHeaders: Record<string, string> = {
@@ -139,7 +140,7 @@ export async function apiFetch<T = any>(path: string, fetchOptions: ApiFetchOpti
       headers: finalHeaders,
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
       signal,
-      credentials: "same-origin",
+      credentials: resolveCredentials(),
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
@@ -168,9 +169,15 @@ export async function apiFetch<T = any>(path: string, fetchOptions: ApiFetchOpti
   return payload;
 }
 
-/** 把后端相对下载地址（/api/media/generated/...）转为可点击的完整路径。 */
+/**
+ * 把后端相对下载地址（/api/media/generated/...）转为可点击的完整路径。
+ * 绝对地址（http(s)://、//）原样返回；/api/... 走 joinApiUrl（同源默认原样，
+ * 跨域配置了 base 时前置 origin）；其余以 "/" 开头的绝对路径保持原样。
+ */
 export function downloadUrl(url?: string | null): string {
   if (!url) return "";
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("/")) return url;
-  return `/api/media/generated/${url}`;
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("//")) return url;
+  if (url.startsWith("/api/")) return joinApiUrl(url);
+  if (url.startsWith("/")) return url;
+  return joinApiUrl(`/api/media/generated/${url}`);
 }

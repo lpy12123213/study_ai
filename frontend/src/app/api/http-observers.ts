@@ -6,6 +6,7 @@
  * 不注入 Bearer 令牌。应用启动时调用一次 registerHttpObservers()。
  */
 import { configureHttpClient } from "@/shared/api/http-client";
+import { resolveApiBaseUrl } from "@/shared/api/config";
 import { useUiStore } from "@/stores/ui";
 
 /** 成功或失败响应里都可能携带组卷网登录态标记。 */
@@ -20,6 +21,7 @@ function inspectZujuanPayload(payload: unknown) {
 
 export function registerHttpObservers(): void {
   configureHttpClient({
+    baseUrl: resolveApiBaseUrl(),
     onPayload: inspectZujuanPayload,
     onError: (error, { silent }) => {
       if (error.status === 429 && !silent) {

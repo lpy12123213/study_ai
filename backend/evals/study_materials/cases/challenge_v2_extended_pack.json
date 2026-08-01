@@ -1,0 +1,673 @@
+{
+  "pack_version": 1,
+  "defaults": {
+    "tier": "extended",
+    "preset": "deep",
+    "options": {"with_questions": true, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+    "min_unique_sources": 10,
+    "format_requirements": {"key_formulas": [], "min_figures": 1, "min_tables": 1, "min_chars": 7000},
+    "learning_requirements": {
+      "min_objectives": 3,
+      "min_worked_examples": 2,
+      "min_practice_questions": 6,
+      "min_answered_questions": 6,
+      "required_levels": ["基础", "应用", "迁移"]
+    }
+  },
+  "cases": [
+    {
+      "id": "central_limit_theorem",
+      "tier": "smoke",
+      "title": "中心极限定理、近似误差与推断边界",
+      "query": "系统自学中心极限定理：标准化、适用条件、样本均值标准误、Berry–Esseen 误差界与重尾反例；必须区分渐近正态、有限样本精确正态和大数定律",
+      "subject": "概率论与数理统计",
+      "expected_knowledge_points": ["标准化和分布收敛", "样本均值标准误", "Lindeberg–Lévy 条件", "Berry–Esseen 误差界", "重尾与相关性反例", "中心极限定理与大数定律"],
+      "expected_domains": ["nist.gov", "stat.berkeley.edu", "wikipedia.org"],
+      "required_facts": [
+        {"id": "standardized_limit", "description": "独立同分布且方差有限时，中心化标准化和依分布收敛到标准正态", "match": {"all": ["中心极限定理"], "any": ["依分布收敛|分布收敛", "标准正态", "独立同分布.{0,12}有限方差"]}, "source_urls": ["https://en.wikipedia.org/wiki/Central_limit_theorem"]},
+        {"id": "standard_error", "description": "样本均值的标准误为 sigma/sqrt(n)", "match": {"all": ["标准误"], "any": ["sigma.{0,8}sqrt|σ.{0,8}√", "平方根.{0,6}n", "1/√n"]}, "source_urls": ["https://www.itl.nist.gov/div898/handbook/eda/section3/eda3661.htm"]},
+        {"id": "finite_sample", "description": "中心极限定理是渐近结论，不保证有限样本精确正态", "match": {"any": ["有限样本.{0,12}(不|并非).{0,8}(精确|严格).{0,4}正态", "渐近.{0,8}正态", "n.{0,8}趋于无穷"]}, "source_urls": ["https://en.wikipedia.org/wiki/Central_limit_theorem"]},
+        {"id": "berry_esseen", "description": "Berry–Esseen 定理在三阶绝对矩有限时给出 O(1/sqrt(n)) 级误差界", "match": {"all": ["Berry.?Esseen|贝里.?埃塞恩"], "any": ["三阶绝对矩", "1/√n|sqrt.{0,5}n", "误差界|收敛速度"]}, "source_urls": ["https://en.wikipedia.org/wiki/Berry%E2%80%93Esseen_theorem"]},
+        {"id": "heavy_tail_boundary", "description": "无限方差重尾分布可能不满足经典中心极限定理", "match": {"all": ["重尾|柯西|Cauchy"], "any": ["无限方差|方差不存在", "不满足.{0,8}经典.{0,4}中心极限定理"]}, "source_urls": ["https://www.stat.berkeley.edu/~stark/Teach/S240/Notes/ch4.pdf"]}
+      ],
+      "traps": [
+        {"id": "exact_normal", "description": "误解：样本量一大就必然精确服从正态分布", "wrong_pattern": "样本量.{0,8}(大|超过).{0,12}(必然|一定|精确).{0,6}正态", "correct_pattern": "渐近|近似|有限样本"},
+        {"id": "same_as_lln", "description": "误解：中心极限定理与大数定律是同一个结论", "wrong_pattern": "中心极限定理.{0,12}(就是|等同于|与).{0,4}大数定律", "correct_pattern": "大数定律.{0,20}(收敛|均值)|中心极限定理.{0,20}分布"}
+      ],
+      "contrasts": [["中心极限定理", "大数定律"], ["渐近正态", "精确正态"]],
+      "format_requirements": {"key_formulas": ["sqrt|√", "sigma|σ", "N\\(0.?1\\)|标准正态"]}
+    },
+    {
+      "id": "fourier_transform_sampling",
+      "title": "傅里叶变换、采样与混叠",
+      "query": "系统自学连续/离散傅里叶变换、卷积定理、频谱泄漏、采样定理与混叠；用可计算例子区分采样率、信号最高频率、DFT 频率分辨率和窗函数作用",
+      "subject": "信号与系统",
+      "expected_knowledge_points": ["时域与频域表征", "卷积定理", "奈奎斯特采样条件", "混叠", "DFT 频率栅格", "窗函数与频谱泄漏"],
+      "expected_domains": ["ocw.mit.edu", "dspguide.com", "wikipedia.org"],
+      "required_facts": [
+        {"id": "transform_pair", "description": "傅里叶变换将时域信号分解为复指数频率成分且存在逆变换", "match": {"all": ["傅里叶变换"], "any": ["时域.{0,10}频域", "复指数", "逆变换"]}, "source_urls": ["https://ocw.mit.edu/courses/res-6-007-signals-and-systems-spring-2011/pages/lecture-notes/"]},
+        {"id": "convolution_theorem", "description": "时域卷积对应频域乘积", "match": {"all": ["卷积定理|卷积"], "any": ["频域.{0,8}乘积|乘法", "时域.{0,8}卷积"]}, "source_urls": ["https://en.wikipedia.org/wiki/Convolution_theorem"]},
+        {"id": "nyquist_condition", "description": "严格带限信号无混叠重建要求采样率大于最高频率两倍", "match": {"all": ["奈奎斯特|Nyquist"], "any": ["两倍|2倍|2B", "带限", "采样率"]}, "source_urls": ["https://www.dspguide.com/ch3/2.htm"]},
+        {"id": "aliasing", "description": "欠采样使频谱副本重叠，高频映射为低频且事后不能唯一恢复", "match": {"all": ["混叠|aliasing"], "any": ["频谱.{0,8}重叠", "高频.{0,8}低频", "无法.{0,8}恢复"]}, "source_urls": ["https://www.dspguide.com/ch3/2.htm"]},
+        {"id": "window_leakage", "description": "有限时长截断等价于乘窗，会导致频谱泄漏并产生主瓣旁瓣权衡", "match": {"all": ["频谱泄漏|谱泄漏"], "any": ["窗函数|乘窗", "主瓣.{0,10}旁瓣", "有限.{0,6}截断"]}, "source_urls": ["https://www.dspguide.com/ch9/1.htm"]}
+      ],
+      "traps": [
+        {"id": "nyquist_equal", "description": "误解：任何信号以恰好两倍最高频率采样都能无条件完美恢复", "wrong_pattern": "恰好.{0,4}两倍.{0,12}(任何|所有).{0,6}(完美|无损).{0,4}恢复", "correct_pattern": "严格大于|带限|抗混叠|边界"},
+        {"id": "zero_padding_resolution", "description": "误解：补零提高真实频率分辨能力", "wrong_pattern": "补零.{0,10}(提高|增加).{0,8}(真实|实际)?频率分辨率", "correct_pattern": "插值|不增加.{0,8}信息|观察时长"}
+      ],
+      "contrasts": [["采样率", "频率分辨率"], ["频谱泄漏", "混叠"]],
+      "format_requirements": {"key_formulas": ["Nyquist|奈奎斯特", "卷积", "DFT|离散傅里叶"]}
+    },
+    {
+      "id": "abstract_group_homomorphism",
+      "title": "群同态、正规子群与同构定理",
+      "query": "系统自学群同态：核与像、正规子群、商群、第一同构定理、单射/满射判据；必须给出有限群与无限群的例题、非正规子群反例和良定义检查",
+      "subject": "抽象代数",
+      "expected_knowledge_points": ["群同态定义", "核与像", "正规子群", "商群", "第一同构定理", "单射与满射判据"],
+      "expected_domains": ["abstract.ups.edu", "mathworld.wolfram.com", "wikipedia.org"],
+      "required_facts": [
+        {"id": "operation_preserved", "description": "群同态满足 phi(ab)=phi(a)phi(b) 并保持单位元和逆元", "match": {"all": ["群同态"], "any": ["phi.{0,5}ab.{0,10}phi.{0,5}a", "保持.{0,6}运算", "单位元.{0,8}逆元"]}, "source_urls": ["http://abstract.ups.edu/aata/homomorph.html"]},
+        {"id": "kernel_normal", "description": "同态核是定义域的正规子群，像是陪域的子群", "match": {"all": ["核|kernel"], "any": ["正规子群", "像.{0,8}子群"]}, "source_urls": ["https://mathworld.wolfram.com/GroupKernel.html"]},
+        {"id": "first_isomorphism", "description": "第一同构定理给出 G/ker(phi) 同构于 im(phi)", "match": {"all": ["第一同构定理"], "any": ["G/.{0,8}ker", "商群.{0,12}像", "im.{0,8}同构"]}, "source_urls": ["http://abstract.ups.edu/aata/isomorph.html"]},
+        {"id": "injective_kernel", "description": "群同态单射当且仅当核只有单位元", "match": {"all": ["单射"], "any": ["核.{0,8}(平凡|只有单位元)", "当且仅当"]}, "source_urls": ["https://en.wikipedia.org/wiki/Group_homomorphism"]},
+        {"id": "quotient_requires_normal", "description": "用陪集定义商群需要子群正规以保证乘法良定义", "match": {"all": ["商群"], "any": ["正规", "良定义", "陪集.{0,8}乘法"]}, "source_urls": ["http://abstract.ups.edu/aata/normal.html"]}
+      ],
+      "traps": [
+        {"id": "every_subgroup_quotient", "description": "误解：任意子群都可直接形成商群", "wrong_pattern": "任意.{0,4}子群.{0,10}(都|均).{0,6}(形成|定义).{0,4}商群", "correct_pattern": "正规子群|良定义"},
+        {"id": "kernel_empty", "description": "误解：单射同态的核为空集", "wrong_pattern": "单射.{0,8}核.{0,6}(为空|空集)", "correct_pattern": "平凡核|单位元"}
+      ],
+      "contrasts": [["核", "像"], ["正规子群", "一般子群"]],
+      "format_requirements": {"key_formulas": ["ker|核", "im|像", "G/"]}
+    },
+    {
+      "id": "numerical_ode_stability",
+      "title": "常微分方程数值方法的误差与稳定性",
+      "query": "系统自学 Euler、隐式 Euler 与 Runge–Kutta 方法：局部/全局截断误差、测试方程、绝对稳定域、A 稳定性和刚性；用步长失败反例说明精度与稳定性不是一回事",
+      "subject": "数值分析",
+      "expected_knowledge_points": ["局部与全局误差", "Euler 方法阶数", "测试方程与放大因子", "绝对稳定域", "A 稳定性", "刚性方程"],
+      "expected_domains": ["fncbook.com", "ocw.mit.edu", "wikipedia.org"],
+      "required_facts": [
+        {"id": "euler_order", "description": "前向 Euler 局部截断误差 O(h^2)、全局误差 O(h)", "match": {"all": ["Euler|欧拉"], "any": ["局部.{0,12}O.{0,4}h.?2", "全局.{0,12}O.{0,4}h", "一阶方法"]}, "source_urls": ["https://fncbook.com/euler/"]},
+        {"id": "test_equation", "description": "对 y'=lambda y，前向 Euler 放大因子为 1+h lambda", "match": {"all": ["测试方程"], "any": ["1.{0,3}h.{0,3}lambda", "放大因子", "y.?=.{0,4}lambda"]}, "source_urls": ["https://fncbook.com/absolute-stability/"]},
+        {"id": "absolute_stability", "description": "绝对稳定要求数值放大因子模不超过 1", "match": {"all": ["绝对稳定"], "any": ["放大因子.{0,12}(小于|不超过).{0,4}1", "稳定域", "模.{0,5}1"]}, "source_urls": ["https://fncbook.com/absolute-stability/"]},
+        {"id": "backward_a_stable", "description": "隐式 Euler 的稳定域包含整个左半平面，因此 A 稳定", "match": {"all": ["隐式.{0,4}Euler|后向.{0,4}Euler|隐式欧拉"], "any": ["A.?稳定", "左半平面"]}, "source_urls": ["https://en.wikipedia.org/wiki/Stiff_equation"]},
+        {"id": "stiffness", "description": "刚性问题迫使显式法为稳定性采用远小于精度所需的步长", "match": {"all": ["刚性"], "any": ["显式.{0,10}步长", "稳定性.{0,12}精度", "特征尺度"]}, "source_urls": ["https://en.wikipedia.org/wiki/Stiff_equation"]}
+      ],
+      "traps": [
+        {"id": "small_h_always", "description": "误解：只要步长看起来很小，显式 Euler 就必然稳定", "wrong_pattern": "步长.{0,6}(很小|足够小).{0,8}Euler.{0,6}(必然|一定).{0,4}稳定", "correct_pattern": "稳定域|h.{0,6}lambda|问题尺度"},
+        {"id": "accuracy_equals_stability", "description": "误解：高阶方法必然比低阶方法稳定", "wrong_pattern": "高阶.{0,8}(必然|一定).{0,8}(更稳定|稳定性更好)", "correct_pattern": "精度.{0,12}稳定性|稳定域"}
+      ],
+      "contrasts": [["局部截断误差", "全局误差"], ["精度", "稳定性"]],
+      "format_requirements": {"key_formulas": ["O.{0,3}h", "lambda|λ", "稳定域"]}
+    },
+    {
+      "id": "convex_optimization_kkt",
+      "title": "凸优化、对偶与 KKT 条件",
+      "query": "系统自学凸优化中的拉格朗日对偶和 KKT 条件：原始/对偶可行性、驻点、互补松弛、Slater 条件、强对偶；明确凸与非凸问题中必要性和充分性的边界",
+      "subject": "最优化理论",
+      "expected_knowledge_points": ["凸集与凸函数", "拉格朗日函数", "弱对偶与强对偶", "KKT 四类条件", "互补松弛", "Slater 条件"],
+      "expected_domains": ["stanford.edu", "mit.edu", "wikipedia.org"],
+      "required_facts": [
+        {"id": "convex_definition", "description": "凸函数在线段上的函数值不超过端点函数值的凸组合", "match": {"all": ["凸函数"], "any": ["线段", "凸组合", "f.{0,6}theta"]}, "source_urls": ["https://web.stanford.edu/~boyd/cvxbook/bv_cvxbook.pdf"]},
+        {"id": "weak_duality", "description": "对最小化原问题，任意对偶可行值给出原最优值下界", "match": {"all": ["弱对偶"], "any": ["下界", "对偶间隙", "原问题.{0,10}对偶问题"]}, "source_urls": ["https://web.stanford.edu/~boyd/cvxbook/bv_cvxbook.pdf"]},
+        {"id": "kkt_components", "description": "KKT 包含原始可行、对偶可行、驻点和互补松弛", "match": {"all": ["KKT"], "any": ["原始可行.{0,20}对偶可行", "驻点.{0,20}互补松弛"]}, "source_urls": ["https://web.stanford.edu/~boyd/cvxbook/bv_cvxbook.pdf"]},
+        {"id": "complementary_slackness", "description": "不等式约束乘子与约束松弛量乘积为零", "match": {"all": ["互补松弛"], "any": ["乘积.{0,8}零", "lambda.{0,8}g", "活跃约束"]}, "source_urls": ["https://en.wikipedia.org/wiki/Karush%E2%80%93Kuhn%E2%80%93Tucker_conditions"]},
+        {"id": "slater", "description": "凸问题满足 Slater 严格可行条件时强对偶成立，KKT 可刻画最优解", "match": {"all": ["Slater|斯莱特"], "any": ["严格可行", "强对偶", "充分条件"]}, "source_urls": ["https://web.stanford.edu/~boyd/cvxbook/bv_cvxbook.pdf"]}
+      ],
+      "traps": [
+        {"id": "kkt_global_nonconvex", "description": "误解：任意非凸问题只要满足 KKT 就一定是全局最优", "wrong_pattern": "非凸.{0,12}满足.{0,4}KKT.{0,10}(一定|必然).{0,6}全局最优", "correct_pattern": "必要条件|不充分|局部|凸问题"},
+        {"id": "strong_duality_always", "description": "误解：所有优化问题都自动强对偶", "wrong_pattern": "(所有|任意).{0,6}优化问题.{0,8}(都|均).{0,4}强对偶", "correct_pattern": "Slater|约束资格|弱对偶|条件"}
+      ],
+      "contrasts": [["弱对偶", "强对偶"], ["必要条件", "充分条件"]],
+      "format_requirements": {"key_formulas": ["KKT", "lambda|λ", "互补松弛"]}
+    },
+    {
+      "id": "pca_svd",
+      "title": "主成分分析与奇异值分解",
+      "query": "系统自学 PCA 与 SVD：中心化、协方差特征分解、最大方差与最小重构误差两种视角、解释方差、白化和高维小样本计算；辨析缩放、旋转与监督学习",
+      "subject": "线性代数与机器学习",
+      "expected_knowledge_points": ["数据中心化与标准化", "协方差特征分解", "SVD 与 PCA 关系", "最大方差投影", "低秩重构误差", "解释方差与白化"],
+      "expected_domains": ["stanford.edu", "scikit-learn.org", "wikipedia.org"],
+      "required_facts": [
+        {"id": "centering", "description": "PCA 前必须按特征中心化；是否标准化取决于量纲与目标", "match": {"all": ["中心化"], "any": ["减去.{0,6}均值", "标准化.{0,12}量纲", "零均值"]}, "source_urls": ["https://scikit-learn.org/stable/modules/decomposition.html#pca"]},
+        {"id": "covariance_eigen", "description": "主轴是样本协方差矩阵的特征向量，特征值给出对应方差", "match": {"all": ["协方差矩阵"], "any": ["特征向量", "特征值.{0,10}方差"]}, "source_urls": ["https://en.wikipedia.org/wiki/Principal_component_analysis"]},
+        {"id": "svd_relation", "description": "中心化数据矩阵 X 的右奇异向量是主方向，奇异值平方与协方差特征值相关", "match": {"all": ["SVD|奇异值分解"], "any": ["右奇异向量", "奇异值.{0,10}平方", "主方向"]}, "source_urls": ["https://cs229.stanford.edu/notes2022fall/cs229-notes10.pdf"]},
+        {"id": "two_objectives", "description": "前 k 个主成分既最大化投影方差，也最小化正交低秩重构平方误差", "match": {"all": ["重构误差"], "any": ["最大化.{0,8}方差", "最小化.{0,8}平方", "低秩"]}, "source_urls": ["https://en.wikipedia.org/wiki/Principal_component_analysis"]},
+        {"id": "explained_variance", "description": "解释方差比由所选特征值之和除以总特征值之和得到", "match": {"all": ["解释方差"], "any": ["特征值.{0,12}总和", "方差比", "累计"]}, "source_urls": ["https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html"]}
+      ],
+      "traps": [
+        {"id": "pca_supervised", "description": "误解：PCA 使用标签寻找最能分类的方向", "wrong_pattern": "PCA.{0,12}(使用|利用).{0,4}标签.{0,12}(分类|判别)", "correct_pattern": "无监督|不使用标签|方差"},
+        {"id": "always_standardize", "description": "误解：PCA 在任何数据上都必须按方差标准化", "wrong_pattern": "PCA.{0,10}(任何|所有).{0,4}数据.{0,8}(必须|一定).{0,6}标准化", "correct_pattern": "量纲|视问题|中心化|协方差"}
+      ],
+      "contrasts": [["中心化", "标准化"], ["最大方差", "最小重构误差"]],
+      "format_requirements": {"key_formulas": ["SVD|奇异值", "协方差", "解释方差"]}
+    },
+    {
+      "id": "special_relativity",
+      "title": "狭义相对论的时空结构",
+      "query": "系统自学狭义相对论：两个基本假设、洛伦兹变换、同时性的相对性、固有时、时间膨胀、长度收缩、时空间隔和速度合成；用双生子与尺钟例题澄清参考系误区",
+      "subject": "理论物理",
+      "expected_knowledge_points": ["相对性原理与光速不变", "洛伦兹因子", "同时性的相对性", "固有时与时间膨胀", "长度收缩", "时空间隔与因果性"],
+      "expected_domains": ["openstax.org", "einstein-online.info", "wikipedia.org"],
+      "required_facts": [
+        {"id": "postulates", "description": "惯性系中物理定律相同，真空光速对所有惯性观察者相同", "match": {"all": ["光速不变"], "any": ["相对性原理", "所有惯性系", "物理定律.{0,8}相同"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-3/pages/5-1-invariance-of-physical-laws"]},
+        {"id": "lorentz_factor", "description": "洛伦兹因子 gamma=1/sqrt(1-v^2/c^2)", "match": {"all": ["洛伦兹因子|Lorentz 因子"], "any": ["1.{0,5}sqrt.{0,12}v", "1.{0,5}√.{0,12}c", "gamma|γ"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-3/pages/5-3-time-dilation"]},
+        {"id": "proper_time", "description": "同一地点发生的两事件由共动钟测得固有时，其他惯性系测得更长时间间隔", "match": {"all": ["固有时"], "any": ["同一.{0,6}地点", "共动.{0,6}钟", "时间膨胀"]}, "source_urls": ["https://www.einstein-online.info/en/spotlight/proper_time/"]},
+        {"id": "interval_invariant", "description": "洛伦兹变换保持时空间隔，间隔符号决定类时类光类空及因果可能性", "match": {"all": ["时空间隔"], "any": ["不变量|保持不变", "类时|类光|类空", "因果"]}, "source_urls": ["https://en.wikipedia.org/wiki/Spacetime"]},
+        {"id": "velocity_addition", "description": "相对论速度合成不是普通相加，亚光速合成仍小于光速", "match": {"all": ["速度合成|速度相加"], "any": ["不是.{0,6}简单相加", "小于.{0,4}光速", "分母.{0,8}c"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-3/pages/5-7-relativistic-velocity-transformation"]}
+      ],
+      "traps": [
+        {"id": "optical_illusion", "description": "误解：时间膨胀只是传播延迟造成的视觉假象", "wrong_pattern": "时间膨胀.{0,12}(只是|仅仅).{0,10}(视觉|光传播|观察).{0,6}(假象|延迟)", "correct_pattern": "固有时|钟.{0,8}比较|真实效应"},
+        {"id": "own_frame_contracts", "description": "误解：物体在自身静止系中也发生长度收缩", "wrong_pattern": "自身.{0,6}静止系.{0,12}(也|同样).{0,6}长度收缩", "correct_pattern": "固有长度|相对运动|静止系"}
+      ],
+      "contrasts": [["固有时", "坐标时"], ["同时性的相对性", "因果次序"]],
+      "format_requirements": {"key_formulas": ["gamma|γ|洛伦兹因子", "c.?2|光速", "时空间隔"]}
+    },
+    {
+      "id": "maxwell_equations_em_waves",
+      "title": "麦克斯韦方程与电磁波",
+      "query": "系统自学微分/积分形式的麦克斯韦方程、边界条件、位移电流、电磁波方程、波速、偏振与坡印廷矢量；要求从方程推导真空平面波并辨析静态场与辐射场",
+      "subject": "电动力学",
+      "expected_knowledge_points": ["电场高斯定律", "磁场高斯定律", "法拉第定律", "安培–麦克斯韦定律", "电磁波方程与波速", "能流与偏振"],
+      "expected_domains": ["openstax.org", "farside.ph.utexas.edu", "wikipedia.org"],
+      "required_facts": [
+        {"id": "gauss_laws", "description": "电通量源于电荷，而磁场散度为零、没有观测到磁单极", "match": {"all": ["高斯定律"], "any": ["电荷.{0,10}电通量", "磁场.{0,8}散度.{0,4}零", "磁单极"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/16-1-maxwells-equations-and-electromagnetic-waves"]},
+        {"id": "faraday", "description": "时变磁通产生环形电场，感应电动势符号体现楞次定律", "match": {"all": ["法拉第"], "any": ["时变磁", "磁通.{0,8}电动势", "楞次"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-1-faradays-law"]},
+        {"id": "displacement_current", "description": "安培定律加入位移电流项后与电荷守恒相容", "match": {"all": ["位移电流"], "any": ["电通量.{0,8}变化", "电荷守恒", "安培.?麦克斯韦"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/16-1-maxwells-equations-and-electromagnetic-waves"]},
+        {"id": "wave_speed", "description": "真空方程给出电磁波速 c=1/sqrt(mu0 epsilon0)", "match": {"all": ["电磁波"], "any": ["1.{0,5}sqrt.{0,12}mu|1.{0,5}√.{0,12}μ", "波速.{0,8}光速", "真空"]}, "source_urls": ["https://farside.ph.utexas.edu/teaching/em/lectures/node96.html"]},
+        {"id": "transverse_energy", "description": "真空平面波中 E、B 与传播方向两两垂直，坡印廷矢量给出能流方向", "match": {"all": ["坡印廷|Poynting"], "any": ["E.{0,12}B.{0,12}垂直", "横波", "能流"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/16-3-energy-carried-by-electromagnetic-waves"]}
+      ],
+      "traps": [
+        {"id": "needs_medium", "description": "误解：电磁波像声波一样必须依赖物质介质传播", "wrong_pattern": "电磁波.{0,10}(必须|只能).{0,8}(介质|物质).{0,4}传播", "correct_pattern": "真空|不需要.{0,6}介质"},
+        {"id": "fields_parallel", "description": "误解：平面波的电场与磁场平行", "wrong_pattern": "电场.{0,8}磁场.{0,6}(平行|同方向)", "correct_pattern": "垂直|横向|叉乘"}
+      ],
+      "contrasts": [["传导电流", "位移电流"], ["近场", "辐射场"]],
+      "format_requirements": {"key_formulas": ["Maxwell|麦克斯韦", "mu|μ", "epsilon|ε", "Poynting|坡印廷"]}
+    },
+    {
+      "id": "thermodynamics_entropy",
+      "title": "热力学熵、第二定律与自由能",
+      "query": "系统自学热力学第一/第二定律、状态函数与过程量、Clausius 不等式、可逆/不可逆过程、熵产生、Helmholtz/Gibbs 自由能及适用约束；避免把熵简化为日常语言的混乱度",
+      "subject": "热力学",
+      "expected_knowledge_points": ["第一定律与符号约定", "状态函数和过程量", "熵的 Clausius 定义", "第二定律与熵产生", "可逆与不可逆", "自由能判据"],
+      "expected_domains": ["openstax.org", "chem.libretexts.org", "nist.gov"],
+      "required_facts": [
+        {"id": "first_law", "description": "第一定律表达内能变化等于传入热量与对系统做功之和，符号取决于约定", "match": {"all": ["第一定律"], "any": ["内能.{0,10}热量.{0,10}功", "符号约定", "能量守恒"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/3-3-first-law-of-thermodynamics"]},
+        {"id": "entropy_state", "description": "熵是状态函数，而热量和功是路径相关的过程量", "match": {"all": ["熵.{0,6}状态函数"], "any": ["热量.{0,10}路径", "功.{0,8}过程量", "路径无关"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Thermodynamics_and_Chemical_Equilibrium_(Ellgen)/07%3A_State_Functions_and_The_First_Law/7.05%3A_State_Functions"]},
+        {"id": "clausius", "description": "可逆路径上 dS=delta Qrev/T，不可逆过程需加入非负熵产生", "match": {"all": ["Clausius|克劳修斯"], "any": ["Q.{0,6}rev.{0,6}T", "熵产生", "可逆路径"]}, "source_urls": ["https://en.wikipedia.org/wiki/Clausius_theorem"]},
+        {"id": "isolated_second_law", "description": "孤立系统总熵不减；局部系统熵可以因向环境输出熵而降低", "match": {"all": ["孤立系统"], "any": ["总熵.{0,6}不减|熵增加", "局部.{0,8}降低", "系统和环境"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/4-7-entropy-on-a-microscopic-scale"]},
+        {"id": "gibbs_condition", "description": "恒温恒压且只做体积功时，自发过程 Gibbs 自由能降低，平衡时取极小", "match": {"all": ["Gibbs|吉布斯"], "any": ["恒温.{0,8}恒压", "自发.{0,8}降低", "平衡.{0,8}极小"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Physical_Chemistry_(LibreTexts)/19%3A_Chemical_Thermodynamics/19.06%3A_Gibbs_Energy_Change_and_Equilibrium"]}
+      ],
+      "traps": [
+        {"id": "entropy_everywhere", "description": "误解：任何选定系统的熵在任何过程中都只能增加", "wrong_pattern": "(任何|所有).{0,4}系统.{0,8}熵.{0,8}(只能|必然|总是).{0,4}增加", "correct_pattern": "孤立系统|系统和环境|熵流"},
+        {"id": "entropy_disorder", "description": "误解：熵严格等同于日常语言的混乱程度", "wrong_pattern": "熵.{0,6}(就是|严格等于|等同于).{0,4}(混乱|无序)程度", "correct_pattern": "微观状态|概率|热力学定义|局限"}
+      ],
+      "contrasts": [["状态函数", "过程量"], ["可逆过程", "不可逆过程"]],
+      "format_requirements": {"key_formulas": ["dS|熵变", "Q.{0,5}T", "Gibbs|吉布斯"]}
+    },
+    {
+      "id": "semiconductor_pn_junction",
+      "title": "半导体 PN 结与二极管",
+      "query": "系统自学能带、掺杂、载流子、PN 结耗尽层与内建电势、正反向偏置、Shockley 方程、击穿和光伏效应；要求用能带图和 I–V 曲线解释而非只背结论",
+      "subject": "半导体物理",
+      "expected_knowledge_points": ["本征与掺杂半导体", "多数/少数载流子", "耗尽层与内建场", "正向偏置", "反向偏置与击穿", "Shockley 方程"],
+      "expected_domains": ["pveducation.org", "openstax.org", "wikipedia.org"],
+      "required_facts": [
+        {"id": "doping_neutrality", "description": "施主/受主掺杂改变多数载流子，但宏观材料仍近似电中性", "match": {"all": ["掺杂"], "any": ["施主.{0,10}电子", "受主.{0,10}空穴", "电中性"]}, "source_urls": ["https://www.pveducation.org/pvcdrom/pn-junctions/doping"]},
+        {"id": "depletion_region", "description": "扩散与复合留下固定离化杂质，形成耗尽区和抵抗扩散的内建电场", "match": {"all": ["耗尽区|耗尽层"], "any": ["固定.{0,6}离子", "内建电场", "扩散.{0,8}复合"]}, "source_urls": ["https://www.pveducation.org/pvcdrom/pn-junctions/formation-of-a-pn-junction"]},
+        {"id": "forward_bias", "description": "正向偏置降低势垒、缩窄耗尽层并使扩散电流指数增加", "match": {"all": ["正向偏置"], "any": ["降低.{0,6}势垒", "缩窄.{0,6}耗尽", "指数.{0,6}电流"]}, "source_urls": ["https://www.pveducation.org/pvcdrom/pn-junctions/bias-of-pn-junctions"]},
+        {"id": "shockley", "description": "理想二极管电流近似 I=Is(exp(qV/nkT)-1)", "match": {"all": ["Shockley|肖克利"], "any": ["指数", "I.?s", "qV.{0,8}kT"]}, "source_urls": ["https://en.wikipedia.org/wiki/Shockley_diode_equation"]},
+        {"id": "reverse_breakdown", "description": "反向偏置下先有小饱和电流，达到击穿电压后齐纳或雪崩机制使电流剧增", "match": {"all": ["反向偏置"], "any": ["饱和电流", "齐纳|Zener", "雪崩|击穿"]}, "source_urls": ["https://www.pveducation.org/pvcdrom/pn-junctions/breakdown-voltage"]}
+      ],
+      "traps": [
+        {"id": "depletion_empty", "description": "误解：耗尽层中没有任何电荷", "wrong_pattern": "耗尽(区|层).{0,8}(没有|不存在).{0,4}(任何)?电荷", "correct_pattern": "固定离子|空间电荷|自由载流子"},
+        {"id": "only_electrons", "description": "误解：半导体电流只由电子携带，空穴不参与", "wrong_pattern": "半导体.{0,8}电流.{0,8}(只|仅).{0,4}电子.{0,4}携带", "correct_pattern": "空穴|两类载流子"}
+      ],
+      "contrasts": [["多数载流子", "少数载流子"], ["正向偏置", "反向偏置"]],
+      "format_requirements": {"key_formulas": ["Shockley|肖克利", "exp|指数", "I.?V|伏安"]}
+    },
+    {
+      "id": "chemical_equilibrium_thermodynamics",
+      "title": "化学平衡的热力学基础",
+      "query": "系统自学反应商 Q、平衡常数 K、标准/非标准 Gibbs 能、活度、Le Châtelier 原理和温度效应；要求计算平衡组成并澄清催化剂、初始浓度和化学计量倍乘对 K 的影响",
+      "subject": "物理化学",
+      "expected_knowledge_points": ["反应商与平衡常数", "活度", "Gibbs 能与反应方向", "标准 Gibbs 能与 K", "温度对 K 的影响", "催化剂与平衡"],
+      "expected_domains": ["iupac.org", "chem.libretexts.org", "nist.gov"],
+      "required_facts": [
+        {"id": "q_direction", "description": "Q<K 时净反应正向，Q>K 时逆向，Q=K 达平衡", "match": {"all": ["反应商|Q"], "any": ["Q.{0,4}K.{0,8}正向", "Q.{0,4}K.{0,8}逆向", "Q.?=.?K.{0,6}平衡"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/General_Chemistry/Map%3A_Chemistry_(Zumdahl_and_Decoste)/06%3A_Chemical_Equilibrium/6.04%3A_The_Reaction_Quotient"]},
+        {"id": "delta_g", "description": "任意组成下 Delta_r G=Delta_r G°+RT ln Q，平衡时 Delta_r G=0", "match": {"all": ["ln.{0,3}Q"], "any": ["G.{0,8}RT", "平衡.{0,8}G.{0,4}0"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Physical_Chemistry_(LibreTexts)/19%3A_Chemical_Thermodynamics/19.06%3A_Gibbs_Energy_Change_and_Equilibrium"]},
+        {"id": "standard_relation", "description": "标准反应 Gibbs 能与平衡常数满足 Delta_r G°=-RT ln K", "match": {"all": ["ln.{0,3}K"], "any": ["-RT", "标准.{0,8}Gibbs|标准.{0,8}吉布斯"]}, "source_urls": ["https://goldbook.iupac.org/terms/view/E02177"]},
+        {"id": "temperature_only", "description": "给定标准态下 K 只随温度改变，不因初始组成或催化剂改变", "match": {"all": ["平衡常数"], "any": ["只.{0,4}温度|仅.{0,4}温度", "初始浓度.{0,8}不改变", "催化剂.{0,8}不改变"]}, "source_urls": ["https://goldbook.iupac.org/terms/view/E02177"]},
+        {"id": "catalyst_rates", "description": "催化剂同时降低正逆反应活化能、加快到达平衡，但不移动平衡组成", "match": {"all": ["催化剂"], "any": ["正逆.{0,8}加快", "到达平衡.{0,8}更快", "不改变.{0,8}平衡"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/General_Chemistry/Chem1_(Lower)/15%3A_Chemical_Equilibrium/15.02%3A_The_Equilibrium_Constant"]}
+      ],
+      "traps": [
+        {"id": "concentrations_equal", "description": "误解：达到平衡时反应物与产物浓度相等", "wrong_pattern": "达到.{0,4}平衡.{0,10}反应物.{0,8}产物.{0,8}浓度.{0,4}相等", "correct_pattern": "速率相等|比例由.{0,6}K|浓度不再变化"},
+        {"id": "catalyst_changes_k", "description": "误解：加入催化剂会改变平衡常数或平衡位置", "wrong_pattern": "催化剂.{0,10}(改变|增大|减小).{0,6}(平衡常数|K|平衡位置)", "correct_pattern": "不改变|正逆反应|到达平衡"}
+      ],
+      "contrasts": [["反应商 Q", "平衡常数 K"], ["动力学速率", "热力学平衡"]],
+      "format_requirements": {"key_formulas": ["ln.{0,3}Q", "ln.{0,3}K", "Gibbs|吉布斯"]}
+    },
+    {
+      "id": "electrochemistry_nernst",
+      "title": "电化学电池与 Nernst 方程",
+      "query": "系统自学原电池/电解池、半反应配平、电极电势、Gibbs 能、Nernst 方程、浓差电池与电解；要求明确阳极/阴极定义和正负极在两类电池中的变化",
+      "subject": "电化学",
+      "expected_knowledge_points": ["氧化还原半反应", "阳极与阴极", "标准电池电势", "Gibbs 能关系", "Nernst 方程", "原电池与电解池"],
+      "expected_domains": ["iupac.org", "chem.libretexts.org", "nist.gov"],
+      "required_facts": [
+        {"id": "electrode_definitions", "description": "阳极始终发生氧化、阴极始终发生还原，与电极正负号无关", "match": {"all": ["阳极.{0,6}氧化", "阴极.{0,6}还原"], "any": ["正负极", "原电池.{0,8}电解池"]}, "source_urls": ["https://goldbook.iupac.org/terms/view/A00370"]},
+        {"id": "cell_potential", "description": "按还原电势表 E°cell=E°cathode-E°anode", "match": {"all": ["电池电势"], "any": ["阴极.{0,8}减.{0,6}阳极", "E.{0,6}cell", "还原电势"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/General_Chemistry/Map%3A_Chemistry_(Zumdahl_and_Decoste)/11%3A_Electrochemistry/11.03%3A_Cell_Potential_Electrical_Work_and_Gibbs_Energy"]},
+        {"id": "gibbs_relation", "description": "电池反应 Delta G=-nFE；自发原电池 E>0 且 Delta G<0", "match": {"all": ["nF"], "any": ["G.{0,5}-.{0,5}nF", "E.{0,4}0.{0,10}自发", "G.{0,4}0"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/General_Chemistry/Map%3A_Chemistry_(Zumdahl_and_Decoste)/11%3A_Electrochemistry/11.03%3A_Cell_Potential_Electrical_Work_and_Gibbs_Energy"]},
+        {"id": "nernst", "description": "Nernst 方程 E=E°-(RT/nF)lnQ，Q 必须按总反应写", "match": {"all": ["Nernst|能斯特"], "any": ["RT.{0,6}nF", "ln.{0,3}Q", "反应商"]}, "source_urls": ["https://goldbook.iupac.org/terms/view/N04175"]},
+        {"id": "potential_intensive", "description": "配平半反应时电子数影响 n，但标准电极电势不能随系数倍乘", "match": {"all": ["电极电势"], "any": ["不能.{0,8}倍乘", "强度量", "系数.{0,8}不乘"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/Analytical_Chemistry/Supplemental_Modules_(Analytical_Chemistry)/Electrochemistry/Basics_of_Electrochemistry"]}
+      ],
+      "traps": [
+        {"id": "anode_negative", "description": "误解：阳极在所有电池中都一定是负极", "wrong_pattern": "阳极.{0,8}(总是|一定|始终).{0,4}负极", "correct_pattern": "原电池.{0,12}电解池|氧化"},
+        {"id": "multiply_potential", "description": "误解：半反应乘二时标准电势也乘二", "wrong_pattern": "半反应.{0,6}(乘|扩大).{0,4}2.{0,10}电势.{0,4}(也|应).{0,4}(乘|扩大).{0,4}2", "correct_pattern": "不乘|强度量|Gibbs"}
+      ],
+      "contrasts": [["原电池", "电解池"], ["电势", "Gibbs 能"]],
+      "format_requirements": {"key_formulas": ["Nernst|能斯特", "nF", "ln.{0,3}Q"]}
+    },
+    {
+      "id": "organic_sn1_sn2_e1_e2",
+      "title": "SN1、SN2、E1 与 E2 竞争机理",
+      "query": "系统自学亲核取代与消除反应：速率方程、底物结构、亲核性/碱性、溶剂、离去基、立体化学、重排和温度；用决策表处理 SN1/SN2/E1/E2 竞争但说明规则边界",
+      "subject": "有机化学",
+      "expected_knowledge_points": ["SN2 双分子机理", "SN1 碳正离子机理", "E2 反式共平面", "E1 机理", "溶剂与底物效应", "取代消除竞争"],
+      "expected_domains": ["openstax.org", "chem.libretexts.org", "iupac.org"],
+      "required_facts": [
+        {"id": "sn2", "description": "SN2 是协同背面进攻，速率同时依赖底物和亲核试剂并发生构型反转", "match": {"all": ["SN2"], "any": ["背面进攻", "构型反转|Walden", "二级动力学|双分子"]}, "source_urls": ["https://openstax.org/books/organic-chemistry/pages/11-3-characteristics-of-the-sn2-reaction"]},
+        {"id": "sn1", "description": "SN1 速控步形成平面碳正离子，可能消旋并发生氢/烷基迁移重排", "match": {"all": ["SN1"], "any": ["碳正离子", "一级动力学|单分子", "重排", "消旋"]}, "source_urls": ["https://openstax.org/books/organic-chemistry/pages/11-4-the-sn1-reaction"]},
+        {"id": "e2", "description": "E2 是一步双分子消除，通常要求 beta-H 与离去基反式共平面", "match": {"all": ["E2"], "any": ["反式共平面|anti.?periplanar", "beta.?H|β.?H", "一步"]}, "source_urls": ["https://openstax.org/books/organic-chemistry/pages/11-8-characteristics-of-the-e2-reaction"]},
+        {"id": "e1", "description": "E1 经碳正离子中间体，常与 SN1 竞争且升温通常有利于消除", "match": {"all": ["E1"], "any": ["碳正离子", "SN1.{0,8}竞争", "升温.{0,8}消除"]}, "source_urls": ["https://openstax.org/books/organic-chemistry/pages/11-9-the-e1-reaction"]},
+        {"id": "condition_matrix", "description": "一级底物位阻小利于 SN2，三级底物阻碍 SN2；强而庞大碱常推动 E2", "match": {"any": ["一级底物.{0,12}SN2", "三级底物.{0,12}(不利|阻碍).{0,4}SN2", "强碱.{0,8}E2", "位阻"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/Organic_Chemistry/Organic_Chemistry_(OpenStax)/11%3A_Reactions_of_Alkyl_Halides-_Nucleophilic_Substitutions_and_Eliminations/11.12%3A_A_Summary_of_Reactivity_-_SN1_SN2_E1_E2"]}
+      ],
+      "traps": [
+        {"id": "primary_sn1", "description": "误解：普通一级卤代烷很容易走 SN1", "wrong_pattern": "一级.{0,6}(卤代烷|底物).{0,8}(容易|优先|主要).{0,4}SN1", "correct_pattern": "碳正离子.{0,8}不稳定|SN2|烯丙基|苄基"},
+        {"id": "strong_nucleophile_only_sn2", "description": "误解：强亲核/强碱条件下一定只有 SN2", "wrong_pattern": "强(亲核试剂|碱).{0,10}(一定|只能|必然).{0,4}SN2", "correct_pattern": "E2|位阻|底物|竞争"}
+      ],
+      "contrasts": [["亲核性", "碱性"], ["SN1", "SN2"]],
+      "format_requirements": {"key_formulas": ["SN1", "SN2", "E1", "E2"]}
+    },
+    {
+      "id": "mendelian_linkage",
+      "title": "孟德尔遗传、连锁与重组作图",
+      "query": "系统自学分离定律、独立分配、测交、连锁、交换与重组率、遗传图距；要求从配子概率推导表型比例，并解释双交换为何使远距离图距低估",
+      "subject": "遗传学",
+      "expected_knowledge_points": ["分离定律", "独立分配条件", "测交", "遗传连锁", "重组率", "遗传图谱与双交换"],
+      "expected_domains": ["ncbi.nlm.nih.gov", "genome.gov", "nature.com"],
+      "required_facts": [
+        {"id": "segregation", "description": "二倍体个体的一对等位基因在配子形成时分离，每个配子得到一个", "match": {"all": ["分离定律"], "any": ["等位基因.{0,8}分离", "每个配子.{0,8}一个"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK22098/"]},
+        {"id": "independent_condition", "description": "独立分配适用于不同染色体或相距足够远而近似不连锁的基因", "match": {"all": ["独立分配"], "any": ["不同染色体", "相距.{0,8}足够远", "不适用于.{0,8}连锁"]}, "source_urls": ["https://www.genome.gov/genetics-glossary/Independent-Assortment"]},
+        {"id": "linkage", "description": "同一染色体上邻近基因倾向共同遗传，交换产生重组配子", "match": {"all": ["连锁"], "any": ["同一染色体", "交换|交叉互换", "重组配子"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK21945/"]},
+        {"id": "recombination_limit", "description": "可观察重组率不超过 50%；50% 与不连锁在两点测交中不可区分", "match": {"all": ["重组率"], "any": ["50%|百分之五十", "不超过", "不连锁"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK21945/"]},
+        {"id": "double_crossovers", "description": "多次尤其双交换可恢复亲本型，导致两点重组率低估较远图距", "match": {"all": ["双交换|双重交换"], "any": ["低估.{0,6}图距", "恢复.{0,6}亲本", "三点测交"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK21945/"]}
+      ],
+      "traps": [
+        {"id": "all_genes_independent", "description": "误解：分离定律意味着所有基因总是独立分配", "wrong_pattern": "分离定律.{0,12}(所有|任意).{0,4}基因.{0,8}(都|总是).{0,4}独立分配", "correct_pattern": "连锁|不同染色体|独立分配条件"},
+        {"id": "rf_equals_distance", "description": "误解：任意距离下重组百分率都严格等于图距 cM", "wrong_pattern": "重组率.{0,10}(始终|总是|严格).{0,6}等于.{0,6}(图距|cM)", "correct_pattern": "短距离|双交换|低估|校正"}
+      ],
+      "contrasts": [["分离定律", "独立分配定律"], ["重组率", "遗传图距"]],
+      "format_requirements": {"key_formulas": ["50%|百分之五十", "cM|厘摩", "重组率"]}
+    },
+    {
+      "id": "immune_response_vaccines",
+      "title": "免疫应答、免疫记忆与疫苗",
+      "query": "系统自学先天/适应性免疫、抗原呈递、B/T 细胞、抗体、MHC I/II、克隆选择、免疫记忆和疫苗；要求区分个体保护与群体免疫并讨论免疫逃逸边界",
+      "subject": "免疫学",
+      "expected_knowledge_points": ["先天与适应性免疫", "B 细胞与抗体", "辅助/细胞毒 T 细胞", "MHC I 与 MHC II", "克隆选择与记忆", "疫苗与群体免疫"],
+      "expected_domains": ["cdc.gov", "who.int", "ncbi.nlm.nih.gov"],
+      "required_facts": [
+        {"id": "innate_adaptive", "description": "先天免疫快速且模式识别广泛，适应性免疫初次较慢但具高度特异性和记忆", "match": {"all": ["先天免疫", "适应性免疫"], "any": ["快速", "特异性", "记忆"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK10757/"]},
+        {"id": "b_t_roles", "description": "B 细胞可分化为浆细胞产生抗体，T 细胞主要执行辅助或细胞毒效应", "match": {"all": ["B 细胞", "T 细胞"], "any": ["浆细胞.{0,8}抗体", "辅助性", "细胞毒"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK10757/"]},
+        {"id": "mhc", "description": "MHC I 通常向 CD8 T 细胞呈递内源肽，MHC II 向 CD4 T 细胞呈递外源肽", "match": {"all": ["MHC I", "MHC II"], "any": ["CD8", "CD4", "内源.{0,10}外源"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK10757/"]},
+        {"id": "memory", "description": "初次应答形成记忆细胞，再次暴露通常产生更快更强的应答", "match": {"all": ["记忆细胞|免疫记忆"], "any": ["再次.{0,8}更快", "二次应答", "更强"]}, "source_urls": ["https://www.cdc.gov/vaccines/basics/explaining-how-vaccines-work.html"]},
+        {"id": "herd_threshold", "description": "群体免疫阈值依赖传播能力、疫苗有效性和人群异质性，并非固定百分比", "match": {"all": ["群体免疫"], "any": ["R0|基本再生数", "疫苗有效性", "不是.{0,6}固定|因病原体而异"]}, "source_urls": ["https://www.who.int/news-room/questions-and-answers/item/herd-immunity-lockdowns-and-covid-19"]}
+      ],
+      "traps": [
+        {"id": "vaccine_treats", "description": "误解：预防性疫苗能像抗生素一样直接治愈已经发生的感染", "wrong_pattern": "疫苗.{0,10}(直接|立即).{0,6}(治愈|杀死).{0,6}(已有|正在).{0,4}感染", "correct_pattern": "预防|免疫记忆|治疗性疫苗.{0,8}例外"},
+        {"id": "natural_always_better", "description": "误解：自然感染获得的免疫在所有情况下都比疫苗更安全更强", "wrong_pattern": "自然感染.{0,12}(总是|一定|所有情况).{0,8}(更安全|更强|优于).{0,4}疫苗", "correct_pattern": "疾病风险|因病原体而异|疫苗"}
+      ],
+      "contrasts": [["先天免疫", "适应性免疫"], ["个体保护", "群体免疫"]],
+      "format_requirements": {"key_formulas": ["MHC", "CD4", "CD8", "R0|再生数"]}
+    },
+    {
+      "id": "cellular_respiration",
+      "title": "细胞呼吸与氧化磷酸化",
+      "query": "系统自学糖酵解、丙酮酸氧化、TCA 循环、电子传递链、质子动力势、ATP 合酶和发酵；要求逐阶段核算碳、电子载体与 ATP，并解释解偶联和底物水平磷酸化",
+      "subject": "生物化学",
+      "expected_knowledge_points": ["糖酵解", "丙酮酸氧化", "TCA 循环", "电子传递链", "化学渗透与 ATP 合酶", "发酵与 NAD+ 再生"],
+      "expected_domains": ["openstax.org", "ncbi.nlm.nih.gov", "khanacademy.org"],
+      "required_facts": [
+        {"id": "glycolysis", "description": "每葡萄糖糖酵解净产 2 ATP、2 NADH 和 2 丙酮酸，发生在细胞质", "match": {"all": ["糖酵解"], "any": ["净.{0,4}2.{0,4}ATP", "2.{0,4}NADH", "细胞质"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/7-2-glycolysis"]},
+        {"id": "pyruvate_tca", "description": "真核细胞中丙酮酸进入线粒体转为乙酰辅酶 A，TCA 每乙酰基放出两分子 CO2", "match": {"all": ["乙酰辅酶 A|乙酰.?CoA", "TCA|三羧酸循环|柠檬酸循环"], "any": ["线粒体", "CO2|二氧化碳"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/7-3-oxidation-of-pyruvate-and-the-citric-acid-cycle"]},
+        {"id": "terminal_acceptor", "description": "有氧呼吸中氧是电子传递链末端电子受体并被还原为水", "match": {"all": ["末端电子受体"], "any": ["氧|O2", "还原.{0,6}水"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/7-4-oxidative-phosphorylation"]},
+        {"id": "chemiosmosis", "description": "电子传递驱动质子跨内膜泵出，质子动力势经 ATP 合酶合成 ATP", "match": {"all": ["ATP 合酶"], "any": ["质子梯度|质子动力势", "化学渗透", "内膜"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK26894/"]},
+        {"id": "fermentation", "description": "发酵通过还原丙酮酸或其衍生物再生 NAD+，使缺氧时糖酵解继续", "match": {"all": ["发酵"], "any": ["再生.{0,5}NAD", "糖酵解.{0,8}继续", "乳酸|乙醇"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/7-5-metabolism-without-oxygen"]}
+      ],
+      "traps": [
+        {"id": "oxygen_in_glycolysis", "description": "误解：氧气在糖酵解步骤中直接被消耗", "wrong_pattern": "糖酵解.{0,10}(直接|步骤中).{0,6}(消耗|需要).{0,4}氧气", "correct_pattern": "不直接需要氧|电子传递链|末端电子受体"},
+        {"id": "most_atp_glycolysis", "description": "误解：有氧呼吸的大部分 ATP 来自糖酵解底物水平磷酸化", "wrong_pattern": "有氧呼吸.{0,12}(大部分|绝大多数).{0,4}ATP.{0,8}糖酵解", "correct_pattern": "氧化磷酸化|电子传递链|ATP 合酶"}
+      ],
+      "contrasts": [["底物水平磷酸化", "氧化磷酸化"], ["有氧呼吸", "发酵"]],
+      "format_requirements": {"key_formulas": ["ATP", "NAD", "质子.{0,6}梯度"]}
+    },
+    {
+      "id": "population_genetics_hardy_weinberg",
+      "title": "Hardy–Weinberg 平衡与群体遗传推断",
+      "query": "系统自学 Hardy–Weinberg 平衡：等位基因/基因型频率、假设、一次随机交配的结果、卡方检验、选择/迁移/突变/漂变/近交偏离；用隐性病频率反推携带者并说明边界",
+      "subject": "群体遗传学",
+      "expected_knowledge_points": ["等位基因频率", "p+q=1", "基因型频率展开", "平衡假设", "偏离机制", "卡方检验"],
+      "expected_domains": ["genome.gov", "ncbi.nlm.nih.gov", "nature.com"],
+      "required_facts": [
+        {"id": "equations", "description": "二等位位点有 p+q=1，随机交配下 p^2+2pq+q^2=1", "match": {"all": ["p.{0,3}q.{0,3}1"], "any": ["p.?2.{0,5}2pq.{0,5}q.?2", "Hardy.?Weinberg|哈代.?温伯格"]}, "source_urls": ["https://www.genome.gov/genetics-glossary/Hardy-Weinberg-Equilibrium"]},
+        {"id": "assumptions", "description": "理想平衡假设随机交配、无限大群体且无选择迁移突变", "match": {"all": ["随机交配"], "any": ["无限大|足够大.{0,4}群体", "无选择", "无迁移", "无突变"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK22001/"]},
+        {"id": "one_generation", "description": "在无其他力时一次随机交配即可建立基因型频率比例，但不自动改变等位基因频率", "match": {"all": ["一代|一次随机交配"], "any": ["基因型频率", "等位基因频率.{0,10}不变"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK22001/"]},
+        {"id": "recessive_carrier", "description": "完全外显隐性病频率 q^2 可用于估 q，携带者频率为 2pq，但依赖模型假设", "match": {"all": ["携带者"], "any": ["q.?2", "2pq", "隐性.{0,8}频率"]}, "source_urls": ["https://www.genome.gov/genetics-glossary/Hardy-Weinberg-Equilibrium"]},
+        {"id": "statistical_test", "description": "观察与期望基因型数可用卡方等拟合优度检验，显著偏离不唯一指向某一种机制", "match": {"all": ["卡方|chi.?square"], "any": ["观察.{0,8}期望", "拟合优度", "不能.{0,8}唯一"]}, "source_urls": ["https://www.nature.com/scitable/knowledge/library/the-hardy-weinberg-principle-13235724/"]}
+      ],
+      "traps": [
+        {"id": "dominant_common", "description": "误解：显性等位基因一定比隐性等位基因常见", "wrong_pattern": "显性.{0,6}等位基因.{0,10}(一定|必然|总是).{0,6}(更常见|频率更高)", "correct_pattern": "显性.{0,8}频率|不决定|可稀有"},
+        {"id": "deviation_proves_selection", "description": "误解：偏离平衡就证明自然选择是唯一原因", "wrong_pattern": "偏离.{0,8}Hardy.?Weinberg.{0,10}(证明|说明).{0,6}(只能|唯一|必然).{0,4}自然选择", "correct_pattern": "迁移|漂变|近交|分型误差|多种原因"}
+      ],
+      "contrasts": [["等位基因频率", "基因型频率"], ["统计偏离", "因果机制"]],
+      "format_requirements": {"key_formulas": ["p.?2", "2pq", "q.?2", "卡方|chi"]}
+    },
+    {
+      "id": "database_transactions_mvcc",
+      "tier": "smoke",
+      "title": "数据库事务、隔离级别与 MVCC",
+      "query": "系统自学数据库事务：ACID、并发异常、SQL 隔离级别、冲突可串行化、两阶段锁与 MVCC/快照隔离；用转账和医生值班案例复现丢失更新、幻读与写偏斜",
+      "subject": "数据库系统",
+      "expected_knowledge_points": ["ACID", "并发异常", "隔离级别", "可串行化", "两阶段锁", "MVCC 与快照隔离"],
+      "expected_domains": ["postgresql.org", "dev.mysql.com", "microsoft.com"],
+      "required_facts": [
+        {"id": "acid", "description": "ACID 分别是原子性、一致性、隔离性和持久性，其中一致性依赖应用约束与事务逻辑", "match": {"all": ["原子性", "隔离性", "持久性"], "any": ["一致性", "ACID"]}, "source_urls": ["https://www.postgresql.org/docs/current/tutorial-transactions.html"]},
+        {"id": "isolation_anomalies", "description": "较弱隔离级别允许脏读、不可重复读或幻读等不同异常，具体保证依数据库实现", "match": {"all": ["隔离级别"], "any": ["脏读", "不可重复读", "幻读", "实现差异"]}, "source_urls": ["https://www.postgresql.org/docs/current/transaction-iso.html"]},
+        {"id": "serializability", "description": "可串行化要求并发执行结果等价于某个事务串行顺序", "match": {"all": ["可串行化"], "any": ["等价.{0,8}串行", "串行顺序", "最高隔离"]}, "source_urls": ["https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE"]},
+        {"id": "mvcc_snapshot", "description": "MVCC 通过多个行版本让读者看到一致快照，减少读写阻塞但仍需处理写冲突和版本回收", "match": {"all": ["MVCC"], "any": ["多个版本|多版本", "一致.{0,4}快照", "读写.{0,6}阻塞", "版本回收"]}, "source_urls": ["https://www.postgresql.org/docs/current/mvcc-intro.html"]},
+        {"id": "write_skew", "description": "快照隔离可阻止许多异常但仍可能出现跨行约束的写偏斜；可串行化需检测或阻止它", "match": {"all": ["写偏斜|write skew"], "any": ["快照隔离", "跨行.{0,8}约束", "可串行化"]}, "source_urls": ["https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE"]}
+      ],
+      "traps": [
+        {"id": "mvcc_lock_free", "description": "误解：使用 MVCC 后数据库完全不需要锁或冲突检测", "wrong_pattern": "MVCC.{0,10}(完全|彻底).{0,6}(不需要|无需).{0,4}(锁|冲突检测)", "correct_pattern": "写锁|冲突|行锁|串行化失败"},
+        {"id": "repeatable_serializable", "description": "误解：可重复读在所有实现中都等价于可串行化", "wrong_pattern": "可重复读.{0,12}(总是|完全|等同于).{0,4}可串行化", "correct_pattern": "写偏斜|实现差异|快照隔离|更弱"}
+      ],
+      "contrasts": [["隔离性", "持久性"], ["快照隔离", "可串行化"]],
+      "format_requirements": {"key_formulas": ["ACID", "MVCC", "serial|串行"]}
+    },
+    {
+      "id": "distributed_consensus_raft",
+      "title": "Raft 共识、安全性与成员变更",
+      "query": "系统自学 Raft：任期、角色、选举限制、日志复制、提交规则、安全性证明、崩溃恢复、网络分区和 joint consensus；要求用事件时间线推演旧 leader 与日志冲突",
+      "subject": "分布式系统",
+      "expected_knowledge_points": ["任期与三种角色", "领导者选举", "日志复制", "提交规则", "状态机安全性", "联合共识成员变更"],
+      "expected_domains": ["raft.github.io", "usenix.org", "github.com"],
+      "required_facts": [
+        {"id": "terms_roles", "description": "服务器在 follower/candidate/leader 三角色间转换，任期单调增加并帮助识别过期领导者", "match": {"all": ["follower|跟随者", "candidate|候选者", "leader|领导者"], "any": ["任期.{0,8}递增|term", "过期"]}, "source_urls": ["https://raft.github.io/raft.pdf"]},
+        {"id": "election_majority", "description": "候选者需获得集群多数票；每节点每任期至多投一票且日志新旧影响投票", "match": {"all": ["多数|过半"], "any": ["每个任期.{0,8}一票", "日志.{0,8}更新", "选举"]}, "source_urls": ["https://raft.github.io/raft.pdf"]},
+        {"id": "log_matching", "description": "若两日志有相同 index 和 term 的条目，则该条目之前的日志相同", "match": {"all": ["日志匹配|Log Matching"], "any": ["index|索引", "term|任期", "之前.{0,8}相同"]}, "source_urls": ["https://raft.github.io/raft.pdf"]},
+        {"id": "commit_current_term", "description": "领导者通过多数复制直接提交当前任期条目；旧任期条目不能只靠计数单独提交", "match": {"all": ["提交"], "any": ["当前任期", "多数.{0,8}复制", "旧任期.{0,10}不能"]}, "source_urls": ["https://raft.github.io/raft.pdf"]},
+        {"id": "joint_consensus", "description": "安全成员变更采用新旧配置重叠的联合共识，避免两个不相交多数同时决策", "match": {"all": ["联合共识|joint consensus"], "any": ["新旧.{0,6}配置", "重叠", "两个.{0,8}多数"]}, "source_urls": ["https://raft.github.io/raft.pdf"]}
+      ],
+      "traps": [
+        {"id": "one_follower_commit", "description": "误解：领导者把条目复制到任意一个 follower 就已提交", "wrong_pattern": "复制.{0,8}(一个|任意一个).{0,4}(follower|跟随者).{0,8}(就|即).{0,4}提交", "correct_pattern": "多数|过半|commitIndex"},
+        {"id": "consensus_availability", "description": "误解：网络分区时所有分区都能继续提交，Raft 同时保证完全可用", "wrong_pattern": "网络分区.{0,12}(所有|每个).{0,4}分区.{0,8}(都|仍).{0,4}(提交|可写)", "correct_pattern": "多数分区|少数.{0,6}不可提交|安全性"}
+      ],
+      "contrasts": [["安全性", "活性"], ["复制", "提交"]],
+      "format_requirements": {"key_formulas": ["term|任期", "index|索引", "majority|多数"]}
+    },
+    {
+      "id": "operating_system_virtual_memory",
+      "title": "虚拟内存、页表与系统抖动",
+      "query": "系统自学虚拟地址转换、多级页表、TLB、缺页异常、按需分页、页替换、工作集和 thrashing；要求逐步走一遍地址翻译与缺页处理并核算有效访问时间",
+      "subject": "操作系统",
+      "expected_knowledge_points": ["虚拟/物理地址", "页表与页框", "TLB", "缺页处理", "页替换", "工作集与抖动"],
+      "expected_domains": ["pages.cs.wisc.edu", "kernel.org", "intel.com"],
+      "required_facts": [
+        {"id": "address_translation", "description": "虚拟页号经页表映射到物理页框，页内偏移在映射中保持不变", "match": {"all": ["虚拟页号|VPN", "物理页框|PFN"], "any": ["页内偏移", "页表.{0,8}映射"]}, "source_urls": ["https://pages.cs.wisc.edu/~remzi/OSTEP/vm-paging.pdf"]},
+        {"id": "tlb", "description": "TLB 缓存近期页表映射；TLB miss 不等于缺页，可能只需页表遍历", "match": {"all": ["TLB"], "any": ["缓存.{0,8}映射", "TLB miss.{0,12}缺页", "页表遍历"]}, "source_urls": ["https://pages.cs.wisc.edu/~remzi/OSTEP/vm-tlbs.pdf"]},
+        {"id": "page_fault", "description": "缺页是 CPU 异常；操作系统验证访问、载入或分配页、更新映射后可重启指令，非法访问则终止", "match": {"all": ["缺页"], "any": ["异常", "重启.{0,6}指令", "非法访问", "磁盘"]}, "source_urls": ["https://pages.cs.wisc.edu/~remzi/OSTEP/vm-beyondphys.pdf"]},
+        {"id": "replacement", "description": "内存压力下页替换选择牺牲页；LRU 难以精确实现，Clock 是常见近似", "match": {"all": ["页替换"], "any": ["LRU", "Clock|时钟算法", "牺牲页"]}, "source_urls": ["https://pages.cs.wisc.edu/~remzi/OSTEP/vm-beyondphys-policy.pdf"]},
+        {"id": "thrashing", "description": "工作集超过可用内存会导致高频缺页和抖动，增加交换空间不等价于增加 RAM 性能", "match": {"all": ["抖动|thrashing"], "any": ["工作集", "频繁.{0,6}缺页", "可用内存"]}, "source_urls": ["https://pages.cs.wisc.edu/~remzi/OSTEP/vm-beyondphys.pdf"]}
+      ],
+      "traps": [
+        {"id": "fault_is_error", "description": "误解：任何 page fault 都表示程序出错并应终止", "wrong_pattern": "(任何|所有).{0,4}(page fault|缺页).{0,8}(都是|表示).{0,6}(程序错误|必须终止)", "correct_pattern": "按需分页|合法缺页|装入|非法访问"},
+        {"id": "vm_is_swap", "description": "误解：虚拟内存就是磁盘交换区的同义词", "wrong_pattern": "虚拟内存.{0,6}(就是|等同于).{0,6}(交换区|swap|磁盘空间)", "correct_pattern": "地址空间|映射|保护|按需分页"}
+      ],
+      "contrasts": [["TLB miss", "缺页"], ["虚拟地址", "物理地址"]],
+      "format_requirements": {"key_formulas": ["VPN|虚拟页号", "PFN|页框", "TLB"]}
+    },
+    {
+      "id": "cryptographic_hash_signatures",
+      "title": "密码散列、MAC 与数字签名",
+      "query": "系统自学密码散列的原像/第二原像/碰撞安全、生日界、HMAC、数字签名、证书和密码存储；要求构造攻击模型并辨析签名、加密、校验和与普通哈希",
+      "subject": "应用密码学",
+      "expected_knowledge_points": ["散列安全性质", "生日攻击", "HMAC", "数字签名", "公钥证书", "盐与密码 KDF"],
+      "expected_domains": ["nist.gov", "rfc-editor.org", "owasp.org"],
+      "required_facts": [
+        {"id": "hash_properties", "description": "密码散列需要原像、第二原像和碰撞抗性；三者攻击目标与复杂度不同", "match": {"all": ["原像", "碰撞"], "any": ["第二原像", "不可逆", "抗性"]}, "source_urls": ["https://csrc.nist.gov/pubs/fips/180-4/upd1/final"]},
+        {"id": "birthday_bound", "description": "理想 n 位散列的通用碰撞攻击约需 2^(n/2) 次，而原像约需 2^n 次", "match": {"all": ["生日攻击|生日界"], "any": ["n/2", "2.{0,5}n", "平方根"]}, "source_urls": ["https://en.wikipedia.org/wiki/Birthday_attack"]},
+        {"id": "hmac", "description": "HMAC 使用共享秘密密钥和散列提供完整性与来源认证，不提供不可否认性", "match": {"all": ["HMAC"], "any": ["共享.{0,6}密钥", "完整性", "认证", "不可否认"]}, "source_urls": ["https://www.rfc-editor.org/rfc/rfc2104"]},
+        {"id": "signature", "description": "数字签名用私钥签名、相应公钥验证，通常签署消息摘要而非为消息保密", "match": {"all": ["私钥.{0,8}签名", "公钥.{0,8}验证"], "any": ["摘要", "不提供.{0,6}保密", "完整性"]}, "source_urls": ["https://csrc.nist.gov/pubs/fips/186-5/final"]},
+        {"id": "password_kdf", "description": "密码存储应使用每用户随机盐和专用慢 KDF，而非快速通用散列一次", "match": {"all": ["盐|salt"], "any": ["Argon2|scrypt|bcrypt|PBKDF2", "慢.{0,6}哈希|慢.{0,6}KDF", "每个用户"]}, "source_urls": ["https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html"]}
+      ],
+      "traps": [
+        {"id": "hash_encryption", "description": "误解：散列是可用密钥解密还原的加密", "wrong_pattern": "散列|哈希.{0,8}(可以|能够).{0,6}(解密|还原).{0,4}原文", "correct_pattern": "单向|原像|不可逆|加密不同"},
+        {"id": "private_key_encryption", "description": "误解：数字签名就是用私钥把整段消息加密", "wrong_pattern": "数字签名.{0,8}(就是|等同于).{0,8}私钥.{0,6}加密.{0,6}(消息|原文)", "correct_pattern": "签名算法|摘要|不提供保密|验证"}
+      ],
+      "contrasts": [["数字签名", "公钥加密"], ["HMAC", "数字签名"]],
+      "format_requirements": {"key_formulas": ["2.{0,5}n", "HMAC", "私钥", "公钥"]}
+    },
+    {
+      "id": "compiler_parsing_optimization",
+      "title": "编译器前端、中间表示与优化",
+      "query": "系统自学编译器流水线：词法分析、CFG 解析、AST、名称/类型检查、IR、SSA、数据流优化、寄存器分配和代码生成；要求用一段程序跟踪每阶段产物并讨论优化正确性",
+      "subject": "编译原理",
+      "expected_knowledge_points": ["词法分析", "语法分析与 AST", "语义/类型检查", "中间表示", "SSA 与数据流", "寄存器分配和代码生成"],
+      "expected_domains": ["llvm.org", "stanford.edu", "gcc.gnu.org"],
+      "required_facts": [
+        {"id": "lexing", "description": "词法分析把字符流分组成 token，通常由正则语言和有限自动机描述", "match": {"all": ["词法分析"], "any": ["字符流.{0,8}token|词法单元", "正则", "有限自动机"]}, "source_urls": ["https://web.stanford.edu/class/archive/cs/cs143/cs143.1128/handouts/020%20Cool%20Manual.pdf"]},
+        {"id": "parsing", "description": "语法分析依据上下文无关文法建立解析树或 AST，并处理优先级与结合性", "match": {"all": ["语法分析"], "any": ["上下文无关文法|CFG", "AST|抽象语法树", "优先级.{0,8}结合性"]}, "source_urls": ["https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl02.html"]},
+        {"id": "semantic_analysis", "description": "名称解析和类型检查属于语义分析，能发现文法正确但类型或作用域错误的程序", "match": {"all": ["语义分析"], "any": ["类型检查", "名称解析", "作用域", "语法正确"]}, "source_urls": ["https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl03.html"]},
+        {"id": "ssa", "description": "SSA 形式要求每个变量只赋值一次，并用 phi 节点合并控制流路径上的定义", "match": {"all": ["SSA"], "any": ["只赋值一次", "phi|φ", "控制流"]}, "source_urls": ["https://llvm.org/docs/LangRef.html#phi-instruction"]},
+        {"id": "optimization_semantics", "description": "合法优化必须在语言规定和未定义行为边界内保持可观察语义，且单项优化不保证所有机器上更快", "match": {"all": ["优化"], "any": ["保持.{0,8}语义", "未定义行为", "不保证.{0,8}更快"]}, "source_urls": ["https://llvm.org/docs/Passes.html"]}
+      ],
+      "traps": [
+        {"id": "parser_types", "description": "误解：解析器单独就能发现所有类型和作用域错误", "wrong_pattern": "语法分析(器)?.{0,12}(能够|会).{0,6}(发现|检查).{0,6}(所有|全部).{0,6}(类型|作用域)错误", "correct_pattern": "语义分析|类型检查|名称解析"},
+        {"id": "optimization_always_faster", "description": "误解：开启更多优化必然让每个程序运行更快", "wrong_pattern": "(更多|更高级).{0,4}优化.{0,8}(必然|一定|总会).{0,6}(更快|提升性能)", "correct_pattern": "代码尺寸|编译时间|目标机器|不保证"}
+      ],
+      "contrasts": [["解析树", "抽象语法树"], ["语法分析", "语义分析"]],
+      "format_requirements": {"key_formulas": ["AST", "SSA", "phi|φ", "IR|中间表示"]}
+    },
+    {
+      "id": "transformer_attention",
+      "title": "Transformer 注意力机制与边界",
+      "query": "系统自学 Transformer：Q/K/V、缩放点积注意力、多头、自注意力/交叉注意力、位置编码、因果与填充 mask、残差/归一化和 O(n²) 成本；要求手算小矩阵并讨论注意力权重解释风险",
+      "subject": "深度学习",
+      "expected_knowledge_points": ["Q/K/V 投影", "缩放点积注意力", "多头注意力", "位置编码", "mask", "复杂度与解释边界"],
+      "expected_domains": ["arxiv.org", "pytorch.org", "nlp.seas.harvard.edu"],
+      "required_facts": [
+        {"id": "attention_equation", "description": "缩放点积注意力为 softmax(QK^T/sqrt(d_k))V", "match": {"all": ["softmax", "QK"], "any": ["sqrt.{0,5}d", "√.{0,5}d", "缩放点积"]}, "source_urls": ["https://arxiv.org/abs/1706.03762"]},
+        {"id": "scaling_reason", "description": "除以 sqrt(d_k) 防止维度大时点积方差增大令 softmax 饱和和梯度过小", "match": {"all": ["缩放"], "any": ["点积.{0,8}方差", "softmax.{0,8}饱和", "梯度"]}, "source_urls": ["https://arxiv.org/abs/1706.03762"]},
+        {"id": "multihead", "description": "多头注意力在不同学习投影子空间并行计算，拼接后再线性映射", "match": {"all": ["多头注意力"], "any": ["不同.{0,6}子空间", "拼接|concat", "线性映射"]}, "source_urls": ["https://nlp.seas.harvard.edu/annotated-transformer/"]},
+        {"id": "position_mask", "description": "纯注意力不含序列顺序，需位置编码；自回归训练还用因果 mask 阻止看未来 token", "match": {"all": ["位置编码", "因果.{0,4}mask|因果掩码"], "any": ["顺序", "未来.{0,6}token|未来词元"]}, "source_urls": ["https://arxiv.org/abs/1706.03762"]},
+        {"id": "quadratic_cost", "description": "标准全注意力的注意力矩阵随序列长度 n 占 O(n^2) 时间/内存级别", "match": {"all": ["O.{0,3}n.?2|二次复杂度"], "any": ["序列长度", "注意力矩阵", "内存"]}, "source_urls": ["https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html"]}
+      ],
+      "traps": [
+        {"id": "attention_explanation", "description": "误解：注意力权重天然就是模型决策的忠实因果解释", "wrong_pattern": "注意力权重.{0,12}(就是|等同于|天然是).{0,8}(因果|忠实).{0,4}解释", "correct_pattern": "不等于.{0,6}解释|解释.{0,8}争议|干预|梯度"},
+        {"id": "order_inherent", "description": "误解：没有任何位置信息时自注意力天然知道 token 次序", "wrong_pattern": "自注意力.{0,12}(不需要|无需).{0,6}位置.{0,8}(也|就).{0,6}(知道|编码).{0,4}顺序", "correct_pattern": "置换等变|位置编码|顺序信息"}
+      ],
+      "contrasts": [["自注意力", "交叉注意力"], ["注意力相关性", "因果解释"]],
+      "format_requirements": {"key_formulas": ["softmax", "QK", "sqrt|√", "O.{0,3}n.?2"]}
+    },
+    {
+      "id": "monetary_policy_inflation",
+      "title": "货币政策、通胀与传导机制",
+      "query": "系统自学中央银行如何通过政策利率、预期、信贷和资产价格影响总需求与通胀；区分需求/供给冲击、名义/实际利率、常规政策/QE，并讨论时滞、零利率下限与可信度",
+      "subject": "宏观经济学",
+      "expected_knowledge_points": ["政策利率与传导", "名义和实际利率", "通胀预期", "需求拉动与成本推动", "数量宽松", "时滞与政策权衡"],
+      "expected_domains": ["federalreserve.gov", "imf.org", "ecb.europa.eu"],
+      "required_facts": [
+        {"id": "transmission", "description": "政策利率通过市场利率、信贷、汇率、资产价格和预期影响支出与通胀，传导不是瞬时一跳", "match": {"all": ["传导机制"], "any": ["市场利率", "信贷", "汇率", "预期", "时滞"]}, "source_urls": ["https://www.ecb.europa.eu/mopo/intro/transmission/html/index.en.html"]},
+        {"id": "real_rate", "description": "事前实际利率近似等于名义利率减预期通胀，不能用已实现通胀机械替代所有决策预期", "match": {"all": ["实际利率", "名义利率"], "any": ["减.{0,6}预期通胀", "Fisher|费雪", "近似"]}, "source_urls": ["https://www.federalreserve.gov/econres/notes/feds-notes/why-do-we-think-that-inflation-expectations-matter-for-inflation-20210903.html"]},
+        {"id": "shock_types", "description": "需求冲击与供给冲击都可推高物价，但产出和政策权衡不同", "match": {"all": ["需求.{0,6}冲击", "供给.{0,6}冲击"], "any": ["成本推动", "产出", "权衡"]}, "source_urls": ["https://www.imf.org/en/Publications/fandd/issues/Series/Back-to-Basics/Inflation"]},
+        {"id": "qe", "description": "在短期利率受限时，QE 通过购买较长期证券、压低期限溢价并改善金融条件发挥作用", "match": {"all": ["量化宽松|QE"], "any": ["购买.{0,8}证券|资产购买", "长期利率|期限溢价", "零利率"]}, "source_urls": ["https://www.federalreserve.gov/monetarypolicy/bst_openmarketops.htm"]},
+        {"id": "lags_uncertainty", "description": "货币政策存在长且可变的时滞，决策需基于预测并面对模型与数据不确定性", "match": {"all": ["时滞"], "any": ["长且可变", "预测", "不确定性", "滞后"]}, "source_urls": ["https://www.federalreserve.gov/monetarypolicy.htm"]}
+      ],
+      "traps": [
+        {"id": "money_inflation_mechanical", "description": "误解：货币量增加某个百分比会在任何时期机械产生同百分比通胀", "wrong_pattern": "货币(供应|数量).{0,8}增加.{0,8}(必然|一定|机械地).{0,10}同.{0,4}(比例|百分比).{0,4}通胀", "correct_pattern": "货币流通速度|产出|时滞|条件|需求"},
+        {"id": "rate_immediate", "description": "误解：加息会立刻且无副作用地把通胀降到目标", "wrong_pattern": "加息.{0,10}(立刻|立即).{0,8}(无副作用|没有代价|直接).{0,8}通胀.{0,6}目标", "correct_pattern": "时滞|产出|就业|权衡|预期"}
+      ],
+      "contrasts": [["名义利率", "实际利率"], ["需求冲击", "供给冲击"]],
+      "format_requirements": {"key_formulas": ["实际利率", "预期通胀", "QE|量化宽松"]}
+    },
+    {
+      "id": "comparative_advantage",
+      "title": "比较优势、贸易收益与分配效应",
+      "query": "系统自学比较优势：机会成本、生产可能性边界、专业化、贸易条件和一般均衡直觉；要求用两国两品数值例子证明即使一国有绝对优势仍可互利，并讨论分配与模型边界",
+      "subject": "国际经济学",
+      "expected_knowledge_points": ["机会成本", "绝对优势与比较优势", "生产可能性边界", "贸易条件", "专业化收益", "国内分配与模型假设"],
+      "expected_domains": ["wto.org", "imf.org", "openstax.org"],
+      "required_facts": [
+        {"id": "opportunity_cost", "description": "比较优势由较低机会成本而非更高绝对生产率决定", "match": {"all": ["比较优势", "机会成本"], "any": ["较低", "不是.{0,8}绝对", "相对成本"]}, "source_urls": ["https://openstax.org/books/principles-economics-3e/pages/33-1-absolute-and-comparative-advantage"]},
+        {"id": "absolute_both_goods", "description": "一国即使两种产品都有绝对优势，只要相对机会成本不同仍可能从贸易获益", "match": {"all": ["绝对优势"], "any": ["两种.{0,8}都有", "仍.{0,6}获益", "相对.{0,6}成本"]}, "source_urls": ["https://www.imf.org/external/pubs/ft/fandd/basics/trade.htm"]},
+        {"id": "terms_range", "description": "简化两国两品模型中互利贸易条件位于两国机会成本之间", "match": {"all": ["贸易条件"], "any": ["机会成本.{0,8}之间", "双方.{0,6}获益", "交换比率"]}, "source_urls": ["https://openstax.org/books/principles-economics-3e/pages/33-2-what-happens-when-a-country-has-an-absolute-advantage-in-all-goods"]},
+        {"id": "aggregate_distribution", "description": "贸易的总体净收益不意味着国内每个人都获益，进口竞争会产生行业和要素分配效应", "match": {"all": ["分配效应"], "any": ["并非.{0,8}每个人", "进口竞争", "赢家.{0,8}输家", "再分配"]}, "source_urls": ["https://www.wto.org/english/res_e/booksp_e/wtr17-2_e.pdf"]},
+        {"id": "model_boundaries", "description": "运输成本、规模经济、市场力量、资本流动和调整成本会限制基础 Ricardian 模型", "match": {"all": ["模型.{0,6}假设|模型.{0,6}边界"], "any": ["运输成本", "规模经济", "调整成本", "市场力量"]}, "source_urls": ["https://www.wto.org/english/res_e/booksp_e/wtr08-2c_e.pdf"]}
+      ],
+      "traps": [
+        {"id": "productive_no_trade", "description": "误解：一个国家所有产品都更高效就无法从贸易受益", "wrong_pattern": "(所有|全部).{0,4}产品.{0,8}(更高效|绝对优势).{0,10}(无法|不能).{0,6}贸易.{0,4}(获益|收益)", "correct_pattern": "机会成本|比较优势|相对成本"},
+        {"id": "exports_good_imports_bad", "description": "误解：出口本身是收益，进口本身是损失", "wrong_pattern": "出口.{0,6}(就是|等于).{0,4}收益.{0,10}进口.{0,6}(就是|等于).{0,4}损失", "correct_pattern": "消费机会|贸易条件|交换|福利"}
+      ],
+      "contrasts": [["绝对优势", "比较优势"], ["总体收益", "分配效应"]],
+      "format_requirements": {"key_formulas": ["机会成本", "PPF|生产可能性边界", "贸易条件"]}
+    },
+    {
+      "id": "causal_inference_dag",
+      "title": "因果图、混杂与可识别性",
+      "query": "系统自学因果 DAG：干预与观察、后门路径、混杂、碰撞点、媒介、d-separation、调整集、选择偏倚和可识别性；要求用三个反例说明多控制变量可能增加偏差",
+      "subject": "因果推断",
+      "expected_knowledge_points": ["观察与干预", "DAG 与 d-separation", "混杂和后门准则", "碰撞点偏倚", "媒介与总效应", "可识别性与估计"],
+      "expected_domains": ["hsph.harvard.edu", "dagitty.net", "stanford.edu"],
+      "required_facts": [
+        {"id": "intervention", "description": "P(Y|X=x) 是观察条件分布，P(Y|do(X=x)) 表示外部干预，二者一般不相等", "match": {"all": ["do.{0,4}X|干预"], "any": ["观察.{0,8}条件", "一般.{0,6}不相等", "因果效应"]}, "source_urls": ["https://www.hsph.harvard.edu/miguel-hernan/causal-inference-book/"]},
+        {"id": "backdoor", "description": "为识别总因果效应，应阻断 X 与 Y 间所有后门路径且不能调整 X 的后代", "match": {"all": ["后门路径|后门准则"], "any": ["阻断", "共同原因|混杂", "后代"]}, "source_urls": ["https://dagitty.net/learn/graphs/index.html"]},
+        {"id": "collider", "description": "碰撞点在未条件化时阻断路径，对它或其后代条件化会打开非因果关联", "match": {"all": ["碰撞点|collider"], "any": ["条件化.{0,10}打开", "阻断.{0,8}路径", "选择偏倚"]}, "source_urls": ["https://dagitty.net/learn/graphs/index.html"]},
+        {"id": "mediator", "description": "估计总效应时通常不调整暴露后的媒介；调整媒介针对直接效应且需额外假设", "match": {"all": ["媒介|中介变量"], "any": ["总效应", "直接效应", "不调整|额外假设"]}, "source_urls": ["https://www.hsph.harvard.edu/miguel-hernan/causal-inference-book/"]},
+        {"id": "identification_estimation", "description": "可识别性是从观测分布表达因果量的理论问题，与有限样本采用何种估计器不同", "match": {"all": ["可识别"], "any": ["估计", "观测分布", "有限样本", "理论"]}, "source_urls": ["https://plato.stanford.edu/entries/causal-models/"]}
+      ],
+      "traps": [
+        {"id": "adjust_all", "description": "误解：回归中控制可获得的变量越多，因果估计一定越好", "wrong_pattern": "控制.{0,8}(越多|所有).{0,4}变量.{0,10}(一定|必然|总会).{0,6}(更准确|偏差更小|更好)", "correct_pattern": "碰撞点|媒介|DAG|增加偏差"},
+        {"id": "correlation_causation", "description": "误解：控制几个协变量后的显著相关就自动证明因果", "wrong_pattern": "控制.{0,8}协变量.{0,12}(显著|相关).{0,8}(证明|就是).{0,4}因果", "correct_pattern": "未测混杂|识别假设|干预|不能证明"}
+      ],
+      "contrasts": [["观察条件", "干预分布"], ["混杂变量", "碰撞变量"]],
+      "format_requirements": {"key_formulas": ["do.{0,4}X", "DAG", "d.?separation|d.?分离"]}
+    },
+    {
+      "id": "constitutional_separation_powers",
+      "title": "美国宪政中的分权、制衡与联邦主义",
+      "query": "系统自学美国宪法的立法/行政/司法分权、checks and balances、司法审查、联邦主义、权利保障和紧急权力；要求以宪法条文与判例区分制度文本、惯例和现实政治效果",
+      "subject": "政治制度与宪法",
+      "expected_knowledge_points": ["三权分立", "制衡机制", "司法审查", "联邦主义", "权利法案", "行政权边界"],
+      "expected_domains": ["constitution.congress.gov", "archives.gov", "supremecourt.gov"],
+      "required_facts": [
+        {"id": "vested_powers", "description": "宪法前三条分别将联邦立法、行政和司法权配置给国会、总统与联邦法院体系", "match": {"all": ["第一条|Article I", "第二条|Article II", "第三条|Article III"], "any": ["国会.{0,12}总统.{0,12}法院", "立法.{0,10}行政.{0,10}司法"]}, "source_urls": ["https://constitution.congress.gov/constitution/"]},
+        {"id": "checks_balances", "description": "制衡包括总统否决、国会覆议与弹劾、参议院确认以及法院审查等相互约束", "match": {"all": ["制衡"], "any": ["否决", "弹劾", "确认", "司法审查"]}, "source_urls": ["https://constitution.congress.gov/browse/essay/artI-S1-3-1/ALDE_00013292/"]},
+        {"id": "judicial_review", "description": "Marbury v. Madison 奠定联邦司法审查的重要实践，但该术语未以完整制度条款直接写入宪法正文", "match": {"all": ["Marbury|马伯里", "司法审查"], "any": ["1803", "宪法正文", "判例"]}, "source_urls": ["https://www.supremecourt.gov/about/constitutional.aspx"]},
+        {"id": "federalism", "description": "联邦主义在联邦与州之间纵向分配权力，不等同于联邦政府内部三部门横向分权", "match": {"all": ["联邦主义"], "any": ["联邦.{0,8}州", "纵向", "第十修正案"]}, "source_urls": ["https://constitution.congress.gov/constitution/amendment-10/"]},
+        {"id": "rights_limits", "description": "权利不是无条件绝对的；政府限制通常需接受文本、历史和不同审查标准约束", "match": {"all": ["权利法案|修正案"], "any": ["不是.{0,6}绝对", "审查标准", "政府限制", "正当程序"]}, "source_urls": ["https://www.archives.gov/founding-docs/bill-of-rights"]}
+      ],
+      "traps": [
+        {"id": "complete_separation", "description": "误解：三权分立意味着三个部门完全没有职能交叉或相互影响", "wrong_pattern": "三权分立.{0,12}(完全|绝对).{0,6}(互不|没有).{0,6}(交叉|影响|干预)", "correct_pattern": "制衡|共享权力|否决|确认"},
+        {"id": "judicial_review_explicit", "description": "误解：宪法正文逐字明确规定最高法院可废除任何法律", "wrong_pattern": "宪法正文.{0,12}(明确|逐字).{0,10}最高法院.{0,10}(废除|推翻).{0,6}(任何|所有).{0,4}法律", "correct_pattern": "Marbury|判例发展|司法审查"}
+      ],
+      "contrasts": [["分权", "制衡"], ["联邦主义", "三权分立"]],
+      "format_requirements": {"key_formulas": ["Article|第.{0,3}条", "Marbury|马伯里", "修正案"]}
+    },
+    {
+      "id": "plate_tectonics",
+      "title": "板块构造、海底扩张与地震火山",
+      "query": "系统自学岩石圈板块、软流圈、离散/汇聚/转换边界、海底扩张、古地磁条带、俯冲与大陆碰撞；要求用全球证据链解释地震火山分布并辨析驱动力",
+      "subject": "地球科学",
+      "expected_knowledge_points": ["岩石圈与软流圈", "三类板块边界", "海底扩张", "古地磁证据", "俯冲与造山", "板块驱动力"],
+      "expected_domains": ["usgs.gov", "noaa.gov", "nps.gov"],
+      "required_facts": [
+        {"id": "lithosphere", "description": "刚性岩石圈由地壳和最上部地幔组成，分成板块在较弱软流圈之上运动", "match": {"all": ["岩石圈", "软流圈"], "any": ["地壳.{0,8}上部地幔", "刚性.{0,8}板块"]}, "source_urls": ["https://pubs.usgs.gov/gip/dynamic/tectonic.html"]},
+        {"id": "boundary_types", "description": "离散边界生成新洋壳、汇聚边界俯冲或碰撞、转换边界主要水平错动", "match": {"all": ["离散边界", "汇聚边界", "转换边界"], "any": ["新洋壳", "俯冲|碰撞", "水平.{0,6}错动"]}, "source_urls": ["https://pubs.usgs.gov/gip/dynamic/understanding.html"]},
+        {"id": "magnetic_stripes", "description": "洋中脊两侧对称的磁异常条带记录地磁反转，为海底扩张提供证据", "match": {"all": ["磁.{0,4}条带|磁异常"], "any": ["对称", "地磁反转", "海底扩张"]}, "source_urls": ["https://oceanservice.noaa.gov/facts/tectonics.html"]},
+        {"id": "subduction", "description": "较密的洋岩石圈可在海沟处俯冲，产生倾斜震源带、火山弧并回收岩石圈", "match": {"all": ["俯冲"], "any": ["海沟", "震源.{0,6}带", "火山弧", "回收"]}, "source_urls": ["https://pubs.usgs.gov/gip/dynamic/understanding.html"]},
+        {"id": "driving_forces", "description": "板块运动由地幔对流、板片拉力和洋脊推力等共同作用，板片拉力常被视为重要贡献", "match": {"all": ["板片拉力|slab pull"], "any": ["地幔对流", "洋脊推力", "共同作用"]}, "source_urls": ["https://pubs.usgs.gov/gip/dynamic/unanswered.html"]}
+      ],
+      "traps": [
+        {"id": "continents_float_crust", "description": "误解：大陆像木筏一样在液态海洋地壳上漂移", "wrong_pattern": "大陆.{0,10}(漂浮|漂移).{0,8}(液态|熔融).{0,4}(海洋地壳|地壳)上", "correct_pattern": "岩石圈板块|软流圈|固态.{0,6}流变"},
+        {"id": "all_volcano_boundaries", "description": "误解：所有火山都严格位于板块边界", "wrong_pattern": "(所有|全部).{0,4}火山.{0,8}(都|必然).{0,6}板块边界", "correct_pattern": "热点|板内火山|大多数"}
+      ],
+      "contrasts": [["岩石圈", "软流圈"], ["大陆漂移", "板块构造"]],
+      "format_requirements": {"key_formulas": ["海底扩张", "俯冲", "板片拉力"]}
+    },
+    {
+      "id": "climate_feedback_carbon_cycle",
+      "tier": "smoke",
+      "title": "气候反馈、辐射强迫与碳循环",
+      "query": "系统自学温室效应、辐射强迫、气候敏感度、水汽/冰反照率/碳循环反馈、碳预算和海洋热惯性；要求区分反馈与外部强迫、天气与气候，并量化不确定性",
+      "subject": "气候科学",
+      "expected_knowledge_points": ["温室效应", "辐射强迫", "气候反馈", "水汽与冰反照率", "全球碳循环", "碳预算与时间尺度"],
+      "expected_domains": ["ipcc.ch", "nasa.gov", "noaa.gov"],
+      "required_facts": [
+        {"id": "greenhouse", "description": "温室气体吸收并再辐射地表长波辐射，使有温室气体的地表温度高于无温室气体情形", "match": {"all": ["温室效应"], "any": ["长波|红外", "吸收.{0,8}再辐射", "地表.{0,8}升温"]}, "source_urls": ["https://science.nasa.gov/climate-change/faq/what-is-the-greenhouse-effect/"]},
+        {"id": "forcing_feedback", "description": "辐射强迫是对能量收支的外部扰动，反馈是温度变化诱发并放大或削弱响应的过程", "match": {"all": ["辐射强迫", "反馈"], "any": ["外部.{0,6}扰动", "放大|削弱", "能量收支"]}, "source_urls": ["https://www.ipcc.ch/report/ar6/wg1/chapter/chapter-7/"]},
+        {"id": "water_vapor", "description": "现代变暖中水汽主要是随温度变化的正反馈，而持续增加 CO2 是重要外部强迫", "match": {"all": ["水汽.{0,8}反馈", "CO2|二氧化碳"], "any": ["正反馈", "强迫", "随温度"]}, "source_urls": ["https://science.nasa.gov/climate-change/faq/is-water-vapor-the-most-important-greenhouse-gas/"]},
+        {"id": "ice_albedo", "description": "升温使冰雪减少、反照率降低、吸收太阳能增加，构成正反馈", "match": {"all": ["冰.?反照率|冰雪.?反照率"], "any": ["反照率.{0,8}降低", "吸收.{0,8}增加", "正反馈"]}, "source_urls": ["https://climate.nasa.gov/nasa_science/science/"]},
+        {"id": "carbon_budget", "description": "累计 CO2 排放与全球平均升温近似成比例，剩余碳预算依赖温控概率、非 CO2 强迫和模型不确定性", "match": {"all": ["碳预算"], "any": ["累计.{0,6}排放", "近似.{0,6}成比例", "概率|不确定性", "非.?CO2"]}, "source_urls": ["https://www.ipcc.ch/report/ar6/wg1/chapter/chapter-5/"]}
+      ],
+      "traps": [
+        {"id": "water_primary_forcing", "description": "误解：水汽是当前长期增暖的独立首要外部强迫，因此 CO2 不重要", "wrong_pattern": "水汽.{0,12}(首要|主要).{0,6}外部强迫.{0,12}CO2.{0,8}(不重要|可忽略)", "correct_pattern": "水汽.{0,8}反馈|CO2.{0,8}强迫"},
+        {"id": "cold_day_refutes", "description": "误解：某地一次寒潮或冷天可以反驳全球长期变暖", "wrong_pattern": "(寒潮|冷天|低温).{0,10}(反驳|证明没有).{0,8}(全球变暖|气候变暖)", "correct_pattern": "天气.{0,8}气候|长期趋势|全球平均"}
+      ],
+      "contrasts": [["辐射强迫", "气候反馈"], ["天气", "气候"]],
+      "format_requirements": {"key_formulas": ["W/m|瓦.{0,4}平方米", "CO2|二氧化碳", "碳预算"]}
+    },
+    {
+      "id": "experimental_design_statistics",
+      "title": "实验设计、统计功效与可重复性",
+      "query": "系统自学随机分配、随机抽样、对照、盲法、阻断、重复、析因设计、样本量与功效、效应量、置信区间、多重比较和预注册；要求诊断伪重复与停止规则偏差",
+      "subject": "实验设计与统计学",
+      "expected_knowledge_points": ["随机分配与随机抽样", "对照和盲法", "阻断与重复", "析因设计", "功效和样本量", "多重比较与预注册"],
+      "expected_domains": ["nist.gov", "amstat.org", "nih.gov"],
+      "required_facts": [
+        {"id": "assignment_sampling", "description": "随机分配支持组间因果比较，随机抽样支持向目标总体外推；二者解决不同问题", "match": {"all": ["随机分配", "随机抽样"], "any": ["因果", "外推|代表性", "不同问题"]}, "source_urls": ["https://www.itl.nist.gov/div898/handbook/pri/section3/pri332.htm"]},
+        {"id": "control_blinding", "description": "对照隔离处理效应，盲法减少参与者、研究者或评估者的行为和测量偏倚", "match": {"all": ["对照", "盲法"], "any": ["测量偏倚", "安慰剂", "评估者"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK305518/"]},
+        {"id": "experimental_unit", "description": "独立实验单位而非重复测量决定有效样本量；把同一单位的技术重复当独立样本是伪重复", "match": {"all": ["实验单位", "伪重复"], "any": ["技术重复", "独立样本", "有效样本量"]}, "source_urls": ["https://www.itl.nist.gov/div898/handbook/pri/section3/pri332.htm"]},
+        {"id": "power", "description": "功效取决于效应量、噪声、样本量、显著性阈值和设计；事前样本量计算需声明目标效应", "match": {"all": ["统计功效|功效"], "any": ["效应量", "样本量", "显著性", "事前"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK557823/"]},
+        {"id": "multiplicity", "description": "多重检验和数据依赖停止会提高至少一次假阳性的概率，应预先规划并校正或透明报告", "match": {"all": ["多重比较|多重检验"], "any": ["假阳性|第一类错误", "校正", "预注册|停止规则"]}, "source_urls": ["https://www.amstat.org/asa/files/pdfs/p-valuestatement.pdf"]}
+      ],
+      "traps": [
+        {"id": "nonsignificant_no_effect", "description": "误解：p>0.05 证明不存在任何效应", "wrong_pattern": "p.{0,3}0.05.{0,10}(证明|说明).{0,6}(没有|不存在).{0,4}(任何)?效应", "correct_pattern": "功效|置信区间|证据不足|效应量"},
+        {"id": "randomized_representative", "description": "误解：做了随机分配，样本就自动代表所有人群", "wrong_pattern": "随机分配.{0,12}(自动|就).{0,8}(代表|推广到).{0,6}(所有|总体)人群", "correct_pattern": "随机抽样|外部效度|入选标准"}
+      ],
+      "contrasts": [["随机分配", "随机抽样"], ["统计显著性", "实际重要性"]],
+      "format_requirements": {"key_formulas": ["p.?值|p.?value", "功效", "效应量"]}
+    },
+    {
+      "id": "information_theory_entropy_coding",
+      "title": "信息熵、互信息与信道容量",
+      "query": "系统自学 Shannon 信息量、熵、条件熵、互信息、KL 散度、典型集、无损源编码和有噪信道编码定理；要求手算二元信源并区分信息论量与语义信息",
+      "subject": "信息论",
+      "expected_knowledge_points": ["自信息与熵", "联合/条件熵", "互信息", "KL 散度", "无损源编码", "信道容量与编码定理"],
+      "expected_domains": ["ocw.mit.edu", "stanford.edu", "ieee.org"],
+      "required_facts": [
+        {"id": "self_information_entropy", "description": "事件自信息为 -log p，离散熵是自信息期望 H(X)=-sum p log p", "match": {"all": ["自信息", "熵"], "any": ["-log.{0,4}p", "-sum|求和", "期望"]}, "source_urls": ["https://ocw.mit.edu/courses/6-441-information-theory-spring-2010/pages/lecture-notes/"]},
+        {"id": "mutual_information", "description": "互信息 I(X;Y)=H(X)-H(X|Y)，非负且独立时为零", "match": {"all": ["互信息"], "any": ["H.{0,4}X.{0,8}H.{0,6}X.{0,3}Y", "非负", "独立.{0,6}零"]}, "source_urls": ["https://web.stanford.edu/class/ee376a/files/lecture_notes.pdf"]},
+        {"id": "kl", "description": "KL 散度通常不对称且不满足三角不等式，因此不是距离度量", "match": {"all": ["KL 散度|相对熵"], "any": ["不对称", "三角不等式", "不是.{0,4}距离"]}, "source_urls": ["https://web.stanford.edu/class/ee376a/files/lecture_notes.pdf"]},
+        {"id": "source_coding", "description": "对长块无损编码，平均码长可逼近熵但不能普遍长期低于熵；前缀码满足 Kraft 不等式", "match": {"all": ["源编码"], "any": ["平均码长.{0,8}熵", "Kraft|克拉夫特", "无损"]}, "source_urls": ["https://ocw.mit.edu/courses/6-441-information-theory-spring-2010/pages/lecture-notes/"]},
+        {"id": "channel_capacity", "description": "信道容量是输入分布上互信息的最大值；低于容量存在可令误码率趋零的编码，高于容量则不可能", "match": {"all": ["信道容量"], "any": ["互信息.{0,8}最大", "低于.{0,6}容量", "误码率.{0,8}趋近于零|趋零"]}, "source_urls": ["https://web.stanford.edu/class/ee376a/files/lecture_notes.pdf"]}
+      ],
+      "traps": [
+        {"id": "entropy_semantics", "description": "误解：Shannon 熵直接衡量消息的真实性、重要性或语义深度", "wrong_pattern": "Shannon|香农.{0,4}熵.{0,10}(直接|就是).{0,8}(真实性|重要性|语义深度|意义)", "correct_pattern": "概率分布|不涉及语义|不等于.{0,6}意义"},
+        {"id": "below_entropy_lossless", "description": "误解：存在一种通用无损压缩算法可让所有数据长期低于熵率", "wrong_pattern": "(通用|任何).{0,4}无损压缩.{0,12}(所有|任意).{0,4}数据.{0,10}低于.{0,4}熵", "correct_pattern": "平均码长|不可能|源模型|渐近"}
+      ],
+      "contrasts": [["熵", "语义信息"], ["源编码", "信道编码"]],
+      "format_requirements": {"key_formulas": ["-log", "H.{0,3}X", "I.{0,3}X", "KL|相对熵"]}
+    }
+  ]
+}

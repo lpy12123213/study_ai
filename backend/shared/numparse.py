@@ -18,7 +18,7 @@ def clamp_int(value: Any, *, default: int, min_value: int, max_value: int) -> in
     """
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         n = default
     return max(min_value, min(max_value, n))
 
@@ -45,7 +45,7 @@ def clamp_int_optional(value: Any, *, default: Optional[int], min_value: int, ma
     else:
         try:
             n = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             n = default
     if n is None:
         return None

@@ -4,6 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+// 开发代理目标可配置（默认本地后端），跨站联调时用 VITE_DEV_PROXY_TARGET 覆盖。
+const proxyTarget = process.env.VITE_DEV_PROXY_TARGET || "http://localhost:8000";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -16,7 +19,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: proxyTarget,
         changeOrigin: true,
         ws: true,
       },

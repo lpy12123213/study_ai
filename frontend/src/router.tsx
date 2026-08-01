@@ -1,9 +1,9 @@
-import { createBrowserRouter, type RouteObject } from "react-router";
+import { createBrowserRouter, redirect, type RouteObject } from "react-router";
 import type { ComponentType } from "react";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { NotFoundPage } from "@/pages/not-found";
-import { APP_ROUTES } from "@/app/router/catalog";
+import { APP_ROUTES, REDIRECTS } from "@/app/router/catalog";
 import { RouteErrorBoundary } from "@/app/router/route-error-boundary";
 
 /**
@@ -36,6 +36,12 @@ function toRoute(meta: (typeof APP_ROUTES)[number]): RouteObject {
 
 const shellChildren: RouteObject[] = APP_ROUTES.filter((r) => r.layout === "shell").map(toRoute);
 
+/** 兼容重定向（F11）：精确匹配 from，loader 返回 redirect 到 to。 */
+const redirectRoutes: RouteObject[] = REDIRECTS.map((r) => ({
+  path: r.from,
+  loader: () => redirect(r.to),
+}));
+
 /** 初次进入时懒加载页面模块期间的极简占位（避免空白闪屏）。 */
 const bootFallback = (
   <div className="flex h-dvh items-center justify-center bg-background">
@@ -49,6 +55,8 @@ export const router = createBrowserRouter([
     errorElement: <RouteErrorBoundary />,
     children: [
       ...APP_ROUTES.filter((r) => r.layout === "public").map(toRoute),
+      // redirect 路由必须在 AppShell 之前：精确路径优先于 AppShell 内的 '*' 兜底
+      ...redirectRoutes,
       {
         element: <AppShell />,
         errorElement: <RouteErrorBoundary />,

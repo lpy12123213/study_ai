@@ -4,7 +4,7 @@
   "query": "系统自学量子谐振子：定态薛定谔方程求解、能级与零点能、升降算符方法、波函数性质，并与经典谐振子对比",
   "subject": "量子力学",
   "preset": "deep",
-  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "定态薛定谔方程与谐振子势",
     "能级与零点能",

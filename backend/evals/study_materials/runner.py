@@ -2,7 +2,8 @@
 
 用法::
 
-    python -m backend.evals.study_materials.runner --case all --dry-run   # 只校验用例
+    python -m backend.evals.study_materials.runner --case all --dry-run   # 校验 40 例
+    python -m backend.evals.study_materials.runner --case light           # 轻量 8 例、自动并发
     python -m backend.evals.study_materials.runner --case lebesgue_integral \
         --base-url http://127.0.0.1:8000 [--llm-judge] [--check-links]
 
@@ -27,7 +28,7 @@ from backend.evals.study_materials.case_schema import (
     BenchmarkCase,
     CaseValidationError,
     default_cases_dir,
-    load_case,
+    load_case_file,
     load_cases,
 )
 from backend.evals.study_materials.scorecard import grade_case, write_outputs
@@ -280,14 +281,51 @@ def build_link_checker() -> Callable[[str], bool]:
 def _resolve_cases(selector: str, cases_dir: Path) -> List[BenchmarkCase]:
     candidate = Path(selector)
     if candidate.is_file():
-        return [load_case(candidate)]
+        return load_case_file(candidate)
     cases = load_cases(cases_dir)
-    if selector.strip().lower() == "all":
-        return cases
+    normalized = selector.strip().lower()
+    tier_sets = {
+        "light": {"smoke"},
+        "heavy": {"core", "extended"},
+        "smoke": {"smoke"},
+        "core": {"smoke", "core"},
+        "extended": {"extended"},
+        "all": {"smoke", "core", "extended"},
+    }
+    if normalized in tier_sets:
+        return [case for case in cases if case.tier in tier_sets[normalized]]
     matched = [c for c in cases if c.id == selector.strip()]
     if not matched:
-        raise CaseValidationError(f"未找到用例 {selector!r}（可用: {', '.join(c.id for c in cases)}）")
+        raise CaseValidationError(
+            f"未找到用例/套件 {selector!r}（负载套件: light, heavy；"
+            f"分层套件: smoke, core, extended, all；"
+            f"用例: {', '.join(c.id for c in cases)}）"
+        )
     return matched
+
+
+def _select_shard(cases: List[BenchmarkCase], *, count: int, index: int) -> List[BenchmarkCase]:
+    """按排序后的 case id 做稳定的 0-based 分片。"""
+    if count < 1:
+        raise CaseValidationError("--shard-count 必须大于等于 1")
+    if index < 0 or index >= count:
+        raise CaseValidationError(f"--shard-index 必须满足 0 <= index < {count}")
+    ordered = sorted(cases, key=lambda case: case.id)
+    selected = [case for position, case in enumerate(ordered) if position % count == index]
+    if not selected:
+        raise CaseValidationError(f"分片 {index}/{count} 没有用例（当前套件共 {len(ordered)} 个）")
+    return selected
+
+
+def _effective_parallel(requested: int, case_count: int) -> int:
+    """0 表示自动：单例串行，多例最多 4 并发，避免压垮本地后端。"""
+    if requested < 0:
+        raise CaseValidationError("--parallel 不能为负数（0 表示自动）")
+    if case_count < 1:
+        return 0
+    if requested == 0:
+        return min(4, case_count)
+    return min(requested, case_count)
 
 
 def run_case(
@@ -349,7 +387,11 @@ def run_case(
         notes=notes,
     )
     paths = write_outputs(card, out_dir)
-    print(f"[{case.id}] 总分 {card.total:.1f}/100，报告 → {paths['report']}", flush=True)
+    print(
+        f"[{case.id}] 成熟度 {card.total:.1f}/100（原始诊断 {card.raw_total:.1f}，"
+        f"封顶 {card.applied_ceiling:.0f}）→ {paths['report']}",
+        flush=True,
+    )
     return card.to_dict()
 
 
@@ -426,19 +468,28 @@ def regrade_run(
         notes=notes,
     )
     paths = write_outputs(card, run_dir)
-    print(f"[regrade {case.id}] 总分 {card.total:.1f}/100，报告 → {paths['report']}", flush=True)
+    print(
+        f"[regrade {case.id}] 成熟度 {card.total:.1f}/100（原始诊断 {card.raw_total:.1f}，"
+        f"封顶 {card.applied_ceiling:.0f}）→ {paths['report']}",
+        flush=True,
+    )
     return card.to_dict()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="自学资料生成质量 benchmark")
-    parser.add_argument("--case", help="用例 id / all / 用例 JSON 路径")
+    parser.add_argument(
+        "--case",
+        help="用例 id / light / heavy / smoke / core / extended / all / 用例 JSON 路径",
+    )
     parser.add_argument("--regrade", metavar="RUN_DIR", help="对已落盘的运行目录重新评分（不重新生成）")
     parser.add_argument("--cases-dir", default=str(default_cases_dir()), help="用例目录")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="后端服务地址")
     parser.add_argument("--out", default="artifacts/evals/study_materials", help="输出根目录")
     parser.add_argument("--timeout-s", type=float, default=2400.0, help="单用例 SSE 读取超时（秒）")
-    parser.add_argument("--parallel", type=int, default=1, help="并发跑用例数（默认 1 串行；服务端支持并发任务）")
+    parser.add_argument("--parallel", type=int, default=0, help="并发跑用例数（默认 0=自动，最多 4；1=串行）")
+    parser.add_argument("--shard-count", type=int, default=1, help="把所选套件稳定分成 N 片（默认 1）")
+    parser.add_argument("--shard-index", type=int, default=0, help="运行第几片，0-based（默认 0）")
     parser.add_argument("--llm-judge", action="store_true", help="启用 LLM 复核（事实点/排版）")
     parser.add_argument("--check-links", action="store_true", help="抽查参考文献 URL 可访问性")
     parser.add_argument("--dry-run", action="store_true", help="只加载校验用例，不跑生成")
@@ -463,6 +514,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         cases = _resolve_cases(args.case, Path(args.cases_dir))
+        cases = _select_shard(cases, count=args.shard_count, index=args.shard_index)
+        workers = _effective_parallel(args.parallel, len(cases))
     except CaseValidationError as exc:
         print(f"用例错误: {exc}", file=sys.stderr)
         return 2
@@ -470,17 +523,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.dry_run:
         for case in cases:
             print(
-                f"[dry-run] {case.id}: preset={case.preset} kp={len(case.expected_knowledge_points)} "
-                f"facts={len(case.required_facts)} traps={len(case.traps)} contrasts={len(case.contrasts)}"
+                f"[dry-run] {case.id}: tier={case.tier} preset={case.preset} "
+                f"kp={len(case.expected_knowledge_points)} "
+                f"facts={len(case.required_facts)} traps={len(case.traps)} contrasts={len(case.contrasts)} "
+                f"questions>={case.learning_requirements.min_practice_questions}"
             )
-        print(f"[dry-run] {len(cases)} 个用例校验通过")
+        print(f"[dry-run] {len(cases)} 个用例校验通过；真实运行并发={workers}")
         return 0
 
     results: List[Dict[str, Any]] = []
-    if args.parallel > 1 and len(cases) > 1:
+    if workers > 1:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        workers = max(1, min(int(args.parallel), len(cases)))
         print(f"并行跑 {len(cases)} 个用例（并发 {workers}）", flush=True)
         results_by_id: Dict[str, Dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -523,12 +577,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     print("\n==== 汇总 ====")
     for item in results:
-        line = f"{item['case_id']}: {item.get('total', 0.0):.1f}/100"
+        final_score = float(item.get("total", 0.0))
+        raw_score = float(item.get("raw_total", final_score))
+        line = f"{item['case_id']}: 成熟度 {final_score:.1f}/100（原始诊断 {raw_score:.1f}）"
         if item.get("error"):
             line += f"（采集异常: {item['error']}）"
         print(line)
     mean = sum(float(r.get("total", 0.0)) for r in results) / len(results)
-    print(f"平均: {mean:.1f}/100")
+    raw_mean = sum(float(r.get("raw_total", r.get("total", 0.0))) for r in results) / len(results)
+    print(f"成熟度平均: {mean:.1f}/100；原始诊断平均: {raw_mean:.1f}/100")
+    failed_gates: Dict[str, int] = {}
+    for result in results:
+        for gate in result.get("quality_gates") or []:
+            if isinstance(gate, dict) and not bool(gate.get("passed")):
+                gate_id = str(gate.get("id") or "unknown")
+                failed_gates[gate_id] = failed_gates.get(gate_id, 0) + 1
+    if failed_gates:
+        summary = "、".join(f"{gate_id}={count}/{len(results)}" for gate_id, count in sorted(failed_gates.items()))
+        print(f"未通过门槛: {summary}")
     return 0
 
 

@@ -103,6 +103,49 @@ class TestTasksApiContract(unittest.TestCase):
 
         app.dependency_overrides.clear()
 
+    def test_deepthink_cancel_flow(self) -> None:
+        """Canonical DeepThink 长任务闭环：提交 → 取消 → 状态对齐为 canceled。
+
+        前端已迁移到 ``POST /api/tasks/deepthink`` 并显式调用取消 API，
+        客户端断开不再隐含取消（见 backend/api/deepthink.py 兼容入口文档）。
+        """
+
+        app = create_app()
+        self._override_auth(app)
+        client = TestClient(app)
+
+        dummy_task = SimpleNamespace(task_id="deepthink-1")
+
+        with patch("backend.api.tasks.submit_deepthink_task", new=AsyncMock(return_value=dummy_task)):
+            resp = client.post("/api/tasks/deepthink", json={"question": "1+1=?", "subject": "高中数学"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"success": True, "taskId": "deepthink-1"})
+
+        canceled_task = {
+            "id": "deepthink-1",
+            "user_id": "u-1",
+            "task_type": "deepthink",
+            "title": "深度解题",
+            "status": "canceled",
+            "progress": 10,
+        }
+
+        with (
+            patch("backend.api.tasks.task_runtime.cancel_task", new=AsyncMock(return_value=True)) as cancel,
+            patch("backend.api.tasks.db_get_task", new=AsyncMock(return_value=canceled_task)) as get_task,
+        ):
+            cancel_resp = client.post("/api/tasks/deepthink-1/cancel")
+            self.assertEqual(cancel_resp.status_code, 200)
+            self.assertEqual(cancel_resp.json(), {"success": True})
+            cancel.assert_awaited_once_with(task_id="deepthink-1", user_id="u-1")
+
+            status_resp = client.get("/api/tasks/deepthink-1")
+            self.assertEqual(status_resp.status_code, 200)
+            self.assertEqual(status_resp.json()["status"], "canceled")
+            get_task.assert_awaited()
+
+        app.dependency_overrides.clear()
+
     def test_stream_endpoint_is_mounted(self) -> None:
         app = create_app()
         client = TestClient(app)

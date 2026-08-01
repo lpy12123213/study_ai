@@ -4,7 +4,7 @@
   "query": "系统自学 CRISPR-Cas9：天然起源、分子机制（gRNA/PAM/双链断裂与修复）、脱靶问题、碱基编辑与引导编辑的演进及伦理争议",
   "subject": "分子生物学",
   "preset": "deep",
-  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "CRISPR 的天然起源",
     "gRNA 与 PAM",

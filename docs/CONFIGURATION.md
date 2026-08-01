@@ -303,11 +303,19 @@ DOCX 推荐安装 Pandoc。
 
 默认不要开启不必要的题干、答案、解析持久化。
 
-## 前端
+## 前端与部署
 
-- `VITE_API_BASE_URL`：默认 `/api`
+前端与后端之间有两种受支持的模式：
 
-同源部署保持默认值。前后端分开部署时设置为后端完整 API 地址并重新构建。
+- 同源反向代理（默认）：浏览器使用相对 `/api`，无需设置 `VITE_API_BASE_URL`，认证 Cookie 为 `SameSite=Lax`。
+- 跨站部署：前端构建时把 `VITE_API_BASE_URL` 设为后端 origin；后端用 `CORS_ORIGINS` 白名单允许前端 origin，并设置 `AUTH_COOKIE_SAMESITE=none`（隐含 `Secure`，要求 HTTPS）。前端跨站请求需携带凭证（`credentials: include`、EventSource `withCredentials`）；`CORS_ORIGINS=*` 与携带凭证的请求不能同时使用。
+
+- `VITE_API_BASE_URL`（前端构建时）：后端 origin；默认留空表示同源相对 `/api`。
+- `VITE_DEV_PROXY_TARGET`（前端开发）：Vite dev server 的 `/api` 代理目标，默认 `http://localhost:8000`。
+- `AUTH_COOKIE_SAMESITE`：`lax`（默认）或 `none`；`none` 隐含 `Secure`，跨站部署需要 HTTPS。
+- `CORS_ORIGINS`：允许跨站访问的 origin allowlist，逗号分隔。
+- `TRUST_PROXY_HEADERS`：`1` 表示信任代理传入的客户端 IP 头（`X-Forwarded-For` / `Forwarded` 等）。
+- `TRUSTED_PROXIES`：受信任的直接上游代理 IP/CIDR 列表，逗号分隔；只在 `TRUST_PROXY_HEADERS=1` 时生效，不要在未知代理后使用 `*`。
 
 ## 媒体、画布与可观测性
 

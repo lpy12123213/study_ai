@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -148,7 +148,7 @@ function inferSourceMode(questionIds: string[]): string {
  * 这里对缺题干的题目逐条经题库详情接口补水（question_cache 命中才有题干/答案/解析）；
  * 未收录到本地题库的题目优雅降级为元信息 + 来源链接。
  */
-function QuestionList({ questions }: { questions: PaperQuestion[] }) {
+function QuestionList({ questions, focusQuestionId }: { questions: PaperQuestion[]; focusQuestionId?: string | null }) {
   const missingIds = questions.filter((q) => !q.stem && q.question_id).map((q) => q.question_id);
 
   const hydration = useQuery({
@@ -188,6 +188,14 @@ function QuestionList({ questions }: { questions: PaperQuestion[] }) {
   });
   const dehydrated = merged.filter((q) => !q.stem).length;
 
+  // 全局搜索携带 ?question= 锚点：题目列表加载/补水完成后滚动定位
+  useEffect(() => {
+    if (!focusQuestionId) return;
+    const el = document.querySelector(`[data-question-id="${CSS.escape(focusQuestionId)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focusQuestionId, questions, hydration.data]);
+
   return (
     <div className="space-y-3">
       {hydration.isPending && missingIds.length > 0 ? (
@@ -201,23 +209,24 @@ function QuestionList({ questions }: { questions: PaperQuestion[] }) {
         </p>
       ) : null}
       {merged.map((q, idx) => (
-        <QuestionCard
-          key={q.question_id || idx}
-          question={q}
-          actions={
-            <>
-              <Badge variant="muted">第 {q.order ?? idx + 1} 题</Badge>
-              {q.source_url ? (
-                <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs text-muted-foreground">
-                  <a href={q.source_url} target="_blank" rel="noreferrer">
-                    <ExternalLink />
-                    查看来源
-                  </a>
-                </Button>
-              ) : null}
-            </>
-          }
-        />
+        <div key={q.question_id || idx} data-question-id={q.question_id}>
+          <QuestionCard
+            question={q}
+            actions={
+              <>
+                <Badge variant="muted">第 {q.order ?? idx + 1} 题</Badge>
+                {q.source_url ? (
+                  <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs text-muted-foreground">
+                    <a href={q.source_url} target="_blank" rel="noreferrer">
+                      <ExternalLink />
+                      查看来源
+                    </a>
+                  </Button>
+                ) : null}
+              </>
+            }
+          />
+        </div>
       ))}
     </div>
   );
@@ -552,6 +561,8 @@ export function PaperDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useUiStore((s) => s.toast);
+  const [searchParams] = useSearchParams();
+  const focusQuestionId = searchParams.get("question");
 
   const [exportOpen, setExportOpen] = useState(false);
   const [linksOpen, setLinksOpen] = useState(false);
@@ -721,7 +732,7 @@ export function PaperDetailPage() {
         {paper.questions.length === 0 ? (
           <EmptyState icon={FileQuestion} title="试卷暂无题目" description="可通过组卷或题库向试卷中添加题目" />
         ) : (
-          <QuestionList questions={paper.questions} />
+          <QuestionList questions={paper.questions} focusQuestionId={focusQuestionId} />
         )}
       </section>
 

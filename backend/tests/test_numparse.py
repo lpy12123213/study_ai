@@ -21,6 +21,15 @@ class TestClampInt(unittest.TestCase):
     def test_default_is_clamped(self) -> None:
         self.assertEqual(clamp_int(None, default=99, min_value=1, max_value=10), 10)
 
+    def test_non_finite_values_fall_back_to_default(self) -> None:
+        kwargs = {"default": 4, "min_value": 1, "max_value": 10}
+        self.assertEqual(clamp_int(float("inf"), **kwargs), 4)
+        self.assertEqual(clamp_int(float("-inf"), **kwargs), 4)
+        self.assertEqual(clamp_int(float("nan"), **kwargs), 4)
+        # 1e999 parses to float('inf'), and the string form is not an int literal.
+        self.assertEqual(clamp_int(1e999, **kwargs), 4)
+        self.assertEqual(clamp_int("1e999", **kwargs), 4)
+
 
 class TestClampFloat(unittest.TestCase):
     def test_parses_and_clamps(self) -> None:
@@ -41,6 +50,20 @@ class TestClampIntOptional(unittest.TestCase):
     def test_clamps_parsed_and_default(self) -> None:
         self.assertEqual(clamp_int_optional("20", default=1, min_value=1, max_value=10), 10)
         self.assertEqual(clamp_int_optional(None, default=99, min_value=1, max_value=10), 10)
+
+    def test_non_finite_values_fall_back_to_none_default(self) -> None:
+        kwargs = {"default": None, "min_value": 1, "max_value": 10}
+        self.assertIsNone(clamp_int_optional(float("inf"), **kwargs))
+        self.assertIsNone(clamp_int_optional(float("-inf"), **kwargs))
+        self.assertIsNone(clamp_int_optional(float("nan"), **kwargs))
+        self.assertIsNone(clamp_int_optional(1e999, **kwargs))
+        self.assertIsNone(clamp_int_optional("1e999", **kwargs))
+
+    def test_non_finite_values_fall_back_to_non_none_default(self) -> None:
+        kwargs = {"default": 7, "min_value": 1, "max_value": 10}
+        self.assertEqual(clamp_int_optional(float("inf"), **kwargs), 7)
+        self.assertEqual(clamp_int_optional(float("-inf"), **kwargs), 7)
+        self.assertEqual(clamp_int_optional(float("nan"), **kwargs), 7)
 
 
 class TestClampFloatOptional(unittest.TestCase):

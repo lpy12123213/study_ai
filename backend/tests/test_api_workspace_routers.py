@@ -9,6 +9,7 @@ database or HTTP client.
 
 from __future__ import annotations
 
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -212,6 +213,16 @@ class TestShareLinksRouter(unittest.IsolatedAsyncioTestCase):
             out = await share_links.fetch_shared_content("t", {}, request=None)
         self.assertEqual(out["item_type"], "paper")
         self.assertEqual(out["paper"], {"paper_id": 5})
+
+    async def test_share_limiter_ip_ignores_spoofed_forwarded_header(self) -> None:
+        # F8: by default the shared client_ip helper trusts only request.client.host,
+        # so a direct client cannot rotate the share password limiter key via XFF.
+        request = SimpleNamespace(
+            client=SimpleNamespace(host="203.0.113.9"),
+            headers={"x-forwarded-for": "198.51.100.1"},
+        )
+        with patch.dict(os.environ, {"TRUST_PROXY_HEADERS": "0"}, clear=False):
+            self.assertEqual(share_links._client_ip(request), "203.0.113.9")
 
 
 class _FakeScalars:

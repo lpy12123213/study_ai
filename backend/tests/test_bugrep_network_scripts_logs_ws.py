@@ -94,6 +94,8 @@ class BugrepNetworkScriptsLogsWsTests(unittest.IsolatedAsyncioTestCase):
         from backend.api import ws
 
         class FakeWebSocket:
+            cookies: dict = {}
+
             def __init__(self) -> None:
                 self.accepted = False
                 self.closed = False

@@ -465,6 +465,8 @@ export interface GlobalSearchResult {
   paper_id?: number;
   question_id?: string;
   archive_id?: number;
+  /** 实体聚合后的命中条数（如一个会话里匹配的消息数）；1:N 实体才有意义。 */
+  match_count?: number;
 }
 
 export interface ExportFileInfo {

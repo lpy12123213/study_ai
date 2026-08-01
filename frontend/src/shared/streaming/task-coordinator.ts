@@ -11,6 +11,7 @@
  * 本模块是纯连接编排：REST 校准函数由调用方注入，不导入业务 API 与 store。
  */
 import { normalizeEvent } from "@/lib/sse";
+import { buildEventSourceUrl, resolveCredentials } from "@/shared/api/config";
 import type { TaskEvent } from "@/shared/api/types";
 
 export type TaskConnectionState = "connecting" | "open" | "reconnecting" | "stopped";
@@ -107,7 +108,12 @@ export function watchTask(taskId: string, opts: TaskWatchOptions): TaskWatchHand
   const connect = () => {
     if (stopped || finished) return;
     setConn(reconnects > 0 ? "reconnecting" : "connecting");
-    es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream?after_seq=${lastSeq}`);
+    es = new EventSource(
+      buildEventSourceUrl(`/api/tasks/${encodeURIComponent(taskId)}/stream`, { after_seq: lastSeq }),
+    );
+    // withCredentials 同源是 no-op；跨域部署时携带 cookie。
+    // TS 的 DOM lib 将 withCredentials 声明为 readonly，但运行时浏览器允许设置，故经 Object.assign 赋值。
+    Object.assign(es, { withCredentials: resolveCredentials() === "include" });
     es.onopen = () => setConn("open");
     es.onmessage = (msg) => {
       const raw = typeof msg.data === "string" ? msg.data : "";

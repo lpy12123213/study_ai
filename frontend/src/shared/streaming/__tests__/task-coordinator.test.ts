@@ -127,6 +127,20 @@ describe("watchTask", () => {
     expect(onTerminal).toHaveBeenCalledWith("calibration");
   });
 
+  it("校准得到 canceled：onCalibrated + onTerminal(calibration)，无需终态事件", async () => {
+    const onCalibrated = vi.fn();
+    const onTerminal = vi.fn();
+    const getStatus = vi.fn().mockResolvedValue({ status: "canceled", error: "Task cancelled" });
+    watchTask("t1", { getStatus, onEvent: () => {}, onCalibrated, onTerminal });
+
+    lastSource().fail();
+    await flushMicrotasks();
+
+    expect(onCalibrated).toHaveBeenCalledWith({ status: "canceled", error: "Task cancelled" });
+    expect(onTerminal).toHaveBeenCalledWith("calibration");
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
   it("校准失败重试耗尽 → onGaveUp", async () => {
     const onGaveUp = vi.fn();
     const getStatus = vi.fn().mockRejectedValue(new Error("network"));

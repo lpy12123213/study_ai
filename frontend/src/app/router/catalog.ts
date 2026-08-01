@@ -130,6 +130,24 @@ export const APP_ROUTES: AppRouteMeta[] = [
   },
 ];
 
+/**
+ * 兼容重定向（F11）：旧指南入口 / 旧书签 → 当前路由。
+ * 独立于 APP_ROUTES 存在，避免污染侧栏导航；由 router.tsx 派生成顶层 redirect 路由。
+ */
+export interface RouteRedirect {
+  /** 匹配的旧路径（精确）。 */
+  from: string;
+  /** 跳转目标；query 直接写在 to 中（如 /library?tab=generate）。 */
+  to: string;
+}
+
+export const REDIRECTS: RouteRedirect[] = [
+  { from: "/blueprint", to: "/compose?tab=blueprint" },
+  { from: "/study-materials", to: "/materials" },
+  { from: "/question-library", to: "/library" },
+  { from: "/ai-generate", to: "/library?tab=generate" },
+];
+
 export interface NavItemView {
   to: string;
   label: string;

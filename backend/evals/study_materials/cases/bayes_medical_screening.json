@@ -2,6 +2,7 @@
   "id": "bayes_medical_screening",
   "title": "贝叶斯定理与医学筛查",
   "query": "自学贝叶斯定理：公式与含义、医学筛查中的灵敏度/特异度/阳性预测值、基础概率（患病率）如何改变检验结果的含义、基础概率谬误",
+  "tier": "smoke",
   "subject": "概率论",
   "preset": "standard",
   "options": {"with_questions": true, "with_diagrams": false, "max_points": 6, "prefer_local_archive": false},

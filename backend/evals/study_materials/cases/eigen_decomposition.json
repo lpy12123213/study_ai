@@ -4,7 +4,7 @@
   "query": "自学特征值与特征向量：定义与求法、代数重数与几何重数、可对角化的判定、谱定理，以及不可对角化的反例",
   "subject": "线性代数",
   "preset": "deep",
-  "options": {"with_questions": false, "with_diagrams": false, "max_points": 7, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": false, "max_points": 7, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "特征值与特征向量的定义",
     "特征多项式与求法",

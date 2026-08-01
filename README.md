@@ -206,23 +206,22 @@ Copy-Item .env.example .env
 - `STUDY_MATERIALS_THINKING_MODEL` / `STUDY_MATERIALS_WRITER_MODEL`：资料生成的拆分/写作模型
 - `TAVILY_API_KEY`、`EXA_API_KEY`、`METASO_API_KEY`：检索 provider（至少一个）
 - `JWT_SECRET`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`
-- `VITE_API_BASE_URL`：前端 API 基础地址，默认 `/api`
+- `VITE_API_BASE_URL`：前端 API 基础地址，默认同源相对 `/api`；跨站部署时设为后端 origin
 
 注意：模型 ID 一旦失效（供应商下架或拼错），所有 LLM 调用会永久失败；后端启动时会做一次非阻塞模型自检并在日志中给出明确提示。完整配置说明见 `docs/CONFIGURATION.md`，多供应商模型配置也可使用本地私有的 `config/model.json`。
 
 ## 前端 API
 
-前端只读取一个 API 基础地址：
+前端使用 `VITE_API_BASE_URL` 定位后端，有两种受支持的模式：
 
-- `VITE_API_BASE_URL`，默认 `/api`
-
-同源部署时保持默认值即可，由后端托管 `frontend/dist`。前后端分开部署时，把它设置成后端的完整 API 地址，例如：
+- 同源反向代理（默认）：浏览器使用相对 `/api`，由后端托管 `frontend/dist`，无需设置 `VITE_API_BASE_URL`，认证 Cookie 为 `SameSite=Lax`。
+- 跨站部署：前端构建时把 `VITE_API_BASE_URL` 设为后端 origin（如 `https://api.example.com`）；后端用 `CORS_ORIGINS` 白名单允许前端 origin，并设置 `AUTH_COOKIE_SAMESITE=none`（隐含 `Secure`，要求 HTTPS）。跨站请求携带凭证（`credentials: include`、EventSource `withCredentials`）；`CORS_ORIGINS=*` 与携带凭证的请求不能同时使用。
 
 ```bash
-VITE_API_BASE_URL=https://your-backend.example/api
+VITE_API_BASE_URL=https://api.example.com
 ```
 
-修改后需要重新构建前端。
+修改后需要重新构建前端。完整说明见 `docs/DEPLOYMENT.md`。
 
 ## 质量检查
 

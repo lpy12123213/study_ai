@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -29,6 +30,7 @@ from backend.core.auth import (
     revoke_token_jti,
     validate_access_token,
 )
+from backend.core.client_ip import client_ip
 from backend.core.settings import env_int
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -48,17 +50,51 @@ def _auth_cookie_secure() -> bool:
     return env in {"prod", "production"}
 
 
+def _auth_cookie_samesite() -> str:
+    """SameSite for the auth cookie (``lax`` default; ``none`` enables cross-site).
+
+    ``SameSite=None`` is only honored by browsers together with ``Secure``, so the
+    cookie is forced secure whenever ``AUTH_COOKIE_SAMESITE=none``.
+    """
+    raw = str(os.getenv("AUTH_COOKIE_SAMESITE") or "").strip().lower()
+    if raw == "none":
+        return "none"
+    return "lax"
+
+
 class _LoginAttemptLimiter:
-    def __init__(self) -> None:
-        self._attempts: dict[str, list[float]] = {}
+    """Per-IP+username login failure limiter with bounded memory.
+
+    ``_attempts`` is an OrderedDict capped at ``max_keys`` (LRU eviction of the
+    oldest key, mirroring ``SlidingWindowRateLimiter``). ``_locked_until`` is
+    reclaimed periodically (on each failure/retry) so expired locks don't
+    accumulate. An attacker varying usernames can still not grow memory without
+    bound; the middleware IP-total layer remains the second, coarser fence.
+    """
+
+    def __init__(self, *, max_keys: Optional[int] = None) -> None:
+        self._attempts: "OrderedDict[str, list[float]]" = OrderedDict()
         self._locked_until: dict[str, float] = {}
+        self._max_keys = max(1, int(max_keys if max_keys is not None else env_int("AUTH_LOGIN_LIMITER_KEYS", 50_000)))
 
     def reset(self) -> None:
         self._attempts.clear()
         self._locked_until.clear()
 
+    def _evict_if_needed(self) -> None:
+        while len(self._attempts) > self._max_keys:
+            oldest, _ = self._attempts.popitem(last=False)
+            self._locked_until.pop(oldest, None)
+
+    def _sweep_expired_locks(self) -> None:
+        now = time.monotonic()
+        expired = [key for key, until in self._locked_until.items() if until <= now]
+        for key in expired:
+            self._locked_until.pop(key, None)
+
     def retry_after(self, key: str) -> int:
         now = time.monotonic()
+        self._sweep_expired_locks()
         until = float(self._locked_until.get(key) or 0.0)
         if until <= now:
             self._locked_until.pop(key, None)
@@ -73,13 +109,16 @@ class _LoginAttemptLimiter:
             return 0
 
         now = time.monotonic()
+        self._sweep_expired_locks()
         recent = [ts for ts in self._attempts.get(key, []) if now - ts <= window_s]
         recent.append(now)
         self._attempts[key] = recent
-        if len(recent) <= max_failures:
-            return 0
-        self._locked_until[key] = now + lock_s
-        return lock_s
+        locked = len(recent) > max_failures
+        if locked:
+            self._locked_until[key] = now + lock_s
+        self._attempts.move_to_end(key)
+        self._evict_if_needed()
+        return lock_s if locked else 0
 
     def record_success(self, key: str) -> None:
         self._attempts.pop(key, None)
@@ -91,7 +130,7 @@ _login_attempt_limiter = _LoginAttemptLimiter()
 
 
 def _request_ip(req: Request) -> str:
-    return str(getattr(req.client, "host", "") or "").strip()
+    return client_ip(req)
 
 
 def _login_limiter_key(payload: LoginRequest, http_request: Request) -> str:
@@ -115,23 +154,25 @@ def _raise_login_locked(*, payload: LoginRequest, http_request: Request, retry_a
 
 
 def _set_access_cookie(response: Response, token: str) -> None:
+    samesite = _auth_cookie_samesite()
     response.set_cookie(
         AUTH_ACCESS_COOKIE_NAME,
         token,
         max_age=max(1, int(JWT_EXPIRE_HOURS or 24)) * 3600,
         httponly=True,
-        secure=_auth_cookie_secure(),
-        samesite="lax",
+        secure=(samesite == "none") or _auth_cookie_secure(),
+        samesite=samesite,
         path="/",
     )
 
 
 def _clear_access_cookie(response: Response) -> None:
+    samesite = _auth_cookie_samesite()
     response.delete_cookie(
         AUTH_ACCESS_COOKIE_NAME,
         httponly=True,
-        secure=_auth_cookie_secure(),
-        samesite="lax",
+        secure=(samesite == "none") or _auth_cookie_secure(),
+        samesite=samesite,
         path="/",
     )
 

@@ -85,15 +85,45 @@ def ensure_venv(root: Path) -> Path:
     return vpy
 
 
+_PLATFORM_LOCK_SUFFIX = {"win32": "win", "linux": "linux", "darwin": "mac"}
+
+
+def _platform_lock_name(platform: str) -> str | None:
+    """Return the lock file name for a platform, or None when unknown.
+
+    Unknown platforms never select a lock and fall back to range resolution.
+    """
+    suffix = _PLATFORM_LOCK_SUFFIX.get(platform)
+    if suffix is None:
+        return None
+    return f"requirements-lock-{suffix}.txt"
+
+
+def _selected_requirement_files(root: Path, platform: str) -> list[Path]:
+    """Select the requirement files to fingerprint and install for a platform.
+
+    Returns [requirements.txt] plus the platform-specific lock file when that
+    exact lock exists (e.g. requirements-lock-win.txt for win32), plus
+    requirements-dev.txt when present. A lock generated for another platform is
+    never selected: when the matching lock is absent we fall back to range
+    resolution from requirements.txt.
+    """
+    req_files = [root / "requirements.txt"]
+    lock_name = _platform_lock_name(platform)
+    if lock_name is not None:
+        lock_file = root / lock_name
+        if lock_file.exists():
+            req_files.append(lock_file)
+    if (root / "requirements-dev.txt").exists():
+        req_files.append(root / "requirements-dev.txt")
+    return req_files
+
+
 def ensure_backend_deps(root: Path, vpy: Path) -> None:
     print("[setup] Checking backend deps...")
 
-    lock_file = root / "requirements-lock.txt"
-    req_files = [root / "requirements.txt"]
-    if lock_file.exists():
-        req_files.append(lock_file)
-    if (root / "requirements-dev.txt").exists():
-        req_files.append(root / "requirements-dev.txt")
+    req_files = _selected_requirement_files(root, sys.platform)
+    lock_file = next((p for p in req_files if p.name.startswith("requirements-lock-")), None)
 
     expected = _content_fingerprint(req_files)
     stamp = root / "venv" / ".backend-requirements.sha256"
@@ -102,8 +132,8 @@ def ensure_backend_deps(root: Path, vpy: Path) -> None:
     if expected != installed:
         print("[setup] Installing backend Python packages...")
         _run_checked([str(vpy), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], cwd=root)
-        if lock_file.exists():
-            # 锁定文件存在时按锁定版本安装，保证环境可复现；删除它即回退到区间解析
+        if lock_file is not None:
+            # 本平台锁定文件存在时按锁定版本安装，保证环境可复现；删除它即回退到区间解析
             _run_checked([str(vpy), "-m", "pip", "install", "-r", str(lock_file)], cwd=root)
         else:
             _run_checked([str(vpy), "-m", "pip", "install", "-r", str(root / "requirements.txt")], cwd=root)

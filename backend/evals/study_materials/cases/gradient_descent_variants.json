@@ -4,7 +4,7 @@
   "query": "系统自学梯度下降：批量/随机/小批量梯度下降、Momentum、Adam 的更新公式与直觉、学习率与调度策略、收敛性与常见误区",
   "subject": "机器学习",
   "preset": "deep",
-  "options": {"with_questions": false, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 8, "prefer_local_archive": false},
   "expected_knowledge_points": [
     "梯度下降基本原理",
     "批量/随机/小批量梯度下降",

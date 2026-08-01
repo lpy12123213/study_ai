@@ -3,14 +3,16 @@
  * - 第三方题目图片一律经 /api/media/proxy?url= 加载（SSRF 白名单 + 缓存）。
  * - 生成文件走 /api/media/generated/{filename}。
  */
+import { joinApiUrl } from "@/shared/api/config";
+
 export function proxyImageUrl(url?: string | null): string {
   if (!url) return "";
   let u = url.trim();
   if (!u) return "";
-  if (u.startsWith("/api/")) return u;
+  if (u.startsWith("/api/")) return joinApiUrl(u);
   if (u.startsWith("//")) u = `https:${u}`;
   if (/^https?:\/\//i.test(u)) {
-    return `/api/media/proxy?url=${encodeURIComponent(u)}`;
+    return joinApiUrl(`/api/media/proxy?url=${encodeURIComponent(u)}`);
   }
   return u;
 }
@@ -34,6 +36,6 @@ export function rewriteStemHtml(html?: string | null): string {
 
 export function generatedFileUrl(filename?: string | null): string {
   if (!filename) return "";
-  if (filename.startsWith("/api/")) return filename;
-  return `/api/media/generated/${filename}`;
+  if (filename.startsWith("/api/")) return joinApiUrl(filename);
+  return joinApiUrl(`/api/media/generated/${filename}`);
 }

@@ -38,9 +38,13 @@ function HighlightedSnippet({ text }: { text: string }) {
 function resultLink(r: GlobalSearchResult): string | null {
   switch (r.type) {
     case "conversation":
-      return r.conversation_id ? `/chat/${r.conversation_id}` : null;
+      if (!r.conversation_id) return null;
+      // 有最佳命中消息时带 message 锚点，聊天页定位到该条消息
+      return r.message_id ? `/chat/${r.conversation_id}?message=${r.message_id}` : `/chat/${r.conversation_id}`;
     case "paper":
-      return r.paper_id ? `/papers/${r.paper_id}` : null;
+      if (!r.paper_id) return null;
+      // 有最佳命中题目时带 question 锚点，试卷页定位到该题
+      return r.question_id ? `/papers/${r.paper_id}?question=${encodeURIComponent(r.question_id)}` : `/papers/${r.paper_id}`;
     case "study_archive":
       return r.archive_id ? `/materials/${r.archive_id}` : null;
     case "question":
@@ -125,6 +129,11 @@ export function GlobalSearch() {
                     <span className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium">{r.title || "未命名"}</span>
                       <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{meta.label}</span>
+                      {typeof r.match_count === "number" && r.match_count > 1 ? (
+                        <span className="shrink-0 rounded bg-accent px-1.5 py-0.5 text-[10px] text-accent-foreground">
+                          {r.match_count} 条匹配
+                        </span>
+                      ) : null}
                     </span>
                     {r.snippet ? (
                       <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
