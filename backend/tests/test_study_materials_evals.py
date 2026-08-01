@@ -20,6 +20,7 @@ from backend.evals.study_materials.graders.common import DIMENSION_MAX, PROCESS_
 from backend.evals.study_materials.graders.events import EventStats, grade_research, grade_subagents
 from backend.evals.study_materials.graders.knowledge import grade_knowledge
 from backend.evals.study_materials.graders.learning import grade_learning
+from backend.evals.study_materials.graders.rubric import grade_rubric
 from backend.evals.study_materials.graders.structure import grade_structure
 from backend.evals.study_materials.runner import (
     _effective_parallel,
@@ -787,6 +788,104 @@ class RunnerHelperTests(unittest.TestCase):
                 )
             self.assertEqual(rc, 0)
             self.assertEqual(sorted(ran), ["mini_a", "mini_b"])
+
+
+class RubricGraderTests(unittest.TestCase):
+    """W 维度：LLM rubric 写作诊断（独立字段，不进总分/四门槛/成熟度）。"""
+
+    def setUp(self) -> None:
+        self.case = parse_case(_mini_case())
+
+    def test_fake_judge_scores_appear_in_w_dimension(self) -> None:
+        captured: dict = {}
+
+        def fake_judge(system: str, markdown: str) -> dict:
+            captured["system"] = system
+            return {
+                "coherence": 4,
+                "style": 3,
+                "misconception_authenticity": 5,
+                "rationale": {
+                    "coherence": "节间承接自然",
+                    "style": "略有模板腔",
+                    "misconception_authenticity": "误区像真实教学错误",
+                },
+            }
+
+        baseline = grade_case(self.case, _LEGACY_EVENTS, _CURRENT_STYLE_MD)
+        card = grade_case(self.case, _LEGACY_EVENTS, _CURRENT_STYLE_MD, llm_rubric_judge=fake_judge)
+        rubric = card.writing_rubric
+        self.assertIsNotNone(rubric)
+        self.assertEqual(rubric["coherence"], 4)
+        self.assertEqual(rubric["style"], 3)
+        self.assertEqual(rubric["misconception_authenticity"], 5)
+        self.assertEqual(rubric["rationale"]["style"], "略有模板腔")
+        self.assertIsNone(rubric["error"])
+        # system prompt 来自注册表 study.eval.rubric.v1
+        self.assertIn("coherence", captured["system"])
+        self.assertIn("misconception_authenticity", captured["system"])
+        # W 不改变成熟度分与任何既有维度
+        self.assertEqual(card.total, baseline.total)
+        self.assertEqual(card.raw_total, baseline.raw_total)
+        self.assertEqual([d.dimension for d in card.dimensions], ["R", "K", "L", "F", "A", "C"])
+        self.assertEqual([d.dimension for d in card.process_diagnostics], ["S"])
+        payload = card.to_dict()
+        self.assertEqual(payload["writing_rubric"]["coherence"], 4)
+        json.dumps(payload, ensure_ascii=False)
+        from backend.evals.study_materials.scorecard import render_report
+
+        self.assertIn("写作 rubric", render_report(card))
+
+    def test_judge_disabled_w_is_null_and_dimensions_untouched(self) -> None:
+        card = grade_case(self.case, _LEGACY_EVENTS, _CURRENT_STYLE_MD)
+        self.assertIsNone(card.writing_rubric)
+        self.assertIsNone(card.to_dict()["writing_rubric"])
+        self.assertEqual([d.dimension for d in card.dimensions], ["R", "K", "L", "F", "A", "C"])
+        # grade_rubric 本身在 judge 未启用时记 null + error，不抛异常
+        w = grade_rubric(_CURRENT_STYLE_MD, judge_func=None)["W"]
+        self.assertIsNone(w["coherence"])
+        self.assertIsNone(w["style"])
+        self.assertIsNone(w["misconception_authenticity"])
+        self.assertEqual(w["error"], "judge_not_enabled")
+
+    def test_invalid_json_marks_parse_error_without_sinking_scores(self) -> None:
+        baseline = grade_case(self.case, _LEGACY_EVENTS, _CURRENT_STYLE_MD)
+        card = grade_case(
+            self.case,
+            _LEGACY_EVENTS,
+            _CURRENT_STYLE_MD,
+            llm_rubric_judge=lambda system, md: "这不是 JSON，无法解析",
+        )
+        rubric = card.writing_rubric
+        self.assertIsNotNone(rubric)
+        self.assertIsNone(rubric["coherence"])
+        self.assertIsNone(rubric["style"])
+        self.assertIsNone(rubric["misconception_authenticity"])
+        self.assertIn("parse_error", rubric["error"])
+        self.assertEqual(card.total, baseline.total)
+
+    def test_judge_exception_and_out_of_range_scores_are_sanitized(self) -> None:
+        def boom(system: str, markdown: str) -> dict:
+            raise RuntimeError("llm down")
+
+        w = grade_rubric(_CURRENT_STYLE_MD, judge_func=boom)["W"]
+        self.assertIsNone(w["coherence"])
+        self.assertIn("judge_error", w["error"])
+        # JSON 字符串返回 + 越界/非法分数截断为 0-5 或 null
+        raw = '{"coherence": 9, "style": -1, "misconception_authenticity": "x"}'
+        w2 = grade_rubric(_CURRENT_STYLE_MD, judge_func=lambda system, md: raw)["W"]
+        self.assertEqual(w2["coherence"], 5)
+        self.assertEqual(w2["style"], 0)
+        self.assertIsNone(w2["misconception_authenticity"])
+        self.assertIsNone(w2["error"])
+
+    def test_rubric_prompt_registered_with_json_contract(self) -> None:
+        from backend.llm.prompts import create_default_prompt_registry
+
+        rendered = create_default_prompt_registry().render("study.eval.rubric.v1")
+        self.assertIn("coherence", rendered.content)
+        self.assertIn("misconception_authenticity", rendered.content)
+        self.assertEqual(rendered.output_contract.validate_prompt_text(rendered.content), [])
 
 
 if __name__ == "__main__":

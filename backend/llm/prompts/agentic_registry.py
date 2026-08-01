@@ -569,6 +569,19 @@ def create_default_prompt_registry() -> PromptRegistry:
             "Output fields: claims.",
         ),
         (
+            "study.eval.rubric.v1",
+            "你是严谨的自学教材写作评审。通读成稿 Markdown，按三个 0-5 子维度打分（0 最差，5 最好），"
+            "并为每个子维度各给一句评分理由。\n"
+            "输出 JSON 对象，字段：\n"
+            "- coherence：连贯性，节间承接是否自然、有无前后重复或断裂。\n"
+            "- style：文风，语言是否自然不生硬、有无模板腔。\n"
+            "- misconception_authenticity：易错点真实性，易错点是否像真实教学误区而非套话。\n"
+            "- rationale：对象，含 coherence/style/misconception_authenticity 三个字段，各为一句理由。\n"
+            "要求：\n"
+            "- 只输出 JSON；三个子维度分数均为 0-5 的整数。\n"
+            "Output fields: coherence, style, misconception_authenticity, rationale.",
+        ),
+        (
             "figure.spec.v1",
             "你是严谨的教材配图代码生成器。根据输入的配图意图 intent、图类型 kind、小节内容要点 content_spec "
             "与图注 caption，生成对应渲染引擎可直接渲染的图源代码。\n"

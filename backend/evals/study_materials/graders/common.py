@@ -31,6 +31,8 @@ DIMENSION_TITLES: Dict[str, str] = {
     "F": "结构与格式",
     "A": "美观与可读性",
     "C": "引用与学术规范",
+    # W 是 LLM rubric 写作诊断：独立字段展示，不在 DIMENSION_MAX/PROCESS_DIMENSION_MAX 中计分。
+    "W": "写作 rubric（LLM 诊断）",
 }
 
 

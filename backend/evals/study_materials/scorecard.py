@@ -17,6 +17,7 @@ from backend.evals.study_materials.graders.common import DimensionResult, valida
 from backend.evals.study_materials.graders.events import grade_research, grade_subagents
 from backend.evals.study_materials.graders.knowledge import LlmFactJudge, grade_knowledge
 from backend.evals.study_materials.graders.learning import grade_learning
+from backend.evals.study_materials.graders.rubric import LlmRubricJudge, grade_rubric
 from backend.evals.study_materials.graders.structure import grade_structure
 from backend.generation.study_materials.coverage import split_sections_by_kp
 
@@ -53,6 +54,8 @@ class Scorecard:
     generated_at: str = ""
     notes: List[str] = field(default_factory=list)
     scoring_version: str = SCORING_VERSION
+    # LLM rubric 写作诊断（W 维度）：独立字段仅报告展示，不进总分/四门槛/成熟度。
+    writing_rubric: Optional[Dict[str, Any]] = None
 
     @property
     def raw_total(self) -> float:
@@ -103,6 +106,7 @@ class Scorecard:
             "quality_gates": [gate.to_dict() for gate in self.quality_gates],
             "dimensions": [dimension.to_dict() for dimension in self.dimensions],
             "process_diagnostics": [dimension.to_dict() for dimension in self.process_diagnostics],
+            "writing_rubric": self.writing_rubric,
         }
 
 
@@ -236,6 +240,7 @@ def grade_case(
     task_info: Optional[Dict[str, Any]] = None,
     llm_fact_judge: Optional[LlmFactJudge] = None,
     llm_aesthetics_judge: Optional[Callable[[str, str], float]] = None,
+    llm_rubric_judge: Optional[LlmRubricJudge] = None,
     link_checker: Optional[LinkChecker] = None,
     notes: Optional[List[str]] = None,
 ) -> Scorecard:
@@ -261,6 +266,9 @@ def grade_case(
         citations,
     ])
     card.process_diagnostics.append(grade_subagents(case, events))
+    # W 维度：仅 judge 启用时调用的独立 LLM 诊断，不进总分与四门槛（同 aesthetics 注入模式）。
+    if llm_rubric_judge is not None:
+        card.writing_rubric = grade_rubric(markdown, judge_func=llm_rubric_judge)["W"]
     card.quality_gates = _build_quality_gates(case, events, markdown, card.dimensions, task_info)
     return card
 
@@ -323,4 +331,25 @@ def render_report(card: Scorecard) -> str:
         for check in dimension.checks:
             lines.append(f"- `{check.id}` {check.description}：{check.score:.1f}/{check.max_score:.0f} — {check.detail}")
         lines.append("")
+    lines.append("## 写作 rubric 诊断（LLM，不计入总分）")
+    lines.append("")
+    if card.writing_rubric:
+        rubric = card.writing_rubric
+        rationale = rubric.get("rationale") or {}
+        labels = (
+            ("coherence", "连贯性"),
+            ("style", "文风"),
+            ("misconception_authenticity", "易错点真实性"),
+        )
+        for key, label in labels:
+            score = rubric.get(key)
+            reason = str(rationale.get(key) or "")
+            suffix = f" — {reason}" if reason else ""
+            shown = f"{score}/5" if score is not None else "—"
+            lines.append(f"- {label}（{key}）：{shown}{suffix}")
+        if rubric.get("error"):
+            lines.append(f"- 诊断未生效：{rubric['error']}")
+    else:
+        lines.append("- 未启用 LLM judge（--llm-judge 时生成该诊断）。")
+    lines.append("")
     return "\n".join(lines)
