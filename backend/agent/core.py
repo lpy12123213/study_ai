@@ -353,7 +353,16 @@ class AgentCore:
 
     async def _start_export_subagent(self, *, ctx: CompressedContext, kp: str) -> AsyncIterator[Dict[str, Any]]:
         ctx.working_memory["_export_subagent_kp"] = kp
-        yield agent_event("subagent_start", {"knowledge_point": kp, "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
+        # 导出子代理 start/end 打标（阶段 1 只要求 start/end）；其嵌套工具事件保持不打标。
+        yield agent_event(
+            "subagent_start",
+            {
+                "subagent_id": "sa-export",
+                "kind": "export",
+                "knowledge_point": kp,
+                "content": "SubAgent 启动：导出与编译（LaTeX/PDF）。",
+            },
+        )
         yield agent_event("status", {"content": "SubAgent 启动：导出与编译（LaTeX/PDF）。"})
 
     async def _end_export_subagent(
@@ -364,7 +373,15 @@ class AgentCore:
         content: str,
     ) -> AsyncIterator[Dict[str, Any]]:
         ctx.working_memory.pop("_export_subagent_kp", None)
-        yield agent_event("subagent_end", {"knowledge_point": kp, "content": content})
+        yield agent_event(
+            "subagent_end",
+            {
+                "subagent_id": "sa-export",
+                "kind": "export",
+                "knowledge_point": kp,
+                "content": content,
+            },
+        )
         yield agent_event("status", {"content": content})
 
     # Run loop methods are added below.

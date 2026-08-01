@@ -9,6 +9,20 @@ from backend.core.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _tag_subagent_event(evt: Dict[str, Any], subagent_id: str, knowledge_point: str) -> Dict[str, Any]:
+    """浅拷贝事件并注入子代理归属字段，便于前端按子代理分组展示。
+
+    不修改源事件；knowledge_point 为空时不注入该字段。
+    """
+    out = dict(evt)
+    data = dict(evt.get("data") or {})
+    data["subagent_id"] = subagent_id
+    if knowledge_point:
+        data["knowledge_point"] = knowledge_point
+    out["data"] = data
+    return out
+
+
 class ExecutionStrategy(Protocol):
     async def execute_step_block(
         self,
@@ -149,44 +163,81 @@ class PerKnowledgePointStrategy(ParallelStrategy):
         results: ActionResults,
         block: List[PlanStep],
         kp: str,
+        index: int,
+        total: int,
         sem: asyncio.Semaphore,
         queue: "asyncio.Queue[Optional[Dict[str, Any]]]",
     ) -> None:
+        subagent_id = f"sa-{index}"
         try:
             async with sem:
                 await queue.put(
                     agent_event(
                         "subagent_start",
                         {
+                            "subagent_id": subagent_id,
+                            "index": index,
+                            "total": total,
+                            "kind": "knowledge_research",
                             "knowledge_point": kp,
                             "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
                         },
                     )
                 )
-                await queue.put(agent_event("status", {"content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"}))
+                await queue.put(
+                    _tag_subagent_event(
+                        agent_event("status", {"content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"}),
+                        subagent_id,
+                        kp,
+                    )
+                )
 
                 concrete_block = [dispatcher._expand_foreach_step(step, kp=kp) for step in block]
-                async for evt in self.execute_step_block(dispatcher=dispatcher, ctx=ctx, results=results, steps=concrete_block):
-                    await queue.put(evt)
+                async for evt in self.execute_step_block(
+                    dispatcher=dispatcher, ctx=ctx, results=results, steps=concrete_block
+                ):
+                    await queue.put(_tag_subagent_event(evt, subagent_id, kp))
 
                 summary = await dispatcher._summarize_subagent(ctx, kp)
                 if summary:
                     dispatcher._store_subagent_summary(ctx, kp, summary)
-                    await queue.put(agent_event("status", {"content": f"SubAgent 摘要（{kp}）：{summary}"}))
+                    await queue.put(
+                        _tag_subagent_event(
+                            agent_event("status", {"content": f"SubAgent 摘要（{kp}）：{summary}"}),
+                            subagent_id,
+                            kp,
+                        )
+                    )
 
                 await queue.put(
                     agent_event(
                         "subagent_end",
                         {
+                            "subagent_id": subagent_id,
+                            "index": index,
+                            "total": total,
+                            "kind": "knowledge_research",
                             "knowledge_point": kp,
                             "content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}",
                         },
                     )
                 )
-                await queue.put(agent_event("status", {"content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}"}))
+                await queue.put(
+                    _tag_subagent_event(
+                        agent_event("status", {"content": f"SubAgent 完成：已收集该知识点的资料。\n当前知识点：{kp}"}),
+                        subagent_id,
+                        kp,
+                    )
+                )
         except Exception as exc:  # pragma: no cover (best-effort safety)
             logger.exception("agent_subagent_failed", extra={"knowledge_point": kp})
-            await queue.put(agent_event("error", {"message": f"SubAgent 运行失败（{kp}）：{exc}"}))
+            await queue.put(
+                _tag_subagent_event(
+                    agent_event("error", {"message": f"SubAgent 运行失败（{kp}）：{exc}"}),
+                    subagent_id,
+                    kp,
+                )
+            )
         finally:
             await queue.put(None)
 
@@ -225,39 +276,79 @@ class PerKnowledgePointStrategy(ParallelStrategy):
             logger.debug("agent_subagent_concurrency_adjust_failed", exc_info=True)
 
         if subagent_concurrency <= 1 or len(kps) <= 1:
-            for kp in kps:
+            total = len(kps)
+            for index, kp in enumerate(kps):
+                subagent_id = f"sa-{index}"
                 yield agent_event(
                     "subagent_start",
-                    {"knowledge_point": kp, "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"},
+                    {
+                        "subagent_id": subagent_id,
+                        "index": index,
+                        "total": total,
+                        "kind": "knowledge_research",
+                        "knowledge_point": kp,
+                        "content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}",
+                    },
                 )
-                yield agent_event("status", {"content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"})
+                yield _tag_subagent_event(
+                    agent_event("status", {"content": f"SubAgent 启动：深挖该知识点的资料与题型。\n当前知识点：{kp}"}),
+                    subagent_id,
+                    kp,
+                )
 
                 concrete_block = [dispatcher._expand_foreach_step(step, kp=kp) for step in block]
-                async for evt in self.execute_step_block(dispatcher=dispatcher, ctx=ctx, results=results, steps=concrete_block):
-                    yield evt
+                async for evt in self.execute_step_block(
+                    dispatcher=dispatcher, ctx=ctx, results=results, steps=concrete_block
+                ):
+                    yield _tag_subagent_event(evt, subagent_id, kp)
 
                 summary = await dispatcher._summarize_subagent(ctx, kp)
                 if summary:
                     dispatcher._store_subagent_summary(ctx, kp, summary)
-                    yield agent_event("status", {"content": f"SubAgent 摘要（{kp}）：{summary}"})
+                    yield _tag_subagent_event(
+                        agent_event("status", {"content": f"SubAgent 摘要（{kp}）：{summary}"}),
+                        subagent_id,
+                        kp,
+                    )
 
                 yield agent_event(
                     "subagent_end",
                     {
+                        "subagent_id": subagent_id,
+                        "index": index,
+                        "total": total,
+                        "kind": "knowledge_research",
                         "knowledge_point": kp,
                         "content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}",
                     },
                 )
-                yield agent_event("status", {"content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}"})
+                yield _tag_subagent_event(
+                    agent_event("status", {"content": f"SubAgent 完成：已收集该知识点的资料，准备进入下一个。\n当前知识点：{kp}"}),
+                    subagent_id,
+                    kp,
+                )
             return
 
         yield agent_event("status", {"content": f"SubAgent 并行模式：共 {len(kps)} 个知识点，最大并发 {subagent_concurrency}。"})
 
         queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
         sem = asyncio.Semaphore(subagent_concurrency)
+        total = len(kps)
         tasks = [
-            asyncio.create_task(self._run_subagent(dispatcher=dispatcher, ctx=ctx, results=results, block=block, kp=kp, sem=sem, queue=queue))
-            for kp in kps
+            asyncio.create_task(
+                self._run_subagent(
+                    dispatcher=dispatcher,
+                    ctx=ctx,
+                    results=results,
+                    block=block,
+                    kp=kp,
+                    index=index,
+                    total=total,
+                    sem=sem,
+                    queue=queue,
+                )
+            )
+            for index, kp in enumerate(kps)
         ]
         finished = 0
         try:

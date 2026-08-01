@@ -126,3 +126,84 @@ class TestAgentSubagentContext(unittest.TestCase):
         self.assertTrue(isinstance(text, str))
         self.assertTrue(text.strip())
         self.assertNotIn("####", text)
+
+    def test_normalize_event_payload_preserves_subagent_fields(self) -> None:
+        from backend.shared.tasks.runtime import TaskRuntime
+
+        runtime = TaskRuntime.__new__(TaskRuntime)
+        payload = runtime._normalize_event_payload(
+            task_id="task-1",
+            event={
+                "event": "subagent_start",
+                "data": {
+                    "subagent_id": "sa-0",
+                    "index": 0,
+                    "total": 3,
+                    "kind": "knowledge_research",
+                    "knowledge_point": "函数",
+                    "content": "启动",
+                },
+            },
+        )
+
+        self.assertEqual(payload["type"], "subagent_start")
+        d = payload["data"]
+        self.assertEqual(d["subagent_id"], "sa-0")
+        self.assertEqual(d["index"], 0)
+        self.assertEqual(d["total"], 3)
+        self.assertEqual(d["kind"], "knowledge_research")
+        self.assertEqual(d["knowledge_point"], "函数")
+        self.assertEqual(d["content"], "启动")
+
+    def test_compact_catchup_events_retains_subagent_and_tool_events(self) -> None:
+        from backend.generation.study_materials import orchestrator as orch
+
+        events = [
+            {"type": "status", "data": {"content": "s1"}},
+            {"type": "subagent_start", "data": {"subagent_id": "sa-0", "kind": "knowledge_research"}},
+            {"type": "status", "data": {"content": "s2"}},
+            {"type": "tool_result", "data": {"subagent_id": "sa-0", "step_id": "x"}},
+            {"type": "subagent_end", "data": {"subagent_id": "sa-0"}},
+            {"type": "status", "data": {"content": "s3"}},
+            {"type": "thinking", "data": {"content": "t1"}},
+        ]
+
+        compacted, skipped = orch._compact_catchup_events(events)
+        types = [e["type"] for e in compacted]
+
+        # 状态演进类（subagent_*/tool_*）全量保留；仅折叠 status/thinking。
+        self.assertEqual(types.count("subagent_start"), 1)
+        self.assertEqual(types.count("subagent_end"), 1)
+        self.assertEqual(types.count("tool_result"), 1)
+        self.assertEqual(types.count("status"), 1)
+        self.assertEqual(types.count("thinking"), 1)
+        self.assertEqual(skipped, 2)
+        # 保留的 status 是最新一条，整体顺序保持。
+        self.assertEqual([e for e in compacted if e["type"] == "status"][0]["data"]["content"], "s3")
+        self.assertEqual(compacted[-1]["type"], "thinking")
+
+    def test_export_subagent_events_tagged(self) -> None:
+        from backend.agent.core import AgentCore
+        from backend.agent.types import CompressedContext, UserProfile
+
+        agent = AgentCore.__new__(AgentCore)
+        ctx = CompressedContext(user_profile=UserProfile(user_id="u"), system_instructions="", current_task="t")
+
+        async def _collect() -> tuple:
+            starts = [e async for e in agent._start_export_subagent(ctx=ctx, kp="导出：LaTeX/PDF")]
+            ends = [e async for e in agent._end_export_subagent(ctx=ctx, kp="导出：LaTeX/PDF", content="done")]
+            return starts, ends
+
+        starts, ends = asyncio.run(_collect())
+        start_evt = next(e for e in starts if e.get("event") == "subagent_start")
+        end_evt = next(e for e in ends if e.get("event") == "subagent_end")
+        self.assertEqual(start_evt["data"]["subagent_id"], "sa-export")
+        self.assertEqual(start_evt["data"]["kind"], "export")
+        self.assertEqual(start_evt["data"]["knowledge_point"], "导出：LaTeX/PDF")
+        self.assertEqual(end_evt["data"]["subagent_id"], "sa-export")
+        self.assertEqual(end_evt["data"]["kind"], "export")
+        self.assertEqual(end_evt["data"]["content"], "done")
+
+
+if __name__ == "__main__":
+    unittest.main()
