@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from backend.core.text_lint import lint_text
 from backend.generation.study_materials.coverage import split_sections_by_kp
 
+if TYPE_CHECKING:
+    from backend.generation.study_materials.author.blueprint import Blueprint
+    from backend.generation.study_materials.author.todos import TodoList
+
 WORKFLOW_VERSION = 1
-QUALITY_POLICY_VERSION = 2
+QUALITY_POLICY_VERSION = 3
 REVIEW_SCHEMA_VERSION = 1
 
 _ACCEPTANCE_OPTION_DEFAULTS: Dict[str, Any] = {
@@ -373,4 +378,99 @@ def build_acceptance_record(*, report: Dict[str, Any], preset: str, options: Any
         "review_schema_version": REVIEW_SCHEMA_VERSION,
         "options_fingerprint": acceptance_options_fingerprint(options),
         "failed_checks": list(report.get("failed_checks") or []),
+    }
+
+
+# ---------------- author 运行时专用验收门 ----------------
+
+# 组装残留的确定性占位符：[[FILL:<id>]] / [[FIG:<n>]]。
+_AUTHOR_PLACEHOLDER_RE = re.compile(r"\[\[(?:FILL|FIG):")
+# 正文给符号下定义的简化句型：<symbol>（紧邻）表示/代表/是<含义>。
+_AUTHOR_MEANING_VERBS = ("表示", "代表", "是")
+# 含义截取到就近的句读或换行为止。
+_AUTHOR_MEANING_TAIL_RE = r"([^\n，。；、：,.;:]+)"
+
+
+def _meanings_compatible(claimed: str, expected: str) -> bool:
+    """简化确定性比较：去空白后互为子串即视为含义一致。"""
+
+    claimed_norm = re.sub(r"\s+", "", str(claimed or ""))
+    expected_norm = re.sub(r"\s+", "", str(expected or ""))
+    if not claimed_norm or not expected_norm:
+        return True
+    return claimed_norm in expected_norm or expected_norm in claimed_norm
+
+
+def _author_terminology_conflicts(markdown: str, blueprint: "Blueprint") -> List[Dict[str, Any]]:
+    """正文若在术语表之外给表内符号下了与表内含义冲突的定义，记 warning（不阻断）。"""
+
+    issues: List[Dict[str, Any]] = []
+    verbs = "|".join(_AUTHOR_MEANING_VERBS)
+    for term in list(getattr(blueprint, "terminology", None) or []):
+        symbol = str(term.get("symbol") or "").strip()
+        meaning = str(term.get("meaning") or "").strip()
+        if not symbol or not meaning:
+            continue
+        pattern = re.compile(re.escape(symbol) + rf"\s*(?:{verbs})\s*" + _AUTHOR_MEANING_TAIL_RE)
+        for match in pattern.finditer(markdown):
+            claimed = match.group(1).strip()
+            if not claimed or _meanings_compatible(claimed, meaning):
+                continue
+            issues.append(
+                {
+                    "code": "terminology_conflict",
+                    "severity": "warning",
+                    "symbol": symbol,
+                    "expected": meaning,
+                    "found": claimed,
+                    "detail": f"正文将 {symbol} 定义为「{claimed}」，与术语表「{meaning}」不一致",
+                }
+            )
+            break  # 每个符号只记第一条冲突，避免刷屏
+    return issues
+
+
+def evaluate_author_acceptance(*, todos: "TodoList", markdown: str, blueprint: "Blueprint") -> Dict[str, Any]:
+    """author 运行时的成稿验收门（与 state 驱动的 evaluate_acceptance 并存，互不改用）。
+
+    硬门槛（error，阻断）：todos 未清零（``todos_not_cleared``）、成稿残留
+    ``[[FILL:``/``[[FIG:`` 占位符（``placeholder_residual``）。
+    软提示（warning，不阻断）：正文与术语表含义冲突（``terminology_conflict``）。
+    返回包络沿用 evaluate_acceptance 惯例；``issues`` 为含 ``code``/``severity``
+    的 dict 列表，``failed_checks`` 取其中 error 级 issue 的 code。
+    """
+
+    text = str(markdown or "")
+    issues: List[Dict[str, Any]] = []
+
+    if not todos.all_cleared():
+        uncleared = [it.id for it in todos.items if it.status not in {"done", "waived"}]
+        issues.append(
+            {
+                "code": "todos_not_cleared",
+                "severity": "error",
+                "todos": uncleared,
+                "detail": f"存在未清零的 TODO（须为 done/waived）：{', '.join(uncleared)}",
+            }
+        )
+
+    if _AUTHOR_PLACEHOLDER_RE.search(text):
+        residual = sorted({m.group(0) for m in _AUTHOR_PLACEHOLDER_RE.finditer(text)})
+        issues.append(
+            {
+                "code": "placeholder_residual",
+                "severity": "error",
+                "placeholders": residual,
+                "detail": f"成稿残留未替换占位符：{', '.join(residual)}",
+            }
+        )
+
+    issues.extend(_author_terminology_conflicts(text, blueprint))
+
+    failed_checks = list(dict.fromkeys(issue["code"] for issue in issues if issue["severity"] == "error"))
+    return {
+        "passed": not failed_checks,
+        "failed_checks": failed_checks,
+        "issues": issues,
+        "quality_policy_version": QUALITY_POLICY_VERSION,
     }
