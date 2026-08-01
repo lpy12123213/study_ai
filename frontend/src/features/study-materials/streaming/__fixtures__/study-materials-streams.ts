@@ -523,3 +523,100 @@ export const researchOutageStream: StudyMaterialsWireEvent[] = [
     },
   },
 ];
+
+/**
+ * 新版过程事件流（author 工作流契约）：顶层 agent_path 泳道 +
+ * todo_update / thinking_delta / note_write / figure_trace / section_fill。
+ */
+export const traceAgentStream: StudyMaterialsWireEvent[] = [
+  {
+    taskId: "materials-trace-1",
+    seq: 1,
+    type: "task_started",
+    data: { taskId: "materials-trace-1", query: "光合作用", status: "running" },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 2,
+    type: "todo_update",
+    agent_path: "main",
+    data: {
+      todo: {
+        id: "t1",
+        type: "research",
+        ref: "光反应",
+        status: "in_progress",
+        acceptance: "覆盖 3 个来源",
+      },
+    },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 3,
+    type: "todo_update",
+    agent_path: "main",
+    data: { todo: { id: "t2", type: "fill", ref: "sec-1", status: "pending" } },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 4,
+    type: "thinking_delta",
+    agent_path: "main",
+    data: { text: "先列大纲。" },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 5,
+    type: "thinking_delta",
+    agent_path: "fill:sec-1",
+    data: { text: "组织本节材料。" },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 6,
+    type: "note_write",
+    agent_path: "fill:sec-1",
+    data: { name: "sec-1-photosynthesis", chars: 120 },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 7,
+    type: "tool_call",
+    agent_path: "fill:sec-1",
+    data: {
+      step_id: "fill-sec-1-write",
+      name: "write_section",
+      arguments: { sec_id: "sec-1" },
+    },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 8,
+    type: "figure_trace",
+    agent_path: "fig:1",
+    data: { figure_id: "fig-1", stage: "render", status: "success" },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 9,
+    type: "section_fill",
+    agent_path: "fill:sec-1",
+    data: { sec_id: "sec-1", status: "done" },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 10,
+    type: "todo_update",
+    agent_path: "main",
+    data: {
+      todo: { id: "t1", type: "research", ref: "光反应", status: "done", note: "3 个来源已覆盖" },
+    },
+  },
+  {
+    taskId: "materials-trace-1",
+    seq: 11,
+    type: "thinking_delta",
+    agent_path: "main",
+    data: { text: "继续填充下一节。" },
+  },
+];

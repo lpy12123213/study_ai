@@ -16,6 +16,7 @@ import {
   ChevronDown,
   FileText,
   History,
+  PanelLeftOpen,
   Plus,
   RotateCcw,
   SlidersHorizontal,
@@ -78,6 +79,7 @@ import { decodeStudyMaterialsEvent } from "./streaming/contract";
 import { KnowledgePointBoard } from "./ui/knowledge-point-board";
 import { MaterialResultCard } from "./ui/material-result-card";
 import { MaterialsWelcome } from "./ui/materials-welcome";
+import { ProcessPanel, StudyTodoProgress } from "./ui/process-panel";
 import { RecoveryCard } from "./ui/recovery-card";
 import { ResumeBanner } from "./ui/resume-banner";
 import { RevisionStrip } from "./ui/revision-strip";
@@ -278,6 +280,14 @@ function GenerationOptions({
   );
 }
 
+/** 骨架占位符：BACKBONE 之后的 text_snapshot 可能残留 [[FILL:xxx]] / [[FIG:n]]。 */
+const SKELETON_PLACEHOLDER_RE = /\[\[(?:FILL:[^\]]+|FIG:\d+)\]\]/g;
+
+/** 渲染前把骨架占位符替换为「撰写中」灰块（不动 markdown-view 组件）。 */
+function renderSkeletonPlaceholders(markdown: string): string {
+  return markdown.replace(SKELETON_PLACEHOLDER_RE, "\n\n> **撰写中…**\n\n");
+}
+
 /** 运行中的草稿预览：text_delta 为完整快照，修订时整体替换。 */
 function DraftPreviewPane({ markdown, version }: { markdown: string; version: number }) {
   const [open, setOpen] = useState(true);
@@ -300,7 +310,7 @@ function DraftPreviewPane({ markdown, version }: { markdown: string; version: nu
       </button>
       {open ? (
         <div className="max-h-96 overflow-y-auto border-t border-border px-4 py-3">
-          <MarkdownView content={markdown} />
+          <MarkdownView content={renderSkeletonPlaceholders(markdown)} />
         </div>
       ) : null}
     </section>
@@ -344,6 +354,9 @@ export function StudyMaterialsRoute() {
   const [inspectorToolId, setInspectorToolId] = useState<string | null>(null);
   const [latexUrl, setLatexUrl] = useState<string | undefined>();
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  /** 宽屏双栏：过程面板折叠；窄屏（<lg）：过程/文稿单栏 tabs。 */
+  const [processCollapsed, setProcessCollapsed] = useState(false);
+  const [mobileTab, setMobileTab] = useState<"process" | "document">("process");
 
   const projectionRef = useRef(projection);
   const activeRequestRef = useRef(activeRequest);
@@ -596,6 +609,8 @@ export function StudyMaterialsRoute() {
       abortRef.current = controller;
       setReceiving(true);
       setPinnedToBottom(true);
+      setProcessCollapsed(false);
+      setMobileTab("process");
 
       const payload: StudyGeneratePayload = {
         query,
@@ -759,6 +774,8 @@ export function StudyMaterialsRoute() {
     setInspectorToolId(null);
     setLatexUrl(undefined);
     setResumeCandidate(null);
+    setProcessCollapsed(false);
+    setMobileTab("process");
     clearPersistedRun();
     setSearchParams({}, { replace: true });
     // 「新的生成」与停止接收同理：尽力取消服务端任务，失败不阻塞本地重置。
@@ -831,6 +848,10 @@ export function StudyMaterialsRoute() {
   const markdown = selectResultMarkdown(projection);
   const toolCount = selectToolCount(projection);
   const kpBoard = selectKnowledgePointBoard(projection);
+  const todoList = useMemo(() => Object.values(projection.todos), [projection.todos]);
+  // 有真实过程数据（todos 或泳道时间线）才切双栏；legacy 任务回放保持单栏推断视图。
+  const hasProcessData = todoList.length > 0 || Object.keys(projection.traceByAgent).length > 0;
+  const showProcess = Boolean(activeRequest) && hasProcessData;
   const hasConversation = activeRequest !== null || projection.runStatus !== "idle";
   const interruptedCandidate =
     projection.runStatus === "interrupted" && projection.taskId
@@ -873,11 +894,79 @@ export function StudyMaterialsRoute() {
           </header>
 
           <div className="relative min-h-0 flex-1">
-            <div
-              ref={scrollRef}
-              onScroll={handleScroll}
-              className="h-full overflow-y-auto px-4 py-4"
-            >
+            <div className="flex h-full min-h-0 flex-col lg:flex-row">
+              {showProcess ? (
+                <>
+                  {/* 窄屏（<lg）：单栏 tabs（过程/文稿） */}
+                  <div
+                    role="tablist"
+                    aria-label="过程与文稿切换"
+                    className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2 lg:hidden"
+                  >
+                    {(["process", "document"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileTab === tab}
+                        onClick={() => setMobileTab(tab)}
+                        className={cn(
+                          "rounded-full px-3 py-1 text-xs transition-colors",
+                          mobileTab === tab
+                            ? "bg-surface font-medium text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {tab === "process" ? "过程" : "文稿"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* 左栏：过程面板（宽屏固定 420px，可折叠为细条；折叠只影响宽屏，窄屏仍走 tabs） */}
+                  {processCollapsed ? (
+                    <div className="hidden w-9 shrink-0 flex-col items-center border-r border-border py-2 lg:flex">
+                      <button
+                        type="button"
+                        onClick={() => setProcessCollapsed(false)}
+                        aria-label="展开过程面板"
+                        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+                      >
+                        <PanelLeftOpen className="size-4" />
+                      </button>
+                    </div>
+                  ) : null}
+                  <div
+                    className={cn(
+                      "min-h-0 flex-col",
+                      mobileTab === "process" ? "flex" : "hidden",
+                      processCollapsed
+                        ? "lg:hidden"
+                        : "lg:flex lg:w-[420px] lg:shrink-0 lg:border-r lg:border-border",
+                    )}
+                  >
+                    <ProcessPanel
+                      todos={todoList}
+                      traceByAgent={projection.traceByAgent}
+                      sectionStatus={projection.sectionStatus}
+                      onCollapse={() => setProcessCollapsed(true)}
+                      className="min-h-0 flex-1"
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              {/* 右栏文稿预览：窄屏按 tab 显隐，宽屏常驻 */}
+              <div
+                className={cn(
+                  "min-h-0 min-w-0 flex-1",
+                  showProcess && mobileTab !== "document" ? "hidden lg:block" : "flex flex-col",
+                )}
+              >
+                <div
+                  ref={scrollRef}
+                  onScroll={handleScroll}
+                  className="h-full overflow-y-auto px-4 py-4"
+                >
               <div className="mx-auto max-w-[800px]">
                 {resumeCandidate ? (
                   <div className="mb-5">
@@ -933,6 +1022,9 @@ export function StudyMaterialsRoute() {
                         <div className="overflow-x-auto pb-1">
                           <StageProgress stages={projection.stages} progress={projection.progress} />
                         </div>
+
+                        {/* 有 todos 数据时优先展示真实清单进度；没有时保持现有推断步进器。 */}
+                        <StudyTodoProgress todos={todoList} />
 
                         {projection.previousResult ? (
                           <MaterialResultCard
@@ -1081,9 +1173,11 @@ export function StudyMaterialsRoute() {
                   </div>
                 ) : null}
               </div>
+                </div>
+              </div>
             </div>
 
-            {!pinnedToBottom ? (
+            {!pinnedToBottom && (!showProcess || mobileTab === "document") ? (
               <button
                 type="button"
                 onClick={scrollToLatest}

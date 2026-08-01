@@ -13,6 +13,7 @@ import type {
   StudyMaterialsStageId,
   StudyMaterialsStageView,
   StudyMaterialsToolView,
+  StudyMaterialsTraceEntry,
   StudyMaterialsTurnView,
 } from "./types";
 import {
@@ -55,6 +56,9 @@ const STAGE_INDEX = new Map(STUDY_MATERIALS_STAGES.map((stage, index) => [stage.
 /** 单个知识点条目的嵌套 steps 上限：超出丢弃最旧、保留最新（与 tasks store MAX_EVENTS 截尾语义一致）。 */
 const MAX_KP_STEPS = 50;
 
+/** 单泳道时间线条目上限：超出丢弃最旧（与 MAX_KP_STEPS 截尾语义一致）。 */
+const MAX_TRACE_ENTRIES = 120;
+
 export function inferStudyMaterialsStage(toolName: string): StudyMaterialsStageId | undefined {
   return inferStageFromTool(toolName) || undefined;
 }
@@ -84,6 +88,9 @@ export function initialStudyMaterialsProjection(): StudyMaterialsProjection {
     markdownSnapshot: "",
     snapshotVersion: 0,
     revisionIssues: [],
+    todos: {},
+    traceByAgent: {},
+    sectionStatus: {},
     seenTerminal: false,
     stopIntent: false,
   };
@@ -303,6 +310,81 @@ function matchKpItem(
   return event.subagentId ? item.subagentId === event.subagentId : item.title === event.knowledgePoint;
 }
 
+/** 泳道条目草稿：id/at 由 appendTraceEntry 统一补齐。 */
+type TraceEntryDraft =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; tool: ToolStepView }
+  | { kind: "note"; name: string; chars: number }
+  | { kind: "figure"; figureId: string; stage: string; status?: string }
+  | { kind: "section"; secId: string; status: string };
+
+/** 时间线条目 id：优先事件 seq（单调递增），缺省回退时间戳 + 泳道长度。 */
+function traceEntryId(agentPath: string, at: number, seq: number | undefined, laneLength: number): string {
+  return seq !== undefined ? `${agentPath}:s${seq}` : `${agentPath}:t${at}-${laneLength}`;
+}
+
+/** 向指定泳道追加条目（超出上限丢弃最旧）；其它泳道引用保持不变。 */
+function appendTraceEntry(
+  traceByAgent: Record<string, StudyMaterialsTraceEntry[]>,
+  agentPath: string,
+  draft: TraceEntryDraft,
+  at: number,
+  seq: number | undefined,
+): Record<string, StudyMaterialsTraceEntry[]> {
+  const lane = traceByAgent[agentPath] ?? [];
+  const entry: StudyMaterialsTraceEntry = {
+    ...draft,
+    id: traceEntryId(agentPath, at, seq, lane.length),
+    at,
+  };
+  return { ...traceByAgent, [agentPath]: [...lane.slice(-(MAX_TRACE_ENTRIES - 1)), entry] };
+}
+
+/** 相邻 thinking_delta 合并为一个思考块，避免高频增量撑爆泳道。 */
+function appendThinkingEntry(
+  traceByAgent: Record<string, StudyMaterialsTraceEntry[]>,
+  agentPath: string,
+  text: string,
+  at: number,
+  seq: number | undefined,
+): Record<string, StudyMaterialsTraceEntry[]> {
+  const lane = traceByAgent[agentPath] ?? [];
+  const last = lane[lane.length - 1];
+  if (last?.kind === "thinking") {
+    const merged: StudyMaterialsTraceEntry = { ...last, text: last.text + text };
+    return { ...traceByAgent, [agentPath]: [...lane.slice(0, -1), merged] };
+  }
+  return appendTraceEntry(traceByAgent, agentPath, { kind: "thinking", text }, at, seq);
+}
+
+/** 泳道内工具卡片：tool_call 新建，tool_result 按 stepId 覆盖（镜像 buildKpStep 的扁平构造）。 */
+function patchTraceTool(
+  traceByAgent: Record<string, StudyMaterialsTraceEntry[]>,
+  agentPath: string,
+  event: SubagentToolEvent,
+  at: number,
+  seq: number | undefined,
+): Record<string, StudyMaterialsTraceEntry[]> {
+  const lane = traceByAgent[agentPath] ?? [];
+  const index = lane.findIndex((entry) => entry.kind === "tool" && entry.tool.id === event.stepId);
+  if (index >= 0) {
+    const prior = lane[index];
+    if (prior.kind !== "tool") return traceByAgent;
+    const next: StudyMaterialsTraceEntry = { ...prior, tool: buildKpStep(event, prior.tool, at) };
+    return {
+      ...traceByAgent,
+      [agentPath]: lane.map((entry, entryIndex) => (entryIndex === index ? next : entry)),
+    };
+  }
+  return appendTraceEntry(
+    traceByAgent,
+    agentPath,
+    { kind: "tool", tool: buildKpStep(event, undefined, at) },
+    at,
+    seq,
+  );
+}
+
 function markActiveTools(
   turn: StudyMaterialsTurnView,
   status: "error" | "interrupted",
@@ -428,6 +510,7 @@ function applyEvent(
   state: StudyMaterialsProjection,
   event: StudyMaterialsStreamEvent,
   at: number,
+  seq?: number,
 ): StudyMaterialsProjection {
   switch (event.kind) {
     case "task_started": {
@@ -496,6 +579,62 @@ function applyEvent(
       return stage ? setCurrentStage(state, stage, { authoritative: true }) : state;
     }
 
+    case "thinking_delta": {
+      if (!event.text) return state;
+      return {
+        ...state,
+        runStatus: "running",
+        startedAt: state.startedAt ?? at,
+        traceByAgent: appendThinkingEntry(state.traceByAgent, event.agentPath, event.text, at, seq),
+      };
+    }
+
+    case "note_write":
+      return {
+        ...state,
+        traceByAgent: appendTraceEntry(
+          state.traceByAgent,
+          event.agentPath,
+          { kind: "note", name: event.name, chars: event.chars },
+          at,
+          seq,
+        ),
+      };
+
+    case "todo_update":
+      // 同 id 覆盖；Record 键序保持首次出现顺序，清单展示稳定。
+      return { ...state, todos: { ...state.todos, [event.todo.id]: event.todo } };
+
+    case "figure_trace":
+      return {
+        ...state,
+        traceByAgent: appendTraceEntry(
+          state.traceByAgent,
+          event.agentPath,
+          {
+            kind: "figure",
+            figureId: event.figureId,
+            stage: event.stage,
+            ...(event.status ? { status: event.status } : {}),
+          },
+          at,
+          seq,
+        ),
+      };
+
+    case "section_fill":
+      return {
+        ...state,
+        sectionStatus: { ...state.sectionStatus, [event.secId]: event.status },
+        traceByAgent: appendTraceEntry(
+          state.traceByAgent,
+          event.agentPath,
+          { kind: "section", secId: event.secId, status: event.status },
+          at,
+          seq,
+        ),
+      };
+
     case "tool_call": {
       const stage = activeStage(state, event.name);
       const staged = setCurrentStage(state, stage);
@@ -524,8 +663,13 @@ function applyEvent(
             buildKpStep(event, prior, at),
           )
         : staged.turn.kpItems;
+      // 带 agent_path 的工具事件同步进过程泳道；旧事件（无 agentPath）不动泳道。
+      const traceByAgent = event.agentPath
+        ? patchTraceTool(staged.traceByAgent, event.agentPath, event, at, seq)
+        : staged.traceByAgent;
       return {
         ...staged,
+        traceByAgent,
         turn: {
           ...turn,
           kpItems,
@@ -595,7 +739,11 @@ function applyEvent(
             buildKpStep(event, prior, at),
           )
         : staged.turn.kpItems;
-      return { ...staged, stages, turn: { ...turn, kpItems, tools: flatTools } };
+      // 带 agent_path 的工具事件同步进过程泳道；旧事件（无 agentPath）不动泳道。
+      const traceByAgent = event.agentPath
+        ? patchTraceTool(staged.traceByAgent, event.agentPath, event, at, seq)
+        : staged.traceByAgent;
+      return { ...staged, stages, traceByAgent, turn: { ...turn, kpItems, tools: flatTools } };
     }
 
     case "text_snapshot":
@@ -761,7 +909,7 @@ export function studyMaterialsProjectionReducer(
         action.event.taskId !== state.taskId;
       if (!startsNewTask && action.seq && action.seq <= state.lastSeq) return state;
       const base = startsNewTask ? { ...state, lastSeq: 0 } : state;
-      const next = applyEvent(base, action.event, action.at);
+      const next = applyEvent(base, action.event, action.at, action.seq);
       return {
         ...next,
         lastSeq: action.seq ? Math.max(next.lastSeq, action.seq) : next.lastSeq,

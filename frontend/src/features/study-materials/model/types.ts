@@ -50,6 +50,27 @@ export interface StudyMaterialsToolView extends ToolStepView {
   elapsedMs?: number;
 }
 
+/** todo_update 上报的单条 TODO（对齐后端 TodoItem；type/status 保留字符串以前向兼容）。 */
+export interface StudyMaterialTodo {
+  id: string;
+  type: string;
+  ref: string;
+  status: string;
+  acceptance?: string;
+  note?: string;
+}
+
+/**
+ * 过程面板泳道时间线条目：同一泳道内按到达顺序排列。
+ * 相邻 thinking_delta 在 reducer 侧合并为单个 thinking 块；tool 由 tool_result 按 stepId 覆盖。
+ */
+export type StudyMaterialsTraceEntry =
+  | { id: string; kind: "thinking"; text: string; at: number }
+  | { id: string; kind: "tool"; tool: ToolStepView; at: number }
+  | { id: string; kind: "note"; name: string; chars: number; at: number }
+  | { id: string; kind: "figure"; figureId: string; stage: string; status?: string; at: number }
+  | { id: string; kind: "section"; secId: string; status: string; at: number };
+
 export interface StudyMaterialsKnowledgePointView {
   title: string;
   status: "running" | "done" | "error";
@@ -115,6 +136,12 @@ export interface StudyMaterialsProjection {
   serverKpCoverage?: StudyMaterialsServerKpCoverage;
   /** continue 时保留的上一版成果；新一轮 done 或 reset 时清除。 */
   previousResult?: StudyMaterialsPreviousResult;
+  /** todo_update 累积的 TODO 清单：同 id 覆盖，键序保持首次出现顺序。 */
+  todos: Record<string, StudyMaterialTodo>;
+  /** 按 agentPath 分组的过程时间线：main 主泳道，fill:* / fig:* 子泳道。 */
+  traceByAgent: Record<string, StudyMaterialsTraceEntry[]>;
+  /** section_fill 上报的每节填充状态（secId -> status）。 */
+  sectionStatus: Record<string, string>;
   startedAt?: number;
   endedAt?: number;
   seenTerminal: boolean;

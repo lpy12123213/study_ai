@@ -9,6 +9,7 @@
  * text_delta 在本领域是完整 Markdown 快照，不是追加增量。
  */
 import type { StudyMaterialResult, TaskEvent } from "@/shared/api/types";
+import type { StudyMaterialTodo } from "../model/types";
 
 export type StudyMaterialsStreamEvent =
   | {
@@ -21,6 +22,41 @@ export type StudyMaterialsStreamEvent =
   | { kind: "status"; content: string }
   | { kind: "progress"; percent?: number; stage?: string }
   | { kind: "thinking"; content: string }
+  | {
+      /** 新版统一思考增量（替代 legacy thinking / codex reasoning_delta）。 */
+      kind: "thinking_delta";
+      text: string;
+      /** 事件归属泳道（main / fill:sec-x / fig:n）；旧事件缺省降级 main。 */
+      agentPath: string;
+    }
+  | {
+      /** 研究笔记落笔。 */
+      kind: "note_write";
+      name: string;
+      chars: number;
+      agentPath: string;
+    }
+  | {
+      /** TODO 状态变更（同 id 覆盖）。 */
+      kind: "todo_update";
+      todo: StudyMaterialTodo;
+      agentPath: string;
+    }
+  | {
+      /** 配图代码/渲染尝试/产物。 */
+      kind: "figure_trace";
+      figureId: string;
+      stage: string;
+      status?: string;
+      agentPath: string;
+    }
+  | {
+      /** 章节填充开始/完成。 */
+      kind: "section_fill";
+      secId: string;
+      status: string;
+      agentPath: string;
+    }
   | {
       kind: "workflow_stage";
       stage: string;
@@ -38,6 +74,8 @@ export type StudyMaterialsStreamEvent =
       subagentId?: string;
       /** 冗余知识点名，便于展示与旧逻辑兼容。 */
       knowledgePoint?: string;
+      /** 过程事件泳道（新版事件携带；旧事件无此字段则不注入）。 */
+      agentPath?: string;
     }
   | {
       kind: "tool_result";
@@ -52,6 +90,8 @@ export type StudyMaterialsStreamEvent =
       subagentId?: string;
       /** 冗余知识点名，便于展示与旧逻辑兼容。 */
       knowledgePoint?: string;
+      /** 过程事件泳道（新版事件携带；旧事件无此字段则不注入）。 */
+      agentPath?: string;
     }
   | { kind: "text_snapshot"; content: string }
   | { kind: "quality_report"; report: Record<string, unknown> }
@@ -110,6 +150,11 @@ function asNumber(value: unknown): number | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+/** 过程事件泳道：顶层 agent_path（normalizeEvent 已并入 data）；旧事件缺省降级 main。 */
+function agentPathOf(data: Record<string, unknown>): string {
+  return asString(data.agent_path) ?? "main";
 }
 
 function stringList(value: unknown): string[] {
@@ -199,9 +244,64 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
     }
 
     case "thinking":
-    case "thinking_delta":
     case "reasoning_delta":
       return { kind: "thinking", content: asString(data.content) ?? "" };
+
+    case "thinking_delta":
+      return {
+        kind: "thinking_delta",
+        text: asString(data.text) ?? asString(data.content) ?? "",
+        agentPath: agentPathOf(data),
+      };
+
+    case "note_write":
+      return {
+        kind: "note_write",
+        name: asString(data.name) ?? "",
+        chars: asNumber(data.chars) ?? 0,
+        agentPath: agentPathOf(data),
+      };
+
+    case "todo_update": {
+      const raw = asRecord(data.todo);
+      const id = asString(raw?.id);
+      if (!id) return null;
+      const acceptance = asString(raw?.acceptance);
+      const note = asString(raw?.note);
+      const todo: StudyMaterialTodo = {
+        id,
+        type: asString(raw?.type) ?? "",
+        ref: asString(raw?.ref) ?? "",
+        status: asString(raw?.status) ?? "pending",
+        ...(acceptance ? { acceptance } : {}),
+        ...(note ? { note } : {}),
+      };
+      return { kind: "todo_update", todo, agentPath: agentPathOf(data) };
+    }
+
+    case "figure_trace": {
+      const figureId = asString(data.figure_id);
+      if (!figureId) return null;
+      const status = asString(data.status);
+      return {
+        kind: "figure_trace",
+        figureId,
+        stage: asString(data.stage) ?? "",
+        ...(status ? { status } : {}),
+        agentPath: agentPathOf(data),
+      };
+    }
+
+    case "section_fill": {
+      const secId = asString(data.sec_id);
+      if (!secId) return null;
+      return {
+        kind: "section_fill",
+        secId,
+        status: asString(data.status) ?? "",
+        agentPath: agentPathOf(data),
+      };
+    }
 
     case "workflow_stage": {
       const stage = asString(data.stage);
@@ -228,6 +328,7 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
       const title = asString(data.title);
       const subagentId = asString(data.subagent_id);
       const knowledgePoint = asString(data.knowledge_point);
+      const agentPath = asString(data.agent_path);
       return {
         kind: "tool_call",
         stepId,
@@ -235,6 +336,7 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         ...(title ? { title } : {}),
         ...(subagentId ? { subagentId } : {}),
         ...(knowledgePoint ? { knowledgePoint } : {}),
+        ...(agentPath ? { agentPath } : {}),
         arguments: data.arguments ?? data.input ?? {},
       };
     }
@@ -249,6 +351,7 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
       const title = asString(data.title);
       const subagentId = asString(data.subagent_id);
       const knowledgePoint = asString(data.knowledge_point);
+      const agentPath = asString(data.agent_path);
       const explicitSuccess = asBoolean(data.success);
       const isError = asBoolean(data.is_error);
       const success = explicitSuccess ?? !(isError ?? false);
@@ -267,6 +370,7 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
         ...(title ? { title } : {}),
         ...(subagentId ? { subagentId } : {}),
         ...(knowledgePoint ? { knowledgePoint } : {}),
+        ...(agentPath ? { agentPath } : {}),
         success,
         result,
         ...(error ? { error } : {}),

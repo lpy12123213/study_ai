@@ -1,7 +1,7 @@
 /** 学习资料 feature API（自 lib/api/materials.ts 迁入，架构 Phase 5）。 */
 import { apiFetch } from "@/shared/api/http-client";
 import { streamGet, streamPost, type StreamHandlers } from "@/lib/sse";
-import type { StudyArchive, StudyArchiveSummary, StudyPreset } from "@/shared/api/types";
+import type { StudyArchive, StudyArchiveSummary, StudyPreset, TaskEvent } from "@/shared/api/types";
 
 /** 档案列表项：base_fingerprint 已在后端行序列化中下发，但共享类型尚未声明。 */
 export type StudyArchiveSummaryItem = StudyArchiveSummary & { base_fingerprint?: string };
@@ -40,6 +40,13 @@ export interface StudyTaskStatus {
   search_summary_by_kp?: Record<string, unknown>;
 }
 
+/** GET /tasks/{id}/trace 的一页全量过程事件（备用；过程面板当前走 SSE 流，不依赖该端点）。 */
+export interface StudyTaskTracePage {
+  events: TaskEvent[];
+  count?: number;
+  next_after_seq?: number;
+}
+
 export const studyMaterialsApi = {
   taskStatus: (taskId: string) =>
     apiFetch<StudyTaskStatus>(`/api/study-materials/tasks/${encodeURIComponent(taskId)}`),
@@ -50,6 +57,11 @@ export const studyMaterialsApi = {
       `/api/study-materials/tasks/${encodeURIComponent(taskId)}/stream?after_seq=${Math.max(0, afterSeq)}`,
       handlers,
     ),
+  /** 全量过程事件分页（trace 面板/调试备用，UI 尚未接入）。 */
+  traceEvents: (taskId: string, opts?: { afterSeq?: number; limit?: number }) =>
+    apiFetch<StudyTaskTracePage>(`/api/study-materials/tasks/${encodeURIComponent(taskId)}/trace`, {
+      query: { after_seq: opts?.afterSeq ?? 0, limit: opts?.limit ?? 500 },
+    }),
   convertToLatex: (payload: { markdown: string; topic?: string; subject?: string }) =>
     apiFetch<{ tex_url: string; filename: string; sha256?: string; bytes?: number; model?: string }>(
       "/api/study-materials/convert-markdown-to-latex",
