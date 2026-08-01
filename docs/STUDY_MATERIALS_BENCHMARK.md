@@ -111,11 +111,16 @@ python -m backend.evals.study_materials.runner --case all --llm-judge --check-li
 
 - 2026-08-01：基线暴露的生成缺陷修复后复跑（分支 `feat/study-materials-benchmark`）：
 
-  | 模型 | 用例 | 总分 | 说明 |
-  |---|---|---|---|
-  | deepseek-v4-pro | tcp_congestion_control | **44.9** | 五处缺陷修复后首次真实成稿 |
-  | deepseek-v4-pro | lebesgue_integral | **36.8** | 同上 |
-  | deepseek-v4-flash | tcp_congestion_control | 20.0 | 受修订截断缺陷污染的中间结果（成稿被 revise 截短） |
+  | 模型 | 用例 | 总分 | 成稿 | R | K | S | F | A | C |
+  |---|---|---|---|---|---|---|---|---|---|
+  | deepseek-v4-pro | tcp_congestion_control | **44.9** | 10768 字符 | 8.8 | 19.2 | 0 | 9.9 | 7.0 | 0 |
+  | deepseek-v4-pro | lebesgue_integral | **36.8** | 9358 字符 | 8.5 | 13.1 | 0 | 8.7 | 6.5 | 0 |
+  | deepseek-v4-flash | tcp_congestion_control | **41.6** | 14920 字符 | 10.0 | 16.8 | 0 | 8.3 | 6.5 | 0 |
+  | deepseek-v4-flash | lebesgue_integral | **40.4** | 22468 字符 | 10.0 | 17.2 | 0 | 8.8 | 4.5 | 0 |
+
+  失分地图（修复后）：S（无子代理事件）与 C（无参考文献/内联引用）为结构性 0 分；
+  K1 受 0.15 溯源门控压制；R 缺深读与权威域名命中。下一步提升主攻：引用体系
+  （渲染 refs_by_kp + 内联标记）、plan 模式子代理、每 kp 深读。
 
   修复的缺陷（详见 `backend/tests/test_study_materials_write_path_fixes.py` 回归）：
   写作 240s 超时预算、直写路径 0 素材静默成功、审阅 JSON flake 判死整跑、
