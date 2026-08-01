@@ -22,6 +22,10 @@ class AgentConfig:
     # ReAct budgets (safety caps).
     react_llm_call_budget: int = 25
     react_retry_budget_per_tool: int = 2
+    # Skills-ification: when true, ReAct injects only the loaded-skill tools and
+    # exposes the `load_skill` inline action (AGENT_SKILLS_MODE=1). Default off
+    # keeps the legacy full tool list for A/B comparison and fast rollback.
+    skills_mode: bool = False
 
     # Context compression
     sliding_window_size: int = 10
@@ -71,6 +75,7 @@ class AgentConfig:
                 "AGENT_REACT_RETRY_BUDGET_PER_TOOL",
                 cls.react_retry_budget_per_tool,
             ),
+            skills_mode=env_bool("AGENT_SKILLS_MODE", cls.skills_mode),
             sliding_window_size=env_int("AGENT_SLIDING_WINDOW_SIZE", cls.sliding_window_size),
             token_threshold=env_int("AGENT_TOKEN_THRESHOLD", cls.token_threshold),
             emergency_token_threshold=env_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
@@ -92,6 +97,7 @@ AGENT_CONFIG = {
     "react_max_iterations": _cfg.react_max_iterations,
     "react_llm_call_budget": _cfg.react_llm_call_budget,
     "react_retry_budget_per_tool": _cfg.react_retry_budget_per_tool,
+    "skills_mode": _cfg.skills_mode,
     "sliding_window_size": _cfg.sliding_window_size,
     "token_threshold": _cfg.token_threshold,
     "checkpoint_dir": _cfg.checkpoint_dir,

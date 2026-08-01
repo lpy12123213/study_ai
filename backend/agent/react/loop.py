@@ -10,6 +10,14 @@ from pydantic import Field as PydanticField
 
 from backend.agent.config import AgentConfig
 from backend.agent.mcp.registry import MCPToolRegistry
+from backend.agent.planning.skill_catalog import (
+    SKILLS,
+    find_skill_for_tool,
+    normalize_active_skills,
+    skills_for_domain,
+    tools_for_skills,
+)
+from backend.agent.planning.study_options import _study_flags
 from backend.agent.react.prompts import build_react_messages
 from backend.agent.types import ActionResults, CompressedContext, ExecutionPlan, PlanStep, agent_event
 from backend.core.logging_utils import get_logger
@@ -111,6 +119,39 @@ def _extract_tool_decision(res: Any) -> Dict[str, Any]:
 
 def _normalize_key(text: str) -> str:
     return str(text or "").strip().lower().replace("-", "").replace("_", "")
+
+
+def _active_skills_from_context(ctx: CompressedContext) -> List[str]:
+    """Read ctx.working_memory['active_skills'], guarding against malformed values.
+
+    A missing/non-list value resets to the bootstrap skill list (["planning"])
+    so a fresh run never starts with an empty tool surface.
+    """
+    wm = ctx.working_memory if isinstance(ctx.working_memory, dict) else {}
+    return normalize_active_skills(wm.get("active_skills"))
+
+
+def _current_domain(ctx: CompressedContext) -> str:
+    """Skill domain for this ReAct run.
+
+    The ReAct loop is a study-materials path: study_options being present or
+    absent both map to the study domain. Compose runs (paper-compose) use a
+    separate agent and never enter this loop, so paper-compose/compose-sandbox
+    skills are rejected by load_skill here.
+    """
+    return "study"
+
+
+def _resolve_skill_name(raw: str) -> str:
+    """Resolve a raw skill reference to a canonical SKILLS key (exact or normalized)."""
+    name = str(raw or "").strip()
+    if name in SKILLS:
+        return name
+    norm = _normalize_key(name)
+    for skill_name in SKILLS:
+        if _normalize_key(skill_name) == norm:
+            return skill_name
+    return ""
 
 
 def _get_split_knowledge_points(ctx: CompressedContext) -> List[str]:
@@ -551,6 +592,37 @@ class ReActLoop:
             logger.warning("react_tool_registry_lookup_failed", extra={"tool": name}, exc_info=True)
             return False
 
+    def _study_flag_booleans(self, ctx: CompressedContext) -> Tuple[bool, bool, bool]:
+        """(enable_diagrams, enable_questions, enable_extra_tools) via the canonical resolver.
+
+        Delegates to planning.study_options._study_flags so the env fallbacks
+        (STUDY_MATERIALS_ENABLE_QUESTIONS / STUDY_MATERIALS_ENABLE_EXTRA_TOOLS)
+        and defaults stay identical to the planner's.
+        """
+        flags = _study_flags(ctx)
+        return (
+            bool(flags.get("enable_diagrams", True)),
+            bool(flags.get("enable_questions", False)),
+            bool(flags.get("enable_extra_tools", False)),
+        )
+
+    def _injectable_tools(self, ctx: CompressedContext) -> List[Dict[str, Any]]:
+        """Tools exposed to the controller LLM in skills mode.
+
+        Recomputed from the current active_skills each iteration so a mid-run
+        load_skill becomes visible on the next decision. When skills_mode is off
+        the caller keeps the legacy full-list behavior instead.
+        """
+        active = _active_skills_from_context(ctx)
+        enable_diagrams, enable_questions, enable_extra_tools = self._study_flag_booleans(ctx)
+        return tools_for_skills(
+            active,
+            self.tool_registry,
+            enable_diagrams=enable_diagrams,
+            enable_questions=enable_questions,
+            enable_extra_tools=enable_extra_tools,
+        )
+
     async def run(
         self,
         *,
@@ -700,6 +772,13 @@ class ReActLoop:
                 )
             scratchpad_text = "\n".join(scratch_lines).strip()
 
+            # Skills mode: recompute the injectable tool surface each iteration so
+            # a mid-run load_skill becomes visible on the next decision. When off,
+            # `tools` stays the full registry list captured before the loop.
+            if self.config.skills_mode:
+                tools = self._injectable_tools(ctx)
+            injected_tool_names = {str(t.get("name") or "").strip() for t in tools}
+
             messages = build_react_messages(
                 ctx=ctx,
                 topic=topic,
@@ -709,6 +788,7 @@ class ReActLoop:
                 iteration=i,
                 max_iterations=max_iterations,
                 budget_remaining=max(0, llm_call_budget - llm_calls),
+                skills_mode=self.config.skills_mode,
             )
 
             retry_note = _retry_exceeded_system_note()
@@ -774,6 +854,92 @@ class ReActLoop:
                     obs = (
                         "Quality: FAILED (empty_kps)\n"
                         "- arguments.knowledge_points 为空或格式错误"
+                    )
+                scratch.append(
+                    {
+                        "thought": decision.thought,
+                        "action": action,
+                        "arguments": decision.arguments,
+                        "observation": obs,
+                    }
+                )
+                continue
+
+            # Inline skill loading (skills mode only). The controller LLM expands
+            # the available tool surface on demand without an extra LLM
+            # round-trip: the skill is appended to working_memory["active_skills"]
+            # and its tools become injectable on the next iteration. No tool
+            # budget is consumed (the decision itself already counts as one LLM
+            # call). Gated by skills_mode: when off, a stray load_skill action
+            # falls through to the legacy tool_not_found path below.
+            if self.config.skills_mode and action_norm in {"loadskill", "activateskill", "useskill"}:
+                args_obj = decision.arguments if isinstance(decision.arguments, dict) else {}
+                skill_name = _resolve_skill_name(str(args_obj.get("skill") or "").strip())
+                enable_diagrams, _enable_questions, _enable_extra = self._study_flag_booleans(ctx)
+                domain_skills = skills_for_domain(_current_domain(ctx), enable_diagrams=enable_diagrams)
+                if not skill_name or skill_name not in domain_skills:
+                    available = ", ".join(domain_skills)
+                    obs = (
+                        "Quality: FAILED (skill_not_available)\n"
+                        f"- 无效或当前域不可用的 skill。可用 skills：{available}。"
+                    )
+                    yield agent_event(
+                        "status",
+                        {"content": f"ReAct：无法加载 skill {skill_name or '(空)'}，请从可用列表选择。"},
+                    )
+                else:
+                    skill_def = SKILLS[skill_name]
+                    active = _active_skills_from_context(ctx)
+                    if skill_name not in active:
+                        active.append(skill_name)
+                        ctx.working_memory["active_skills"] = active
+                    tool_names = ", ".join(skill_def["tools"])
+                    # Keep the observation short: the full instruction is
+                    # re-rendered into every decision message (Loaded skill
+                    # instructions), so scratchpad truncation cannot hide it.
+                    obs = (
+                        f"Quality: HIGH (skill_loaded)\n"
+                        f"- 已激活 skill `{skill_name}`：{skill_def['one_liner']}\n"
+                        f"- 可用工具：{tool_names}"
+                    )
+                    yield agent_event(
+                        "status",
+                        {"content": f"已加载 skill {skill_name}（{len(skill_def['tools'])} 个工具）。"},
+                    )
+                scratch.append(
+                    {
+                        "thought": decision.thought,
+                        "action": action,
+                        "arguments": decision.arguments,
+                        "observation": obs,
+                    }
+                )
+                continue
+
+            # Soft-guide (skills mode): a registered tool that is not part of the
+            # currently injected surface (belongs to an unloaded skill, or was
+            # gated out by flags) is refused with guidance instead of a hard
+            # failure, so the model can recover by loading the owning skill.
+            # Routed before batch dispatch so an unloaded tool never executes.
+            if self.config.skills_mode and action not in injected_tool_names:
+                skill_name = find_skill_for_tool(action)
+                if skill_name and skill_name not in _active_skills_from_context(ctx):
+                    obs = (
+                        f"Quality: FAILED (skill_not_loaded)\n"
+                        f'- 该工具属于 skill {skill_name}，请先 load_skill("{skill_name}") 后再调用。'
+                    )
+                    yield agent_event(
+                        "status",
+                        {"content": f"ReAct：工具 {action} 属于未加载的 skill {skill_name}，请先 load_skill。"},
+                    )
+                else:
+                    obs = (
+                        f"Quality: FAILED (tool_not_available)\n"
+                        f"- 工具 {action} 当前不可用（未加载或未启用）。"
+                    )
+                    yield agent_event(
+                        "status",
+                        {"content": f"ReAct：工具 {action} 当前不可用（未加载或未启用）。"},
                     )
                 scratch.append(
                     {

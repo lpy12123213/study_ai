@@ -1102,6 +1102,139 @@ def create_default_prompt_registry() -> PromptRegistry:
                 "Output clear, structured review comments directly. Do not output JSON."
             ),
         ),
+        (
+            "agent.skills.planning.v1",
+            False,
+            (
+                "你是「planning」技能的使用指引（study 域，默认已加载）。\n"
+                "适用时机：任务开始时；主题宽泛/复合需拆解时。\n"
+                "工具顺序与配合：\n"
+                "1) split_knowledge_points 拆分知识点（3-8 个互不重复、可单独检索）；\n"
+                "2) review_knowledge_points 复核去重与粒度；\n"
+                "3) detect_knowledge_type 判定知识点类型（定义/定理/算法等）；\n"
+                "4) generate_outline 生成大纲。\n"
+                "注意事项：\n"
+                "- 单点聚焦主题可跳过拆分，直接进入 research。\n"
+                "- 拆分结果写入 working_memory，供后续 skill 消费；已有 split_knowledge_points 时勿重复拆。"
+            ),
+        ),
+        (
+            "agent.skills.research.v1",
+            False,
+            (
+                "你是「research」技能的使用指引（study 域）。\n"
+                "适用时机：需要为知识点补充权威/多源资料。\n"
+                "工具顺序与配合：\n"
+                "1) web_search_knowledge 联网检索（每个 KP 至少一次）；\n"
+                "2) wikipedia_search / mediawiki_search 补权威定义；stackexchange_search / github_search "
+                "补社区与代码资料；browse_web_pages 抓取正文（snippet 质量低时）；\n"
+                "3) aggregate_knowledge 聚合多源结果；\n"
+                "4) synthesize_sources 去噪为写作可用的 source_brief。\n"
+                "输出格式：聚合结果写入 working_memory 的 source_briefs；不要重复检索已覆盖的来源。\n"
+                "注意事项：\n"
+                "- preset=research 时每个 KP 至少覆盖 3 类来源；Quality<HIGH 时换 query_hint 或换工具重试。\n"
+                "- 可用 batch_mode=\"per_knowledge_point\" 批量检索。"
+            ),
+        ),
+        (
+            "agent.skills.examples.v1",
+            False,
+            (
+                "你是「examples」技能的使用指引（study 域）。\n"
+                "适用时机：需要知识库笔记或题库例题/练习支撑。\n"
+                "工具顺序与配合：\n"
+                "1) retrieve_knowledge 检索知识库事实笔记；\n"
+                "2) search_examples / search_exercises 检索例题与练习；\n"
+                "3) search_questions_by_knowledge 按知识点检索题库（需 enable_questions 开启）。\n"
+                "输出格式：把检索到的例题/练习与知识库笔记整理成结构化清单返回，标注来源。\n"
+                "注意事项：\n"
+                "- 例题用于说明概念、巩固练习，不要用它替代 research 的权威定义。\n"
+                "- 多知识点时可用 batch_mode。"
+            ),
+        ),
+        (
+            "agent.skills.writing.v1",
+            False,
+            (
+                "你是「writing」技能的使用指引（study 域）。\n"
+                "适用时机：检索/聚合完成后撰写与打磨内容。\n"
+                "工具顺序与配合：\n"
+                "1) generate_study_material 按 KP 生成讲解（建议 batch_mode 覆盖全部 KP）；\n"
+                "2) critique_draft 审稿给出修订意见；refine_draft 按意见最小修订（高分草稿可跳过）；\n"
+                "3) revise_markdown 按 review 问题修订整篇；\n"
+                "4) assemble_study_archive 组装最终 Markdown；save_markdown_file 保存；export_study_markdown 发布下载链接；\n"
+                "5) review_content 最终审查（passed=true 才收尾）。\n"
+                "注意事项：\n"
+                "- 优先覆盖全部 KP 再打磨单点；先组装/保存/导出再审查。"
+            ),
+        ),
+        (
+            "agent.skills.export.v1",
+            False,
+            (
+                "你是「export」技能的使用指引（study 域）。\n"
+                "适用时机：需要 LaTeX 或 PDF 产物。\n"
+                "工具顺序与配合：\n"
+                "1) convert_markdown_to_latex 转 ElegantBook LaTeX；\n"
+                "2) refine_latex 修复结构/公式/编译问题；\n"
+                "3) compile_latex_to_pdf 编译 PDF。\n"
+                "注意事项：\n"
+                "- 编译失败时读取错误并做最小修订，不要重写全文。"
+            ),
+        ),
+        (
+            "agent.skills.diagrams.v1",
+            False,
+            (
+                "你是「diagrams」技能的使用指引（study/compose 域，按需加载）。\n"
+                "适用时机：需要教学示意图或函数图像。\n"
+                "工具选择（按需）：\n"
+                "- generate_diagrams 规划并生成图解；\n"
+                "- draw_svg_diagram / draw_diagram 通用 SVG 绘制；\n"
+                "- tikz_to_svg / asy_to_svg 编译 TikZ/Asymptote 为 SVG；\n"
+                "- render_chemistry / render_circuit / render_graphviz 化学式/电路/流程图；\n"
+                "- plot_function / plot_3d 函数与三维图像；\n"
+                "- seedream_generate 文生图（Seedream）。\n"
+                "输出格式：图产物以 SVG/PNG 文件形式输出并附简短说明，供正文引用。\n"
+                "注意事项：\n"
+                "- 图须服务于知识讲解，避免装饰性内容；公式用 LaTeX。"
+            ),
+        ),
+        (
+            "agent.skills.paper-compose.v1",
+            False,
+            (
+                "你是「paper-compose」技能的使用指引（compose 域，由组卷 agent 驱动）。\n"
+                "适用时机：题库组卷全流程。\n"
+                "工具顺序与配合：\n"
+                "1) get_available_filters 获取筛选维度；search_questions 检索候选；\n"
+                "2) batch_get_question_details 按需取详情；review_question_match 审查匹配；\n"
+                "3) compose_paper_blueprint 组装试卷；create_paper 保存；\n"
+                "4) render_paper_latex / compile_latex_sandbox 渲染与编译；repair_latex 修复。\n"
+                "辅助：analyze_paper 分析、crawl_questions_from_bank 爬题、generate_questions_ai 补题、"
+                "solve_question_independently 独立解题校验。\n"
+                "注意事项：\n"
+                "- 只回传题目 ID 与元数据，不外泄题干全文；编译失败走 repair 而非静默重试。"
+            ),
+        ),
+        (
+            "agent.skills.compose-sandbox.v1",
+            False,
+            (
+                "你是「compose-sandbox」技能的使用指引（compose 域）。\n"
+                "适用时机：需要在沙箱中读写文件或执行命令以配合组卷。\n"
+                "工具顺序与配合：\n"
+                "1) compose_sandbox_open 打开沙箱会话；\n"
+                "2) compose_sandbox_write_file / compose_sandbox_read_file 读写文件；\n"
+                "3) compose_sandbox_run 执行命令；\n"
+                "4) compose_sandbox_patch_question 修补题目；\n"
+                "5) compose_sandbox_export 导出；\n"
+                "6) compose_sandbox_close 关闭会话。\n"
+                "输出格式：文件读写与命令执行结果以结构化文本返回；导出产物给出路径。\n"
+                "注意事项：\n"
+                "- 用完必须 close，避免资源泄漏；仅在需要文件/命令时使用。"
+            ),
+        ),
     ]
 
     for spec in json_specs:

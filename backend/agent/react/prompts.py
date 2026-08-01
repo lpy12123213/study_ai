@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from backend.agent.planning.skill_catalog import SKILLS, normalize_active_skills, skills_for_domain
+from backend.agent.planning.study_options import _study_flags
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
 from backend.llm.client import cacheable_message
@@ -226,6 +228,57 @@ def _wm_summary(ctx: CompressedContext, *, budget_remaining: Optional[int] = Non
     return "\n".join(parts)
 
 
+def _skill_manifest(*, domain: str = "study", enable_diagrams: bool = True) -> str:
+    """Render the static available-skill manifest (name + one-liner).
+
+    Lists EVERY skill loadable in this run's domain + flags, not just the
+    loaded ones, so the stable (cacheable) message stays byte-identical across
+    load_skill calls within a run. The loaded/unloaded state and the full skill
+    instructions live in the per-iteration decision message instead.
+    """
+    lines = ["Available skills (tool groups). 调用 load_skill 可按需展开其工具集（不消耗额外 LLM 预算）："]
+    shown = 0
+    for name in skills_for_domain(domain, enable_diagrams=enable_diagrams):
+        skill = SKILLS.get(name)
+        if not skill:
+            continue
+        lines.append(f"- {name}: {skill['one_liner']}")
+        shown += 1
+        if shown >= 12:
+            break
+    lines.append("建议导航：planning → research → writing → export；examples/diagrams 按需 load_skill。")
+    return "\n".join(lines)
+
+
+def _loaded_skill_instructions(ctx: CompressedContext) -> str:
+    """Render the FULL instructions of the currently loaded skills.
+
+    Injected into the per-iteration decision message (reassembled every round,
+    never scratchpad-clipped, and outside the cacheable stable prefix), so the
+    controller LLM always sees the complete `agent.skills.<name>.v1` guidance
+    for every skill in active_skills.
+    """
+    wm = ctx.working_memory if isinstance(ctx.working_memory, dict) else {}
+    active = normalize_active_skills(wm.get("active_skills"))
+
+    registry = create_llm_prompt_registry()
+    parts: List[str] = []
+    for name in active:
+        skill = SKILLS.get(name)
+        if not skill:
+            continue
+        try:
+            content = registry.render(skill["prompt_id"]).content
+        except Exception:
+            logger.exception("react_skill_instruction_render_failed", extra={"skill": name})
+            content = skill["one_liner"]
+        parts.append(f"### {name}\n{str(content or '').strip()}")
+
+    if not parts:
+        return ""
+    return "Loaded skill instructions（已加载 skill 的完整指引）：\n" + "\n\n".join(parts)
+
+
 def _format_tools(tools: List[Dict[str, Any]]) -> str:
     lines: List[str] = []
     for t in tools or []:
@@ -263,6 +316,7 @@ def build_react_messages(
     iteration: int,
     max_iterations: int,
     budget_remaining: int,
+    skills_mode: bool = False,
 ) -> List[Dict[str, Any]]:
     preset = ""
     requirements = ""
@@ -281,21 +335,52 @@ def build_react_messages(
         f"{_wm_summary(ctx)}\n"
     )
 
-    decision_prompt = (
-        f"- iteration: {iteration + 1}/{max_iterations}\n\n"
-        f"- tool_iterations_remaining: {max(0, max_iterations - (iteration + 1))}\n"
-        f"- budget_remaining: {max(0, int(budget_remaining or 0))}\n\n"
-        "历史（Thought/Action/Quality/Observation 简述，可能为空）：\n"
-        f"{scratchpad or '（空）'}\n\n"
-        "Available tools. action must be one of these tools, finish, or one of the special actions below:\n"
-        f"{_format_tools(tools)}\n"
-        "\nSpecial inline actions (no tool call, no LLM round-trip):\n"
-        "- set_knowledge_points: directly write knowledge_points to memory.\n"
-        "  arguments: {\"knowledge_points\": [\"KP1\", \"KP2\", ...]} (3-8 items recommended).\n"
-        "  Use this instead of the split_knowledge_points tool when you can confidently split the topic yourself.\n\n"
-        "Now output strict JSON:\n"
-        '{"thought":"...","action":"...","batch_mode":"","arguments":{...},"note":""}\n'
-    )
+    if skills_mode:
+        # Static manifest: identical for the whole run, so the cacheable stable
+        # message no longer flips when load_skill changes active_skills.
+        flags = _study_flags(ctx)
+        stable_context_prompt += "\n" + _skill_manifest(enable_diagrams=bool(flags.get("enable_diagrams", True))) + "\n"
+
+    special_actions = [
+        "",
+        "Special inline actions (no tool call, no LLM round-trip):",
+        "- set_knowledge_points: directly write knowledge_points to memory.",
+        '  arguments: {"knowledge_points": ["KP1", "KP2", ...]} (3-8 items recommended).',
+        "  Use this instead of the split_knowledge_points tool when you can confidently split the topic yourself.",
+    ]
+    if skills_mode:
+        # load_skill only exists in skills mode; keep its docs out of legacy runs.
+        special_actions += [
+            "- load_skill: 按需加载一个 skill，立即展开其工具集（本动作不消耗额外 LLM 预算）。",
+            '  arguments: {"skill": "research"}。全部可用 skill 见上方 Available skills 清单；'
+            "已加载 skill 的完整指令见下方 Loaded skill instructions。",
+        ]
+
+    decision_parts = [
+        f"- iteration: {iteration + 1}/{max_iterations}",
+        "",
+        f"- tool_iterations_remaining: {max(0, max_iterations - (iteration + 1))}",
+        f"- budget_remaining: {max(0, int(budget_remaining or 0))}",
+        "",
+        "历史（Thought/Action/Quality/Observation 简述，可能为空）：",
+        scratchpad or "（空）",
+        "",
+        "Available tools. action must be one of these tools, finish, or one of the special actions below:",
+        _format_tools(tools),
+        *special_actions,
+    ]
+    if skills_mode:
+        # Full instructions for loaded skills: reassembled each iteration (no
+        # scratchpad truncation) and kept out of the cacheable stable prefix.
+        loaded_block = _loaded_skill_instructions(ctx)
+        if loaded_block:
+            decision_parts += ["", loaded_block]
+    decision_parts += [
+        "",
+        "Now output strict JSON:",
+        '{"thought":"...","action":"...","batch_mode":"","arguments":{...},"note":""}',
+    ]
+    decision_prompt = "\n".join(decision_parts)
 
     return [
         cacheable_message("system", _controller_system_prompt()),

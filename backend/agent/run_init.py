@@ -132,6 +132,14 @@ async def initialize_run(
 
     ctx.working_memory["study_options"] = study_opts
 
+    # Skills-ification bootstrap: fresh runs start with the planning skill loaded
+    # so the ReAct surface is never empty. Gated by skills_mode so the legacy
+    # (off) path is byte-for-byte behavior-identical: no active_skills key ever
+    # appears in working_memory. Deliberately NOT added to the resume
+    # exclusion/prune sets so active_skills round-trips through checkpoints.
+    if config.skills_mode:
+        ctx.working_memory.setdefault("active_skills", ["planning"])
+
     # Cross-task semantic memory: retrieve related historical snippets (best-effort).
     try:
         subject_pref = str(ctx.user_profile.preferences.get("subject") or "").strip()
