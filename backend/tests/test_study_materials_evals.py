@@ -1022,6 +1022,66 @@ class RubricGraderTests(unittest.TestCase):
         self.assertIsNone(w2["misconception_authenticity"])
         self.assertIsNone(w2["error"])
 
+    def test_fence_wrapped_json_is_parsed_without_retry(self) -> None:
+        # 真实缺陷：judge 用 ```json fence 包裹输出 → 直接解析失败（run #4 W=parse_error）。
+        calls: list = []
+
+        def fence_judge(system: str, markdown: str) -> str:
+            calls.append(markdown)
+            return '```json\n{"coherence": 4, "style": 3, "misconception_authenticity": 5}\n```'
+
+        w = grade_rubric(_CURRENT_STYLE_MD, judge_func=fence_judge)["W"]
+
+        self.assertEqual(w["coherence"], 4)
+        self.assertEqual(w["style"], 3)
+        self.assertIsNone(w["error"])
+        self.assertEqual(len(calls), 1)
+
+    def test_prose_prefixed_json_is_parsed_without_retry(self) -> None:
+        calls: list = []
+
+        def chatty_judge(system: str, markdown: str) -> str:
+            calls.append(markdown)
+            return '好的，以下是评审结果：\n{"coherence": 4, "style": 3, "misconception_authenticity": 5}\n希望有帮助。'
+
+        w = grade_rubric(_CURRENT_STYLE_MD, judge_func=chatty_judge)["W"]
+
+        self.assertEqual(w["coherence"], 4)
+        self.assertIsNone(w["error"])
+        self.assertEqual(len(calls), 1)
+
+    def test_unparseable_output_retried_once_with_json_only_reminder(self) -> None:
+        calls: list = []
+
+        def flaky_judge(system: str, markdown: str) -> str:
+            calls.append(markdown)
+            if len(calls) == 1:
+                return "这份资料整体不错，我给出如下评价……（散文，无 JSON）"
+            return '{"coherence": 2, "style": 2, "misconception_authenticity": 2}'
+
+        w = grade_rubric(_CURRENT_STYLE_MD, judge_func=flaky_judge)["W"]
+
+        self.assertEqual(w["coherence"], 2)
+        self.assertIsNone(w["error"])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("只输出 JSON", calls[1])
+
+    def test_persistent_garbage_marks_parse_error_with_raw_head_and_single_retry(self) -> None:
+        calls: list = []
+
+        def garbage_judge(system: str, markdown: str) -> str:
+            calls.append(markdown)
+            return "彻底无法解析的输出" * 30
+
+        w = grade_rubric(_CURRENT_STYLE_MD, judge_func=garbage_judge)["W"]
+
+        self.assertIsNone(w["coherence"])
+        self.assertIn("parse_error", w["error"])
+        self.assertIn("| raw: ", w["error"])
+        self.assertIn("彻底无法解析的输出", w["error"])
+        # 只重试一次，不得循环重试
+        self.assertEqual(len(calls), 2)
+
     def test_rubric_prompt_registered_with_json_contract(self) -> None:
         from backend.llm.prompts import create_default_prompt_registry
 

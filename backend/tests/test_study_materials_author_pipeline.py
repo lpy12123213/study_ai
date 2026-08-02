@@ -15,6 +15,7 @@ from backend.generation.study_materials.author.blueprint import Blueprint, Bluep
 from backend.generation.study_materials.author.figures import FigureForge
 from backend.generation.study_materials.author.pipeline import (
     AuthorPipelineContext,
+    _AuthorPipeline,
     run_author_pipeline,
 )
 from backend.generation.study_materials.author.research_tools import ResearchToolbox
@@ -928,6 +929,96 @@ class AuthorResearchDeepReadTests(unittest.TestCase):
         self.assertTrue(any(d.get("status") == "ok" for d in browse_calls))
         # top-1 失败不阻断：top-2 的深读摘要仍落笔记
         self.assertTrue(any("deep_read" in ln and "p2/极限_数学" in ln for ln in research.splitlines()))
+
+
+class AuthorSourceRegistryExpansionTests(unittest.TestCase):
+    """C1 真实缺陷（run #4 参考文献 URL 5/10）：来源登记表只收录被事实行引用的 URL，
+    检索到但未直接引用的结果不登记。修复：每次 search 成功后把结果前 5 条 URL 全部登记
+    （去重、保留首次 title，cap 25），事实行的 src 照常引用。"""
+
+    @staticmethod
+    def _sparse_serp_toolbox():
+        """每条查询返回 5 条不同 URL，仅前 2 条带事实内容（后 3 条旧逻辑不会登记）。"""
+
+        async def fake_serp(query, n):
+            fake_serp.calls += 1
+            q = fake_serp.calls
+            return [
+                {
+                    "title": f"T{q}-{i}",
+                    "url": f"https://example.com/r{q}_{i}",
+                    "content": f"事实 {i}" if i < 2 else "",
+                    "score": 0.9,
+                }
+                for i in range(5)
+            ]
+
+        fake_serp.calls = 0
+
+        async def fake_fetch(url):
+            return "页面正文"
+
+        return ResearchToolbox(serp_func=fake_serp, fetch_func=fake_fetch)
+
+    def _research_only(self, tmp, kps):
+        ctx = AuthorPipelineContext(
+            task_id="t-author-src",
+            topic="综合专题",
+            subject="数学",
+            work_dir=Path(tmp),
+            user_id="u-1",
+            preset="standard",
+            knowledge_points=kps,
+        )
+        pipeline = _AuthorPipeline(
+            ctx, llm_func=_fake_llm(), toolbox=self._sparse_serp_toolbox(), emit=lambda event: None
+        )
+        asyncio.run(pipeline._research())  # noqa: SLF001 - 只驱动研究阶段，聚焦登记行为
+        return pipeline
+
+    def test_search_results_registered_beyond_fact_cited_urls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._research_only(tmp, ["极限"])
+
+        urls = {entry["url"] for entry in pipeline.source_registry}
+        # 2 条查询 × 5 条 URL 全部登记（含无事实内容、旧逻辑遗漏的 3 条）
+        self.assertEqual(len(pipeline.source_registry), 10)
+        self.assertEqual(
+            urls,
+            {f"https://example.com/r{q}_{i}" for q in (1, 2) for i in range(5)},
+        )
+
+    def test_registry_covers_real_retrieval_surface_with_six_kps(self):
+        kps = ["特征值定义", "特征多项式", "对角化", "相似矩阵", "特征向量求法", "谱定理"]
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._research_only(tmp, kps)
+
+        # 6 kp × 2 查询 × 5 URL = 60 条候选，cap 25
+        self.assertGreaterEqual(len(pipeline.source_registry), 10)
+        self.assertLessEqual(len(pipeline.source_registry), 25)
+
+    def test_register_source_dedupes_keeps_first_title_and_caps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-src-unit",
+                topic="极限",
+                subject="数学",
+                work_dir=Path(tmp),
+                user_id="u-1",
+                knowledge_points=["极限"],
+            )
+            pipeline = _AuthorPipeline(
+                ctx, llm_func=_fake_llm(), toolbox=_fake_toolbox(), emit=lambda event: None
+            )
+            first = pipeline._register_source("https://example.com/a", "首次标题")  # noqa: SLF001
+            again = pipeline._register_source("https://example.com/a", "重复标题")  # noqa: SLF001
+
+            self.assertEqual(first, again)
+            self.assertEqual(pipeline.source_registry[0]["title"], "首次标题")
+
+            for i in range(1, 30):
+                pipeline._register_source(f"https://example.com/{i}", f"t{i}")  # noqa: SLF001
+            self.assertEqual(len(pipeline.source_registry), 25)
 
 
 if __name__ == "__main__":

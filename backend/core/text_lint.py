@@ -4,6 +4,14 @@ import re
 from typing import Any
 
 _PLACEHOLDER_RE = re.compile(r"(?<!\{)\{[A-Za-z_][A-Za-z0-9_]{1,40}\}(?!\})")
+# 数学区间：$$...$$ 与 \[...\] 可跨行，行内 $...$ 不跨行。占位符检查前先剥离，
+# 避免 LaTeX 环境参数（\begin{pmatrix}、\operatorname{span} 等）被误判为未填占位符。
+_MATH_SPAN_RE = re.compile(
+    r"\$\$.+?\$\$"        # $$...$$ 独立公式（可跨行）
+    r"|\\\[.+?\\\]"       # \[...\] 独立公式（可跨行）
+    r"|\$[^\$\n]+?\$",    # $...$ 行内公式（不跨行）
+    re.S,
+)
 _UNESCAPED_SINGLE_DOLLAR_RE = re.compile(r"(?<!\\)(?<!\$)\$(?!\$)")
 _UNESCAPED_DOUBLE_DOLLAR_RE = re.compile(r"(?<!\\)\$\$")
 _CODE_FENCE_RE = re.compile(r"(?m)^```")
@@ -52,7 +60,8 @@ def lint_text(text: Any) -> list[str]:
         return []
 
     flags: list[str] = []
-    if _PLACEHOLDER_RE.search(raw):
+    # 仅占位符检查在剥离数学区间后的文本上执行；其余检查仍对原文执行。
+    if _PLACEHOLDER_RE.search(_MATH_SPAN_RE.sub("", raw)):
         flags.append("unresolved_placeholder")
     if len(_UNESCAPED_SINGLE_DOLLAR_RE.findall(raw)) % 2 == 1:
         flags.append("unbalanced_inline_math")

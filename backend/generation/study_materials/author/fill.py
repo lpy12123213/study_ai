@@ -35,9 +35,13 @@ _FALLBACK_SYSTEM_PROMPT = (
     "要求：严格遵守给定术语符号表；必须包含 [EXn] 带步骤例题、[Qn] 分层自测题、[An] 答案与评分点；"
     "数学公式用 LaTeX；在关键事实句末用 [^n] 标注来源编号，只允许使用给定来源清单里的编号；"
     "正文禁止出现裸 URL、禁止输出参考文献小节或脚注定义；只写该小节正文。"
+    "小节正文内只允许使用 ### 与 #### 标题（禁止 # 与 ##：全书标题层级由主干统一管理）；"
+    "[EXn]/[Qn]/[An] 题目标签用加粗行（如 **[EX1]**）而非标题。"
 )
 
 _URL_RE = re.compile(r"https?://")
+# 小节正文只允许 ###/#### 标题：# 与 ## 与骨架的全书层级冲突（真实缺陷：## [EX1] 例题 破坏层级）。
+_LOW_LEVEL_HEADING_RE = re.compile(r"^#{1,2}\s", re.M)
 # 来源登记表行：- [^n] title url（pipeline 写入 research.md 头部，fill 上下文里唯一允许的 URL 形态）。
 _SOURCE_LINE_RE = re.compile(r"^\s*[-*+]\s*\[\^(\d+)\]\s+(?P<title>.+?)\s+(?P<url>https?://\S+)\s*$", re.M)
 _SRC_URL_RE = re.compile(r"src:\s*(https?://[^\s|]+)")
@@ -147,6 +151,8 @@ class FillRunner:
             missing.append(f"长度不足（{len(text)} < {int(required_chars)} 字符）")
         if _URL_RE.search(text):
             missing.append("包含 URL（http:// 或 https://）")
+        if _LOW_LEVEL_HEADING_RE.search(text):
+            missing.append("包含 # 或 ## 级标题（小节正文只允许 ###/#### 标题，[EXn]/[Qn]/[An] 标签用加粗行）")
         if "[[" in text:
             missing.append("包含 [[ ]] 式引用标记或占位符")
         for tag in ("[EX", "[Q", "[A"):

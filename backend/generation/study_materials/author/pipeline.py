@@ -51,6 +51,7 @@ FILL_CONCURRENCY = 3
 FIG_CONCURRENCY = 3
 NOTE_PAYLOAD_LIMIT = 8000  # 注入蓝图/主干 prompt 的笔记与蓝图文本上限（字符）
 EXCERPT_SPAN = 1500        # backbone_excerpt 截取窗口（与 fill.EXCERPT_LIMIT 对齐）
+SOURCE_REGISTRY_CAP = 25   # 来源登记表容量上限（检索即登记后防止 fill 上下文被来源清单挤占）
 
 # 骨架净化：LLM 为占位符自加的「正文占位」/「占位」空标题行（真实缺陷：残留成稿触发 lint）。
 _BOGUS_PLACEHOLDER_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?:正文)?占位\s*$", re.M)
@@ -64,7 +65,10 @@ _FALLBACK_BLUEPRINT_PROMPT = (
     "figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid）；"
     "difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。"
     "sections[].id 必须是小写字母/数字/连字符/下划线（如 sec-1、s1_definition）。"
-    "sections 必须逐一覆盖每个知识点，且每节 title 包含该知识点的名称关键词。"
+    "sections 与输入知识点一一对应：每个输入知识点恰好对应一个 section，"
+    "不得合并多个知识点为一节、不得拆分一个知识点为多节；"
+    "该节 title 必须完整包含对应知识点的名称关键词。"
+    "知识点 section 之外，允许额外的前置与总结 section。"
 )
 _FALLBACK_BACKBONE_PROMPT = (
     "你是严谨的自学教材作者。根据给定蓝图撰写全书骨架，输出 Markdown。"
@@ -286,6 +290,14 @@ class _AuthorPipeline:
                 for row in (rows if isinstance(rows, list) else [])
                 if isinstance(row, dict) and str(row.get("url") or "").strip()
             ][:5]
+            # C1：检索即登记结果前 5 条 URL（不限于被事实行引用的），参考文献反映真实检索面；
+            # 去重/保留首次 title/容量上限由 _register_source 负责。
+            for row in (rows if isinstance(rows, list) else [])[:5]:
+                if not isinstance(row, dict):
+                    continue
+                url = str(row.get("url") or "").strip()
+                if url:
+                    self._register_source(url, str(row.get("title") or "").strip())
             self._emit("tool_call", {
                 "tool": "search", "query": query, "provider": provider,
                 "result_count": len(rows) if isinstance(rows, list) else 0,
@@ -364,10 +376,13 @@ class _AuthorPipeline:
         self._mark("research", "done")
 
     def _register_source(self, url: str, title: str = "") -> int:
-        """任务级来源登记：去重 URL → 顺序编号（[^n]）；title 缺省用域名。"""
+        """任务级来源登记：去重 URL → 顺序编号（[^n]）；title 缺省用域名，保留首次出现的 title。
+        已登记返回既有编号；达到 SOURCE_REGISTRY_CAP 上限时不再登记并返回 -1。"""
 
         if url in self._source_index:
             return self._source_index[url]
+        if len(self.source_registry) >= SOURCE_REGISTRY_CAP:
+            return -1
         n = len(self.source_registry) + 1
         self._source_index[url] = n
         self.source_registry.append({"n": n, "title": title or urlsplit(url).netloc or url, "url": url})

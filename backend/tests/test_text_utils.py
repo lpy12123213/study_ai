@@ -37,5 +37,45 @@ class TestTextUtils(unittest.TestCase):
         self.assertIn("unclosed_code_fence", flags)
 
 
+class TestTextLintMathSpanExemption(unittest.TestCase):
+    """G0 真实缺陷：LaTeX 数学环境参数（\\begin{pmatrix}、\\operatorname{span} 等）
+    被占位符正则误判为未填占位符（成稿 300+ 处矩阵全部命中）。数学区间必须先剥离再查占位符。"""
+
+    def test_display_math_environment_args_are_not_placeholders(self) -> None:
+        flags = lint_text(
+            "矩阵：$$A = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$，"
+            "以及 $$\\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix}$$ 完整。"
+        )
+
+        self.assertNotIn("unresolved_placeholder", flags)
+
+    def test_inline_math_operatorname_is_not_placeholder(self) -> None:
+        flags = lint_text("记 $\\operatorname{span}\\{v_1, v_2\\}$ 为张成空间。")
+
+        self.assertNotIn("unresolved_placeholder", flags)
+
+    def test_bracket_display_math_environment_args_are_not_placeholders(self) -> None:
+        flags = lint_text("公式：\n\\[\\begin{pmatrix} \\lambda_1 & 0 \\\\ 0 & \\lambda_2 \\end{pmatrix}\\]\n完。")
+
+        self.assertNotIn("unresolved_placeholder", flags)
+
+    def test_prose_placeholder_still_flagged(self) -> None:
+        flags = lint_text("本节主题为 {topic}，请补充。")
+
+        self.assertIn("unresolved_placeholder", flags)
+
+    def test_placeholder_outside_math_still_flagged_when_math_present(self) -> None:
+        flags = lint_text("公式 $\\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix}$ 之外还有 {variable} 残留。")
+
+        self.assertIn("unresolved_placeholder", flags)
+
+    def test_math_exemption_does_not_hide_other_flags(self) -> None:
+        # 其他检查仍对原文执行：未闭合行内公式照常命中。
+        flags = lint_text("矩阵 $$\\begin{pmatrix} a \\\\ b \\end{pmatrix}$$ 与 $x+1")
+
+        self.assertNotIn("unresolved_placeholder", flags)
+        self.assertIn("unbalanced_inline_math", flags)
+
+
 if __name__ == "__main__":
     unittest.main()

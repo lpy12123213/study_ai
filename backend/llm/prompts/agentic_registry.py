@@ -554,8 +554,10 @@ def create_default_prompt_registry() -> PromptRegistry:
             "- figures：配图计划，每项含 n/sec_id/intent/kind/caption。\n"
             "要求：\n"
             "- 小节顺序即叙事顺序，前后小节必须构成连贯的学习路径。\n"
-            "- sections 必须逐一覆盖输入的每个知识点，不得遗漏；每节 title 必须包含对应知识点的名称关键词"
-            "（成稿按小节标题匹配知识点小节）。\n"
+            "- sections 与输入知识点一一对应：每个输入知识点恰好对应一个 section，"
+            "不得合并多个知识点为一节、不得拆分一个知识点为多节；该 section 的 title "
+            "必须完整包含对应知识点的名称关键词（成稿按小节标题匹配知识点小节，合并或拆分都会导致匹配失败）。"
+            "知识点 section 之外，允许额外添加前置（导入/预备知识）与总结 section。\n"
             "- figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid；"
             "禁止 diagram/flow-chart/vector-plot 等自创类型）。\n"
             "- sections[].difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。\n"
@@ -1022,6 +1024,8 @@ def create_default_prompt_registry() -> PromptRegistry:
             "- 必须包含 [EXn] 带步骤例题、[Qn] 分层自测题（基础/应用/迁移）、[An] 答案与评分点，"
             "编号 n 均从 1 起连续递增且一一对应。\n"
             "- 数学公式用 LaTeX：行内 $...$，独立 $$...$$。\n"
+            "- 小节正文内只允许使用 ### 与 #### 标题（禁止 # 与 ##：全书标题层级由主干统一管理）；"
+            "[EXn]/[Qn]/[An] 题目标签用加粗行（如 **[EX1]**）而非标题。\n"
             "- 只写该小节正文，不要输出书名、章节标题或其他小节的内容。",
         ),
         (

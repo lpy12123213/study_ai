@@ -57,6 +57,21 @@ class AuthorPromptTests(unittest.TestCase):
         p = self.reg.render("study.author.blueprint.v1")
         self.assertIn("知识点", p.content)
 
+    def test_blueprint_prompt_requires_one_section_per_knowledge_point(self):
+        # benchmark 真实缺陷：LLM 把「定义」「特征多项式与求法」两个知识点合并成一节
+        # 「定义与求法」，标题无「特征多项式」关键词 → kp 小节匹配失败（4/6）。
+        # 蓝图必须强制 1:1 映射：每个输入知识点恰好对应一个 section（不得合并/拆分）。
+        p = self.reg.render("study.author.blueprint.v1")
+        self.assertIn("恰好对应一个", p.content)
+        self.assertIn("不得合并", p.content)
+
+    def test_fallback_blueprint_prompt_keeps_kp_mapping_wording_in_sync(self):
+        # pipeline 内置降级 prompt 的措辞关键词必须与注册版本保持一致。
+        from backend.generation.study_materials.author.pipeline import _FALLBACK_BLUEPRINT_PROMPT
+
+        self.assertIn("恰好对应一个", _FALLBACK_BLUEPRINT_PROMPT)
+        self.assertIn("不得合并", _FALLBACK_BLUEPRINT_PROMPT)
+
     def test_blueprint_prompt_constrains_section_id_charset(self):
         # 真实缺陷：模型产出大写/点号/下划线混合 id（S0.FrontMatter、s0_frontmatter），
         # 与汇编器占位符字符集错位 → 提示词必须给死 id 字符集与示例。

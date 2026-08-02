@@ -87,6 +87,54 @@ class FillRunnerTests(unittest.TestCase):
         self.assertEqual(out.attempts, 2)
 
 
+class HeadingLevelTests(unittest.TestCase):
+    """真实缺陷：fill 小节正文出现 ## 级标题（## [EX1] 例题、## 自测题），
+    与骨架的 ## 小节标题同级，破坏全书层级。小节正文只允许 ###/####，题目标签用加粗行。"""
+
+    def test_h2_heading_in_output_rejected_and_fed_back(self):
+        seen = []
+
+        async def heading_llm(system, user):
+            seen.append(user)
+            return GROUNDED_BODY + "\n\n## [EX2] 例题\n\n补充例题讲解与步骤拆解。"
+
+        r = FillRunner(llm_func=heading_llm, max_retries=2)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertTrue(out.needs_author_rewrite)
+        self.assertEqual(len(seen), 2)
+        self.assertIn("标题", seen[1])  # 验收失败原因必须喂回模型
+
+    def test_h1_heading_in_output_rejected(self):
+        async def heading_llm(system, user):
+            return "# 小节标题\n\n" + GROUNDED_BODY
+
+        r = FillRunner(llm_func=heading_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertTrue(out.needs_author_rewrite)
+
+    def test_h3_h4_headings_accepted(self):
+        async def heading_llm(system, user):
+            return "### 直观理解\n\n" + GROUNDED_BODY + "\n\n#### 备注\n\n补充说明与提醒。"
+
+        r = FillRunner(llm_func=heading_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertIn("### 直观理解", out.text)
+
+    def test_fill_prompt_restricts_heading_levels(self):
+        # fill system prompt 必须给死标题层级纪律（注册表与内置降级 prompt 同步）。
+        from backend.generation.study_materials.author.fill import _FALLBACK_SYSTEM_PROMPT
+        from backend.llm.prompts import create_default_prompt_registry
+
+        registered = create_default_prompt_registry().render("study.author.fill.v1").content
+        for prompt in (registered, _FALLBACK_SYSTEM_PROMPT):
+            self.assertIn("###", prompt)
+            self.assertIn("加粗", prompt)
+
+
 # 来源登记表行（[^n] title url）：fill 上下文里唯一允许出现的 URL 形态。
 SOURCE_REGISTRY = (
     "## 来源登记表\n\n"
