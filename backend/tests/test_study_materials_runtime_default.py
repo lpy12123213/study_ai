@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from types import SimpleNamespace
@@ -163,6 +164,130 @@ class WebSearchDecomposeDefaultTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(item["results"])
         # decompose 默认关闭：不再为子问题拆分调用 LLM。
         self.assertEqual(agent.llm_calls, [])
+
+
+class AuthorEventForwardingDrainTests(unittest.IsolatedAsyncioTestCase):
+    """I-5：author 事件转发须在终端迁移（done / fail_task）前 drain，取消后不留泄露 task。"""
+
+    @staticmethod
+    def _success_result() -> dict:
+        return {
+            "success": True,
+            "markdown": "# 函数单调性",
+            "material": {"iteration": 1, "markdown": "# 函数单调性", "passed": True},
+            "acceptance": {},
+            "quality_report": {},
+            "review": {},
+            "plan": {},
+            "research": {},
+            "coverage_map": {},
+            "sections": [{"title": "单调性的定义"}],
+            "revision_attempts": 0,
+            "todos": [],
+            "references": [],
+            "audit": {},
+            "quality_notes": [],
+            "blueprint": {},
+            "degraded": False,
+        }
+
+    @staticmethod
+    def _slow_recorder(recorded: list, *, slow_s: float = 0.05):
+        """慢 append 记录器：非 done 事件故意慢于 done，未 drain 时 done 会先落（复现竞态）。"""
+
+        async def _append(task, event):
+            if event.get("event") != "done":
+                await asyncio.sleep(slow_s)
+            recorded.append(event)
+
+        return _append
+
+    def _common_patches(self, manager, orchestrator, recorded: list, *, fail_mock: AsyncMock | None = None):
+        return (
+            patch.object(orchestrator.task_runtime, "append_event", new=self._slow_recorder(recorded)),
+            patch.object(orchestrator.task_runtime, "complete_task", new=AsyncMock()),
+            patch.object(orchestrator.task_runtime, "fail_task", new=fail_mock or AsyncMock()),
+            patch.object(manager, "_upsert_archive_from_resume_state", new=AsyncMock()),
+            patch.object(manager, "_persist_snapshot"),
+        )
+
+    async def test_author_events_all_land_before_done(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task(task_id="study-author-drain-done")
+        ctx = manager._task_run_context(task)
+        recorded: list = []
+
+        async def _fake_pipeline(pipeline_ctx, *, llm_func, toolbox, emit, forge):
+            for idx in range(3):
+                emit({"event": "author_progress", "data": {"idx": idx}})
+            await asyncio.sleep(0)  # 让转发任务启动并进入慢 append
+            return self._success_result()
+
+        patches = self._common_patches(manager, orchestrator, recorded)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patch.object(
+            orchestrator, "run_author_pipeline", new=_fake_pipeline
+        ):
+            await manager._run_author_staged(ctx)
+            await asyncio.sleep(0.2)  # 放任任何迟到转发落定后再断言
+
+        kinds = [evt.get("event") for evt in recorded]
+        self.assertEqual(kinds, ["author_progress", "author_progress", "author_progress", "done"])
+        # 同序转发：转发落盘顺序与 emit 顺序一致。
+        self.assertEqual([evt["data"]["idx"] for evt in recorded[:3]], [0, 1, 2])
+
+    async def test_author_events_all_land_before_fail_task(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task(task_id="study-author-drain-fail")
+        ctx = manager._task_run_context(task)
+        recorded: list = []
+
+        async def _record_fail(*args, **kwargs):
+            recorded.append({"event": "__fail__"})
+
+        async def _fake_pipeline(pipeline_ctx, *, llm_func, toolbox, emit, forge):
+            for idx in range(2):
+                emit({"event": "author_progress", "data": {"idx": idx}})
+            await asyncio.sleep(0)
+            return {"success": False, "error": {"code": "author_audit_failed", "stage": "audit", "issues": ["x"]}}
+
+        patches = self._common_patches(manager, orchestrator, recorded, fail_mock=AsyncMock(side_effect=_record_fail))
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patch.object(
+            orchestrator, "run_author_pipeline", new=_fake_pipeline
+        ):
+            await manager._run_author_staged(ctx)
+            await asyncio.sleep(0.2)
+
+        kinds = [evt.get("event") for evt in recorded]
+        self.assertEqual(kinds, ["author_progress", "author_progress", "__fail__"])
+
+    async def test_author_emit_cancel_leaves_no_pending_forward_tasks(self) -> None:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task(task_id="study-author-drain-cancel")
+        ctx = manager._task_run_context(task)
+        recorded: list = []
+
+        async def _fake_pipeline(pipeline_ctx, *, llm_func, toolbox, emit, forge):
+            emit({"event": "author_progress", "data": {"idx": 0}})
+            await asyncio.sleep(0.02)  # 第一个事件的转发仍在进行中
+            task.status = "canceled"  # 模拟用户取消
+            emit({"event": "author_progress", "data": {"idx": 1}})  # _author_emit 同步抛 CancelledError
+
+        before = asyncio.all_tasks()
+        patches = self._common_patches(manager, orchestrator, recorded)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patch.object(
+            orchestrator, "run_author_pipeline", new=_fake_pipeline
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await manager._run_author_staged(ctx)
+
+        leaked = [t for t in asyncio.all_tasks() - before if not t.done()]
+        self.assertEqual(leaked, [])
 
 
 if __name__ == "__main__":

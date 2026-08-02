@@ -1646,11 +1646,25 @@ class StudyMaterialsTaskManager:
                     exc_info=True,
                 )
 
+        # I-5: 单 drainer 从队列串行转发（保证与 emit 同序）；终端迁移（fail_task/done）
+        # 前 join 清空队列，取消/异常路径在 finally 取消 drainer，不留泄露 task。
+        forward_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+        async def _author_event_drainer() -> None:
+            while True:
+                evt = await forward_queue.get()
+                try:
+                    await _author_event_forward(evt)
+                finally:
+                    forward_queue.task_done()
+
+        drainer = asyncio.get_running_loop().create_task(_author_event_drainer())
+
         def _author_emit(evt: Dict[str, Any]) -> None:
             # pipeline 的 emit 是同步回调；任务不再 running 时同步抛 CancelledError 终止流水线。
             if task.status != "running":
                 raise asyncio.CancelledError
-            asyncio.get_running_loop().create_task(_author_event_forward(evt))
+            forward_queue.put_nowait(evt)
 
         async def _author_llm(system_prompt: str, user_prompt: str) -> str:
             # 延迟导入：注入假 llm_func 的测试不触碰 LLM 栈。
@@ -1668,124 +1682,131 @@ class StudyMaterialsTaskManager:
                 req_id_prefix="study_author",
             )
 
-        preset = str(ctx.options.get("preset") or "standard").strip() or "standard"
-        requirements = str(ctx.options.get("requirements") or "")
-        pipeline_ctx = AuthorPipelineContext(
-            task_id=task.task_id,
-            topic=ctx.query,
-            subject=ctx.subject,
-            work_dir=_TASK_SNAPSHOTS_DIR / task.task_id,
-            user_id=task.user_id,
-            preset=preset,
-            requirements=requirements,
-            options=ctx.options,
-            knowledge_points=[ctx.query] if ctx.query else [],
-        )
-        result = await run_author_pipeline(
-            pipeline_ctx,
-            llm_func=_author_llm,
-            toolbox=ResearchToolbox(),
-            emit=_author_emit,
-            forge=FigureForge(on_trace=_author_emit),
-        )
-        if not result.get("success"):
-            error = _dict(result.get("error"))
-            code = str(error.get("code") or "author_pipeline_failed")
-            await task_runtime.fail_task(
-                task,
-                code,
-                error={
-                    "message": code,
-                    "code": code,
-                    "stage": str(error.get("stage") or ""),
-                    "issues": list(error.get("issues") or []),
-                    "recoverable": True,
-                },
+        try:
+            preset = str(ctx.options.get("preset") or "standard").strip() or "standard"
+            requirements = str(ctx.options.get("requirements") or "")
+            pipeline_ctx = AuthorPipelineContext(
+                task_id=task.task_id,
+                topic=ctx.query,
+                subject=ctx.subject,
+                work_dir=_TASK_SNAPSHOTS_DIR / task.task_id,
+                user_id=task.user_id,
+                preset=preset,
+                requirements=requirements,
+                options=ctx.options,
+                knowledge_points=[ctx.query] if ctx.query else [],
             )
-            return
-
-        markdown = str(result.get("markdown") or "")
-        material = _dict(result.get("material"))
-        acceptance = _dict(result.get("acceptance"))
-        quality_report = _dict(result.get("quality_report"))
-        workflow_state = {
-            "version": WORKFLOW_VERSION,
-            "stage": "completed",
-            "last_successful_stage": "accept",
-            "preset": preset,
-            "plan": _dict(result.get("plan")),
-            "research": _dict(result.get("research")),
-            "markdown": markdown,
-            "review": _dict(result.get("review")),
-            "quality_report": quality_report,
-            "acceptance": acceptance,
-            "revision_attempts": int(result.get("revision_attempts") or 0),
-            "last_failure": {},
-            "coverage_map": _dict(result.get("coverage_map")),
-            "runtime": "author",
-        }
-        sections = [
-            {"knowledge_point": str(item.get("title") or "").strip(), "title": str(item.get("title") or "").strip()}
-            for item in (result.get("sections") or [])
-            if isinstance(item, dict) and str(item.get("title") or "").strip()
-        ]
-        existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
-        meta["resume_working_memory"] = _merge_resume_working_memory(
-            existing,
-            {
-                "study_options": {"preset": preset, "requirements": requirements},
-                "assemble_study_archive": markdown,
-                "markdown": markdown,
-                "generate_study_material": {
-                    "topic": ctx.query,
-                    "subject": ctx.subject,
-                    "preset": preset,
-                    "requirements": requirements,
-                    "sections": sections,
-                },
-                "study_materials_workflow": workflow_state,
-            },
-        )
-        meta["study_materials_workflow"] = workflow_state
-        meta["iterations_done"] = int(material.get("iteration") or 0) or (ctx.iteration_offset + 1)
-        _refresh_resume_meta(meta=meta)
-        await self._upsert_archive_from_resume_state(
-            task, meta=meta, query=ctx.query, subject=ctx.subject, options=ctx.options
-        )
-        self._persist_snapshot(task, force=True)
-
-        done_payload: Dict[str, Any] = {
-            "success": True,
-            "material": material,
-            "quality_report": quality_report,
-            "review": _dict(result.get("review")),
-            "acceptance": acceptance,
-            "workflow": workflow_state,
-            "author": {
-                "todos": result.get("todos") or [],
-                "references": result.get("references") or [],
-                "audit": _dict(result.get("audit")),
-                "quality_notes": result.get("quality_notes") or [],
-                "blueprint": _dict(result.get("blueprint")),
-            },
-        }
-        if result.get("degraded"):
-            # 与 codex workflow 相同的降级交付：done 前先广播 quality_degraded，
-            # degraded / material.passed 同时出现在 done 载荷与 complete_task 结果里。
-            done_payload["degraded"] = True
-            await task_runtime.append_event(
-                task,
-                {
-                    "type": "quality_degraded",
-                    "event": "quality_degraded",
-                    "data": {
-                        "issues": list(material.get("issues") or []),
-                        "revision_attempts": int(result.get("revision_attempts") or 0),
+            result = await run_author_pipeline(
+                pipeline_ctx,
+                llm_func=_author_llm,
+                toolbox=ResearchToolbox(),
+                emit=_author_emit,
+                forge=FigureForge(on_trace=_author_emit),
+            )
+            # I-5: 终端迁移前 drain——清空转发队列，迟到事件不得落在 fail_task/done 之后。
+            await forward_queue.join()
+            if not result.get("success"):
+                error = _dict(result.get("error"))
+                code = str(error.get("code") or "author_pipeline_failed")
+                await task_runtime.fail_task(
+                    task,
+                    code,
+                    error={
+                        "message": code,
+                        "code": code,
+                        "stage": str(error.get("stage") or ""),
+                        "issues": list(error.get("issues") or []),
+                        "recoverable": True,
                     },
+                )
+                return
+
+            markdown = str(result.get("markdown") or "")
+            material = _dict(result.get("material"))
+            acceptance = _dict(result.get("acceptance"))
+            quality_report = _dict(result.get("quality_report"))
+            workflow_state = {
+                "version": WORKFLOW_VERSION,
+                "stage": "completed",
+                "last_successful_stage": "accept",
+                "preset": preset,
+                "plan": _dict(result.get("plan")),
+                "research": _dict(result.get("research")),
+                "markdown": markdown,
+                "review": _dict(result.get("review")),
+                "quality_report": quality_report,
+                "acceptance": acceptance,
+                "revision_attempts": int(result.get("revision_attempts") or 0),
+                "last_failure": {},
+                "coverage_map": _dict(result.get("coverage_map")),
+                "runtime": "author",
+            }
+            sections = [
+                {"knowledge_point": str(item.get("title") or "").strip(), "title": str(item.get("title") or "").strip()}
+                for item in (result.get("sections") or [])
+                if isinstance(item, dict) and str(item.get("title") or "").strip()
+            ]
+            existing = meta.get("resume_working_memory") if isinstance(meta.get("resume_working_memory"), dict) else {}
+            meta["resume_working_memory"] = _merge_resume_working_memory(
+                existing,
+                {
+                    "study_options": {"preset": preset, "requirements": requirements},
+                    "assemble_study_archive": markdown,
+                    "markdown": markdown,
+                    "generate_study_material": {
+                        "topic": ctx.query,
+                        "subject": ctx.subject,
+                        "preset": preset,
+                        "requirements": requirements,
+                        "sections": sections,
+                    },
+                    "study_materials_workflow": workflow_state,
                 },
             )
-        await task_runtime.append_event(task, agent_event("done", done_payload))
-        await task_runtime.complete_task(task, result=done_payload)
+            meta["study_materials_workflow"] = workflow_state
+            meta["iterations_done"] = int(material.get("iteration") or 0) or (ctx.iteration_offset + 1)
+            _refresh_resume_meta(meta=meta)
+            await self._upsert_archive_from_resume_state(
+                task, meta=meta, query=ctx.query, subject=ctx.subject, options=ctx.options
+            )
+            self._persist_snapshot(task, force=True)
+
+            done_payload: Dict[str, Any] = {
+                "success": True,
+                "material": material,
+                "quality_report": quality_report,
+                "review": _dict(result.get("review")),
+                "acceptance": acceptance,
+                "workflow": workflow_state,
+                "author": {
+                    "todos": result.get("todos") or [],
+                    "references": result.get("references") or [],
+                    "audit": _dict(result.get("audit")),
+                    "quality_notes": result.get("quality_notes") or [],
+                    "blueprint": _dict(result.get("blueprint")),
+                },
+            }
+            if result.get("degraded"):
+                # 与 codex workflow 相同的降级交付：done 前先广播 quality_degraded，
+                # degraded / material.passed 同时出现在 done 载荷与 complete_task 结果里。
+                done_payload["degraded"] = True
+                await task_runtime.append_event(
+                    task,
+                    {
+                        "type": "quality_degraded",
+                        "event": "quality_degraded",
+                        "data": {
+                            "issues": list(material.get("issues") or []),
+                            "revision_attempts": int(result.get("revision_attempts") or 0),
+                        },
+                    },
+                )
+            await task_runtime.append_event(task, agent_event("done", done_payload))
+            await task_runtime.complete_task(task, result=done_payload)
+        finally:
+            # I-5: 取消/异常路径撤销 drainer——转发 task 不得泄露到本作用域之外。
+            drainer.cancel()
+            await asyncio.gather(drainer, return_exceptions=True)
 
     async def _run_legacy_agent(self, ctx: _TaskRunContext) -> None:
         """legacy AgentCore 路径（默认；也是 codex staged 显式回退的目标）。"""
