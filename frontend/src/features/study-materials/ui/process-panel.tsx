@@ -33,6 +33,7 @@ import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import type { ToolStepStatus, ToolStepView } from "@/features/chat/model/types";
 import type { StudyMaterialTodo, StudyMaterialsTraceEntry } from "../model/types";
+import { sectionStatusText } from "./section-status-text";
 
 const TODO_TYPE_ICON: Record<string, typeof Circle> = {
   research: Search,
@@ -53,19 +54,6 @@ function todoStatusText(status: string): string {
       return "已完成";
     case "waived":
       return "已跳过";
-    case "failed":
-      return "失败";
-    default:
-      return status;
-  }
-}
-
-function sectionStatusText(status: string): string {
-  switch (status) {
-    case "started":
-      return "撰写中";
-    case "done":
-      return "已完成";
     case "failed":
       return "失败";
     default:
@@ -317,7 +305,7 @@ function SubLane({
         <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {secStatus ? (
-          <Badge variant={secStatus === "done" ? "success" : "outline"}>
+          <Badge variant={secStatus === "ok" ? "success" : "outline"}>
             {sectionStatusText(secStatus)}
           </Badge>
         ) : null}

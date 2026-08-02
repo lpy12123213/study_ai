@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { normalizeEvent } from "@/lib/sse";
+import type { StudyTaskTracePage } from "../../api";
 import { decodeStudyMaterialsEvent } from "../../streaming/contract";
+import { sectionStatusText } from "../../ui/section-status-text";
 import {
   initialStudyMaterialsProjection,
   studyMaterialsProjectionReducer,
@@ -57,17 +59,19 @@ describe("study-materials trace contract", () => {
       chars: 120,
       agentPath: "fill:sec-1",
     });
-    expect(decode(traceStream[7])).toMatchObject({
+    expect(decode(traceStream[7])).toEqual({
       kind: "figure_trace",
-      figureId: "fig-1",
-      stage: "render",
-      status: "success",
+      figureId: "1",
+      stage: "render_ok",
+      engine: "mermaid",
+      url: "/api/media/generated/fig-1.svg",
       agentPath: "fig:1",
     });
+    // section_fill 状态词表为 start|ok|retry|failed（author/fill.py）。
     expect(decode(traceStream[8])).toEqual({
       kind: "section_fill",
       secId: "sec-1",
-      status: "done",
+      status: "ok",
       agentPath: "fill:sec-1",
     });
   });
@@ -145,13 +149,13 @@ describe("study-materials process reducer", () => {
       "section",
     ]);
     expect(state.traceByAgent["fig:1"]).toEqual([
-      expect.objectContaining({ kind: "figure", figureId: "fig-1", stage: "render" }),
+      expect.objectContaining({ kind: "figure", figureId: "1", stage: "render_ok" }),
     ]);
   });
 
   it("section_fill 更新每节状态", () => {
     const state = project(traceStream);
-    expect(state.sectionStatus).toEqual({ "sec-1": "done" });
+    expect(state.sectionStatus).toEqual({ "sec-1": "ok" });
   });
 
   it("legacy 流不产生 todos/trace 切片（旧任务回放不回归）", () => {
@@ -159,5 +163,84 @@ describe("study-materials process reducer", () => {
     expect(state.todos).toEqual({});
     expect(state.traceByAgent).toEqual({});
     expect(state.sectionStatus).toEqual({});
+  });
+});
+
+describe("study-materials 后端真实事件形状（C-1/I-3/M-1）", () => {
+  it("figure_trace 接受数字 figure_id，并按 stage 词表透传 engine/url/error", () => {
+    // codegen 阶段：仅 figure_id + stage（chars 等额外字段忽略）。
+    expect(
+      decode({
+        taskId: "materials-trace-1",
+        seq: 20,
+        type: "figure_trace",
+        agent_path: "fig:2",
+        data: { figure_id: 2, stage: "codegen", chars: 512 },
+      }),
+    ).toEqual({ kind: "figure_trace", figureId: "2", stage: "codegen", agentPath: "fig:2" });
+    // render_fail 阶段：engine + error 透传，整条事件不丢弃。
+    expect(
+      decode({
+        taskId: "materials-trace-1",
+        seq: 21,
+        type: "figure_trace",
+        agent_path: "fig:2",
+        data: { figure_id: 2, stage: "render_fail", engine: "tikz", error: "tikz_render_failed" },
+      }),
+    ).toEqual({
+      kind: "figure_trace",
+      figureId: "2",
+      stage: "render_fail",
+      engine: "tikz",
+      error: "tikz_render_failed",
+      agentPath: "fig:2",
+    });
+  });
+
+  it("figure_trace 缺 figure_id 时不解码", () => {
+    expect(
+      decode({
+        taskId: "materials-trace-1",
+        seq: 22,
+        type: "figure_trace",
+        data: { stage: "codegen" },
+      }),
+    ).toBeNull();
+  });
+
+  it("author 流水线 tool_call 形状（tool/query/result_count/stage/sec_id/error）可容忍解码", () => {
+    expect(
+      decode({
+        taskId: "materials-trace-1",
+        seq: 30,
+        type: "tool_call",
+        agent_path: "main",
+        data: { tool: "search", query: "光合作用 光反应", result_count: 3, stage: "research" },
+      }),
+    ).toMatchObject({ kind: "tool_call", name: "search", agentPath: "main" });
+    expect(
+      decode({
+        taskId: "materials-trace-1",
+        seq: 31,
+        type: "tool_call",
+        agent_path: "fill:sec-1",
+        data: { tool: "llm", stage: "fill", sec_id: "sec-1", error: "llm_request_failed" },
+      }),
+    ).toMatchObject({ kind: "tool_call", name: "llm", agentPath: "fill:sec-1" });
+  });
+
+  it("StudyTaskTracePage 对齐后端 key-set：events / next_after_seq / has_more", () => {
+    const page: StudyTaskTracePage = { events: [], next_after_seq: 42, has_more: false };
+    // @ts-expect-error 旧契约（count?/next_after_seq?）不再合法：has_more 必填且无 count 字段
+    const legacy: StudyTaskTracePage = { events: [], count: 1 };
+    expect(Object.keys(page).sort()).toEqual(["events", "has_more", "next_after_seq"]);
+    expect(legacy).toBeTruthy();
+  });
+
+  it("section_fill 状态徽标映射后端词表 start|ok|retry|failed", () => {
+    expect(sectionStatusText("start")).toBe("撰写中");
+    expect(sectionStatusText("ok")).toBe("已完成");
+    expect(sectionStatusText("retry")).toBe("重试中");
+    expect(sectionStatusText("failed")).toBe("失败");
   });
 });

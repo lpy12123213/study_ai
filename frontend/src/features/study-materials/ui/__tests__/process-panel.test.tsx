@@ -61,12 +61,12 @@ describe("ProcessPanel", () => {
     renderPanel();
     expect(screen.getByText("填充 · sec-1")).toBeTruthy();
     expect(screen.getByText("配图 · 1")).toBeTruthy();
-    // section_fill done → 泳道徽标「已完成」
+    // section_fill ok → 泳道徽标「已完成」
     expect(screen.getAllByText("已完成").length).toBeGreaterThan(0);
     // 默认展开：笔记/工具/配图卡片可见
     expect(screen.getByText(/sec-1-photosynthesis/)).toBeTruthy();
     expect(screen.getByText("write_section")).toBeTruthy();
-    expect(screen.getByText("配图 fig-1")).toBeTruthy();
+    expect(screen.getByText("配图 1")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("收起 填充 · sec-1 泳道"));
     expect(screen.queryByText(/sec-1-photosynthesis/)).toBeNull();
     expect(screen.getByLabelText("展开 填充 · sec-1 泳道")).toBeTruthy();

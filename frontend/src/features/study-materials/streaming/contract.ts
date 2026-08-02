@@ -43,11 +43,14 @@ export type StudyMaterialsStreamEvent =
       agentPath: string;
     }
   | {
-      /** 配图代码/渲染尝试/产物。 */
+      /** 配图代码/渲染尝试/产物。后端 figure_id 为 int（FigureSpec.n），统一转成字符串。 */
       kind: "figure_trace";
       figureId: string;
+      /** 后端词表：codegen | render_attempt | render_ok | render_fail。 */
       stage: string;
-      status?: string;
+      engine?: string;
+      url?: string;
+      error?: string;
       agentPath: string;
     }
   | {
@@ -280,14 +283,19 @@ export function decodeStudyMaterialsEvent(ev: TaskEvent): StudyMaterialsStreamEv
     }
 
     case "figure_trace": {
-      const figureId = asString(data.figure_id);
+      // 后端 figure_id 是 int（FigureSpec.n）；旧实现只收字符串导致整条事件被丢弃。
+      const figureId = asString(data.figure_id) ?? asNumber(data.figure_id)?.toString();
       if (!figureId) return null;
-      const status = asString(data.status);
+      const engine = asString(data.engine);
+      const url = asString(data.url);
+      const error = asString(data.error);
       return {
         kind: "figure_trace",
         figureId,
         stage: asString(data.stage) ?? "",
-        ...(status ? { status } : {}),
+        ...(engine ? { engine } : {}),
+        ...(url ? { url } : {}),
+        ...(error ? { error } : {}),
         agentPath: agentPathOf(data),
       };
     }

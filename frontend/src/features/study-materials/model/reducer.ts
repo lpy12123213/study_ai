@@ -615,7 +615,6 @@ function applyEvent(
             kind: "figure",
             figureId: event.figureId,
             stage: event.stage,
-            ...(event.status ? { status: event.status } : {}),
           },
           at,
           seq,

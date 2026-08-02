@@ -594,14 +594,16 @@ export const traceAgentStream: StudyMaterialsWireEvent[] = [
     seq: 8,
     type: "figure_trace",
     agent_path: "fig:1",
-    data: { figure_id: "fig-1", stage: "render", status: "success" },
+    // 后端真实形状：figure_id 为 int（FigureSpec.n）；stage ∈ codegen|render_attempt|render_ok|render_fail。
+    data: { figure_id: 1, stage: "render_ok", engine: "mermaid", url: "/api/media/generated/fig-1.svg" },
   },
   {
     taskId: "materials-trace-1",
     seq: 9,
     type: "section_fill",
     agent_path: "fill:sec-1",
-    data: { sec_id: "sec-1", status: "done" },
+    // 后端状态词表：start|ok|retry|failed。
+    data: { sec_id: "sec-1", status: "ok" },
   },
   {
     taskId: "materials-trace-1",

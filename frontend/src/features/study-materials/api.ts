@@ -43,8 +43,8 @@ export interface StudyTaskStatus {
 /** GET /tasks/{id}/trace 的一页全量过程事件（备用；过程面板当前走 SSE 流，不依赖该端点）。 */
 export interface StudyTaskTracePage {
   events: TaskEvent[];
-  count?: number;
-  next_after_seq?: number;
+  next_after_seq: number;
+  has_more: boolean;
 }
 
 export const studyMaterialsApi = {
