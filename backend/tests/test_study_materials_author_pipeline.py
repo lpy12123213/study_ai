@@ -68,9 +68,12 @@ BACKBONE_MD = """# 极限入门
 ## 总结
 """
 
+# 长度门恢复 min(target_chars*0.5, min_chars) 后需 ≥200 字符（target 800 → 400，被 min_chars 盖帽）。
 FILL_BODY = (
     "本节讲解核心概念：极限描述的是无限逼近的过程，"
     "先用日常例子建立直觉，再过渡到严格表述，并配带步骤的例题与分层自测。"
+    "直观上，自变量越靠近目标值，函数值越稳定地靠近某个确定的数，这个数就是极限；"
+    "逼近只要求无限接近，并不要求真正到达，这是初学者最容易混淆的地方。"
     "[EX1] 例题：求 x 趋近 2 时 x+1 的极限。步骤：观察趋势，x 越接近 2，x+1 越接近 3。"
     "[Q1] 自测（基础）：用自己的话解释逼近；（应用）：求 x→0 时 2x 的极限。"
     "[A1] 答案：0。评分点：趋势判断正确、表述无循环论证。"
@@ -303,6 +306,212 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
         self.assertFalse(result["degraded"])
         self.assertTrue((result.get("acceptance") or {}).get("accepted"))
         self.assertIn("error", result["legacy_acceptance"])
+
+
+class AuthorPipelineObservabilityTests(unittest.TestCase):
+    """I-1：research 的 search 与各 LLM 阶段调用必须发 tool_call 事件（无隐藏调用）。"""
+
+    @staticmethod
+    def _tool_calls(events, tool):
+        return [e["data"] for e in events if e["type"] == "tool_call" and e["data"].get("tool") == tool]
+
+    def test_search_and_llm_stage_events_emitted(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=_fake_llm(),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        # research：每次 search 调用前有 start、完成后带 result_count
+        search_calls = self._tool_calls(events, "search")
+        self.assertTrue(search_calls)
+        self.assertTrue(any(d.get("status") == "start" and d.get("query") for d in search_calls))
+        self.assertTrue(any(d.get("result_count") == 1 for d in search_calls))
+        # LLM 阶段：blueprint/backbone/audit 均可观测，完成时带 chars
+        llm_calls = self._tool_calls(events, "llm")
+        self.assertTrue({"blueprint", "backbone", "audit"} <= {d.get("stage") for d in llm_calls})
+        audit_done = [d for d in llm_calls if d.get("stage") == "audit" and "chars" in d]
+        self.assertTrue(audit_done)
+        self.assertTrue(all(d.get("sec_id") == "sec-1" for d in audit_done))
+
+    def test_search_failure_emits_error_event(self):
+        async def failing_serp(query, n):
+            raise RuntimeError("serp down")
+
+        async def fake_fetch(url):
+            return "页面正文"
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=_fake_llm(),
+                    toolbox=ResearchToolbox(serp_func=failing_serp, fetch_func=fake_fetch),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")  # 检索失败不阻断成书
+        search_calls = self._tool_calls(events, "search")
+        self.assertTrue(any("error" in d for d in search_calls))
+
+    def test_revision_stage_event_on_unsupported_claims(self):
+        unsupported_audit = json.dumps(
+            {"claims": [{"text": "极限就是直接代入", "verdict": "unsupported", "fix": "删除该断言"}]},
+            ensure_ascii=False,
+        )
+
+        async def revising_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return unsupported_audit
+            if "骨架" in system:
+                return BACKBONE_MD
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=revising_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["revision_attempts"], 1)
+        revision_calls = [d for d in self._tool_calls(events, "llm") if d.get("stage") == "revision"]
+        self.assertTrue(any(d.get("sec_id") == "sec-1" and "chars" in d for d in revision_calls))
+
+
+class AuthorPipelineFaultToleranceTests(unittest.TestCase):
+    """I-2：fill/figure 子调用异常不炸掉整本书，走结构化降级，不向上抛。"""
+
+    def test_fill_exception_falls_back_to_author_rewrite(self):
+        async def flaky_fill_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            if "极限的直观概念" in user and "请作者亲自撰写" not in user:
+                raise ConnectionError("llm stack down")  # 填充子代理整个炸掉
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=flaky_fill_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["degraded"])
+        self.assertTrue(any(n.startswith("fill_error:sec-1") for n in result["quality_notes"]))
+        todo = next(t for t in result["todos"] if t["id"] == "fill:sec-1")
+        self.assertEqual(todo["status"], "done")
+        self.assertEqual(todo["note"], "author_rewrite")
+        # 作者补写作为独立 LLM 阶段可被观测
+        author_fill = [
+            e["data"] for e in events
+            if e["type"] == "tool_call" and e["data"].get("tool") == "llm" and e["data"].get("stage") == "author_fill"
+        ]
+        self.assertTrue(any(d.get("sec_id") == "sec-1" and "chars" in d for d in author_fill))
+
+    def test_fill_and_author_rewrite_both_raise_marks_section_failed(self):
+        async def fill_down_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            if "极限的直观概念" in user:
+                raise ConnectionError("llm stack down")  # 填充与作者补写都炸
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(  # 不向上抛未捕获异常
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=fill_down_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "failed")
+        todo = next(t for t in result["todos"] if t["id"] == "fill:sec-1")
+        self.assertEqual(todo["status"], "failed")
+        self.assertTrue(any(n.startswith("author_fill_error:sec-1") for n in result["quality_notes"]))
+
+    def test_figure_forge_exception_strips_fig_and_waives(self):
+        class _ExplodingForge:
+            async def generate(self, spec):
+                raise TypeError("render engine exploded")  # 不在旧捕获列表 (ValueError, RuntimeError) 内
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=_fake_llm(),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_ExplodingForge(),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertNotIn("[[FIG:", result["markdown"])
+        self.assertTrue(any(n.startswith("figure_failed:1") for n in result["quality_notes"]))
+        todo = next(t for t in result["todos"] if t["id"] == "fig:1")
+        self.assertEqual(todo["status"], "waived")
+
+
+class AuthorBackboneFigValidationTests(unittest.TestCase):
+    """M-2：BACKBONE 校验覆盖 [[FIG:n]]，缺失与 FILL 缺失同等处理（重试 1 次 → failed）。"""
+
+    def test_backbone_missing_fig_placeholder_fails_after_one_retry(self):
+        backbone_no_fig = "# 极限入门\n\n[[FILL:sec-1]]\n\n衔接段。\n\n[[FILL:sec-2]]\n"
+        events = []
+        counter = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=_fake_llm(backbone_text=backbone_no_fig, counter=counter),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "backbone_placeholder_missing")
+        self.assertEqual(counter.get("backbone"), 2)  # 首次 + 重试 1 次
+        self.assertTrue(any("[[FIG:1]]" in n for n in result["quality_notes"]))
 
 
 if __name__ == "__main__":

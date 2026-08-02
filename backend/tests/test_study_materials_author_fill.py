@@ -13,13 +13,24 @@ BP = Blueprint.from_dict({
 })
 
 
+# 长度门恢复 min(target_chars*0.5, min_chars) 后，fake 正文需 ≥200 字符（target 800 → 400，被 min_chars 盖帽）。
+GROUNDED_BODY = (
+    "本节严格讲解极限的直观概念：当自变量无限接近某个值时，函数值无限接近一个确定的数，"
+    "这个数就是极限；$\\epsilon$ 作为任意小正数刻画了这种接近程度，逼近不要求到达。"
+    "[EX1] 例题：求 x 趋近 2 时 x+1 的极限。步骤一：观察 x 接近 2 的趋势；"
+    "步骤二：x+1 随之接近 3；步骤三：得出极限为 3，并说明这与直接代入一致纯属巧合。"
+    "[Q1] 自测（基础）：用自己的话解释无限逼近的含义；（应用）：求 x→0 时 2x 的极限并说明理由。"
+    "[A1] 答案：0。评分点：趋势判断正确、表述无循环论证、能区分函数值与极限值。"
+)
+
+
 class FillRunnerTests(unittest.TestCase):
     def test_context_pack_is_bounded_and_grounded(self):
         seen = {}
 
         async def fake_llm(system, user):
             seen["user"] = user
-            return "正文含 $\\epsilon$。[EX1] 例 …[Q1] 题 …[A1] 答 …"
+            return GROUNDED_BODY
 
         r = FillRunner(llm_func=fake_llm, max_retries=2)
         out = asyncio.run(r.fill(BP.sections[0], backbone_excerpt="衔接段",
@@ -47,6 +58,33 @@ class FillRunnerTests(unittest.TestCase):
         r = FillRunner(llm_func=leaky_llm, max_retries=1, min_chars=10)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
         self.assertTrue(out.needs_author_rewrite)
+
+    def test_length_gate_uses_half_target_ratio(self):
+        """I-4：长度门恢复 min(target_chars*0.5, min_chars)；800 字目标 → 需 ≥200 字符。"""
+        short = "简要讲解极限概念并配例题。[EX1] 例 …[Q1] 题 …[A1] 答 …" * 4  # ~120 字符，标签齐全但长度不足
+
+        async def short_llm(system, user):
+            return short
+
+        out = asyncio.run(FillRunner(llm_func=short_llm, max_retries=1).fill(BP.sections[0], "", "", []))
+        self.assertTrue(out.needs_author_rewrite)
+
+        async def long_llm(system, user):
+            return short * 2  # ~240 字符，过 200 盖帽线
+
+        ok = asyncio.run(FillRunner(llm_func=long_llm, max_retries=1).fill(BP.sections[0], "", "", []))
+        self.assertFalse(ok.needs_author_rewrite)
+
+    def test_default_max_retries_is_two(self):
+        """M-5：默认 max_retries 对齐设计“默认 ≤2”。"""
+        async def bad_llm(system, user):
+            return "太短"
+
+        runner = FillRunner(llm_func=bad_llm, min_chars=100)
+        self.assertEqual(runner.max_retries, 2)
+        out = asyncio.run(runner.fill(BP.sections[0], "", "", []))
+        self.assertTrue(out.needs_author_rewrite)
+        self.assertEqual(out.attempts, 2)
 
 
 if __name__ == "__main__":

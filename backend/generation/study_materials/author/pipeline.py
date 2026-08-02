@@ -6,7 +6,7 @@ FigureForge 异步生成（失败不阻塞，移除对应 ``[[FIG:n]]`` 行并�
 最后由确定性汇编器替换占位符并渲染书目。验收由 author 专用门
 ``quality_gate.evaluate_author_acceptance`` 决定交付终态（legacy
 ``evaluate_acceptance`` 仍调用一次，仅作诊断挂回 ``legacy_acceptance``）；所有 LLM/工具
-调用都伴随统一 trace 事件（todo_update/note_write/section_fill/figure_trace/
+调用都伴随统一 trace 事件（todo_update/note_write/section_fill/figure_trace/tool_call/
 text_delta），无隐藏调用（设计稿 §9）。
 
 失败语义：蓝图非法、主干占位符缺/多、汇编修不好，均以结构化 ``status=failed``
@@ -28,6 +28,7 @@ from backend.generation.study_materials.author.blueprint import Blueprint, Secti
 from backend.generation.study_materials.author.fill import (
     _FALLBACK_SYSTEM_PROMPT,
     FILL_PROMPT_ID,
+    FillResult,
     FillRunner,
 )
 from backend.generation.study_materials.author.notes import NotesStore
@@ -191,6 +192,30 @@ class _AuthorPipeline:
             "quality_notes": list(self.quality_notes),
         }
 
+    async def _llm_stage(self, stage: str, prompt: str, user: str, *, sec_id: str = "") -> str:
+        """主 agent 的 LLM 阶段调用：前后发 tool_call 事件（无隐藏调用，设计稿 §9）。
+
+        事件 data 形状：start ``{"tool": "llm", "stage", "status": "start"}``，
+        完成带 ``"chars": len(输出)``，失败带 ``"error"``（原异常继续上抛，由调用方
+        的容错路径处理）；有小节上下文时带 ``"sec_id"``。
+        """
+
+        def _data(extra: Dict[str, Any]) -> Dict[str, Any]:
+            data: Dict[str, Any] = {"tool": "llm", "stage": stage}
+            if sec_id:
+                data["sec_id"] = sec_id
+            data.update(extra)
+            return data
+
+        self._emit("tool_call", _data({"status": "start"}))
+        try:
+            out = await _call_llm(self.llm, prompt, user)
+        except Exception as exc:
+            self._emit("tool_call", _data({"error": f"{type(exc).__name__}: {exc}"}))
+            raise
+        self._emit("tool_call", _data({"chars": len(out)}))
+        return out
+
     # ---- 状态机主体 ----
 
     async def run(self) -> Dict[str, Any]:
@@ -220,11 +245,19 @@ class _AuthorPipeline:
 
         async def _search(query: str) -> Optional[Dict[str, Any]]:
             async with sem:
+                self._emit("tool_call", {"tool": "search", "query": query, "status": "start"})
                 try:
-                    return await self.toolbox.search(query, n=5)
+                    result = await self.toolbox.search(query, n=5)
                 except (RuntimeError, asyncio.TimeoutError) as exc:
                     self.quality_notes.append(f"search_failed:{query}:{exc}")
+                    self._emit("tool_call", {"tool": "search", "query": query, "error": f"{type(exc).__name__}: {exc}"})
                     return None
+            rows = result.get("results") if isinstance(result, dict) else None
+            self._emit("tool_call", {
+                "tool": "search", "query": query,
+                "result_count": len(rows) if isinstance(rows, list) else 0,
+            })
+            return result
 
         queries: List = []
         for kp in kps:
@@ -271,7 +304,7 @@ class _AuthorPipeline:
             f"## 研究笔记\n{research_text[:NOTE_PAYLOAD_LIMIT] or '（无）'}"
         )
         for attempt in (1, 2):
-            raw = await _call_llm(self.llm, prompt, user)
+            raw = await self._llm_stage("blueprint", prompt, user)
             try:
                 blueprint = Blueprint.from_dict(_extract_json(raw))
             except ValueError as exc:  # BlueprintError/JSONDecodeError 均为 ValueError 子类
@@ -321,7 +354,7 @@ class _AuthorPipeline:
             f"## 蓝图（JSON）\n{json.dumps(self.blueprint_dict, ensure_ascii=False)[:NOTE_PAYLOAD_LIMIT]}"
         )
         for attempt in (1, 2):
-            backbone = await _call_llm(self.llm, prompt, user)
+            backbone = await self._llm_stage("backbone", prompt, user)
             problems = self._validate_backbone(backbone)
             if not problems:
                 self.backbone = backbone
@@ -346,6 +379,10 @@ class _AuthorPipeline:
             count = len(re.findall(r"\[\[FILL:" + re.escape(sec.id) + r"\]\]", backbone))
             if count != 1:
                 problems.append(f"小节 {sec.id} 的 [[FILL:{sec.id}]] 出现 {count} 次（应恰好 1 次）")
+        for fig in bp.figures:
+            count = len(re.findall(r"\[\[FIG:" + re.escape(str(fig.n)) + r"\]\]", backbone))
+            if count != 1:
+                problems.append(f"图 {fig.n} 的 [[FIG:{fig.n}]] 出现 {count} 次（应恰好 1 次）")
         return problems
 
     async def _fill_and_figures(self) -> None:
@@ -359,21 +396,30 @@ class _AuthorPipeline:
             tid = f"fill:{sec.id}"
             self._mark(tid, "in_progress")
             async with fill_sem:
-                result = await runner.fill(
-                    sec,
-                    backbone_excerpt=self._backbone_excerpt(sec.id),
-                    research_slice=self.notes.read("research"),
-                    terminology=bp.terminology,
-                )
+                try:
+                    result: Optional[FillResult] = await runner.fill(
+                        sec,
+                        backbone_excerpt=self._backbone_excerpt(sec.id),
+                        research_slice=self.notes.read("research"),
+                        terminology=bp.terminology,
+                    )
+                except Exception as exc:  # noqa: BLE001 — LLM/httpx 栈错误不能经 gather 炸掉整本书，降级为作者补写
+                    self.quality_notes.append(f"fill_error:{sec.id}:{type(exc).__name__}:{exc}")
+                    result = None
             item = self.todos.get(tid)
-            item.retries = max(0, result.attempts - 1)
-            if not result.needs_author_rewrite:
-                self.sections[sec.id] = result.text
-                self._mark(tid, "done")
-                return
-            # 子代理交不出：作者用同一 fill prompt 亲自补写（计一次 retry，兜底保证没有交不出的节）。
+            if result is not None:
+                item.retries = max(0, result.attempts - 1)
+                if not result.needs_author_rewrite:
+                    self.sections[sec.id] = result.text
+                    self._mark(tid, "done")
+                    return
+            # 子代理交不出或抛异常：作者用同一 fill prompt 亲自补写（计一次 retry，兜底保证没有交不出的节）。
             item.retries += 1
-            text = await self._author_fill(sec, note="填充子代理多次未通过验收，请作者亲自撰写本节正文。")
+            try:
+                text = await self._author_fill(sec, note="填充子代理多次未通过验收，请作者亲自撰写本节正文。")
+            except Exception as exc:  # noqa: BLE001 — 补写也失败则该节标 failed（结构化，不抛出）
+                self.quality_notes.append(f"author_fill_error:{sec.id}:{type(exc).__name__}:{exc}")
+                text = ""
             if text:
                 self.sections[sec.id] = text
                 self._mark(tid, "done", "author_rewrite")
@@ -391,7 +437,7 @@ class _AuthorPipeline:
             async with fig_sem:
                 try:
                     out = await self.forge.generate(asdict(fig))
-                except (ValueError, RuntimeError) as exc:
+                except Exception as exc:  # noqa: BLE001 — 渲染/沙箱任意异常都走既有结构化失败路径，不炸掉整本书
                     out = {"url": None, "status": "failed", "error": str(exc)}
             if out.get("status") == "ok" and out.get("url"):
                 self.figures[fig.n] = {"url": str(out["url"]), "caption": fig.caption}
@@ -415,13 +461,13 @@ class _AuthorPipeline:
         half = span // 2
         return self.backbone[max(0, idx - half): idx + len(marker) + half]
 
-    async def _author_fill(self, sec: SectionSpec, *, note: str = "") -> str:
+    async def _author_fill(self, sec: SectionSpec, *, note: str = "", stage: str = "author_fill") -> str:
         prompt = _render_prompt(FILL_PROMPT_ID, _FALLBACK_SYSTEM_PROMPT)
         payload = FillRunner._build_user_payload(
             sec, self._backbone_excerpt(sec.id), self.notes.read("research"), self.blueprint.terminology  # noqa: SLF001
         )
         user = f"{payload}\n\n{note}" if note else payload
-        return await _call_llm(self.llm, prompt, user)
+        return await self._llm_stage(stage, prompt, user, sec_id=sec.id)
 
     @staticmethod
     def _strip_fig(backbone: str, n: int) -> str:
@@ -452,7 +498,11 @@ class _AuthorPipeline:
             spec = next((s for s in self.blueprint.sections if s.id == key), None)
             if spec is None:
                 continue
-            text = await self._author_fill(spec, note=f"汇编缺少小节 {key} 的正文，请作者补写。")
+            try:
+                text = await self._author_fill(spec, note=f"汇编缺少小节 {key} 的正文，请作者补写。")
+            except Exception as exc:  # noqa: BLE001 — 与 _fill_one 同一失败矩阵：补写异常不抛出，记结构化失败
+                self.quality_notes.append(f"author_fill_error:{key}:{type(exc).__name__}:{exc}")
+                text = ""
             if text:
                 self.sections[key] = text
                 revised = True
@@ -476,7 +526,7 @@ class _AuthorPipeline:
                 f"## 小节正文\n{self.sections.get(sec.id, '')[:NOTE_PAYLOAD_LIMIT]}\n\n"
                 f"## 研究笔记切片\n{research_text[:NOTE_PAYLOAD_LIMIT]}"
             )
-            raw = await _call_llm(self.llm, prompt, user)
+            raw = await self._llm_stage("audit", prompt, user, sec_id=sec.id)
             try:
                 data = _extract_json(raw)
                 claims = data.get("claims") if isinstance(data, dict) else []
@@ -503,6 +553,7 @@ class _AuthorPipeline:
             text = await self._author_fill(
                 spec,
                 note=f"以下断言无研究笔记支持，请修订（改写、降级为推断措辞或删除）：\n{fixes}",
+                stage="revision",
             )
             if text:
                 self.sections[sec_id] = text

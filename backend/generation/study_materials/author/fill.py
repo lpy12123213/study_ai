@@ -26,7 +26,7 @@ PAYLOAD_LIMIT = 12000   # user payload 总量硬上限（字符）
 
 # 产出验收的长度下限：min(target_chars * MIN_TARGET_RATIO, min_chars)。min_chars 作为上限
 # 盖帽，避免大 target_chars 的小节对单次填充提出过长要求。
-MIN_TARGET_RATIO = 0.05
+MIN_TARGET_RATIO = 0.5
 
 _FALLBACK_SYSTEM_PROMPT = (
     "你是严谨的自学教材作者。只为指定的某一个小节撰写核心讲解正文，输出 Markdown。\n"
@@ -52,7 +52,7 @@ class FillRunner:
         self,
         llm_func: LlmFunc,
         *,
-        max_retries: int = 3,
+        max_retries: int = 2,
         min_chars: int = 200,
         on_event: Optional[EventSink] = None,
     ) -> None:
