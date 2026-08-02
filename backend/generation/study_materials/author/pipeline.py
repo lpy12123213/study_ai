@@ -52,6 +52,9 @@ FIG_CONCURRENCY = 3
 NOTE_PAYLOAD_LIMIT = 8000  # 注入蓝图/主干 prompt 的笔记与蓝图文本上限（字符）
 EXCERPT_SPAN = 1500        # backbone_excerpt 截取窗口（与 fill.EXCERPT_LIMIT 对齐）
 
+# 骨架净化：LLM 为占位符自加的「正文占位」/「占位」空标题行（真实缺陷：残留成稿触发 lint）。
+_BOGUS_PLACEHOLDER_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?:正文)?占位\s*$", re.M)
+
 # 注册表不可用时的最小降级 prompt（措辞关键词与注册版本保持一致）。
 _FALLBACK_BLUEPRINT_PROMPT = (
     "你是严谨的自学教材总编。根据输入的主题、学科、preset 与研究笔记，为全书设计写作蓝图。\n"
@@ -60,11 +63,16 @@ _FALLBACK_BLUEPRINT_PROMPT = (
     "figures（n/sec_id/intent/kind/caption）。易错点只能来自研究笔记中带出处的条目。"
     "figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid）；"
     "difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。"
+    "sections 必须逐一覆盖每个知识点，且每节 title 包含该知识点的名称关键词。"
 )
 _FALLBACK_BACKBONE_PROMPT = (
     "你是严谨的自学教材作者。根据给定蓝图撰写全书骨架，输出 Markdown。"
+    "首行形如 # 自学材料：<主题>，随后依次给出 meta 引用行（含学科与生成预设）、"
+    "## 使用方式（建议） 小节、## 知识点目录 小节（每项为可跳转锚点链接）；"
+    "正文小节用编号标题 ## N、标题。"
     "小节正文位置只留占位符 [[FILL:sec-id]]，图位留占位符 [[FIG:n]]；"
-    "蓝图中每个 section 必须恰好对应一个 [[FILL:sec-id]] 占位符，不得多也不得少。"
+    "蓝图中每个 section 必须恰好对应一个 [[FILL:sec-id]] 占位符，不得多也不得少；"
+    "占位符必须单独占一行，其前后禁止出现任何「占位」字样或仅为占位而设的标题。"
 )
 _FALLBACK_AUDIT_PROMPT = (
     "你是严谨的事实核查员。输入一个小节的正文与该小节的研究笔记切片，逐条核查正文中的事实性断言。\n"
@@ -158,6 +166,9 @@ class _AuthorPipeline:
         self.knowledge_points = kps
 
         self.research_evidence: Dict[str, List[Dict[str, Any]]] = {}
+        # 任务级来源登记：去重 URL → 顺序编号（[^n]），供 fill 内联引用与 assembler 脚注定义共用。
+        self.source_registry: List[Dict[str, Any]] = []
+        self._source_index: Dict[str, int] = {}
         self.blueprint: Optional[Blueprint] = None
         self.blueprint_dict: Dict[str, Any] = {}
         self._blueprint_errors: List[str] = []  # 蓝图各次校验失败详情，失败终态透出到 error.detail
@@ -292,6 +303,8 @@ class _AuthorPipeline:
                 conf = row.get("score")
                 conf_text = f"{float(conf):.2f}" if isinstance(conf, (int, float)) and not isinstance(conf, bool) else "0.50"
                 self.notes.append("research", f"- {fact} | src: {url or '（无出处）'} | conf: {conf_text}")
+                if url:
+                    self._register_source(url, str(row.get("title") or "").strip())
                 evidence.append({
                     "source_class": "web_search",
                     "title": str(row.get("title") or "").strip(),
@@ -300,7 +313,31 @@ class _AuthorPipeline:
                 })
             if evidence:
                 self.research_evidence.setdefault(f"kp-{kps.index(kp) + 1}", []).extend(evidence)
+        self._write_source_registry()
         self._mark("research", "done")
+
+    def _register_source(self, url: str, title: str = "") -> int:
+        """任务级来源登记：去重 URL → 顺序编号（[^n]）；title 缺省用域名。"""
+
+        if url in self._source_index:
+            return self._source_index[url]
+        n = len(self.source_registry) + 1
+        self._source_index[url] = n
+        self.source_registry.append({"n": n, "title": title or urlsplit(url).netloc or url, "url": url})
+        return n
+
+    def _write_source_registry(self) -> None:
+        """来源登记表写到 notes/research.md 头部（fill 上下文唯一允许的 URL 形态）；facts 行保留 src: url。"""
+
+        if not self.source_registry:
+            return
+        lines = ["## 来源登记表", ""]
+        lines += [f"- [^{entry['n']}] {entry['title']} {entry['url']}" for entry in self.source_registry]
+        content = "\n".join(lines)
+        existing = self.notes.read("research")
+        if existing.strip():
+            content += "\n\n" + existing
+        self.notes.write("research", content)
 
     async def _blueprint(self) -> Optional[Blueprint]:
         prompt = _render_prompt(BLUEPRINT_PROMPT_ID, _FALLBACK_BLUEPRINT_PROMPT)
@@ -372,7 +409,7 @@ class _AuthorPipeline:
             f"## 蓝图（JSON）\n{json.dumps(self.blueprint_dict, ensure_ascii=False)[:NOTE_PAYLOAD_LIMIT]}"
         )
         for attempt in (1, 2):
-            backbone = await self._llm_stage("backbone", prompt, user)
+            backbone = self._sanitize_backbone(await self._llm_stage("backbone", prompt, user))
             problems = self._validate_backbone(backbone)
             if not problems:
                 self.backbone = backbone
@@ -388,6 +425,12 @@ class _AuthorPipeline:
             )
         self._mark("backbone", "failed", "占位符校验失败")
         return None
+
+    @staticmethod
+    def _sanitize_backbone(backbone: str) -> str:
+        """删除骨架里「正文占位」/「占位」空标题行（LLM 为占位符自加，残留成稿触发 lint）。"""
+
+        return _BOGUS_PLACEHOLDER_HEADING_RE.sub("", str(backbone or ""))
 
     def _validate_backbone(self, backbone: str) -> List[str]:
         bp = self.blueprint
@@ -495,7 +538,8 @@ class _AuthorPipeline:
         return "\n".join(ln for ln in backbone.splitlines() if marker not in ln)
 
     async def _assemble_with_revise(self) -> Optional[str]:
-        self.references = self._extract_references(self.notes.read("research"))
+        # 书目直接使用任务级来源登记表（含 [^n] 编号），与 fill 内联引用一一对应。
+        self.references = [dict(entry) for entry in self.source_registry]
         try:
             return assemble(self.backbone, self.sections, self.figures, self.references)
         except AssemblyError as exc:
@@ -670,20 +714,6 @@ class _AuthorPipeline:
             return evaluate_acceptance(state=gate_state)
         except Exception as exc:  # noqa: BLE001 — 诊断门，失败不阻断交付
             return {"passed": None, "failed_checks": [], "error": f"{type(exc).__name__}: {exc}"}
-
-    @staticmethod
-    def _extract_references(research_text: str) -> List[Dict[str, str]]:
-        """从研究笔记的 ``src:`` URL 去重提取书目；title 用域名。"""
-
-        refs: List[Dict[str, str]] = []
-        seen: set = set()
-        for match in re.finditer(r"src:\s*(https?://[^\s|]+)", str(research_text or "")):
-            url = match.group(1).rstrip(".,;)")
-            if url in seen:
-                continue
-            seen.add(url)
-            refs.append({"title": urlsplit(url).netloc or url, "url": url})
-        return refs
 
 
 async def run_author_pipeline(

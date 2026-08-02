@@ -2,18 +2,20 @@
 
 Each blueprint section is filled by a dedicated sub-LLM call that sees only a *bounded*
 context pack: an excerpt of the backbone where the text attaches, a slice of the research
-notes, the terminology table, and the section spec. The produced text must pass an
-acceptance check (length, no URLs / citation markers, required [EXn]/[Qn]/[An] tags);
-failed attempts are retried with the list of missing items appended to the prompt. When
-retries are exhausted the section is flagged for author rewrite instead of silently
-accepting bad content.
+notes, the numbered source registry (``[^n] title url`` lines — the only URL form allowed
+in the fill context), the terminology table, and the section spec. The produced text must
+pass an acceptance check (length, no bare URLs / reference sections, required
+[EXn]/[Qn]/[An] tags, and every inline ``[^n]`` citation marker must resolve to the given
+source list — hallucinated ids are retried); failed attempts are retried with the list of
+missing items appended to the prompt. When retries are exhausted the section is flagged
+for author rewrite instead of silently accepting bad content.
 """
 from __future__ import annotations
 
 import inspect
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .blueprint import SectionSpec
 from .trace import make_event
@@ -31,13 +33,33 @@ MIN_TARGET_RATIO = 0.5
 _FALLBACK_SYSTEM_PROMPT = (
     "你是严谨的自学教材作者。只为指定的某一个小节撰写核心讲解正文，输出 Markdown。\n"
     "要求：严格遵守给定术语符号表；必须包含 [EXn] 带步骤例题、[Qn] 分层自测题、[An] 答案与评分点；"
-    "数学公式用 LaTeX；不输出 URL、参考文献或 [[1]] 之类的引用标记；只写该小节正文。"
+    "数学公式用 LaTeX；在关键事实句末用 [^n] 标注来源编号，只允许使用给定来源清单里的编号；"
+    "正文禁止出现裸 URL、禁止输出参考文献小节或脚注定义；只写该小节正文。"
 )
 
 _URL_RE = re.compile(r"https?://")
+# 来源登记表行：- [^n] title url（pipeline 写入 research.md 头部，fill 上下文里唯一允许的 URL 形态）。
+_SOURCE_LINE_RE = re.compile(r"^\s*[-*+]\s*\[\^(\d+)\]\s+(?P<title>.+?)\s+(?P<url>https?://\S+)\s*$", re.M)
+_SRC_URL_RE = re.compile(r"src:\s*(https?://[^\s|]+)")
+_FOOTNOTE_MARK_RE = re.compile(r"\[\^(\d+)\]")
 
 LlmFunc = Callable[[str, str], Union[str, Awaitable[str]]]
 EventSink = Callable[[Dict[str, Any]], None]
+
+
+def _parse_source_lines(text: str) -> List[Dict[str, str]]:
+    """从研究笔记切片解析来源登记表行（``- [^n] title url``）。"""
+
+    sources: List[Dict[str, str]] = []
+    for match in _SOURCE_LINE_RE.finditer(str(text or "")):
+        sources.append({"n": match.group(1), "title": match.group("title").strip(), "url": match.group("url")})
+    return sources
+
+
+def source_ids_in_slice(research_slice: str) -> Set[str]:
+    """研究笔记切片（按注入上限截断后）里可用的引用编号集合，供产出校验。"""
+
+    return {s["n"] for s in _parse_source_lines(str(research_slice or "")[:RESEARCH_LIMIT])}
 
 
 @dataclass
@@ -83,6 +105,7 @@ class FillRunner:
             section_spec, backbone_excerpt or "", research_slice or "", terminology or []
         )
         required_chars = min(section_spec.target_chars * MIN_TARGET_RATIO, float(self.min_chars))
+        allowed_citations = source_ids_in_slice(research_slice or "")
         missing: List[str] = []
         for attempt in range(1, self.max_retries + 1):
             self._emit(section_spec.id, "start")
@@ -90,7 +113,7 @@ class FillRunner:
             if missing:
                 user += "\n\n上次产出未通过验收，请补全/修正以下缺失项：\n" + "\n".join(f"- {m}" for m in missing)
             text = await self._call_llm(user)
-            missing = self._validate(text, required_chars)
+            missing = self._validate(text, required_chars, allowed_citations)
             if not missing:
                 self._emit(section_spec.id, "ok")
                 return FillResult(text=text, needs_author_rewrite=False, attempts=attempt)
@@ -113,7 +136,11 @@ class FillRunner:
         ))
 
     @staticmethod
-    def _validate(text: str, required_chars: float) -> List[str]:
+    def _validate(
+        text: str,
+        required_chars: float,
+        allowed_citation_ids: Optional[Set[str]] = None,
+    ) -> List[str]:
         """返回缺失项清单；空列表表示验收通过。"""
         missing: List[str] = []
         if len(text) < required_chars:
@@ -125,7 +152,29 @@ class FillRunner:
         for tag in ("[EX", "[Q", "[A"):
             if tag not in text:
                 missing.append(f"缺少 {tag}n] 标签（例题/自测题/答案）")
+        # 内联引用编号必须落在该节来源清单内（幻觉编号 → 重试）。
+        allowed = allowed_citation_ids or set()
+        bad = sorted({m for m in _FOOTNOTE_MARK_RE.findall(text) if m not in allowed}, key=int)
+        if bad:
+            missing.append("引用来源清单外的编号 " + "、".join(f"[^{m}]" for m in bad) + "（幻觉引用）")
         return missing
+
+    @staticmethod
+    def _split_sources(research: str) -> Tuple[List[Dict[str, str]], str]:
+        """抽出研究笔记切片里的来源登记表行；已登记来源的 ``src: url`` 改写为 ``src: [^n]``。"""
+
+        sources = _parse_source_lines(research)
+        if not sources:
+            return [], research
+        text = _SOURCE_LINE_RE.sub("", research)
+        text = re.sub(r"^##\s*来源登记表\s*$", "", text, flags=re.M)  # 空标题一并移除
+        by_url = {s["url"]: s["n"] for s in sources}
+
+        def _rewrite(match: "re.Match[str]") -> str:
+            n = by_url.get(match.group(1))
+            return f"src: [^{n}]" if n else match.group(0)
+
+        return sources, _SRC_URL_RE.sub(_rewrite, text)
 
     @staticmethod
     def _build_user_payload(
@@ -136,7 +185,7 @@ class FillRunner:
     ) -> str:
         """构造有界 user payload；超总量上限时先裁 research_slice，再裁 backbone_excerpt。"""
         excerpt = backbone_excerpt[:EXCERPT_LIMIT]
-        research = research_slice[:RESEARCH_LIMIT]
+        sources, research = FillRunner._split_sources(research_slice[:RESEARCH_LIMIT])
 
         def render(research_text: str, excerpt_text: str) -> str:
             parts = [
@@ -153,8 +202,14 @@ class FillRunner:
             if terminology:
                 lines = "\n".join(f"- {t.get('symbol', '')}: {t.get('meaning', '')}" for t in terminology)
                 parts.append(f"## 全书术语符号表（严格遵守）\n{lines}")
+            if sources:
+                lines = "\n".join(f"- [^{s['n']}] {s['title']} {s['url']}" for s in sources)
+                parts.append(
+                    "## 本节来源清单（关键事实句末以 [^n] 标注来源，仅可使用以下编号；"
+                    f"正文禁止出现裸 URL）\n{lines}"
+                )
             parts.append(f"## 衔接段（正文接在此处之后）\n{excerpt_text or '（无）'}")
-            parts.append(f"## 研究笔记切片（事实依据，禁止照抄出处链接到正文）\n{research_text or '（无）'}")
+            parts.append(f"## 研究笔记切片（事实依据，禁止照抄出处链接到正文）\n{research_text.strip() or '（无）'}")
             return "\n\n".join(parts)
 
         payload = render(research, excerpt)

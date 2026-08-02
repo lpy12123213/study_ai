@@ -87,5 +87,59 @@ class FillRunnerTests(unittest.TestCase):
         self.assertEqual(out.attempts, 2)
 
 
+# 来源登记表行（[^n] title url）：fill 上下文里唯一允许出现的 URL 形态。
+SOURCE_REGISTRY = (
+    "## 来源登记表\n\n"
+    "- [^1] 极限 通俗解释 https://example.com/limits\n"
+    "- [^2]  epsilon-delta 定义 https://example.com/epsilon\n"
+)
+
+
+class InlineCitationTests(unittest.TestCase):
+    """C2：正文允许并校验 [^n] 内联引用，编号必须落在该节来源清单内。"""
+
+    def test_payload_carries_numbered_source_list(self):
+        seen = {}
+
+        async def fake_llm(system, user):
+            seen["user"] = user
+            return GROUNDED_BODY
+
+        r = FillRunner(llm_func=fake_llm, max_retries=1)
+        research = SOURCE_REGISTRY + "\n## 极限\n- 极限是无限逼近 | src: https://example.com/limits | conf: 0.90"
+        asyncio.run(r.fill(BP.sections[0], "", research, []))
+        self.assertIn("来源清单", seen["user"])
+        self.assertIn("[^1] 极限 通俗解释 https://example.com/limits", seen["user"])
+        # 事实行出处改写为编号，正文中不再出现裸 URL 形态的 src
+        self.assertIn("src: [^1]", seen["user"])
+
+    def test_inline_marker_in_source_list_accepted(self):
+        body = GROUNDED_BODY + "这一直观解释有检索来源支持[^1]。"
+
+        async def fake_llm(system, user):
+            return body
+
+        r = FillRunner(llm_func=fake_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", SOURCE_REGISTRY, []))
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertIn("[^1]", out.text)
+
+    def test_hallucinated_citation_id_rejected(self):
+        async def fake_llm(system, user):
+            return GROUNDED_BODY + "来源[^9]。"
+
+        r = FillRunner(llm_func=fake_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", SOURCE_REGISTRY, []))
+        self.assertTrue(out.needs_author_rewrite)
+
+    def test_citation_without_source_list_rejected(self):
+        async def fake_llm(system, user):
+            return GROUNDED_BODY + "来源[^1]。"
+
+        r = FillRunner(llm_func=fake_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "无来源笔记。", []))
+        self.assertTrue(out.needs_author_rewrite)
+
+
 if __name__ == "__main__":
     unittest.main()

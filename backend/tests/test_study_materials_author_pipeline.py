@@ -595,6 +595,89 @@ class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
         self.assertIn("unknown difficulty", detail)
 
 
+class AuthorInlineCitationTests(unittest.TestCase):
+    """C2/G0 真实运行修复：[^n] 内联引用体系、骨架净化与收尾 footer 的端到端验证。"""
+
+    # fake 正文带合法内联引用 [^1]（对应 fake 检索唯一来源 https://example.com/limits）。
+    CITED_FILL_BODY = FILL_BODY + "这一直观解释有检索来源支持[^1]。"
+
+    # 真实缺陷形态：骨架 LLM 在占位符上方自加「正文占位」空标题。
+    BACKBONE_WITH_BOGUS_HEADINGS = BACKBONE_MD.replace(
+        "[[FILL:sec-1]]", "### 正文占位\n\n[[FILL:sec-1]]"
+    ).replace(
+        "[[FILL:sec-2]]", "### 正文占位\n\n[[FILL:sec-2]]"
+    )
+
+    def _cited_llm(self, backbone_text):
+        async def fake_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return backbone_text
+            return self.CITED_FILL_BODY
+
+        return fake_llm
+
+    def test_full_run_with_citations_registry_footer_and_sanitized_backbone(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=self._cited_llm(self.BACKBONE_WITH_BOGUS_HEADINGS),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+            self.assertEqual(result["status"], "ok")
+            markdown = result["markdown"]
+
+            # 骨架净化：「正文占位」标题不进成稿
+            self.assertNotIn("占位", markdown)
+
+            # 内联引用与文末脚注定义一一对应
+            self.assertIn("[^1]", markdown)
+            self.assertIn("[^1]: 极限 通俗解释 — https://example.com/limits", markdown)
+
+            # 收尾 footer：成稿以句读终止符结束（消除 eof_mid_sentence）
+            self.assertIn("本资料由作者代理生成", markdown)
+            self.assertTrue(markdown.rstrip().endswith("。"))
+
+            # 来源登记表落进 research.md 头部，facts 行保留 src: url
+            research = (Path(tmp) / "notes" / "research.md").read_text(encoding="utf-8")
+            self.assertIn("## 来源登记表", research)
+            self.assertIn("[^1] 极限 通俗解释 https://example.com/limits", research)
+            self.assertIn("src: https://example.com/limits", research)
+            self.assertLess(
+                research.index("## 来源登记表"), research.index("## 极限"),
+                "来源登记表必须位于研究笔记头部",
+            )
+
+            # references 透出登记表编号，供 assembler 渲染脚注定义
+            self.assertEqual(result["references"][0]["n"], 1)
+
+    def test_sanitized_backbone_snapshot_in_notes(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=self._cited_llm(self.BACKBONE_WITH_BOGUS_HEADINGS),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+            self.assertEqual(result["status"], "ok")
+            backbone_note = (Path(tmp) / "notes" / "backbone.md").read_text(encoding="utf-8")
+            self.assertNotIn("占位", backbone_note)
+
+
 class BlueprintDifficultyVocabularyTests(unittest.TestCase):
     """蓝图 difficulty 词表校验（真实运行中模型产出整数难度/自造词）。"""
 

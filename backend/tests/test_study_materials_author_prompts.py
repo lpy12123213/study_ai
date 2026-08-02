@@ -46,6 +46,24 @@ class AuthorPromptTests(unittest.TestCase):
         self.assertIn("[[FILL:", p.content)
         self.assertIn("[[FIG:", p.content)
 
+    def test_backbone_prompt_defines_skeleton_contract(self):
+        # 真实运行缺陷：骨架缺使用方式/锚点目录小节，且模型自加「正文占位」空标题。
+        p = self.reg.render("study.author.backbone.v1")
+        for kw in ["使用方式", "知识点目录", "锚点", "单独占一行"]:
+            self.assertIn(kw, p.content)
+
+    def test_blueprint_prompt_requires_kp_titled_sections(self):
+        # benchmark 按小节标题匹配知识点：蓝图必须要求 title 含知识点名称关键词。
+        p = self.reg.render("study.author.blueprint.v1")
+        self.assertIn("知识点", p.content)
+
+    def test_fill_prompt_defines_inline_citation_contract(self):
+        # C2 内联引用：关键事实句末 [^n] 标注，编号只能来自给定来源清单，禁裸 URL。
+        p = self.reg.render("study.author.fill.v1")
+        self.assertIn("[^n]", p.content)
+        self.assertIn("来源清单", p.content)
+        self.assertIn("裸 URL", p.content)
+
     def test_audit_prompt_is_json_contract(self):
         p = self.reg.render("study.author.audit.v1")
         self.assertEqual(JsonOutputContract().validate_prompt_text(p.content), [])
