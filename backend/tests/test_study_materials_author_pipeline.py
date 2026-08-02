@@ -696,5 +696,121 @@ class BlueprintDifficultyVocabularyTests(unittest.TestCase):
             Blueprint.from_dict(self._with_difficulty("进阶"))
 
 
+class AuthorResearchDeepReadTests(unittest.TestCase):
+    """研究阶段升级：deep/research preset 追加 wikipedia 查询、深读 serp top URL；事件带 provider/urls。"""
+
+    @staticmethod
+    def _toolbox(log, fetch_fail_substr=None):
+        async def fake_serp(query, n):
+            log.append(("serp", query))
+            slug = query.replace(" ", "_")
+            return [
+                {"title": f"t1 {query}", "url": f"https://example.com/p1/{slug}", "content": f"事实一 {query}", "score": 0.9},
+                {"title": f"t2 {query}", "url": f"https://example.com/p2/{slug}", "content": f"事实二 {query}", "score": 0.8},
+            ]
+
+        async def fake_wiki(query, n):
+            log.append(("wiki", query))
+            return [{
+                "title": f"百科 {query}",
+                "url": f"https://zh.wikipedia.org/wiki/{query}",
+                "content": "条目正文",
+                "score": 0.8,
+            }]
+
+        async def fake_fetch(url):
+            log.append(("fetch", url))
+            if fetch_fail_substr and fetch_fail_substr in url:
+                raise RuntimeError("fetch http 500")
+            return "页面正文" * 200  # 1000 字，验证深读摘要截断
+
+        return ResearchToolbox(serp_func=fake_serp, fetch_func=fake_fetch, wiki_func=fake_wiki)
+
+    def _run(self, tmp, events, log, *, preset="deep", fetch_fail_substr=None):
+        ctx = AuthorPipelineContext(
+            task_id="t-author-deep",
+            topic="微积分基础",
+            subject="数学",
+            work_dir=Path(tmp),
+            user_id="u-1",
+            preset=preset,
+            knowledge_points=["极限", "导数"],
+        )
+        return asyncio.run(
+            run_author_pipeline(
+                ctx,
+                llm_func=_fake_llm(),
+                toolbox=self._toolbox(log, fetch_fail_substr),
+                emit=events.append,
+                forge=_fake_forge(events),
+            )
+        )
+
+    @staticmethod
+    def _tool_calls(events, tool):
+        return [e["data"] for e in events if e["type"] == "tool_call" and e["data"].get("tool") == tool]
+
+    def test_deep_preset_adds_wikipedia_query_and_two_deep_reads_per_kp(self):
+        events, log = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events, log, preset="deep")
+            research = (Path(tmp) / "notes" / "research.md").read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "ok")
+        # 每个知识点追加 1 条 wikipedia 查询（查询词为知识点本身）
+        self.assertEqual([q for kind, q in log if kind == "wiki"], ["极限", "导数"])
+        # deep preset：每 kp 从 serp 结果深读 top-2（两 kp 共 4 次 browse）
+        fetched = [url for kind, url in log if kind == "fetch"]
+        self.assertEqual(len(fetched), 4)
+        self.assertIn("https://example.com/p1/极限_数学", fetched)
+        self.assertIn("https://example.com/p2/极限_数学", fetched)
+        # 深读摘要（前 500 字）作为 deep_read 行落入研究笔记
+        line = next(ln for ln in research.splitlines() if "deep_read" in ln and "p1/极限_数学" in ln)
+        self.assertIn("src: https://example.com/p1/极限_数学", line)
+        self.assertLessEqual(len(line), 600, "深读摘要必须截断到 ~500 字")
+
+        # search 完成事件带 provider 与前 5 条结果 URL
+        search_done = [d for d in self._tool_calls(events, "search") if "result_count" in d]
+        self.assertTrue(search_done)
+        self.assertTrue(all(d.get("provider") in ("tavily", "wikipedia") for d in search_done))
+        self.assertTrue(all(isinstance(d.get("urls"), list) and d["urls"] for d in search_done))
+        self.assertTrue(all(len(d["urls"]) <= 5 for d in search_done))
+        self.assertTrue(any(d["provider"] == "wikipedia" for d in search_done))
+        # browse 事件带 url 与 ok 状态
+        browse_calls = self._tool_calls(events, "browse")
+        self.assertEqual(len(browse_calls), 4)
+        self.assertTrue(all(d.get("status") == "ok" and d.get("url") for d in browse_calls))
+
+    def test_standard_preset_skips_wikipedia_and_deep_reads_top1(self):
+        events, log = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events, log, preset="standard")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse([q for kind, q in log if kind == "wiki"], "quick/standard 不走 wikipedia 通道")
+        # 每 kp 仅深读 serp top-1（两 kp 共 2 次 browse）
+        fetched = [url for kind, url in log if kind == "fetch"]
+        self.assertEqual(len(fetched), 2)
+        self.assertEqual(len(self._tool_calls(events, "browse")), 2)
+        # standard preset 下 search 事件同样带 provider/urls
+        search_done = [d for d in self._tool_calls(events, "search") if "result_count" in d]
+        self.assertTrue(all(d.get("provider") == "tavily" for d in search_done))
+        self.assertTrue(all(d.get("urls") for d in search_done))
+
+    def test_browse_failure_records_quality_note_without_blocking(self):
+        events, log = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events, log, preset="deep", fetch_fail_substr="p1/")
+            research = (Path(tmp) / "notes" / "research.md").read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(any(n.startswith("deep_read_failed:") for n in result["quality_notes"]))
+        browse_calls = self._tool_calls(events, "browse")
+        self.assertTrue(any(d.get("status") == "error" for d in browse_calls))
+        self.assertTrue(any(d.get("status") == "ok" for d in browse_calls))
+        # top-1 失败不阻断：top-2 的深读摘要仍落笔记
+        self.assertTrue(any("deep_read" in ln and "p2/极限_数学" in ln for ln in research.splitlines()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,10 @@
 输入是 SSE 帧字典列表（``{taskId, seq, type, data}``），全部确定性判定：
 - R 看检索工具调用的类别数、深读行为、唯一来源数、检索轮次与权威域名命中；
 - S 看 subagent_start/subagent_end 事件、知识点覆盖率与摘要产出。
+
+识别两种事件词汇：legacy agent 的 ``data.name`` 工具事件（web_search_knowledge、
+browse_web_pages 等），以及 author 运行时的 ``data.tool == "search"|"browse"``
+tool_call 事件（provider/query/urls 在 data 上）。两条识别路径互不干扰。
 """
 
 from __future__ import annotations
@@ -33,6 +37,17 @@ SEARCH_TOOL_CLASSES: Dict[str, str] = {
     "deep_research": "web",
 }
 DEEP_READ_TOOLS = {"browse_web_pages"}
+
+# author 运行时 search 事件的 data.provider → 来源类别（未知 provider 按原值计类）。
+AUTHOR_PROVIDER_CLASSES: Dict[str, str] = {
+    "tavily": "web",
+    "serp": "web",
+    "exa": "web",
+    "wikipedia": "wikipedia",
+    "mediawiki": "mediawiki",
+    "github": "github",
+    "stackexchange": "stackexchange",
+}
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>\]\)）】，,；;]+")
 
@@ -73,11 +88,33 @@ class EventStats:
     def search_calls(self) -> List[Dict[str, Any]]:
         return [c for c in self.tool_calls if str(c.get("name") or "") in SEARCH_TOOL_CLASSES]
 
+    # ---- author 运行时检索统计（data.tool 形状，与 legacy data.name 互不干扰） ----
+
+    def author_search_calls(self) -> List[Dict[str, Any]]:
+        """author 检索事件；跳过 status=start 帧，避免与完成帧重复计数。"""
+        calls: List[Dict[str, Any]] = []
+        for call in self.tool_calls:
+            if str(call.get("tool") or "") != "search":
+                continue
+            if str(call.get("status") or "") == "start":
+                continue
+            calls.append(call)
+        return calls
+
+    def author_browse_calls(self) -> List[Dict[str, Any]]:
+        return [c for c in self.tool_calls if str(c.get("tool") or "") == "browse"]
+
     def source_classes(self) -> Set[str]:
-        return {SEARCH_TOOL_CLASSES[str(c.get("name"))] for c in self.search_calls()}
+        classes = {SEARCH_TOOL_CLASSES[str(c.get("name"))] for c in self.search_calls()}
+        for call in self.author_search_calls():
+            provider = str(call.get("provider") or "").strip().lower()
+            if provider:
+                classes.add(AUTHOR_PROVIDER_CLASSES.get(provider, provider))
+        return classes
 
     def deep_read_count(self) -> int:
-        return sum(1 for c in self.tool_calls if str(c.get("name") or "") in DEEP_READ_TOOLS)
+        legacy = sum(1 for c in self.tool_calls if str(c.get("name") or "") in DEEP_READ_TOOLS)
+        return legacy + len(self.author_browse_calls())
 
     def distinct_search_payloads(self) -> int:
         """检索轮次近似：不同检索入参（query 改写/重试）的数量。"""
@@ -85,6 +122,10 @@ class EventStats:
         for call in self.search_calls():
             args = call.get("arguments")
             payloads.add(json.dumps(args if args is not None else {}, ensure_ascii=False, sort_keys=True))
+        for call in self.author_search_calls():
+            query = str(call.get("query") or "").strip()
+            if query:
+                payloads.add(f"author:{query}")
         return len(payloads)
 
     def _task_info_urls(self) -> Set[str]:
@@ -107,12 +148,20 @@ class EventStats:
         return urls
 
     def result_urls(self) -> Set[str]:
-        """tool_result 输出 + task_info 检索摘要里出现过的全部 URL。"""
+        """tool_result 输出 + task_info 检索摘要 + author search 事件 urls 里出现过的全部 URL。"""
         urls: Set[str] = set(self._task_info_urls())
         for result in self.tool_results:
             blob = json.dumps(result, ensure_ascii=False, default=str)
             for match in _URL_RE.findall(blob):
                 urls.add(match.rstrip(".,;:)\"]}"))
+        for call in self.author_search_calls():
+            raw_urls = call.get("urls")
+            if not isinstance(raw_urls, list):
+                continue
+            for item in raw_urls:
+                url = str(item or "").strip()
+                if url.startswith("http"):
+                    urls.add(url)
         return urls
 
     def result_domains(self) -> Set[str]:
@@ -169,7 +218,7 @@ def grade_research(
     ratio = deep_reads / kp_count
     score = part if ratio >= 1.0 else (part * 0.5 if ratio >= 0.5 else (part * 0.25 if deep_reads > 0 else 0.0))
     dim.checks.append(CheckResult(
-        "R2_deep_reads", "每个知识点至少一次深读（browse_web_pages）",
+        "R2_deep_reads", "每个知识点至少一次深读（browse_web_pages/browse）",
         score, part, f"深读 {deep_reads} 次 / {kp_count} 个知识点",
     ))
 

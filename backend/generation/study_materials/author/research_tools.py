@@ -16,11 +16,13 @@ class ResearchToolbox:
         self,
         serp_func: Optional[SerpFunc] = None,
         fetch_func: Optional[FetchFunc] = None,
+        wiki_func: Optional[SerpFunc] = None,
         *,
         timeout_s: float = 30.0,
     ) -> None:
         self._serp = serp_func or self._default_serp
         self._fetch = fetch_func or self._default_fetch
+        self._wiki = wiki_func or self._default_wiki
         self._timeout = timeout_s
 
     async def search(self, query: str, n: int = 5) -> Dict[str, Any]:
@@ -29,6 +31,13 @@ class ResearchToolbox:
         except Exception as exc:  # noqa: BLE001 - re-raised with provider label for the agent
             raise RuntimeError(f"serp failed: {exc}") from exc
         return {"provider": "serp", "query": query, "results": results[:n]}
+
+    async def search_wikipedia(self, query: str, n: int = 3) -> Dict[str, Any]:
+        try:
+            results = await asyncio.wait_for(self._wiki(query, n), timeout=self._timeout)
+        except Exception as exc:  # noqa: BLE001 - re-raised with provider label for the agent
+            raise RuntimeError(f"wikipedia failed: {exc}") from exc
+        return {"provider": "wikipedia", "query": query, "results": results[:n]}
 
     async def browse(self, url: str, *, max_chars: int = 4000) -> Dict[str, Any]:
         try:
@@ -47,6 +56,21 @@ class ResearchToolbox:
             raise RuntimeError(str(data.get("error") or "tavily search failed"))
         results = data.get("results")
         return list(results) if isinstance(results, list) else []
+
+    @staticmethod
+    async def _default_wiki(query: str, n: int) -> List[Dict[str, Any]]:
+        """Adapt the real Wikipedia entry: backend/integrations/mcp/search/wikipedia.wikipedia_search."""
+        from backend.integrations.mcp.search.wikipedia import wikipedia_search
+
+        data = await wikipedia_search(query, search_results=max(1, min(int(n or 3), 10)))
+        if not data.get("success"):
+            raise RuntimeError(str(data.get("error") or "wikipedia search failed"))
+        return [{
+            "title": str(data.get("title") or query),
+            "url": str(data.get("url") or ""),
+            "content": str(data.get("summary") or data.get("content") or ""),
+            "score": 0.8,
+        }]
 
     @staticmethod
     async def _default_fetch(url: str) -> str:

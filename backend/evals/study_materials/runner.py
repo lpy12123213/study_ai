@@ -261,6 +261,29 @@ def build_llm_aesthetics_judge() -> Callable[[str, str], float]:
     return judge
 
 
+def build_llm_rubric_judge() -> Callable[[str, str], Any]:
+    """W 维度 rubric judge：(system_prompt, markdown) -> LLM 原始输出（JSON 文本或 dict）。"""
+    from backend.agent.config import AgentConfig
+    from backend.llm.client import chat_completion_text
+
+    model = str(AgentConfig().reflector_model or "").strip() or None
+
+    def judge(system_prompt: str, markdown: str) -> Any:
+        kwargs: Dict[str, Any] = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"请评审以下自学资料：\n\n{markdown[:12000]}"},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 512,
+        }
+        if model:
+            kwargs["model"] = model
+        return asyncio.run(chat_completion_text(**kwargs))
+
+    return judge
+
+
 def build_link_checker() -> Callable[[str], bool]:
     def check(url: str) -> bool:
         try:
@@ -383,6 +406,7 @@ def run_case(
         task_info=task_info,
         llm_fact_judge=build_llm_fact_judge() if llm_judge else None,
         llm_aesthetics_judge=build_llm_aesthetics_judge() if llm_judge else None,
+        llm_rubric_judge=build_llm_rubric_judge() if llm_judge else None,
         link_checker=build_link_checker() if check_links else None,
         notes=notes,
     )
@@ -464,6 +488,7 @@ def regrade_run(
         task_info=task_info,
         llm_fact_judge=build_llm_fact_judge() if llm_judge else None,
         llm_aesthetics_judge=build_llm_aesthetics_judge() if llm_judge else None,
+        llm_rubric_judge=build_llm_rubric_judge() if llm_judge else None,
         link_checker=build_link_checker() if check_links else None,
         notes=notes,
     )
@@ -490,7 +515,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--parallel", type=int, default=0, help="并发跑用例数（默认 0=自动，最多 4；1=串行）")
     parser.add_argument("--shard-count", type=int, default=1, help="把所选套件稳定分成 N 片（默认 1）")
     parser.add_argument("--shard-index", type=int, default=0, help="运行第几片，0-based（默认 0）")
-    parser.add_argument("--llm-judge", action="store_true", help="启用 LLM 复核（事实点/排版）")
+    parser.add_argument("--llm-judge", action="store_true", help="启用 LLM 复核（事实点/排版/写作 rubric）")
     parser.add_argument("--check-links", action="store_true", help="抽查参考文献 URL 可访问性")
     parser.add_argument("--dry-run", action="store_true", help="只加载校验用例，不跑生成")
     args = parser.parse_args(argv)

@@ -255,6 +255,8 @@ class _AuthorPipeline:
 
     async def _research(self) -> None:
         kps = self.knowledge_points
+        preset = str(self.ctx.preset or "standard").strip().lower()
+        deep_mode = preset in {"deep", "research"}
         self._add_todo(TodoItem(
             id="research", type="research", ref="、".join(kps),
             acceptance="每个知识点的事实与易错点查询结果落 notes/research.md",
@@ -262,57 +264,101 @@ class _AuthorPipeline:
         self._mark("research", "in_progress")
         sem = asyncio.Semaphore(SEARCH_CONCURRENCY)
 
-        async def _search(query: str) -> Optional[Dict[str, Any]]:
+        async def _search(query: str, provider: str) -> Optional[Dict[str, Any]]:
             async with sem:
-                self._emit("tool_call", {"tool": "search", "query": query, "status": "start"})
+                self._emit("tool_call", {"tool": "search", "query": query, "provider": provider, "status": "start"})
                 try:
-                    result = await self.toolbox.search(query, n=5)
+                    if provider == "wikipedia":
+                        result = await self.toolbox.search_wikipedia(query, n=3)
+                    else:
+                        result = await self.toolbox.search(query, n=5)
                 except (RuntimeError, asyncio.TimeoutError) as exc:
                     self.quality_notes.append(f"search_failed:{query}:{exc}")
-                    self._emit("tool_call", {"tool": "search", "query": query, "error": f"{type(exc).__name__}: {exc}"})
+                    self._emit("tool_call", {
+                        "tool": "search", "query": query, "provider": provider,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
                     return None
             rows = result.get("results") if isinstance(result, dict) else None
+            urls = [
+                str(row.get("url") or "").strip()
+                for row in (rows if isinstance(rows, list) else [])
+                if isinstance(row, dict) and str(row.get("url") or "").strip()
+            ][:5]
             self._emit("tool_call", {
-                "tool": "search", "query": query,
+                "tool": "search", "query": query, "provider": provider,
                 "result_count": len(rows) if isinstance(rows, list) else 0,
+                "urls": urls,
             })
             return result
 
-        queries: List = []
-        for kp in kps:
-            queries.append((kp, f"{kp} {self.ctx.subject}".strip()))
-            queries.append((kp, f"{kp} 常见错误 误区"))
-        results = await asyncio.gather(*[_search(query) for _, query in queries])
+        async def _deep_read(url: str) -> Optional[str]:
+            """深读一个来源页面：成功返回页面摘要（前 500 字）；失败记 quality note，不阻断。"""
+            async with sem:
+                try:
+                    page = await self.toolbox.browse(url)
+                except (RuntimeError, asyncio.TimeoutError) as exc:
+                    self.quality_notes.append(f"deep_read_failed:{url}:{exc}")
+                    self._emit("tool_call", {"tool": "browse", "url": url, "status": "error"})
+                    return None
+            self._emit("tool_call", {"tool": "browse", "url": url, "status": "ok"})
+            text = str(page.get("text") or "").strip() if isinstance(page, dict) else ""
+            return text[:500]
 
-        last_kp: Optional[str] = None
-        for (kp, _query), result in zip(queries, results):
-            if kp != last_kp:
-                self.notes.append("research", f"## {kp}")
-                last_kp = kp
-            rows = result.get("results") if isinstance(result, dict) else None
-            if not isinstance(rows, list):
-                continue
+        async def _research_kp(kp: str) -> Dict[str, Any]:
+            queries = [(f"{kp} {self.ctx.subject}".strip(), "tavily"), (f"{kp} 常见错误 误区", "tavily")]
+            if deep_mode:
+                queries.append((kp, "wikipedia"))
+            results = await asyncio.gather(*[_search(query, provider) for query, provider in queries])
+            serp_urls: List[str] = []
+            for (_query, provider), result in zip(queries, results):
+                if provider != "tavily" or not isinstance(result, dict):
+                    continue
+                rows = result.get("results")
+                for row in rows if isinstance(rows, list) else []:
+                    if not isinstance(row, dict):
+                        continue
+                    url = str(row.get("url") or "").strip()
+                    if url and url not in serp_urls:
+                        serp_urls.append(url)
+            deep_reads: List[Dict[str, str]] = []
+            for url in serp_urls[: 2 if deep_mode else 1]:
+                summary = await _deep_read(url)
+                if summary:
+                    deep_reads.append({"url": url, "summary": summary})
+            return {"items": list(zip([provider for _q, provider in queries], results)), "deep_reads": deep_reads}
+
+        outcomes = await asyncio.gather(*[_research_kp(kp) for kp in kps])
+
+        for idx, (kp, outcome) in enumerate(zip(kps, outcomes)):
+            self.notes.append("research", f"## {kp}")
             evidence: List[Dict[str, Any]] = []
-            for row in rows:
-                if not isinstance(row, dict):
+            for provider, result in outcome["items"]:
+                rows = result.get("results") if isinstance(result, dict) else None
+                if not isinstance(rows, list):
                     continue
-                fact = str(row.get("content") or row.get("snippet") or "").strip()
-                url = str(row.get("url") or "").strip()
-                if not fact:
-                    continue
-                conf = row.get("score")
-                conf_text = f"{float(conf):.2f}" if isinstance(conf, (int, float)) and not isinstance(conf, bool) else "0.50"
-                self.notes.append("research", f"- {fact} | src: {url or '（无出处）'} | conf: {conf_text}")
-                if url:
-                    self._register_source(url, str(row.get("title") or "").strip())
-                evidence.append({
-                    "source_class": "web_search",
-                    "title": str(row.get("title") or "").strip(),
-                    "snippet": fact,
-                    "url": url,
-                })
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    fact = str(row.get("content") or row.get("snippet") or "").strip()
+                    url = str(row.get("url") or "").strip()
+                    if not fact:
+                        continue
+                    conf = row.get("score")
+                    conf_text = f"{float(conf):.2f}" if isinstance(conf, (int, float)) and not isinstance(conf, bool) else "0.50"
+                    self.notes.append("research", f"- {fact} | src: {url or '（无出处）'} | conf: {conf_text}")
+                    if url:
+                        self._register_source(url, str(row.get("title") or "").strip())
+                    evidence.append({
+                        "source_class": "wikipedia" if provider == "wikipedia" else "web_search",
+                        "title": str(row.get("title") or "").strip(),
+                        "snippet": fact,
+                        "url": url,
+                    })
+            for read in outcome["deep_reads"]:
+                self.notes.append("research", f"- deep_read: {read['summary']} | src: {read['url']}")
             if evidence:
-                self.research_evidence.setdefault(f"kp-{kps.index(kp) + 1}", []).extend(evidence)
+                self.research_evidence.setdefault(f"kp-{idx + 1}", []).extend(evidence)
         self._write_source_registry()
         self._mark("research", "done")
 

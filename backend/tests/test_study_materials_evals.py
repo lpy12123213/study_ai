@@ -292,6 +292,72 @@ class EventGraderTests(unittest.TestCase):
         self.assertGreater(by_id["R5_authority_domains"].score, 0.0)
 
 
+class AuthorEventGraderTests(unittest.TestCase):
+    """author 运行时事件（tool_call 帧 data.tool=search/browse 形状）驱动 R 维度评分。"""
+
+    def setUp(self) -> None:
+        self.kps = [f"知识点{i}" for i in range(1, 7)]
+        self.case = parse_case(_mini_case(
+            expected_knowledge_points=self.kps,
+            min_unique_sources=8,
+            expected_domains=["wikipedia.org", "example.edu"],
+        ))
+
+    def _author_events(self) -> list:
+        """合成 author 事件流：6 kp × (2 serp + 1 wiki + 1 browse)，search 完成帧带 urls。"""
+        events = []
+        for kp in self.kps:
+            queries = [
+                (f"{kp} 数学", "tavily", [f"https://example.edu/{kp}/a", f"https://example.edu/{kp}/b"]),
+                (f"{kp} 常见错误 误区", "tavily", [f"https://notes.test/{kp}"]),
+                (kp, "wikipedia", [f"https://zh.wikipedia.org/wiki/{kp}"]),
+            ]
+            for query, provider, urls in queries:
+                events.append(_frame("tool_call", {
+                    "tool": "search", "query": query, "provider": provider, "status": "start",
+                }))
+                events.append(_frame("tool_call", {
+                    "tool": "search", "query": query, "provider": provider,
+                    "result_count": len(urls), "urls": urls,
+                }))
+            events.append(_frame("tool_call", {"tool": "browse", "url": f"https://example.edu/{kp}/a", "status": "ok"}))
+        return events
+
+    def test_author_event_stream_scores_r_dimension(self) -> None:
+        result = grade_research(self.case, self._author_events())
+        by_id = {c.id: c for c in result.checks}
+        # R1：tavily→web + wikipedia → 2 类
+        self.assertIn("2 类", by_id["R1_source_classes"].detail)
+        self.assertGreaterEqual(by_id["R1_source_classes"].score, by_id["R1_source_classes"].max_score * 0.6)
+        # R2：6 次深读 / 6 个知识点 → 满分
+        self.assertAlmostEqual(by_id["R2_deep_reads"].score, by_id["R2_deep_reads"].max_score)
+        # R3：24 个唯一 URL ≥ 8 → 满分
+        self.assertAlmostEqual(by_id["R3_unique_sources"].score, by_id["R3_unique_sources"].max_score)
+        # R4：18 个不同 query ≥ 2×6 → 满分
+        self.assertAlmostEqual(by_id["R4_multi_round"].score, by_id["R4_multi_round"].max_score)
+        # R5：wikipedia.org 与 example.edu 均命中 → 满分
+        self.assertAlmostEqual(by_id["R5_authority_domains"].score, by_id["R5_authority_domains"].max_score)
+
+    def test_author_stats_skip_start_frames_and_collect_urls(self) -> None:
+        stats = EventStats(self._author_events())
+        self.assertEqual(stats.deep_read_count(), 6)
+        self.assertEqual(stats.distinct_search_payloads(), 18)  # start 帧不重复计数
+        self.assertEqual(stats.source_classes(), {"web", "wikipedia"})
+        self.assertIn("zh.wikipedia.org", stats.result_domains())
+        self.assertIn("https://notes.test/知识点1", stats.result_urls())
+
+    def test_legacy_stream_not_misread_as_author_events(self) -> None:
+        """legacy data.name 事件不落入 author 识别路径：统计量保持既有行为。"""
+        legacy = [
+            _tool_call("web_search_knowledge", {"query": "q1"}),
+            _tool_call("browse_web_pages", {"urls": ["https://example.edu/a"]}),
+        ]
+        stats = EventStats(legacy)
+        self.assertEqual(stats.source_classes(), {"web"})
+        self.assertEqual(stats.deep_read_count(), 1)
+        self.assertEqual(stats.distinct_search_payloads(), 1)
+
+
 _CURRENT_STYLE_MD = """# 自学材料：迷你主题
 
 > 学科：测试学科
@@ -788,6 +854,83 @@ class RunnerHelperTests(unittest.TestCase):
                 )
             self.assertEqual(rc, 0)
             self.assertEqual(sorted(ran), ["mini_a", "mini_b"])
+
+    def test_run_case_wires_llm_rubric_judge(self) -> None:
+        """--llm-judge 开启时 build_llm_rubric_judge 的产出必须传进 grade_case（T14 接线）。"""
+        import tempfile
+        from unittest.mock import patch
+
+        import backend.evals.study_materials.runner as runner_mod
+
+        case = parse_case(_mini_case())
+        called = {"rubric": 0}
+
+        def fake_rubric_judge(system, markdown):  # noqa: ANN001, ANN202
+            called["rubric"] += 1
+            return {
+                "coherence": 4,
+                "style": 3,
+                "misconception_authenticity": 5,
+                "rationale": {"coherence": "承接自然", "style": "稳", "misconception_authenticity": "真实"},
+            }
+
+        fake_run = {
+            "events": [_frame("done", {"material": {"markdown": _CHALLENGE_READY_MD}})],
+            "markdown": _CHALLENGE_READY_MD,
+            "markdown_source": "done_event",
+            "task_id": "",
+            "error": "",
+            "elapsed_s": 0.1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(runner_mod, "collect_run", return_value=fake_run),
+                patch.object(runner_mod, "build_llm_fact_judge", return_value=lambda md, desc, urls: True),
+                patch.object(runner_mod, "build_llm_aesthetics_judge", return_value=lambda md, title: 0.5),
+                patch.object(runner_mod, "build_llm_rubric_judge", return_value=fake_rubric_judge),
+            ):
+                judged = runner_mod.run_case(
+                    case, base_url="http://127.0.0.1:9", out_root=Path(tmp),
+                    timeout_s=1.0, llm_judge=True, check_links=False,
+                )
+                unjudged = runner_mod.run_case(
+                    case, base_url="http://127.0.0.1:9", out_root=Path(tmp),
+                    timeout_s=1.0, llm_judge=False, check_links=False,
+                )
+        self.assertEqual(called["rubric"], 1)
+        self.assertEqual(judged["writing_rubric"]["coherence"], 4)
+        self.assertEqual(judged["writing_rubric"]["misconception_authenticity"], 5)
+        self.assertIsNone(unjudged["writing_rubric"])
+
+    def test_regrade_wires_llm_rubric_judge(self) -> None:
+        import tempfile
+        from unittest.mock import patch
+
+        import backend.evals.study_materials.runner as runner_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "meta.json").write_text(json.dumps({"case_id": "mini", "error": ""}), encoding="utf-8")
+            cases_dir = Path(tmp) / "cases"
+            cases_dir.mkdir()
+            (cases_dir / "mini.json").write_text(json.dumps(_mini_case()), encoding="utf-8")
+            (run_dir / "events.jsonl").write_text(
+                "\n".join(json.dumps(e, ensure_ascii=False) for e in _LEGACY_EVENTS) + "\n", encoding="utf-8"
+            )
+            (run_dir / "final.md").write_text(_CHALLENGE_READY_MD, encoding="utf-8")
+            (run_dir / "task_info.json").write_text(json.dumps({}), encoding="utf-8")
+            with (
+                patch.object(runner_mod, "build_llm_fact_judge", return_value=lambda md, desc, urls: True),
+                patch.object(runner_mod, "build_llm_aesthetics_judge", return_value=lambda md, title: 0.5),
+                patch.object(
+                    runner_mod,
+                    "build_llm_rubric_judge",
+                    return_value=lambda system, md: {"coherence": 5, "style": 4, "misconception_authenticity": 3},
+                ),
+            ):
+                result = runner_mod.regrade_run(run_dir, cases_dir=cases_dir, llm_judge=True, check_links=False)
+        self.assertEqual(result["writing_rubric"]["coherence"], 5)
 
 
 class RubricGraderTests(unittest.TestCase):
