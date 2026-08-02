@@ -76,6 +76,12 @@ class TestTextLintMathSpanExemption(unittest.TestCase):
         self.assertNotIn("unresolved_placeholder", flags)
         self.assertIn("unbalanced_inline_math", flags)
 
+    def test_paren_inline_math_environment_args_are_not_placeholders(self) -> None:
+        # 真实缺陷（实跑 #5）：模型用 \\(...\\) 定界符时，\\begin{bmatrix} 仍被误判占位符。
+        flags = lint_text("设 \\(A=\\begin{bmatrix}0&1\\\\1&0\\end{bmatrix}\\)，求特征值。")
+
+        self.assertNotIn("unresolved_placeholder", flags)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -155,6 +155,8 @@ class FillRunner:
             missing.append("包含 # 或 ## 级标题（小节正文只允许 ###/#### 标题，[EXn]/[Qn]/[An] 标签用加粗行）")
         if "[[" in text:
             missing.append("包含 [[ ]] 式引用标记或占位符")
+        if "\\(" in text or "\\[" in text:
+            missing.append("使用了 \\( 或 \\[ 定界符（LaTeX 定界符请用 $...$ / $$...$$）")
         for tag in ("[EX", "[Q", "[A"):
             if tag not in text:
                 missing.append(f"缺少 {tag}n] 标签（例题/自测题/答案）")

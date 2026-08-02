@@ -117,7 +117,6 @@ class HeadingLevelTests(unittest.TestCase):
     def test_h3_h4_headings_accepted(self):
         async def heading_llm(system, user):
             return "### 直观理解\n\n" + GROUNDED_BODY + "\n\n#### 备注\n\n补充说明与提醒。"
-
         r = FillRunner(llm_func=heading_llm, max_retries=1)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
 
@@ -187,6 +186,43 @@ class InlineCitationTests(unittest.TestCase):
         r = FillRunner(llm_func=fake_llm, max_retries=1)
         out = asyncio.run(r.fill(BP.sections[0], "", "无来源笔记。", []))
         self.assertTrue(out.needs_author_rewrite)
+
+
+class LatexDelimiterTests(unittest.TestCase):
+    """真实缺陷（实跑 #5）：模型用 \\(...\\) / \\[...\\] 定界符——前端 remark-math 不渲染，
+    且 lint 数学区间豁免不覆盖。fill 校验必须拒绝并要求 $...$ / $$...$$。"""
+
+    def test_paren_delimiter_rejected_and_fed_back(self):
+        seen = []
+
+        async def paren_llm(system, user):
+            seen.append(user)
+            return GROUNDED_BODY + "公式 \\(A=\\begin{bmatrix}0&1\\\\1&0\\end{bmatrix}\\) 见上。"
+
+        r = FillRunner(llm_func=paren_llm, max_retries=2)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertTrue(out.needs_author_rewrite)
+        self.assertEqual(len(seen), 2)
+        self.assertIn("定界符", seen[1])
+
+    def test_bracket_delimiter_rejected(self):
+        async def bracket_llm(system, user):
+            return GROUNDED_BODY + "\n\\[x+1=2\\]"
+
+        r = FillRunner(llm_func=bracket_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertTrue(out.needs_author_rewrite)
+
+    def test_dollar_delimiters_accepted(self):
+        async def dollar_llm(system, user):
+            return GROUNDED_BODY + "公式 $x+1=2$ 与 $$y=2x$$ 见上。"
+
+        r = FillRunner(llm_func=dollar_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertFalse(out.needs_author_rewrite)
 
 
 if __name__ == "__main__":
