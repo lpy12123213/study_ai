@@ -13,7 +13,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
-FILL_RE = re.compile(r"\[\[FILL:([A-Za-z0-9\-]+)\]\]")
+# 占位符 id 字符集须覆盖蓝图合法小节 id（含下划线，见 blueprint.SECTION_ID_RE）：
+# 真实缺陷——LLM 产出 s0_frontmatter 之类下划线 id 时，旧字符集不含 _，占位符
+# 既不被替换也不计入 missing，静默残留成稿。
+FILL_RE = re.compile(r"\[\[FILL:([A-Za-z0-9_\-]+)\]\]")
 FIG_RE = re.compile(r"\[\[FIG:(\d+)\]\]")
 _FALLBACK_LEAK_RE = re.compile(r"未成功使用模型生成|兜底内容|source=llm_|退回到摘要")
 

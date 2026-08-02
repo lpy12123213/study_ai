@@ -57,6 +57,14 @@ class AuthorPromptTests(unittest.TestCase):
         p = self.reg.render("study.author.blueprint.v1")
         self.assertIn("知识点", p.content)
 
+    def test_blueprint_prompt_constrains_section_id_charset(self):
+        # 真实缺陷：模型产出大写/点号/下划线混合 id（S0.FrontMatter、s0_frontmatter），
+        # 与汇编器占位符字符集错位 → 提示词必须给死 id 字符集与示例。
+        p = self.reg.render("study.author.blueprint.v1")
+        self.assertIn("小写字母", p.content)
+        self.assertIn("下划线", p.content)
+        self.assertIn("s1_definition", p.content)
+
     def test_fill_prompt_defines_inline_citation_contract(self):
         # C2 内联引用：关键事实句末 [^n] 标注，编号只能来自给定来源清单，禁裸 URL。
         p = self.reg.render("study.author.fill.v1")

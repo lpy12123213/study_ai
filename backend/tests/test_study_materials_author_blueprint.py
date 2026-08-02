@@ -41,6 +41,20 @@ class BlueprintTests(unittest.TestCase):
         with self.assertRaises(BlueprintError):
             Blueprint.from_dict(bad)
 
+    def test_section_id_charset_validated(self):
+        """小节 id 字符集与汇编器 [[FILL:<id>]] 占位符契约对齐：小写字母/数字开头，
+        后接小写字母、数字、连字符或下划线；大写/点号/空格拒绝。"""
+        for bad_id in ("S0.FrontMatter", "S0_frontmatter", "s0 frontmatter", "-s0", "s0.front"):
+            bad = dict(VALID, sections=[dict(VALID["sections"][0], id=bad_id)], figures=[])
+            with self.assertRaises(BlueprintError, msg=f"id {bad_id!r} 应被拒绝"):
+                Blueprint.from_dict(bad)
+
+    def test_section_id_underscore_and_hyphen_accepted(self):
+        for good_id in ("s0_frontmatter", "sec-1", "s1_definition"):
+            good = dict(VALID, sections=[dict(VALID["sections"][0], id=good_id)], figures=[])
+            bp = Blueprint.from_dict(good)
+            self.assertEqual(bp.sections[0].id, good_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,11 +7,17 @@ enforces it structurally.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 FIGURE_KINDS = frozenset({"auto", "tikz", "mermaid", "manim", "image"})
 DIFFICULTY_LEVELS = frozenset({"基础", "应用", "迁移"})
+
+# 小节 id 字符集：小写字母/数字开头，后接小写字母、数字、连字符或下划线，最长 64。
+# 与汇编器 [[FILL:<id>]] 占位符契约对齐（真实缺陷：LLM 产出 S0.FrontMatter 之类
+# 大写/点号 id，或下划线 id 与旧 FILL_RE 字符集错位，占位符静默残留成稿）。
+SECTION_ID_RE = re.compile(r"[a-z0-9][a-z0-9_\-]{0,63}")
 
 SECTION_FIELDS = ("id", "title", "purpose", "key_points", "target_chars", "difficulty", "misconceptions", "frontier")
 FIGURE_FIELDS = ("n", "sec_id", "intent", "kind", "caption")
@@ -83,8 +89,14 @@ class SectionSpec:
         difficulty = _require_str(raw, "difficulty", where)
         if difficulty not in DIFFICULTY_LEVELS:
             _fail(f"{where}: unknown difficulty {difficulty!r} (expected one of {sorted(DIFFICULTY_LEVELS)})")
+        section_id = _require_str(raw, "id", where)
+        if not SECTION_ID_RE.fullmatch(section_id):
+            _fail(
+                f"{where}: field 'id' must match ^[a-z0-9][a-z0-9_-]{{0,63}}$ "
+                f"(lowercase letters/digits, hyphen/underscore; got {section_id!r})"
+            )
         return cls(
-            id=_require_str(raw, "id", where),
+            id=section_id,
             title=_require_str(raw, "title", where),
             purpose=_require_str(raw, "purpose", where),
             key_points=list(key_points),

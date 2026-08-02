@@ -9,8 +9,8 @@ FigureForge 异步生成（失败不阻塞，移除对应 ``[[FIG:n]]`` 行并�
 调用都伴随统一 trace 事件（todo_update/note_write/section_fill/figure_trace/tool_call/
 text_delta），无隐藏调用（设计稿 §9）。
 
-失败语义：蓝图非法、主干占位符缺/多、汇编修不好，均以结构化 ``status=failed``
-结果返回（任务层据此置 failed 终态），不向上抛未捕获异常。
+失败语义：蓝图非法、主干占位符缺/多、汇编修不好、验收发现占位符残留，均以结构化
+``status=failed`` 结果返回（任务层据此置 failed 终态），不向上抛未捕获异常。
 """
 from __future__ import annotations
 
@@ -63,6 +63,7 @@ _FALLBACK_BLUEPRINT_PROMPT = (
     "figures（n/sec_id/intent/kind/caption）。易错点只能来自研究笔记中带出处的条目。"
     "figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid）；"
     "difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。"
+    "sections[].id 必须是小写字母/数字/连字符/下划线（如 sec-1、s1_definition）。"
     "sections 必须逐一覆盖每个知识点，且每节 title 包含该知识点的名称关键词。"
 )
 _FALLBACK_BACKBONE_PROMPT = (
@@ -691,9 +692,27 @@ class _AuthorPipeline:
             "dimensions": {},
             "issues": [str(c.get("text") or "") for c in self.unsupported_claims],
         }
-        # author 专用验收门决定交付终态：硬门槛为 todos 未清零与占位符残留。
+        # author 专用验收门决定交付终态：占位符残留硬失败，todos 未清零降级交付。
         report = evaluate_author_acceptance(todos=self.todos, markdown=document, blueprint=bp)
         report["draft_hash"] = review["draft_hash"]  # build_acceptance_record 需要该字段
+        failed_checks = [str(check) for check in report.get("failed_checks") or []]
+        if "placeholder_residual" in failed_checks:
+            # 占位符残留绝不交付（真实缺陷：下划线小节 id 绕过旧 FILL_RE 后，含 [[FILL:
+            # 的成稿被降级交付给读者）；与其他 _failed 终态同形状，任务层据此置 failed。
+            residual = next(
+                (
+                    issue
+                    for issue in report.get("issues") or []
+                    if isinstance(issue, dict) and issue.get("code") == "placeholder_residual"
+                ),
+                {},
+            )
+            self.quality_notes.append("accept_failed:placeholder_residual")
+            return self._failed(
+                "placeholder_residual",
+                "accept",
+                detail=str(residual.get("detail") or "成稿残留未替换占位符"),
+            )
         legacy_report = self._legacy_acceptance_diagnostic(plan_points, review, coverage_map, document)
         degraded = not report["passed"]
         acceptance = (

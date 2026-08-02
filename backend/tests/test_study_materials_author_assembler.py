@@ -61,6 +61,21 @@ class AssembleTests(unittest.TestCase):
                      references=[])
         self.assertIn("sec-1", str(cm.exception))
 
+    def test_underscore_section_id_substituted(self):
+        """真实缺陷：LLM 产出下划线小节 id（s0_frontmatter），FILL_RE 字符集不含 _ 时
+        占位符既不被替换也不报缺失，静默残留成稿。"""
+        backbone = "# 自学材料：极限\n\n[[FILL:s0_frontmatter]]\n\n## 总结\n\n收尾。"
+        out = assemble(backbone, sections={"s0_frontmatter": "封面与使用说明。"},
+                       figures={}, references=[])
+        self.assertIn("封面与使用说明。", out)
+        self.assertNotIn("[[FILL:", out)
+
+    def test_missing_underscore_fill_raises_naming_id(self):
+        backbone = "# 自学材料：极限\n\n[[FILL:s0_frontmatter]]\n\n收尾。"
+        with self.assertRaises(AssemblyError) as cm:
+            assemble(backbone, sections={}, figures={}, references=[])
+        self.assertIn("s0_frontmatter", str(cm.exception))
+
     def test_fallback_leak_rejected(self):
         leaky = {"sec-1": "> 注：本段讲解未成功使用模型生成（source=llm_sectioned）"}
         with self.assertRaises(AssemblyError):

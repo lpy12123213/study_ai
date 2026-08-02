@@ -308,6 +308,38 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
         self.assertTrue((result.get("acceptance") or {}).get("accepted"))
         self.assertIn("error", result["legacy_acceptance"])
 
+    def test_placeholder_residual_hard_fails_instead_of_degraded_delivery(self):
+        """占位符残留绝不交付：成稿带 [[FILL: 时必须是 failed 终态，而不是 degraded 降级交付。
+
+        构造路径（真实缺陷形态）：作者补写正文未经 FillRunner 验收，把占位符写进小节
+        正文；汇编器只扫骨架不重扫替换文本，占位符随之进入成稿。
+        """
+
+        async def placeholder_fill_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            if "极限的严格定义" in user:
+                return FILL_BODY + "\n\n承接 [[FILL:ghost_sec]] 小节的讨论。\n"
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, events, llm_func=placeholder_fill_llm)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "placeholder_residual")
+        self.assertEqual(result["error"]["stage"], "accept")
+        self.assertIn("[[FILL:", result["error"]["detail"])
+        # 硬失败终态不附带任何成功/交付载荷
+        self.assertNotIn("markdown", result)
+        self.assertNotIn("material", result)
+        self.assertNotIn("degraded", result)
+
 
 class AuthorPipelineObservabilityTests(unittest.TestCase):
     """I-1：research 的 search 与各 LLM 阶段调用必须发 tool_call 事件（无隐藏调用）。"""
@@ -694,6 +726,92 @@ class BlueprintDifficultyVocabularyTests(unittest.TestCase):
     def test_unknown_difficulty_word_rejected(self):
         with self.assertRaises(BlueprintError):
             Blueprint.from_dict(self._with_difficulty("进阶"))
+
+
+class AuthorUnderscoreSectionIdTests(unittest.TestCase):
+    """端到端回归（真实缺陷）：LLM 产出下划线小节 id（s0_frontmatter），旧 FILL_RE
+    字符集不含 _，占位符既不被替换也不报缺失，静默残留成稿并降级交付（8 处残留）。
+    修复后全链路必须替换干净、验收通过。"""
+
+    UNDERSCORE_BLUEPRINT_JSON = json.dumps(
+        {
+            "narrative": "先建立直觉，再严格化。",
+            "terminology": [{"symbol": "$\\epsilon$", "meaning": "任意小正数"}],
+            "sections": [
+                {
+                    "id": "s0_frontmatter",
+                    "title": "极限的直观概念",
+                    "purpose": "建立直觉",
+                    "key_points": ["逼近", "直观定义"],
+                    "target_chars": 800,
+                    "difficulty": "基础",
+                    "misconceptions": [],
+                    "frontier": True,
+                },
+                {
+                    "id": "s1_definition",
+                    "title": "极限的严格定义",
+                    "purpose": "严格化",
+                    "key_points": ["epsilon-delta 定义"],
+                    "target_chars": 800,
+                    "difficulty": "应用",
+                    "misconceptions": [],
+                    "frontier": False,
+                },
+            ],
+            "figures": [
+                {"n": 1, "sec_id": "s0_frontmatter", "intent": "逼近示意", "kind": "mermaid", "caption": "图1 逼近过程"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    UNDERSCORE_BACKBONE_MD = """# 极限入门
+
+## 第一章 直观
+
+引入段：本节回答什么是逼近。
+
+[[FILL:s0_frontmatter]]
+
+[[FIG:1]]
+
+衔接段：有了直觉，下面严格化。
+
+[[FILL:s1_definition]]
+
+## 总结
+"""
+
+    def test_full_run_with_underscore_section_ids_ships_clean_document(self):
+        async def underscore_llm(system, user):
+            if "总编" in system:
+                return self.UNDERSCORE_BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return self.UNDERSCORE_BACKBONE_MD
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=underscore_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["degraded"], msg=result.get("quality_report"))
+        markdown = result["markdown"]
+        self.assertNotIn("[[FILL:", markdown)
+        self.assertNotIn("[[FIG:", markdown)
+        self.assertIn("## 参考文献", markdown)
+        self.assertTrue(result["quality_report"]["passed"])
 
 
 class AuthorResearchDeepReadTests(unittest.TestCase):

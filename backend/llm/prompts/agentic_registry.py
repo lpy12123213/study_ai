@@ -559,6 +559,8 @@ def create_default_prompt_registry() -> PromptRegistry:
             "- figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid；"
             "禁止 diagram/flow-chart/vector-plot 等自创类型）。\n"
             "- sections[].difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。\n"
+            "- sections[].id 必须是小写字母/数字/连字符/下划线（如 sec-1、s1_definition），"
+            "禁止大写字母、点号、空格。\n"
             "- 易错点只能来自研究笔记中带出处的条目；没有可靠出处就留空数组（诚实省略，禁止编造）。\n"
             "- 对置信度低或证据不足的小节，将 frontier 标记为 true。\n"
             "Output fields: narrative, terminology, sections, figures.",
