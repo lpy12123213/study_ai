@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -247,16 +248,17 @@ def build_llm_aesthetics_judge() -> Callable[[str, str], float]:
         kwargs: Dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
-            "max_tokens": 16,
+            "max_tokens": 64,
         }
         if model:
             kwargs["model"] = model
         text = asyncio.run(chat_completion_text(**kwargs))
-        digits = "".join(ch for ch in str(text or "") if ch.isdigit() or ch == ".")
-        try:
-            return max(0.0, min(10.0, float(digits))) / 10.0
-        except ValueError:
-            return 0.0
+        match = re.search(r"\d+(?:\.\d+)?", str(text or ""))
+        if not match:
+            # 解析失败必须抛出：grade_aesthetics 只在异常时回退确定性代理，
+            # 静默返回 0.0 会把「judge 失败」误记为「排版 0 分」。
+            raise ValueError(f"aesthetics judge unparseable: {str(text or '')[:120]}")
+        return max(0.0, min(10.0, float(match.group(0)))) / 10.0
 
     return judge
 
