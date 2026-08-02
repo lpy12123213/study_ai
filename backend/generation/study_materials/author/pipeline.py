@@ -1,6 +1,8 @@
-"""作者流水线主体（设计稿 §3-§7）：RESEARCH→BLUEPRINT→BACKBONE→FILL∥FIG→ASSEMBLE→AUDIT→ACCEPT。
+"""作者流水线主体（设计稿 §3-§7）：SPLIT→RESEARCH→BLUEPRINT→BACKBONE→FILL∥FIG→ASSEMBLE→AUDIT→ACCEPT。
 
-主 agent（作者）驱动全程：先检索并把事实落进研究笔记，再写蓝图与全书主干；
+主 agent（作者）驱动全程：请求侧未给知识点时先把主题拆成知识点列表（拆分是增强
+而非硬门槛，任何失败回退 [topic] 并记 quality note）；再检索并把事实落进研究笔记，
+然后写蓝图与全书主干；
 小节正文委托 FillRunner 有界并行填充（交不出的节由作者亲自补写），配图委托
 FigureForge 异步生成（失败不阻塞，移除对应 ``[[FIG:n]]`` 行并记入 quality notes）；
 最后由确定性汇编器替换占位符并渲染书目。验收由 author 专用门
@@ -34,7 +36,7 @@ from backend.generation.study_materials.author.fill import (
 from backend.generation.study_materials.author.notes import NotesStore
 from backend.generation.study_materials.author.todos import TodoItem, TodoList
 from backend.generation.study_materials.author.trace import make_event
-from backend.generation.study_materials.coverage import split_sections_by_kp
+from backend.generation.study_materials.coverage import split_sections_by_kp, unmatched_kp_titles
 from backend.generation.study_materials.quality_gate import (
     build_acceptance_record,
     draft_hash,
@@ -45,6 +47,7 @@ from backend.generation.study_materials.quality_gate import (
 BLUEPRINT_PROMPT_ID = "study.author.blueprint.v1"
 BACKBONE_PROMPT_ID = "study.author.backbone.v1"
 AUDIT_PROMPT_ID = "study.author.audit.v1"
+SPLIT_PROMPT_ID = "study.author.split.v1"
 
 SEARCH_CONCURRENCY = 3
 FILL_CONCURRENCY = 3
@@ -57,6 +60,13 @@ SOURCE_REGISTRY_CAP = 25   # 来源登记表容量上限（检索即登记后防
 _BOGUS_PLACEHOLDER_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?:正文)?占位\s*$", re.M)
 
 # 注册表不可用时的最小降级 prompt（措辞关键词与注册版本保持一致）。
+_FALLBACK_SPLIT_PROMPT = (
+    "你是严谨的自学教材结构设计助手。根据输入的主题、学科、preset 与知识点数量上限 max_points，"
+    "把主题拆分为适合自学的知识点列表。\n"
+    "输出 JSON 对象，字段：knowledge_points（知识点名称列表，字符串数组）。\n"
+    "数量 2~max_points 个，不得超过 max_points；按学习顺序排列；"
+    "每个知识点是独立可教学的概念点，知识点之间不重叠、不互相包含。"
+)
 _FALLBACK_BLUEPRINT_PROMPT = (
     "你是严谨的自学教材总编。根据输入的主题、学科、preset 与研究笔记，为全书设计写作蓝图。\n"
     "输出 JSON 对象，字段：narrative、terminology（symbol/meaning）、sections"
@@ -243,6 +253,7 @@ class _AuthorPipeline:
     # ---- 状态机主体 ----
 
     async def run(self) -> Dict[str, Any]:
+        await self._decompose_kps()
         await self._research()
         if await self._blueprint() is None:
             return self._failed("blueprint_invalid", "blueprint", detail=" | ".join(self._blueprint_errors))
@@ -257,6 +268,64 @@ class _AuthorPipeline:
         if document is None:
             return self._failed("assemble_failed", "revision")
         return self._accept(document)
+
+    def _needs_kp_split(self) -> bool:
+        """请求侧未给知识点时才拆分；编排层把整段 query 兜底包装成单个“知识点”
+        （== topic）视同未给（真实缺陷：benchmark 不给知识点时全程只有 1 个 kp 的检索量）。"""
+
+        provided = [str(kp).strip() for kp in (self.ctx.knowledge_points or []) if str(kp).strip()]
+        if not provided:
+            return True
+        return provided == [str(self.ctx.topic).strip()]
+
+    def _max_points(self) -> int:
+        """拆分数量上限：读 ctx.options["max_points"]（请求契约 1-15），缺省 6。"""
+
+        raw = self.ctx.options.get("max_points") if isinstance(self.ctx.options, dict) else None
+        try:
+            value = int(raw) if raw is not None else 6
+        except (TypeError, ValueError):
+            value = 6
+        return max(1, min(value, 15))
+
+    async def _decompose_kps(self) -> None:
+        """SPLIT 阶段：把主题拆成 2~max_points 个知识点，写进 self.knowledge_points。
+
+        任何失败（LLM 异常/非法 JSON/非法结构）都回退 [topic] 并记 quality note——
+        拆分是增强而非硬门槛，不阻断后续研究阶段。拆分结果写一行进研究笔记头部。
+        """
+
+        if not self._needs_kp_split():
+            return
+        topic = str(self.ctx.topic).strip()
+        max_points = self._max_points()
+        prompt = _render_prompt(SPLIT_PROMPT_ID, _FALLBACK_SPLIT_PROMPT)
+        user = (
+            f"主题: {self.ctx.topic}\n学科: {self.ctx.subject}\n"
+            f"preset: {self.ctx.preset}\nmax_points: {max_points}"
+        )
+        kps: List[str] = []
+        try:
+            raw = await self._llm_stage("split", prompt, user)
+            data = _extract_json(raw)
+            items = data.get("knowledge_points") if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                raise ValueError("knowledge_points is not a list")
+            seen: set = set()
+            for item in items:
+                text = str(item).strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    kps.append(text)
+            if not kps:
+                raise ValueError("knowledge_points is empty")
+            kps = kps[:max_points]
+        except Exception as exc:  # noqa: BLE001 — 拆分失败回退 [topic]，LLM/解析栈错误不阻断流水线
+            self.quality_notes.append(f"kp_split_fallback:{type(exc).__name__}:{exc}")
+            kps = [topic] if topic else []
+        if kps:
+            self.knowledge_points = kps
+            self.notes.append("research", f"## 知识点拆分：{'、'.join(kps)}")
 
     async def _research(self) -> None:
         kps = self.knowledge_points
@@ -427,12 +496,41 @@ class _AuthorPipeline:
                         "请修正后重新输出完整蓝图 JSON。"
                     )
                 continue
+            # kp 覆盖校验（与 benchmark 同源的标题归属逻辑）：每个输入 kp 必须有小节标题归属，
+            # 防止 LLM 把多个 kp 合并成一节（成稿按小节标题匹配知识点时合并的 kp 归属为空）。
+            uncovered = self._blueprint_kp_coverage(blueprint)
+            if uncovered:
+                detail = (
+                    f"以下知识点未被任何小节标题覆盖：{'、'.join(uncovered)}，"
+                    "请为每个知识点设独立小节且标题含其名称关键词"
+                )
+                self._blueprint_errors.append(detail)
+                self.quality_notes.append(f"blueprint_invalid:attempt{attempt}:{detail}")
+                if attempt < 2:
+                    self.quality_notes.append(f"blueprint_retry:{detail}")
+                    user += (
+                        "\n\n上次蓝图校验未通过：\n"
+                        f"- {detail}\n"
+                        "请修正后重新输出完整蓝图 JSON。"
+                    )
+                continue
             self.blueprint = blueprint
             self.blueprint_dict = asdict(blueprint)
             self.notes.write("blueprint", json.dumps(self.blueprint_dict, ensure_ascii=False, indent=2))
             self._decompose_todos()
             return blueprint
         return None
+
+    def _blueprint_kp_coverage(self, blueprint: Blueprint) -> List[str]:
+        """返回未被任何小节标题覆盖的 kp 名单。
+
+        把蓝图 section titles 合成伪 markdown（``## {title}`` + 占位正文），复用
+        benchmark 的 ``split_sections_by_kp`` 归属逻辑：前置/总结类 section 标题不含
+        kp 名称关键词，自然不会顶替 kp 归属。
+        """
+
+        pseudo = "\n\n".join(f"## {sec.title}\n\n占位" for sec in blueprint.sections)
+        return unmatched_kp_titles(split_sections_by_kp(pseudo, self.knowledge_points))
 
     def _decompose_todos(self) -> None:
         bp = self.blueprint

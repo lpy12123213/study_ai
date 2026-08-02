@@ -91,6 +91,32 @@ class AuthorPromptTests(unittest.TestCase):
         p = self.reg.render("study.author.audit.v1")
         self.assertEqual(JsonOutputContract().validate_prompt_text(p.content), [])
 
+    def test_split_prompt_exists_and_is_json_contract(self):
+        # 知识点拆分提示词：注册为 JSON 契约，覆盖数量上限/学习顺序/独立可教学/不重叠。
+        p = self.reg.render("study.author.split.v1")
+        self.assertEqual(JsonOutputContract().validate_prompt_text(p.content), [])
+        for kw in ["knowledge_points", "max_points", "学习顺序", "独立可教学", "不重叠"]:
+            self.assertIn(kw, p.content)
+
+    def test_fallback_split_prompt_keeps_keywords_in_sync(self):
+        # pipeline 内置降级 split prompt 的措辞关键词必须与注册版本保持一致。
+        from backend.generation.study_materials.author.pipeline import _FALLBACK_SPLIT_PROMPT
+
+        for kw in ["knowledge_points", "max_points", "学习顺序", "不重叠"]:
+            self.assertIn(kw, _FALLBACK_SPLIT_PROMPT)
+
+    def test_fill_prompt_requires_numbered_labels_and_levels(self):
+        # benchmark 真实缺陷：**[EX1] [Q1]** 合并标签、自测题无层级标注、
+        # **[EX1]**（基础）充当答案标签。注册版与降级版 fill prompt 都必须给死纪律。
+        from backend.generation.study_materials.author.fill import _FALLBACK_SYSTEM_PROMPT
+
+        registered = self.reg.render("study.author.fill.v1").content
+        for prompt in (registered, _FALLBACK_SYSTEM_PROMPT):
+            self.assertIn("不得合并", prompt)
+            self.assertIn("层级", prompt)
+            self.assertIn("评分点", prompt)
+            self.assertIn("充当答案标签", prompt)
+
     def test_figure_spec_prompt_is_json_contract(self):
         p = self.reg.render("figure.spec.v1")
         self.assertEqual(JsonOutputContract().validate_prompt_text(p.content), [])

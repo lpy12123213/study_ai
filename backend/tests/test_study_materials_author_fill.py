@@ -61,7 +61,7 @@ class FillRunnerTests(unittest.TestCase):
 
     def test_length_gate_uses_half_target_ratio(self):
         """I-4：长度门恢复 min(target_chars*0.5, min_chars)；800 字目标 → 需 ≥200 字符。"""
-        short = "简要讲解极限概念并配例题。[EX1] 例 …[Q1] 题 …[A1] 答 …" * 4  # ~120 字符，标签齐全但长度不足
+        short = "简要讲解极限概念并配例题。[EX1] 例 …[Q1] 题（基础） …[A1] 答 …" * 4  # ~140 字符，标签齐全但长度不足
 
         async def short_llm(system, user):
             return short
@@ -222,6 +222,72 @@ class LatexDelimiterTests(unittest.TestCase):
         r = FillRunner(llm_func=dollar_llm, max_retries=1)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
 
+        self.assertFalse(out.needs_author_rewrite)
+
+
+class QuestionLabelTests(unittest.TestCase):
+    """真实缺陷（benchmark eigen_decomposition 实跑）：自测题标签与例题合并书写
+    （``**[EX1] [Q1]**``）、不标层级，答案节用 ``**[EX1]**（基础）`` 充当答案标签
+    （应为 [A1]），层级与评分点识别失败。fill 验收必须拒绝并要求编号标签 + 层级标注。"""
+
+    # 合并标签（EX 与 Q 共行）且无层级标注：编号在但层级缺 → 拒并喂回。
+    MERGED_Q_BODY = GROUNDED_BODY.replace(
+        "[Q1] 自测（基础）：用自己的话解释无限逼近的含义；（应用）：求 x→0 时 2x 的极限并说明理由。",
+        "**[EX1] [Q1]** 自测：求 x→0 时 2x 的极限并说明理由。",
+    )
+    UNNUMBERED_A_BODY = GROUNDED_BODY.replace("[A1] 答案", "[A] 答案")
+    UNNUMBERED_Q_BODY = GROUNDED_BODY.replace("[Q1] 自测", "[Q] 自测")
+    EX_AS_ANSWER_BODY = GROUNDED_BODY.replace("[A1] 答案", "[EX1] 答案")
+
+    def test_merged_ex_q_label_without_level_rejected_and_fed_back(self):
+        seen = []
+
+        async def merged_llm(system, user):
+            seen.append(user)
+            return self.MERGED_Q_BODY
+
+        r = FillRunner(llm_func=merged_llm, max_retries=2)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertTrue(out.needs_author_rewrite)
+        self.assertEqual(len(seen), 2)
+        self.assertIn("层级", seen[1])  # 缺层级标注的原因必须喂回模型
+
+    def test_unnumbered_answer_label_rejected_and_fed_back(self):
+        seen = []
+
+        async def unnumbered_llm(system, user):
+            seen.append(user)
+            return self.UNNUMBERED_A_BODY
+
+        r = FillRunner(llm_func=unnumbered_llm, max_retries=2)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+
+        self.assertTrue(out.needs_author_rewrite)
+        self.assertIn("答案标签必须带编号", seen[1])
+
+    def test_unnumbered_question_label_rejected(self):
+        async def unnumbered_llm(system, user):
+            return self.UNNUMBERED_Q_BODY
+
+        r = FillRunner(llm_func=unnumbered_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+        self.assertTrue(out.needs_author_rewrite)
+
+    def test_ex_label_as_answer_rejected(self):
+        async def ex_answer_llm(system, user):
+            return self.EX_AS_ANSWER_BODY
+
+        r = FillRunner(llm_func=ex_answer_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
+        self.assertTrue(out.needs_author_rewrite)
+
+    def test_wellformed_numbered_labels_with_levels_accepted(self):
+        async def good_llm(system, user):
+            return GROUNDED_BODY  # [EX1]/[Q1]（基础）（应用）/[A1] 评分点
+
+        r = FillRunner(llm_func=good_llm, max_retries=1)
+        out = asyncio.run(r.fill(BP.sections[0], "", "", []))
         self.assertFalse(out.needs_author_rewrite)
 
 

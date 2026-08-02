@@ -33,6 +33,9 @@ MIN_TARGET_RATIO = 0.5
 _FALLBACK_SYSTEM_PROMPT = (
     "你是严谨的自学教材作者。只为指定的某一个小节撰写核心讲解正文，输出 Markdown。\n"
     "要求：严格遵守给定术语符号表；必须包含 [EXn] 带步骤例题、[Qn] 分层自测题、[An] 答案与评分点；"
+    "三类标签各自独立编号、独占加粗行，不得合并书写；"
+    "每个 [Qn] 必须标注层级（基础/应用/迁移）；[An] 答案与 [Qn] 一一对应并给出评分点，"
+    "禁止用 [EXn] 充当答案标签；"
     "数学公式用 LaTeX；在关键事实句末用 [^n] 标注来源编号，只允许使用给定来源清单里的编号；"
     "正文禁止出现裸 URL、禁止输出参考文献小节或脚注定义；只写该小节正文。"
     "小节正文内只允许使用 ### 与 #### 标题（禁止 # 与 ##：全书标题层级由主干统一管理）；"
@@ -46,6 +49,11 @@ _LOW_LEVEL_HEADING_RE = re.compile(r"^#{1,2}\s", re.M)
 _SOURCE_LINE_RE = re.compile(r"^\s*[-*+]\s*\[\^(\d+)\]\s+(?P<title>.+?)\s+(?P<url>https?://\S+)\s*$", re.M)
 _SRC_URL_RE = re.compile(r"src:\s*(https?://[^\s|]+)")
 _FOOTNOTE_MARK_RE = re.compile(r"\[\^(\d+)\]")
+# 题号标签纪律（真实缺陷：**[EX1] [Q1]** 合并书写、自测题无层级、**[EX1]**（基础）
+# 充当答案标签）：编号必须显式（[Q1]/[A1]），[Qn] 必须标注层级（基础/应用/迁移）。
+_QUESTION_NUMBER_RE = re.compile(r"\[Q\d")
+_ANSWER_NUMBER_RE = re.compile(r"\[A\d")
+_QUESTION_LEVEL_RE = re.compile(r"基础|应用|迁移")
 
 LlmFunc = Callable[[str, str], Union[str, Awaitable[str]]]
 EventSink = Callable[[Dict[str, Any]], None]
@@ -160,6 +168,13 @@ class FillRunner:
         for tag in ("[EX", "[Q", "[A"):
             if tag not in text:
                 missing.append(f"缺少 {tag}n] 标签（例题/自测题/答案）")
+        if "[Q" in text:
+            if not _QUESTION_NUMBER_RE.search(text):
+                missing.append("自测题标签必须带编号（[Q1] 形式），且不得与 [EXn] 合并书写")
+            if not _QUESTION_LEVEL_RE.search(text):
+                missing.append("每个 [Qn] 自测题必须标注层级（基础/应用/迁移）")
+        if "[A" in text and not _ANSWER_NUMBER_RE.search(text):
+            missing.append("答案标签必须带编号（[A1] 形式），与 [Qn] 一一对应，禁止用 [EXn] 充当答案标签")
         # 内联引用编号必须落在该节来源清单内（幻觉编号 → 重试）。
         allowed = allowed_citation_ids or set()
         bad = sorted({m for m in _FOOTNOTE_MARK_RE.findall(text) if m not in allowed}, key=int)

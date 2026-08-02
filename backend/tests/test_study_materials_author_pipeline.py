@@ -86,6 +86,131 @@ AUDIT_JSON = json.dumps(
     ensure_ascii=False,
 )
 
+# 两个知识点（极限/导数）的蓝图与主干夹具：kp 覆盖校验要求每个输入 kp 有小节标题归属。
+TWO_KP_BLUEPRINT_JSON = json.dumps(
+    {
+        "narrative": "先极限后导数。",
+        "terminology": [{"symbol": "$\\epsilon$", "meaning": "任意小正数"}],
+        "sections": [
+            {
+                "id": "sec-1",
+                "title": "极限的定义",
+                "purpose": "建立极限概念",
+                "key_points": ["逼近", "直观定义"],
+                "target_chars": 800,
+                "difficulty": "基础",
+                "misconceptions": [],
+                "frontier": False,
+            },
+            {
+                "id": "sec-2",
+                "title": "导数的定义",
+                "purpose": "建立导数概念",
+                "key_points": ["变化率", "差商极限"],
+                "target_chars": 800,
+                "difficulty": "基础",
+                "misconceptions": [],
+                "frontier": False,
+            },
+        ],
+        "figures": [],
+    },
+    ensure_ascii=False,
+)
+
+TWO_KP_BACKBONE_MD = """# 微积分基础
+
+## 第一章 极限
+
+引入段：本节回答什么是极限。
+
+[[FILL:sec-1]]
+
+衔接段：有了极限，下面定义导数。
+
+[[FILL:sec-2]]
+
+## 总结
+"""
+
+# 拆分阶段夹具：fake LLM 返回 3 个知识点；配套蓝图/主干覆盖三者（kp 覆盖校验才能通过）。
+SPLIT3_JSON = json.dumps({"knowledge_points": ["极限", "导数", "积分"]}, ensure_ascii=False)
+
+SPLIT3_BLUEPRINT_JSON = json.dumps(
+    {
+        "narrative": "极限→导数→积分。",
+        "terminology": [],
+        "sections": [
+            {
+                "id": "sec-1",
+                "title": "极限的定义",
+                "purpose": "建立极限概念",
+                "key_points": ["逼近"],
+                "target_chars": 800,
+                "difficulty": "基础",
+                "misconceptions": [],
+                "frontier": False,
+            },
+            {
+                "id": "sec-2",
+                "title": "导数的定义",
+                "purpose": "建立导数概念",
+                "key_points": ["变化率"],
+                "target_chars": 800,
+                "difficulty": "基础",
+                "misconceptions": [],
+                "frontier": False,
+            },
+            {
+                "id": "sec-3",
+                "title": "积分的定义",
+                "purpose": "建立积分概念",
+                "key_points": ["分割求和"],
+                "target_chars": 800,
+                "difficulty": "基础",
+                "misconceptions": [],
+                "frontier": False,
+            },
+        ],
+        "figures": [],
+    },
+    ensure_ascii=False,
+)
+
+SPLIT3_BACKBONE_MD = """# 微积分基础
+
+引入段。
+
+[[FILL:sec-1]]
+
+衔接段。
+
+[[FILL:sec-2]]
+
+衔接段。
+
+[[FILL:sec-3]]
+
+## 总结
+"""
+
+
+def _llm_with_fixtures(*, blueprint_json, backbone_md, split_json=None):
+    """按 prompt 关键词路由的夹具 LLM：split（knowledge_points）/blueprint/backbone/audit/fill。"""
+
+    async def fake_llm(system, user):
+        if split_json is not None and "knowledge_points" in system:
+            return split_json
+        if "总编" in system:
+            return blueprint_json
+        if "核查" in system:
+            return AUDIT_JSON
+        if "骨架" in system:
+            return backbone_md
+        return FILL_BODY
+
+    return fake_llm
+
 
 def _fake_llm(backbone_text=BACKBONE_MD, counter=None):
     async def fake_llm(system, user):
@@ -858,7 +983,8 @@ class AuthorResearchDeepReadTests(unittest.TestCase):
         return asyncio.run(
             run_author_pipeline(
                 ctx,
-                llm_func=_fake_llm(),
+                # 两 kp ctx 的蓝图必须逐 kp 给小节（kp 覆盖校验），故不用默认单 kp 的 BLUEPRINT_JSON。
+                llm_func=_llm_with_fixtures(blueprint_json=TWO_KP_BLUEPRINT_JSON, backbone_md=TWO_KP_BACKBONE_MD),
                 toolbox=self._toolbox(log, fetch_fail_substr),
                 emit=events.append,
                 forge=_fake_forge(events),
@@ -1019,6 +1145,298 @@ class AuthorSourceRegistryExpansionTests(unittest.TestCase):
             for i in range(1, 30):
                 pipeline._register_source(f"https://example.com/{i}", f"t{i}")  # noqa: SLF001
             self.assertEqual(len(pipeline.source_registry), 25)
+
+
+class AuthorBlueprintKpCoverageTests(unittest.TestCase):
+    """蓝图知识点覆盖校验：用与 benchmark 同源的 split_sections_by_kp 归属逻辑，
+    每个输入 kp 必须有小节标题归属；未覆盖名单进重试反馈（共用 1 次重试额度）。
+
+    真实缺陷（benchmark eigen_decomposition 4/6）：LLM 持续把两个 kp 合并成一节，
+    成稿按小节标题匹配知识点时合并不掉的那几个 kp 归属为空。
+    """
+
+    @staticmethod
+    def _ctx_two_kps(work_dir):
+        return AuthorPipelineContext(
+            task_id="t-author-kp-cov",
+            topic="微积分基础",
+            subject="数学",
+            work_dir=Path(work_dir),
+            user_id="u-1",
+            preset="standard",
+            knowledge_points=["极限", "导数"],
+        )
+
+    def test_uncovered_kp_listed_in_retry_feedback_then_recovers(self):
+        blueprint_users = []
+
+        async def flaky_blueprint_llm(system, user):
+            if "总编" in system:
+                blueprint_users.append(user)
+                # 首次蓝图两节都是 极限 标题：导数 无小节标题归属
+                return BLUEPRINT_JSON if len(blueprint_users) == 1 else TWO_KP_BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return TWO_KP_BACKBONE_MD
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_two_kps(tmp),
+                    llm_func=flaky_blueprint_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(blueprint_users), 2)
+        self.assertIn("未被任何小节标题覆盖", blueprint_users[1])
+        self.assertIn("导数", blueprint_users[1])
+
+    def test_uncovered_kp_exhausts_retry_returns_blueprint_invalid(self):
+        async def merged_blueprint_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON  # 始终只覆盖 极限
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return TWO_KP_BACKBONE_MD
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_two_kps(tmp),
+                    llm_func=merged_blueprint_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "blueprint_invalid")
+        self.assertIn("未被任何小节标题覆盖", result["error"]["detail"])
+        self.assertIn("导数", result["error"]["detail"])
+
+    def test_frontmatter_and_summary_sections_do_not_cover_kps(self):
+        """前置/总结小节不顶替 kp 归属：只有前置+总结时两个 kp 均未覆盖。"""
+        bp = Blueprint.from_dict({
+            "narrative": "n",
+            "terminology": [],
+            "sections": [
+                {
+                    "id": "sec-0", "title": "前置知识", "purpose": "p", "key_points": ["k"],
+                    "target_chars": 800, "difficulty": "基础", "misconceptions": [], "frontier": False,
+                },
+                {
+                    "id": "sec-9", "title": "全书总结", "purpose": "p", "key_points": ["k"],
+                    "target_chars": 800, "difficulty": "基础", "misconceptions": [], "frontier": False,
+                },
+            ],
+            "figures": [],
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = _AuthorPipeline(
+                self._ctx_two_kps(tmp), llm_func=_fake_llm(), toolbox=_fake_toolbox(), emit=lambda event: None
+            )
+            uncovered = pipeline._blueprint_kp_coverage(bp)  # noqa: SLF001
+        self.assertEqual(uncovered, ["极限", "导数"])
+
+    def test_kp_covered_by_section_title_containing_kp_name(self):
+        bp = Blueprint.from_dict(json.loads(TWO_KP_BLUEPRINT_JSON))
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = _AuthorPipeline(
+                self._ctx_two_kps(tmp), llm_func=_fake_llm(), toolbox=_fake_toolbox(), emit=lambda event: None
+            )
+            uncovered = pipeline._blueprint_kp_coverage(bp)  # noqa: SLF001
+        self.assertEqual(uncovered, [])
+
+
+class AuthorKpSplitTests(unittest.TestCase):
+    """知识点拆分阶段（split）：ctx 未给知识点时先拆题，研究按拆分结果逐 kp 检索。
+
+    真实缺陷（benchmark eigen_decomposition 实跑）：请求侧不给知识点时整条 pipeline
+    把整段 query 当 1 个知识点，deep preset 全程只有 1 个 kp 的检索量。
+    """
+
+    @staticmethod
+    def _ctx_no_kps(work_dir, **overrides):
+        params = dict(
+            task_id="t-author-split",
+            topic="微积分基础",
+            subject="数学",
+            work_dir=Path(work_dir),
+            user_id="u-1",
+            preset="standard",
+        )
+        params.update(overrides)
+        return AuthorPipelineContext(**params)
+
+    @staticmethod
+    def _llm_stages(events, stage):
+        return [
+            e["data"] for e in events
+            if e["type"] == "tool_call" and e["data"].get("tool") == "llm" and e["data"].get("stage") == stage
+        ]
+
+    @staticmethod
+    def _search_starts(events):
+        return [
+            e["data"] for e in events
+            if e["type"] == "tool_call" and e["data"].get("tool") == "search" and e["data"].get("status") == "start"
+        ]
+
+    def test_split_fans_out_research_per_kp(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_no_kps(tmp),
+                    llm_func=_llm_with_fixtures(
+                        blueprint_json=SPLIT3_BLUEPRINT_JSON,
+                        backbone_md=SPLIT3_BACKBONE_MD,
+                        split_json=SPLIT3_JSON,
+                    ),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+            research = (Path(tmp) / "notes" / "research.md").read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "ok")
+        # split 阶段可观测：LLM 调用完成带 chars
+        self.assertTrue(any("chars" in d for d in self._llm_stages(events, "split")))
+        # standard preset 每 kp 2 条查询：3 个拆分知识点 → 6 次 search
+        starts = self._search_starts(events)
+        self.assertEqual(len(starts), 6)
+        queries = [d["query"] for d in starts]
+        for kp in ("极限", "导数", "积分"):
+            self.assertTrue(any(q.startswith(kp) for q in queries), msg=queries)
+        # plan 透出拆分结果；拆分行落在研究笔记头部（kp 小节之前）
+        self.assertEqual([p["title"] for p in result["plan"]["knowledge_points"]], ["极限", "导数", "积分"])
+        self.assertIn("## 知识点拆分：极限、导数、积分", research)
+        self.assertLess(research.index("## 知识点拆分"), research.index("\n## 极限\n"))
+
+    def test_split_invalid_output_falls_back_to_topic(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-split-fallback",
+                topic="极限",
+                subject="数学",
+                work_dir=Path(tmp),
+                user_id="u-1",
+                preset="standard",
+            )
+            result = asyncio.run(
+                run_author_pipeline(
+                    ctx,
+                    llm_func=_llm_with_fixtures(
+                        blueprint_json=BLUEPRINT_JSON, backbone_md=BACKBONE_MD, split_json="这不是 JSON"
+                    ),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        # 回退 [topic]：1 个 kp × 2 查询；quality note 记录回退
+        self.assertEqual(len(self._search_starts(events)), 2)
+        self.assertTrue(any(n.startswith("kp_split_fallback:") for n in result["quality_notes"]))
+        self.assertEqual([p["title"] for p in result["plan"]["knowledge_points"]], ["极限"])
+
+    def test_split_skipped_when_ctx_provides_kps(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-split-skip",
+                topic="微积分基础",
+                subject="数学",
+                work_dir=Path(tmp),
+                user_id="u-1",
+                preset="standard",
+                knowledge_points=["极限", "导数"],
+            )
+            result = asyncio.run(
+                run_author_pipeline(
+                    ctx,
+                    llm_func=_llm_with_fixtures(
+                        blueprint_json=TWO_KP_BLUEPRINT_JSON,
+                        backbone_md=TWO_KP_BACKBONE_MD,
+                        split_json=SPLIT3_JSON,  # 若被调用会返回 3 个点——必须不被调用
+                    ),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(self._llm_stages(events, "split"), [])
+        self.assertEqual([p["title"] for p in result["plan"]["knowledge_points"]], ["极限", "导数"])
+
+    def test_split_result_clamped_to_max_points(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_no_kps(tmp, options={"max_points": 2}),
+                    llm_func=_llm_with_fixtures(
+                        blueprint_json=TWO_KP_BLUEPRINT_JSON,
+                        backbone_md=TWO_KP_BACKBONE_MD,
+                        split_json=SPLIT3_JSON,
+                    ),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        # max_points=2：拆分 3 个点截到前 2 个（保留学习顺序在前的）
+        self.assertEqual(len(self._search_starts(events)), 4)
+        self.assertEqual([p["title"] for p in result["plan"]["knowledge_points"]], ["极限", "导数"])
+
+    def test_split_runs_when_ctx_kps_is_topic_wrap(self):
+        """编排层把整段 query 兜底包装成单个“知识点”（== topic）时视同未给，照常拆分。"""
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-split-wrap",
+                topic="极限",
+                subject="数学",
+                work_dir=Path(tmp),
+                user_id="u-1",
+                preset="standard",
+                knowledge_points=["极限"],  # == topic：编排层兜底包装
+            )
+            result = asyncio.run(
+                run_author_pipeline(
+                    ctx,
+                    llm_func=_llm_with_fixtures(
+                        blueprint_json=TWO_KP_BLUEPRINT_JSON,
+                        backbone_md=TWO_KP_BACKBONE_MD,
+                        split_json=json.dumps({"knowledge_points": ["极限", "导数"]}, ensure_ascii=False),
+                    ),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(self._llm_stages(events, "split"))
+        self.assertEqual(len(self._search_starts(events)), 4)
+        self.assertEqual([p["title"] for p in result["plan"]["knowledge_points"]], ["极限", "导数"])
 
 
 if __name__ == "__main__":
