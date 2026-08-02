@@ -208,6 +208,17 @@ def _dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _author_blueprint_summary(blueprint: Dict[str, Any]) -> Dict[str, Any]:
+    """done 载荷里的蓝图摘要：完整蓝图（10k+）在任务快照 notes/blueprint.md 与 todos.json。"""
+    sections = [
+        {"id": str(item.get("id") or ""), "title": str(item.get("title") or "")}
+        for item in (blueprint.get("sections") or [])
+        if isinstance(item, dict)
+    ]
+    figures = blueprint.get("figures")
+    return {"sections": sections, "figures": len(figures) if isinstance(figures, list) else 0}
+
+
 def _step_result_key(item: Dict[str, Any]) -> str:
     """B1: step_results 去重的稳定内容键——优先非空 step_id，否则用规范化 JSON 的 sha1。"""
 
@@ -277,6 +288,10 @@ def _resume_wm_from_result_payload(
             wm[key] = value
     workflow_state = _dict(data.get("workflow")) or _dict(result.get("workflow"))
     if workflow_state:
+        if not str(workflow_state.get("markdown") or "").strip() and markdown:
+            # 瘦身后的 done 载荷不再重复携带 workflow.markdown；正文以 material 为准回填，
+            # 保证 improve / fix_export 等冷续作的成稿判定不失真。
+            workflow_state = {**workflow_state, "markdown": markdown}
         wm["study_materials_workflow"] = workflow_state
     return wm
 
@@ -1771,19 +1786,42 @@ class StudyMaterialsTaskManager:
             )
             self._persist_snapshot(task, force=True)
 
+            # done 载荷瘦身（DB JSON 上限 TASK_JSON_MAX_CHARS=200k，超限会被整包截断）：
+            # 正文只在 material.markdown 携带一份，workflow 不再重复 markdown / research
+            # 证据全文（完整状态在 meta 工作流状态与任务快照里；B3 冷续作由
+            # _resume_wm_from_result_payload 从 material 回填 markdown）。
+            research = _dict(result.get("research"))
+            done_workflow = {
+                "version": WORKFLOW_VERSION,
+                "stage": workflow_state["stage"],
+                "last_successful_stage": workflow_state["last_successful_stage"],
+                "preset": preset,
+                "plan": _dict(result.get("plan")),
+                "research": {},
+                "research_evidence_count": sum(
+                    len(items) for items in research.values() if isinstance(items, list)
+                ),
+                "review": _dict(result.get("review")),
+                "quality_report": quality_report,
+                "acceptance": acceptance,
+                "revision_attempts": int(result.get("revision_attempts") or 0),
+                "last_failure": {},
+                "coverage_map": _dict(result.get("coverage_map")),
+                "runtime": "author",
+            }
             done_payload: Dict[str, Any] = {
                 "success": True,
                 "material": material,
                 "quality_report": quality_report,
                 "review": _dict(result.get("review")),
                 "acceptance": acceptance,
-                "workflow": workflow_state,
+                "workflow": done_workflow,
                 "author": {
                     "todos": result.get("todos") or [],
                     "references": result.get("references") or [],
                     "audit": _dict(result.get("audit")),
                     "quality_notes": result.get("quality_notes") or [],
-                    "blueprint": _dict(result.get("blueprint")),
+                    "blueprint": _author_blueprint_summary(_dict(result.get("blueprint"))),
                 },
             }
             if result.get("degraded"):

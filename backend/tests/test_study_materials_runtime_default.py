@@ -290,5 +290,135 @@ class AuthorEventForwardingDrainTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(leaked, [])
 
 
+class AuthorDonePayloadSlimTests(unittest.IsolatedAsyncioTestCase):
+    """done 载荷瘦身：DB JSON 截断线（TASK_JSON_MAX_CHARS=200k）以下留余量，正文/acceptance 不动。"""
+
+    @staticmethod
+    def _big_success_result() -> dict:
+        markdown = "# 成稿\n" + "正文段落。" * 13000  # ~65k，deep 档典型体量
+        blueprint = {
+            "narrative": "叙事主线。" * 2000,
+            "terminology": [{"symbol": f"s{i}", "meaning": "术语含义。" * 20} for i in range(40)],
+            "sections": [
+                {
+                    "id": f"sec-{i}",
+                    "title": f"第 {i} 节",
+                    "purpose": "写作目的。" * 100,
+                    "key_points": ["要点。" * 50],
+                    "target_chars": 2000,
+                    "difficulty": "standard",
+                    "misconceptions": [],
+                    "frontier": False,
+                }
+                for i in range(1, 13)
+            ],
+            "figures": [
+                {"n": i, "sec_id": "sec-1", "intent": "示意图", "kind": "mermaid", "caption": "图"}
+                for i in range(1, 4)
+            ],
+        }
+        return {
+            "success": True,
+            "markdown": markdown,
+            "material": {"iteration": 1, "markdown": markdown, "passed": True, "issues": []},
+            "acceptance": {"status": "accepted", "checks": ["placeholder_free"]},
+            "quality_report": {"passed": True, "failed_checks": [], "issues": []},
+            "review": {"passed": True, "draft_hash": "h", "dimensions": {}, "issues": []},
+            "plan": {"knowledge_points": [{"id": "kp-1", "title": "单调性"}]},
+            "research": {
+                "kp-1": [
+                    {"url": f"https://example.com/{i}", "title": "证据", "snippet": "证据摘要。" * 100}
+                    for i in range(80)
+                ]
+            },
+            "coverage_map": {"kp-1": True},
+            "sections": [{"title": "单调性的定义"}],
+            "revision_attempts": 0,
+            "todos": [],
+            "references": [],
+            "audit": {"frontier_sections": [], "unsupported": [], "passed": True},
+            "quality_notes": [],
+            "blueprint": blueprint,
+            "degraded": False,
+        }
+
+    async def _capture_done(self, pipeline_result: dict) -> tuple[dict, dict]:
+        from backend.generation.study_materials import orchestrator
+
+        manager = StudyMaterialsTaskManager()
+        task = _task(task_id="study-author-slim")
+        ctx = manager._task_run_context(task)
+        recorded: list = []
+        complete = AsyncMock()
+
+        async def _append(_task, event):
+            recorded.append(event)
+
+        async def _fake_pipeline(pipeline_ctx, *, llm_func, toolbox, emit, forge):
+            return pipeline_result
+
+        with patch.object(orchestrator.task_runtime, "append_event", new=_append), patch.object(
+            orchestrator.task_runtime, "complete_task", new=complete
+        ), patch.object(orchestrator.task_runtime, "fail_task", new=AsyncMock()), patch.object(
+            manager, "_upsert_archive_from_resume_state", new=AsyncMock()
+        ), patch.object(manager, "_persist_snapshot"), patch.object(
+            orchestrator, "run_author_pipeline", new=_fake_pipeline
+        ):
+            await manager._run_author_staged(ctx)
+
+        done_events = [evt for evt in recorded if evt.get("event") == "done"]
+        self.assertEqual(len(done_events), 1)
+        done_data = done_events[0]["data"]
+        complete_result = complete.call_args.kwargs["result"]
+        return done_data, complete_result
+
+    async def test_done_payload_stays_under_db_cap_with_large_markdown(self) -> None:
+        result = self._big_success_result()
+        markdown = result["markdown"]
+
+        done_data, complete_result = await self._capture_done(result)
+
+        payload_chars = len(json.dumps(done_data, ensure_ascii=False))
+        self.assertLess(payload_chars, 150_000)  # 200k 截断线以下留余量
+        self.assertEqual(complete_result, done_data)  # done 事件与 complete_task 结果同一份
+        self.assertTrue(done_data["success"])
+        self.assertEqual(done_data["material"]["markdown"], markdown)  # 正文完整保留
+        self.assertEqual(done_data["acceptance"], {"status": "accepted", "checks": ["placeholder_free"]})
+
+    async def test_author_blueprint_is_slimmed_to_summary(self) -> None:
+        done_data, _ = await self._capture_done(self._big_success_result())
+
+        self.assertEqual(
+            done_data["author"]["blueprint"],
+            {
+                "sections": [{"id": f"sec-{i}", "title": f"第 {i} 节"} for i in range(1, 13)],
+                "figures": 3,
+            },
+        )
+
+    async def test_done_workflow_drops_heavy_duplicates_and_cold_resume_backfills_markdown(self) -> None:
+        result = self._big_success_result()
+        markdown = result["markdown"]
+        acceptance = result["acceptance"]
+
+        done_data, _ = await self._capture_done(result)
+        workflow = done_data["workflow"]
+        self.assertNotIn("markdown", workflow)  # 不再重复携带整份正文
+        self.assertEqual(workflow.get("research"), {})  # 证据全文不进 done 载荷
+        self.assertEqual(workflow.get("research_evidence_count"), 80)
+        self.assertEqual(workflow["acceptance"], acceptance)  # fix_export 续作仍要校验验收
+        self.assertEqual(workflow["plan"], result["plan"])
+
+        # B3 冷续作：从瘦身后的 done 载荷重建 resume wm 时，material.markdown 回填进 workflow。
+        from backend.generation.study_materials.orchestrator import _resume_wm_from_result_payload
+
+        wm = _resume_wm_from_result_payload(
+            done_data, query="函数单调性", subject="高中数学", options={"preset": "standard"}
+        )
+        restored = wm["study_materials_workflow"]
+        self.assertEqual(restored["markdown"], markdown)
+        self.assertEqual(restored["acceptance"], acceptance)
+
+
 if __name__ == "__main__":
     unittest.main()

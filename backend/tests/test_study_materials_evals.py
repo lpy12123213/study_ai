@@ -27,6 +27,7 @@ from backend.evals.study_materials.runner import (
     _extract_markdown,
     _resolve_cases,
     _select_shard,
+    resolve_markdown,
 )
 from backend.evals.study_materials.scorecard import grade_case
 
@@ -759,6 +760,48 @@ class RunnerHelperTests(unittest.TestCase):
         self.assertEqual(_extract_markdown({"material": "正文"}), "正文")
         self.assertEqual(_extract_markdown({"markdown": "正文"}), "正文")
         self.assertEqual(_extract_markdown({}), "")
+
+    def test_resolve_markdown_falls_back_to_last_text_delta_when_done_truncated(self) -> None:
+        # 真实事故回归：done 载荷超 DB 上限被整包替换为 _truncated，正文只在事件流里。
+        final = "# 成稿\n" + "正文段落。" * 13000  # ~65k chars
+        events = [
+            _frame("text_delta", {"content": "# 骨架快照"}),
+            _frame("text_delta", {"content": final}),
+            _frame("done", {"_truncated": True, "original_chars": 209164, "preview": "{"}),
+        ]
+        markdown, source = resolve_markdown(events)
+        self.assertEqual(markdown, final)
+        self.assertEqual(source, "text_delta_fallback")
+
+    def test_resolve_markdown_prefers_done_material_over_text_delta(self) -> None:
+        events = [
+            _frame("text_delta", {"content": "# 快照"}),
+            _frame("done", {"material": {"markdown": "# 正式成稿"}}),
+        ]
+        markdown, source = resolve_markdown(events)
+        self.assertEqual(markdown, "# 正式成稿")
+        self.assertEqual(source, "done_event")
+
+    def test_resolve_markdown_text_delta_after_md_url_fetch_failure(self) -> None:
+        from unittest.mock import patch
+
+        events = [
+            _frame("text_delta", {"content": "# 快照成稿"}),
+            _frame("done", {"material": {"md_url": "/files/x.md"}}),
+        ]
+        with patch("backend.evals.study_materials.runner._fetch_url_markdown", return_value=""):
+            markdown, source = resolve_markdown(events, base_url="http://127.0.0.1:8000")
+        self.assertEqual(markdown, "# 快照成稿")
+        self.assertEqual(source, "text_delta_fallback")
+
+    def test_resolve_markdown_text_delta_skips_blank_snapshots(self) -> None:
+        events = [
+            _frame("text_delta", {"content": "  "}),
+            _frame("text_delta", "not-a-dict"),
+            _frame("done", {"_truncated": True}),
+        ]
+        markdown, source = resolve_markdown(events)
+        self.assertEqual((markdown, source), ("", "none"))
 
     def test_regrade_from_saved_artifacts(self) -> None:
         import tempfile

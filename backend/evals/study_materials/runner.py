@@ -77,8 +77,24 @@ def _fetch_url_markdown(base_url: str, md_url: str) -> str:
     return ""
 
 
+def _last_text_delta_content(events: List[Dict[str, Any]]) -> str:
+    """事件流中最后一条 text_delta 的正文（设计契约：text_delta 即全量成稿快照）。
+
+    done 载荷超 DB JSON 上限被整包截断（``{"_truncated": ...}``）时，成稿只存在于
+    事件流里；此时最后一条快照就是最终成稿。
+    """
+    for frame in reversed(events):
+        if str(frame.get("type") or "") != "text_delta":
+            continue
+        data = frame.get("data") if isinstance(frame.get("data"), dict) else {}
+        content = str(data.get("content") or "")
+        if content.strip():
+            return content
+    return ""
+
+
 def resolve_markdown(events: List[Dict[str, Any]], *, base_url: str = "") -> tuple[str, str]:
-    """(markdown, 来源说明)。done 未携带正文时回退 md_url 下载。"""
+    """(markdown, 来源说明)。done 未携带正文时依次回退 md_url 下载、最后一条 text_delta 快照。"""
     markdown = ""
     for frame in reversed(events):
         if str(frame.get("type") or "") == "done":
@@ -93,6 +109,9 @@ def resolve_markdown(events: List[Dict[str, Any]], *, base_url: str = "") -> tup
             fetched = _fetch_url_markdown(base_url, md_url)
             if fetched.strip():
                 return fetched, f"md_url 回退（{md_url}）"
+    snapshot = _last_text_delta_content(events)
+    if snapshot.strip():
+        return snapshot, "text_delta_fallback"
     return "", "none"
 
 
