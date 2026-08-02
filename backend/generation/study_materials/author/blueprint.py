@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 FIGURE_KINDS = frozenset({"auto", "tikz", "mermaid", "manim", "image"})
+DIFFICULTY_LEVELS = frozenset({"基础", "应用", "迁移"})
 
 SECTION_FIELDS = ("id", "title", "purpose", "key_points", "target_chars", "difficulty", "misconceptions", "frontier")
 FIGURE_FIELDS = ("n", "sec_id", "intent", "kind", "caption")
@@ -79,13 +80,16 @@ class SectionSpec:
         frontier = raw["frontier"]
         if not isinstance(frontier, bool):
             _fail(f"{where}: 'frontier' must be a boolean")
+        difficulty = _require_str(raw, "difficulty", where)
+        if difficulty not in DIFFICULTY_LEVELS:
+            _fail(f"{where}: unknown difficulty {difficulty!r} (expected one of {sorted(DIFFICULTY_LEVELS)})")
         return cls(
             id=_require_str(raw, "id", where),
             title=_require_str(raw, "title", where),
             purpose=_require_str(raw, "purpose", where),
             key_points=list(key_points),
             target_chars=target_chars,
-            difficulty=_require_str(raw, "difficulty", where),
+            difficulty=difficulty,
             misconceptions=_parse_misconceptions(raw["misconceptions"], where),
             frontier=frontier,
         )

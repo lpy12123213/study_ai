@@ -554,6 +554,9 @@ def create_default_prompt_registry() -> PromptRegistry:
             "- figures：配图计划，每项含 n/sec_id/intent/kind/caption。\n"
             "要求：\n"
             "- 小节顺序即叙事顺序，前后小节必须构成连贯的学习路径。\n"
+            "- figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid；"
+            "禁止 diagram/flow-chart/vector-plot 等自创类型）。\n"
+            "- sections[].difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。\n"
             "- 易错点只能来自研究笔记中带出处的条目；没有可靠出处就留空数组（诚实省略，禁止编造）。\n"
             "- 对置信度低或证据不足的小节，将 frontier 标记为 true。\n"
             "Output fields: narrative, terminology, sections, figures.",

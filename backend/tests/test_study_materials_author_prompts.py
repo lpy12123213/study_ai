@@ -26,6 +26,12 @@ class AuthorPromptTests(unittest.TestCase):
         for kw in ["叙事", "小节", "术语", "配图计划", "易错点", "置信"]:
             self.assertIn(kw, p.content)
 
+    def test_blueprint_prompt_constrains_figure_kind_and_difficulty_vocabularies(self):
+        # 真实运行中模型自造 kind（diagram/flow-chart）并用数字难度 → 提示词必须给死词表。
+        p = self.reg.render("study.author.blueprint.v1")
+        for kw in ["mermaid", "tikz", "迁移"]:
+            self.assertIn(kw, p.content)
+
     def test_fill_prompt_forbids_urls_and_requires_grounded_misconceptions(self):
         p = self.reg.render("study.author.fill.v1")
         self.assertEqual(

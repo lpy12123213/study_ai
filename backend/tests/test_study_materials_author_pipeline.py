@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from backend.generation.study_materials.author.blueprint import Blueprint, BlueprintError
 from backend.generation.study_materials.author.figures import FigureForge
 from backend.generation.study_materials.author.pipeline import (
     AuthorPipelineContext,
@@ -41,7 +42,7 @@ BLUEPRINT_JSON = json.dumps(
                 "purpose": "严格化",
                 "key_points": ["epsilon-delta 定义"],
                 "target_chars": 800,
-                "difficulty": "进阶",
+                "difficulty": "应用",
                 "misconceptions": [],
                 "frontier": False,
             },
@@ -512,6 +513,104 @@ class AuthorBackboneFigValidationTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "backbone_placeholder_missing")
         self.assertEqual(counter.get("backbone"), 2)  # 首次 + 重试 1 次
         self.assertTrue(any("[[FIG:1]]" in n for n in result["quality_notes"]))
+
+
+class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
+    """蓝图校验失败的重试必须把失败原因喂回模型；重试仍失败时失败详情透出到 error.detail。"""
+
+    @staticmethod
+    def _blueprint_variant(**mutations):
+        data = json.loads(BLUEPRINT_JSON)
+        figures = mutations.get("figures")
+        if figures:
+            data["figures"][0].update(figures)
+        sections = mutations.get("sections")
+        if sections:
+            data["sections"][0].update(sections)
+        return json.dumps(data, ensure_ascii=False)
+
+    def test_retry_user_message_contains_validation_error(self):
+        # 首次蓝图 figures[].kind 自造词（真实失败模式），重试带反馈后修正 → 流水线继续。
+        bad_kind = self._blueprint_variant(figures={"kind": "diagram"})
+        blueprint_users = []
+
+        async def flaky_blueprint_llm(system, user):
+            if "总编" in system:
+                blueprint_users.append(user)
+                return bad_kind if len(blueprint_users) == 1 else BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=flaky_blueprint_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(blueprint_users), 2)
+        self.assertIn("unknown figure kind", blueprint_users[1])
+        self.assertIn("diagram", blueprint_users[1])
+
+    def test_retry_exhausted_returns_both_error_details(self):
+        # 两次蓝图各自不同的校验错误 → failed 结果必须带齐两条详情。
+        bad_kind = self._blueprint_variant(figures={"kind": "diagram"})
+        bad_difficulty = self._blueprint_variant(sections={"difficulty": "进阶"})
+        responses = iter([bad_kind, bad_difficulty])
+
+        async def always_bad_blueprint_llm(system, user):
+            if "总编" in system:
+                return next(responses)
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            return FILL_BODY
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=always_bad_blueprint_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "blueprint_invalid")
+        detail = result["error"]["detail"]
+        self.assertIn("unknown figure kind", detail)
+        self.assertIn("unknown difficulty", detail)
+
+
+class BlueprintDifficultyVocabularyTests(unittest.TestCase):
+    """蓝图 difficulty 词表校验（真实运行中模型产出整数难度/自造词）。"""
+
+    @staticmethod
+    def _with_difficulty(value):
+        data = json.loads(BLUEPRINT_JSON)
+        data["sections"][0]["difficulty"] = value
+        return data
+
+    def test_integer_difficulty_rejected(self):
+        with self.assertRaises(BlueprintError):
+            Blueprint.from_dict(self._with_difficulty(1))
+
+    def test_unknown_difficulty_word_rejected(self):
+        with self.assertRaises(BlueprintError):
+            Blueprint.from_dict(self._with_difficulty("进阶"))
 
 
 if __name__ == "__main__":

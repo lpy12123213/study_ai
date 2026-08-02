@@ -58,6 +58,8 @@ _FALLBACK_BLUEPRINT_PROMPT = (
     "输出 JSON 对象，字段：narrative、terminology（symbol/meaning）、sections"
     "（id/title/purpose/key_points/target_chars/difficulty/misconceptions/frontier）、"
     "figures（n/sec_id/intent/kind/caption）。易错点只能来自研究笔记中带出处的条目。"
+    "figures[].kind 只能是 auto/tikz/mermaid/manim/image 之一（拿不准就用 mermaid）；"
+    "difficulty 只能是 基础/应用/迁移 之一（字符串，不要用数字）。"
 )
 _FALLBACK_BACKBONE_PROMPT = (
     "你是严谨的自学教材作者。根据给定蓝图撰写全书骨架，输出 Markdown。"
@@ -158,6 +160,7 @@ class _AuthorPipeline:
         self.research_evidence: Dict[str, List[Dict[str, Any]]] = {}
         self.blueprint: Optional[Blueprint] = None
         self.blueprint_dict: Dict[str, Any] = {}
+        self._blueprint_errors: List[str] = []  # 蓝图各次校验失败详情，失败终态透出到 error.detail
         self.backbone = ""
         self.sections: Dict[str, str] = {}
         self.figures: Dict[int, Dict[str, str]] = {}
@@ -183,11 +186,16 @@ class _AuthorPipeline:
         self.todos.save(self.todos_path)
         self._emit("todo_update", {"todo": asdict(self.todos.get(todo_id))})
 
-    def _failed(self, code: str, stage: str) -> Dict[str, Any]:
+    def _failed(self, code: str, stage: str, *, detail: str = "") -> Dict[str, Any]:
+        error: Dict[str, Any] = {
+            "code": code, "message": code, "stage": stage, "issues": list(self.quality_notes),
+        }
+        if detail:
+            error["detail"] = detail
         return {
             "success": False,
             "status": "failed",
-            "error": {"code": code, "message": code, "stage": stage, "issues": list(self.quality_notes)},
+            "error": error,
             "todos": self.todos.to_json(),
             "quality_notes": list(self.quality_notes),
         }
@@ -221,7 +229,7 @@ class _AuthorPipeline:
     async def run(self) -> Dict[str, Any]:
         await self._research()
         if await self._blueprint() is None:
-            return self._failed("blueprint_invalid", "blueprint")
+            return self._failed("blueprint_invalid", "blueprint", detail=" | ".join(self._blueprint_errors))
         if await self._backbone() is None:
             return self._failed("backbone_placeholder_missing", "backbone")
         await self._fill_and_figures()
@@ -308,7 +316,17 @@ class _AuthorPipeline:
             try:
                 blueprint = Blueprint.from_dict(_extract_json(raw))
             except ValueError as exc:  # BlueprintError/JSONDecodeError 均为 ValueError 子类
-                self.quality_notes.append(f"blueprint_invalid:attempt{attempt}:{exc}")
+                detail = str(exc)
+                self._blueprint_errors.append(detail)
+                self.quality_notes.append(f"blueprint_invalid:attempt{attempt}:{detail}")
+                if attempt < 2:
+                    # 重试必须把校验失败原因喂回模型（与 backbone 重试同一模式），否则同一错误必然再现。
+                    self.quality_notes.append(f"blueprint_retry:{detail}")
+                    user += (
+                        "\n\n上次蓝图校验未通过：\n"
+                        f"- {detail}\n"
+                        "请修正后重新输出完整蓝图 JSON。"
+                    )
                 continue
             self.blueprint = blueprint
             self.blueprint_dict = asdict(blueprint)
