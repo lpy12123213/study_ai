@@ -66,7 +66,12 @@ _QUESTION_ID_RE = re.compile(r"\[Q(\d+)\]", re.IGNORECASE)
 _ANSWER_ID_RE = re.compile(r"\[A(\d+)\]", re.IGNORECASE)
 _EXAMPLE_ID_RE = re.compile(r"\[EX(\d+)\]", re.IGNORECASE)
 _RUBRIC_CUE_RE = re.compile(r"评分点|得分点|采分点|评分标准")
-_WORKED_STEP_CUE_RE = re.compile(r"步骤|解答|解析|推导|求解过程")
+# 解题过程线索：覆盖中文数学的常见写法（"解："、"证明"、"第一步"、"首先"等）。
+# 窄词表（仅"步骤/解答/解析/推导"）在真实探针中误杀了半数小节：模型写了完整
+# 解题过程但没用这几个字眼，三次重试烧尽后整本书 assemble_failed。
+_WORKED_STEP_CUE_RE = re.compile(
+    r"步骤|解答|解析|推导|求解|解法|证明|首先|第[一二三①②③123]\s*步|解\s*[:：]"
+)
 _CORRECTION_CUE_RE = re.compile(r"(?:常见误区|错误(?:在于|的是|地认为)?|不正确|并非|不是|不能|不可|混淆)")
 _COMPARISON_REQUEST_RE = re.compile(r"(?:区分|辨析|对比|比较|区别|差异)", re.IGNORECASE)
 _COMPARISON_CUE_RE = re.compile(

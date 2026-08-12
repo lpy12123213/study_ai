@@ -176,6 +176,45 @@ class FillRunnerTests(unittest.TestCase):
         self.assertEqual(FillRunner._validate(cited, 0, {"1"}, []), [])  # noqa: SLF001
 
 
+class SectionLearningQuotaTests(unittest.TestCase):
+    """逐节学习闭环配额：题量/例题量/配对/评分点在填充时校验（G3 检查前移）。"""
+
+    BASE = "本节讲解核心概念，先建立直觉再严格化，配合例题与分层自测帮助巩固。" * 4
+
+    def test_quota_counts_pairing_and_rubric_are_enforced(self):
+        body = self.BASE + (
+            "\n\n**[EX1]** 例题。解：先求导，再比较符号。"
+            "\n\n**[Q1]**[基础] 第一题？\n**[A1]** 答案。评分点：判断正确。"
+            "\n\n**[Q2]**[应用] 第二题？\n**[A3]** 答案。评分点：过程完整。"
+        )
+        missing = FillRunner._validate(  # noqa: SLF001
+            body, 0, set(), [], min_questions=3, min_examples=2,
+        )
+        self.assertTrue(any("自测题数量不足（2/3）" in item for item in missing), msg=missing)
+        self.assertTrue(any("不配对的编号: 2、3" in item for item in missing), msg=missing)
+        self.assertTrue(any("例题数量不足（1/2）" in item for item in missing), msg=missing)
+
+    def test_chinese_solution_wordings_count_as_worked_steps(self):
+        """真实探针缺陷：窄线索词表（步骤/解答/解析/推导）误杀"解："、"第一步"、
+        "证明"、"首先"等标准数学解题写法，半数小节验收失败导致 assemble_failed。"""
+
+        cues = (
+            "解：先求导数，再由符号定单调性。",
+            "证明的关键在于对差商取极限。",
+            "首先求导，然后比较端点与驻点的函数值。",
+            "第一步 求导；第二步 解不等式。",
+        )
+        for cue in cues:
+            body = self.BASE + (
+                f"\n\n**[EX1]** 例题。{cue}"
+                "\n\n**[Q1]**[基础] 题目？\n**[A1]** 答案。评分点：判断完整。"
+            )
+            missing = FillRunner._validate(  # noqa: SLF001
+                body, 0, set(), [], min_questions=1, min_examples=1,
+            )
+            self.assertEqual(missing, [], msg=f"cue={cue!r} missing={missing}")
+
+
 class HeadingLevelTests(unittest.TestCase):
     """真实缺陷：fill 小节正文出现 ## 级标题（## [EX1] 例题、## 自测题），
     与骨架的 ## 小节标题同级，破坏全书层级。入口应确定性降为 H3，避免重跑模型。"""
