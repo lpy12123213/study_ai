@@ -32,6 +32,29 @@ class AuthorPromptTests(unittest.TestCase):
         for kw in ["mermaid", "tikz", "迁移"]:
             self.assertIn(kw, p.content)
 
+    def test_blueprint_prompt_carries_controlled_extension_contract(self):
+        from backend.generation.study_materials.author.pipeline import _FALLBACK_BLUEPRINT_PROMPT
+
+        for prompt in (self.reg.render("study.author.blueprint.v1").content, _FALLBACK_BLUEPRINT_PROMPT):
+            self.assertIn("[拓展:主题全名]", prompt)
+            self.assertIn("[高中连接]", prompt)
+
+    def test_blueprint_prompt_assigns_every_explicit_task_obligation(self):
+        from backend.generation.study_materials.author.pipeline import _FALLBACK_BLUEPRINT_PROMPT
+
+        for prompt in (self.reg.render("study.author.blueprint.v1").content, _FALLBACK_BLUEPRINT_PROMPT):
+            self.assertIn("逐项分配", prompt)
+            self.assertIn("时间顺序", prompt)
+            self.assertIn("比较双方", prompt)
+
+    def test_blueprint_prompt_proactively_covers_contrasts_and_distinct_misconceptions(self):
+        from backend.generation.study_materials.author.pipeline import _FALLBACK_BLUEPRINT_PROMPT
+
+        for prompt in (self.reg.render("study.author.blueprint.v1").content, _FALLBACK_BLUEPRINT_PROMPT):
+            self.assertIn("至少4组", prompt)
+            self.assertIn("易混概念辨析", prompt)
+            self.assertIn("至少4个互不重复", prompt)
+
     def test_fill_prompt_forbids_urls_and_requires_grounded_misconceptions(self):
         p = self.reg.render("study.author.fill.v1")
         self.assertEqual(
@@ -40,6 +63,12 @@ class AuthorPromptTests(unittest.TestCase):
         )
         self.assertIn("出处", p.content)
         self.assertIn("[EXn]", p.content)
+        self.assertIn("80%~130%", p.content)
+
+    def test_learning_repair_prompt_defines_whole_document_contract(self):
+        p = self.reg.render("study.author.learning_repair.v1")
+        for keyword in ["学习目标", "前置知识", "带完整步骤", "[基础]", "评分点"]:
+            self.assertIn(keyword, p.content)
 
     def test_backbone_prompt_defines_placeholders(self):
         p = self.reg.render("study.author.backbone.v1")
@@ -102,8 +131,22 @@ class AuthorPromptTests(unittest.TestCase):
         # pipeline 内置降级 split prompt 的措辞关键词必须与注册版本保持一致。
         from backend.generation.study_materials.author.pipeline import _FALLBACK_SPLIT_PROMPT
 
-        for kw in ["knowledge_points", "max_points", "学习顺序", "不重叠"]:
+        for kw in ["knowledge_points", "min_points", "max_points", "学习顺序", "不重叠", "受控拓展"]:
             self.assertIn(kw, _FALLBACK_SPLIT_PROMPT)
+
+    def test_registered_split_prompt_carries_minimum_and_extension_contract(self):
+        p = self.reg.render("study.author.split.v1")
+        for kw in ["min_points", "全局输出要求", "受控拓展"]:
+            self.assertIn(kw, p.content)
+
+    def test_fill_prompts_require_global_and_section_contracts(self):
+        from backend.generation.study_materials.author.fill import _FALLBACK_SYSTEM_PROMPT
+
+        for prompt in (self.reg.render("study.author.fill.v1").content, _FALLBACK_SYSTEM_PROMPT):
+            self.assertIn("全局输出要求", prompt)
+            self.assertIn("本节硬性标记", prompt)
+            self.assertIn("明确驳正", prompt)
+            self.assertIn("同时点名", prompt)
 
     def test_fill_prompt_requires_numbered_labels_and_levels(self):
         # benchmark 真实缺陷：**[EX1] [Q1]** 合并标签、自测题无层级标注、

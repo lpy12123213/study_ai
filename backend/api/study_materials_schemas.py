@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,10 @@ class StudyMaterialsGenerateRequest(BaseModel):
     prefer_local_archive: Optional[bool] = Field(
         None,
         description="可选：是否优先从本地知识库/归档复用（默认 quick/standard 自动开；可用环境变量 STUDY_ARCHIVE_PREFER_LOCAL 覆盖）",
+    )
+    research_budget: Literal["", "lean", "balanced"] = Field(
+        "",
+        description="可选：研究调用预算 lean|balanced；lean 保留逐知识点检索并限制百科补充与网页深读",
     )
 
 
@@ -78,6 +82,8 @@ def build_study_materials_options(request: StudyMaterialsGenerateRequest) -> dic
             options["max_points"] = max(1, min(n, 15))
     if request.prefer_local_archive is not None:
         options["preferLocalArchive"] = bool(request.prefer_local_archive)
+    if request.research_budget:
+        options["research_budget"] = request.research_budget
     return options
 
 

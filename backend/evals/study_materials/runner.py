@@ -4,7 +4,8 @@
 
     python -m backend.evals.study_materials.runner --case all --dry-run   # 校验 40 例
     python -m backend.evals.study_materials.runner --case light           # 轻量 8 例、自动并发
-    python -m backend.evals.study_materials.runner --case lebesgue_integral \
+    python -m backend.evals.study_materials.runner --case light-probe     # 同门槛单例真实探针
+    python -m backend.evals.study_materials.runner --case derivative_monotonicity_optimization \
         --base-url http://127.0.0.1:8000 [--llm-judge] [--check-links]
 
 每个用例在 ``--out/<case_id>/<timestamp>/`` 下落盘：
@@ -322,6 +323,9 @@ def build_link_checker() -> Callable[[str], bool]:
 # ---------------------------------------------------------------- 编排
 
 
+_LIGHT_PROBE_CASE_ID = "derivative_monotonicity_optimization"
+
+
 def _resolve_cases(selector: str, cases_dir: Path) -> List[BenchmarkCase]:
     candidate = Path(selector)
     if candidate.is_file():
@@ -336,12 +340,14 @@ def _resolve_cases(selector: str, cases_dir: Path) -> List[BenchmarkCase]:
         "extended": {"extended"},
         "all": {"smoke", "core", "extended"},
     }
+    if normalized == "light-probe":
+        return [case for case in cases if case.id == _LIGHT_PROBE_CASE_ID]
     if normalized in tier_sets:
         return [case for case in cases if case.tier in tier_sets[normalized]]
     matched = [c for c in cases if c.id == selector.strip()]
     if not matched:
         raise CaseValidationError(
-            f"未找到用例/套件 {selector!r}（负载套件: light, heavy；"
+            f"未找到用例/套件 {selector!r}（负载套件: light-probe, light, heavy；"
             f"分层套件: smoke, core, extended, all；"
             f"用例: {', '.join(c.id for c in cases)}）"
         )
@@ -526,7 +532,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="自学资料生成质量 benchmark")
     parser.add_argument(
         "--case",
-        help="用例 id / light / heavy / smoke / core / extended / all / 用例 JSON 路径",
+        help="用例 id / light-probe / light / heavy / smoke / core / extended / all / 用例 JSON 路径",
     )
     parser.add_argument("--regrade", metavar="RUN_DIR", help="对已落盘的运行目录重新评分（不重新生成）")
     parser.add_argument("--cases-dir", default=str(default_cases_dir()), help="用例目录")

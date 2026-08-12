@@ -1,0 +1,36 @@
+{
+  "id": "conditional_probability_diagnostic_test",
+  "title": "高中条件概率：诊断试验与逆概率陷阱",
+  "query": "在高中数学范围内，用 10000 人筛查情境系统学习条件概率、全概率公式、贝叶斯公式、树状图与 2×2 列联表；已知患病率 1%、灵敏度 90%、特异度 95%，必须算出真阳性、假阳性、阳性预测值，并分析复检在何种条件下才能更新概率",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["似然比与赔率形式的贝叶斯更新", "ROC 曲线的阈值权衡"],
+  "subject": "高中数学",
+  "preset": "deep",
+  "requirements": "必须并排使用树状图、自然频数表和公式三种表示，解释每个分母对应的条件总体；复检只能在声明条件独立假设后计算。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["条件概率定义", "乘法公式与全概率公式", "贝叶斯公式", "树状图与列联表", "灵敏度和特异度", "阳性预测值与基础概率", "自然频数法", "复检与条件独立", "似然比与后验赔率", "ROC 阈值权衡"],
+  "min_unique_sources": 12,
+  "expected_domains": ["openstax.org", "nist.gov", "cdc.gov", "plus.maths.org"],
+  "required_facts": [
+    {"id": "conditional_denominator", "description": "P(A|B)=P(A∩B)/P(B)，条件 B 改变样本空间和分母", "match": {"all": ["条件概率", "P.{0,3}A.{0,3}B"], "any": ["交集|同时发生", "样本空间|分母.{0,8}B"]}, "source_urls": ["https://openstax.org/books/introductory-statistics-2e/pages/3-key-terms"]},
+    {"id": "total_probability", "description": "用患病与未患病的互斥完备划分计算 P(阳性)", "match": {"all": ["全概率"], "any": ["患病.{0,12}未患病", "互斥.{0,8}完备", "P.{0,4}阳性"]}, "source_urls": ["https://openstax.org/books/introductory-statistics-2e/pages/3-3-two-basic-rules-of-probability"]},
+    {"id": "bayes_direction", "description": "贝叶斯公式用先验和似然求后验，P(阳性|患病) 与 P(患病|阳性) 方向不同", "match": {"all": ["贝叶斯", "后验"], "any": ["先验", "似然", "阳性.{0,8}患病.{0,12}患病.{0,8}阳性"]}, "source_urls": ["https://openstax.org/books/introductory-statistics-2e/pages/3-1-terminology"]},
+    {"id": "test_definitions", "description": "灵敏度是患病者中阳性的比例，特异度是未患病者中阴性的比例，假阳性率=1-特异度", "match": {"all": ["灵敏度", "特异度", "假阳性率"], "any": ["1.{0,3}-.{0,3}特异度", "患病者.{0,8}阳性", "未患病者.{0,8}阴性"]}, "source_urls": ["https://www.cdc.gov/csels/dsepd/ss1978/lesson1/section5.html"]},
+    {"id": "natural_frequencies", "description": "10000 人中预计 100 人患病：90 真阳性；9900 人未患病：495 假阳性", "match": {"all": ["10000|1万", "90.{0,6}真阳性", "495.{0,6}假阳性"], "any": ["100.{0,6}患病", "9900.{0,6}未患病"]}, "source_urls": ["https://plus.maths.org/content/os/issue40/features/gill/"]},
+    {"id": "ppv_numeric", "description": "阳性预测值为 90/(90+495)，约 15.4%，远低于灵敏度 90%", "match": {"all": ["阳性预测值|PPV", "15.4%|15%"], "any": ["90.{0,4}/.{0,4}585", "90.{0,6}495", "远低于.{0,8}90%"]}, "source_urls": ["https://www.cdc.gov/csels/dsepd/ss1978/lesson1/section5.html"]},
+    {"id": "base_rate_comparison", "description": "保持灵敏度和特异度不变，提高患病率通常会提高阳性预测值，说明结果依赖基础概率", "match": {"all": ["患病率|基础概率", "阳性预测值|PPV"], "any": ["提高.{0,8}提高", "依赖", "基础率"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK383/"]},
+    {"id": "repeat_test_assumption", "description": "不能无条件把两次结果概率直接相乘；只有在给定患病状态后误差近似独立等假设下才能按相应模型更新", "match": {"all": ["复检|重复检测", "条件独立"], "any": ["不能.{0,10}直接相乘", "误差.{0,8}相关", "假设"]}, "source_urls": ["https://www.itl.nist.gov/div898/handbook/pri/section3/pri332.htm"]},
+    {"id": "likelihood_ratio_bridge", "description": "[拓展] 阳性似然比 LR+=灵敏度/(1-特异度)=18，后验赔率=先验赔率×LR+，应复算得到约 15.4%", "match": {"all": ["似然比|LR.?[+]", "后验赔率", "先验赔率"], "any": ["18", "赔率.{0,8}相乘", "15.4%|15%"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK383/"]},
+    {"id": "roc_threshold_bridge", "description": "[拓展] ROC 以假阳性率为横轴、真阳性率为纵轴展示阈值权衡；ROC/AUC 不直接给出特定患病率下的 PPV", "match": {"all": ["ROC", "假阳性率", "真阳性率|灵敏度"], "any": ["阈值", "AUC", "不.{0,8}(直接|等于).{0,8}(PPV|阳性预测值)"]}, "source_urls": ["https://www.ncbi.nlm.nih.gov/books/NBK383/"]}
+  ],
+  "traps": [
+    {"id": "reverse_conditional", "description": "误解：灵敏度 90% 就等于阳性后患病概率 90%", "wrong_pattern": "灵敏度.{0,6}90%.{0,12}(阳性.{0,6}患病|患病概率).{0,6}90%", "correct_pattern": "阳性预测值|后验|15.4%|基础概率"},
+    {"id": "ignore_base_rate", "description": "误解：检验结果的解释与患病率无关", "wrong_pattern": "(阳性预测值|检验结果).{0,10}(与|和).{0,4}(患病率|基础概率).{0,6}(无关|没有关系)", "correct_pattern": "依赖.{0,8}(患病率|基础概率)|先验"},
+    {"id": "multiply_retests", "description": "误解：两次阳性的假阳性率必然等于单次假阳性率平方", "wrong_pattern": "两次.{0,6}阳性.{0,12}假阳性率.{0,8}(必然|一定|直接).{0,8}(平方|相乘)", "correct_pattern": "条件独立|相关|假设"},
+    {"id": "roc_guarantees_ppv", "description": "误解：ROC/AUC 很高就保证任何人群的阳性预测值都很高", "wrong_pattern": "(ROC|AUC).{0,8}(高|接近.?1).{0,12}(任何|所有).{0,6}人群.{0,8}(PPV|阳性预测值).{0,6}(都|必然).{0,4}高", "correct_pattern": "患病率|基础概率|阈值|不直接"}
+  ],
+  "contrasts": [["P(阳性|患病)", "P(患病|阳性)"], ["灵敏度", "阳性预测值"], ["互斥事件", "独立事件"], ["ROC 曲线", "阳性预测值"]],
+  "format_requirements": {"key_formulas": ["P.{0,3}A.{0,3}B", "全概率", "90.{0,4}/.{0,4}585", "LR|似然比"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

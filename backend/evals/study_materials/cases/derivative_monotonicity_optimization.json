@@ -1,0 +1,36 @@
+{
+  "id": "derivative_monotonicity_optimization",
+  "title": "高中导数：含参函数、单调性与约束最优化",
+  "query": "在高中数学范围内，用 f_a(x)=x^3-3ax 对 a<0、a=0、a>0 完整分类单调区间和极值，再用 g(x)=x+4/x（x>0）完成实际最优化建模；必须覆盖定义域、端点、导数不存在、驻点非极值和二阶导数判别失效的反例",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["拉格朗日中值定理的单调性桥接", "牛顿迭代与切线近似"],
+  "subject": "高中数学",
+  "preset": "deep",
+  "requirements": "所有结论必须配符号表或图像；含参讨论不可只给 a>0；最优化例题必须写变量范围、候选点比较和结果的实际意义。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["导数的几何与变化率意义", "定义域和可导性", "导数符号与单调区间", "临界点与驻点", "含参分类讨论", "局部极值与最值", "闭区间端点比较", "约束最优化建模", "中值定理与单调性", "牛顿迭代与切线近似"],
+  "min_unique_sources": 12,
+  "expected_domains": ["openstax.org", "mathcentre.ac.uk", "khanacademy.org", "mathsisfun.com"],
+  "required_facts": [
+    {"id": "derivative_meaning", "description": "导数既表示切线斜率，也表示函数在一点的瞬时变化率", "match": {"all": ["导数"], "any": ["切线.{0,6}斜率", "瞬时变化率"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/3-1-defining-the-derivative"]},
+    {"id": "sign_monotonicity", "description": "在区间上 f'>0 推出递增、f'<0 推出递减；判断依赖整个区间而非单点", "match": {"all": ["f.?'.{0,4}>.{0,4}0", "f.?'.{0,4}<.{0,4}0"], "any": ["单调递增", "单调递减", "区间"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
+    {"id": "critical_candidates", "description": "临界点包括定义域内 f'=0 或导数不存在的点，它们只是极值候选点", "match": {"all": ["临界点"], "any": ["导数.{0,6}(不存在|无定义)", "f.?'.{0,4}=.{0,4}0", "候选"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-3-maxima-and-minima"]},
+    {"id": "parameter_derivative", "description": "f_a'(x)=3(x²-a)；a<0 时恒正，a=0 时除 x=0 外为正，a>0 时零点为 ±sqrt(a)", "match": {"all": ["3.{0,3}x.?2.{0,3}-.{0,3}3.?a", "a.{0,3}<.{0,3}0", "a.{0,3}=.{0,3}0", "a.{0,3}>.{0,3}0"], "any": ["√a|sqrt.{0,3}a", "恒正"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
+    {"id": "parameter_classification", "description": "a>0 时 -sqrt(a) 为极大点、sqrt(a) 为极小点；a<=0 时无极值，a=0 的原点是水平切线但非极值", "match": {"all": ["a.{0,3}>.{0,3}0", "极大", "极小"], "any": ["-.?√a", "a.{0,3}≤.{0,3}0.{0,8}无极值", "水平切线.{0,8}(非|不是).{0,4}极值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
+    {"id": "stationary_counterexample", "description": "f(x)=x³ 在 x=0 导数为零但导数不变号，因此不是极值点", "match": {"all": ["x.?3|x³", "x.{0,3}=.{0,3}0"], "any": ["导数.{0,6}为零", "不变号", "不是.{0,4}极值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
+    {"id": "closed_interval", "description": "求闭区间绝对最值要比较区间内临界点与两个端点的函数值", "match": {"all": ["闭区间", "端点"], "any": ["临界点", "函数值.{0,8}比较", "绝对最值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-3-maxima-and-minima"]},
+    {"id": "optimization_example", "description": "g(x)=x+4/x 在 x>0 时 g'=1-4/x²，x=2 取得最小值 4，并检验边界趋势或实际约束", "match": {"all": ["x.{0,3}[+].{0,3}4.?/.?x", "x.{0,3}>.{0,3}0", "x.{0,3}=.{0,3}2"], "any": ["最小值.{0,4}4", "边界", "实际意义"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-7-applied-optimization-problems"]},
+    {"id": "mean_value_bridge", "description": "[拓展] 拉格朗日中值定理要求闭区间连续、开区间可导，并给出某点导数等于割线斜率，可桥接单调性与不等式证明", "match": {"all": ["拉格朗日中值定理|微分中值定理", "闭区间.{0,8}连续", "开区间.{0,8}可导"], "any": ["割线.{0,8}斜率", "单调性", "不等式"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-4-the-mean-value-theorem"]},
+    {"id": "newton_iteration_bridge", "description": "[拓展] 牛顿迭代用切线零点更新 x_(n+1)=x_n-f(x_n)/f'(x_n)，有局部性且需检查初值与导数，不保证任意初值收敛", "match": {"all": ["牛顿迭代|Newton", "x.{0,4}n.{0,4}[+].{0,4}1", "f.?'.{0,4}x"], "any": ["切线.{0,6}零点", "初值", "不保证.{0,8}收敛"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-9-newtons-method"]}
+  ],
+  "traps": [
+    {"id": "zero_derivative_extremum", "description": "误解：f'(x0)=0 就足以判定 x0 是极值点", "wrong_pattern": "f.?'.{0,6}=.{0,4}0.{0,12}(必然|一定|就).{0,6}(极值|极大|极小)", "correct_pattern": "变号|候选|x.?3|反例"},
+    {"id": "ignore_endpoints", "description": "误解：闭区间最值只需检查导数为零的点", "wrong_pattern": "闭区间.{0,12}(只|仅).{0,6}(检查|考虑).{0,8}(导数为零|驻点)", "correct_pattern": "端点"},
+    {"id": "second_derivative_zero", "description": "误解：二阶导数等于零就说明没有极值", "wrong_pattern": "二阶导数.{0,6}(等于|=).{0,2}0.{0,10}(没有|不存在).{0,4}极值", "correct_pattern": "不能判定|一阶导数.{0,6}变号|更高阶|反例"},
+    {"id": "newton_always_converges", "description": "误解：牛顿迭代从任意初值都必然收敛到所需根", "wrong_pattern": "牛顿迭代.{0,10}(任意|任何).{0,4}初值.{0,8}(都|必然|一定).{0,6}收敛", "correct_pattern": "初值|局部收敛|导数.{0,6}为零|可能发散"}
+  ],
+  "contrasts": [["驻点", "极值点"], ["局部极值", "闭区间绝对最值"], ["必要条件", "充分条件"], ["解析求根", "牛顿迭代近似"]],
+  "format_requirements": {"key_formulas": ["f.?'.{0,4}x", "3.{0,3}x.?2.{0,3}-.{0,3}3.?a", "1.{0,3}-.{0,3}4.?/.?x.?2", "x.{0,4}n.{0,4}[+].{0,4}1"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

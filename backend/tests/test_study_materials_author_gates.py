@@ -2,6 +2,7 @@ import unittest
 
 from backend.generation.study_materials.author.blueprint import Blueprint
 from backend.generation.study_materials.author.todos import TodoItem, TodoList
+from backend.generation.study_materials.learning_contract import LearningContractRequirements
 from backend.generation.study_materials.quality_gate import evaluate_author_acceptance
 
 BP = Blueprint.from_dict({
@@ -84,6 +85,50 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
         report = evaluate_author_acceptance(todos=TodoList(), markdown=CLEAN_MARKDOWN, blueprint=BP)
 
         self.assertTrue(report["passed"])
+
+    def test_requested_learning_contract_is_not_silently_accepted(self):
+        report = evaluate_author_acceptance(
+            todos=_cleared_todos(),
+            markdown=CLEAN_MARKDOWN,
+            blueprint=BP,
+            learning_requirements=LearningContractRequirements(),
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("learning_contract_unmet", _issue_codes(report, severity="error"))
+
+    def test_knowledge_and_extension_contracts_are_hard_gates(self):
+        topics = ["牛顿迭代与切线近似"]
+        incomplete = "# 导数\n\n## 导数定义\n\n这里讲定义。"
+        report = evaluate_author_acceptance(
+            todos=_cleared_todos(),
+            markdown=incomplete,
+            blueprint=BP,
+            knowledge_points=["导数定义", *topics],
+            min_knowledge_sections=2,
+            extension_topics=topics,
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertIn("knowledge_coverage_unmet", _issue_codes(report, severity="error"))
+        self.assertIn("extension_contract_unmet", _issue_codes(report, severity="error"))
+
+        complete = incomplete + """
+
+## [拓展:牛顿迭代与切线近似]
+
+由高中导数的切线方程得到迭代思想。
+[高中连接] 用切线近似检查高中导数题的估算与误差。
+"""
+        passed = evaluate_author_acceptance(
+            todos=_cleared_todos(),
+            markdown=complete,
+            blueprint=BP,
+            knowledge_points=["导数定义", *topics],
+            min_knowledge_sections=2,
+            extension_topics=topics,
+        )
+        self.assertTrue(passed["passed"], passed)
 
 
 if __name__ == "__main__":

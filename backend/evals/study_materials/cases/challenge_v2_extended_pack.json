@@ -16,26 +16,39 @@
   },
   "cases": [
     {
-      "id": "central_limit_theorem",
+      "id": "circuit_measurement_internal_resistance",
       "tier": "smoke",
-      "title": "中心极限定理、近似误差与推断边界",
-      "query": "系统自学中心极限定理：标准化、适用条件、样本均值标准误、Berry–Esseen 误差界与重尾反例；必须区分渐近正态、有限样本精确正态和大数定律",
-      "subject": "概率论与数理统计",
-      "expected_knowledge_points": ["标准化和分布收敛", "样本均值标准误", "Lindeberg–Lévy 条件", "Berry–Esseen 误差界", "重尾与相关性反例", "中心极限定理与大数定律"],
-      "expected_domains": ["nist.gov", "stat.berkeley.edu", "wikipedia.org"],
+      "options": {"max_points": 10},
+      "curriculum_scope": "high_school_plus",
+      "extension_topics": ["戴维南等效", "线性回归与测量不确定度"],
+      "title": "高中电路实验：电表接法、电源内阻与图像反演",
+      "query": "在高中物理范围内，系统讲解伏安法、电流表内外接法、电源电动势与内阻测量；必须用 I/A=0.10,0.20,0.30,0.40,0.50 和 U/V=1.47,1.44,1.41,1.38,1.35 的数据拟合 U-I 图像，反演 E、r，并讨论短路、功率、读数偏差和安全边界",
+      "subject": "高中物理",
+      "requirements": "给出原理图、数据表、U-I 图像解读和至少两种错误接法的因果分析；所有推导只使用高中欧姆定律、串并联与一次函数。",
+      "expected_knowledge_points": ["理想电流表与电压表", "电流表内接法与外接法", "电动势和路端电压", "U-I 图像斜率与截距", "闭合电路欧姆定律", "短路电流与安全", "输出功率与效率", "实验误差与改进", "戴维南端口等效", "线性回归与不确定度"],
+      "min_unique_sources": 12,
+      "expected_domains": ["openstax.org", "physicsclassroom.com", "phet.colorado.edu", "nist.gov"],
       "required_facts": [
-        {"id": "standardized_limit", "description": "独立同分布且方差有限时，中心化标准化和依分布收敛到标准正态", "match": {"all": ["中心极限定理"], "any": ["依分布收敛|分布收敛", "标准正态", "独立同分布.{0,12}有限方差"]}, "source_urls": ["https://en.wikipedia.org/wiki/Central_limit_theorem"]},
-        {"id": "standard_error", "description": "样本均值的标准误为 sigma/sqrt(n)", "match": {"all": ["标准误"], "any": ["sigma.{0,8}sqrt|σ.{0,8}√", "平方根.{0,6}n", "1/√n"]}, "source_urls": ["https://www.itl.nist.gov/div898/handbook/eda/section3/eda3661.htm"]},
-        {"id": "finite_sample", "description": "中心极限定理是渐近结论，不保证有限样本精确正态", "match": {"any": ["有限样本.{0,12}(不|并非).{0,8}(精确|严格).{0,4}正态", "渐近.{0,8}正态", "n.{0,8}趋于无穷"]}, "source_urls": ["https://en.wikipedia.org/wiki/Central_limit_theorem"]},
-        {"id": "berry_esseen", "description": "Berry–Esseen 定理在三阶绝对矩有限时给出 O(1/sqrt(n)) 级误差界", "match": {"all": ["Berry.?Esseen|贝里.?埃塞恩"], "any": ["三阶绝对矩", "1/√n|sqrt.{0,5}n", "误差界|收敛速度"]}, "source_urls": ["https://en.wikipedia.org/wiki/Berry%E2%80%93Esseen_theorem"]},
-        {"id": "heavy_tail_boundary", "description": "无限方差重尾分布可能不满足经典中心极限定理", "match": {"all": ["重尾|柯西|Cauchy"], "any": ["无限方差|方差不存在", "不满足.{0,8}经典.{0,4}中心极限定理"]}, "source_urls": ["https://www.stat.berkeley.edu/~stark/Teach/S240/Notes/ch4.pdf"]}
+        {"id": "meter_connection", "description": "电流表串联、电压表并联，接线前需校量程和极性", "match": {"all": ["电流表.{0,6}串联", "电压表.{0,6}并联"], "any": ["量程", "极性|正负接线柱"]}, "source_urls": ["https://openstax.org/books/physics/pages/19-1-ohms-law"]},
+        {"id": "ideal_meter_resistance", "description": "理想电流表电阻为零、理想电压表电阻无穷大；真实电表会扰动被测电路", "match": {"all": ["电流表.{0,12}(零|很小)", "电压表.{0,12}(无穷|很大)"], "any": ["内阻", "扰动|系统误差"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/21-4-dc-voltmeters-and-ammeters"]},
+        {"id": "terminal_voltage", "description": "放电时路端电压 U=E-Ir，内电压降为 Ir", "match": {"all": ["路端电压|端电压"], "any": ["U.{0,4}=.{0,4}E.{0,4}-.{0,4}I.?r", "内电压|Ir"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/21-2-electromotive-force-terminal-voltage"]},
+        {"id": "graph_inference", "description": "U-I 图像纵截距给 E，斜率绝对值给 r；题给数据应得到 E=1.50 V、r=0.30 ohm", "match": {"all": ["纵截距", "斜率"], "any": ["1.50.{0,4}V", "0.30.{0,4}(Ω|欧姆|ohm)", "E.{0,4}=.{0,4}1.5"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/21-2-electromotive-force-terminal-voltage"]},
+        {"id": "load_current", "description": "外电阻 R 与内阻 r 串联时 I=E/(R+r)，U=IR", "match": {"all": ["R.{0,4}\\+.{0,4}r"], "any": ["I.{0,5}=.{0,5}E", "U.{0,4}=.{0,4}IR", "闭合电路欧姆定律"]}, "source_urls": ["https://openstax.org/books/physics/pages/19-2-series-circuits"]},
+        {"id": "short_circuit", "description": "短路时外电阻近零，电流约 E/r，内阻限制但电流仍可能危险", "match": {"all": ["短路"], "any": ["E.?/?.?r", "外电阻.{0,8}(为零|接近零)", "过热|危险"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/21-2-electromotive-force-terminal-voltage"]},
+        {"id": "power_efficiency", "description": "外电路功率 P=I²R，电源总功率 EI，效率 U/E=R/(R+r)，不能把最大功率等同最高效率", "match": {"all": ["I.?2.?R|I²R", "效率"], "any": ["U.?/?.?E", "R.?/.?\\(R.?\\+.?r\\)", "最大功率"]}, "source_urls": ["https://openstax.org/books/physics/pages/19-4-electric-power"]},
+        {"id": "measurement_bias", "description": "电表非理想、导线接触电阻和电池温升会造成系统偏差；应控制电流与通电时间并重复测量", "match": {"all": ["系统误差|系统偏差"], "any": ["电表内阻", "接触电阻", "温升|通电时间", "重复测量"]}, "source_urls": ["https://www.nist.gov/pml/owm/si-units-electric-current"]},
+        {"id": "thevenin_bridge", "description": "[拓展] 线性二端网络对外可等效为开路电压 E_th 与串联内阻 R_th；等效只保证端口伏安关系，不复制内部电流和功耗", "match": {"all": ["戴维南|Thevenin", "开路电压", "等效.{0,6}内阻"], "any": ["端口.{0,8}伏安", "不.{0,8}(复制|等同).{0,8}(内部|功耗)"]}, "source_urls": ["https://eng.libretexts.org/Bookshelves/Electrical_Engineering/Electronics/Book%3A_Electrical_Circuits_I_-_Direct_Current_(Kuphaldt)/10%3A_DC_Network_Analysis/10.07%3A_Thevenins_Theorem"]},
+        {"id": "regression_uncertainty_bridge", "description": "[拓展] 用全部 U-I 数据做线性回归比只取两端点更稳健，应报告斜率/截距、残差、不确定度与有效数字，而非把拟合值当精确真值", "match": {"all": ["线性回归|最小二乘", "残差", "不确定度"], "any": ["全部.{0,6}数据", "斜率.{0,8}截距", "有效数字", "不.{0,8}精确真值"]}, "source_urls": ["https://www.itl.nist.gov/div898/handbook/pmd/section4/pmd431.htm"]}
       ],
       "traps": [
-        {"id": "exact_normal", "description": "误解：样本量一大就必然精确服从正态分布", "wrong_pattern": "样本量.{0,8}(大|超过).{0,12}(必然|一定|精确).{0,6}正态", "correct_pattern": "渐近|近似|有限样本"},
-        {"id": "same_as_lln", "description": "误解：中心极限定理与大数定律是同一个结论", "wrong_pattern": "中心极限定理.{0,12}(就是|等同于|与).{0,4}大数定律", "correct_pattern": "大数定律.{0,20}(收敛|均值)|中心极限定理.{0,20}分布"}
+        {"id": "voltmeter_series", "description": "误解：电压表应串联测电压", "wrong_pattern": "电压表.{0,8}(应|要|必须).{0,4}串联", "correct_pattern": "电压表.{0,8}并联"},
+        {"id": "emf_equals_terminal", "description": "误解：有电流时电动势恒等于路端电压", "wrong_pattern": "电动势.{0,8}(总是|始终|恒).{0,4}(等于|就是).{0,4}(路端|端)电压", "correct_pattern": "U.{0,4}=.{0,4}E.{0,4}-|内电压降|开路"},
+        {"id": "max_power_max_efficiency", "description": "误解：外电路获得最大功率时效率也最高", "wrong_pattern": "最大功率.{0,12}(效率|能量利用率).{0,6}(最高|最大)", "correct_pattern": "R.{0,4}=.{0,4}r|效率.{0,8}50%|权衡"},
+        {"id": "thevenin_is_physical_copy", "description": "误解：戴维南等效后等效电源内部每条支路的电流和功耗都与原网络相同", "wrong_pattern": "戴维南.{0,8}等效.{0,14}(内部|每条支路).{0,10}(电流|功耗).{0,8}(都|完全).{0,4}相同", "correct_pattern": "端口|外部伏安|不保留.{0,8}内部"}
       ],
-      "contrasts": [["中心极限定理", "大数定律"], ["渐近正态", "精确正态"]],
-      "format_requirements": {"key_formulas": ["sqrt|√", "sigma|σ", "N\\(0.?1\\)|标准正态"]}
+      "contrasts": [["电动势", "路端电压"], ["电流表内接法", "电流表外接法"], ["最大输出功率", "最高效率"], ["物理原网络", "戴维南端口等效"]],
+      "format_requirements": {"key_formulas": ["U.{0,4}=.{0,4}E.{0,4}-", "I.{0,5}=.{0,5}E", "P.{0,4}=|功率", "E.?th|戴维南"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+      "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
     },
     {
       "id": "fourier_transform_sampling",
@@ -374,26 +387,39 @@
       "format_requirements": {"key_formulas": ["p.?2", "2pq", "q.?2", "卡方|chi"]}
     },
     {
-      "id": "database_transactions_mvcc",
+      "id": "chemical_equilibrium_titration",
       "tier": "smoke",
-      "title": "数据库事务、隔离级别与 MVCC",
-      "query": "系统自学数据库事务：ACID、并发异常、SQL 隔离级别、冲突可串行化、两阶段锁与 MVCC/快照隔离；用转账和医生值班案例复现丢失更新、幻读与写偏斜",
-      "subject": "数据库系统",
-      "expected_knowledge_points": ["ACID", "并发异常", "隔离级别", "可串行化", "两阶段锁", "MVCC 与快照隔离"],
-      "expected_domains": ["postgresql.org", "dev.mysql.com", "microsoft.com"],
+      "options": {"max_points": 10},
+      "curriculum_scope": "high_school_plus",
+      "extension_topics": ["缓冲溶液与 Henderson–Hasselbalch 关系", "活度对浓度近似的边界"],
+      "title": "高中化学平衡、弱酸电离与滴定曲线",
+      "query": "在高中化学范围内，把可逆反应的动态平衡、浓度商 Q 与平衡常数 K、勒夏特列原理、催化剂和温度效应，与 0.100 mol/L 醋酸被 0.100 mol/L NaOH 滴定的分段计算、滴定曲线和指示剂选择串联起来",
+      "subject": "高中化学",
+      "requirements": "必须按滴定前、半中和点、化学计量点和过量碱四段解释粒子组成与 pH；列出适用条件，不使用大学热力学推导。",
+      "expected_knowledge_points": ["可逆反应与动态平衡", "平衡常数与浓度商", "勒夏特列原理", "温度与催化剂的不同作用", "弱酸电离平衡", "滴定曲线分段", "化学计量点与滴定终点", "指示剂选择与实验误差", "缓冲关系与半中和点", "活度和浓度近似边界"],
+      "min_unique_sources": 12,
+      "expected_domains": ["openstax.org", "chem.libretexts.org", "iupac.org", "rsc.org"],
       "required_facts": [
-        {"id": "acid", "description": "ACID 分别是原子性、一致性、隔离性和持久性，其中一致性依赖应用约束与事务逻辑", "match": {"all": ["原子性", "隔离性", "持久性"], "any": ["一致性", "ACID"]}, "source_urls": ["https://www.postgresql.org/docs/current/tutorial-transactions.html"]},
-        {"id": "isolation_anomalies", "description": "较弱隔离级别允许脏读、不可重复读或幻读等不同异常，具体保证依数据库实现", "match": {"all": ["隔离级别"], "any": ["脏读", "不可重复读", "幻读", "实现差异"]}, "source_urls": ["https://www.postgresql.org/docs/current/transaction-iso.html"]},
-        {"id": "serializability", "description": "可串行化要求并发执行结果等价于某个事务串行顺序", "match": {"all": ["可串行化"], "any": ["等价.{0,8}串行", "串行顺序", "最高隔离"]}, "source_urls": ["https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE"]},
-        {"id": "mvcc_snapshot", "description": "MVCC 通过多个行版本让读者看到一致快照，减少读写阻塞但仍需处理写冲突和版本回收", "match": {"all": ["MVCC"], "any": ["多个版本|多版本", "一致.{0,4}快照", "读写.{0,6}阻塞", "版本回收"]}, "source_urls": ["https://www.postgresql.org/docs/current/mvcc-intro.html"]},
-        {"id": "write_skew", "description": "快照隔离可阻止许多异常但仍可能出现跨行约束的写偏斜；可串行化需检测或阻止它", "match": {"all": ["写偏斜|write skew"], "any": ["快照隔离", "跨行.{0,8}约束", "可串行化"]}, "source_urls": ["https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE"]}
+        {"id": "dynamic_equilibrium", "description": "动态平衡时正逆反应速率相等，宏观浓度保持不变但反应没有停止", "match": {"all": ["动态平衡", "正.{0,4}逆.{0,4}反应速率.{0,6}相等"], "any": ["浓度.{0,8}不变", "反应.{0,8}(没有|并未)停止"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-1-chemical-equilibria"]},
+        {"id": "q_vs_k", "description": "比较 Q 与 K 判断净反应方向：Q<K 向正反应，Q>K 向逆反应，Q=K 平衡", "match": {"all": ["Q.{0,4}<.{0,4}K", "Q.{0,4}>.{0,4}K"], "any": ["正反应方向", "逆反应方向", "Q.{0,4}=.{0,4}K"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-3-shifting-equilibria-le-chateliers-principle"]},
+        {"id": "equilibrium_expression", "description": "平衡常数式的幂次来自配平系数，纯固体和纯液体不写入浓度平衡常数式", "match": {"all": ["平衡常数"], "any": ["化学计量数|配平系数", "纯固体.{0,10}(不|省略)", "纯液体.{0,10}(不|省略)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-2-equilibrium-constants"]},
+        {"id": "temperature_catalyst", "description": "一定反应的 K 只随温度改变；催化剂同时降低正逆反应活化能、缩短达平衡时间但不改变 K 和平衡组成", "match": {"all": ["催化剂", "平衡常数"], "any": ["温度.{0,8}改变", "正逆反应.{0,12}加快", "不改变.{0,8}平衡组成"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-3-shifting-equilibria-le-chateliers-principle"]},
+        {"id": "weak_acid_equilibrium", "description": "醋酸是弱酸，只部分电离；稀释会提高电离程度但氢离子浓度仍可下降", "match": {"all": ["醋酸", "部分电离|不完全电离"], "any": ["稀释.{0,8}电离程度.{0,8}(增大|提高)", "氢离子浓度.{0,8}(减小|下降)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-3-relative-strengths-of-acids-and-bases"]},
+        {"id": "titration_stages", "description": "弱酸强碱滴定中半中和点酸与共轭碱等量，化学计量点主要为盐且 pH>7，过量后由过量 OH- 控制", "match": {"all": ["半中和点", "化学计量点|当量点"], "any": ["pH.{0,4}>.{0,4}7", "醋酸根", "过量.{0,6}OH"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-7-acid-base-titrations"]},
+        {"id": "equivalence_endpoint", "description": "化学计量点由反应计量关系定义，滴定终点由指示剂变色或仪器信号观察，二者不必严格重合", "match": {"all": ["化学计量点|当量点", "滴定终点|终点"], "any": ["指示剂", "不.{0,6}(完全|严格).{0,4}重合", "计量关系"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/4-5-quantitative-chemical-analysis"]},
+        {"id": "indicator_choice", "description": "指示剂变色范围应落在化学计量点附近的陡跃区，弱酸强碱滴定通常不选甲基橙", "match": {"all": ["变色范围", "陡跃|突跃"], "any": ["酚酞", "甲基橙.{0,8}(不适合|不宜)", "指示剂选择"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-7-acid-base-titrations"]},
+        {"id": "henderson_bridge", "description": "[拓展] Henderson–Hasselbalch 关系 pH=pKa+log([A-]/[HA]) 可由 Ka 式重排得到；在缓冲区近似适用，半中和点给 pH=pKa", "match": {"all": ["Henderson|亨德森", "pH.{0,4}=.{0,4}pK", "半中和点"], "any": ["缓冲", "Ka.{0,8}重排", "适用条件"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-6-buffers"]},
+        {"id": "activity_bridge", "description": "[拓展] 严格的平衡常数使用活度；高中以浓度代替活度是稀溶液近似，离子强度较大时偏差会增大", "match": {"all": ["活度", "浓度.{0,8}近似", "稀溶液"], "any": ["离子强度", "偏差", "平衡常数"]}, "source_urls": ["https://goldbook.iupac.org/terms/view/A00115"]}
       ],
       "traps": [
-        {"id": "mvcc_lock_free", "description": "误解：使用 MVCC 后数据库完全不需要锁或冲突检测", "wrong_pattern": "MVCC.{0,10}(完全|彻底).{0,6}(不需要|无需).{0,4}(锁|冲突检测)", "correct_pattern": "写锁|冲突|行锁|串行化失败"},
-        {"id": "repeatable_serializable", "description": "误解：可重复读在所有实现中都等价于可串行化", "wrong_pattern": "可重复读.{0,12}(总是|完全|等同于).{0,4}可串行化", "correct_pattern": "写偏斜|实现差异|快照隔离|更弱"}
+        {"id": "equilibrium_stopped", "description": "误解：化学平衡时正逆反应均停止", "wrong_pattern": "平衡.{0,10}(正逆反应|反应).{0,8}(停止|不再进行)", "correct_pattern": "动态平衡|速率.{0,6}相等"},
+        {"id": "catalyst_shifts", "description": "误解：催化剂会使平衡向生成物方向移动并增大 K", "wrong_pattern": "催化剂.{0,12}(平衡.{0,6}向.{0,4}生成物|增大.{0,4}(平衡常数|K))", "correct_pattern": "不改变.{0,8}(平衡组成|平衡常数|K)|同时加快"},
+        {"id": "equivalence_neutral", "description": "误解：任何酸碱滴定的化学计量点 pH 都等于 7", "wrong_pattern": "(任何|所有).{0,6}(酸碱)?滴定.{0,10}(化学计量点|当量点).{0,6}pH.{0,4}(等于|=).{0,2}7", "correct_pattern": "弱酸强碱|盐的水解|pH.{0,4}>.{0,4}7"},
+        {"id": "henderson_universal", "description": "误解：Henderson–Hasselbalch 公式可在滴定全过程无条件直接套用", "wrong_pattern": "(Henderson|亨德森).{0,12}(滴定全过程|任何阶段).{0,8}(都|均|无条件).{0,4}(适用|套用)", "correct_pattern": "缓冲区|适用条件|化学计量点|过量"}
       ],
-      "contrasts": [["隔离性", "持久性"], ["快照隔离", "可串行化"]],
-      "format_requirements": {"key_formulas": ["ACID", "MVCC", "serial|串行"]}
+      "contrasts": [["反应速率相等", "反应停止"], ["平衡常数改变", "平衡移动"], ["化学计量点", "滴定终点"], ["活度", "浓度"]],
+      "format_requirements": {"key_formulas": ["Q.{0,4}[<=>].{0,4}K", "K[a-z]?|平衡常数", "pH", "pK|Henderson"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+      "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
     },
     {
       "id": "distributed_consensus_raft",
@@ -606,26 +632,39 @@
       "format_requirements": {"key_formulas": ["海底扩张", "俯冲", "板片拉力"]}
     },
     {
-      "id": "climate_feedback_carbon_cycle",
+      "id": "monsoon_water_cycle_urbanization",
       "tier": "smoke",
-      "title": "气候反馈、辐射强迫与碳循环",
-      "query": "系统自学温室效应、辐射强迫、气候敏感度、水汽/冰反照率/碳循环反馈、碳预算和海洋热惯性；要求区分反馈与外部强迫、天气与气候，并量化不确定性",
-      "subject": "气候科学",
-      "expected_knowledge_points": ["温室效应", "辐射强迫", "气候反馈", "水汽与冰反照率", "全球碳循环", "碳预算与时间尺度"],
-      "expected_domains": ["ipcc.ch", "nasa.gov", "noaa.gov"],
+      "options": {"max_points": 10},
+      "curriculum_scope": "high_school_plus",
+      "extension_topics": ["合理公式 Q=CIA", "单位线与过程线的尺度假设"],
+      "title": "高中地理：季风、水循环与城市洪峰判读",
+      "query": "在高中地理范围内，从海陆热力性质差异和气压带风带季节移动解释东亚、南亚季风；再用同一场暴雨下城市与林地两条径流过程线，推断下渗、地表径流、洪峰流量、峰现时间和海绵城市措施的作用与边界",
+      "subject": "高中地理",
+      "requirements": "必须画季风环流示意图和双过程线，完成因果链与读图题；区分定义、机制、相关性和适用条件，不扩展到大学流体模型。",
+      "expected_knowledge_points": ["季风的季节性风向转换", "海陆热力性质差异", "气压梯度与风向", "东亚季风与南亚季风", "水循环环节与水量收支", "下渗和地表径流", "城市化与洪水过程线", "海绵城市措施及边界", "合理公式与洪峰估算", "单位线的线性尺度假设"],
+      "min_unique_sources": 12,
+      "expected_domains": ["noaa.gov", "usgs.gov", "metoffice.gov.uk", "nasa.gov"],
       "required_facts": [
-        {"id": "greenhouse", "description": "温室气体吸收并再辐射地表长波辐射，使有温室气体的地表温度高于无温室气体情形", "match": {"all": ["温室效应"], "any": ["长波|红外", "吸收.{0,8}再辐射", "地表.{0,8}升温"]}, "source_urls": ["https://science.nasa.gov/climate-change/faq/what-is-the-greenhouse-effect/"]},
-        {"id": "forcing_feedback", "description": "辐射强迫是对能量收支的外部扰动，反馈是温度变化诱发并放大或削弱响应的过程", "match": {"all": ["辐射强迫", "反馈"], "any": ["外部.{0,6}扰动", "放大|削弱", "能量收支"]}, "source_urls": ["https://www.ipcc.ch/report/ar6/wg1/chapter/chapter-7/"]},
-        {"id": "water_vapor", "description": "现代变暖中水汽主要是随温度变化的正反馈，而持续增加 CO2 是重要外部强迫", "match": {"all": ["水汽.{0,8}反馈", "CO2|二氧化碳"], "any": ["正反馈", "强迫", "随温度"]}, "source_urls": ["https://science.nasa.gov/climate-change/faq/is-water-vapor-the-most-important-greenhouse-gas/"]},
-        {"id": "ice_albedo", "description": "升温使冰雪减少、反照率降低、吸收太阳能增加，构成正反馈", "match": {"all": ["冰.?反照率|冰雪.?反照率"], "any": ["反照率.{0,8}降低", "吸收.{0,8}增加", "正反馈"]}, "source_urls": ["https://climate.nasa.gov/nasa_science/science/"]},
-        {"id": "carbon_budget", "description": "累计 CO2 排放与全球平均升温近似成比例，剩余碳预算依赖温控概率、非 CO2 强迫和模型不确定性", "match": {"all": ["碳预算"], "any": ["累计.{0,6}排放", "近似.{0,6}成比例", "概率|不确定性", "非.?CO2"]}, "source_urls": ["https://www.ipcc.ch/report/ar6/wg1/chapter/chapter-5/"]}
+        {"id": "monsoon_definition", "description": "季风的核心是大范围盛行风随季节显著转换，不等同于一次强降雨", "match": {"all": ["季风", "风向.{0,8}(季节|转换|反转)"], "any": ["盛行风", "不等同.{0,8}(暴雨|降雨)"]}, "source_urls": ["https://www.nesdis.noaa.gov/about/k-12-education/severe-weather/what-monsoon"]},
+        {"id": "thermal_contrast", "description": "海陆热容量和升降温速度不同造成季节性气压差，近地面风由高压区吹向低压区并受地转偏向影响", "match": {"all": ["海陆热力性质差异|海陆热力差异", "气压"], "any": ["升温.{0,8}快", "高压.{0,8}低压", "地转偏向"]}, "source_urls": ["https://www.nesdis.noaa.gov/about/k-12-education/severe-weather/what-monsoon"]},
+        {"id": "east_south_asia", "description": "东亚夏季风主要受海陆热力差异影响，南亚夏季风还与气压带风带季节移动和越赤道气流密切相关", "match": {"all": ["东亚.{0,8}季风", "南亚.{0,8}季风"], "any": ["气压带.{0,6}风带", "越赤道", "海陆热力"]}, "source_urls": ["https://www.metoffice.gov.uk/weather/learn-about/weather/types-of-weather/monsoons"]},
+        {"id": "water_cycle_drivers", "description": "太阳辐射驱动蒸发蒸腾，重力驱动降水、径流和下渗后的地下水运动", "match": {"all": ["太阳辐射|太阳能", "重力"], "any": ["蒸发|蒸腾", "径流", "下渗|地下水"]}, "source_urls": ["https://www.usgs.gov/special-topics/water-science-school/water-cycle"]},
+        {"id": "water_balance", "description": "流域一定时段可用降水 P、蒸散发 E、径流 R 与储水变化 ΔS 表示水量收支", "match": {"all": ["水量收支"], "any": ["P.{0,6}=.{0,6}E.{0,6}\\+.{0,6}R", "储水变化|ΔS", "降水.{0,12}蒸散发.{0,12}径流"]}, "source_urls": ["https://www.usgs.gov/special-topics/water-science-school/water-cycle"]},
+        {"id": "urban_runoff", "description": "不透水面增加会减少下渗、加快并增加地表径流，使城市洪峰更高、峰现更早且退水更快", "match": {"all": ["不透水面", "下渗"], "any": ["洪峰.{0,8}(更高|增大)", "峰现.{0,8}(提前|更早)", "径流.{0,8}(增加|加快)"]}, "source_urls": ["https://www.usgs.gov/water-science-school/science/surface-runoff-and-water-cycle?page=0"]},
+        {"id": "hydrograph_area", "description": "过程线纵轴流量、横轴时间；峰值反映最大流量，而曲线下面积对应总径流量，二者不能混同", "match": {"all": ["过程线|水文曲线", "曲线.{0,6}(下面积|面积)"], "any": ["总径流量", "洪峰流量", "流量.{0,8}时间"]}, "source_urls": ["https://www.usgs.gov/water-science-school/science/surface-runoff-and-water-cycle?page=0"]},
+        {"id": "sponge_city_limits", "description": "透水铺装、下凹绿地、湿地和调蓄设施可滞蓄并促渗，但效果受土壤、前期含水量、雨强和维护限制", "match": {"all": ["透水铺装|下凹绿地|雨水花园", "调蓄|滞蓄"], "any": ["前期.{0,6}含水", "雨强", "维护", "土壤"]}, "source_urls": ["https://www.epa.gov/green-infrastructure/what-green-infrastructure"]},
+        {"id": "rational_method_bridge", "description": "[拓展] 合理公式 Q=CIA 用径流系数、设计雨强和汇水面积估算小流域洪峰，要求雨强时段覆盖汇流时间且不能直接给总径流量", "match": {"all": ["合理公式", "Q.{0,4}=.{0,4}C.?I.?A", "径流系数"], "any": ["汇流时间", "小流域", "不能.{0,8}总径流量", "设计雨强"]}, "source_urls": ["https://www.fhwa.dot.gov/engineering/hydraulics/pubs/07092/07092.pdf"]},
+        {"id": "unit_hydrograph_bridge", "description": "[拓展] 单位线用单位有效降雨形成的直接径流过程线，依赖线性叠加和时不变近似；极端事件或流域改变时需重新检验", "match": {"all": ["单位线|单位过程线", "线性叠加", "时不变"], "any": ["有效降雨", "直接径流", "极端.{0,8}(失效|检验)", "流域改变"]}, "source_urls": ["https://training.weather.gov/nwstc/Hydrology/HYDRO/BHModule/BH-unit5.HTML"]}
       ],
       "traps": [
-        {"id": "water_primary_forcing", "description": "误解：水汽是当前长期增暖的独立首要外部强迫，因此 CO2 不重要", "wrong_pattern": "水汽.{0,12}(首要|主要).{0,6}外部强迫.{0,12}CO2.{0,8}(不重要|可忽略)", "correct_pattern": "水汽.{0,8}反馈|CO2.{0,8}强迫"},
-        {"id": "cold_day_refutes", "description": "误解：某地一次寒潮或冷天可以反驳全球长期变暖", "wrong_pattern": "(寒潮|冷天|低温).{0,10}(反驳|证明没有).{0,8}(全球变暖|气候变暖)", "correct_pattern": "天气.{0,8}气候|长期趋势|全球平均"}
+        {"id": "monsoon_is_rain", "description": "误解：季风就是连续数月的大雨", "wrong_pattern": "季风.{0,6}(就是|等于|仅指).{0,8}(大雨|暴雨|雨季)", "correct_pattern": "风向.{0,8}(季节|转换)|盛行风"},
+        {"id": "urban_total_certain", "description": "误解：城市化必然使任何暴雨的总降水量和总径流量都按相同比例增加", "wrong_pattern": "城市化.{0,10}(必然|一定).{0,8}(总降水量|总径流量).{0,8}(同比例|相同倍数).{0,4}增加", "correct_pattern": "降水条件|曲线面积|下渗|情景"},
+        {"id": "green_infra_eliminates", "description": "误解：海绵城市措施可以消除所有等级的城市内涝", "wrong_pattern": "(海绵城市|透水铺装|雨水花园).{0,12}(消除|杜绝).{0,6}(所有|任何).{0,4}(内涝|洪水)", "correct_pattern": "设计标准|极端降雨|边界|维护"},
+        {"id": "rational_method_universal", "description": "误解：合理公式可不检查尺度和降雨条件地计算任意流域任意洪水", "wrong_pattern": "合理公式.{0,12}(任意|任何).{0,6}(流域|洪水).{0,8}(都|均|直接).{0,4}(适用|计算)", "correct_pattern": "小流域|汇流时间|设计雨强|适用条件"}
       ],
-      "contrasts": [["辐射强迫", "气候反馈"], ["天气", "气候"]],
-      "format_requirements": {"key_formulas": ["W/m|瓦.{0,4}平方米", "CO2|二氧化碳", "碳预算"]}
+      "contrasts": [["季风", "季风降水"], ["洪峰流量", "总径流量"], ["下渗", "地表径流"], ["经验径流系数", "物理常数"]],
+      "format_requirements": {"key_formulas": ["P.{0,6}=.{0,6}E", "ΔS|储水", "流量", "Q.{0,4}=.{0,4}C.?I.?A"], "min_figures": 3, "min_tables": 2, "min_chars": 10000},
+      "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
     },
     {
       "id": "experimental_design_statistics",

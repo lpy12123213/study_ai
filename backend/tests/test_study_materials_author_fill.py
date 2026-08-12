@@ -2,7 +2,11 @@ import asyncio
 import unittest
 
 from backend.generation.study_materials.author.blueprint import Blueprint
-from backend.generation.study_materials.author.fill import FillRunner
+from backend.generation.study_materials.author.fill import (
+    FillRunner,
+    remap_out_of_scope_citations,
+    restore_missing_example_tag,
+)
 
 BP = Blueprint.from_dict({
     "narrative": "n", "terminology": [{"symbol": "$\\epsilon$", "meaning": "任意小"}],
@@ -42,14 +46,19 @@ class FillRunnerTests(unittest.TestCase):
         self.assertLess(len(seen["user"]), 12000)      # 有界
 
     def test_retry_then_author_fallback_flag(self):
+        events = []
+
         async def bad_llm(system, user):
             return "太短"
 
-        r = FillRunner(llm_func=bad_llm, max_retries=2, min_chars=100)
+        r = FillRunner(llm_func=bad_llm, max_retries=2, min_chars=100, on_event=events.append)
         out = asyncio.run(r.fill(BP.sections[0], backbone_excerpt="",
                                  research_slice="", terminology=[]))
         self.assertTrue(out.needs_author_rewrite)
         self.assertEqual(out.attempts, 2)
+        self.assertTrue(any("长度不足" in issue for issue in out.missing))
+        failed = next(event for event in events if event["data"]["status"] == "failed")
+        self.assertEqual(failed["data"]["missing"], list(out.missing))
 
     def test_url_in_output_rejected(self):
         async def leaky_llm(system, user):
@@ -86,12 +95,92 @@ class FillRunnerTests(unittest.TestCase):
         self.assertTrue(out.needs_author_rewrite)
         self.assertEqual(out.attempts, 2)
 
+    def test_global_requirements_and_required_marker_are_enforced(self):
+        seen = []
+
+        async def marker_llm(system, user):
+            seen.append(user)
+            if len(seen) == 1:
+                return GROUNDED_BODY
+            return GROUNDED_BODY + "\n\n[高中连接] 用切线近似帮助检查高中导数题的估算结果。"
+
+        runner = FillRunner(llm_func=marker_llm, max_retries=2)
+        out = asyncio.run(
+            runner.fill(
+                BP.sections[0],
+                "",
+                "",
+                [],
+                global_requirements="必须比较精确值与近似值，并说明误差来源。",
+                required_markers=["[高中连接]"],
+            )
+        )
+
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertEqual(out.attempts, 2)
+        self.assertIn("必须比较精确值与近似值", seen[0])
+        self.assertIn("[高中连接]", seen[0])
+        self.assertIn("缺少必需标记 [高中连接]", seen[1])
+
+    def test_requested_comparison_and_sourced_misconception_need_explicit_semantics(self):
+        section = Blueprint.from_dict({
+            "narrative": "n",
+            "terminology": [],
+            "sections": [{
+                "id": "sec-compare",
+                "title": "必要条件与充分条件",
+                "purpose": "辨析两个条件",
+                "key_points": ["区分必要条件与充分条件"],
+                "target_chars": 200,
+                "difficulty": "应用",
+                "misconceptions": [{
+                    "claim": "必要条件就是充分条件",
+                    "source_url": "https://example.edu/logic",
+                }],
+                "frontier": False,
+            }],
+            "figures": [],
+        }).sections[0]
+        weak = (
+            "本节介绍两个条件及其数学表达，并给出若干命题帮助学习者掌握基本用法。" * 6
+            + "\n\n**[EX1]**\n例题。步骤：写出命题。"
+            + "\n\n**[Q1]** [基础]\n判断命题。"
+            + "\n\n**[A1]**\n答案成立。评分点：判断正确。"
+        )
+
+        missing = FillRunner._validate(  # noqa: SLF001 - 直接锁定分节语义门
+            weak,
+            0,
+            set(),
+            [],
+            section_spec=section,
+        )
+        self.assertTrue(any("明确驳正" in item for item in missing))
+        self.assertTrue(any("明确比较" in item for item in missing))
+
+        strong = weak + (
+            "\n\n### 易错点辨析\n常见误区认为必要条件就是充分条件；这种说法错误，因为二者方向不同。"
+            "必要条件与充分条件相比，前者是结论成立所必需，后者足以推出结论，区别不能混同。"
+        )
+        self.assertEqual(
+            FillRunner._validate(strong, 0, set(), [], section_spec=section),  # noqa: SLF001
+            [],
+        )
+
+    def test_section_with_registered_sources_requires_a_valid_inline_citation(self):
+        uncited = GROUNDED_BODY
+        missing = FillRunner._validate(uncited, 0, {"1"}, [])  # noqa: SLF001
+        self.assertTrue(any("有效内联引用" in item for item in missing))
+
+        cited = uncited + "\n\n上述极限定义与逼近条件可由本节来源核对。[^1]"
+        self.assertEqual(FillRunner._validate(cited, 0, {"1"}, []), [])  # noqa: SLF001
+
 
 class HeadingLevelTests(unittest.TestCase):
     """真实缺陷：fill 小节正文出现 ## 级标题（## [EX1] 例题、## 自测题），
-    与骨架的 ## 小节标题同级，破坏全书层级。小节正文只允许 ###/####，题目标签用加粗行。"""
+    与骨架的 ## 小节标题同级，破坏全书层级。入口应确定性降为 H3，避免重跑模型。"""
 
-    def test_h2_heading_in_output_rejected_and_fed_back(self):
+    def test_h2_heading_in_output_demoted_without_retry(self):
         seen = []
 
         async def heading_llm(system, user):
@@ -101,18 +190,20 @@ class HeadingLevelTests(unittest.TestCase):
         r = FillRunner(llm_func=heading_llm, max_retries=2)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
 
-        self.assertTrue(out.needs_author_rewrite)
-        self.assertEqual(len(seen), 2)
-        self.assertIn("标题", seen[1])  # 验收失败原因必须喂回模型
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("### [EX2] 例题", out.text)
+        self.assertNotRegex(out.text, r"(?m)^##\s+\[EX2\]", msg=out.text)
 
-    def test_h1_heading_in_output_rejected(self):
+    def test_h1_heading_in_output_demoted(self):
         async def heading_llm(system, user):
             return "# 小节标题\n\n" + GROUNDED_BODY
 
         r = FillRunner(llm_func=heading_llm, max_retries=1)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
 
-        self.assertTrue(out.needs_author_rewrite)
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertTrue(out.text.startswith("### 小节标题"))
 
     def test_h3_h4_headings_accepted(self):
         async def heading_llm(system, user):
@@ -156,6 +247,7 @@ class InlineCitationTests(unittest.TestCase):
         research = SOURCE_REGISTRY + "\n## 极限\n- 极限是无限逼近 | src: https://example.com/limits | conf: 0.90"
         asyncio.run(r.fill(BP.sections[0], "", research, []))
         self.assertIn("来源清单", seen["user"])
+        self.assertIn("全书固定编号，不得从 [^1] 重新编号", seen["user"])
         self.assertIn("[^1] 极限 通俗解释 https://example.com/limits", seen["user"])
         # 事实行出处改写为编号，正文中不再出现裸 URL 形态的 src
         self.assertIn("src: [^1]", seen["user"])
@@ -179,6 +271,31 @@ class InlineCitationTests(unittest.TestCase):
         out = asyncio.run(r.fill(BP.sections[0], "", SOURCE_REGISTRY, []))
         self.assertTrue(out.needs_author_rewrite)
 
+    def test_author_level_citation_repair_uses_only_supplied_global_ids(self):
+        text, remapped = remap_out_of_scope_citations(
+            "第一条[^9]，已有编号保留[^7]，第二条[^12]，再次引用[^9]。",
+            {"3", "7"},
+        )
+
+        self.assertEqual(remapped, {"9": "3", "12": "7"})
+        self.assertEqual(text, "第一条[^3]，已有编号保留[^7]，第二条[^7]，再次引用[^3]。")
+
+    def test_author_level_citation_repair_keeps_unsupported_ids_without_sources(self):
+        text, remapped = remap_out_of_scope_citations("来源[^9]。", set())
+
+        self.assertEqual(text, "来源[^9]。")
+        self.assertEqual(remapped, {})
+
+    def test_author_level_example_label_repair_requires_real_example_cue(self):
+        repaired, changed = restore_missing_example_tag("讲解正文。\n### 示例：求函数极值\n步骤一：求导。")
+
+        self.assertTrue(changed)
+        self.assertIn("**[EX1]**\n### 示例：求函数极值", repaired)
+
+        untouched, changed = restore_missing_example_tag("只有概念讲解，没有演算块。")
+        self.assertFalse(changed)
+        self.assertEqual(untouched, "只有概念讲解，没有演算块。")
+
     def test_citation_without_source_list_rejected(self):
         async def fake_llm(system, user):
             return GROUNDED_BODY + "来源[^1]。"
@@ -190,9 +307,9 @@ class InlineCitationTests(unittest.TestCase):
 
 class LatexDelimiterTests(unittest.TestCase):
     """真实缺陷（实跑 #5）：模型用 \\(...\\) / \\[...\\] 定界符——前端 remark-math 不渲染，
-    且 lint 数学区间豁免不覆盖。fill 校验必须拒绝并要求 $...$ / $$...$$。"""
+    且 lint 数学区间豁免不覆盖。fill 入口应无损归一化，避免为机械格式差异重跑模型。"""
 
-    def test_paren_delimiter_rejected_and_fed_back(self):
+    def test_paren_delimiter_normalized_without_retry(self):
         seen = []
 
         async def paren_llm(system, user):
@@ -202,18 +319,30 @@ class LatexDelimiterTests(unittest.TestCase):
         r = FillRunner(llm_func=paren_llm, max_retries=2)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
 
-        self.assertTrue(out.needs_author_rewrite)
-        self.assertEqual(len(seen), 2)
-        self.assertIn("定界符", seen[1])
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("$A=\\begin{bmatrix}0&1\\\\1&0\\end{bmatrix}$", out.text)
+        self.assertNotIn("\\(", out.text)
 
-    def test_bracket_delimiter_rejected(self):
+    def test_bracket_delimiter_normalized(self):
         async def bracket_llm(system, user):
             return GROUNDED_BODY + "\n\\[x+1=2\\]"
 
         r = FillRunner(llm_func=bracket_llm, max_retries=1)
         out = asyncio.run(r.fill(BP.sections[0], "", "", []))
 
-        self.assertTrue(out.needs_author_rewrite)
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertIn("$$x+1=2$$", out.text)
+
+    def test_delimiters_inside_fenced_code_are_not_rewritten(self):
+        async def fenced_llm(system, user):
+            return GROUNDED_BODY + "\n```text\n# literal\n\\(literal\\)\n```\n正文 \\(x+1\\)。"
+
+        out = asyncio.run(FillRunner(llm_func=fenced_llm, max_retries=1).fill(BP.sections[0], "", "", []))
+
+        self.assertFalse(out.needs_author_rewrite)
+        self.assertIn("```text\n# literal\n\\(literal\\)\n```", out.text)
+        self.assertIn("正文 $x+1$。", out.text)
 
     def test_dollar_delimiters_accepted(self):
         async def dollar_llm(system, user):

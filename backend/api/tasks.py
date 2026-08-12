@@ -67,6 +67,20 @@ router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(requir
 logger = get_logger(__name__)
 
 
+def _set_historical_eta(task: dict, *, elapsed_s: float, average_s: float) -> None:
+    """Attach a coarse ETA without claiming that an overdue running task has 0s left."""
+
+    elapsed = max(0.0, float(elapsed_s))
+    remaining = float(average_s) - elapsed
+    task["elapsed_s"] = elapsed
+    if remaining > 0:
+        task["eta_s"] = remaining
+        task.pop("eta_overdue", None)
+        return
+    task.pop("eta_s", None)
+    task["eta_overdue"] = True
+
+
 def _sse_headers() -> dict:
     return {
         "Cache-Control": "no-cache",
@@ -280,8 +294,7 @@ async def list_tasks(
         elapsed_s = max(0.0, now - started_ts)
         avg_s = averages.get(ttype)
         if avg_s and avg_s > 1:
-            t["elapsed_s"] = elapsed_s
-            t["eta_s"] = max(0.0, float(avg_s) - elapsed_s)
+            _set_historical_eta(t, elapsed_s=elapsed_s, average_s=float(avg_s))
 
     return {"tasks": items, "count": len(items)}
 
@@ -594,8 +607,7 @@ async def get_task_status(
                 if avg_s and avg_s > 1:
                     now = time.time()
                     elapsed_s = max(0.0, now - started_ts)
-                    db_task["elapsed_s"] = elapsed_s
-                    db_task["eta_s"] = max(0.0, float(avg_s) - elapsed_s)
+                    _set_historical_eta(db_task, elapsed_s=elapsed_s, average_s=float(avg_s))
             except Exception:
                 logger.warning(
                     "task_eta_compute_failed",

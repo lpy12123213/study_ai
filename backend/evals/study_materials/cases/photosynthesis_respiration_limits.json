@@ -1,0 +1,36 @@
+{
+  "id": "photosynthesis_respiration_limits",
+  "title": "高中生物：光合—呼吸耦联与限制因素实验",
+  "query": "在高中生物范围内，把叶绿体光反应、卡尔文循环与细胞呼吸的物质能量变化串联起来；必须解释光照强度—净光合速率曲线的补偿点、饱和点与限制因素，并设计可区分光照、CO2、温度影响的对照实验和数据判读",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["化学渗透与质子动力势", "作用光谱与表观量子效率"],
+  "subject": "高中生物",
+  "preset": "deep",
+  "requirements": "必须给叶绿体/线粒体物质流示意图、限制因素曲线和实验变量表；区分总光合、净光合与呼吸速率，所有机理限定高中层次。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["光反应的场所与产物", "卡尔文循环和碳同化", "氧气来源", "有氧呼吸阶段与场所", "ATP 与物质能量联系", "总光合和净光合", "光补偿点与光饱和点", "限制因素实验设计", "化学渗透与质子梯度", "作用光谱与量子效率"],
+  "min_unique_sources": 12,
+  "expected_domains": ["openstax.org", "ncbi.nlm.nih.gov", "khanacademy.org", "bio.libretexts.org"],
+  "required_facts": [
+    {"id": "light_reactions", "description": "光反应在类囊体膜进行，水被氧化释放 O2，并形成 ATP 和 NADPH", "match": {"all": ["类囊体膜", "ATP", "NADPH"], "any": ["水的光解|水被氧化", "释放.{0,4}(O2|O₂|氧气)"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/8-2-the-light-dependent-reactions-of-photosynthesis"]},
+    {"id": "oxygen_from_water", "description": "光合作用释放的氧原子来自水而不是二氧化碳，可用同位素示踪验证", "match": {"all": ["氧气|O2|O₂", "来自.{0,4}水|水的光解"], "any": ["不是.{0,6}(二氧化碳|CO2|CO₂)", "同位素"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/8-2-the-light-dependent-reactions-of-photosynthesis"]},
+    {"id": "calvin_cycle", "description": "卡尔文循环在叶绿体基质固定 CO2，消耗光反应提供的 ATP 和 NADPH 形成 G3P 等有机物前体", "match": {"all": ["卡尔文循环", "叶绿体基质", "CO2|CO₂|二氧化碳"], "any": ["消耗.{0,10}ATP.{0,10}NADPH", "G3P|三碳糖"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/8-3-using-light-energy-to-make-organic-molecules"]},
+    {"id": "respiration_stages", "description": "有氧呼吸的糖酵解在细胞质，丙酮酸氧化和柠檬酸循环在线粒体基质，氧化磷酸化在线粒体内膜", "match": {"all": ["糖酵解", "细胞质", "线粒体"], "any": ["柠檬酸循环|三羧酸循环", "内膜", "氧化磷酸化"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/7-introduction"]},
+    {"id": "process_relationship", "description": "光合作用储存光能到有机物，细胞呼吸把有机物化学能转移到 ATP；两者总反应近似相反但不是同一路径简单逆转", "match": {"all": ["光合作用", "细胞呼吸", "ATP"], "any": ["储存.{0,8}能量", "释放|转移.{0,8}能量", "不是.{0,8}简单.{0,4}逆反应"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/8-3-using-light-energy-to-make-organic-molecules"]},
+    {"id": "net_gross_relation", "description": "净光合速率=总光合速率-呼吸速率；仅测 CO2 吸收或 O2 释放通常得到表观净交换", "match": {"all": ["净光合", "总光合", "呼吸速率"], "any": ["净.{0,4}=.{0,8}总.{0,8}-.{0,8}呼吸", "CO2.{0,8}吸收", "O2.{0,8}释放"]}, "source_urls": ["https://bio.libretexts.org/Bookshelves/Botany/Photosynthesis_(Mauseth)/01%3A_Chapters/1.08%3A_The_Impact_of_Photosynthesis_on_Net_Primary_Productivity"]},
+    {"id": "compensation_saturation", "description": "光补偿点处光合与呼吸相等、净光合为零；光饱和点后增加光强不再显著提高光合速率", "match": {"all": ["光补偿点", "光饱和点"], "any": ["净光合.{0,6}(为零|=.?0)", "光合.{0,6}呼吸.{0,6}相等", "不再.{0,8}提高"]}, "source_urls": ["https://bio.libretexts.org/Bookshelves/Botany/Photosynthesis_(Mauseth)/01%3A_Chapters/1.08%3A_The_Impact_of_Photosynthesis_on_Net_Primary_Productivity"]},
+    {"id": "limiting_experiment", "description": "研究单一限制因素要设置对照并控制叶面积、材料状态、测量时间等变量，温度既影响光合作用也影响呼吸", "match": {"all": ["对照", "控制变量"], "any": ["叶面积", "材料.{0,6}状态", "测量时间", "温度.{0,12}呼吸"]}, "source_urls": ["https://www.nuffieldfoundation.org/practical-biology/investigating-factors-affecting-rate-photosynthesis"]},
+    {"id": "chemiosmosis_bridge", "description": "[拓展] 类囊体膜和线粒体内膜都用电子传递建立 H+ 电化学梯度，ATP 合酶利用质子动力势合成 ATP", "match": {"all": ["化学渗透", "质子动力势|H[+].{0,8}梯度", "ATP 合酶"], "any": ["类囊体膜", "线粒体内膜", "电子传递"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/7-4-oxidative-phosphorylation"]},
+    {"id": "action_spectrum_bridge", "description": "[拓展] 吸收光谱描述色素吸收，作用光谱描述不同波长驱动光合作用的效果；表观量子效率需在低光等受控条件比较", "match": {"all": ["吸收光谱", "作用光谱", "量子效率"], "any": ["波长", "低光", "控制条件", "光合作用效果"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/8-2-the-light-dependent-reactions-of-photosynthesis"]}
+  ],
+  "traps": [
+    {"id": "oxygen_from_co2", "description": "误解：光合作用释放的氧气来自 CO2", "wrong_pattern": "(氧气|O2|O₂).{0,6}来自.{0,4}(二氧化碳|CO2|CO₂)", "correct_pattern": "来自.{0,4}水|光解水|同位素"},
+    {"id": "plants_respire_night_only", "description": "误解：植物只在夜间进行细胞呼吸", "wrong_pattern": "植物.{0,8}(只|仅).{0,4}(在)?夜间.{0,6}(呼吸|细胞呼吸)", "correct_pattern": "昼夜|白天.{0,8}也|持续呼吸"},
+    {"id": "light_always_linear", "description": "误解：只要继续增加光照，光合速率就会始终线性增加", "wrong_pattern": "光照.{0,8}增加.{0,12}光合速率.{0,8}(始终|一直|无限).{0,6}(线性)?增加", "correct_pattern": "光饱和点|限制因素|平台"},
+    {"id": "dark_reaction_independent", "description": "误解：所谓暗反应在光下不能发生且完全不依赖光反应", "wrong_pattern": "暗反应.{0,10}(不能在光下|完全不依赖光|与光反应无关)", "correct_pattern": "ATP|NADPH|光下.{0,8}发生|间接依赖"}
+  ],
+  "contrasts": [["总光合速率", "净光合速率"], ["光补偿点", "光饱和点"], ["光合作用", "细胞呼吸"], ["吸收光谱", "作用光谱"]],
+  "format_requirements": {"key_formulas": ["ATP", "NADPH", "净.{0,4}=.{0,8}总.{0,8}-", "H[+]|质子"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

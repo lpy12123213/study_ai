@@ -15,16 +15,8 @@ from typing import Any, Dict, List, Optional
 
 VALID_PRESETS = ("quick", "standard", "deep", "research")
 VALID_TIERS = ("smoke", "core", "extended")
+VALID_CURRICULUM_SCOPES = ("", "high_school", "high_school_plus")
 CASE_PACK_VERSION = 1
-
-# Challenge v2 使用显式输出协议把主观的“适合自学”拆成可确定性评分的结构。
-# API 会把 requirements 截到 600 字符，因此协议必须保持紧凑，并放在自定义要求前。
-BENCHMARK_OUTPUT_CONTRACT = (
-    "评测输出契约：须含学习目标、前置知识、自测题、答案与评分点、参考文献；"
-    "列出至少3个可检验学习目标；至少2个带完整步骤的例题，标为[EX1]起；"
-    "至少6道自测题，标为[Q1]起并覆盖[基础][应用][迁移]，答案标为[A1]起且一一对应并给评分点；"
-    "关键事实句后用[^n]内联引文，文末脚注列标题与URL；明确边界条件、误区和反例。"
-)
 
 _CASES_DIR = Path(__file__).resolve().parent / "cases"
 
@@ -78,13 +70,50 @@ class FormatRequirements:
 
 @dataclass
 class LearningRequirements:
-    """学习闭环的确定性门槛；标签由 ``BENCHMARK_OUTPUT_CONTRACT`` 约定。"""
+    """学习闭环的确定性门槛；标签由 ``benchmark_output_contract`` 约定。"""
 
     min_objectives: int = 3
     min_worked_examples: int = 2
     min_practice_questions: int = 6
     min_answered_questions: int = 6
     required_levels: List[str] = field(default_factory=lambda: ["基础", "应用", "迁移"])
+
+
+def benchmark_output_contract(
+    learning: Optional[LearningRequirements] = None,
+    *,
+    curriculum_scope: str = "",
+    extension_topics: Optional[List[str]] = None,
+    min_knowledge_sections: int = 0,
+) -> str:
+    """按用例门槛生成请求侧输出协议，避免评分要求与生成提示脱节。"""
+
+    req = learning or LearningRequirements()
+    levels = "".join(f"[{level}]" for level in req.required_levels)
+    contract = (
+        "评测输出契约：须含学习目标、前置知识、自测题、答案与评分点、参考文献；"
+        f"列出至少{req.min_objectives}个可检验学习目标；"
+        f"至少{req.min_worked_examples}个带完整步骤的例题，标为[EX1]起；"
+        f"至少{req.min_practice_questions}道自测题，标为[Q1]起并覆盖{levels}，"
+        f"答案标为[A1]起且至少{req.min_answered_questions}份一一对应并给评分点；"
+        "关键事实句后用[^n]内联引文，文末脚注列标题与URL；明确边界条件、误区和反例。"
+    )
+    if min_knowledge_sections > 0:
+        contract += f"；正文须以至少{int(min_knowledge_sections)}个独立知识点二级标题展开。"
+    if curriculum_scope == "high_school":
+        contract += "；内容与解法严格限定在高中课程范围，不引入大学专业知识作为作答前提。"
+    elif curriculum_scope == "high_school_plus":
+        topics = "、".join(extension_topics or [])
+        contract += (
+            f"；主题主线与作答前提限高中；允许拓展仅限{topics}。"
+            "每项须用[拓展:上列对应主题全名]逐项标记，从高中知识推导，并紧跟[高中连接]说明其对高中"
+            "解题、实验或材料分析的帮助；不得作为前置知识。"
+        )
+    return contract
+
+
+# 默认协议保留为公共常量，供旧用例和外部调用方兼容使用。
+BENCHMARK_OUTPUT_CONTRACT = benchmark_output_contract()
 
 
 @dataclass
@@ -105,6 +134,14 @@ class BenchmarkCase:
     contrasts: List[List[str]] = field(default_factory=list)
     format_requirements: FormatRequirements = field(default_factory=FormatRequirements)
     learning_requirements: LearningRequirements = field(default_factory=LearningRequirements)
+    curriculum_scope: str = ""
+    extension_topics: List[str] = field(default_factory=list)
+
+    @property
+    def min_knowledge_sections(self) -> int:
+        """G0 requires 80% of expected knowledge points to be learner-visible sections."""
+
+        return max(1, (len(self.expected_knowledge_points) * 4 + 4) // 5)
 
     def request_payload(self) -> Dict[str, Any]:
         """映射为 ``POST /api/study-materials/generate`` 的请求体。"""
@@ -114,7 +151,15 @@ class BenchmarkCase:
         if self.preset:
             payload["preset"] = self.preset
         payload.update(self.options)
-        requirements = BENCHMARK_OUTPUT_CONTRACT
+        # smoke/light 保持完整难度与评分协议，只压缩昂贵的补充百科和网页深读调用。
+        if self.tier == "smoke":
+            payload.setdefault("research_budget", "lean")
+        requirements = benchmark_output_contract(
+            self.learning_requirements,
+            curriculum_scope=self.curriculum_scope,
+            extension_topics=self.extension_topics,
+            min_knowledge_sections=self.min_knowledge_sections,
+        )
         if self.requirements:
             requirements += f"；主题附加要求：{self.requirements}"
         payload["requirements"] = requirements
@@ -200,6 +245,31 @@ def parse_case(obj: Dict[str, Any], *, source: str = "") -> BenchmarkCase:
     tier = str(obj.get("tier") or "core").strip().lower() or "core"
     if tier not in VALID_TIERS:
         raise CaseValidationError(f"case {case_id!r}: tier 非法 {tier!r}，可选 {VALID_TIERS}")
+    curriculum_scope = str(obj.get("curriculum_scope") or "").strip().lower()
+    if curriculum_scope not in VALID_CURRICULUM_SCOPES:
+        raise CaseValidationError(
+            f"case {case_id!r}: curriculum_scope 非法 {curriculum_scope!r}，可选 {VALID_CURRICULUM_SCOPES}"
+        )
+    extension_raw = obj.get("extension_topics") or []
+    if not isinstance(extension_raw, list):
+        raise CaseValidationError(f"case {case_id!r}: extension_topics 必须是数组")
+    extension_topics = [
+        str(topic).strip()
+        for topic in extension_raw
+        if str(topic).strip()
+    ]
+    if len(extension_topics) != len(set(extension_topics)):
+        raise CaseValidationError(f"case {case_id!r}: extension_topics 不能重复")
+    if len(extension_topics) > 3:
+        raise CaseValidationError(f"case {case_id!r}: extension_topics 最多配置 3 项")
+    if curriculum_scope == "high_school_plus" and not extension_topics:
+        raise CaseValidationError(
+            f"case {case_id!r}: high_school_plus 必须声明 extension_topics"
+        )
+    if curriculum_scope != "high_school_plus" and extension_topics:
+        raise CaseValidationError(
+            f"case {case_id!r}: extension_topics 仅用于 high_school_plus"
+        )
 
     fact_ids: set[str] = set()
     trap_ids: set[str] = set()
@@ -249,6 +319,17 @@ def parse_case(obj: Dict[str, Any], *, source: str = "") -> BenchmarkCase:
     expected_kps = [str(kp).strip() for kp in obj.get("expected_knowledge_points") or [] if str(kp).strip()]
     if not expected_kps:
         raise CaseValidationError(f"case {case_id!r}: expected_knowledge_points 不能为空")
+    min_knowledge_sections = max(1, (len(expected_kps) * 4 + 4) // 5)
+    if curriculum_scope == "high_school_plus" and options.get("max_points") is not None:
+        try:
+            max_points = int(options["max_points"])
+        except (TypeError, ValueError) as exc:
+            raise CaseValidationError(f"case {case_id!r}: options.max_points 必须是整数") from exc
+        if max_points < min_knowledge_sections:
+            raise CaseValidationError(
+                f"case {case_id!r}: high_school_plus 的 max_points={max_points} 无法覆盖 "
+                f"G0 所需至少 {min_knowledge_sections} 个知识点小节"
+            )
     expected_domains = [
         str(domain).strip().lower()
         for domain in obj.get("expected_domains") or []
@@ -258,7 +339,12 @@ def parse_case(obj: Dict[str, Any], *, source: str = "") -> BenchmarkCase:
         raise CaseValidationError(f"case {case_id!r}: expected_domains 不能为空")
 
     custom_requirements = str(obj.get("requirements") or "").strip()
-    combined_requirements = BENCHMARK_OUTPUT_CONTRACT
+    combined_requirements = benchmark_output_contract(
+        learning,
+        curriculum_scope=curriculum_scope,
+        extension_topics=extension_topics,
+        min_knowledge_sections=min_knowledge_sections,
+    )
     if custom_requirements:
         combined_requirements += f"；主题附加要求：{custom_requirements}"
     if len(combined_requirements) > 600:
@@ -283,6 +369,8 @@ def parse_case(obj: Dict[str, Any], *, source: str = "") -> BenchmarkCase:
         contrasts=contrasts,
         format_requirements=fmt,
         learning_requirements=learning,
+        curriculum_scope=curriculum_scope,
+        extension_topics=extension_topics,
     )
 
 

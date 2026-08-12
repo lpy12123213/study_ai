@@ -6,8 +6,10 @@
 
 import asyncio
 import json
+import re
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,11 +17,17 @@ from backend.generation.study_materials.author.blueprint import Blueprint, Bluep
 from backend.generation.study_materials.author.figures import FigureForge
 from backend.generation.study_materials.author.pipeline import (
     AuthorPipelineContext,
+    _authority_search_query,
     _AuthorPipeline,
+    _task_authority_queries,
     run_author_pipeline,
 )
 from backend.generation.study_materials.author.research_tools import ResearchToolbox
 from backend.generation.study_materials.author.todos import TodoList
+from backend.generation.study_materials.learning_contract import (
+    inspect_learning_contract,
+    renumber_learning_tags_by_section,
+)
 from backend.generation.study_materials.quality_gate import draft_hash
 
 BLUEPRINT_JSON = json.dumps(
@@ -77,14 +85,70 @@ FILL_BODY = (
     "直观上，自变量越靠近目标值，函数值越稳定地靠近某个确定的数，这个数就是极限；"
     "逼近只要求无限接近，并不要求真正到达，这是初学者最容易混淆的地方。"
     "[EX1] 例题：求 x 趋近 2 时 x+1 的极限。步骤：观察趋势，x 越接近 2，x+1 越接近 3。"
-    "[Q1] 自测（基础）：用自己的话解释逼近；（应用）：求 x→0 时 2x 的极限。"
+    "[Q1][基础] 用自己的话解释逼近，并求 x→0 时 2x 的极限。"
     "[A1] 答案：0。评分点：趋势判断正确、表述无循环论证。"
 )
+
+_QUOTA_LEVELS = ["基础", "应用", "迁移"]
+
+
+def _grounded_fill_body(user: str, body: str = FILL_BODY) -> str:
+    """Make fake writers behave like a competent model following the payload:
+    cite the first source made available to that section, and satisfy the
+    per-section learning quotas（本节学习闭环硬性配额）announced in the payload."""
+
+    text = str(user or "")
+    source_ids = re.findall(r"^\s*[-*+]\s*\[\^(\d+)\]", text, re.MULTILINE)
+    clean = re.sub(r"\[\^\d+\]", "", body)
+
+    ex_match = re.search(r"至少 (\d+) 个 \[EXn\]", text)
+    q_match = re.search(r"至少 (\d+) 道 \[Qn\]", text)
+    min_examples = int(ex_match.group(1)) if ex_match else 0
+    min_questions = int(q_match.group(1)) if q_match else 0
+    # FILL_BODY 自带 [EX1]/[Q1]/[A1]；配额高于 1 时按编号与层级轮转补足其余。
+    for n in range(2, min_examples + 1):
+        clean += f"\n\n**[EX{n}]** 补充例题。步骤：先分析条件，再逐步推导，最后检验结果。"
+    for n in range(2, min_questions + 1):
+        level = _QUOTA_LEVELS[(n - 1) % len(_QUOTA_LEVELS)]
+        clean += f"\n\n**[Q{n}]**[{level}] 补充自测题？\n**[A{n}]** 答案要点。评分点：判断依据完整。"
+    return clean + (f"\n\n本节关键事实可由给定来源核对。[^{source_ids[0]}]" if source_ids else "")
 
 AUDIT_JSON = json.dumps(
     {"claims": [{"text": "极限描述无限逼近的过程", "verdict": "supported", "fix": ""}]},
     ensure_ascii=False,
 )
+
+LEARNING_APPENDIX = """## 学习目标（补全）
+- 能解释极限的核心含义。
+- 能按步骤计算基础极限。
+- 能辨析极限中的常见误区。
+
+## 前置知识（补全）
+需要掌握基础代数运算、函数记号与变量趋近的直观含义。
+
+## 带步骤例题（补全）
+**[EX2]** 求一个一次函数的极限。
+步骤：先识别趋近点，再代入连续函数，最后检查结果。
+
+**[EX3]** 判断一段极限推理是否成立。
+步骤：先核对前提，再逐项验证，最后说明边界。
+
+## 全书自测题（补全）
+- [Q2][基础] 极限描述什么过程？
+- [Q3][基础] 连续函数如何求极限？
+- [Q4][应用] 如何检查代入法的适用条件？
+- [Q5][应用] 如何识别一个错误推理？
+- [Q6][迁移] 条件改变时结论可能如何变化？
+- [Q7][迁移] 如何构造一个边界案例？
+
+## 答案与评分点（补全）
+- [A2] 描述无限逼近；评分点：说清趋近与取值的区别。
+- [A3] 在连续条件下代入；评分点：写出条件与结果。
+- [A4] 核对连续性；评分点：说明适用边界。
+- [A5] 逐项核对前提；评分点：指出失效步骤。
+- [A6] 重新检查前提；评分点：说明变化链。
+- [A7] 选择边界条件；评分点：案例与结论一致。
+"""
 
 # 两个知识点（极限/导数）的蓝图与主干夹具：kp 覆盖校验要求每个输入 kp 有小节标题归属。
 TWO_KP_BLUEPRINT_JSON = json.dumps(
@@ -207,7 +271,7 @@ def _llm_with_fixtures(*, blueprint_json, backbone_md, split_json=None):
             return AUDIT_JSON
         if "骨架" in system:
             return backbone_md
-        return FILL_BODY
+        return _grounded_fill_body(user)
 
     return fake_llm
 
@@ -222,7 +286,7 @@ def _fake_llm(backbone_text=BACKBONE_MD, counter=None):
             if counter is not None:
                 counter["backbone"] = counter.get("backbone", 0) + 1
             return backbone_text
-        return FILL_BODY
+        return _grounded_fill_body(user)
 
     return fake_llm
 
@@ -329,6 +393,29 @@ class AuthorPipelineTests(unittest.TestCase):
         todo_events = [e for e in events if e["type"] == "todo_update"]
         self.assertTrue(any(e["data"]["todo"]["status"] == "failed" for e in todo_events))
 
+    def test_backbone_unknown_placeholder_fails_after_one_retry(self):
+        counter = {}
+        backbone = BACKBONE_MD + "\n\n[[FILL:rogue-section]]\n"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=_fake_llm(backbone_text=backbone, counter=counter),
+                    toolbox=_fake_toolbox(),
+                    emit=lambda _event: None,
+                    forge=None,
+                )
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "backbone_placeholder_missing")
+        self.assertEqual(counter.get("backbone"), 2)
+        self.assertTrue(
+            any("主干含未知占位符" in note and "[[FILL:rogue-section]]" in note for note in result["quality_notes"]),
+            result["quality_notes"],
+        )
+
     def test_blueprint_invalid_fails_after_one_retry(self):
         events = []
 
@@ -339,7 +426,7 @@ class AuthorPipelineTests(unittest.TestCase):
                 return AUDIT_JSON
             if "骨架" in system:
                 return BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         with tempfile.TemporaryDirectory() as tmp:
             result = asyncio.run(
@@ -392,10 +479,10 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
             if "骨架" in system:
                 return BACKBONE_MD
             if "汇编缺少小节" in user:
-                return FILL_BODY  # 汇编补写成功，保证流程走到 ACCEPT
+                return _grounded_fill_body(user)  # 汇编补写成功，保证流程走到 ACCEPT
             if "极限的直观概念" in user:
                 return ""  # sec-1 填充与作者改写均交空 → fill todo 以 failed 终态残留
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -434,12 +521,8 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
         self.assertTrue((result.get("acceptance") or {}).get("accepted"))
         self.assertIn("error", result["legacy_acceptance"])
 
-    def test_placeholder_residual_hard_fails_instead_of_degraded_delivery(self):
-        """占位符残留绝不交付：成稿带 [[FILL: 时必须是 failed 终态，而不是 degraded 降级交付。
-
-        构造路径（真实缺陷形态）：作者补写正文未经 FillRunner 验收，把占位符写进小节
-        正文；汇编器只扫骨架不重扫替换文本，占位符随之进入成稿。
-        """
+    def test_placeholder_from_author_rewrite_fails_before_delivery(self):
+        """子写手和作者补写都不能把 [[FILL: 残留带入可交付成稿。"""
 
         async def placeholder_fill_llm(system, user):
             if "总编" in system:
@@ -449,8 +532,8 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
             if "骨架" in system:
                 return BACKBONE_MD
             if "极限的严格定义" in user:
-                return FILL_BODY + "\n\n承接 [[FILL:ghost_sec]] 小节的讨论。\n"
-            return FILL_BODY
+                return _grounded_fill_body(user) + "\n\n承接 [[FILL:ghost_sec]] 小节的讨论。\n"
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -458,13 +541,154 @@ class AuthorAcceptanceGateTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertFalse(result["success"])
-        self.assertEqual(result["error"]["code"], "placeholder_residual")
-        self.assertEqual(result["error"]["stage"], "accept")
-        self.assertIn("[[FILL:", result["error"]["detail"])
+        self.assertEqual(result["error"]["code"], "assemble_failed")
+        self.assertEqual(result["error"]["stage"], "assemble")
+        self.assertTrue(any(note.startswith("author_fill_invalid:") for note in result["quality_notes"]))
         # 硬失败终态不附带任何成功/交付载荷
         self.assertNotIn("markdown", result)
         self.assertNotIn("material", result)
         self.assertNotIn("degraded", result)
+
+
+class AuthorLearningContractTests(unittest.TestCase):
+    @staticmethod
+    def _ctx_with_questions(work_dir):
+        ctx = _ctx(work_dir)
+        ctx.options = {"with_questions": True}
+        return ctx
+
+    def test_whole_document_gap_gets_one_targeted_appendix(self):
+        async def learning_llm(system, user):
+            if "练习总编" in system:
+                return LEARNING_APPENDIX
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            return _grounded_fill_body(user)
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_with_questions(tmp),
+                    llm_func=learning_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["degraded"], msg=result["quality_report"])
+        self.assertTrue(inspect_learning_contract(result["markdown"])["passed"])
+        self.assertLess(result["markdown"].index("## 学习目标（补全）"), result["markdown"].index("## 参考文献"))
+        learning_todo = next(todo for todo in result["todos"] if todo["id"] == "learning_contract")
+        self.assertEqual(learning_todo["status"], "done")
+        self.assertEqual(result["learning_repair_attempts"], 1)
+        repair_events = [
+            event["data"]
+            for event in events
+            if event["type"] == "tool_call" and event["data"].get("stage") == "learning_repair"
+        ]
+        self.assertTrue(repair_events)
+
+    def test_invalid_learning_repair_is_explicitly_degraded(self):
+        async def invalid_learning_llm(system, user):
+            if "练习总编" in system:
+                return "## 学习目标（补全）\n- 仍不完整。"
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            return _grounded_fill_body(user)
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_with_questions(tmp),
+                    llm_func=invalid_learning_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["degraded"])
+        self.assertIn("learning_contract_unmet", result["quality_report"]["failed_checks"])
+        learning_todo = next(todo for todo in result["todos"] if todo["id"] == "learning_contract")
+        self.assertEqual(learning_todo["status"], "failed")
+        self.assertEqual(result["learning_repair_attempts"], 2)
+
+    def test_learning_repair_reads_harder_request_counts(self):
+        repair_requests = []
+
+        async def learning_llm(system, user):
+            if "练习总编" in system:
+                repair_requests.append(user)
+                return LEARNING_APPENDIX
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            return _grounded_fill_body(user)
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx_with_questions(tmp)
+            ctx.requirements = (
+                "列出至少5个可检验学习目标；至少4个带完整步骤的例题；"
+                "至少12道自测题；答案至少12份一一对应并给评分点。"
+            )
+            result = asyncio.run(
+                run_author_pipeline(
+                    ctx,
+                    llm_func=learning_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertTrue(result["degraded"])
+        self.assertEqual(len(repair_requests), 2)
+        # 逐节配额（2 节 × min(2, ceil(4/2))=2 例题、min(4, ceil(12/2))=4 题）已在填充时
+        # 交齐 4 例题与 [Q1]..[Q8]；整书补齐只需兜底剩余 4 题（[Q9]..[Q12]），例题无需新增。
+        for request in repair_requests:
+            self.assertIn("- 例题: 无需新增", request)
+            self.assertIn("[Q9]/[A9]", request)
+            self.assertIn("[Q12]/[A12]", request)
+            self.assertNotIn("[Q13]/[A13]", request)
+            self.assertIn("学习目标用至少5条列表", request)
+            self.assertIn("4题层级依次为", request)
+
+    def test_section_local_question_numbers_are_renumbered_globally(self):
+        first, second = renumber_learning_tags_by_section(
+            [
+                "[EX1] 例题。步骤。\n[Q1][基础] 第一题？\n[A1] 答案。评分点。",
+                "[EX1] 例题。步骤。\n[Q1][应用] 第二题？\n[A1] 答案。评分点。",
+            ]
+        )
+
+        self.assertIn("[EX1]", first)
+        self.assertIn("[Q1]", first)
+        self.assertIn("[A1]", first)
+        self.assertIn("[EX2]", second)
+        self.assertIn("[Q2]", second)
+        self.assertIn("[A2]", second)
+        inspected = inspect_learning_contract(
+            "## 自测题\n" + first + "\n" + second,
+        )
+        self.assertEqual(inspected["question_count"], 2)
+        self.assertEqual(inspected["paired_count"], 2)
 
 
 class AuthorPipelineObservabilityTests(unittest.TestCase):
@@ -499,6 +723,9 @@ class AuthorPipelineObservabilityTests(unittest.TestCase):
         audit_done = [d for d in llm_calls if d.get("stage") == "audit" and "chars" in d]
         self.assertTrue(audit_done)
         self.assertTrue(all(d.get("sec_id") == "sec-1" for d in audit_done))
+        progress = [event["data"]["progress"] for event in events if event["type"] == "progress"]
+        self.assertEqual(progress, sorted(progress))
+        self.assertEqual((progress[0], progress[-1]), (5.0, 96.0))
 
     def test_search_failure_emits_error_event(self):
         async def failing_serp(query, n):
@@ -536,7 +763,7 @@ class AuthorPipelineObservabilityTests(unittest.TestCase):
                 return unsupported_audit
             if "骨架" in system:
                 return BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -569,7 +796,7 @@ class AuthorPipelineFaultToleranceTests(unittest.TestCase):
                 return BACKBONE_MD
             if "极限的直观概念" in user and "请作者亲自撰写" not in user:
                 raise ConnectionError("llm stack down")  # 填充子代理整个炸掉
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -596,6 +823,70 @@ class AuthorPipelineFaultToleranceTests(unittest.TestCase):
         ]
         self.assertTrue(any(d.get("sec_id") == "sec-1" and "chars" in d for d in author_fill))
 
+    def test_author_rewrite_remaps_hallucinated_citation_to_supplied_source(self):
+        async def hallucinated_citation_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            body = _grounded_fill_body(user)
+            if "极限的直观概念" in user:
+                return re.sub(r"\[\^\d+\]", "[^999]", body)
+            return body
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=hallucinated_citation_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertNotIn("[^999]", result["markdown"])
+        self.assertTrue(any(note.startswith("author_fill_citations_remapped:sec-1:") for note in result["quality_notes"]))
+        todo = next(t for t in result["todos"] if t["id"] == "fill:sec-1")
+        self.assertEqual(todo["status"], "done")
+        self.assertEqual(todo["note"], "author_rewrite")
+
+    def test_author_rewrite_restores_label_for_existing_example_block(self):
+        async def missing_example_label_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            body = _grounded_fill_body(user)
+            if "极限的直观概念" in user:
+                return body.replace("[EX1] ", "")
+            return body
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=missing_example_label_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("**[EX1]**", result["markdown"])
+        self.assertTrue(any(note == "author_fill_example_tag_inserted:sec-1" for note in result["quality_notes"]))
+        todo = next(t for t in result["todos"] if t["id"] == "fill:sec-1")
+        self.assertEqual(todo["status"], "done")
+        self.assertEqual(todo["note"], "author_rewrite")
+
     def test_fill_and_author_rewrite_both_raise_marks_section_failed(self):
         async def fill_down_llm(system, user):
             if "总编" in system:
@@ -606,7 +897,7 @@ class AuthorPipelineFaultToleranceTests(unittest.TestCase):
                 return BACKBONE_MD
             if "极限的直观概念" in user:
                 raise ConnectionError("llm stack down")  # 填充与作者补写都炸
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,11 +939,109 @@ class AuthorPipelineFaultToleranceTests(unittest.TestCase):
         todo = next(t for t in result["todos"] if t["id"] == "fig:1")
         self.assertEqual(todo["status"], "waived")
 
+    def test_fallback_leak_is_rewritten_once_instead_of_misparsed_as_missing_id(self):
+        async def leaky_fill_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            if "本节含机器兜底说明" in user:
+                return _grounded_fill_body(user)
+            return _grounded_fill_body(user) + "\n> 本段未成功使用模型生成（source=llm_sectioned）\n"
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=leaky_fill_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertNotIn("未成功使用模型生成", result["markdown"])
+        self.assertIn("assemble_failed:fallback note leaked into content", result["quality_notes"])
+        repair_calls = [
+            event["data"]
+            for event in events
+            if event["type"] == "tool_call" and event["data"].get("stage") == "assembly_repair"
+        ]
+        self.assertEqual({call.get("sec_id") for call in repair_calls}, {"sec-1", "sec-2"})
+
+    def test_failed_audit_revision_rolls_back_to_last_good_document(self):
+        unsupported_audit = json.dumps(
+            {"claims": [{"text": "极限就是代入", "verdict": "unsupported", "fix": "删除"}]},
+            ensure_ascii=False,
+        )
+
+        async def leaky_revision_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                return unsupported_audit
+            if "骨架" in system:
+                return BACKBONE_MD
+            if "以下断言无研究笔记支持" in user:
+                return _grounded_fill_body(user) + "\n> 兜底内容\n"
+            return _grounded_fill_body(user)
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=leaky_revision_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["degraded"])
+        self.assertNotIn("兜底内容", result["markdown"])
+        self.assertIn("revision_rolled_back:assembly_failed", result["quality_notes"])
+        revision = next(todo for todo in result["todos"] if todo["id"] == "revision")
+        self.assertEqual(revision["status"], "failed")
+
+    def test_audit_exception_delivers_last_good_document_as_degraded(self):
+        async def audit_down_llm(system, user):
+            if "总编" in system:
+                return BLUEPRINT_JSON
+            if "核查" in system:
+                raise ConnectionError("audit unavailable")
+            if "骨架" in system:
+                return BACKBONE_MD
+            return _grounded_fill_body(user)
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=audit_down_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["degraded"])
+        self.assertTrue(result["markdown"].startswith("# 极限入门"))
+        audit = next(todo for todo in result["todos"] if todo["id"] == "audit")
+        self.assertEqual(audit["status"], "failed")
+
 
 class AuthorBackboneFigValidationTests(unittest.TestCase):
-    """M-2：BACKBONE 校验覆盖 [[FIG:n]]，缺失与 FILL 缺失同等处理（重试 1 次 → failed）。"""
+    """Optional figure placement is repaired from its declared section anchor."""
 
-    def test_backbone_missing_fig_placeholder_fails_after_one_retry(self):
+    def test_backbone_missing_fig_placeholder_is_inserted_without_retry(self):
         backbone_no_fig = "# 极限入门\n\n[[FILL:sec-1]]\n\n衔接段。\n\n[[FILL:sec-2]]\n"
         events = []
         counter = {}
@@ -667,10 +1056,33 @@ class AuthorBackboneFigValidationTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["code"], "backbone_placeholder_missing")
-        self.assertEqual(counter.get("backbone"), 2)  # 首次 + 重试 1 次
-        self.assertTrue(any("[[FIG:1]]" in n for n in result["quality_notes"]))
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(counter.get("backbone"), 1)
+        self.assertIn("![图1 逼近过程](/media/generated/f1.svg)", result["markdown"])
+        self.assertIn("backbone_figure_placeholder_inserted:1:sec-1", result["quality_notes"])
+
+    def test_duplicate_fill_placeholder_is_collapsed_without_retry(self):
+        duplicate = BACKBONE_MD.replace(
+            "[[FILL:sec-1]]",
+            "[[FILL:sec-1]]\n\n重复说明中的占位符：[[FILL:sec-1]]",
+        )
+        events = []
+        counter = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=_fake_llm(backbone_text=duplicate, counter=counter),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(counter.get("backbone"), 1)
+        self.assertNotIn("[[FILL:", result["markdown"])
+        self.assertIn("backbone_placeholder_deduplicated:[[FILL:sec-1]]:2->1", result["quality_notes"])
 
 
 class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
@@ -688,19 +1100,19 @@ class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
         return json.dumps(data, ensure_ascii=False)
 
     def test_retry_user_message_contains_validation_error(self):
-        # 首次蓝图 figures[].kind 自造词（真实失败模式），重试带反馈后修正 → 流水线继续。
-        bad_kind = self._blueprint_variant(figures={"kind": "diagram"})
+        # 首次蓝图 difficulty 自造词（无别名可机械修复），重试带反馈后修正 → 流水线继续。
+        bad_difficulty = self._blueprint_variant(sections={"difficulty": "进阶"})
         blueprint_users = []
 
         async def flaky_blueprint_llm(system, user):
             if "总编" in system:
                 blueprint_users.append(user)
-                return bad_kind if len(blueprint_users) == 1 else BLUEPRINT_JSON
+                return bad_difficulty if len(blueprint_users) == 1 else BLUEPRINT_JSON
             if "核查" in system:
                 return AUDIT_JSON
             if "骨架" in system:
                 return BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -716,14 +1128,14 @@ class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(len(blueprint_users), 2)
-        self.assertIn("unknown figure kind", blueprint_users[1])
-        self.assertIn("diagram", blueprint_users[1])
+        self.assertIn("unknown difficulty", blueprint_users[1])
+        self.assertIn("进阶", blueprint_users[1])
 
     def test_retry_exhausted_returns_both_error_details(self):
-        # 两次蓝图各自不同的校验错误 → failed 结果必须带齐两条详情。
-        bad_kind = self._blueprint_variant(figures={"kind": "diagram"})
+        # 两次蓝图各自不同的语义校验错误 → failed 结果必须带齐两条详情。
         bad_difficulty = self._blueprint_variant(sections={"difficulty": "进阶"})
-        responses = iter([bad_kind, bad_difficulty])
+        bad_figure_ref = self._blueprint_variant(figures={"sec_id": "sec-ghost"})
+        responses = iter([bad_difficulty, bad_figure_ref])
 
         async def always_bad_blueprint_llm(system, user):
             if "总编" in system:
@@ -732,7 +1144,7 @@ class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
                 return AUDIT_JSON
             if "骨架" in system:
                 return BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -749,8 +1161,46 @@ class AuthorBlueprintRetryFeedbackTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["code"], "blueprint_invalid")
         detail = result["error"]["detail"]
-        self.assertIn("unknown figure kind", detail)
         self.assertIn("unknown difficulty", detail)
+        self.assertIn("unknown section", detail)
+
+    def test_mechanical_shape_slips_are_repaired_without_llm_retry(self):
+        """figure kind 自造词有文档化缺省（mermaid），机械修复省一次全量蓝图重试。"""
+
+        bad_kind = self._blueprint_variant(figures={"kind": "diagram"})
+        blueprint_users = []
+
+        async def bad_kind_blueprint_llm(system, user):
+            if "总编" in system:
+                blueprint_users.append(user)
+                return bad_kind
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return BACKBONE_MD
+            return _grounded_fill_body(user)
+
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    _ctx(tmp),
+                    llm_func=bad_kind_blueprint_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(blueprint_users), 1)
+        self.assertTrue(
+            any(
+                note.startswith("blueprint_mechanical_repair:") and "figure_kind:diagram->mermaid" in note
+                for note in result["quality_notes"]
+            ),
+            msg=result["quality_notes"],
+        )
 
 
 class AuthorInlineCitationTests(unittest.TestCase):
@@ -761,6 +1211,9 @@ class AuthorInlineCitationTests(unittest.TestCase):
 
     # 真实缺陷形态：骨架 LLM 在占位符上方自加「正文占位」空标题。
     BACKBONE_WITH_BOGUS_HEADINGS = BACKBONE_MD.replace(
+        "# 极限入门",
+        "# 极限入门\n\n> 骨架说明：[[FILL:...]] 是正文位置，[[FIG:n]] 是配图位置。",
+    ).replace(
         "[[FILL:sec-1]]", "### 正文占位\n\n[[FILL:sec-1]]"
     ).replace(
         "[[FILL:sec-2]]", "### 正文占位\n\n[[FILL:sec-2]]"
@@ -796,6 +1249,10 @@ class AuthorInlineCitationTests(unittest.TestCase):
 
             # 骨架净化：「正文占位」标题不进成稿
             self.assertNotIn("占位", markdown)
+            self.assertNotIn("[[FILL:...]]", markdown)
+            self.assertNotIn("[[FIG:n]]", markdown)
+            self.assertIn("正文填充标记", markdown)
+            self.assertIn("配图标记", markdown)
 
             # 内联引用与文末脚注定义一一对应
             self.assertIn("[^1]", markdown)
@@ -917,7 +1374,7 @@ class AuthorUnderscoreSectionIdTests(unittest.TestCase):
                 return AUDIT_JSON
             if "骨架" in system:
                 return self.UNDERSCORE_BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -995,6 +1452,27 @@ class AuthorResearchDeepReadTests(unittest.TestCase):
     def _tool_calls(events, tool):
         return [e["data"] for e in events if e["type"] == "tool_call" and e["data"].get("tool") == tool]
 
+    def test_authority_query_adds_subject_specific_cross_language_source_hints(self):
+        math_query = _authority_search_query("导数符号与单调区间", "高中数学")
+        biology_query = _authority_search_query("光合作用限制因素", "高中生物")
+        fallback_query = _authority_search_query("未知主题", "跨学科")
+
+        self.assertIn("OpenStax Khan Academy Mathcentre MathsIsFun", math_query)
+        self.assertIn("OpenStax NCBI Khan Academy LibreTexts", biology_query)
+        self.assertIn("官方 权威 来源 official documentation", fallback_query)
+        self.assertTrue(math_query.startswith("导数符号与单调区间 高中数学"))
+
+    def test_lean_task_authority_queries_are_topic_specific_and_real_domains(self):
+        derivative = _task_authority_queries("导数、极值与牛顿迭代", "高中数学")
+        diagnosis = _task_authority_queries("条件概率与医学筛查诊断", "高中数学")
+        history = _task_authority_queries("法国大革命成因", "高中历史")
+
+        self.assertEqual(len(derivative), 2)
+        self.assertIn("site:openstax.org", derivative[0])
+        self.assertIn("site:khanacademy.org", derivative[1])
+        self.assertIn("site:cdc.gov", diagnosis[1])
+        self.assertIn("site:britannica.com", history[0])
+
     def test_deep_preset_adds_wikipedia_query_and_two_deep_reads_per_kp(self):
         events, log = [], []
         with tempfile.TemporaryDirectory() as tmp:
@@ -1004,14 +1482,14 @@ class AuthorResearchDeepReadTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         # 每个知识点追加 1 条 wikipedia 查询（查询词为知识点本身）
         self.assertEqual([q for kind, q in log if kind == "wiki"], ["极限", "导数"])
-        # deep preset：每 kp 从 serp 结果深读 top-2（两 kp 共 4 次 browse）
+        # deep preset：每 kp 在“权威事实/常见误区”两类查询间轮转深读（两 kp 共 4 次 browse）
         fetched = [url for kind, url in log if kind == "fetch"]
         self.assertEqual(len(fetched), 4)
-        self.assertIn("https://example.com/p1/极限_数学", fetched)
-        self.assertIn("https://example.com/p2/极限_数学", fetched)
+        self.assertTrue(any(url.startswith("https://example.com/p1/极限_数学_权威教材_OpenStax") for url in fetched))
+        self.assertTrue(any(url.startswith("https://example.com/p1/极限_常见错误_误区") for url in fetched))
         # 深读摘要（前 500 字）作为 deep_read 行落入研究笔记
         line = next(ln for ln in research.splitlines() if "deep_read" in ln and "p1/极限_数学" in ln)
-        self.assertIn("src: https://example.com/p1/极限_数学", line)
+        self.assertIn("src: https://example.com/p1/极限_数学_权威教材_OpenStax", line)
         self.assertLessEqual(len(line), 600, "深读摘要必须截断到 ~500 字")
 
         # search 完成事件带 provider 与前 5 条结果 URL
@@ -1042,10 +1520,65 @@ class AuthorResearchDeepReadTests(unittest.TestCase):
         self.assertTrue(all(d.get("provider") == "tavily" for d in search_done))
         self.assertTrue(all(d.get("urls") for d in search_done))
 
+    def test_lean_budget_keeps_per_kp_search_but_caps_wikipedia_and_deep_reads(self):
+        events, log = [], []
+        knowledge_points = [f"知识点{i}" for i in range(1, 9)]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-lean",
+                topic="高中综合主题",
+                subject="高中数学",
+                work_dir=Path(tmp),
+                preset="deep",
+                requirements="正文须以至少8个独立知识点二级标题展开。",
+                options={"research_budget": "lean"},
+                knowledge_points=knowledge_points,
+            )
+            pipeline = _AuthorPipeline(
+                ctx,
+                llm_func=_fake_llm(),
+                toolbox=self._toolbox(log),
+                emit=events.append,
+                forge=None,
+            )
+            asyncio.run(pipeline._research())  # noqa: SLF001 - 聚焦研究调用预算
+
+        # 每个知识点仍保留“权威事实 + 常见误区”两类搜索，并增加 2 次主题级权威教材检索。
+        self.assertEqual(len([1 for kind, _ in log if kind == "serp"]), 18)
+        # 两次主题权威检索替换两次易失败百科调用；合计仍恰好为轻量门槛所需的 20 次搜索。
+        # 深读仍达到 10 次，可覆盖由 8 个最低小节反推的 10 个期望知识点。
+        self.assertEqual(
+            [query for kind, query in log if kind == "wiki"],
+            ["知识点1", "知识点8"],
+        )
+        self.assertTrue(any("site:openstax.org" in query for kind, query in log if kind == "serp"))
+        self.assertTrue(any("site:khanacademy.org" in query for kind, query in log if kind == "serp"))
+        self.assertIn("site:openstax.org", pipeline.source_registry[0]["url"])
+        self.assertIn("site:khanacademy.org", pipeline.source_registry[1]["url"])
+        self.assertEqual(len([1 for kind, _ in log if kind == "fetch"]), 10)
+        budget_events = [event["data"] for event in events if event["type"] == "research_budget"]
+        self.assertEqual(
+            budget_events,
+            [{
+                "mode": "lean",
+                "knowledge_points": 8,
+                "search_calls_planned": 20,
+                "deep_reads_planned": 10,
+                "max_fill_sections": 8,
+                "max_figures": 3,
+            }],
+        )
+
     def test_browse_failure_records_quality_note_without_blocking(self):
         events, log = [], []
         with tempfile.TemporaryDirectory() as tmp:
-            result = self._run(tmp, events, log, preset="deep", fetch_fail_substr="p1/")
+            result = self._run(
+                tmp,
+                events,
+                log,
+                preset="deep",
+                fetch_fail_substr="p1/极限_数学_权威教材_OpenStax",
+            )
             research = (Path(tmp) / "notes" / "research.md").read_text(encoding="utf-8")
 
         self.assertEqual(result["status"], "ok")
@@ -1053,9 +1586,120 @@ class AuthorResearchDeepReadTests(unittest.TestCase):
         browse_calls = self._tool_calls(events, "browse")
         self.assertTrue(any(d.get("status") == "error" for d in browse_calls))
         self.assertTrue(any(d.get("status") == "ok" for d in browse_calls))
-        # top-1 失败不阻断：top-2 的深读摘要仍落笔记
-        self.assertTrue(any("deep_read" in ln and "p2/极限_数学" in ln for ln in research.splitlines()))
+        # 权威查询 top-1 失败不阻断：误区查询的深读摘要仍落笔记
+        self.assertTrue(any("deep_read" in ln and "p1/极限_常见错误" in ln for ln in research.splitlines()))
 
+
+class AuthorLeanGenerationBudgetTests(unittest.TestCase):
+    @staticmethod
+    def _pipeline(tmp, *, llm, knowledge_points=None):
+        ctx = AuthorPipelineContext(
+            task_id="t-author-lean-generation",
+            topic="微积分基础",
+            subject="高中数学",
+            work_dir=Path(tmp),
+            preset="deep",
+            options={"research_budget": "lean"},
+            knowledge_points=knowledge_points or ["极限", "导数"],
+        )
+        return _AuthorPipeline(ctx, llm_func=llm, toolbox=_fake_toolbox(), emit=lambda _event: None, forge=None)
+
+    def test_lean_blueprint_retries_instead_of_adding_fill_only_preface_sections(self):
+        oversized = json.loads(TWO_KP_BLUEPRINT_JSON)
+        oversized["sections"].append({
+            "id": "sec-preface",
+            "title": "学习导航",
+            "purpose": "介绍学习路径",
+            "key_points": ["如何使用本资料"],
+            "target_chars": 400,
+            "difficulty": "基础",
+            "misconceptions": [],
+            "frontier": False,
+        })
+        replies = [json.dumps(oversized, ensure_ascii=False), TWO_KP_BLUEPRINT_JSON]
+        users = []
+
+        async def fake_llm(_system, user):
+            users.append(user)
+            return replies[len(users) - 1]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline(tmp, llm=fake_llm)
+            blueprint = asyncio.run(pipeline._blueprint())  # noqa: SLF001 - 聚焦蓝图调用预算
+
+        self.assertIsNotNone(blueprint)
+        self.assertEqual(len(users), 2)
+        self.assertEqual(len(blueprint.sections), 2)
+        self.assertTrue(any("blueprint_section_budget" in note for note in pipeline.quality_notes))
+
+    def test_lean_blueprint_keeps_at_most_three_evenly_distributed_figures(self):
+        payload = json.loads(TWO_KP_BLUEPRINT_JSON)
+        payload["figures"] = [
+            {"n": n, "sec_id": "sec-1" if n < 4 else "sec-2", "intent": f"图{n}", "kind": "mermaid", "caption": f"图{n}"}
+            for n in range(1, 6)
+        ]
+
+        async def fake_llm(_system, _user):
+            return json.dumps(payload, ensure_ascii=False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline(tmp, llm=fake_llm)
+            blueprint = asyncio.run(pipeline._blueprint())  # noqa: SLF001
+
+        self.assertEqual([figure.n for figure in blueprint.figures], [1, 3, 5])
+        self.assertIn("blueprint_figures_trimmed:5/3", pipeline.quality_notes)
+
+    def test_lean_fill_uses_one_worker_attempt_then_targeted_author_fallback(self):
+        users = []
+
+        async def fake_llm(_system, user):
+            users.append(user)
+            return FILL_BODY if "上次填充未通过原因" in user else "太短"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline(tmp, llm=fake_llm)
+            pipeline.blueprint = Blueprint.from_dict(json.loads(TWO_KP_BLUEPRINT_JSON))
+            pipeline.blueprint_dict = asdict(pipeline.blueprint)
+            pipeline.backbone = TWO_KP_BACKBONE_MD
+            pipeline._decompose_todos()  # noqa: SLF001
+            asyncio.run(pipeline._fill_and_figures())  # noqa: SLF001
+
+        self.assertEqual(len(users), 4, "两个小节各 1 次 worker + 1 次定向作者兜底")
+        self.assertEqual(set(pipeline.sections), {"sec-1", "sec-2"})
+        self.assertTrue(all("长度不足" in user for user in users if "上次填充未通过原因" in user))
+
+    def test_missing_section_repairs_run_with_bounded_parallelism(self):
+        async def unused_llm(_system, _user):
+            return ""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline(
+                tmp,
+                llm=unused_llm,
+                knowledge_points=["极限", "导数", "积分"],
+            )
+            pipeline.blueprint = Blueprint.from_dict(json.loads(SPLIT3_BLUEPRINT_JSON))
+            pipeline.blueprint_dict = asdict(pipeline.blueprint)
+            pipeline.backbone = SPLIT3_BACKBONE_MD
+            active = 0
+            max_active = 0
+            all_started = asyncio.Event()
+
+            async def fake_author_fill(_section, *, note="", stage="author_fill"):
+                nonlocal active, max_active
+                active += 1
+                max_active = max(max_active, active)
+                if active == 3:
+                    all_started.set()
+                await all_started.wait()
+                active -= 1
+                return FILL_BODY
+
+            pipeline._author_fill = fake_author_fill  # type: ignore[method-assign]  # noqa: SLF001
+            document = asyncio.run(asyncio.wait_for(pipeline._assemble_with_revise(), timeout=1.0))  # noqa: SLF001
+
+        self.assertIsNotNone(document)
+        self.assertEqual(max_active, 3)
 
 class AuthorSourceRegistryExpansionTests(unittest.TestCase):
     """C1 真实缺陷（run #4 参考文献 URL 5/10）：来源登记表只收录被事实行引用的 URL，
@@ -1123,6 +1767,245 @@ class AuthorSourceRegistryExpansionTests(unittest.TestCase):
         self.assertGreaterEqual(len(pipeline.source_registry), 10)
         self.assertLessEqual(len(pipeline.source_registry), 25)
 
+    def test_registry_cap_is_allocated_across_all_knowledge_points(self):
+        async def fake_serp(query, n):
+            slug = query.replace(" ", "_")
+            return [
+                {
+                    "title": f"{slug}-{index}",
+                    "url": f"https://example.com/{slug}/{index}",
+                    "content": f"{query} 的事实 {index}",
+                    "score": 0.9,
+                }
+                for index in range(5)
+            ]
+
+        async def fake_fetch(url):
+            return "页面正文"
+
+        kps = [f"知识点{index}" for index in range(1, 7)]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-src-fair",
+                topic="综合专题",
+                subject="数学",
+                work_dir=Path(tmp),
+                preset="standard",
+                knowledge_points=kps,
+            )
+            pipeline = _AuthorPipeline(
+                ctx,
+                llm_func=_fake_llm(),
+                toolbox=ResearchToolbox(serp_func=fake_serp, fetch_func=fake_fetch),
+                emit=lambda event: None,
+            )
+            asyncio.run(pipeline._research())  # noqa: SLF001
+
+        urls = [entry["url"] for entry in pipeline.source_registry]
+        for kp in kps:
+            self.assertTrue(any(kp in url for url in urls), (kp, urls))
+
+    def test_registry_cap_preserves_authority_and_misconception_query_per_kp(self):
+        async def fake_serp(query, n):
+            kp = query.split()[0]
+            intent = "misconception" if "常见错误" in query else "authority"
+            host = "archive.gov" if intent == "authority" else "teaching.example.com"
+            rows = [
+                {
+                    "title": f"{intent}-{index}",
+                    "url": f"https://{host}/{kp}/{intent}/{index}",
+                    "content": f"{kp} {intent} 事实 {index}",
+                    "score": 0.9 - index * 0.01,
+                }
+                for index in range(5)
+            ]
+            if intent == "authority":
+                # 高相关博客排在前面；生成链路仍应把低分机构来源排到本查询首位。
+                rows.insert(0, {
+                    "title": "高相关个人博客",
+                    "url": f"https://blog.example.com/{kp}/top",
+                    "content": f"{kp} 博客摘要",
+                    "score": 0.99,
+                })
+                rows[-1] = {
+                    "title": "国家档案馆",
+                    "url": f"https://archive.gov/{kp}/primary",
+                    "content": f"{kp} 一手档案",
+                    "score": 0.4,
+                }
+            return rows[:n]
+
+        async def fake_fetch(url):
+            return "页面正文"
+
+        kps = [f"知识点{index}" for index in range(1, 10)]
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-src-intents",
+                topic="综合专题",
+                subject="高中历史",
+                work_dir=Path(tmp),
+                preset="standard",
+                knowledge_points=kps,
+            )
+            pipeline = _AuthorPipeline(
+                ctx,
+                llm_func=_fake_llm(),
+                toolbox=ResearchToolbox(serp_func=fake_serp, fetch_func=fake_fetch),
+                emit=lambda event: None,
+            )
+            asyncio.run(pipeline._research())  # noqa: SLF001
+
+        urls = [entry["url"] for entry in pipeline.source_registry]
+        for kp in kps:
+            kp_urls = [url for url in urls if f"/{kp}/" in url]
+            self.assertTrue(any("archive.gov" in url for url in kp_urls), (kp, kp_urls))
+            self.assertTrue(any("/misconception/" in url for url in kp_urls), (kp, kp_urls))
+
+
+class AuthorTaskContractPropagationTests(unittest.TestCase):
+    def test_fill_contract_includes_core_question_and_output_requirements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = _AuthorPipeline(
+                AuthorPipelineContext(
+                    task_id="t-author-task-contract",
+                    topic="解释改革受阻为何迫使王室召集三级会议，并区分原因与导火索",
+                    subject="高中历史",
+                    work_dir=Path(tmp),
+                    requirements="必须给出时间顺序和中间机制",
+                    knowledge_points=["改革受阻与政治合法性"],
+                ),
+                llm_func=_fake_llm(),
+                toolbox=_fake_toolbox(),
+                emit=lambda event: None,
+            )
+
+            contract = pipeline._global_fill_requirements()  # noqa: SLF001
+
+        self.assertIn("改革受阻为何迫使王室召集三级会议", contract)
+        self.assertIn("区分原因与导火索", contract)
+        self.assertIn("时间顺序和中间机制", contract)
+
+    def test_required_markers_are_short_bracket_tags_only(self):
+        """硬性标记只允许括号型短标签。
+
+        曾经按学科硬编码的长句结论（如“a>0 时 -√a 为极大点…”）要求逐字复现，
+        模型一用 LaTeX 改写即验收失败，重试烧尽后整本书 assemble_failed
+        （light-probe 实测：单个标记杀死整次交付）。层级标签按蓝图顺序轮转分配。
+        """
+
+        blueprint = Blueprint.from_dict({
+            "narrative": "导数主线",
+            "terminology": [],
+            "sections": [
+                {
+                    "id": "sec-extrema",
+                    "title": "极值、最值与驻点辨析",
+                    "purpose": "比较局部与整体",
+                    "key_points": ["闭区间端点比较"],
+                    "target_chars": 800,
+                    "difficulty": "应用",
+                    "misconceptions": [],
+                    "frontier": False,
+                },
+                {
+                    "id": "sec-parameter",
+                    "title": "三次函数f_a的单调性与极值分类",
+                    "purpose": "完成含参分类",
+                    "key_points": ["a<0、a=0、a>0"],
+                    "target_chars": 800,
+                    "difficulty": "应用",
+                    "misconceptions": [],
+                    "frontier": False,
+                },
+                {
+                    "id": "sec-newton",
+                    "title": "牛顿迭代与切线近似",
+                    "purpose": "比较求根方法",
+                    "key_points": ["近似解"],
+                    "target_chars": 800,
+                    "difficulty": "迁移",
+                    "misconceptions": [],
+                    "frontier": True,
+                },
+            ],
+            "figures": [],
+        })
+        requirements = (
+            "允许拓展仅限牛顿迭代与切线近似。"
+            "每项须用[拓展:上列对应主题全名]逐项标记，并紧跟[高中连接]说明帮助。"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-derivative-markers",
+                topic="导数含参分类与牛顿迭代",
+                subject="高中数学",
+                work_dir=Path(tmp),
+                requirements=requirements,
+                options={"with_questions": True},
+                knowledge_points=[section.title for section in blueprint.sections],
+            )
+            pipeline = _AuthorPipeline(
+                ctx,
+                llm_func=_fake_llm(),
+                toolbox=_fake_toolbox(),
+                emit=lambda event: None,
+            )
+            pipeline.blueprint = blueprint
+
+            markers = {
+                section.id: pipeline._required_markers_for_section(section)  # noqa: SLF001
+                for section in blueprint.sections
+            }
+
+        # 全部标记都是括号型短标签，长句结论不再出现。
+        for section_markers in markers.values():
+            for marker in section_markers:
+                self.assertRegex(marker, r"^\[[^\[\]]{1,12}\]$")
+        # 层级标签按蓝图顺序轮转；受控拓展节额外要求 [高中连接]。
+        self.assertEqual(markers["sec-extrema"], ["[基础]"])
+        self.assertEqual(markers["sec-parameter"], ["[应用]"])
+        self.assertEqual(markers["sec-newton"], ["[高中连接]", "[迁移]"])
+
+
+class AuthorResearchSliceTests(unittest.TestCase):
+    def test_fill_receives_its_own_kp_evidence_instead_of_note_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = AuthorPipelineContext(
+                task_id="t-author-slice",
+                topic="微积分",
+                subject="数学",
+                work_dir=Path(tmp),
+                knowledge_points=["极限", "导数"],
+            )
+            pipeline = _AuthorPipeline(
+                ctx, llm_func=_fake_llm(), toolbox=_fake_toolbox(), emit=lambda event: None
+            )
+            pipeline.blueprint = Blueprint.from_dict(json.loads(TWO_KP_BLUEPRINT_JSON))
+            pipeline._register_source("https://example.com/limit", "极限来源")  # noqa: SLF001
+            pipeline._register_source("https://example.com/derivative", "导数来源")  # noqa: SLF001
+            pipeline.notes.write(
+                "research",
+                """## 来源登记表
+
+- [^1] 极限来源 https://example.com/limit
+- [^2] 导数来源 https://example.com/derivative
+
+## 极限
+- 极限事实 | src: https://example.com/limit | conf: 0.90
+
+## 导数
+- 导数专属事实 | src: https://example.com/derivative | conf: 0.95
+""",
+            )
+
+            research = pipeline._research_slice_for_section(pipeline.blueprint.sections[1])  # noqa: SLF001
+
+        self.assertIn("导数专属事实", research)
+        self.assertIn("https://example.com/derivative", research)
+        self.assertNotIn("极限事实", research)
+        self.assertNotIn("https://example.com/limit", research)
+
     def test_register_source_dedupes_keeps_first_title_and_caps(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = AuthorPipelineContext(
@@ -1138,8 +2021,12 @@ class AuthorSourceRegistryExpansionTests(unittest.TestCase):
             )
             first = pipeline._register_source("https://example.com/a", "首次标题")  # noqa: SLF001
             again = pipeline._register_source("https://example.com/a", "重复标题")  # noqa: SLF001
+            invalid_relative = pipeline._register_source("/goto?url=opaque", "搜索跳转")  # noqa: SLF001
+            invalid_scheme = pipeline._register_source("javascript:alert(1)", "脚本")  # noqa: SLF001
 
             self.assertEqual(first, again)
+            self.assertEqual(invalid_relative, -1)
+            self.assertEqual(invalid_scheme, -1)
             self.assertEqual(pipeline.source_registry[0]["title"], "首次标题")
 
             for i in range(1, 30):
@@ -1179,7 +2066,7 @@ class AuthorBlueprintKpCoverageTests(unittest.TestCase):
                 return AUDIT_JSON
             if "骨架" in system:
                 return TWO_KP_BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -1206,7 +2093,7 @@ class AuthorBlueprintKpCoverageTests(unittest.TestCase):
                 return AUDIT_JSON
             if "骨架" in system:
                 return TWO_KP_BACKBONE_MD
-            return FILL_BODY
+            return _grounded_fill_body(user)
 
         events = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -1437,6 +2324,121 @@ class AuthorKpSplitTests(unittest.TestCase):
         self.assertTrue(self._llm_stages(events, "split"))
         self.assertEqual(len(self._search_starts(events)), 4)
         self.assertEqual([p["title"] for p in result["plan"]["knowledge_points"]], ["极限", "导数"])
+
+    def test_split_reserves_required_extension_topics_and_receives_full_contract(self):
+        seen = []
+
+        async def split_llm(system, user):
+            seen.append(user)
+            return json.dumps({"knowledge_points": ["导数定义", "导数应用"]}, ensure_ascii=False)
+
+        requirements = (
+            "正文须以至少4个独立知识点二级标题展开；主题主线与作答前提限高中；"
+            "允许拓展仅限牛顿迭代与切线近似、拉格朗日中值定理。"
+            "每项须用[拓展:上列对应主题全名]逐项标记，并紧跟[高中连接]说明帮助。"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx_no_kps(
+                tmp,
+                options={"max_points": 4},
+                requirements=requirements,
+            )
+            pipeline = _AuthorPipeline(
+                ctx, llm_func=split_llm, toolbox=_fake_toolbox(), emit=lambda event: None
+            )
+            asyncio.run(pipeline._decompose_kps())  # noqa: SLF001
+
+        self.assertEqual(
+            pipeline.knowledge_points,
+            ["导数定义", "导数应用", "牛顿迭代与切线近似", "拉格朗日中值定理"],
+        )
+        self.assertIn("正文须以至少4个独立知识点", seen[0])
+        self.assertIn("min_points: 4", seen[0])
+        self.assertIn("牛顿迭代与切线近似", seen[0])
+        self.assertIn("参数分支/步骤/算例必须合并", seen[0])
+        self.assertIn("边界反例、概念辨析和应用", seen[0])
+
+    def test_controlled_extensions_survive_full_pipeline_and_acceptance(self):
+        requirements = (
+            "正文须以至少4个独立知识点二级标题展开；主题主线与作答前提限高中；"
+            "允许拓展仅限牛顿迭代与切线近似、拉格朗日中值定理。"
+            "每项须用[拓展:上列对应主题全名]逐项标记，并紧跟[高中连接]说明帮助。"
+        )
+        blueprint = json.dumps(
+            {
+                "narrative": "高中导数主线后连接两个拓展。",
+                "terminology": [],
+                "sections": [
+                    {
+                        "id": section_id,
+                        "title": title,
+                        "purpose": "形成可迁移理解",
+                        "key_points": [title],
+                        "target_chars": 800,
+                        "difficulty": "应用",
+                        "misconceptions": [],
+                        "frontier": False,
+                    }
+                    for section_id, title in (
+                        ("sec-definition", "导数定义"),
+                        ("sec-application", "导数应用"),
+                        ("sec-newton", "牛顿迭代与切线近似"),
+                        ("sec-mvt", "拉格朗日中值定理"),
+                    )
+                ],
+                "figures": [],
+            },
+            ensure_ascii=False,
+        )
+        backbone = """# 高中导数
+
+[[FILL:sec-definition]]
+
+[[FILL:sec-application]]
+
+[[FILL:sec-newton]]
+
+[[FILL:sec-mvt]]
+"""
+
+        async def extension_llm(system, user):
+            if "knowledge_points" in system:
+                return json.dumps({"knowledge_points": ["导数定义", "导数应用"]}, ensure_ascii=False)
+            if "总编" in system:
+                return blueprint
+            if "核查" in system:
+                return AUDIT_JSON
+            if "骨架" in system:
+                return backbone
+            body = _grounded_fill_body(user)
+            if "本节硬性标记" in user:
+                body += "\n\n[高中连接] 从高中切线与变化率出发，帮助检查导数题的条件和近似误差。"
+            if "解析求根与牛顿迭代近似的区别" in user:
+                body += "\n\n解析求根与牛顿迭代近似的区别：前者给精确表达，后者逐步逼近数值解。"
+            return body
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._ctx_no_kps(
+                tmp,
+                options={"max_points": 4},
+                requirements=requirements,
+            )
+            result = asyncio.run(
+                run_author_pipeline(
+                    ctx,
+                    llm_func=extension_llm,
+                    toolbox=_fake_toolbox(),
+                    emit=lambda event: None,
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["degraded"], result["quality_report"])
+        markdown = result["markdown"]
+        for topic in ("牛顿迭代与切线近似", "拉格朗日中值定理"):
+            self.assertIn(f"[拓展:{topic}]", markdown)
+        self.assertEqual(markdown.count("[高中连接]"), 2)
+        self.assertTrue(result["quality_report"]["passed"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,36 @@
+{
+  "id": "projectile_motion_energy",
+  "title": "高中抛体运动：分解、能量与模型边界",
+  "query": "在高中物理范围内，研究初速度 20 m/s、仰角 37°（sin37°=0.60、cos37°=0.80）、g=10 m/s² 的斜抛：计算轨迹、最高点、飞行时间和同高度射程；再比较落点高低改变、空气阻力存在时哪些结论失效，并用机械能校验速度",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["阻力模型的数值迭代", "量纲分析与模型误差"],
+  "subject": "高中物理",
+  "preset": "deep",
+  "requirements": "必须给运动分解图、x-t/y-t/v-t 或轨迹图，并用运动学与能量法交叉校验；明确每条公式的初末高度和忽略空气阻力条件。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["矢量正交分解", "水平方向匀速运动", "竖直方向匀变速运动", "参数方程与轨迹", "最高点与速度方向", "飞行时间和射程", "机械能守恒校验", "空气阻力与模型边界", "阻力运动的离散迭代", "量纲分析与误差分类"],
+  "min_unique_sources": 12,
+  "expected_domains": ["openstax.org", "physicsclassroom.com", "phet.colorado.edu", "nasa.gov"],
+  "required_facts": [
+    {"id": "component_independence", "description": "忽略空气阻力时水平与竖直运动共享同一时间但相互独立，vx=v0 cosθ、vy0=v0 sinθ", "match": {"all": ["水平.{0,8}竖直.{0,8}(独立|互不影响)", "同一时间"], "any": ["v.?x.{0,5}=.{0,5}v.?0.{0,5}cos", "v.?y.{0,5}=.{0,5}v.?0.{0,5}sin"]}, "source_urls": ["https://openstax.org/books/physics/pages/5-3-projectile-motion"]},
+    {"id": "motion_equations", "description": "运动方程 x=v0 cosθ t，y=y0+v0 sinθ t-(1/2)gt²，速度 vy=v0 sinθ-gt", "match": {"all": ["x.{0,4}=.{0,8}cos", "y.{0,4}=.{0,12}sin", "v.?y.{0,4}=.{0,12}-.{0,4}g.?t"], "any": ["1/2.{0,4}g.?t", "参数方程"]}, "source_urls": ["https://openstax.org/books/physics/pages/5-3-projectile-motion"]},
+    {"id": "numeric_components", "description": "题给初速度分量 vx=16 m/s、vy0=12 m/s", "match": {"all": ["16.{0,4}m/s", "12.{0,4}m/s"], "any": ["水平分量", "竖直分量"]}, "source_urls": ["https://openstax.org/books/physics/pages/5-1-vector-addition-and-subtraction-graphical-methods"]},
+    {"id": "numeric_peak", "description": "最高点 vy=0 但 vx=16 m/s，t=1.2 s，相对抛出点高度 7.2 m，加速度仍竖直向下 g", "match": {"all": ["1.2.{0,3}s", "7.2.{0,3}m"], "any": ["最高点.{0,8}v.?y.{0,4}=.{0,4}0", "v.?x.{0,4}=.{0,4}16", "加速度.{0,8}(向下|g)"]}, "source_urls": ["https://openstax.org/books/physics/pages/5-3-projectile-motion"]},
+    {"id": "numeric_range", "description": "同高度落地时飞行时间 2.4 s、射程 38.4 m；结果可由分量法求得", "match": {"all": ["2.4.{0,3}s", "38.4.{0,3}m"], "any": ["飞行时间", "射程", "同高度"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/3-4-projectile-motion"]},
+    {"id": "range_formula_boundary", "description": "R=v0²sin2θ/g 只适用于忽略空气阻力且起点终点等高；不同高度必须由竖直方程先求时间", "match": {"all": ["sin.{0,3}2", "起点.{0,8}终点.{0,8}等高|同高度"], "any": ["不同高度.{0,12}竖直方程", "适用条件"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/3-4-projectile-motion"]},
+    {"id": "energy_check", "description": "仅重力做功时机械能守恒，速度大小满足 v²=v0²-2g(y-y0)，可校验分量计算但不能给出速度方向", "match": {"all": ["机械能守恒", "v.?2.{0,6}=.{0,6}v.?0.?2.{0,6}-.{0,6}2.?g"], "any": ["速度方向.{0,8}(不能|无法)", "校验"]}, "source_urls": ["https://openstax.org/books/physics/pages/9-2-mechanical-energy-and-conservation-of-energy"]},
+    {"id": "drag_boundary", "description": "有空气阻力时水平速度不再恒定、轨迹不再为理想抛物线，同高度上升下降速度通常不对称且机械能减少", "match": {"all": ["空气阻力"], "any": ["水平速度.{0,8}(不再|减小)", "不再.{0,6}抛物线", "机械能.{0,8}(减少|不守恒)", "不对称"]}, "source_urls": ["https://www.grc.nasa.gov/www/k-12/VirtualAero/BottleRocket/airplane/rktflght.html"]},
+    {"id": "euler_drag_bridge", "description": "[拓展] 不求解微分方程，按小时间步用 v_(n+1)=v_n+a_nΔt、r_(n+1)=r_n+v_nΔt 迭代阻力运动，并用缩小步长检查数值稳定性", "match": {"all": ["数值迭代|欧拉法|Euler", "Δt|时间步长", "v.{0,4}n.{0,4}[+].{0,4}1"], "any": ["r.{0,4}n.{0,4}[+].{0,4}1", "缩小.{0,6}步长", "收敛|稳定"]}, "source_urls": ["https://math.libretexts.org/Bookshelves/Differential_Equations/Numerically_Solving_Ordinary_Differential_Equations_(Brorson)/01%3A_Chapters/1.02%3A_Forward_Euler_method"]},
+    {"id": "model_error_bridge", "description": "[拓展] 用阻力/重力的无量纲比值判断忽略阻力是否合理，并区分测量误差、数值截断误差与模型误差", "match": {"all": ["量纲分析|无量纲", "模型误差"], "any": ["阻力.{0,8}重力.{0,8}比", "截断误差", "测量误差"]}, "source_urls": ["https://www.grc.nasa.gov/www/k-12/airplane/dragco.html"]}
+  ],
+  "traps": [
+    {"id": "peak_speed_zero", "description": "误解：斜抛最高点速度和加速度都为零", "wrong_pattern": "最高点.{0,10}(速度|速率).{0,4}(和|、).{0,4}加速度.{0,6}(都|均).{0,4}(为零|是零)", "correct_pattern": "竖直分量.{0,6}为零|水平速度|加速度.{0,6}g|向下"},
+    {"id": "range_formula_universal", "description": "误解：射程公式可无条件用于任意落点高度", "wrong_pattern": "射程公式.{0,12}(任何|任意).{0,6}(高度|落点).{0,6}(都|均|直接).{0,4}适用", "correct_pattern": "同高度|适用条件|竖直方程"},
+    {"id": "energy_gives_direction", "description": "误解：仅由机械能守恒即可确定任意时刻速度方向", "wrong_pattern": "(只|仅).{0,6}机械能守恒.{0,12}(即可|就能).{0,8}速度方向", "correct_pattern": "速度大小|分量|运动学"},
+    {"id": "euler_is_exact", "description": "误解：数值迭代步长取一次后就得到含阻力运动的精确轨迹", "wrong_pattern": "(欧拉法|Euler|数值迭代).{0,12}(一步|任意步长).{0,8}(精确|无误差).{0,6}(轨迹|解)", "correct_pattern": "步长|近似|截断误差|收敛检查"}
+  ],
+  "contrasts": [["速度为零", "竖直速度为零"], ["运动学分量法", "机械能法"], ["同高度射程", "异高度落点"], ["解析理想模型", "阻力数值模型"]],
+  "format_requirements": {"key_formulas": ["x.{0,4}=.{0,8}cos", "y.{0,4}=.{0,12}sin", "v.?2.{0,6}=.{0,6}v.?0.?2", "Δt|时间步长"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

@@ -246,13 +246,21 @@ class AuthorEventForwardingDrainTests(unittest.IsolatedAsyncioTestCase):
         recorded: list = []
 
         async def _record_fail(*args, **kwargs):
-            recorded.append({"event": "__fail__"})
+            recorded.append({"event": "__fail__", "error": kwargs.get("error")})
 
         async def _fake_pipeline(pipeline_ctx, *, llm_func, toolbox, emit, forge):
             for idx in range(2):
                 emit({"event": "author_progress", "data": {"idx": idx}})
             await asyncio.sleep(0)
-            return {"success": False, "error": {"code": "author_audit_failed", "stage": "audit", "issues": ["x"]}}
+            return {
+                "success": False,
+                "error": {
+                    "code": "author_audit_failed",
+                    "stage": "audit",
+                    "issues": ["x"],
+                    "detail": "frontier section audit timed out",
+                },
+            }
 
         patches = self._common_patches(manager, orchestrator, recorded, fail_mock=AsyncMock(side_effect=_record_fail))
         with patches[0], patches[1], patches[2], patches[3], patches[4], patch.object(
@@ -263,6 +271,7 @@ class AuthorEventForwardingDrainTests(unittest.IsolatedAsyncioTestCase):
 
         kinds = [evt.get("event") for evt in recorded]
         self.assertEqual(kinds, ["author_progress", "author_progress", "__fail__"])
+        self.assertEqual(recorded[-1]["error"]["detail"], "frontier section audit timed out")
 
     async def test_author_emit_cancel_leaves_no_pending_forward_tasks(self) -> None:
         from backend.generation.study_materials import orchestrator

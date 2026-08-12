@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from backend.core.text_lint import lint_text
-from backend.generation.study_materials.coverage import split_sections_by_kp
+from backend.generation.study_materials.coverage import split_sections_by_kp, unmatched_kp_titles
+from backend.generation.study_materials.learning_contract import (
+    LearningContractRequirements,
+    inspect_learning_contract,
+)
+from backend.generation.study_materials.scope_contract import inspect_extension_contract
 
 if TYPE_CHECKING:
     from backend.generation.study_materials.author.blueprint import Blueprint
@@ -430,11 +435,22 @@ def _author_terminology_conflicts(markdown: str, blueprint: "Blueprint") -> List
     return issues
 
 
-def evaluate_author_acceptance(*, todos: "TodoList", markdown: str, blueprint: "Blueprint") -> Dict[str, Any]:
+def evaluate_author_acceptance(
+    *,
+    todos: "TodoList",
+    markdown: str,
+    blueprint: "Blueprint",
+    learning_requirements: LearningContractRequirements | None = None,
+    knowledge_points: List[str] | None = None,
+    min_knowledge_sections: int = 0,
+    extension_topics: List[str] | None = None,
+) -> Dict[str, Any]:
     """author 运行时的成稿验收门（与 state 驱动的 evaluate_acceptance 并存，互不改用）。
 
     硬门槛（error，阻断）：todos 未清零（``todos_not_cleared``）、成稿残留
-    ``[[FILL:``/``[[FIG:`` 占位符（``placeholder_residual``）。
+    ``[[FILL:``/``[[FIG:`` 占位符（``placeholder_residual``）、知识点拆分或小节覆盖不足，
+    以及受控拓展未逐项回连高中。请求练习闭环时，整篇契约不完整
+    （``learning_contract_unmet``）也作为硬门槛；
     软提示（warning，不阻断）：正文与术语表含义冲突（``terminology_conflict``）。
     返回包络沿用 evaluate_acceptance 惯例；``issues`` 为含 ``code``/``severity``
     的 dict 列表，``failed_checks`` 取其中 error 级 issue 的 code。
@@ -464,6 +480,73 @@ def evaluate_author_acceptance(*, todos: "TodoList", markdown: str, blueprint: "
                 "detail": f"成稿残留未替换占位符：{', '.join(residual)}",
             }
         )
+
+    points = list(dict.fromkeys(str(point).strip() for point in (knowledge_points or []) if str(point).strip()))
+    minimum = max(0, int(min_knowledge_sections or 0))
+    if minimum and len(points) < minimum:
+        issues.append(
+            {
+                "code": "knowledge_point_count_unmet",
+                "severity": "error",
+                "actual": len(points),
+                "required": minimum,
+                "detail": f"知识点拆分数量不足：{len(points)}/{minimum}",
+            }
+        )
+    if points:
+        sections_by_kp = split_sections_by_kp(text, points)
+        uncovered = unmatched_kp_titles(sections_by_kp)
+        if uncovered:
+            issues.append(
+                {
+                    "code": "knowledge_coverage_unmet",
+                    "severity": "error",
+                    "uncovered": uncovered,
+                    "covered": len(points) - len(uncovered),
+                    "required": len(points),
+                    "detail": "成稿缺少知识点小节：" + "、".join(uncovered),
+                }
+            )
+
+    extension = inspect_extension_contract(text, extension_topics or [])
+    if not extension["passed"]:
+        issues.append(
+            {
+                "code": "extension_contract_unmet",
+                "severity": "error",
+                "metrics": extension,
+                "detail": (
+                    "受控拓展未逐项回连高中：缺少主题="
+                    + "、".join(extension["missing_topics"] or ["无"])
+                    + "；缺少连接="
+                    + "、".join(extension["missing_connections"] or ["无"])
+                ),
+            }
+        )
+
+    if learning_requirements is not None:
+        learning = inspect_learning_contract(text, learning_requirements)
+        if not learning["passed"]:
+            issues.append(
+                {
+                    "code": "learning_contract_unmet",
+                    "severity": "error",
+                    "missing": list(learning["missing"]),
+                    "metrics": {
+                        key: learning[key]
+                        for key in (
+                            "objective_count",
+                            "prerequisites_ok",
+                            "worked_examples",
+                            "question_count",
+                            "paired_count",
+                            "level_hits",
+                            "rubric_ok",
+                        )
+                    },
+                    "detail": "整篇学习闭环未达标：" + "；".join(learning["missing"]),
+                }
+            )
 
     issues.extend(_author_terminology_conflicts(text, blueprint))
 

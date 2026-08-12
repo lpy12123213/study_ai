@@ -1731,6 +1731,7 @@ class StudyMaterialsTaskManager:
                         "code": code,
                         "stage": str(error.get("stage") or ""),
                         "issues": list(error.get("issues") or []),
+                        "detail": str(error.get("detail") or ""),
                         "recoverable": True,
                     },
                 )

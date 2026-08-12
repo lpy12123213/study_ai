@@ -94,6 +94,7 @@ class TestSharedOptionsBuilder(unittest.TestCase):
         "enable_extra_tools": True,
         "max_points": 99,
         "prefer_local_archive": True,
+        "research_budget": "lean",
     }
 
     def _capture_options(self, path: str) -> dict:
@@ -125,6 +126,7 @@ class TestSharedOptionsBuilder(unittest.TestCase):
         self.assertFalse(opts_stream["with_diagrams"])
         self.assertTrue(opts_stream["enable_extra_tools"])
         self.assertTrue(opts_stream["preferLocalArchive"])
+        self.assertEqual(opts_stream["research_budget"], "lean")
 
     def test_builder_drops_non_positive_max_points(self) -> None:
         from backend.api.study_materials_schemas import (

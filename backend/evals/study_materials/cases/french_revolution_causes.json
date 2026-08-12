@@ -1,98 +1,37 @@
 {
   "id": "french_revolution_causes",
-  "title": "法国大革命的成因",
-  "query": "自学法国大革命（1789）的成因：财政危机、社会等级制度、启蒙思想与 1788 年农业危机等多重因素如何共同作用",
+  "title": "高中历史：法国大革命的多层因果与史料解释",
+  "query": "在高中世界史范围内，解释 1789 年法国大革命为何在此时爆发：把旧制度等级与税负、王室债务和税制改革受阻、启蒙思想、美国独立战争、1788 年歉收与面包价格、三级会议表决争议串成长期结构—中期催化—直接触发的因果链，并区分原因、导火索和革命进程",
   "tier": "smoke",
-  "subject": "世界历史",
-  "preset": "standard",
-  "options": {"with_questions": true, "with_diagrams": false, "max_points": 6, "prefer_local_archive": false},
-  "expected_knowledge_points": [
-    "财政危机与三级会议",
-    "社会等级制度",
-    "启蒙思想",
-    "1788 年农业危机与粮价",
-    "美国独立战争的影响"
-  ],
-  "min_unique_sources": 8,
-  "expected_domains": ["wikipedia.org", "britannica.com", "history.com"],
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["反事实因果推理", "史料来源批判与证据三角互证"],
+  "subject": "高中历史",
+  "preset": "deep",
+  "requirements": "必须给 1774—1789 时间轴、三等级权利义务比较表和至少两种史学解释；每条因果链写中间机制，并辨析史料事实与后世传说。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 11, "prefer_local_archive": false},
+  "expected_knowledge_points": ["旧制度与三个等级", "特权和税负不均", "王室财政危机", "改革受阻与政治合法性", "启蒙思想的作用", "美国独立战争的双重影响", "1788 年歉收与面包危机", "三级会议的表决冲突", "多层因果与时间顺序", "反事实因果检验", "史料来源批判与互证"],
+  "min_unique_sources": 12,
+  "expected_domains": ["britannica.com", "chateauversailles.fr", "archives-nationales.culture.gouv.fr", "history.com"],
   "required_facts": [
-    {
-      "id": "fiscal_crisis",
-      "description": "王室财政危机（巨额债务，含支持美国独立战争的开销）是直接政治导火索",
-      "match": {"all": ["财政危机|财政破产|国库空虚|财政困难"], "any": ["债务|赤字|破产", "美国独立战争|援美"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
-    },
-    {
-      "id": "estates_general",
-      "description": "1789 年 5 月召开三级会议（175 年来首次）",
-      "match": {"all": ["三级会议"], "any": ["1789"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Estates-General_of_1789"]
-    },
-    {
-      "id": "three_estates",
-      "description": "三个等级：第一等级教士、第二等级贵族、第三等级（占人口绝大多数）",
-      "match": {"all": ["第三等级"], "any": ["第一等级|教士", "第二等级|贵族"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Estates_of_the_realm"]
-    },
-    {
-      "id": "enlightenment",
-      "description": "启蒙思想（卢梭、伏尔泰、孟德斯鸠等）提供了思想武器",
-      "match": {"all": ["启蒙"], "any": ["卢梭", "伏尔泰", "孟德斯鸠", "百科全书"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
-    },
-    {
-      "id": "harvest_1788",
-      "description": "1788 年农业歉收（旱灾/冰雹）与随后严冬导致粮价、面包价格暴涨",
-      "match": {"all": ["1788"], "any": ["歉收|旱灾|干旱|冰雹", "粮价|面包|粮食价格"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
-    },
-    {
-      "id": "american_influence",
-      "description": "美国独立战争的示范效应与财政连带影响",
-      "match": {"all": ["美国独立|北美独立|美利坚"], "any": ["示范|影响|启发|激励|思想", "财政|军费|债务"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
-    },
-    {
-      "id": "bastille",
-      "description": "1789 年 7 月 14 日攻占巴士底狱（革命爆发的标志）",
-      "match": {"all": ["巴士底"], "any": ["7 ?月 ?14", "1789"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Storming_of_the_Bastille"]
-    },
-    {
-      "id": "multifactor",
-      "description": "明确呈现多因素共同作用（而非单一归因）",
-      "match": {"any": ["多重因素|多因素|多种因素|共同作用|相互叠加|合力", "长期.{0,8}(原因|因素).{0,12}(短期|直接)"]},
-      "source_urls": ["https://en.wikipedia.org/wiki/Causes_of_the_French_Revolution"]
-    }
+    {"id": "estates_privilege", "description": "旧制度按教士、贵族、第三等级组织社会，前两等级享有特权，第三等级内部多样且承担主要税负", "match": {"all": ["第一等级|教士", "第二等级|贵族", "第三等级"], "any": ["特权", "税负", "内部.{0,6}差异|资产阶级.{0,8}农民"]}, "source_urls": ["https://www.britannica.com/event/French-Revolution"]},
+    {"id": "fiscal_structure", "description": "战争债务、偿债支出与低效不平等税制共同造成财政危机，不能只归因王室个人消费", "match": {"all": ["财政危机", "债务"], "any": ["战争", "税制", "偿债|利息", "结构性"]}, "source_urls": ["https://www.britannica.com/event/French-Revolution/Causes-of-the-French-Revolution"]},
+    {"id": "reform_blocked", "description": "扩大特权阶层纳税的改革遭抵制，显贵会议等政治僵局迫使王室召集三级会议", "match": {"all": ["改革.{0,8}(受阻|失败|抵制)", "三级会议"], "any": ["显贵会议", "贵族.{0,8}抵制", "征税同意"]}, "source_urls": ["https://en.chateauversailles.fr/discover/history/key-dates/summoning-estates-general-1789"]},
+    {"id": "american_dual_effect", "description": "援助美国独立战争既加重法国财政负担，也传播了权利和共和政治的示范，但不是单独充分原因", "match": {"all": ["美国独立战争"], "any": ["财政.{0,8}(负担|债务)", "示范|权利|共和", "不是.{0,8}(唯一|单一)"]}, "source_urls": ["https://history.state.gov/milestones/1776-1783/french-alliance"]},
+    {"id": "enlightenment_role", "description": "启蒙思想为批判特权、主权和权利提供语言与合法性资源，但思想传播本身不能解释 1789 的具体时点", "match": {"all": ["启蒙思想|启蒙运动"], "any": ["特权", "主权|权利", "合法性", "不能.{0,8}单独解释"]}, "source_urls": ["https://www.britannica.com/event/French-Revolution/Causes-of-the-French-Revolution"]},
+    {"id": "harvest_bread", "description": "1788 年歉收和严冬推高粮食及面包价格、压缩家庭可支配收入，放大城市与乡村不满", "match": {"all": ["1788", "面包|粮价"], "any": ["歉收", "严冬", "可支配.{0,6}收入", "不满"]}, "source_urls": ["https://www.britannica.com/event/French-Revolution/Causes-of-the-French-Revolution"]},
+    {"id": "voting_conflict", "description": "三级会议传统按等级表决会使前两等级可能以二对一占优，第三等级要求按人头表决", "match": {"all": ["按等级表决", "按人头表决"], "any": ["二.{0,3}对.{0,3}一", "第三等级", "代表人数"]}, "source_urls": ["https://en.chateauversailles.fr/discover/history/key-dates/summoning-estates-general-1789"]},
+    {"id": "chronology_1789", "description": "三级会议召开、第三等级宣布国民议会和网球场宣誓均先于 7 月 14 日攻占巴士底狱；巴士底狱属于革命进程而非所有深层原因的起点", "match": {"all": ["三级会议", "国民议会", "网球场宣誓", "巴士底狱"], "any": ["5月.{0,12}6月.{0,12}7月", "7月14日", "先于"]}, "source_urls": ["https://www.britannica.com/event/French-Revolution/Events-of-1789"]},
+    {"id": "multilevel_causation", "description": "合格解释要区分长期结构、中期催化和直接触发，并说明因素相互作用而非列清单或单因决定", "match": {"all": ["长期.{0,6}(结构|原因)", "直接.{0,6}(触发|导火索)"], "any": ["中期|催化", "相互作用|合力|叠加", "多重因素"]}, "source_urls": ["https://www.britannica.com/event/French-Revolution/Causes-of-the-French-Revolution"]},
+    {"id": "counterfactual_bridge", "description": "[拓展] 反事实提问若移除某因素结果是否仍可能发生，用于检验必要性与充分性，但不能把无法观察的反事实当成已证事实", "match": {"all": ["反事实", "必要性", "充分性"], "any": ["移除|没有.{0,6}因素", "仍.{0,6}发生", "不能.{0,8}(证明|当成事实)"]}, "source_urls": ["https://plato.stanford.edu/entries/causation-counterfactual/"]},
+    {"id": "source_criticism_bridge", "description": "[拓展] 史料批判要检查作者/出处、受众、目的、时代语境并与独立材料互证；一手史料不自动等于客观可靠", "match": {"all": ["史料批判|来源批判", "互证|三角互证"], "any": ["作者|出处", "受众", "目的", "时代语境", "一手史料.{0,8}(不|并非).{0,6}(客观|可靠)"]}, "source_urls": ["https://www.archives.gov/education/research/history-in-the-raw.html"]}
   ],
   "traps": [
-    {
-      "id": "single_cause",
-      "description": "误解：革命由某一个原因单独导致",
-      "wrong_pattern": "(根本|唯一|真正)原因(就是|是|在于)",
-      "correct_pattern": "多重|多因素|多种因素|共同"
-    },
-    {
-      "id": "marie_caused",
-      "description": "误解：玛丽王后的奢靡是革命的主要原因",
-      "wrong_pattern": "玛丽.{0,4}(王后|安托瓦内特|安东).{0,16}(导致|引发|造成|引起).{0,4}革命",
-      "correct_pattern": "财政|结构性|制度|多重"
-    },
-    {
-      "id": "poor_only",
-      "description": "误解：革命只是贫民/农民的暴动（忽视资产阶级与精英分裂）",
-      "wrong_pattern": "(只有|只是|仅仅是).{0,6}(贫民|农民|穷人|底层).{0,8}(发动|推动|掀起|参与).{0,4}革命",
-      "correct_pattern": "资产阶级|第三等级|市民|精英"
-    }
+    {"id": "single_cause", "description": "误解：任何单一因素足以独自解释革命爆发", "wrong_pattern": "(唯一|单一|全部)原因.{0,6}(就是|是|在于)", "correct_pattern": "多重|相互作用|长期.{0,8}直接"},
+    {"id": "queen_spending", "description": "误解：玛丽·安托瓦内特个人奢侈是财政危机和革命的主要充分原因", "wrong_pattern": "玛丽.{0,8}(奢侈|挥霍).{0,14}(主要|根本|直接).{0,6}(导致|造成).{0,6}(财政危机|革命)", "correct_pattern": "战争债务|税制|结构性|多重"},
+    {"id": "enlightenment_automatic", "description": "误解：启蒙思想一传播就会自动引发革命", "wrong_pattern": "启蒙思想.{0,10}(自动|必然|直接).{0,6}(引发|导致).{0,4}革命", "correct_pattern": "财政|粮价|政治危机|条件|不能单独"},
+    {"id": "bastille_cause", "description": "误解：攻占巴士底狱发生在三级会议之前并导致三级会议召开", "wrong_pattern": "巴士底狱.{0,12}(先于|导致|促使).{0,8}三级会议.{0,6}(召开|召集)", "correct_pattern": "三级会议.{0,12}(先于|5月)|巴士底.{0,8}7月"}
   ],
-  "contrasts": [
-    ["第一等级", "第三等级"],
-    ["短期导火索", "长期结构性原因"]
-  ],
-  "format_requirements": {
-    "key_formulas": [],
-    "min_figures": 0,
-    "min_tables": 1,
-    "min_chars": 6000
-  }
+  "contrasts": [["长期结构性原因", "直接导火索"], ["按等级表决", "按人头表决"], ["史料事实", "后世传说"], ["一手史料", "可靠史料"]],
+  "format_requirements": {"key_formulas": ["1788", "1789", "7.{0,3}月.{0,3}14", "反事实|必要性"], "min_figures": 1, "min_tables": 3, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
 }

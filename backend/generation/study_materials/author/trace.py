@@ -9,9 +9,11 @@ TRACE_EVENT_TYPES = frozenset({
     "note_write",       # 笔记落笔 {name, chars}
     "todo_update",      # TODO 状态变更 {todo: {...}}
     "tool_call",        # 工具调用（补 agent_path；沿用现有 data 形状）
+    "research_budget",  # 研究阶段计划调用量 {mode, knowledge_points, ...}
     "figure_trace",     # 配图代码/渲染尝试/产物 {figure_id, stage, ...}
     "section_fill",     # 填充开始/完成 {sec_id, status}
     "text_delta",       # 成稿快照（沿用现有）
+    "progress",         # 长任务阶段进度 {progress, stage}
 })
 
 

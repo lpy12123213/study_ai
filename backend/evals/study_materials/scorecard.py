@@ -19,7 +19,8 @@ from backend.evals.study_materials.graders.knowledge import LlmFactJudge, grade_
 from backend.evals.study_materials.graders.learning import grade_learning
 from backend.evals.study_materials.graders.rubric import LlmRubricJudge, grade_rubric
 from backend.evals.study_materials.graders.structure import grade_structure
-from backend.generation.study_materials.coverage import split_sections_by_kp
+from backend.generation.study_materials.coverage import match_kp_headings
+from backend.generation.study_materials.scope_contract import inspect_extension_contract
 
 SCORING_VERSION = "challenge_v2"
 
@@ -132,6 +133,13 @@ def _delivery_lint_flags(markdown: str) -> List[str]:
     return lint_text(cleaned)
 
 
+def _extension_bridge_metrics(case: BenchmarkCase, markdown: str) -> Dict[str, Any]:
+    """检查受控大学拓展是否逐项标记，并明确回连高中学习价值。"""
+
+    topics = case.extension_topics if case.curriculum_scope == "high_school_plus" else []
+    return inspect_extension_contract(markdown, topics)
+
+
 def _build_quality_gates(
     case: BenchmarkCase,
     events: List[Dict[str, Any]],
@@ -153,9 +161,10 @@ def _build_quality_gates(
     min_chars = max(1, case.format_requirements.min_chars)
     char_count = len((markdown or "").strip())
     length_ratio = min(1.0, char_count / min_chars)
-    sections = split_sections_by_kp(markdown or "", case.expected_knowledge_points)
-    matched_sections = sum(1 for body in sections.values() if body.strip())
+    heading_matches = match_kp_headings(markdown or "", case.expected_knowledge_points)
+    matched_sections = sum(1 for headings in heading_matches.values() if headings)
     kp_ratio = matched_sections / max(1, len(case.expected_knowledge_points))
+    unmatched_topics = [title for title, headings in heading_matches.items() if not headings]
     lint_flags = _delivery_lint_flags(markdown)
     delivery_ok = (
         terminal_ok
@@ -178,6 +187,7 @@ def _build_quality_gates(
             "terminal_ok": terminal_ok and not terminal_error,
             "length_ratio": round(length_ratio, 4),
             "kp_coverage_ratio": round(kp_ratio, 4),
+            "unmatched_topics": unmatched_topics,
             "lint_flags": lint_flags,
         },
     ))
@@ -186,17 +196,27 @@ def _build_quality_gates(
     k2 = _check_by_id(dimensions, "K", "K2_traps")
     k3 = _check_by_id(dimensions, "K", "K3_contrasts")
     fact_ratio = float((k1.metrics if k1 else {}).get("matched_ratio") or 0.0)
-    correctness_ok = fact_ratio >= 0.8 and _ratio(k2) >= 0.8 and _ratio(k3) >= 0.8
+    extension = _extension_bridge_metrics(case, markdown)
+    correctness_ok = (
+        fact_ratio >= 0.8
+        and _ratio(k2) >= 0.8
+        and _ratio(k3) >= 0.8
+        and bool(extension["passed"])
+    )
     gates.append(QualityGateResult(
         "G1_correctness",
         "核心正确性",
         correctness_ok,
         19.0,
-        f"事实命中={fact_ratio:.0%}；误区驳正={_ratio(k2):.0%}；概念辨析={_ratio(k3):.0%}",
+        (
+            f"事实命中={fact_ratio:.0%}；误区驳正={_ratio(k2):.0%}；概念辨析={_ratio(k3):.0%}；"
+            f"拓展回连={float(extension['ratio']):.0%}"
+        ),
         metrics={
             "fact_ratio": round(fact_ratio, 4),
             "trap_ratio": round(_ratio(k2), 4),
             "contrast_ratio": round(_ratio(k3), 4),
+            "extension_bridge": extension,
         },
     ))
 

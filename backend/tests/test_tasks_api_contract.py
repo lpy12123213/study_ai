@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from backend.api.auth import require_auth
+from backend.api.tasks import _set_historical_eta
 from backend.app import create_app
 
 
@@ -20,6 +21,14 @@ class TestTasksApiContract(unittest.TestCase):
         resp = client.get("/api/tasks")
         # Auth will block; we only assert that the router is mounted.
         self.assertNotEqual(resp.status_code, 404)
+
+    def test_overdue_historical_eta_is_unknown_instead_of_zero(self) -> None:
+        task = {"eta_s": 0.0}
+        _set_historical_eta(task, elapsed_s=120.0, average_s=60.0)
+
+        self.assertEqual(task["elapsed_s"], 120.0)
+        self.assertNotIn("eta_s", task)
+        self.assertTrue(task["eta_overdue"])
 
     def test_submit_endpoints_return_task_id_shape(self) -> None:
         app = create_app()

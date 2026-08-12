@@ -9,6 +9,7 @@ from pathlib import Path
 from backend.evals.study_materials.case_schema import (
     BENCHMARK_OUTPUT_CONTRACT,
     CaseValidationError,
+    benchmark_output_contract,
     default_cases_dir,
     load_case_file,
     load_cases,
@@ -30,6 +31,7 @@ from backend.evals.study_materials.runner import (
     resolve_markdown,
 )
 from backend.evals.study_materials.scorecard import grade_case
+from backend.generation.study_materials.coverage import match_kp_headings
 
 _CASE_DIR = default_cases_dir()
 
@@ -104,7 +106,17 @@ class CaseSchemaTests(unittest.TestCase):
             self.assertEqual(payload["preset"], case.preset)
             self.assertTrue(payload["with_questions"])
             self.assertFalse(payload["prefer_local_archive"])
-            self.assertIn(BENCHMARK_OUTPUT_CONTRACT, payload["requirements"])
+            self.assertTrue(
+                payload["requirements"].startswith(
+                    benchmark_output_contract(
+                        case.learning_requirements,
+                        curriculum_scope=case.curriculum_scope,
+                        extension_topics=case.extension_topics,
+                        min_knowledge_sections=case.min_knowledge_sections,
+                    )
+                ),
+                case.id,
+            )
             self.assertLessEqual(len(payload["requirements"]), 600)
 
     def test_case_pack_deep_merges_nested_defaults(self) -> None:
@@ -150,6 +162,22 @@ class CaseSchemaTests(unittest.TestCase):
 
         with self.assertRaises(CaseValidationError):
             parse_case(_mini_case(tier="impossible"))
+        with self.assertRaises(CaseValidationError):
+            parse_case(_mini_case(curriculum_scope="university"))
+        with self.assertRaises(CaseValidationError):
+            parse_case(_mini_case(curriculum_scope="high_school_plus"))
+        with self.assertRaises(CaseValidationError):
+            parse_case(_mini_case(curriculum_scope="high_school", extension_topics=["越界拓展"]))
+        with self.assertRaises(CaseValidationError):
+            parse_case(_mini_case(curriculum_scope="high_school_plus", extension_topics="不是数组"))
+        with self.assertRaises(CaseValidationError):
+            parse_case(
+                _mini_case(
+                    curriculum_scope="high_school_plus",
+                    extension_topics=["受控拓展"],
+                    options={"max_points": 1},
+                )
+            )
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "pack.json"
             path.write_text(json.dumps({"pack_version": 99, "cases": [_mini_case()]}), encoding="utf-8")
@@ -618,6 +646,87 @@ class LearningGraderTests(unittest.TestCase):
         result = grade_learning(self.case, md)
         self.assertAlmostEqual(result.score, DIMENSION_MAX["L"])
 
+    def test_distributed_chapter_exercises_are_aggregated(self) -> None:
+        md = """# 迷你主题
+
+## 学习目标
+- 能定义概念甲。
+- 能应用性质乙。
+- 能比较两个概念。
+
+## 前置知识
+掌握集合、逻辑与基础代数，并能阅读简单公式。
+
+## 第一章
+**[EX1]** 例题一。步骤：先核对定义，再验证边界。
+
+### 自测题（一）
+- [Q1][基础] 定义是什么？
+- [Q2][应用] 如何应用？
+- [Q3][迁移] 条件变化后如何处理？
+
+### 答案与评分点（一）
+- [A1] 答案；评分点：术语。
+- [A2] 答案；评分点：步骤。
+- [A3] 答案；评分点：迁移理由。
+
+## 第二章
+**[EX2]** 例题二。解答步骤：列条件、推导、检查。
+
+### 自测题（二）
+- [Q4][基础] 条件是什么？
+- [Q5][应用] 结论是什么？
+- [Q6][迁移] 如何构造反例？
+
+### 答案与评分点（二）
+- [A4] 答案；评分点：条件。
+- [A5] 答案；评分点：结论。
+- [A6] 答案；评分点：反例。
+"""
+        result = grade_learning(self.case, md)
+        self.assertAlmostEqual(result.score, DIMENSION_MAX["L"])
+
+
+class DeliveryHeadingCoverageTests(unittest.TestCase):
+    def test_merged_and_split_headings_match_without_hiding_real_gap(self) -> None:
+        md = """# 中心极限定理
+
+## 大数定律与收敛模式
+正文。
+
+## 标准化变换
+正文。
+
+### Lévy–Lindeberg 中心极限定理的陈述
+正文。
+
+## 样本均值标准误
+正文。
+
+## Berry–Esseen 误差界
+正文。
+
+## 重尾分布与 CLT 反例
+正文。
+
+## 中心极限定理
+正文。
+"""
+        expected = [
+            "标准化和分布收敛",
+            "样本均值标准误",
+            "Lindeberg–Lévy 条件",
+            "Berry–Esseen 误差界",
+            "重尾与相关性反例",
+            "中心极限定理与大数定律",
+        ]
+        matches = match_kp_headings(md, expected)
+
+        self.assertTrue(matches["标准化和分布收敛"])
+        self.assertTrue(matches["Lindeberg–Lévy 条件"])
+        self.assertTrue(matches["中心极限定理与大数定律"])
+        self.assertEqual(matches["重尾与相关性反例"], [])
+
 
 class CitationGraderTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -736,6 +845,62 @@ class ScorecardTests(unittest.TestCase):
         self.assertAlmostEqual(card.total, card.raw_total)
         self.assertGreater(card.total, 85.0)
 
+    def test_generic_complete_fixture_stays_below_20_on_hard_light_cases(self) -> None:
+        """难度锚：形式完整但主题无关的教材不能靠结构、练习和引用跨过内容门槛。"""
+
+        events = [_frame("done", {"material": {"markdown": _CHALLENGE_READY_MD}})]
+        for case in _resolve_cases("light", _CASE_DIR):
+            with self.subTest(case=case.id):
+                card = grade_case(case, events, _CHALLENGE_READY_MD)
+                correctness = next(gate for gate in card.quality_gates if gate.id == "G1_correctness")
+                self.assertFalse(correctness.passed)
+                self.assertLess(correctness.metrics["fact_ratio"], 0.5)
+                self.assertLess(card.total, 20.0)
+
+    def test_high_school_plus_extension_must_explicitly_connect_back_to_high_school(self) -> None:
+        topics = ["概念甲高级视角", "性质乙应用边界"]
+        case = parse_case(
+            _mini_case(
+                curriculum_scope="high_school_plus",
+                extension_topics=topics,
+            )
+        )
+        events = [_frame("done", {"material": {"markdown": _CHALLENGE_READY_MD}})]
+
+        missing_bridge = grade_case(case, events, _CHALLENGE_READY_MD)
+        missing_g1 = next(gate for gate in missing_bridge.quality_gates if gate.id == "G1_correctness")
+        self.assertFalse(missing_g1.passed)
+        self.assertEqual(missing_g1.metrics["extension_bridge"]["ratio"], 0.0)
+
+        unpaired_extension = """
+## [拓展:概念甲高级视角]
+这里展开概念甲，但没有说明对高中学习的作用。
+
+## [拓展:性质乙应用边界]
+[高中连接] 由性质乙出发，帮助高中生识别应用题中缺失的条件。
+[高中连接] 另一条标记不能替代上一主题自己的高中连接。
+"""
+        unpaired = grade_case(case, events, _CHALLENGE_READY_MD + unpaired_extension)
+        unpaired_g1 = next(gate for gate in unpaired.quality_gates if gate.id == "G1_correctness")
+        self.assertFalse(unpaired_g1.passed)
+        self.assertEqual(unpaired_g1.metrics["extension_bridge"]["ratio"], 0.5)
+        self.assertEqual(
+            unpaired_g1.metrics["extension_bridge"]["missing_connections"],
+            ["概念甲高级视角"],
+        )
+
+        extension = """
+## [拓展:概念甲高级视角]
+[高中连接] 由定义甲出发，帮助高中生检查定义题的反例与边界。
+
+## [拓展:性质乙应用边界]
+[高中连接] 由性质乙出发，帮助高中生识别应用题中缺失的条件。
+"""
+        bridged = grade_case(case, events, _CHALLENGE_READY_MD + extension)
+        bridged_g1 = next(gate for gate in bridged.quality_gates if gate.id == "G1_correctness")
+        self.assertTrue(bridged_g1.passed, bridged_g1.to_dict())
+        self.assertEqual(bridged_g1.metrics["extension_bridge"]["ratio"], 1.0)
+
     def test_write_outputs(self) -> None:
         import tempfile
 
@@ -832,8 +997,65 @@ class RunnerHelperTests(unittest.TestCase):
         self.assertEqual(len(_resolve_cases("core", _CASE_DIR)), 12)
         self.assertEqual(len(_resolve_cases("extended", _CASE_DIR)), 28)
         self.assertEqual(len(_resolve_cases("all", _CASE_DIR)), 40)
-        exact = _resolve_cases("database_transactions_mvcc", _CASE_DIR)
-        self.assertEqual([case.id for case in exact], ["database_transactions_mvcc"])
+        self.assertEqual(
+            [case.id for case in _resolve_cases("light-probe", _CASE_DIR)],
+            ["derivative_monotonicity_optimization"],
+        )
+        exact = _resolve_cases("chemical_equilibrium_titration", _CASE_DIR)
+        self.assertEqual([case.id for case in exact], ["chemical_equilibrium_titration"])
+
+    def test_light_suite_is_high_school_plus_scoped_and_deliberately_hard(self) -> None:
+        light = _resolve_cases("light", _CASE_DIR)
+        self.assertEqual(
+            {case.id for case in light},
+            {
+                "chemical_equilibrium_titration",
+                "circuit_measurement_internal_resistance",
+                "conditional_probability_diagnostic_test",
+                "derivative_monotonicity_optimization",
+                "french_revolution_causes",
+                "monsoon_water_cycle_urbanization",
+                "photosynthesis_respiration_limits",
+                "projectile_motion_energy",
+            },
+        )
+        self.assertEqual(
+            {case.subject for case in light},
+            {"高中数学", "高中物理", "高中化学", "高中生物", "高中地理", "高中历史"},
+        )
+        for case in light:
+            self.assertEqual(case.curriculum_scope, "high_school_plus", case.id)
+            self.assertGreaterEqual(len(case.extension_topics), 2, case.id)
+            self.assertLessEqual(len(case.extension_topics), 3, case.id)
+            self.assertIn("高中", case.query, case.id)
+            self.assertGreaterEqual(len(case.expected_knowledge_points), 10, case.id)
+            self.assertGreaterEqual(len(case.required_facts), 10, case.id)
+            self.assertGreaterEqual(
+                sum(fact.id.endswith("_bridge") for fact in case.required_facts),
+                2,
+                case.id,
+            )
+            self.assertGreaterEqual(len(case.traps), 4, case.id)
+            self.assertGreaterEqual(len(case.contrasts), 4, case.id)
+            self.assertGreaterEqual(case.min_unique_sources, 12, case.id)
+            self.assertGreaterEqual(case.format_requirements.min_chars, 10000, case.id)
+            self.assertGreaterEqual(case.learning_requirements.min_objectives, 5, case.id)
+            self.assertGreaterEqual(case.learning_requirements.min_worked_examples, 4, case.id)
+            self.assertGreaterEqual(case.learning_requirements.min_practice_questions, 12, case.id)
+            self.assertGreaterEqual(case.learning_requirements.min_answered_questions, 12, case.id)
+            requirements = case.request_payload()["requirements"]
+            self.assertEqual(case.request_payload()["research_budget"], "lean", case.id)
+            required_sections = (len(case.expected_knowledge_points) * 4 + 4) // 5
+            self.assertGreaterEqual(int(case.options.get("max_points") or 0), required_sections, case.id)
+            self.assertIn(f"至少{required_sections}个独立知识点二级标题", requirements, case.id)
+            self.assertIn("至少5个可检验学习目标", requirements, case.id)
+            self.assertIn("至少4个带完整步骤的例题", requirements, case.id)
+            self.assertIn("至少12道自测题", requirements, case.id)
+            self.assertIn("主题主线与作答前提限高中", requirements, case.id)
+            self.assertIn("[拓展:上列对应主题全名]", requirements, case.id)
+            self.assertIn("[高中连接]", requirements, case.id)
+            for topic in case.extension_topics:
+                self.assertIn(topic, requirements, case.id)
 
     def test_light_and_heavy_partition_all_cases(self) -> None:
         light = _resolve_cases("light", _CASE_DIR)

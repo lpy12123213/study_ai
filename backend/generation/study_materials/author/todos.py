@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-TODO_TYPES = frozenset({"research", "backbone", "fill", "fig", "audit", "revision"})
+TODO_TYPES = frozenset({"research", "backbone", "fill", "fig", "audit", "revision", "learning_contract"})
 TODO_STATUSES = frozenset({"pending", "in_progress", "done", "waived", "failed"})
 
 
