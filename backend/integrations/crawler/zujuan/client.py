@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -86,6 +87,9 @@ class ZujuanCrawler:
         self.province_name_to_id: Dict[str, int] = {}
         self._base_meta_data: Optional[List[Dict[str, Any]]] = None
         self._bank_meta_loaded_for: Optional[int] = None
+        # /zujuan-api/base 拉取失败（如 WAF JS 挑战）时的负缓存截止时间（time.monotonic），
+        # 避免 question/list 每次调用都重试同一个注定失败的请求。
+        self._base_meta_blocked_until_s = 0.0
         self._cache = TTLCache(
             name=f"zujuan_cache:{subject}",
             max_entries=int(os.getenv("ZUJIAN_CACHE_MAX_ENTRIES") or "256"),
@@ -122,6 +126,23 @@ class ZujuanCrawler:
         except (TypeError, ValueError):
             burst = 4
         self._http_rate_limiter = get_rate_limiter(key="zujuan", rate_per_s=rps, burst=burst)
+
+        # 静态资源（公式 .mml 等，托管在 staticzujuan.xkw.com CDN）走独立限流桶：
+        # CDN 静态文件本就为高并发分发设计（浏览器打开题目页会并行拉几十张公式图），
+        # 与 API 共用 2rps 桶会把公式转换拖到分钟级。默认仍保持保守的 8rps。
+        static_rps_raw = os.getenv("ZUJUAN_STATIC_RATE_LIMIT_RPS") or "8.0"
+        static_burst_raw = os.getenv("ZUJUAN_STATIC_RATE_LIMIT_BURST") or "16"
+        try:
+            static_rps = float(static_rps_raw)
+        except (TypeError, ValueError):
+            static_rps = 8.0
+        try:
+            static_burst = int(static_burst_raw)
+        except (TypeError, ValueError):
+            static_burst = 16
+        self._http_static_rate_limiter = get_rate_limiter(
+            key="zujuan_static", rate_per_s=static_rps, burst=static_burst
+        )
 
         # 学科配置
         self.subject = subject
@@ -356,7 +377,12 @@ class ZujuanCrawler:
                 return False
             try:
                 async with httpx.AsyncClient(
-                    headers={"User-Agent": self.user_agent, "Cookie": cookie_str},
+                    headers={
+                        "User-Agent": self.user_agent,
+                        "Cookie": cookie_str,
+                        # WAF 对无 Referer 的 API 请求会静默下发 JS 挑战页
+                        "Referer": f"{self.base_url}/",
+                    },
                     timeout=10.0,
                 ) as c:
                     resp = await c.get(f"{self.base_url}/zujuan-api/base")
@@ -398,7 +424,11 @@ class ZujuanCrawler:
                 logger.info("zujuan cookie mode: antibot" if not missing_antibot else "zujuan cookie mode: incomplete")
 
         async def _rate_limit(_request: httpx.Request) -> None:
-            await self._http_rate_limiter.acquire(1.0)
+            # 静态 CDN 资源走独立的宽松桶，API/页面请求仍走保守桶。
+            if _request.url.host == "staticzujuan.xkw.com":
+                await self._http_static_rate_limiter.acquire(1.0)
+            else:
+                await self._http_rate_limiter.acquire(1.0)
 
         headers = {
             "User-Agent": self.user_agent,
@@ -630,11 +660,25 @@ class ZujuanCrawler:
         """加载 /zujuan-api/base，构建题型、年级、版本等元数据缓存。"""
         if not self.client:
             return
+        # 负缓存：上次失败未过重试窗口则直接跳过，避免每个 question/list 都重打一次。
+        if time.monotonic() < self._base_meta_blocked_until_s:
+            return
         try:
-            resp = await self.client.get(f"{self.base_url}/zujuan-api/base")
+            resp = await self.client.get(
+                f"{self.base_url}/zujuan-api/base",
+                # WAF 对无 Referer 的 API 请求会静默下发 JS 挑战页（~8KB），必须带 Referer
+                headers={"Referer": f"{self.base_url}/"},
+            )
             data = _parse_base_json(resp.text)
             if not data:
+                retry_ttl_s = _safe_float(os.getenv("ZUJUAN_BASE_META_RETRY_TTL_S"), 600.0) or 600.0
+                self._base_meta_blocked_until_s = time.monotonic() + max(30.0, retry_ttl_s)
+                logger.warning(
+                    "zujuan base meta parse failed (possible WAF challenge); backing off",
+                    extra={"retry_after_s": max(30.0, retry_ttl_s), "subject": str(getattr(self, "subject", "") or "")},
+                )
                 return
+            self._base_meta_blocked_until_s = 0.0
             self._base_meta_data = data
             # 构建名称 -> ID 映射（简单/常见题型）
             for edu in data:
@@ -645,6 +689,8 @@ class ZujuanCrawler:
                             self.ques_type_map[name] = q.get("ID", 0)
             self._load_bank_meta_from_base()
         except Exception:
+            retry_ttl_s = _safe_float(os.getenv("ZUJUAN_BASE_META_RETRY_TTL_S"), 600.0) or 600.0
+            self._base_meta_blocked_until_s = time.monotonic() + max(30.0, retry_ttl_s)
             logger.exception("zujuan_load_base_meta_failed", extra={"subject": str(getattr(self, "subject", "") or "")})
 
     async def _ai_search(self, keyword: str) -> Dict[str, Any]:
@@ -657,7 +703,9 @@ class ZujuanCrawler:
         keyword = (keyword or "").strip()
         cache_key = f"sse:{keyword}"
         cached = self._cache_get(cache_key)
-        if isinstance(cached, dict) and cached.get("success") and cached.get("payload"):
+        # 命中即返回（含负缓存的失败结果）：SSE 失败不被缓存时，每次搜索/蓝图放宽
+        # 都会先白打一次注定失败的 SSE 请求再进兜底。
+        if isinstance(cached, dict) and (cached.get("success") or cached.get("error")):
             return cached
 
         url = f"{self.base_url}/zujuan-api/search"
@@ -666,7 +714,15 @@ class ZujuanCrawler:
             "Accept": "text/event-stream",
             "Cache-Control": "no-cache",
             "User-Agent": self.user_agent,
+            # WAF 对无 Referer 的 API 请求会静默返回空 body（200 但无 SSE 数据），必须带 Referer
+            "Referer": f"{self.base_url}/",
         }
+
+        def _cache_failure(err: str) -> Dict[str, Any]:
+            neg_ttl_s = _safe_float(os.getenv("ZUJUAN_SSE_NEGATIVE_TTL_S"), 300.0) or 300.0
+            result = {"success": False, "error": err}
+            self._cache_set(cache_key, result, ttl=max(30.0, neg_ttl_s))
+            return result
 
         try:
             async with self.client.stream("GET", url, params=params, headers=headers) as r:
@@ -681,12 +737,12 @@ class ZujuanCrawler:
                         except json.JSONDecodeError:
                             continue
                 if not end_payload:
-                    return {"success": False, "error": "未获取到搜索结果指引"}
+                    return _cache_failure("未获取到搜索结果指引")
                 result = {"success": True, "payload": end_payload}
                 self._cache_set(cache_key, result, ttl=15 * 60)
                 return result
         except httpx.HTTPError as e:
-            return {"success": False, "error": str(e)}
+            return _cache_failure(str(e))
 
     async def _ensure_bank_meta_loaded(self) -> None:
         if not self.client:
