@@ -423,8 +423,14 @@ async def search_by_knowledge(
 ) -> Dict[str, Any]:
     """
     通过知识点搜索（内部复用关键词搜索）。
+
+    注意：这里必须调用模块级 search_by_keyword（按包装器约定以 kwargs 传入
+    self），不能走 self.search_by_keyword——客户端包装器持有 _subject_lock
+    （asyncio.Lock 不可重入），而本函数的客户端包装器已经持有同一把锁，
+    走实例方法会让同一协程重复抢锁，永久死锁。
     """
-    return await self.search_by_keyword(
+    return await search_by_keyword(
+        self=self,
         keyword=knowledge_point,
         subject=subject,
         edu_level=edu_level,

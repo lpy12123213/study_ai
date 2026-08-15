@@ -236,6 +236,25 @@ class TestZujuanSubjectSearchIsolation(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("高中物理", "高中物理"), observations)
         self.assertIn(("高中化学", "高中化学"), observations)
 
+    async def test_search_by_knowledge_does_not_deadlock_on_subject_lock(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        crawler = ZujuanCrawler(subject="高中数学")
+
+        async def fake_search_impl(**kwargs):  # type: ignore[no-untyped-def]
+            return {"success": True, "questions": [], "self_seen": "self" in kwargs}
+
+        # search_by_knowledge 的客户端包装器已持有 _subject_lock；旧实现内部再走
+        # self.search_by_keyword 会重复抢同一把不可重入锁，wait_for 必超时。
+        with patch("backend.integrations.crawler.zujuan.search.search_by_keyword", new=fake_search_impl):
+            res = await asyncio.wait_for(
+                crawler.search_by_knowledge("等差数列", subject="高中数学", limit=1),
+                timeout=5,
+            )
+
+        self.assertTrue(res.get("success"))
+        self.assertTrue(res.get("self_seen"))
+
 
 class FakeResponse:
     status_code = 200
