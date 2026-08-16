@@ -304,7 +304,7 @@ async def _handle_solve_paper(
         return {
             "success": False,
             "error": "missing_llm_config",
-            "hint": "LESSON_PLAN_API_KEY 或 MOONSHOT_API_KEY 未配置，无法批解",
+            "hint": "config/model.json 的 lesson_plan 路由没有可用供应商密钥，无法批解",
         }
 
     sem = asyncio.Semaphore(concurrency)
@@ -927,7 +927,7 @@ async def _dispatch_agent_knowledge(server: Any, name: str, arguments: Dict[str,
                 "common_mistakes": [],
                 "methods": [],
                 "source": "fallback",
-                "note": "未配置 LESSON_PLAN_API_KEY，返回为空。",
+                "note": "config/model.json 的 lesson_plan 路由未配置供应商密钥，返回为空。",
             }
         else:
             prompt = _render_prompt(
@@ -1388,7 +1388,7 @@ async def _dispatch_diagram(server: Any, name: str, arguments: Dict[str, Any], e
             result = {
                 "success": False,
                 "error": "missing_llm_config",
-                "hint": "verify_diagram 依赖 vision-capable LLM，需要 LESSON_PLAN_API_KEY 或 MOONSHOT_API_KEY",
+                "hint": "verify_diagram 依赖 vision-capable LLM，请配置 config/model.json 的 lesson_plan 路由和供应商密钥",
             }
         else:
             try:

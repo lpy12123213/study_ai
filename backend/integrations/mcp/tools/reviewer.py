@@ -6,16 +6,13 @@ from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
 from backend.core.settings import (
-    FIREWORKS_API_KEY,
-    FIREWORKS_BASE_URL,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
     REVIEW_MAX_STEM_CHARS,
     REVIEW_MODEL,
     REVIEW_MODEL_MAX_TOKENS,
     REVIEW_MODEL_TEMPERATURE,
     REVIEW_PROVIDER,
     REVIEW_TIMEOUT,
+    model_provider,
 )
 from backend.llm.client import chat_completion
 from backend.llm.prompts import create_default_prompt_registry
@@ -56,13 +53,9 @@ async def review_question(
     Returns:
         Dict with review results
     """
-    # Determine which API to use
-    if REVIEW_PROVIDER == "fireworks":
-        api_key = FIREWORKS_API_KEY
-        base_url = FIREWORKS_BASE_URL
-    else:  # openrouter
-        api_key = OPENROUTER_API_KEY
-        base_url = OPENROUTER_BASE_URL
+    provider_config = model_provider(REVIEW_PROVIDER)
+    api_key = provider_config.api_key
+    base_url = provider_config.base_url
 
     if not api_key:
         return {
@@ -208,21 +201,22 @@ async def batch_review_questions(
 
 def _get_batch_review_api_config() -> Dict[str, Any]:
     """Resolve API config for batch review based on REVIEW_PROVIDER."""
+    provider_config = model_provider(REVIEW_PROVIDER)
     if REVIEW_PROVIDER == "fireworks":
         model = REVIEW_MODEL
         if model and not model.startswith("accounts/"):
             model = f"accounts/fireworks/models/{model}"
         return {
-            "api_key": FIREWORKS_API_KEY,
-            "base_url": FIREWORKS_BASE_URL,
+            "api_key": provider_config.api_key,
+            "base_url": provider_config.base_url,
             "provider": "fireworks",
             "model": model,
         }
 
     return {
-        "api_key": OPENROUTER_API_KEY,
-        "base_url": OPENROUTER_BASE_URL,
-        "provider": "openrouter",
+        "api_key": provider_config.api_key,
+        "base_url": provider_config.base_url,
+        "provider": REVIEW_PROVIDER,
         "model": REVIEW_MODEL,
     }
 
@@ -243,8 +237,10 @@ async def review_questions_with_openrouter(
     api_config = _get_batch_review_api_config()
 
     if not api_config.get("api_key"):
-        provider_name = "FIREWORKS_API_KEY" if REVIEW_PROVIDER == "fireworks" else "OPENROUTER_API_KEY"
-        return {"success": False, "error": f"未配置 {provider_name}，请在 .env 文件中设置"}
+        return {
+            "success": False,
+            "error": f"未配置 providers.{REVIEW_PROVIDER}.api_key，请在 config/model.json 或模型设置页中设置",
+        }
 
     if not questions:
         return {"success": False, "error": "没有题目可供审查"}

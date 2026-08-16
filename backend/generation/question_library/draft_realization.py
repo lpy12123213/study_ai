@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
-from backend.core.logging_utils import get_logger
-from backend.core.settings import LESSON_PLAN_MAX_TOKENS, LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.core.settings import (
+    LESSON_PLAN_MAX_TOKENS,
+    LESSON_PLAN_MODEL,
+    LESSON_PLAN_TEMPERATURE,
+    model_param_int,
+)
 from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
 from backend.generation.question_library.gen_common import (
     DEFAULT_SEARCH_CONFIG,
@@ -27,28 +30,15 @@ from backend.generation.question_library.subject_knowledge import get_subject_ba
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
-logger = get_logger(__name__)
-_realize_max_tokens_invalid_logged = False
-
 
 def _prompt(prompt_id: str) -> str:
     return create_default_prompt_registry().render(prompt_id).content
 
 
 def _resolve_realize_max_tokens() -> int:
-    raw = str(os.getenv("QUESTION_LIBRARY_REALIZE_MAX_TOKENS") or "").strip()
-    if raw:
-        try:
-            return max(1, int(raw))
-        except Exception:
-            global _realize_max_tokens_invalid_logged
-            if not _realize_max_tokens_invalid_logged:
-                _realize_max_tokens_invalid_logged = True
-                logger.warning(
-                    "question_library_realize_max_tokens_invalid",
-                    extra={"value": raw},
-                    exc_info=True,
-                )
+    configured = model_param_int("question_library_realize_max_tokens", 0)
+    if configured > 0:
+        return configured
     try:
         base = int(LESSON_PLAN_MAX_TOKENS or 0)
     except (TypeError, ValueError):

@@ -17,7 +17,10 @@ class McpReviewerPromptTests(unittest.IsolatedAsyncioTestCase):
             captured["messages"] = kwargs["messages"]
             return SimpleNamespace(content="Overall score: 8/10\nVerdict: APPROVE")
 
-        with patch("backend.integrations.mcp.tools.reviewer.OPENROUTER_API_KEY", "or-key"):
+        with patch(
+            "backend.integrations.mcp.tools.reviewer.model_provider",
+            return_value=SimpleNamespace(api_key="or-key", base_url="https://example.test/v1"),
+        ):
             with patch("backend.integrations.mcp.tools.reviewer.REVIEW_PROVIDER", "openrouter"):
                 with patch("backend.integrations.mcp.tools.reviewer.chat_completion", new=fake_chat_completion):
                     result = await reviewer.review_question(stem="1+1=?", subject="数学")
@@ -39,7 +42,10 @@ class McpReviewerPromptTests(unittest.IsolatedAsyncioTestCase):
 
         questions = [{"question_id": "q1", "stem": "1+1=?", "type": "填空题", "difficulty": 0.5}]
 
-        with patch("backend.integrations.mcp.tools.reviewer.OPENROUTER_API_KEY", "or-key"):
+        with patch(
+            "backend.integrations.mcp.tools.reviewer.model_provider",
+            return_value=SimpleNamespace(api_key="or-key", base_url="https://example.test/v1"),
+        ):
             with patch("backend.integrations.mcp.tools.reviewer.REVIEW_PROVIDER", "openrouter"):
                 with patch("backend.integrations.mcp.tools.reviewer.chat_completion", new=fake_chat_completion):
                     result = await reviewer.review_questions_with_openrouter(

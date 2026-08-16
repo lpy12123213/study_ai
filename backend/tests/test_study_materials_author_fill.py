@@ -70,7 +70,10 @@ class FillRunnerTests(unittest.TestCase):
 
     def test_length_gate_uses_half_target_ratio(self):
         """I-4：长度门恢复 min(target_chars*0.5, min_chars)；800 字目标 → 需 ≥200 字符。"""
-        short = "简要讲解极限概念并配例题。[EX1] 例 …[Q1] 题（基础） …[A1] 答 …" * 4  # ~140 字符，标签齐全但长度不足
+        short = (
+            "简要讲解极限概念。[EX1] 例题，步骤：代入。[Q1] 题（基础）。"
+            "[A1] 答。评分点：正确。" * 4
+        )  # 标签语义合格但长度不足
 
         async def short_llm(system, user):
             return short
@@ -180,6 +183,12 @@ class SectionLearningQuotaTests(unittest.TestCase):
     """逐节学习闭环配额：题量/例题量/配对/评分点在填充时校验（G3 检查前移）。"""
 
     BASE = "本节讲解核心概念，先建立直觉再严格化，配合例题与分层自测帮助巩固。" * 4
+
+    def test_zero_quota_does_not_force_learning_tags(self):
+        self.assertEqual(
+            FillRunner._validate(self.BASE, 0, set(), [], min_questions=0, min_examples=0),  # noqa: SLF001
+            [],
+        )
 
     def test_quota_counts_pairing_and_rubric_are_enforced(self):
         body = self.BASE + (

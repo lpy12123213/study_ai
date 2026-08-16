@@ -435,8 +435,10 @@ export interface ModelSettings {
   active_provider?: string;
   pinned?: boolean;
   providers?: ModelProviderInfo[];
+  routes?: Record<string, string>;
   models?: Record<string, any>;
   params?: Record<string, any>;
+  context?: Record<string, any>;
   config_path?: string;
   runtime?: { reloaded?: boolean; active_provider?: string; main_model?: string; sub_model?: string };
   [k: string]: any;

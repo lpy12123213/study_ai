@@ -324,6 +324,26 @@ def _evenly_spaced_indexes(count: int, limit: int) -> set[int]:
     return {round(slot * (count - 1) / (limit - 1)) for slot in range(limit)}
 
 
+def _distribute_section_quota(total: int, count: int, cap: int) -> List[int]:
+    """Distribute a whole-book quota exactly across sections, up to a per-section cap.
+
+    The previous ceil-per-section calculation duplicated the remainder into every
+    section (12 questions over 10 sections became 20).  Keep the total exact and
+    spread remainder-bearing sections across the book so examples do not cluster
+    only at the beginning.  Any amount above ``cap * count`` remains for the
+    whole-book learning-contract repair.
+    """
+
+    count = max(0, int(count))
+    cap = max(0, int(cap))
+    if count == 0 or cap == 0:
+        return [0] * count
+    deliverable = min(max(0, int(total)), cap * count)
+    base, remainder = divmod(deliverable, count)
+    extras = _evenly_spaced_indexes(count, remainder)
+    return [min(cap, base + (1 if index in extras else 0)) for index in range(count)]
+
+
 def _fill_concurrency() -> int:
     """填充并发度：默认 FILL_CONCURRENCY，环境变量 STUDY_MATERIALS_FILL_CONCURRENCY 覆盖（1-16）。"""
 
@@ -615,10 +635,21 @@ class _AuthorPipeline:
     # ---- 状态机主体 ----
 
     async def run(self) -> Dict[str, Any]:
-        await self._decompose_kps()
-        self._progress(5.0, "split")
-        await self._research()
-        self._progress(20.0, "research")
+        fixture_dir = self._research_fixture_dir()
+        if fixture_dir:
+            # 撰写阶段评测：研究由夹具注入，跳过拆分与检索（不烧检索配额与拆分调用）。
+            fixture_error = self._apply_research_fixture(fixture_dir)
+            if fixture_error:
+                return self._failed("research_fixture_invalid", "research", detail=fixture_error)
+            self._progress(20.0, "research")
+        else:
+            await self._decompose_kps()
+            self._progress(5.0, "split")
+            await self._research()
+            self._progress(20.0, "research")
+        if self._benchmark_stage() == "research":
+            # 检索阶段评测：落盘研究快照后即终态，不进入撰写（不烧撰写 token）。
+            return self._finish_research_stage()
         if await self._blueprint() is None:
             return self._failed("blueprint_invalid", "blueprint", detail=" | ".join(self._blueprint_errors))
         self._progress(30.0, "blueprint")
@@ -671,6 +702,102 @@ class _AuthorPipeline:
         raw = str(self.ctx.options.get("research_budget") or "balanced").strip().lower()
         return raw if raw in {"lean", "balanced"} else "balanced"
 
+    def _benchmark_stage(self) -> str:
+        """阶段评测模式（benchmark 专用）：目前只支持 research（跑到检索为止）。"""
+
+        raw = str(self.ctx.options.get("benchmark_stage") or "").strip().lower()
+        return raw if raw == "research" else ""
+
+    def _research_fixture_dir(self) -> str:
+        return str(self.ctx.options.get("research_fixture_dir") or "").strip()
+
+    def _apply_research_fixture(self, fixture_dir: str) -> str:
+        """从研究快照夹具注入知识点/笔记/来源登记表；返回错误详情（空串=成功）。
+
+        夹具配置错误必须硬失败而不是回退真实检索：阶段评测的目的就是不烧检索，
+        静默回退会花掉本想省下的配额且让评测口径失真。
+        """
+
+        base = Path(fixture_dir)
+        try:
+            kps_raw = json.loads((base / "knowledge_points.json").read_text(encoding="utf-8"))
+            research_md = (base / "research.md").read_text(encoding="utf-8")
+            registry_raw = json.loads((base / "source_registry.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return f"{type(exc).__name__}: {exc}"
+        kps = [str(kp).strip() for kp in kps_raw if str(kp).strip()] if isinstance(kps_raw, list) else []
+        if not kps:
+            return "knowledge_points.json 必须是非空字符串数组"
+        if not isinstance(registry_raw, list):
+            return "source_registry.json 必须是数组"
+        self.knowledge_points = list(dict.fromkeys(kps))
+        self.notes.write("research", research_md)
+        entries = sorted(
+            (entry for entry in registry_raw if isinstance(entry, dict)),
+            key=lambda entry: int(entry.get("n") or 0),
+        )
+        self.source_registry = []
+        self._source_index = {}
+        self._registry_cap = max(
+            SOURCE_REGISTRY_CAP,
+            len(entries),
+            PER_KP_SOURCE_QUOTA * len(self.knowledge_points),
+        )
+        for entry in entries:
+            self._register_source(str(entry.get("url") or ""), str(entry.get("title") or ""))
+        try:
+            evidence_raw = json.loads((base / "research_evidence.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            evidence_raw = {}
+        if isinstance(evidence_raw, dict):
+            self.research_evidence = {
+                str(key): list(items)
+                for key, items in evidence_raw.items()
+                if isinstance(items, list)
+            }
+        self._add_todo(TodoItem(
+            id="research", type="research", ref="、".join(self.knowledge_points),
+            acceptance="研究夹具注入（阶段评测），无真实检索",
+        ))
+        self._mark("research", "done", "fixture")
+        self.quality_notes.append(f"research_fixture_used:{base.name}")
+        return ""
+
+    def _finish_research_stage(self) -> Dict[str, Any]:
+        """检索阶段评测终态：把研究产物落盘为可复用快照，返回结构化研究报告。"""
+
+        snapshot_dir = self.work_dir / "research_snapshot"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        research_md = self.notes.read("research")
+        (snapshot_dir / "knowledge_points.json").write_text(
+            json.dumps(self.knowledge_points, ensure_ascii=False, indent=1), encoding="utf-8",
+        )
+        (snapshot_dir / "research.md").write_text(research_md, encoding="utf-8")
+        (snapshot_dir / "source_registry.json").write_text(
+            json.dumps(self.source_registry, ensure_ascii=False, indent=1), encoding="utf-8",
+        )
+        (snapshot_dir / "research_evidence.json").write_text(
+            json.dumps(self.research_evidence, ensure_ascii=False), encoding="utf-8",
+        )
+        report = {
+            "knowledge_points": list(self.knowledge_points),
+            "unique_sources": len(self.source_registry),
+            "source_urls": [str(entry.get("url") or "") for entry in self.source_registry],
+            "evidence_kp_count": sum(1 for items in self.research_evidence.values() if items),
+            "notes_chars": len(research_md),
+            "snapshot_dir": str(snapshot_dir),
+        }
+        self._emit("research_report", dict(report))
+        return {
+            "success": True,
+            "status": "ok",
+            "stage": "research",
+            "research_report": report,
+            "todos": self.todos.to_json(),
+            "quality_notes": list(self.quality_notes),
+            "stage_timings": dict(self.stage_timings),
+        }
+
     def _merge_required_extension_topics(self, points: List[str], *, max_points: int) -> List[str]:
         """Reserve tail slots for exact controlled-extension topics without exceeding max_points."""
 
@@ -721,6 +848,12 @@ class _AuthorPipeline:
         parts = [f"核心学习问题（不得遗漏与本节相关的任务）：{str(self.ctx.topic).strip()}"]
         if str(self.ctx.requirements or "").strip():
             parts.append(f"输出要求：{str(self.ctx.requirements).strip()}")
+        if self._requires_learning_contract():
+            parts.append(
+                "学习闭环分配纪律：整书学习目标、例题、自测题与答案总量由流水线统一分配；"
+                "本节只执行用户载荷中的“本节学习闭环硬性配额”，不得把整书数量重复生成到每个小节；"
+                "未分配或配额为 0 的标签类型本节无需生成。"
+            )
         return "\n".join(parts)
 
     async def _decompose_kps(self) -> None:
@@ -1346,13 +1479,13 @@ class _AuthorPipeline:
             max_retries=1 if self._research_budget() == "lean" else 2,
             on_event=self.emit,
         )
-        min_questions, min_examples = self._section_learning_quotas()
         fill_sem = asyncio.Semaphore(_fill_concurrency())
         fig_sem = asyncio.Semaphore(FIG_CONCURRENCY)
 
         async def _fill_one(sec: SectionSpec) -> None:
             tid = f"fill:{sec.id}"
             self._mark(tid, "in_progress")
+            min_questions, min_examples = self._section_learning_quotas(sec)
             async with fill_sem:
                 try:
                     result: Optional[FillResult] = await runner.fill(
@@ -1449,6 +1582,9 @@ class _AuthorPipeline:
 
         if not self._requires_learning_contract() or self.blueprint is None:
             return ""
+        min_questions, _ = self._section_learning_quotas(section)
+        if min_questions <= 0:
+            return ""
         levels = [str(level) for level in self._learning_requirements().required_levels if str(level)]
         if not levels:
             return ""
@@ -1460,10 +1596,10 @@ class _AuthorPipeline:
             return ""
         return levels[index % len(levels)]
 
-    def _section_learning_quotas(self) -> Tuple[int, int]:
+    def _section_learning_quotas(self, section: SectionSpec) -> Tuple[int, int]:
         """逐节学习闭环最低配额 (min_questions, min_examples)。
 
-        把全书 min_practice_questions/min_worked_examples 均摊到每节并设单节上限；
+        把全书 min_practice_questions/min_worked_examples 精确分配到各节并设单节上限；
         缺口在填充时立即重试（G3 检查前移），验收后的整书补齐仅兜底余量。
         未请求练习闭环时为 (0, 0)，不改变现有行为。
         """
@@ -1472,9 +1608,23 @@ class _AuthorPipeline:
             return (0, 0)
         requirements = self._learning_requirements()
         count = len(self.blueprint.sections)
-        min_questions = min(SECTION_QUESTION_QUOTA_CAP, -(-requirements.min_practice_questions // count))
-        min_examples = min(SECTION_EXAMPLE_QUOTA_CAP, -(-requirements.min_worked_examples // count))
-        return (min_questions, min_examples)
+        index = next(
+            (i for i, spec in enumerate(self.blueprint.sections) if spec.id == section.id),
+            -1,
+        )
+        if index < 0:
+            return (0, 0)
+        question_quotas = _distribute_section_quota(
+            requirements.min_practice_questions,
+            count,
+            SECTION_QUESTION_QUOTA_CAP,
+        )
+        example_quotas = _distribute_section_quota(
+            requirements.min_worked_examples,
+            count,
+            SECTION_EXAMPLE_QUOTA_CAP,
+        )
+        return (question_quotas[index], example_quotas[index])
 
     def _backbone_excerpt(self, sec_id: str, *, span: int = EXCERPT_SPAN) -> str:
         marker = f"[[FILL:{sec_id}]]"
@@ -1488,7 +1638,7 @@ class _AuthorPipeline:
         prompt = _render_prompt(FILL_PROMPT_ID, _FALLBACK_SYSTEM_PROMPT)
         required_markers = self._required_markers_for_section(sec)
         research_slice = self._research_slice_for_section(sec)
-        min_questions, min_examples = self._section_learning_quotas()
+        min_questions, min_examples = self._section_learning_quotas(sec)
         payload = FillRunner._build_user_payload(
             sec,
             self._backbone_excerpt(sec.id),

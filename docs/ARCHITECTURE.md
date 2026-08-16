@@ -212,7 +212,7 @@ Paper metadata
 
 - 新的长任务必须进入 `/api/tasks`。
 - 新 API 必须挂在对应 domain router。
-- 新配置项要更新 `.env.example` 和 `docs/CONFIGURATION.md`。
+- 新模型配置要更新 `config/model.example.json`；新环境变量要更新 `.env.example`；两者都要同步 `docs/CONFIGURATION.md`。
 - 新前端功能优先放入 `features/<domain>`。
 - 改变用户行为、部署方式、工具链要求时同步更新文档。
 - 改变架构主路径时必须同步本文，并移除过期路径说明。

@@ -1,19 +1,20 @@
 # 配置说明
 
-Study AI 主要通过 `.env`、系统环境变量和本地 `config/model.json` 配置。本文只记录当前代码读取和建议维护的配置项。
+Study AI 将配置分成两类：模型配置只存放在本地 `config/model.json`；非模型的运行、认证、搜索服务和部署配置存放在系统环境变量或 `.env`。
 
 不要提交真实密钥、Cookie、本地数据库或抓取内容。
 
 ## 配置加载
 
-后端会从仓库根目录加载 `.env`，并保留系统环境变量的优先级。核心代码在 `backend/core/settings.py`。
+后端会从仓库根目录加载 `.env`，并保留系统环境变量的优先级；模型配置则独立加载 `config/model.json`。核心代码在 `backend/core/settings.py`。
 
-加载顺序：
+非模型配置加载顺序：
 
 1. 系统环境变量。
 2. 仓库根目录 `.env`，不覆盖已存在的系统环境变量。
-3. `config/model.json` 或 `MODEL_CONFIG_PATH` 指向的模型配置。
-4. 代码默认值。
+3. 代码默认值。
+
+模型供应商、API Key、Base URL、路由、模型 ID、temperature、max_tokens、reasoning effort 和上下文限制不再读取 `.env`。它们只读取 `config/model.json`，文件位置可由 `MODEL_CONFIG_PATH` 指定。
 
 安全等级：
 
@@ -59,10 +60,8 @@ python scripts/check_config.py --strict
 
 | 场景 | 必填或建议项 | 级别 |
 | --- | --- | --- |
-| `CHAT_PROVIDER=openrouter` | `OPENROUTER_API_KEY` | missing |
-| `CHAT_PROVIDER=fireworks` | `FIREWORKS_API_KEY` | missing |
-| `CHAT_PROVIDER=moonshot` | `MOONSHOT_API_KEY` | missing |
-| `LESSON_PLAN_PROVIDER=<provider>` | 对应 provider API Key | missing |
+| `routes.chat` | 对应 `providers.<name>.api_key` | missing |
+| `routes.lesson_plan` | 对应 `providers.<name>.api_key` | missing |
 | 共享或公网部署 | 非占位 `JWT_SECRET`、`ADMIN_PASSWORD` | recommended |
 | `STUDY_MATERIALS_SEARCH_MODE=tavily/metaso/exa` | 对应搜索 API Key | recommended |
 | `WEB_CONCURRENCY` / `UVICORN_WORKERS` / `WORKERS` > 1 | 单进程内存限速不再是全局窗口 | optional |
@@ -82,62 +81,61 @@ python scripts/check_config.py --strict
 默认数据库是 SQLite。`DB_POOL_SIZE` 和 `DB_MAX_OVERFLOW` 只控制异步连接等待 SQLite 锁的方式，不会提升写吞吐；
 高频写入应通过批量刷写和单事务提交减少锁占用。详细策略见 `docs/DB_CONCURRENCY.md`。
 
-## 模型供应商
-
-通用对话供应商：
-
-- `CHAT_PROVIDER`: `openrouter` / `fireworks` / `moonshot`
-- `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`
-- `FIREWORKS_API_KEY`, `FIREWORKS_BASE_URL`
-- `MOONSHOT_API_KEY`, `MOONSHOT_BASE_URL`
-- `MAIN_MODEL`
-- `SUB_MODEL`
-- `MAIN_MODEL_TEMPERATURE`
-- `MAIN_MODEL_MAX_TOKENS`
-- `SUB_MODEL_TEMPERATURE`
-- `SUB_MODEL_MAX_TOKENS`
-
-本地模型配置文件：
+## 模型配置
 
 - 默认路径：`config/model.json`
 - 可用 `MODEL_CONFIG_PATH` 指向其他路径
-- `LLM_PROVIDER_PINNED=1` 可锁定 active provider，避免根据模型名自动切换
-- 也可在 Web 设置页的“API 配置”中维护供应商、Base URL、API Key 和默认模型。
-- 通过 Web 设置页保存的 API Key 会写成 `enc:v1:` 加密值；本机解密密钥默认存放在 `.local/secrets/model_config.key`，可用 `LOCAL_ENCRYPTION_KEY_PATH` 指向其他位置。
+- 复制 `config/model.example.json` 可得到完整字段模板
+- Web 设置页的“模型设置”可以切换供应商；保存目标也是该 JSON 文件
+- 通过 Web 设置页保存的 API Key 会写成 `enc:v2:` 加密值；本机解密密钥默认存放在 `.local/secrets/model_config.key`，可用 `LOCAL_ENCRYPTION_KEY_PATH` 指向其他位置。
 
 示例结构：
 
 ```json
 {
   "active_provider": "openrouter",
-  "pinned": false,
+  "pinned": true,
   "providers": {
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": "sk-or-..."
     }
   },
+  "routes": {
+    "chat": "openrouter",
+    "lesson_plan": "openrouter",
+    "review": "openrouter",
+    "image": "ark"
+  },
   "models": {
     "main": "openai/gpt-5-mini",
-    "sub": "openai/gpt-5-mini",
-    "lesson_plan": "openai/gpt-5-mini"
+    "sub": "openai/gpt-4o-mini",
+    "lesson_plan": "openai/gpt-5-mini",
+    "study_materials_writer": "openai/gpt-5-mini"
   },
   "params": {
     "main_temperature": 0.7,
-    "sub_temperature": 0.3,
-    "thinking_effort": "xhigh"
+    "main_max_tokens": 2000,
+    "study_materials_thinking_effort": "xhigh"
+  },
+  "context": {
+    "input_multiplier": 1.15,
+    "reserve_ratio": 0.015,
+    "openrouter_fetch_limits": true
   }
 }
 ```
 
 模型配置规则：
 
-- `pinned=true` 时，以 `active_provider` 为准，不做自动 provider 推断。
-- `pinned=false` 时允许运行时按模型名前缀做已有的 provider 推断。
+- `active_provider` 是未指定路由时的默认供应商；`routes` 可分别指定 chat、lesson_plan、review 和 image。
+- `pinned=true` 时不按模型名前缀自动切换供应商；`pinned=false` 仅保留已有的兼容推断行为。
 - 模型名必须符合所选 provider 的格式。
-- `main` 用于复杂推理和编排，`sub` 用于轻量提取、选择和判断。
-- lesson plan、study materials 和 question library 可按需设置独立模型。
+- `models` 保存所有模型角色。完整角色清单以 `config/model.example.json` 为准，支持字符串或按 provider 分组的映射。
+- `params` 保存 temperature、max_tokens、reasoning effort、模型 tier 和图像生成参数。
+- `context` 保存模型上下文长度、输入倍率、预留 token、聊天 token 预算和 OpenRouter 模型限制拉取参数。
 - 设置页“抓取模型”会调用供应商的 OpenAI-compatible `GET /models` 接口；如果输入框未填写新 Key，则会使用已保存的加密 Key。
+- `.env` 中旧的 `*_MODEL`、`*_PROVIDER`、模型 temperature/max_tokens、LLM provider API Key/Base URL 不再生效。
 
 ## Agent Runtime
 
@@ -146,8 +144,8 @@ python scripts/check_config.py --strict
 - `AGENT_RUNTIME`: 默认 `codex_runtime`。设为 `legacy` 时才允许走旧 agent/service 分支。
 - `STUDY_MATERIALS_AGENT_RUNTIME`: 自学资料生成的专用开关。默认（留空）走 author 作者流水线（research→blueprint→backbone→fill→assemble→audit→accept，见 `backend/generation/study_materials/author/`）；显式设为 `legacy` 回退不依赖 Codex CLI 的 legacy AgentCore 路径，设为 `codex_runtime` 时启用 Codex 分阶段工作流（规划/起草/修订由 Codex CLI 执行，检索/审查仍由后端工具执行）。2026-08 之前默认是 legacy。
 - `CODEX_RUNTIME_COMMAND`: 默认 `codex`，可指向本机 Codex CLI。
-- `CODEX_RUNTIME_MODEL`: 默认空，表示沿用本机 Codex 配置；需要固定模型时填写。
-- `CODEX_RUNTIME_EFFORT`: 默认 `high`，保留给运行时策略与 metadata。
+- `models.codex_runtime`（`config/model.json`）：默认空，表示沿用本机 Codex 配置。
+- `params.codex_runtime_effort`（`config/model.json`）：默认 `high`，用于 Codex runtime 推理强度与 metadata。
 - `CODEX_RUNTIME_APPROVAL_POLICY`: 默认 `never`，对应 `codex --ask-for-approval never exec`。
 - `CODEX_RUNTIME_SANDBOX`: 默认 `workspace-write`，对应 `codex exec --sandbox workspace-write`。
 - `CODEX_RUNTIME_PROXY`: 可选的 HTTP 代理地址；现有 `HTTP_PROXY`/`HTTPS_PROXY` 优先。未显式配置时，Windows 会读取当前用户的 Internet Settings 代理并只注入 Codex 子进程。
@@ -170,10 +168,11 @@ python scripts/check_config.py --strict
 
 自学资料、AI 出题、MCP 联网搜索可能使用：
 
-- `TAVILY_API_KEY`, `TAVILY_BASE_URL`, `TAVILY_TIMEOUT`
-- `EXA_API_KEY`, `EXA_BASE_URL`
-- `METASO_API_KEY`, `METASO_BASE_URL`, `METASO_TIMEOUT`
-- `ZHIPU_API_KEY`, `ZHIPU_BASE_URL`, `ZHIPU_MODEL`, `ZHIPU_TIMEOUT`
+- `.env`: `TAVILY_API_KEY`, `TAVILY_BASE_URL`, `TAVILY_TIMEOUT`
+- `.env`: `EXA_API_KEY`, `EXA_BASE_URL`
+- `.env`: `METASO_API_KEY`, `METASO_BASE_URL`, `METASO_TIMEOUT`
+- `config/model.json`: `providers.zhipu` 与 `models.zhipu_search`；`.env` 仅保留 `ZHIPU_TIMEOUT`
+- `config/model.json`: 可选 `models.metaso_ask`；Metaso 搜索服务密钥仍属于 `.env` 中的集成配置
 - `ZHIHU_COOKIES`
 
 `ZHIHU_COOKIES` 只能保存在本地环境，不能提交。
@@ -192,9 +191,8 @@ python scripts/check_config.py --strict
 - `STUDY_MATERIALS_SUBAGENT_CONCURRENCY`
 - `STUDY_MATERIALS_SEARCH_MODE`: `tavily` / `exa` / `deepresearch` / `metaso`
 - `STUDY_MATERIALS_WEB_SUBQUERIES`
-- `STUDY_MATERIALS_THINKING_MODEL`
-- `STUDY_MATERIALS_WRITER_MODEL`
-- `STUDY_MATERIALS_THINKING_EFFORT`
+- `config/model.json`: `models.study_materials_thinking`、`models.study_materials_writer` 及其他阶段模型
+- `config/model.json`: `params.study_materials_thinking_effort`、LaTeX token 上限与 reasoning 开关
 - `STUDY_MATERIALS_STEP_TIMEOUT_S`
 - `STUDY_MATERIALS_LATEX_STEP_TIMEOUT_S`
 - `STUDY_MATERIALS_SSE_HEARTBEAT_S`
@@ -212,41 +210,32 @@ python scripts/check_config.py --strict
 
 ## 教案
 
-- `LESSON_PLAN_PROVIDER`
-- `LESSON_PLAN_MODEL`
-- `LESSON_PLAN_TEMPERATURE`
-- `LESSON_PLAN_MAX_TOKENS`
-- `LESSON_PLAN_SUBAGENT_CONCURRENCY`
-- `LESSON_PLAN_WRITER_MODEL`
+- `config/model.json`: `routes.lesson_plan`
+- `config/model.json`: `models.lesson_plan`、`lesson_plan_writer`、`lesson_plan_split`、`lesson_plan_research`、`lesson_plan_kp_review`、`lesson_plan_latex`、`lesson_plan_latex_refine`
+- `config/model.json`: `params.lesson_plan_temperature`、`lesson_plan_max_tokens`、`lesson_plan_infinite_max_tokens`
+- `.env`: `LESSON_PLAN_SUBAGENT_CONCURRENCY` 以及重试、超时等运行参数
 
-未单独设置时，教案会回落到主模型配置。
+未配置专项模型时，教案会回落到 `models.lesson_plan`、`models.sub` 或 `models.main`。
 
 ## AI 出题与题库
 
 - `QUESTION_LIBRARY_MAX_TASKS`
 - `QUESTION_LIBRARY_TASK_TTL_S`
 - `QUESTION_LIBRARY_TASK_MAX_EVENTS`
-- `QUESTION_LIBRARY_REALIZE_MAX_TOKENS`
-- `QUESTION_LIBRARY_JUDGE_MODEL`
-- `QUESTION_LIBRARY_MCP_SEARCH_MODEL`
+- `config/model.json`: `params.question_library_realize_max_tokens`
+- `config/model.json`: `models.question_library_judge`、`question_library_mcp_search`、`question_library_score`
 - `QUESTION_LIBRARY_AUTO_SCORE`
 - `QUESTION_LIBRARY_SCORE_INTERVAL_S`
 - `QUESTION_LIBRARY_SCORE_BATCH`
 - `QUESTION_LIBRARY_HIDE_THRESHOLD`
-- `QUESTION_LIBRARY_SCORE_MODEL`
 
 题库生成的长任务应通过 `/api/tasks/question-library/*` 使用。
 
 ## DeepThink
 
-- `DEEPTHINK_GENERATOR_MODEL`
-- `DEEPTHINK_GENERATOR_TEMPERATURE`
-- `DEEPTHINK_GENERATOR_MAX_TOKENS`
-- `DEEPTHINK_EVALUATOR_MODEL`
-- `DEEPTHINK_EVALUATOR_TEMPERATURE`
-- `DEEPTHINK_EVALUATOR_MAX_TOKENS`
-- `DEEPTHINK_REASONING_EFFORT`
-- `TOT_BRANCH_FACTOR`
+- `config/model.json`: `models.deepthink_generator`、`models.deepthink_evaluator`
+- `config/model.json`: 对应的 temperature、max_tokens 和 `params.deepthink_reasoning_effort`
+- `.env`: `TOT_BRANCH_FACTOR`
 - `TOT_BEAM_WIDTH`
 - `TOT_MAX_DEPTH`
 - `TOT_PRUNE_THRESHOLD`
@@ -353,7 +342,7 @@ OpenTelemetry：
 
 ## 变更规则
 
-- 新增配置项时同步 `.env.example`。
+- 新增模型配置时同步 `config/model.example.json`；新增非模型环境变量时同步 `.env.example`。
 - 后端读取配置优先集中到 `backend/core/settings.py`。
 - 用户可见或部署相关配置同步更新本文。
 - 密钥类型配置在日志和 `/api/config` 中必须脱敏。

@@ -30,13 +30,10 @@ class TestChatLLMMixinContextBudget(unittest.TestCase):
             ]
         )
 
-        with patch.dict(
-            os.environ,
-            {
-                "CHAT_CONTEXT_MAX_TOKENS": str(base_tokens + 40),
-                "CHAT_CONTEXT_MESSAGE_MAX_TOKENS": "2000",
-            },
-            clear=False,
+        values = {"chat_max_tokens": base_tokens + 40, "chat_message_max_tokens": 2000}
+        with patch(
+            "backend.workspace.chat.llm_mixin.model_context_value",
+            side_effect=lambda key, default=None: values.get(key, default),
         ):
             messages = mixin._build_messages(
                 [

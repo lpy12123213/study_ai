@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
-from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
+from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL, model_name
 from backend.core.text_utils import clip_text as _clip_text
 from backend.generation.question_library.curriculum_context import normalize_curriculum_context
 from backend.llm.client import is_llm_configured
@@ -517,7 +517,7 @@ class StudyMaterialGenerationToolsMixin:
         knowledge_types = dict(knowledge_types) if isinstance(knowledge_types, dict) else {}
 
         model = str(
-            os.getenv("STUDY_MATERIALS_OUTLINE_MODEL")
+            model_name("study_materials_outline")
             or getattr(getattr(self, "config", None), "summarizer_model", "")
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()

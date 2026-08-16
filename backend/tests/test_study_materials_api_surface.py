@@ -140,6 +140,24 @@ class TestSharedOptionsBuilder(unittest.TestCase):
         options = build_study_materials_options(StudyMaterialsGenerateRequest(query="q", max_points=1))
         self.assertEqual(options["max_points"], 1)
 
+    def test_builder_maps_benchmark_stage_and_fixture_dir(self) -> None:
+        from backend.api.study_materials_schemas import (
+            StudyMaterialsGenerateRequest,
+            build_study_materials_options,
+        )
+
+        options = build_study_materials_options(StudyMaterialsGenerateRequest(query="q"))
+        self.assertNotIn("benchmark_stage", options)
+        self.assertNotIn("research_fixture_dir", options)
+
+        options = build_study_materials_options(StudyMaterialsGenerateRequest(
+            query="q",
+            benchmark_stage="research",
+            research_fixture_dir="  artifacts/evals/_fixtures/case-x  ",
+        ))
+        self.assertEqual(options["benchmark_stage"], "research")
+        self.assertEqual(options["research_fixture_dir"], "artifacts/evals/_fixtures/case-x")
+
 
 class TestLatexStreamEnvelope(unittest.TestCase):
     """B12: convert-markdown-to-latex/stream must emit the standard task-stream

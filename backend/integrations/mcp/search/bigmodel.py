@@ -204,7 +204,7 @@ async def web_search_with_bigmodel_mcp(
     if not api_key:
         return {
             "success": False,
-            "error": "未配置 ZHIPU_API_KEY，请在 .env 中设置后重试",
+            "error": "未配置 providers.zhipu.api_key，请在 config/model.json 或模型设置页中设置后重试",
             "provider": "zhipu-bigmodel-mcp-web-search",
         }
 

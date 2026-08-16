@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_name, model_provider
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -31,10 +31,8 @@ def _asy_available() -> bool:
 
 
 def _seedream_available() -> bool:
-    api_key = str(os.getenv("ARK_API_KEY") or os.getenv("ARK_API") or "").strip()
-    model = str(
-        os.getenv("SEEDREAM_MODEL") or os.getenv("ARK_IMAGE_MODEL") or os.getenv("ARK_IMAGES_MODEL") or ""
-    ).strip()
+    api_key = str(model_provider("ark").api_key or "").strip()
+    model = model_name("image_generation", provider="ark")
     return bool(api_key and model)
 
 
@@ -102,7 +100,7 @@ class DiagramPlanningToolsMixin:
         max_diagrams = max(0, min(max_diagrams, 12))
 
         model = str(
-            os.getenv("STUDY_MATERIALS_DIAGRAM_PLANNER_MODEL")
+            model_name("study_materials_diagram_planner")
             or getattr(getattr(self, "config", None), "summarizer_model", "")
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()

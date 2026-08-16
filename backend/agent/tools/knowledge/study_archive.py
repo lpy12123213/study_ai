@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import shutil
 from datetime import datetime
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.settings import model_name, model_provider
 
 
 class StudyArchiveToolsMixin:
@@ -141,10 +141,8 @@ class StudyArchiveToolsMixin:
             if shutil.which("dvisvgm") is None:
                 missing.append("dvisvgm")
 
-            api_key = str(os.getenv("ARK_API_KEY") or os.getenv("ARK_API") or "").strip()
-            model = str(
-                os.getenv("SEEDREAM_MODEL") or os.getenv("ARK_IMAGE_MODEL") or os.getenv("ARK_IMAGES_MODEL") or ""
-            ).strip()
+            api_key = str(model_provider("ark").api_key or "").strip()
+            model = model_name("image_generation", provider="ark")
 
             hints: List[str] = []
             if missing:

@@ -8,6 +8,16 @@ from typing import Any, Dict, Optional
 
 from backend.core.encryption import decrypt_string
 
+DEFAULT_PROVIDER_BASE_URLS: Dict[str, str] = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "moonshot": "https://api.moonshot.cn/v1",
+    "fireworks": "https://api.fireworks.ai/inference/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "openai": "https://api.openai.com/v1",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "ark": "https://ark.cn-beijing.volces.com/api/v3",
+}
+
 
 def _truthy(value: str) -> bool:
     v = str(value or "").strip().lower()
@@ -56,8 +66,10 @@ class ModelJsonConfig:
     path: Path
     active_provider: str
     providers: Dict[str, ProviderConfig]
+    routes: Dict[str, str]
     models: Dict[str, Any]
     params: Dict[str, Any]
+    context: Dict[str, Any]
     pinned: bool
 
 
@@ -87,8 +99,10 @@ def load_model_json_config(*, repo_root: Path) -> Optional[ModelJsonConfig]:
 
     active = str(payload.get("active_provider") or "").strip()
     providers_raw = payload.get("providers")
+    routes_raw = payload.get("routes")
     models = payload.get("models") if isinstance(payload.get("models"), dict) else {}
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
 
     providers: Dict[str, ProviderConfig] = {}
     if isinstance(providers_raw, dict):
@@ -111,6 +125,13 @@ def load_model_json_config(*, repo_root: Path) -> Optional[ModelJsonConfig]:
             providers[key] = ProviderConfig(name=key, base_url=base_url, api_key=api_key)
 
     active_key = active.lower()
+    routes: Dict[str, str] = {}
+    if isinstance(routes_raw, dict):
+        for route_raw, provider_raw in routes_raw.items():
+            route = str(route_raw or "").strip().lower().replace("-", "_")
+            provider = str(provider_raw or "").strip().lower()
+            if route and provider and provider in providers:
+                routes[route] = provider
     if "pinned" in payload:
         pinned_raw = payload.get("pinned")
         pinned = bool(pinned_raw) if isinstance(pinned_raw, bool) else _truthy(str(pinned_raw or ""))
@@ -125,7 +146,9 @@ def load_model_json_config(*, repo_root: Path) -> Optional[ModelJsonConfig]:
         path=path,
         active_provider=active_key,
         providers=providers,
+        routes=routes,
         models=dict(models) if isinstance(models, dict) else {},
         params=dict(params) if isinstance(params, dict) else {},
+        context=dict(context) if isinstance(context, dict) else {},
         pinned=pinned,
     )

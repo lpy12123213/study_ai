@@ -177,6 +177,7 @@ Nginx / Caddy / Traefik 需要注意：
 上线前至少确认：
 
 - `.env` 中的 `JWT_SECRET`、`ADMIN_PASSWORD` 已更换。
+- `config/model.json` 中的 provider、路由、模型 ID 和密钥已按部署环境配置。
 - 不允许提交真实 API key、Cookie、数据库、抓取内容。
 - 只开启必要的 `PAPER_STORE_*` 内容持久化。
 - 多用户部署中 PDF 导出优先使用 `PAPER_EXPORT_LATEX_BACKEND=docker` 或确认 `auto` 能找到沙盒镜像。
@@ -191,7 +192,8 @@ Nginx / Caddy / Traefik 需要注意：
 - `.local/` 下的 SQLite 数据库和任务事件。
 - `.local/media/generated/` 下仍需下载的导出文件。
 - `study_archives/` 下的学习资料归档。
-- 自定义 `config/model.json`，但不应把密钥提交到 Git。
+- `config/model.json`：唯一的模型配置源，包含 provider 密钥，但不应提交到 Git。
+- `.local/secrets/model_config.key`：如果 `model.json` 使用加密密钥，恢复时必须与配置文件成对保留。
 
 SQLite 数据库使用项目自带脚本备份。备份通过 `VACUUM INTO` 生成一致性副本，不需要直接复制正在写入的数据库文件：
 
@@ -213,7 +215,7 @@ python scripts/restore_db.py .local/backups/db/exam_papers-YYYYMMDD-HHMMSS.db --
 
 如果目标数据库已经存在，恢复脚本会先生成 `*.pre-restore-*.db` 安全副本，再覆盖目标库，并在恢复后运行 `PRAGMA integrity_check`。
 
-恢复时必须先确认 `.env`、模型配置和数据库 schema 与目标版本兼容。
+恢复时必须先确认 `.env`、`config/model.json`、模型解密密钥和数据库 schema 与目标版本兼容。
 
 建议生产或长期运行环境至少每日备份一次，并保留最近 7 到 14 天的数据库副本。Linux 可使用 cron：
 

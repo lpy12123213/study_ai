@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from backend.agent.tools.utils.text_utils import _sanitize_explanation_markdown
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
-from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL
+from backend.core.settings import MAIN_MODEL, STUDY_MATERIALS_WRITER_MODEL, model_name
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -88,7 +88,7 @@ class RefineDraftToolsMixin:
         material = material if isinstance(material, dict) else {}
 
         model = str(
-            os.getenv("STUDY_MATERIALS_REFINER_MODEL")
+            model_name("study_materials_refiner")
             or STUDY_MATERIALS_WRITER_MODEL
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()

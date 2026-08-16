@@ -192,23 +192,22 @@ study_ai/
 
 ## 配置
 
-复制 `.env.example` 到 `.env` 后填写需要的密钥：
+复制 `.env.example` 到 `.env` 配置运行环境，并从模型示例创建本地模型配置：
 
 ```powershell
 Copy-Item .env.example .env
+Copy-Item config/model.example.json config/model.json
 ```
 
 常用配置：
 
-- `CHAT_PROVIDER`：`openrouter` / `fireworks` / `moonshot`
-- `OPENROUTER_API_KEY`、`FIREWORKS_API_KEY`、`MOONSHOT_API_KEY`
-- `MAIN_MODEL`（对话与编排）、`SUB_MODEL`（轻量任务）
-- `STUDY_MATERIALS_THINKING_MODEL` / `STUDY_MATERIALS_WRITER_MODEL`：资料生成的拆分/写作模型
+- `config/model.json`：唯一的模型配置源，包含 provider、API Key、Base URL、路由、模型 ID、生成参数和上下文限制
+- `MODEL_CONFIG_PATH`：仅在需要把模型配置放到其他位置时设置
 - `TAVILY_API_KEY`、`EXA_API_KEY`、`METASO_API_KEY`：检索 provider（至少一个）
 - `JWT_SECRET`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`
 - `VITE_API_BASE_URL`：前端 API 基础地址，默认同源相对 `/api`；跨站部署时设为后端 origin
 
-注意：模型 ID 一旦失效（供应商下架或拼错），所有 LLM 调用会永久失败；后端启动时会做一次非阻塞模型自检并在日志中给出明确提示。完整配置说明见 `docs/CONFIGURATION.md`，多供应商模型配置也可使用本地私有的 `config/model.json`。
+注意：模型 ID 一旦失效（供应商下架或拼错），所有 LLM 调用会永久失败；后端启动时会做一次非阻塞模型自检并在日志中给出明确提示。完整字段见 `config/model.example.json` 和 `docs/CONFIGURATION.md`。旧的 `.env` 模型变量不再生效。
 
 ## 前端 API
 
@@ -243,7 +242,7 @@ cd frontend && npx vitest run && npx tsc -b     # 前端测试与类型检查
 - `/api/tasks` 是新增长任务的唯一 canonical 接口。
 - 后端新增路由必须进入对应 domain router。
 - 前端新增复杂功能必须优先落在 `frontend/src/features/<domain>/`。
-- 新配置项必须同步 `.env.example` 与 `docs/CONFIGURATION.md`。
+- 新模型配置必须同步 `config/model.example.json`，新环境变量必须同步 `.env.example`；两类变更都要更新 `docs/CONFIGURATION.md`。
 - 用户可见行为变化必须同步 `docs/USER_GUIDE.md` 或对应专项文档。
 
 ## 数据与安全

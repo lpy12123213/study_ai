@@ -8,13 +8,12 @@ and the console factory used throughout the CLI.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import LESSON_PLAN_MODEL, settings
+from backend.core.settings import LESSON_PLAN_MODEL, model_name, settings
 
 _REVIEW_STATUSES = {"pending_review", "in_review", "approved", "rejected", "confirmed", "committed"}
 # Keep the canonical logger name stable after the package split so emitted log
@@ -54,7 +53,7 @@ def _normalize_cli_model_for_provider(*, provider: str, model: str) -> str:
 
 
 def _resolve_cli_mcp_search_model() -> str:
-    explicit = str(os.getenv("QUESTION_LIBRARY_MCP_SEARCH_MODEL") or "").strip()
+    explicit = model_name("question_library_mcp_search")
     if explicit:
         return explicit
 

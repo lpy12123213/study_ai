@@ -1,0 +1,39 @@
+{
+  "id": "redox_electrochemistry_industrial",
+  "title": "高中化学：氧化还原、电化学与氯碱工业贯通",
+  "query": "在高中化学范围内，贯通氧化还原与电化学：用得失电子守恒配平典型氧化还原方程式；解释铜锌原电池与电解饱和食盐水（氯碱工业）的完整工作原理并书写电极反应式；辨析原电池正负极与电解池阴阳极、活性电极与惰性电极；解释钢铁的析氢腐蚀与吸氧腐蚀，比较牺牲阳极与外加电流两类阴极保护法；完成串联电解池按电量守恒的定量推算；说明阴阳离子放电顺序及其受浓度影响的边界",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["能斯特方程的浓度趋势分析", "法拉第电解定律的定量计算"],
+  "subject": "高中化学",
+  "preset": "deep",
+  "requirements": "每个电极反应式必须同时配平原子与电荷并注明介质；正负极与阴阳极不得混用；串联计算必须显式写电子守恒关系。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 12, "prefer_local_archive": false},
+  "expected_knowledge_points": ["氧化还原与电子守恒配平", "原电池构成与工作原理", "电极反应式书写", "正负极判断与电子流向", "电解池原理与阴阳极", "离子放电顺序", "氯碱工业与隔膜电解", "金属电化学腐蚀类型", "金属防护与阴极保护", "串联电路电量守恒计算", "能斯特方程的浓度趋势分析", "法拉第电解定律的定量计算"],
+  "min_unique_sources": 14,
+  "expected_domains": ["openstax.org", "libretexts.org", "khanacademy.org", "rsc.org"],
+  "required_facts": [
+    {"id": "electron_conservation", "description": "氧化还原配平的核心是得失电子守恒（化合价升降总数相等）", "match": {"all": ["电子.{0,6}守恒|得失电子"], "any": ["配平", "化合价.{0,6}升降"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-1-review-of-redox-chemistry"]},
+    {"id": "galvanic_principle", "description": "原电池负极发生氧化、正极发生还原，电子经外电路从负极流向正极", "match": {"all": ["负极.{0,8}氧化", "正极.{0,8}还原"], "any": ["外电路", "电子.{0,10}流"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-2-galvanic-cells"]},
+    {"id": "electrolysis_electrodes", "description": "电解池阳极发生氧化、阴极发生还原，阳极与电源正极相连", "match": {"all": ["阳极.{0,8}氧化", "阴极.{0,8}还原"], "any": ["电源.{0,6}正极", "外加"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-7-electrolysis"]},
+    {"id": "ion_discharge_order", "description": "惰性电极上阳离子按氧化性、阴离子按还原性顺序放电，且顺序受浓度等实际条件影响", "match": {"all": ["放电顺序"], "any": ["Ag|Cu.{0,4}(2|²)|氧化性", "浓度"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/General_Chemistry/Chemistry_1e_(OpenSTAX)/17%3A_Electrochemistry/17.7%3A_Electrolysis"]},
+    {"id": "chlor_alkali", "description": "电解饱和食盐水：阳极产氯气、阴极产氢气并在阴极区生成 NaOH，工业上用隔膜/离子膜分隔", "match": {"all": ["食盐水|氯碱", "阳极"], "any": ["Cl₂|Cl2|氯气", "NaOH|氢氧化钠", "隔膜|离子膜"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-7-electrolysis"]},
+    {"id": "corrosion_types", "description": "钢铁腐蚀分析氢腐蚀（酸性较强）与吸氧腐蚀（中性或弱酸性、更普遍），负极均为铁失电子", "match": {"all": ["析氢腐蚀", "吸氧腐蚀"], "any": ["更.{0,6}(普遍|常见)", "铁.{0,8}(失去电子|被氧化)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-6-corrosion"]},
+    {"id": "cathodic_protection", "description": "阴极保护分牺牲阳极法（接更活泼金属）与外加电流法（被保护金属接电源负极）", "match": {"all": ["牺牲阳极"], "any": ["外加电流", "活泼.{0,8}金属|锌"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-6-corrosion"]},
+    {"id": "series_charge_conservation", "description": "串联电解池通过的电量相同，各极产物按转移电子数守恒折算", "match": {"all": ["串联"], "any": ["电量.{0,8}(相等|相同)", "电子.{0,8}(守恒|数目相同)"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/General_Chemistry/Chemistry_1e_(OpenSTAX)/17%3A_Electrochemistry/17.7%3A_Electrolysis"]},
+    {"id": "bridge_membrane_role", "description": "盐桥或隔膜沟通内电路、维持两侧电荷（电中性）平衡使反应持续", "match": {"all": ["盐桥|隔膜"], "any": ["电中性|电荷.{0,6}平衡", "闭合回路|内电路"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-2-galvanic-cells"]},
+    {"id": "electrode_equation_rules", "description": "电极反应式须同时守恒原子与电荷，产物随介质酸碱性变化", "match": {"all": ["电极反应"], "any": ["电荷.{0,6}守恒|配平", "介质|酸性|碱性"]}, "source_urls": ["https://www.khanacademy.org/science/chemistry/oxidation-reduction"]},
+    {"id": "nernst_bridge", "description": "[拓展] 能斯特方程给出电动势随浓度商变化的定性趋势：反应物浓度增大电动势增大", "match": {"all": ["能斯特|Nernst"], "any": ["浓度", "电动势.{0,10}(增大|减小|变化)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-4-potential-free-energy-and-equilibrium"]},
+    {"id": "faraday_law_bridge", "description": "[拓展] 法拉第电解定律 m=MQ/(zF)，F≈96500 C/mol，把电量与析出质量定量关联", "match": {"all": ["法拉第|Faraday"], "any": ["96,?500", "zF|nF"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/17-7-electrolysis"]}
+  ],
+  "traps": [
+    {"id": "positive_equals_anode", "description": "误解：正极就是阳极，两组概念可以混用", "wrong_pattern": "正极.{0,6}(就是|即|等同于|等于).{0,4}阳极", "correct_pattern": "原电池.{0,10}正负极|电解池.{0,10}阴阳极|不能混用|两套.{0,4}(概念|叫法)"},
+    {"id": "electron_through_solution", "description": "误解：电子穿过电解质溶液形成电流", "wrong_pattern": "电子.{0,10}(经过|通过|穿过|流经).{0,8}(溶液|电解质)", "correct_pattern": "离子.{0,10}(定向移动|迁移)|电子.{0,8}(只|仅).{0,6}外电路"},
+    {"id": "discharge_order_absolute", "description": "误解：离子放电顺序绝对固定、任何条件下都不变", "wrong_pattern": "放电顺序.{0,12}(绝对|永远|任何条件|一定不变)", "correct_pattern": "浓度|实际条件|超电位|并非绝对"},
+    {"id": "hydrogen_corrosion_default", "description": "误解：自然环境中钢铁腐蚀以析氢腐蚀为主", "wrong_pattern": "(自然|日常|通常|大多).{0,12}析氢腐蚀.{0,8}(为主|主要|更常见)", "correct_pattern": "吸氧腐蚀.{0,12}(更|最).{0,6}(普遍|常见|主要)"},
+    {"id": "sacrificial_role_confusion", "description": "误解：牺牲阳极保护法中被保护金属充当阳极", "wrong_pattern": "被保护.{0,10}(金属|铁).{0,10}(作|做|充当|为).{0,6}阳极", "correct_pattern": "(活泼|锌|镁).{0,12}(作|做|充当|为).{0,6}(阳极|负极)"}
+  ],
+  "contrasts": [["原电池", "电解池"], ["正极", "阳极"], ["析氢腐蚀", "吸氧腐蚀"], ["牺牲阳极保护", "外加电流保护"], ["活性电极", "惰性电极"]],
+  "format_requirements": {"key_formulas": ["Cl₂|Cl2|氯气", "H₂|H2|氢气", "NaOH", "96,?500|zF|nF"], "min_figures": 2, "min_tables": 3, "min_chars": 12000},
+  "learning_requirements": {"min_objectives": 6, "min_worked_examples": 5, "min_practice_questions": 14, "min_answered_questions": 14, "required_levels": ["基础", "应用", "迁移"]}
+}

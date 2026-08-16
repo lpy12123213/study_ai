@@ -177,7 +177,7 @@ async def revise_diagram_source(
         return {
             "success": False,
             "error": "llm_not_configured",
-            "hint": "diagram 修改依赖 LLM，请配置 LESSON_PLAN_API_KEY / MOONSHOT_API_KEY / OPENROUTER_API_KEY。",
+            "hint": "diagram 修改依赖 LLM，请在 config/model.json 中配置 lesson_plan 路由及供应商密钥。",
         }
 
     model = str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-4o-mini"

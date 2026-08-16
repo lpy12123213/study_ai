@@ -48,7 +48,7 @@
 
 - 用户可见行为变化时，更新 `USER_GUIDE.md` 或对应专项文档。
 - API、任务事件、认证或资源字段变化时，更新 `API.md`。
-- 新配置项必须同时更新 `.env.example` 和 `CONFIGURATION.md`。
+- 新模型配置必须同步 `config/model.example.json`，新环境变量必须同步 `.env.example`；两者都要更新 `CONFIGURATION.md`。
 - 新部署依赖或外部工具链要求必须更新 `DEPLOYMENT.md`。
 - 新长任务必须按 `/api/tasks` 描述；领域旧接口只写兼容说明。
 - 文档不要写真实密钥、Cookie、抓取内容或本地数据库路径中的个人信息。

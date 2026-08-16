@@ -259,7 +259,10 @@ class TestQuestionLibraryGenerationPipeline(unittest.IsolatedAsyncioTestCase):
         with patch("backend.generation.question_library.judging.is_llm_configured", return_value=True), patch(
             "backend.generation.question_library.judging._chat_json_with_reasoning",
             new=AsyncMock(side_effect=fake_chat_json_with_reasoning),
-        ), patch.dict("os.environ", {"QUESTION_LIBRARY_JUDGE_MODEL": "openai/test-judge-mini"}, clear=False):
+        ), patch(
+            "backend.generation.question_library.judging.model_name",
+            return_value="openai/test-judge-mini",
+        ):
             await solve_draft("题干", {"subject": "高中数学", "proposed_answer": "x=1"})
             await check_ambiguity({"stem": "题干", "answer": "x=1"})
 

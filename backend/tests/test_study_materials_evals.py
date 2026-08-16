@@ -88,9 +88,9 @@ def _search_result(urls: list[str]) -> dict:
 class CaseSchemaTests(unittest.TestCase):
     def test_all_shipped_cases_load_and_validate(self) -> None:
         cases = load_cases(_CASE_DIR)
-        self.assertEqual(len(cases), 40)
+        self.assertEqual(len(cases), 43)
         tier_counts = {tier: sum(case.tier == tier for case in cases) for tier in ("smoke", "core", "extended")}
-        self.assertEqual(tier_counts, {"smoke": 8, "core": 4, "extended": 28})
+        self.assertEqual(tier_counts, {"smoke": 11, "core": 4, "extended": 28})
         for case in cases:
             self.assertGreaterEqual(len(case.required_facts), 5, case.id)
             self.assertGreaterEqual(len(case.traps), 2, case.id)
@@ -581,6 +581,33 @@ class KnowledgeGraderTests(unittest.TestCase):
         miss = grade_knowledge(self.case, md_far, citation_ratio=1.0)
         self.assertGreater(hit.score, miss.score)
 
+    def test_latex_escaped_percent_matches_visible_numeric_fact(self) -> None:
+        case = parse_case(_mini_case(required_facts=[{
+            "id": "ppv_numeric",
+            "description": "阳性预测值约为 15.4%",
+            "match": {"all": [r"15\.4%"], "any": ["阳性预测值|PPV"]},
+            "source_urls": ["https://example.edu/ppv"],
+        }]))
+        markdown = (
+            r"阳性预测值（PPV）为 $90/585\approx 15.4\%$。[^1]" "\n\n"
+            "## 参考文献\n- [^1]: PPV 来源 https://example.edu/ppv\n"
+        )
+
+        result = grade_knowledge(case, markdown, citation_ratio=1.0)
+        fact_check = {check.id: check for check in result.checks}["K1_facts"]
+        self.assertEqual(fact_check.metrics["matched_count"], 1)
+
+    def test_reversed_conditional_contrast_accepts_symbolic_notation(self) -> None:
+        case = parse_case(_mini_case(contrasts=[["P(阳性|患病)", "P(患病|阳性)"]]))
+        markdown = (
+            r"$P(T^+\mid D)$ 与 $P(D\mid T^+)$ 相比，前者固定患病条件，"
+            "后者固定检测阳性条件，条件方向不能混同。"
+        )
+
+        result = grade_knowledge(case, markdown, citation_ratio=1.0)
+        contrast_check = {check.id: check for check in result.checks}["K3_contrasts"]
+        self.assertEqual(contrast_check.score, contrast_check.max_score)
+
     def test_scaffolding_text_does_not_count_as_content(self) -> None:
         """标题/目录里的概念名（query 回显）不算讲解，空壳成稿 K 维度应接近 0。"""
         skeleton = (
@@ -993,10 +1020,10 @@ class RunnerHelperTests(unittest.TestCase):
             self.assertIn("regrade", result["notes"][0])
 
     def test_tier_suites_have_expected_sizes(self) -> None:
-        self.assertEqual(len(_resolve_cases("smoke", _CASE_DIR)), 8)
-        self.assertEqual(len(_resolve_cases("core", _CASE_DIR)), 12)
+        self.assertEqual(len(_resolve_cases("smoke", _CASE_DIR)), 11)
+        self.assertEqual(len(_resolve_cases("core", _CASE_DIR)), 15)
         self.assertEqual(len(_resolve_cases("extended", _CASE_DIR)), 28)
-        self.assertEqual(len(_resolve_cases("all", _CASE_DIR)), 40)
+        self.assertEqual(len(_resolve_cases("all", _CASE_DIR)), 43)
         self.assertEqual(
             [case.id for case in _resolve_cases("light-probe", _CASE_DIR)],
             ["derivative_monotonicity_optimization"],
@@ -1013,10 +1040,13 @@ class RunnerHelperTests(unittest.TestCase):
                 "circuit_measurement_internal_resistance",
                 "conditional_probability_diagnostic_test",
                 "derivative_monotonicity_optimization",
+                "electromagnetic_induction_rail_energy",
                 "french_revolution_causes",
                 "monsoon_water_cycle_urbanization",
                 "photosynthesis_respiration_limits",
                 "projectile_motion_energy",
+                "redox_electrochemistry_industrial",
+                "sequence_recursion_inequality_synthesis",
             },
         )
         self.assertEqual(
@@ -1048,9 +1078,10 @@ class RunnerHelperTests(unittest.TestCase):
             required_sections = (len(case.expected_knowledge_points) * 4 + 4) // 5
             self.assertGreaterEqual(int(case.options.get("max_points") or 0), required_sections, case.id)
             self.assertIn(f"至少{required_sections}个独立知识点二级标题", requirements, case.id)
-            self.assertIn("至少5个可检验学习目标", requirements, case.id)
-            self.assertIn("至少4个带完整步骤的例题", requirements, case.id)
-            self.assertIn("至少12道自测题", requirements, case.id)
+            learning = case.learning_requirements
+            self.assertIn(f"至少{learning.min_objectives}个可检验学习目标", requirements, case.id)
+            self.assertIn(f"至少{learning.min_worked_examples}个带完整步骤的例题", requirements, case.id)
+            self.assertIn(f"至少{learning.min_practice_questions}道自测题", requirements, case.id)
             self.assertIn("主题主线与作答前提限高中", requirements, case.id)
             self.assertIn("[拓展:上列对应主题全名]", requirements, case.id)
             self.assertIn("[高中连接]", requirements, case.id)
@@ -1063,7 +1094,7 @@ class RunnerHelperTests(unittest.TestCase):
         all_cases = _resolve_cases("all", _CASE_DIR)
         light_ids = {case.id for case in light}
         heavy_ids = {case.id for case in heavy}
-        self.assertEqual(len(light), 8)
+        self.assertEqual(len(light), 11)
         self.assertEqual(len(heavy), 32)
         self.assertFalse(light_ids & heavy_ids)
         self.assertEqual(light_ids | heavy_ids, {case.id for case in all_cases})
@@ -1354,6 +1385,72 @@ class RubricGraderTests(unittest.TestCase):
         self.assertIn("coherence", rendered.content)
         self.assertIn("misconception_authenticity", rendered.content)
         self.assertEqual(rendered.output_contract.validate_prompt_text(rendered.content), [])
+
+
+class StageEvalTests(unittest.TestCase):
+    """阶段评测（--stage research/write）：research 评分卡与夹具助手，全部离线。"""
+
+    def test_grade_research_stage_gate_and_labels(self) -> None:
+        from backend.evals.study_materials.scorecard import grade_research_stage
+
+        case = parse_case(_mini_case())
+        events = [
+            _tool_call("web_search_knowledge", {"query": "q1"}),
+            _frame("done", {}),
+        ]
+        report = {
+            "knowledge_points": [f"知识点{i}" for i in range(case.min_knowledge_sections)],
+            "unique_sources": case.min_unique_sources,
+            "source_urls": [f"https://{domain}/page" for domain in case.expected_domains],
+            "evidence_kp_count": case.min_knowledge_sections,
+        }
+        card = grade_research_stage(case, events, research_report=report)
+        self.assertEqual(card.stage, "research")
+        self.assertEqual(card.total_max, 10.0)
+        self.assertIn("阶段评测", card.readiness_level)
+        gate = card.quality_gates[0]
+        self.assertEqual(gate.id, "GR_research_coverage")
+        self.assertTrue(gate.passed, gate.to_dict())
+        self.assertEqual([d.dimension for d in card.dimensions], ["R"])
+
+        empty = grade_research_stage(case, events, research_report={})
+        empty_gate = empty.quality_gates[0]
+        self.assertFalse(empty_gate.passed)
+        # 覆盖门槛未过时按 RESEARCH_STAGE_GATE_CEILING 封顶
+        self.assertLessEqual(empty.total, 4.0)
+
+    def test_done_research_report_extraction(self) -> None:
+        from backend.evals.study_materials.runner import _done_research_report
+
+        events = [
+            _frame("progress", {"stage": "research"}),
+            _frame("done", {"research_report": {"unique_sources": 3}}),
+        ]
+        self.assertEqual(_done_research_report(events)["unique_sources"], 3)
+        self.assertEqual(_done_research_report([_frame("done", {})]), {})
+        self.assertEqual(_done_research_report([]), {})
+
+    def test_fixture_dir_resolution_and_validation(self) -> None:
+        import tempfile
+
+        from backend.evals.study_materials.runner import (
+            FIXTURE_FILES,
+            resolve_fixture_dir,
+            validate_fixture_dir,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "_fixtures"
+            resolved = resolve_fixture_dir("case-x", fixture_root=root)
+            self.assertEqual(resolved, root / "case-x")
+            explicit = resolve_fixture_dir("case-x", fixture_root=root, fixture_dir=str(Path(tmp) / "explicit"))
+            self.assertEqual(explicit, Path(tmp) / "explicit")
+
+            self.assertEqual(set(validate_fixture_dir(resolved)), set(FIXTURE_FILES))
+            resolved.mkdir(parents=True)
+            for name in FIXTURE_FILES:
+                (resolved / name).write_text("{}", encoding="utf-8")
+            self.assertEqual(validate_fixture_dir(resolved), [])
 
 
 if __name__ == "__main__":

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
-from backend.core.settings import LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE
+from backend.core.settings import LESSON_PLAN_MODEL, LESSON_PLAN_TEMPERATURE, model_name
 from backend.generation.lesson_plan.common import extract_json_obj, lesson_plan_infinite_max_tokens
 from backend.generation.lesson_plan.llm import call_llm_text
 from backend.generation.lesson_plan.prompts import get_system_prompt
@@ -23,7 +22,7 @@ async def generate_lesson_plan_json(
     knowledge_points: List[str],
     research_context: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    model = str(os.getenv("LESSON_PLAN_WRITER_MODEL") or LESSON_PLAN_MODEL).strip() or LESSON_PLAN_MODEL
+    model = model_name("lesson_plan_writer", LESSON_PLAN_MODEL)
 
     prompt_parts = [
         f"Write a {int(duration_minutes)}-minute lesson plan for the following course as structured JSON:",

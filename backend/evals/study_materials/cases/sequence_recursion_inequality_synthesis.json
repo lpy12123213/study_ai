@@ -1,0 +1,39 @@
+{
+  "id": "sequence_recursion_inequality_synthesis",
+  "title": "高中数列：递推构造、求和技巧与放缩证明综合",
+  "query": "在高中数学范围内，系统讲解数列递推与不等式证明：用不动点/待定系数把 a_{n+1}=3a_n+2 化为等比并求通项；用错位相减求 {n·2^n} 的前 n 项和并说明 q=1 时公式失效的原因；用裂项相消求 {1/(n(n+1))} 的前 n 项和；用数学归纳法证明 2^n>n^2（n≥5），归纳步骤必须显式使用归纳假设；再用放缩法证明 1+1/2^2+…+1/n^2<2，解释放缩方向与界的选取；全程辨析递推关系与通项公式、有限求和与无限逼近的区别",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["特征根法与二阶线性递推", "压缩映射与迭代误差估计"],
+  "subject": "高中数学",
+  "preset": "deep",
+  "requirements": "归纳证明必须两步齐全且显式使用归纳假设；每个求和公式必须写适用条件；放缩必须解释方向选择与界为何不越过目标。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 12, "prefer_local_archive": false},
+  "expected_knowledge_points": ["等差与等比的定义判定", "递推关系与通项转化", "不动点与待定系数构造", "累加法与累乘法", "错位相减求和", "裂项相消求和", "数学归纳法两步结构", "数列单调性与有界性", "放缩技巧与不等式证明", "数列与函数的联系", "特征根法与二阶线性递推", "压缩映射与迭代误差估计"],
+  "min_unique_sources": 14,
+  "expected_domains": ["openstax.org", "khanacademy.org", "mathsisfun.com", "mathcentre.ac.uk"],
+  "required_facts": [
+    {"id": "arith_geom_definition", "description": "等差数列由公差、等比数列由公比定义，等比要求公比与首项均非零", "match": {"all": ["等差", "等比", "公差", "公比"], "any": ["不为.{0,3}(0|零)", "非零", "≠.{0,3}0"]}, "source_urls": ["https://www.mathsisfun.com/algebra/sequences-sums-arithmetic.html", "https://www.mathsisfun.com/algebra/sequences-sums-geometric.html"]},
+    {"id": "fixed_point_transform", "description": "a_{n+1}=pa_n+q（p≠1）可由不动点 x=px+q 或待定系数构造等比数列求通项", "match": {"all": ["不动点|待定系数", "等比"], "any": ["p.{0,4}(≠|!=|\\\\ne).{0,3}1|p不等于1|p.{0,3}=.{0,3}1.{0,10}(退化|失效|等差)", "构造"]}, "source_urls": ["https://www.khanacademy.org/math/algebra/x2f8bb11595b61c86:sequences", "https://en.wikipedia.org/wiki/Recurrence_relation"]},
+    {"id": "geometric_sum_condition", "description": "等比求和 S_n=a_1(1-q^n)/(1-q) 仅当 q≠1；q=1 时 S_n=na_1", "match": {"all": ["S.{0,3}n", "q.{0,4}=.{0,4}1"], "any": ["n.{0,4}a.{0,4}1|na₁", "单独|另行|分类|讨论"]}, "source_urls": ["https://www.mathcentre.ac.uk/resources/uploaded/mc-ty-apgp-2009-1.pdf"]},
+    {"id": "staggered_subtraction", "description": "错位相减适用于等差乘等比型数列，相减后须处理首项与末项", "match": {"all": ["错位相减"], "any": ["等差.{0,8}等比|差比", "末项|最后一项|首项"]}, "source_urls": ["https://www.mathcentre.ac.uk/resources/uploaded/mc-ty-apgp-2009-1.pdf"]},
+    {"id": "telescoping_sum", "description": "裂项相消利用 1/(n(n+1))=1/n-1/(n+1)，求和后仅剩首尾未消项", "match": {"all": ["裂项"], "any": ["相消", "首.{0,4}(项|尾)|剩.{0,4}(下|余)"]}, "source_urls": ["https://openstax.org/books/calculus-volume-2/pages/5-2-infinite-series"]},
+    {"id": "induction_two_steps", "description": "数学归纳法必须完成奠基验证与归纳递推两步，且归纳步骤必须使用归纳假设", "match": {"all": ["数学归纳法", "归纳假设"], "any": ["奠基|初始|基础步骤|n.{0,4}=.{0,4}5"]}, "source_urls": ["https://www.mathsisfun.com/algebra/mathematical-induction.html"]},
+    {"id": "monotonicity_check", "description": "数列单调性用作差 a_{n+1}-a_n 或作商比较判断", "match": {"all": ["单调"], "any": ["作差|a.{0,6}n.{0,6}1.{0,8}-", "作商|比值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-2/pages/5-1-sequences"]},
+    {"id": "scaling_direction", "description": "放缩必须方向一致且不越过目标界，如 1/n^2<1/(n(n-1)) 的放大保持可求和", "match": {"all": ["放缩"], "any": ["方向", "目标|界|过头|太松"]}, "source_urls": ["https://openstax.org/books/calculus-volume-2/pages/5-4-comparison-tests"]},
+    {"id": "sequence_as_function", "description": "数列是定义在正整数集上的函数，可借助函数工具但注意自变量离散", "match": {"all": ["正整数"], "any": ["函数", "离散"]}, "source_urls": ["https://openstax.org/books/calculus-volume-2/pages/5-1-sequences"]},
+    {"id": "finite_vs_limit", "description": "有限项求和与无限逼近不同：部分和数列的趋势才对应无穷级数收敛", "match": {"all": ["部分和|前.{0,3}n.{0,3}项和"], "any": ["无穷|无限", "收敛|逼近|趋于"]}, "source_urls": ["https://openstax.org/books/calculus-volume-2/pages/5-2-infinite-series"]},
+    {"id": "characteristic_root_bridge", "description": "[拓展] 二阶线性递推 a_{n+2}=pa_{n+1}+qa_n 的特征方程 x^2=px+q，两异根时通项为 Ar_1^n+Br_2^n", "match": {"all": ["特征方程|特征根"], "any": ["x.{0,3}(2|²).{0,4}=.{0,4}p.{0,3}x|二阶", "重根|两.{0,4}(个|异).{0,2}根"]}, "source_urls": ["https://en.wikipedia.org/wiki/Recurrence_relation"]},
+    {"id": "contraction_mapping_bridge", "description": "[拓展] 压缩映射 |f(x)-f(y)|≤L|x-y|（L<1）保证迭代收敛且误差按几何级数衰减", "match": {"all": ["压缩"], "any": ["L.{0,4}<.{0,4}1|小于.{0,3}1", "误差"]}, "source_urls": ["https://en.wikipedia.org/wiki/Banach_fixed-point_theorem"]}
+  ],
+  "traps": [
+    {"id": "induction_skip_hypothesis", "description": "误解：归纳步骤可以不使用归纳假设直接证明", "wrong_pattern": "归纳.{0,10}(无需|不用|不必).{0,8}(归纳假设|假设)", "correct_pattern": "(使用|用到|代入|结合).{0,6}归纳假设|归纳假设.{0,10}(使用|用到|代入|成立)"},
+    {"id": "geometric_sum_q1", "description": "误解：等比求和公式对任意公比都成立", "wrong_pattern": "(任意|所有|一切).{0,4}(公比|q).{0,14}(都|均).{0,6}(成立|适用)", "correct_pattern": "q.{0,4}=.{0,4}1.{0,14}(单独|另|讨论|失效|na)"},
+    {"id": "staggered_last_term", "description": "误解：错位相减两式相减后可直接套等比求和不管末项", "wrong_pattern": "错位相减.{0,16}(直接|即可|无需).{0,10}(求和|得出)", "correct_pattern": "末项|最后一项|漏.{0,4}项|符号"},
+    {"id": "scaling_overshoot", "description": "误解：放缩随意进行，放得越大/越小越好", "wrong_pattern": "放缩.{0,12}(任意|随意|越大越好|越小越好)", "correct_pattern": "方向|过头|越过|恰当|不等式链"},
+    {"id": "limit_assumed_exists", "description": "误解：不证明收敛就设极限为 L 解方程求极限", "wrong_pattern": "(直接|先).{0,6}设.{0,6}极限.{0,12}(存在|为.{0,4}L)", "correct_pattern": "单调有界|先证.{0,8}(收敛|存在)|压缩"}
+  ],
+  "contrasts": [["递推关系", "通项公式"], ["错位相减", "裂项相消"], ["数学归纳法", "不完全归纳"], ["有限求和", "无限逼近"], ["等差数列", "等比数列"]],
+  "format_requirements": {"key_formulas": ["a.{0,6}n.{0,6}1.{0,6}=", "S.{0,3}n", "1.{0,4}-.{0,4}q", "x.{0,3}(2|²).{0,4}=.{0,4}p.{0,3}x"], "min_figures": 2, "min_tables": 3, "min_chars": 12000},
+  "learning_requirements": {"min_objectives": 6, "min_worked_examples": 5, "min_practice_questions": 14, "min_answered_questions": 14, "required_levels": ["基础", "应用", "迁移"]}
+}

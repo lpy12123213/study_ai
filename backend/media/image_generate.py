@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 import httpx
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_name, model_param, model_param_int, model_provider
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_bytes
 
 logger = get_logger(__name__)
@@ -68,42 +69,40 @@ async def generate_image_via_seedream(
     if not prompt:
         return {"success": False, "error": "prompt_empty"}
 
-    api_key = str(os.getenv("ARK_API_KEY") or os.getenv("ARK_API") or "").strip()
+    ark_provider = model_provider("ark")
+    api_key = str(ark_provider.api_key or "").strip()
     if not api_key:
         return {
             "success": False,
             "error": "ark_api_key_missing",
-            "hint": "需要配置 ARK_API_KEY（火山引擎 ARK 平台密钥）。",
+            "hint": "需要在 config/model.json 的 providers.ark 中配置 API Key。",
         }
 
-    base_url = str(os.getenv("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3").strip().rstrip("/")
+    base_url = str(ark_provider.base_url or "").strip().rstrip("/")
     endpoint = f"{base_url}/images/generations"
 
     effective_model = str(
         model
-        or os.getenv("SEEDREAM_MODEL")
-        or os.getenv("ARK_IMAGE_MODEL")
-        or os.getenv("ARK_IMAGES_MODEL")
+        or model_name("image_generation", provider="ark")
         or ""
     ).strip()
     if not effective_model:
         return {
             "success": False,
             "error": "seedream_model_missing",
-            "hint": "需要配置 SEEDREAM_MODEL 或 ARK_IMAGE_MODEL。",
+            "hint": "需要在 config/model.json 的 models.image_generation 中配置模型。",
         }
 
-    effective_size = str(size or os.getenv("SEEDREAM_SIZE") or os.getenv("ARK_IMAGES_SIZE") or "1024x1024").strip()
+    effective_size = str(size or model_param("image_size", "1024x1024")).strip()
     try:
-        effective_n = int(n or os.getenv("SEEDREAM_N") or 1)
+        effective_n = int(n or model_param_int("image_count", 1))
     except (TypeError, ValueError):
         effective_n = 1
     effective_n = max(1, min(effective_n, 4))
 
     effective_response_format = str(
         response_format
-        or os.getenv("ARK_IMAGES_RESPONSE_FORMAT")
-        or os.getenv("SEEDREAM_RESPONSE_FORMAT")
+        or model_param("image_response_format", "b64_json")
         or "b64_json"
     ).strip()
 

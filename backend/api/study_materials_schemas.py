@@ -26,6 +26,21 @@ class StudyMaterialsGenerateRequest(BaseModel):
         "",
         description="可选：研究调用预算 lean|balanced；lean 保留逐知识点检索并限制百科补充与网页深读",
     )
+    benchmark_stage: Literal["", "research"] = Field(
+        "",
+        description=(
+            "可选：阶段评测模式（benchmark 专用）。research 表示只跑拆分+检索并落盘研究快照，"
+            "不进入撰写阶段；快照可作为撰写阶段评测的夹具复用"
+        ),
+    )
+    research_fixture_dir: str = Field(
+        "",
+        max_length=500,
+        description=(
+            "可选：撰写阶段评测的研究夹具目录（benchmark 专用，本地路径）。"
+            "由 research 阶段评测产出；设置后跳过拆分与检索，直接从夹具起跑撰写"
+        ),
+    )
 
 
 class StudyMaterialsConvertMarkdownToLatexRequest(BaseModel):
@@ -84,6 +99,10 @@ def build_study_materials_options(request: StudyMaterialsGenerateRequest) -> dic
         options["preferLocalArchive"] = bool(request.prefer_local_archive)
     if request.research_budget:
         options["research_budget"] = request.research_budget
+    if request.benchmark_stage:
+        options["benchmark_stage"] = request.benchmark_stage
+    if (request.research_fixture_dir or "").strip():
+        options["research_fixture_dir"] = str(request.research_fixture_dir).strip()
     return options
 
 

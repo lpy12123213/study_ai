@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterable, Optional
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_name, model_param
 from backend.generation.agentic.types import AgentRunSpec
 
 logger = get_logger(__name__)
@@ -228,8 +229,8 @@ class CodexRuntimeConfig:
     def from_env(cls) -> "CodexRuntimeConfig":
         return cls(
             command=_env_first("CODEX_RUNTIME_COMMAND", default="codex") or "codex",
-            model=_env_first("CODEX_RUNTIME_MODEL", default=""),
-            effort=_env_first("CODEX_RUNTIME_EFFORT", default="high") or "high",
+            model=model_name("codex_runtime"),
+            effort=str(model_param("codex_runtime_effort", "high") or "high").strip(),
             approval_policy=_normalize_approval_policy(
                 _env_first("CODEX_RUNTIME_APPROVAL_POLICY", "CODEX_RUNTIME_PERMISSION_MODE", default="never")
             ),

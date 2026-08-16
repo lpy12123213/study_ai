@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from backend.core.settings import LESSON_PLAN_MODEL, MODEL_TIER_MAP, SUB_MODEL, env_bool, env_int
+from backend.core.settings import LESSON_PLAN_MODEL, MODEL_TIER_MAP, SUB_MODEL, env_bool, env_int, model_name
 
 
 @dataclass(frozen=True)
@@ -81,9 +81,9 @@ class AgentConfig:
             emergency_token_threshold=env_int("AGENT_EMERGENCY_TOKEN_THRESHOLD", cls.emergency_token_threshold),
             compressed_history_max=env_int("AGENT_COMPRESSED_HISTORY_MAX", cls.compressed_history_max),
             checkpoint_dir=_get_str("AGENT_CHECKPOINT_DIR", cls.checkpoint_dir),
-            planner_model=_get_str("AGENT_PLANNER_MODEL", cls.planner_model),
-            summarizer_model=_get_str("AGENT_SUMMARIZER_MODEL", cls.summarizer_model),
-            reflector_model=_get_str("AGENT_REFLECTOR_MODEL", cls.reflector_model),
+            planner_model=model_name("agent_planner", cls.planner_model),
+            summarizer_model=model_name("agent_summarizer", cls.summarizer_model),
+            reflector_model=model_name("agent_reflector", cls.reflector_model),
             model_tier_map=dict(MODEL_TIER_MAP),
         )
 

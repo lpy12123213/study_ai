@@ -18,7 +18,7 @@ from backend.agent.tools.search.deep_research import deep_research
 from backend.agent.tools.utils.text_utils import _clip_text, _postprocess_web_search_result
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
-from backend.core.settings import STUDY_MATERIALS_THINKING_MODEL, env_bool
+from backend.core.settings import STUDY_MATERIALS_THINKING_MODEL, env_bool, model_name
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 from backend.shared.numparse import clamp_int as _clamp_int
@@ -1133,7 +1133,7 @@ class WebSearchKnowledgeToolsMixin:
                     )
 
                     metaso_format = str(args.get("metaso_format") or os.getenv("METASO_ASK_FORMAT") or "simple")
-                    metaso_model = str(args.get("metaso_model") or os.getenv("METASO_ASK_MODEL") or "")
+                    metaso_model = str(args.get("metaso_model") or model_name("metaso_ask") or "")
 
                     sub_questions = [base_query]
                     if decompose:

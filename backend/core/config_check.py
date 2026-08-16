@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 from backend.core.logging_utils import get_logger
 
@@ -17,13 +17,6 @@ _PLACEHOLDERS = {
     "dev-jwt-secret-change-me",
     "dev-admin-change-me",
 }
-
-_PROVIDER_KEYS = {
-    "openrouter": "OPENROUTER_API_KEY",
-    "fireworks": "FIREWORKS_API_KEY",
-    "moonshot": "MOONSHOT_API_KEY",
-}
-
 
 @dataclass(frozen=True)
 class ConfigIssue:
@@ -71,44 +64,53 @@ def _positive_int(env: Mapping[str, str], *keys: str) -> tuple[str, int] | None:
     return None
 
 
-def _provider_key(provider: str) -> str:
-    return _PROVIDER_KEYS.get(str(provider or "").strip().lower(), "")
+def _runtime_model_config() -> dict[str, Any]:
+    from backend.core.settings import settings
+
+    return {
+        "active_provider": settings.llm_active_provider,
+        "routes": dict(settings.model_routes),
+        "providers": {
+            name: {"api_key_set": bool(provider.api_key), "base_url": provider.base_url}
+            for name, provider in settings.model_providers.items()
+        },
+    }
 
 
-def _check_provider(env: Mapping[str, str], *, provider_key: str, setting_key: str, default: str) -> list[ConfigIssue]:
-    provider = _get(env, provider_key, default).lower()
-    key = _provider_key(provider)
-    if not key:
+def _check_model_provider(model_config: Mapping[str, Any], *, route: str) -> list[ConfigIssue]:
+    routes = model_config.get("routes") if isinstance(model_config.get("routes"), Mapping) else {}
+    provider = str(routes.get(route) or model_config.get("active_provider") or "").strip().lower()
+    providers = model_config.get("providers") if isinstance(model_config.get("providers"), Mapping) else {}
+    configured = providers.get(provider) if isinstance(providers.get(provider), Mapping) else {}
+    if not provider or not configured:
         return [
             ConfigIssue(
                 level="missing",
-                key=provider_key,
-                message=f"{provider_key} must be one of: openrouter, fireworks, moonshot",
-                action=f"Set {provider_key}=openrouter|fireworks|moonshot",
+                key=f"routes.{route}",
+                message=f"model route {route} does not reference a configured provider",
+                action=f"Configure routes.{route} and providers in config/model.json",
             )
         ]
-    if not _is_present_secret(_get(env, key)):
+    api_key_set = bool(configured.get("api_key_set")) or _is_present_secret(str(configured.get("api_key") or ""))
+    if not api_key_set:
         return [
             ConfigIssue(
                 level="missing",
-                key=key,
-                message=f"{setting_key} uses {provider}, but {key} is not configured",
-                action=f"Set {key} or configure the provider in config/model.json",
+                key=f"providers.{provider}.api_key",
+                message=f"model route {route} uses {provider}, but its API key is not configured",
+                action=f"Configure providers.{provider}.api_key in config/model.json or the Web model settings page",
             )
         ]
     return []
 
 
-def check_config(env: Mapping[str, str] | None = None) -> dict:
+def check_config(env: Mapping[str, str] | None = None, *, model_config: Mapping[str, Any] | None = None) -> dict:
     source = env if env is not None else os.environ
+    resolved_model_config = model_config if model_config is not None else _runtime_model_config()
     issues: list[ConfigIssue] = []
 
-    issues.extend(
-        _check_provider(source, provider_key="CHAT_PROVIDER", setting_key="chat", default="openrouter")
-    )
-    issues.extend(
-        _check_provider(source, provider_key="LESSON_PLAN_PROVIDER", setting_key="lesson_plan", default=_get(source, "CHAT_PROVIDER", "openrouter"))
-    )
+    issues.extend(_check_model_provider(resolved_model_config, route="chat"))
+    issues.extend(_check_model_provider(resolved_model_config, route="lesson_plan"))
 
     jwt_secret = _get(source, "JWT_SECRET")
     if not _is_present_secret(jwt_secret):
@@ -184,8 +186,8 @@ def check_config(env: Mapping[str, str] | None = None) -> dict:
     }
 
 
-def log_config_check(env: Mapping[str, str] | None = None) -> dict:
-    result = check_config(env)
+def log_config_check(env: Mapping[str, str] | None = None, *, model_config: Mapping[str, Any] | None = None) -> dict:
+    result = check_config(env, model_config=model_config)
     for issue in result.get("missing", []):
         logger.warning("config_missing", extra=_log_extra(issue))
     for issue in result.get("recommended", []):

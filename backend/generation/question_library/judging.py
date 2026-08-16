@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import unicodedata
 from typing import Any
 
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, model_name
 from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
@@ -24,7 +23,7 @@ def _prompt(prompt_id: str) -> str:
 
 
 def _resolve_judge_model() -> str:
-    raw = str(os.getenv("QUESTION_LIBRARY_JUDGE_MODEL") or "").strip()
+    raw = model_name("question_library_judge")
     if raw:
         return raw
     return str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"

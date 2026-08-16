@@ -1,9 +1,8 @@
 import asyncio
-import os
 from typing import Any, Dict, List
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import settings
+from backend.core.settings import model_name, settings
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 from backend.llm.runner import run_text
@@ -88,7 +87,7 @@ def generate_ai_comment(paper_name: str, difficulty: float, questions: List[Dict
     type_info = "、".join([f"{k}{v}道" for k, v in type_stats.items() if v > 0])
     diff_info = "、".join([f"{k}{v}道" for k, v in diff_stats.items() if v > 0])
 
-    model = str(os.getenv("PAPER_ANALYSIS_MODEL") or settings.main_model or "").strip() or "openai/gpt-4o-mini"
+    model = model_name("paper_analysis", settings.main_model or "openai/gpt-4o-mini")
 
     # 如果没有 API key，使用模板生成
     if not is_llm_configured(scope="chat"):

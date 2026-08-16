@@ -160,6 +160,15 @@ class AuthorPromptTests(unittest.TestCase):
             self.assertIn("评分点", prompt)
             self.assertIn("充当答案标签", prompt)
 
+    def test_fill_prompt_obeys_section_quota_instead_of_repeating_whole_book_total(self):
+        from backend.generation.study_materials.author.fill import _FALLBACK_SYSTEM_PROMPT
+
+        registered = self.reg.render("study.author.fill.v1").content
+        for prompt in (registered, _FALLBACK_SYSTEM_PROMPT):
+            self.assertIn("本节学习闭环硬性配额", prompt)
+            self.assertIn("配额为 0", prompt)
+            self.assertIn("不强制生成", prompt)
+
     def test_figure_spec_prompt_is_json_contract(self):
         p = self.reg.render("figure.spec.v1")
         self.assertEqual(JsonOutputContract().validate_prompt_text(p.content), [])

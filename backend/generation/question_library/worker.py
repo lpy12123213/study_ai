@@ -4,7 +4,7 @@ import asyncio
 import os
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import LESSON_PLAN_MODEL, env_bool
+from backend.core.settings import LESSON_PLAN_MODEL, env_bool, model_name
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import list_unscored_question_ids
 from backend.generation.question_library.scoring import apply_score_and_hide, score_stem_with_llm
@@ -56,7 +56,7 @@ async def run_question_library_scoring_worker(*, stop: asyncio.Event) -> None:
     batch = _as_int(os.getenv("QUESTION_LIBRARY_SCORE_BATCH") or "20", 20)
     user_id = str(os.getenv("QUESTION_LIBRARY_SCORE_USER_ID") or "1").strip() or "1"
     subject = str(os.getenv("QUESTION_LIBRARY_SCORE_SUBJECT") or "").strip()
-    model = str(os.getenv("QUESTION_LIBRARY_SCORE_MODEL") or LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
+    model = model_name("question_library_score", LESSON_PLAN_MODEL or "openai/gpt-5-mini")
 
     while not stop.is_set():
         try:

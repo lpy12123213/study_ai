@@ -997,7 +997,9 @@ async def compose_paper_events(
             },
         }
 
-        review_model = str(os.getenv("PAPER_COMPOSE_REVIEW_MODEL") or "").strip()
+        from backend.core.settings import model_name
+
+        review_model = model_name("paper_compose_review")
         try:
             review_timeout_s = float(os.getenv("PAPER_COMPOSE_REVIEW_TIMEOUT_S") or "25")
         except (TypeError, ValueError):

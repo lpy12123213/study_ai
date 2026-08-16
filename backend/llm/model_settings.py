@@ -8,17 +8,14 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from backend.core.encryption import encrypt_string, is_encrypted_string, mask_secret
-from backend.llm.model_config import load_model_json_config, normalize_base_url, resolve_model_config_path
+from backend.llm.model_config import (
+    DEFAULT_PROVIDER_BASE_URLS,
+    load_model_json_config,
+    normalize_base_url,
+    resolve_model_config_path,
+)
 
 _PROVIDER_NAME_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
-
-DEFAULT_PROVIDER_BASE_URLS: Dict[str, str] = {
-    "openrouter": "https://openrouter.ai/api/v1",
-    "moonshot": "https://api.moonshot.cn/v1",
-    "fireworks": "https://api.fireworks.ai/inference/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "openai": "https://api.openai.com/v1",
-}
 
 
 def _normalize_provider_name(value: str) -> str:
@@ -47,8 +44,10 @@ def _read_raw_payload(*, repo_root: Path) -> Dict[str, Any]:
                     "base_url": DEFAULT_PROVIDER_BASE_URLS["openrouter"],
                 }
             },
+            "routes": {},
             "models": {},
             "params": {},
+            "context": {},
         }
     try:
         return _json_loads(path.read_text(encoding="utf-8"))
@@ -98,8 +97,10 @@ def _sanitize_models(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     out: Dict[str, Any] = {}
-    for key in ("main", "sub", "lesson_plan", "review"):
-        raw = value.get(key)
+    for raw_key, raw in value.items():
+        key = _normalize_provider_name(str(raw_key or "")).replace("-", "_").replace(".", "_")
+        if not key:
+            continue
         if isinstance(raw, str):
             model = raw.strip()[:200]
             if model:
@@ -116,21 +117,101 @@ def _sanitize_models(value: Any) -> Dict[str, Any]:
     return out
 
 
+def _sanitize_routes(value: Any, *, providers: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for raw_route, raw_provider in value.items():
+        route = _normalize_provider_name(str(raw_route or "")).replace("-", "_").replace(".", "_")
+        provider = _normalize_provider_name(str(raw_provider or ""))
+        if route and provider and provider in providers:
+            out[route] = provider
+    return out
+
+
 def _sanitize_params(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     out: Dict[str, Any] = {}
-    for key in ("main_temperature", "sub_temperature"):
+    for raw_key, raw_value in value.items():
+        key = _normalize_provider_name(str(raw_key or "")).replace("-", "_").replace(".", "_")
+        if not key:
+            continue
+        if key == "model_tier_map" and isinstance(raw_value, dict):
+            tiers: Dict[str, str] = {}
+            for tier in ("fast", "cheap", "main", "heavy"):
+                model = _string_field(raw_value.get(tier), max_len=200)
+                if model:
+                    tiers[tier] = model
+            if tiers:
+                out[key] = tiers
+            continue
+        if key.endswith("_temperature"):
+            number = _number_field(raw_value)
+            if number is not None:
+                out[key] = max(0.0, min(float(number), 2.0))
+            continue
+        if key.endswith("_max_tokens"):
+            number = _number_field(raw_value)
+            if number is not None:
+                out[key] = max(0, min(int(number), 500_000))
+            continue
+        if key.endswith("_effort"):
+            effort = _string_field(raw_value, max_len=20).lower().replace("-", "").replace("_", "")
+            if effort in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+                out[key] = effort
+            continue
+        if isinstance(raw_value, bool):
+            out[key] = raw_value
+            continue
+        if isinstance(raw_value, (int, float)):
+            out[key] = raw_value
+            continue
+        text = _string_field(raw_value, max_len=500)
+        if text:
+            out[key] = text
+    return out
+
+
+def _sanitize_context(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    lengths_raw = value.get("lengths")
+    if isinstance(lengths_raw, dict):
+        lengths: Dict[str, int] = {}
+        for model, raw_length in lengths_raw.items():
+            model_name = _string_field(model, max_len=300).lower()
+            number = _number_field(raw_length)
+            if model_name and number is not None and int(number) > 0:
+                lengths[model_name] = min(int(number), 10_000_000)
+        if lengths:
+            out["lengths"] = lengths
+    multiplier = _number_field(value.get("input_multiplier"))
+    if multiplier is not None:
+        out["input_multiplier"] = max(1.0, min(float(multiplier), 2.0))
+    reserve_ratio = _number_field(value.get("reserve_ratio"))
+    if reserve_ratio is not None:
+        out["reserve_ratio"] = max(0.0, min(float(reserve_ratio), 0.2))
+    reserve_tokens = _number_field(value.get("reserve_tokens"))
+    if reserve_tokens is not None:
+        out["reserve_tokens"] = max(0, min(int(reserve_tokens), 8192))
+    for key, minimum, maximum in (
+        ("chat_message_max_tokens", 128, 250_000),
+        ("chat_max_tokens", 512, 1_000_000),
+    ):
         number = _number_field(value.get(key))
         if number is not None:
-            out[key] = max(0.0, min(float(number), 2.0))
-    for key in ("main_max_tokens", "sub_max_tokens"):
-        number = _number_field(value.get(key))
-        if number is not None:
-            out[key] = max(1, min(int(number), 500_000))
-    effort = _string_field(value.get("thinking_effort"), max_len=20).lower().replace("-", "").replace("_", "")
-    if effort in {"none", "minimal", "low", "medium", "high", "xhigh"}:
-        out["thinking_effort"] = effort
+            out[key] = max(minimum, min(int(number), maximum))
+    fetch_limits = value.get("openrouter_fetch_limits")
+    if isinstance(fetch_limits, bool):
+        out["openrouter_fetch_limits"] = fetch_limits
+    cache_ttl = _number_field(value.get("openrouter_cache_ttl_s"))
+    if cache_ttl is not None:
+        out["openrouter_cache_ttl_s"] = max(10.0, min(float(cache_ttl), 24.0 * 3600.0))
+    timeout = _number_field(value.get("openrouter_timeout_s"))
+    if timeout is not None:
+        out["openrouter_timeout_s"] = max(1.0, min(float(timeout), 20.0))
     return out
 
 
@@ -176,12 +257,16 @@ def get_model_settings_payload(*, repo_root: Path) -> Dict[str, Any]:
 
     models = raw.get("models") if isinstance(raw.get("models"), dict) else {}
     params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
+    context = raw.get("context") if isinstance(raw.get("context"), dict) else {}
+    routes = raw.get("routes") if isinstance(raw.get("routes"), dict) else {}
     return {
         "active_provider": active_provider,
         "pinned": pinned,
         "providers": providers,
+        "routes": dict(routes),
         "models": dict(models),
         "params": dict(params),
+        "context": dict(context),
         "config_path": str(resolve_model_config_path(repo_root=repo_root)),
         "encryption": {
             "enabled": True,
@@ -257,8 +342,17 @@ def save_model_settings_payload(*, repo_root: Path, payload: Dict[str, Any]) -> 
     models = dict(current_raw.get("models") if isinstance(current_raw.get("models"), dict) else {})
     models.update(_sanitize_models(payload.get("models")))
 
+    routes = dict(current_raw.get("routes") if isinstance(current_raw.get("routes"), dict) else {})
+    routes.update(_sanitize_routes(payload.get("routes"), providers=providers))
+    if "active_provider" in payload and "routes" not in payload and not provider_payload:
+        for route in ("chat", "lesson_plan", "review"):
+            routes[route] = active_provider
+
     params = dict(current_raw.get("params") if isinstance(current_raw.get("params"), dict) else {})
     params.update(_sanitize_params(payload.get("params")))
+
+    context = dict(current_raw.get("context") if isinstance(current_raw.get("context"), dict) else {})
+    context.update(_sanitize_context(payload.get("context")))
 
     pinned = _bool_field(payload.get("pinned"), default=True)
     next_payload = {
@@ -266,8 +360,10 @@ def save_model_settings_payload(*, repo_root: Path, payload: Dict[str, Any]) -> 
         "pinned": pinned,
         "auto": not pinned,
         "providers": providers,
+        "routes": routes,
         "models": models,
         "params": params,
+        "context": context,
     }
 
     path = resolve_model_config_path(repo_root=repo_root)

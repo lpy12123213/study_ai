@@ -62,7 +62,10 @@ def _provider_config_error(query: str, provider: str) -> Dict[str, Any]:
         "success": False,
         "provider": provider_label,
         "query": query,
-        "error": "No web search provider API key configured. Set TAVILY_API_KEY, EXA_API_KEY, or ZHIPU_API_KEY.",
+        "error": (
+            "No web search provider API key configured. Set TAVILY_API_KEY/EXA_API_KEY in .env "
+            "or providers.zhipu.api_key in config/model.json."
+        ),
         "results": [],
     }
 

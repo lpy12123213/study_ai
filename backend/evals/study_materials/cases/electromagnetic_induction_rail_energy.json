@@ -1,0 +1,39 @@
+{
+  "id": "electromagnetic_induction_rail_energy",
+  "title": "高中物理：导轨模型的电磁感应、收尾速度与能量链条",
+  "query": "在高中物理范围内，完整分析水平导轨-导体棒模型（匀强磁场、电阻 R、内阻 r 不可忽略）：推导动生电动势 BLv、回路电流与安培力，解释从加速到收尾速度的全过程并画出 v-t 与 i-t 图像的定性形状；用 q=ΔΦ/R 计算通过导体的电荷量并说明其与运动快慢无关；建立外力做功、焦耳热与动能变化的能量守恒链条；辨析动生与感生电动势、电动势与路端电压、左手定则与右手定则的分工；说明楞次定律的阻碍语义",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["微分方程视角的收尾速度分析", "自感与RL电路的类比"],
+  "subject": "高中物理",
+  "preset": "deep",
+  "requirements": "图像必须解释斜率与渐近行为；电荷量与电热的计算必须分别写出所用守恒关系；所有方向判断必须写明所用定则。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 12, "prefer_local_archive": false},
+  "expected_knowledge_points": ["磁通量及其变化", "法拉第电磁感应定律", "楞次定律与方向判定", "动生电动势与导体棒", "感生与动生的区分", "含内阻回路的电流电压", "安培力与受力运动分析", "收尾速度与稳定状态", "能量转化与守恒链条", "电荷量与磁通量变化", "微分方程视角的收尾速度分析", "自感与RL电路的类比"],
+  "min_unique_sources": 14,
+  "expected_domains": ["openstax.org", "physicsclassroom.com", "khanacademy.org", "phet.colorado.edu"],
+  "required_facts": [
+    {"id": "faraday_law", "description": "感应电动势等于磁通量变化率（乘匝数），ε=nΔΦ/Δt", "match": {"all": ["ΔΦ|磁通量.{0,6}变化"], "any": ["Δt|变化率", "匝"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-1-faradays-law"]},
+    {"id": "lenz_semantics", "description": "楞次定律：感应电流的效果阻碍（而非阻止）磁通量的变化", "match": {"all": ["楞次"], "any": ["阻碍", "反抗|延缓"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-2-lenzs-law"]},
+    {"id": "motional_emf", "description": "动生电动势 ε=BLv 要求 B、L、v 两两垂直，否则取有效分量", "match": {"all": ["BLv|B.{0,3}L.{0,3}v"], "any": ["垂直", "有效.{0,4}(长度|分量)"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-3-motional-emf"]},
+    {"id": "circuit_with_internal_resistance", "description": "回路电流 I=ε/(R+r)，路端电压 U=ε-Ir 小于电动势", "match": {"all": ["R.{0,4}[+].{0,4}r"], "any": ["路端电压", "内阻"]}, "source_urls": ["https://www.physicsclassroom.com/class/circuits/Lesson-1/Electric-Potential-Difference"]},
+    {"id": "terminal_velocity", "description": "收尾速度时加速度为零、合力为零，此时电流恒定且不为零", "match": {"all": ["收尾速度|终速度|最大速度"], "any": ["加速度.{0,6}(为零|等于零)|a.{0,3}=.{0,3}0", "合力.{0,6}(为零|平衡)"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-3-motional-emf"]},
+    {"id": "charge_flux_relation", "description": "通过导体的电荷量 q=ΔΦ/R（含内阻时为总电阻），只由磁通量变化决定，与快慢无关", "match": {"all": ["电荷量|q.{0,4}="], "any": ["ΔΦ.{0,6}/", "与.{0,6}(快慢|时间|速度).{0,6}无关"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-1-faradays-law"]},
+    {"id": "energy_chain", "description": "能量链条：外力做功等于焦耳热与动能变化之和（W外=Q+ΔEk）", "match": {"all": ["能量"], "any": ["焦耳热|电热|Q.{0,4}[+]", "守恒"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-3-motional-emf"]},
+    {"id": "induced_vs_motional", "description": "感生电动势源于磁场变化、动生电动势源于导体运动切割", "match": {"all": ["感生", "动生"], "any": ["磁场.{0,8}变化", "切割|导体.{0,6}运动"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/13-4-induced-electric-fields"]},
+    {"id": "ampere_force_rule", "description": "安培力 F=BIL 用左手定则判断方向，感应电流的安培力总阻碍相对运动", "match": {"all": ["BIL|安培力"], "any": ["左手", "阻碍.{0,8}相对运动"]}, "source_urls": ["https://www.khanacademy.org/science/physics/magnetic-forces-and-magnetic-fields"]},
+    {"id": "graph_asymptote", "description": "v-t 图像斜率渐减并趋于收尾速度，i-t 图像同步趋于恒定值", "match": {"all": ["v-t|v–t|速度.{0,4}时间"], "any": ["斜率", "渐近|趋于|逼近"]}, "source_urls": ["https://www.physicsclassroom.com/class/1DKin/Lesson-4/Meaning-of-Shape-for-a-v-t-Graph"]},
+    {"id": "differential_equation_bridge", "description": "[拓展] m·dv/dt=F-B²L²v/(R+r) 说明速度按指数规律趋近收尾速度", "match": {"all": ["B.{0,3}(2|²).{0,3}L.{0,3}(2|²)"], "any": ["微分|dv", "指数.{0,8}(趋近|逼近|衰减)"]}, "source_urls": ["https://en.wikipedia.org/wiki/Terminal_velocity"]},
+    {"id": "rl_circuit_bridge", "description": "[拓展] RL 电路电流上升同为指数趋稳，自感阻碍电流变化与楞次定律同源", "match": {"all": ["自感|RL"], "any": ["时间常数|指数", "阻碍.{0,8}电流.{0,6}变化"]}, "source_urls": ["https://openstax.org/books/university-physics-volume-2/pages/14-4-rl-circuits"]}
+  ],
+  "traps": [
+    {"id": "lenz_stop_change", "description": "误解：楞次定律表示感应电流阻止磁通量变化，最终磁通量保持不变", "wrong_pattern": "楞次.{0,16}阻止.{0,12}(变化|增大|减小)", "correct_pattern": "阻碍|延缓|反抗"},
+    {"id": "terminal_current_zero", "description": "误解：达到收尾速度时回路电流变为零", "wrong_pattern": "(收尾|终|最大)速度.{0,16}电流.{0,10}(为零|等于零|消失)", "correct_pattern": "电流.{0,8}(恒定|不变|最大|不为零)"},
+    {"id": "hand_rule_confusion", "description": "误解：用右手定则判断安培力方向或用左手定则判断感应电流方向", "wrong_pattern": "右手.{0,10}(判断|判定).{0,8}安培力|左手.{0,10}(判断|判定).{0,8}感应电流", "correct_pattern": "左手.{0,12}安培力|右手.{0,12}(感应|电流方向)|楞次.{0,10}方向"},
+    {"id": "charge_depends_speed", "description": "误解：通过导体的电荷量与抽拉（运动）快慢有关", "wrong_pattern": "电荷量.{0,14}(取决于|依赖).{0,8}(速度|快慢)", "correct_pattern": "与.{0,8}(快慢|时间|速度).{0,8}无关"},
+    {"id": "energy_vanishes", "description": "误解：安培力做负功让机械能凭空消失", "wrong_pattern": "(机械能|能量).{0,10}(凭空)?(消失|损失掉了)", "correct_pattern": "转化.{0,10}(为|成).{0,8}(电能|内能|焦耳热)|电热"}
+  ],
+  "contrasts": [["动生电动势", "感生电动势"], ["电动势", "路端电压"], ["左手定则", "右手定则"], ["瞬时电动势", "平均电动势"], ["安培力", "洛伦兹力"]],
+  "format_requirements": {"key_formulas": ["BLv", "ΔΦ", "R.{0,4}[+].{0,4}r", "B.{0,3}(2|²).{0,3}L.{0,3}(2|²).{0,3}v"], "min_figures": 2, "min_tables": 3, "min_chars": 12000},
+  "learning_requirements": {"min_objectives": 6, "min_worked_examples": 5, "min_practice_questions": 14, "min_answered_questions": 14, "required_levels": ["基础", "应用", "迁移"]}
+}

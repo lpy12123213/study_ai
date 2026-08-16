@@ -130,7 +130,7 @@ def _print_welcome_banner(console) -> None:  # noqa: ANN001
     body.append(f"mcp_search:  {_resolve_cli_mcp_search_model()}\n")
 
     has_exa = bool((os.getenv("EXA_API_KEY") or "").strip())
-    has_zhipu = bool((os.getenv("ZHIPU_API_KEY") or "").strip())
+    has_zhipu = bool(_settings.zhipu_api_key)
     body.append("MCP keys:    ", style="dim")
     body.append(f"exa={'✓' if has_exa else '×'}  ", style="green" if has_exa else "red")
     body.append(f"zhipu={'✓' if has_zhipu else '×'}", style="green" if has_zhipu else "red")

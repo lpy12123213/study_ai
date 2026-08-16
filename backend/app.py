@@ -116,11 +116,11 @@ async def _study_materials_model_self_check() -> None:
     from backend.llm import client as _llm_client
 
     candidates = [
-        ("STUDY_MATERIALS_THINKING_MODEL", str(_settings.STUDY_MATERIALS_THINKING_MODEL or "").strip()),
-        ("STUDY_MATERIALS_WRITER_MODEL", str(_settings.STUDY_MATERIALS_WRITER_MODEL or "").strip()),
+        ("models.study_materials_thinking", str(_settings.STUDY_MATERIALS_THINKING_MODEL or "").strip()),
+        ("models.study_materials_writer", str(_settings.STUDY_MATERIALS_WRITER_MODEL or "").strip()),
     ]
     checked: set = set()
-    for env_name, model in candidates:
+    for config_key, model in candidates:
         if not model or model in checked:
             continue
         checked.add(model)
@@ -137,7 +137,7 @@ async def _study_materials_model_self_check() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("study_materials_model_self_check_error", extra={"model": model, "env": env_name})
+            logger.exception("study_materials_model_self_check_error", extra={"model": model, "config": config_key})
             continue
         error_code = str(getattr(result, "error_code", "") or "")
         if error_code == "4xx":
@@ -145,15 +145,15 @@ async def _study_materials_model_self_check() -> None:
                 "study_materials_model_self_check_failed",
                 extra={
                     "model": model,
-                    "env": env_name,
+                    "config": config_key,
                     "status": error_code,
-                    "hint": f"模型调用永久失败（4xx）：请检查 {env_name}（当前={model}）是否为已下线或拼错的模型 ID",
+                    "hint": f"模型调用永久失败（4xx）：请检查 config/model.json 的 {config_key}（当前={model}）",
                 },
             )
         elif error_code:
             logger.warning(
                 "study_materials_model_self_check_degraded",
-                extra={"model": model, "env": env_name, "error_code": error_code},
+                extra={"model": model, "config": config_key, "error_code": error_code},
             )
 
 

@@ -16,7 +16,7 @@
 - MCP 实现可复用度：
   - `python_scientific_compute`（`.../python_scientific_compute.py:345`）：**独立可复用**，子进程沙箱、无网络；`:58` 已提供 `openai_tool_spec()`。
   - `plot_function`：经 `render_matplotlib_2d_to_url`（`generation/question_library/diagram_utils.py:167`）**可复用**，但硬编码 `user_id="1"`，需传真实 user_id。
-  - `web_search`（`stdio_handlers.py:816`）：provider 自动选择 ~150 行**内联在 handler**，但 `integrations/mcp/search/*` 的 provider 函数可复用 → **抽出共享 `run_web_search` 服务**给 MCP handler 与对话共用。需 `TAVILY_API_KEY`/`EXA_API_KEY`/`ZHIPU_API_KEY`，有网络出口。
+  - `web_search`（`stdio_handlers.py:816`）：provider 自动选择 ~150 行**内联在 handler**，但 `integrations/mcp/search/*` 的 provider 函数可复用 → **抽出共享 `run_web_search` 服务**给 MCP handler 与对话共用。Tavily/Exa 搜索凭据继续使用 `.env`；智谱搜索模型与凭据统一配置在 `config/model.json` 的 `providers.zhipu` / `models.zhipu_search`，并要求有网络出口。
   - 后续（不在 v1）：`render_tikz`（需 xelatex/dvisvgm）、`align_to_curriculum`（内联判定）、`solve_paper`（~95 行编排待抽取）。
 - 规格格式：MCP `inputSchema` 与对话 `parameters` 同为 JSON Schema，转换 trivial。
 - 前端渲染：`features/chat/components/MessageBubble.tsx:49,92` 助手消息为纯 `whitespace-pre-wrap`；已存在 `components/shared/Markdown`（react-markdown + KaTeX + `AuthImage` 解析 `/api/media/generated/...`），lessonPlans/studyMaterials 已用。换上即可显示工具产出的图片/链接/公式。

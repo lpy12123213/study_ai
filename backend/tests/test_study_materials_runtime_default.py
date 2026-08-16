@@ -348,6 +348,8 @@ class AuthorDonePayloadSlimTests(unittest.IsolatedAsyncioTestCase):
             "audit": {"frontier_sections": [], "unsupported": [], "passed": True},
             "quality_notes": [],
             "blueprint": blueprint,
+            "stage_timings": {"research": 12.3, "fill": 45.6, "accept": 1.2},
+            "learning_repair_attempts": 1,
             "degraded": False,
         }
 
@@ -404,6 +406,16 @@ class AuthorDonePayloadSlimTests(unittest.IsolatedAsyncioTestCase):
                 "figures": 3,
             },
         )
+
+    async def test_author_observability_keeps_compact_stage_timings(self) -> None:
+        done_data, _ = await self._capture_done(self._big_success_result())
+
+        self.assertEqual(done_data["author"]["stage_timings"], {
+            "research": 12.3,
+            "fill": 45.6,
+            "accept": 1.2,
+        })
+        self.assertEqual(done_data["author"]["learning_repair_attempts"], 1)
 
     async def test_done_workflow_drops_heavy_duplicates_and_cold_resume_backfills_markdown(self) -> None:
         result = self._big_success_result()

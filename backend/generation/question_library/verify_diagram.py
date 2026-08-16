@@ -178,7 +178,7 @@ async def verify_diagram_with_vision(
         return {
             "ok": False,
             "issues": ["llm_not_configured"],
-            "repair_hint": "verify_diagram 需要可用 LLM。请配置 LESSON_PLAN_API_KEY/MOONSHOT_API_KEY/OPENROUTER_API_KEY。",
+            "repair_hint": "verify_diagram 需要可用 LLM。请在 config/model.json 中配置 lesson_plan 路由及供应商密钥。",
             "confidence": 0.0,
             "mode": "skipped",
         }

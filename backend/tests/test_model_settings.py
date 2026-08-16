@@ -33,6 +33,9 @@ class ModelSettingsTests(unittest.TestCase):
                             "api_key": "ds-secret-key",
                         },
                         "models": {"main": "deepseek-chat", "sub": "deepseek-chat"},
+                        "routes": {"chat": "deepseek", "lesson_plan": "deepseek", "review": "deepseek"},
+                        "params": {"knowledge_video_max_tokens": 9000, "codex_runtime_effort": "xhigh"},
+                        "context": {"input_multiplier": 1.2, "chat_max_tokens": 64000},
                     },
                 )
 
@@ -49,6 +52,11 @@ class ModelSettingsTests(unittest.TestCase):
                 self.assertEqual(loaded.providers["deepseek"].base_url, "https://api.deepseek.com/v1")
                 self.assertTrue(loaded.pinned)
                 self.assertEqual(loaded.models["main"], "deepseek-chat")
+                self.assertEqual(loaded.routes["review"], "deepseek")
+                self.assertEqual(loaded.params["knowledge_video_max_tokens"], 9000)
+                self.assertEqual(loaded.params["codex_runtime_effort"], "xhigh")
+                self.assertAlmostEqual(float(loaded.context["input_multiplier"]), 1.2)
+                self.assertEqual(loaded.context["chat_max_tokens"], 64000)
 
                 save_model_settings_payload(
                     repo_root=root,

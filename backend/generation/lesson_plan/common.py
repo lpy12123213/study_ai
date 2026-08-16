@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.core.logging_utils import get_request_id, get_trace_id
+from backend.core.settings import model_param_int
 from backend.llm.json_utils import extract_first_json_object
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -21,11 +21,7 @@ def lesson_plan_infinite_max_tokens() -> int:
     higher cap when the provider/model supports it.
     """
 
-    raw = (os.getenv("LESSON_PLAN_INFINITE_MAX_TOKENS") or "").strip()
-    try:
-        v = int(raw) if raw else 0
-    except ValueError:
-        v = 0
+    v = model_param_int("lesson_plan_infinite_max_tokens", 0)
     return v if v > 0 else 200000
 
 

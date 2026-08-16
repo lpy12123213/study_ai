@@ -21,6 +21,7 @@ from backend.core.settings import (
     LESSON_PLAN_MAX_TOKENS,
     LESSON_PLAN_TEMPERATURE,
     STUDY_MATERIALS_THINKING_EFFORT_DEFAULT,
+    model_param_bool,
 )
 from backend.llm.client import ChatCompletionResult, chat_completion
 from backend.llm.json_utils import extract_first_json_object
@@ -289,18 +290,13 @@ class Executor:
             return ChatCompletionResult()
 
         def _truthy(raw: str) -> bool:
-            s = (raw or "").strip().lower()
-            return s in {"1", "true", "yes", "y", "on"}
+            return str(raw or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
         def _default_reasoning_cfg() -> Optional[Dict[str, Any]]:
-            # Default to enabled (requested: always use "thinking mode" unless explicitly disabled).
-            enabled_raw = os.getenv("STUDY_MATERIALS_THINKING_MODE") or os.getenv("STUDY_MATERIALS_REASONING") or "1"
-            if (enabled_raw or "").strip().lower() in {"0", "false", "no", "off"}:
+            if not model_param_bool("study_materials_thinking_enabled", True):
                 return None
 
-            effort_raw = os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT")
-            if not str(effort_raw or "").strip():
-                effort_raw = STUDY_MATERIALS_THINKING_EFFORT_DEFAULT or "xhigh"
+            effort_raw = STUDY_MATERIALS_THINKING_EFFORT_DEFAULT or "xhigh"
             effort = (effort_raw or "").strip().lower().replace("-", "").replace("_", "")
             if effort in {"max", "maximum", "highest"}:
                 effort = "xhigh"
@@ -308,13 +304,12 @@ class Executor:
             if effort not in allowed:
                 effort = "xhigh"
 
-            exclude_raw = os.getenv("STUDY_MATERIALS_REASONING_EXCLUDE") or "0"
-            exclude = _truthy(exclude_raw)
+            exclude = model_param_bool("study_materials_reasoning_exclude", False)
             return {"effort": effort, "exclude": exclude}
 
         default_reasoning = _default_reasoning_cfg()
         if reasoning is None:
-            # No call-site override: use env defaults.
+            # No call-site override: use model.json defaults.
             reasoning = default_reasoning
         else:
             # Call-site override should win.

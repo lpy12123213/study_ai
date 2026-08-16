@@ -19,6 +19,7 @@ from backend.generation.study_materials.author.pipeline import (
     AuthorPipelineContext,
     _authority_search_query,
     _AuthorPipeline,
+    _distribute_section_quota,
     _task_authority_queries,
     run_author_pipeline,
 )
@@ -90,6 +91,24 @@ FILL_BODY = (
 )
 
 _QUOTA_LEVELS = ["基础", "应用", "迁移"]
+
+
+class SectionQuotaDistributionTests(unittest.TestCase):
+    def test_whole_book_quota_is_not_ceil_duplicated_per_section(self):
+        questions = _distribute_section_quota(total=12, count=10, cap=4)
+        examples = _distribute_section_quota(total=4, count=10, cap=2)
+
+        self.assertEqual(sum(questions), 12)
+        self.assertEqual(sum(examples), 4)
+        self.assertEqual(len(questions), 10)
+        self.assertEqual(len(examples), 10)
+        self.assertLessEqual(max(questions), 4)
+        self.assertLessEqual(max(examples), 2)
+        self.assertEqual(sum(value > 0 for value in examples), 4)
+
+    def test_per_section_caps_leave_only_true_overflow_for_global_repair(self):
+        self.assertEqual(_distribute_section_quota(total=12, count=2, cap=4), [4, 4])
+        self.assertEqual(_distribute_section_quota(total=4, count=2, cap=2), [2, 2])
 
 
 def _grounded_fill_body(user: str, body: str = FILL_BODY) -> str:
@@ -660,7 +679,7 @@ class AuthorLearningContractTests(unittest.TestCase):
 
         self.assertTrue(result["degraded"])
         self.assertEqual(len(repair_requests), 2)
-        # 逐节配额（2 节 × min(2, ceil(4/2))=2 例题、min(4, ceil(12/2))=4 题）已在填充时
+        # 逐节配额受单节上限约束（2 节各 2 例题、4 题），已在填充时
         # 交齐 4 例题与 [Q1]..[Q8]；整书补齐只需兜底剩余 4 题（[Q9]..[Q12]），例题无需新增。
         for request in repair_requests:
             self.assertIn("- 例题: 无需新增", request)
@@ -865,7 +884,9 @@ class AuthorPipelineFaultToleranceTests(unittest.TestCase):
                 return BACKBONE_MD
             body = _grounded_fill_body(user)
             if "极限的直观概念" in user:
-                return body.replace("[EX1] ", "")
+                # 零学习配额时缺少 [EXn] 本身不应再强制重写；用同一次输出中的
+                # 越界引用触发作者重写，再锁定已有例题块的确定性标签修复。
+                return re.sub(r"\[\^\d+\]", "[^999]", body.replace("[EX1] ", ""))
             return body
 
         events = []
@@ -2439,6 +2460,122 @@ class AuthorKpSplitTests(unittest.TestCase):
             self.assertIn(f"[拓展:{topic}]", markdown)
         self.assertEqual(markdown.count("[高中连接]"), 2)
         self.assertTrue(result["quality_report"]["passed"])
+
+
+class AuthorStageSplitTests(unittest.TestCase):
+    """阶段评测拆分：benchmark_stage=research 只跑检索并落盘快照；
+    research_fixture_dir 注入研究夹具后撰写阶段不得触发任何真实检索。"""
+
+    @staticmethod
+    def _ctx_with_options(work_dir, **options):
+        ctx = _ctx(work_dir)
+        ctx.options = {**ctx.options, **options}
+        return ctx
+
+    def test_research_stage_stops_before_writing_and_snapshots(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_with_options(tmp, benchmark_stage="research"),
+                    llm_func=_fake_llm(),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=None,
+                )
+            )
+            snapshot = Path(tmp) / "research_snapshot"
+            for name in ("knowledge_points.json", "research.md", "source_registry.json", "research_evidence.json"):
+                self.assertTrue((snapshot / name).is_file(), name)
+            registry = json.loads((snapshot / "source_registry.json").read_text(encoding="utf-8"))
+            self.assertTrue(registry)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["stage"], "research")
+        self.assertNotIn("markdown", result)
+        report = result["research_report"]
+        self.assertGreaterEqual(int(report["unique_sources"]), 1)
+        self.assertIn("https://example.com/limits", report["source_urls"])
+        # 研究 todo 完成；不进入撰写：无蓝图/骨架 LLM 调用、无填充事件
+        todos = TodoList.from_json(result["todos"])
+        self.assertEqual(todos.get("research").status, "done")
+        llm_stages = {
+            event["data"].get("stage")
+            for event in events
+            if event.get("type") == "tool_call" and event["data"].get("tool") == "llm"
+        }
+        self.assertNotIn("blueprint", llm_stages)
+        self.assertNotIn("backbone", llm_stages)
+        self.assertFalse(any(event.get("type") == "section_fill" for event in events))
+
+    def test_write_stage_uses_fixture_and_never_searches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_dir = Path(tmp) / "fixture"
+            fixture_dir.mkdir()
+            (fixture_dir / "knowledge_points.json").write_text(
+                json.dumps(["极限的直观概念", "极限的严格定义"], ensure_ascii=False), encoding="utf-8",
+            )
+            (fixture_dir / "research.md").write_text(
+                "## 来源登记表\n\n- [^1] 极限讲义 https://example.com/limits\n\n"
+                "## 极限的直观概念\n- 极限是无限逼近的严格化 | src: [^1] | conf: 0.90\n\n"
+                "## 极限的严格定义\n- epsilon-delta 定义刻画逼近 | src: [^1] | conf: 0.90\n",
+                encoding="utf-8",
+            )
+            (fixture_dir / "source_registry.json").write_text(
+                json.dumps([{"n": 1, "title": "极限讲义", "url": "https://example.com/limits"}]),
+                encoding="utf-8",
+            )
+
+            def forbidden_search(*args, **kwargs):
+                raise AssertionError("write 阶段不得触发真实检索")
+
+            events = []
+            work_dir = Path(tmp) / "work"
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_with_options(str(work_dir), research_fixture_dir=str(fixture_dir)),
+                    llm_func=_fake_llm(),
+                    toolbox=ResearchToolbox(serp_func=forbidden_search, fetch_func=forbidden_search),
+                    emit=events.append,
+                    forge=_fake_forge(events),
+                )
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("[^1]", result["markdown"])
+        self.assertIn("https://example.com/limits", result["markdown"])
+        self.assertTrue(
+            any(note.startswith("research_fixture_used") for note in result["quality_notes"]),
+            result["quality_notes"],
+        )
+        llm_stages = {
+            event["data"].get("stage")
+            for event in events
+            if event.get("type") == "tool_call" and event["data"].get("tool") == "llm"
+        }
+        self.assertNotIn("split", llm_stages)
+        self.assertFalse(
+            any(
+                event.get("type") == "tool_call" and event["data"].get("tool") in {"search", "browse"}
+                for event in events
+            )
+        )
+
+    def test_invalid_fixture_fails_fast(self):
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = asyncio.run(
+                run_author_pipeline(
+                    self._ctx_with_options(tmp, research_fixture_dir=str(Path(tmp) / "missing")),
+                    llm_func=_fake_llm(),
+                    toolbox=_fake_toolbox(),
+                    emit=events.append,
+                    forge=None,
+                )
+            )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["code"], "research_fixture_invalid")
+        self.assertEqual(result["error"]["stage"], "research")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,11 @@ _CONTRAST_CUE_RE = re.compile(
 )
 _INLINE_FOOTNOTE_RE = re.compile(r"\[\^([^\]]+)\]")
 _INLINE_NUMERIC_RE = re.compile(r"\[(\d{1,2})\]")
+_CONDITIONAL_LABEL_RE = re.compile(r"^\s*P\(\s*(?P<event>.+?)\s*\|\s*(?P<condition>.+?)\s*\)\s*$", re.IGNORECASE)
+_CONDITIONAL_EXPR_RE = re.compile(
+    r"P\s*\(\s*(?P<event>[^()]{1,80}?)\s*(?:\\mid|\|)\s*(?P<condition>[^()]{1,80}?)\s*\)",
+    re.IGNORECASE,
+)
 
 
 def _content_text(markdown: str) -> str:
@@ -64,7 +69,10 @@ def _content_text(markdown: str) -> str:
         if in_toc and _BULLET_RE.match(stripped):
             continue
         lines.append(line)
-    return "\n".join(lines)
+    # Markdown 中的百分号通常由 LaTeX 写成 ``\%``。用例事实契约按学习者
+    # 实际看到的 ``%`` 编写；若不在评分入口归一化，已经正确写出的 15.4\%
+    # 会被确定性正则误判为缺失。
+    return "\n".join(lines).replace(r"\%", "%")
 
 
 def _fact_passed(fact: RequiredFact, text: str) -> bool:
@@ -107,6 +115,8 @@ def _explicit_correction_hit(pattern: str, text: str) -> bool:
 
 
 def _contrast_hit(pair: List[str], text: str) -> bool:
+    if _reverse_conditional_hit(pair, text):
+        return True
     a, b = pair[0].casefold(), pair[1].casefold()
     folded = text.casefold()
     for match in re.finditer(re.escape(a), folded):
@@ -116,6 +126,55 @@ def _contrast_hit(pair: List[str], text: str) -> bool:
         ]
         if b in window and _CONTRAST_CUE_RE.search(window):
             return True
+    return False
+
+
+def _conditional_label_parts(value: str) -> Optional[tuple[str, str]]:
+    match = _CONDITIONAL_LABEL_RE.match(str(value or ""))
+    if not match:
+        return None
+    return (match.group("event").strip().casefold(), match.group("condition").strip().casefold())
+
+
+def _normalize_math_token(value: str) -> str:
+    return re.sub(r"[\s{}]", "", str(value or "")).casefold()
+
+
+def _reverse_conditional_hit(pair: List[str], text: str) -> bool:
+    """Recognize an explicitly contrasted pair of reversed conditional probabilities.
+
+    Benchmark labels may use learner-facing event names (``P(阳性|患病)``), while a
+    correct generated book consistently uses symbols (``P(T^+\\mid D)``). Requiring
+    literal label equality therefore rejects the exact mathematical contrast being
+    tested. The special case is deliberately structural: the case labels themselves
+    must be reversals, and the document must contain two nearby probability formulas
+    whose event/condition positions are also reversed plus an explicit contrast cue.
+    """
+
+    if len(pair) != 2:
+        return False
+    left = _conditional_label_parts(pair[0])
+    right = _conditional_label_parts(pair[1])
+    if left is None or right is None or left != (right[1], right[0]):
+        return False
+
+    expressions = [
+        (
+            match.start(),
+            match.end(),
+            _normalize_math_token(match.group("event")),
+            _normalize_math_token(match.group("condition")),
+        )
+        for match in _CONDITIONAL_EXPR_RE.finditer(text)
+    ]
+    for index, first in enumerate(expressions):
+        for second in expressions[index + 1:]:
+            if first[2:] != (second[3], second[2]):
+                continue
+            start = max(0, min(first[0], second[0]) - _CONTRAST_WINDOW // 2)
+            end = min(len(text), max(first[1], second[1]) + _CONTRAST_WINDOW // 2)
+            if _CONTRAST_CUE_RE.search(text[start:end]):
+                return True
     return False
 
 

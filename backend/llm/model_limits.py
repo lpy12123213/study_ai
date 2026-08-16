@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 import threading
 import time
@@ -12,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_context_value
 from backend.llm.tokenizer import estimate_messages_tokens
 from backend.shared.project_paths import resolve_repo_local_dir
 
@@ -41,20 +41,16 @@ def model_context_length(model: str) -> int:
     if not name:
         return 0
     builtin: Dict[str, int] = {"deepseek/deepseek-v3.2": 163840}
-    raw = str(os.getenv("MODEL_CONTEXT_LENGTHS") or "").strip()
-    if raw:
-        try:
-            items = json.loads(raw).items() if raw.startswith("{") else _iter_env_pairs(raw)
-            for key, value in items:
-                try:
-                    parsed = int(value)
-                except (TypeError, ValueError):
-                    continue
-                key = str(key or "").strip().lower()
-                if key and parsed > 0:
-                    builtin[key] = parsed
-        except (json.JSONDecodeError, TypeError, ValueError):
-            logger.debug("failed to parse builtin model max tokens", exc_info=True)
+    configured = model_context_value("lengths", {})
+    if isinstance(configured, dict):
+        for key, value in configured.items():
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            key = str(key or "").strip().lower()
+            if key and parsed > 0:
+                builtin[key] = parsed
     return int(builtin.get(name) or 0)
 
 
@@ -71,7 +67,7 @@ def _iter_env_pairs(raw: str):
 
 def context_input_multiplier() -> float:
     try:
-        value = float(str(os.getenv("MODEL_CONTEXT_INPUT_MULTIPLIER") or "").strip() or "1.15")
+        value = float(model_context_value("input_multiplier", 1.15))
     except (TypeError, ValueError):
         value = 1.15
     return max(1.0, min(value if math.isfinite(value) else 1.15, 2.0))
@@ -82,15 +78,15 @@ def context_reserve_tokens(context_length: int) -> int:
         ctx_len = int(context_length)
     except (TypeError, ValueError):
         ctx_len = 0
-    raw = str(os.getenv("MODEL_CONTEXT_RESERVE_TOKENS") or "").strip()
-    if raw:
+    configured_reserve = model_context_value("reserve_tokens", None)
+    if configured_reserve not in {None, "", 0, "0"}:
         try:
-            reserve = int(raw)
+            reserve = int(configured_reserve)
         except (TypeError, ValueError):
             reserve = 1024
     else:
         try:
-            ratio = float(str(os.getenv("MODEL_CONTEXT_RESERVE_RATIO") or "").strip() or "0.015")
+            ratio = float(model_context_value("reserve_ratio", 0.015))
         except (TypeError, ValueError):
             ratio = 0.015
         ratio = max(0.0, min(ratio if math.isfinite(ratio) else 0.015, 0.2))
@@ -203,13 +199,13 @@ def _persist_openrouter_model_limits_cache_to_disk() -> None:
 async def openrouter_model_limits(
     *, base_url: str, api_key: str, model: str, get_client: Callable[[], Awaitable[Any]], client_get: Callable[..., Awaitable[Any]]
 ) -> Tuple[int, int]:
-    if str(os.getenv("OPENROUTER_FETCH_MODEL_LIMITS") or "1").strip().lower() in {"0", "false", "no", "off"}:
+    if not bool(model_context_value("openrouter_fetch_limits", True)):
         return (0, 0)
     base, model_key, key = str(base_url or "").strip().rstrip("/"), str(model or "").strip().lower(), str(api_key or "").strip()
     if not base or not model_key or not key:
         return (0, 0)
     try:
-        ttl_s = max(10.0, min(float(os.getenv("OPENROUTER_MODELS_CACHE_TTL_S") or 3600.0), 24.0 * 3600.0))
+        ttl_s = max(10.0, min(float(model_context_value("openrouter_cache_ttl_s", 3600.0)), 24.0 * 3600.0))
     except (TypeError, ValueError):
         ttl_s = 3600.0
     now = time.time()
@@ -218,7 +214,7 @@ async def openrouter_model_limits(
     if cached and float(cached[0]) > now:
         return (int(cached[1] or 0), int(cached[2] or 0))
     try:
-        timeout_s = max(1.0, min(float(os.getenv("OPENROUTER_MODELS_TIMEOUT_S") or 6.0), 20.0))
+        timeout_s = max(1.0, min(float(model_context_value("openrouter_timeout_s", 6.0)), 20.0))
         resp = await client_get(
             await get_client(),
             f"{base}/models",

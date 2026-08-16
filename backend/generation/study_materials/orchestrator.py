@@ -1732,9 +1732,27 @@ class StudyMaterialsTaskManager:
                         "stage": str(error.get("stage") or ""),
                         "issues": list(error.get("issues") or []),
                         "detail": str(error.get("detail") or ""),
+                        "stage_timings": _dict(result.get("stage_timings")),
                         "recoverable": True,
                     },
                 )
+                return
+
+            if str(result.get("stage") or "") == "research":
+                # 阶段评测（benchmark_stage=research）：无成稿，不建归档，
+                # done 载荷携带研究报告与快照路径供 runner 评分/回收夹具。
+                stage_payload: Dict[str, Any] = {
+                    "success": True,
+                    "stage": "research",
+                    "research_report": _dict(result.get("research_report")),
+                    "author": {
+                        "todos": result.get("todos") or [],
+                        "quality_notes": result.get("quality_notes") or [],
+                        "stage_timings": _dict(result.get("stage_timings")),
+                    },
+                }
+                await task_runtime.append_event(task, agent_event("done", stage_payload))
+                await task_runtime.complete_task(task, result=stage_payload)
                 return
 
             markdown = str(result.get("markdown") or "")
@@ -1823,6 +1841,8 @@ class StudyMaterialsTaskManager:
                     "audit": _dict(result.get("audit")),
                     "quality_notes": result.get("quality_notes") or [],
                     "blueprint": _author_blueprint_summary(_dict(result.get("blueprint"))),
+                    "stage_timings": _dict(result.get("stage_timings")),
+                    "learning_repair_attempts": int(result.get("learning_repair_attempts") or 0),
                 },
             }
             if result.get("degraded"):

@@ -1,13 +1,107 @@
+import ast
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.core.settings import Settings
 
 
 class ModelJsonConfigTests(unittest.TestCase):
+    def test_production_code_does_not_read_legacy_model_environment_variables(self) -> None:
+        backend_root = Path(__file__).resolve().parents[1]
+        allowed = {"MODEL_CONFIG_PATH", "STUDY_MATERIALS_MODEL_SELF_CHECK"}
+        provider_keys = {
+            "CHAT_PROVIDER",
+            "LESSON_PLAN_PROVIDER",
+            "REVIEW_PROVIDER",
+            "LLM_PROVIDER_PINNED",
+            "OPENROUTER_API_KEY",
+            "OPENROUTER_BASE_URL",
+            "MOONSHOT_API_KEY",
+            "MOONSHOT_BASE_URL",
+            "FIREWORKS_API_KEY",
+            "FIREWORKS_BASE_URL",
+            "ZHIPU_API_KEY",
+            "ZHIPU_BASE_URL",
+            "ARK_API",
+            "ARK_API_KEY",
+            "ARK_BASE_URL",
+        }
+        violations: list[str] = []
+        for path in backend_root.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                first = node.args[0]
+                if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+                    continue
+                name = first.value
+                if name in allowed:
+                    continue
+                is_env_loader = (
+                    isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "os"
+                    and node.func.attr == "getenv"
+                ) or (isinstance(node.func, ast.Name) and node.func.id in {"_get_str", "_get_float", "env_int", "env_bool"})
+                if not is_env_loader:
+                    continue
+                is_model_value = (
+                    name.endswith("_MODEL")
+                    or "_TEMPERATURE" in name
+                    or name.endswith("_MAX_TOKENS")
+                    or name.endswith("_THINKING_EFFORT")
+                    or name.endswith("_REASONING_EFFORT")
+                    or name in provider_keys
+                )
+                if is_model_value:
+                    violations.append(f"{path.relative_to(backend_root)}:{node.lineno}:{name}")
+
+        self.assertEqual(violations, [])
+
+    def test_legacy_model_environment_variables_are_ignored(self) -> None:
+        payload = {
+            "active_provider": "json-provider",
+            "pinned": False,
+            "providers": {
+                "json-provider": {"base_url": "https://json.example/v1", "api_key": "json-key"}
+            },
+            "routes": {"chat": "json-provider", "lesson_plan": "json-provider"},
+            "models": {"main": "json-main", "sub": "json-sub", "lesson_plan": "json-lesson"},
+            "params": {"main_temperature": 0.25, "main_max_tokens": 4321},
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "MODEL_CONFIG_PATH": str(path),
+                    "CHAT_PROVIDER": "legacy-provider",
+                    "OPENROUTER_API_KEY": "legacy-key",
+                    "MAIN_MODEL": "legacy-main",
+                    "SUB_MODEL": "legacy-sub",
+                    "MAIN_MODEL_TEMPERATURE": "1.5",
+                    "MAIN_MODEL_MAX_TOKENS": "99",
+                },
+                clear=False,
+            ):
+                settings = Settings.from_env()
+
+        self.assertEqual(settings.chat_provider, "json-provider")
+        self.assertEqual(settings.chat_api_key, "json-key")
+        self.assertEqual(settings.main_model, "json-main")
+        self.assertEqual(settings.sub_model, "json-sub")
+        self.assertEqual(settings.lesson_plan_model, "json-lesson")
+        self.assertAlmostEqual(settings.main_model_temperature, 0.25)
+        self.assertEqual(settings.main_model_max_tokens, 4321)
+
     def test_settings_loads_model_json_and_pins_provider(self) -> None:
         payload = {
             "active_provider": "deepseek",

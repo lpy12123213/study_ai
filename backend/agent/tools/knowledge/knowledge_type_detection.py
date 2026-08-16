@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
+from backend.core.settings import model_name
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -98,7 +98,7 @@ class KnowledgeTypeDetectionToolsMixin:
         source_briefs = dict(source_briefs) if isinstance(source_briefs, dict) else {}
 
         model = str(
-            os.getenv("STUDY_MATERIALS_TYPE_MODEL")
+            model_name("study_materials_type")
             or getattr(getattr(self, "config", None), "summarizer_model", "")
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()

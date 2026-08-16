@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from backend.core.text_lint import lint_text
 from backend.evals.study_materials.case_schema import BenchmarkCase
@@ -55,6 +56,8 @@ class Scorecard:
     generated_at: str = ""
     notes: List[str] = field(default_factory=list)
     scoring_version: str = SCORING_VERSION
+    # 评测阶段：full（全量端到端）/ research（只评检索）/ write（研究夹具起跑的撰写评测）。
+    stage: str = "full"
     # LLM rubric 写作诊断（W 维度）：独立字段仅报告展示，不进总分/四门槛/成熟度。
     writing_rubric: Optional[Dict[str, Any]] = None
 
@@ -79,6 +82,8 @@ class Scorecard:
 
     @property
     def readiness_level(self) -> str:
+        if self.stage == "research":
+            return "阶段评测（不适用成熟度等级）"
         score = self.total
         if score < 10:
             return "不可交付"
@@ -97,6 +102,7 @@ class Scorecard:
             "scoring_version": self.scoring_version,
             "case_id": self.case_id,
             "title": self.title,
+            "stage": self.stage,
             "total": round(self.total, 2),
             "raw_total": round(self.raw_total, 2),
             "total_max": round(self.total_max, 2),
@@ -263,6 +269,7 @@ def grade_case(
     llm_rubric_judge: Optional[LlmRubricJudge] = None,
     link_checker: Optional[LinkChecker] = None,
     notes: Optional[List[str]] = None,
+    stage: str = "full",
 ) -> Scorecard:
     """对一次生成结果完整评分；LLM 与联网检查均是可选诊断增强。"""
     validate_weights()
@@ -271,6 +278,7 @@ def grade_case(
         title=case.title,
         generated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         notes=list(notes or []),
+        stage=stage if stage in {"full", "write"} else "full",
     )
     citations = grade_citations(case, markdown, link_checker=link_checker)
     citation_ratio = 0.0
@@ -293,6 +301,79 @@ def grade_case(
     return card
 
 
+RESEARCH_STAGE_GATE_CEILING = 4.0  # 检索覆盖门槛未过时的封顶（R 满分 10）
+RESEARCH_STAGE_DOMAIN_THRESHOLD = 0.5
+RESEARCH_STAGE_EVIDENCE_THRESHOLD = 0.8
+
+
+def grade_research_stage(
+    case: BenchmarkCase,
+    events: List[Dict[str, Any]],
+    *,
+    research_report: Optional[Dict[str, Any]] = None,
+    task_info: Optional[Dict[str, Any]] = None,
+    notes: Optional[List[str]] = None,
+) -> Scorecard:
+    """检索阶段评测：R 维度（事件流）+ 来源覆盖门槛（研究快照报告）。
+
+    与全量评分共用 ``grade_research``，保证同一把尺子；覆盖门槛把
+    「来源数量 / 权威域名 / 逐知识点证据 / 知识点数量」这四个撰写阶段的
+    输入前提建模为硬性判定，替代全量跑中由 G0/G2 间接暴露的检索缺陷。
+    """
+
+    card = Scorecard(
+        case_id=case.id,
+        title=case.title,
+        generated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        notes=[*(notes or []), "研究阶段评测：只评检索质量，不评撰写（撰写用 --stage write 单独评）"],
+        stage="research",
+    )
+    card.dimensions.append(grade_research(case, events, task_info=task_info))
+
+    report = research_report if isinstance(research_report, dict) else {}
+    knowledge_points = [str(kp) for kp in (report.get("knowledge_points") or []) if str(kp).strip()]
+    source_urls = [str(url) for url in (report.get("source_urls") or []) if str(url).strip()]
+    unique_sources = int(report.get("unique_sources") or len(set(source_urls)))
+    evidence_kp_count = int(report.get("evidence_kp_count") or 0)
+
+    hosts = {(urlsplit(url).hostname or "").casefold() for url in source_urls}
+    domain_hits = [
+        domain
+        for domain in case.expected_domains
+        if any(host == domain or host.endswith("." + domain) for host in hosts)
+    ]
+    domain_ratio = (len(domain_hits) / len(case.expected_domains)) if case.expected_domains else 1.0
+    evidence_ratio = evidence_kp_count / max(1, len(knowledge_points))
+    kp_ok = len(knowledge_points) >= case.min_knowledge_sections
+    sources_ok = unique_sources >= case.min_unique_sources
+    passed = (
+        kp_ok
+        and sources_ok
+        and domain_ratio >= RESEARCH_STAGE_DOMAIN_THRESHOLD
+        and evidence_ratio >= RESEARCH_STAGE_EVIDENCE_THRESHOLD
+    )
+    card.quality_gates = [QualityGateResult(
+        "GR_research_coverage",
+        "检索覆盖",
+        passed,
+        RESEARCH_STAGE_GATE_CEILING,
+        (
+            f"知识点={len(knowledge_points)}/{case.min_knowledge_sections}；"
+            f"唯一来源={unique_sources}/{case.min_unique_sources}；"
+            f"权威域名={domain_ratio:.0%}（命中 {domain_hits or '无'}）；"
+            f"逐知识点证据={evidence_ratio:.0%}"
+        ),
+        metrics={
+            "kp_count": len(knowledge_points),
+            "unique_sources": unique_sources,
+            "domain_ratio": round(domain_ratio, 4),
+            "domain_hits": domain_hits,
+            "evidence_ratio": round(evidence_ratio, 4),
+        },
+    )]
+    return card
+
+
 def write_outputs(card: Scorecard, out_dir: Path) -> Dict[str, Path]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -310,7 +391,9 @@ def render_report(card: Scorecard) -> str:
     lines.append(f"- 最终成熟度分：**{card.total:.1f} / {card.total_max:.0f}**（{card.readiness_level}）")
     lines.append(f"- 原始诊断分：**{card.raw_total:.1f} / {card.total_max:.0f}**")
     lines.append(f"- 当前封顶：**{card.applied_ceiling:.1f}**（未通过的必要门槛不能由无关加分抵消）")
-    lines.append(f"- 评分版本：`{card.scoring_version}`；评分时间：{card.generated_at}")
+    lines.append(
+        f"- 评测阶段：`{card.stage}`；评分版本：`{card.scoring_version}`；评分时间：{card.generated_at}"
+    )
     for note in card.notes:
         lines.append(f"- 备注：{note}")
     lines.append("")

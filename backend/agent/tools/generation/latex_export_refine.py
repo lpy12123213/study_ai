@@ -13,6 +13,7 @@ from backend.agent.tools.generation.latex_export_utils import (
 )
 from backend.agent.tools.utils.text_utils import _trim_overlap
 from backend.agent.types import CompressedContext
+from backend.core.settings import model_name, model_param_int
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
@@ -73,8 +74,8 @@ class LatexRefineMixin:
             return {"tex_url": url, "filename": filename, "sha256": sha, "bytes": size, "model": ""}
 
         model = str(
-            os.getenv("STUDY_MATERIALS_LATEX_REFINE_MODEL")
-            or os.getenv("STUDY_MATERIALS_LATEX_MODEL")
+            model_name("study_materials_latex_refine")
+            or model_name("study_materials_latex")
             or self.config.summarizer_model
             or self.config.planner_model
         ).strip()
@@ -97,8 +98,8 @@ class LatexRefineMixin:
         }
 
         refine_max_tokens = _clamp_int(
-            os.getenv("STUDY_MATERIALS_LATEX_REFINE_MAX_TOKENS")
-            or os.getenv("STUDY_MATERIALS_LATEX_MAX_TOKENS")
+            model_param_int("study_materials_latex_refine_max_tokens", 0)
+            or model_param_int("study_materials_latex_max_tokens", 8000)
             or 8000,
             default=8000,
             min_value=1200,

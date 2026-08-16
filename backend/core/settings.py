@@ -7,7 +7,6 @@ All other modules should prefer importing from here (or via the existing
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from dataclasses import dataclass
@@ -17,7 +16,12 @@ from typing import Any, Dict
 from dotenv import load_dotenv
 
 from backend.core.secrets import SecretString
-from backend.llm.model_config import load_model_json_config
+from backend.llm.model_config import (
+    DEFAULT_PROVIDER_BASE_URLS,
+    ProviderConfig,
+    load_model_json_config,
+    resolve_model_config_path,
+)
 
 _dotenv_loaded = False
 
@@ -111,17 +115,6 @@ def _normalize_reasoning_effort(value: str, *, default: str = "xhigh") -> str:
     return v
 
 
-def _get_json_dict(name: str) -> Dict[str, Any]:
-    raw = str(os.getenv(name) or "").strip()
-    if not raw:
-        return {}
-    try:
-        obj = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return obj if isinstance(obj, dict) else {}
-
-
 def _normalize_model_tier_map(defaults: Dict[str, str], overrides: Dict[str, Any]) -> Dict[str, str]:
     allowed = {"fast", "cheap", "main", "heavy"}
     out: Dict[str, str] = {}
@@ -137,12 +130,60 @@ def _normalize_model_tier_map(defaults: Dict[str, str], overrides: Dict[str, Any
     return out
 
 
+def _pick_provider_scoped(value: Any, provider_name: str) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        key = str(provider_name or "").strip().lower()
+        selected = value.get(key)
+        if isinstance(selected, str) and selected.strip():
+            return selected.strip()
+        selected = value.get("default")
+        if isinstance(selected, str) and selected.strip():
+            return selected.strip()
+        for candidate in value.values():
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return ""
+
+
+def _model_param_float(params: Dict[str, Any], key: str, default: float) -> float:
+    try:
+        value = float(params.get(key, default))
+    except (TypeError, ValueError):
+        value = float(default)
+    return value
+
+
+def _model_param_int(params: Dict[str, Any], key: str, default: int) -> int:
+    try:
+        value = int(params.get(key, default))
+    except (TypeError, ValueError):
+        value = int(default)
+    return value
+
+
+def _provider_values(providers: Dict[str, ProviderConfig], name: str) -> tuple[str, str]:
+    provider_name = str(name or "").strip().lower()
+    provider = providers.get(provider_name)
+    api_key = str(provider.api_key if provider else "").strip()
+    base_url = str(provider.base_url if provider else "").strip().rstrip("/")
+    if not base_url:
+        base_url = str(DEFAULT_PROVIDER_BASE_URLS.get(provider_name, "")).rstrip("/")
+    return api_key, base_url
+
+
 @dataclass(frozen=True)
 class Settings:
     # Model config (local-only json)
     model_config_path: str
     llm_provider_pinned: bool
     llm_active_provider: str
+    model_providers: Dict[str, ProviderConfig]
+    model_routes: Dict[str, str]
+    model_roles: Dict[str, Any]
+    model_params: Dict[str, Any]
+    model_context: Dict[str, Any]
 
     # Chat provider (OpenAI-compatible)
     chat_provider: str
@@ -247,148 +288,64 @@ class Settings:
         load_project_dotenv(override=False)
 
         model_json = load_model_json_config(repo_root=repo_root)
-        llm_provider_pinned = bool(model_json and model_json.pinned)
-        # Allow env override so users can quickly pin provider without editing config/model.json.
-        # When pinned, `backend.llm.providers.resolve_provider(...)` won't auto-switch to Moonshot
-        # even if MOONSHOT_API_KEY is present and the model ID looks like `moonshotai/kimi-*`.
-        llm_provider_pinned = env_bool("LLM_PROVIDER_PINNED", llm_provider_pinned)
-        llm_active_provider = str(model_json.active_provider if model_json else "").strip().lower()
-        model_config_path = str(model_json.path) if model_json else ""
+        model_config_path = str(model_json.path if model_json else resolve_model_config_path(repo_root=repo_root))
+        model_providers = dict(model_json.providers if model_json else {})
+        model_routes = dict(model_json.routes if model_json else {})
+        model_roles = dict(model_json.models if model_json else {})
+        model_params = dict(model_json.params if model_json else {})
+        model_context = dict(model_json.context if model_json else {})
 
-        openrouter_api_key = _get_str("OPENROUTER_API_KEY", "")
-        base_url = _get_str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
-        moonshot_api_key = _get_str("MOONSHOT_API_KEY", "")
-        moonshot_base_url = _get_str("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/")
-        fireworks_api_key = _get_str("FIREWORKS_API_KEY", "")
-        fireworks_base_url = _get_str("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1").rstrip("/")
-        zhipu_base_url = _get_str("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
+        llm_active_provider = str(model_json.active_provider if model_json else "openrouter").strip().lower()
+        if llm_active_provider not in model_providers:
+            llm_active_provider = next(iter(model_providers), llm_active_provider or "openrouter")
+        llm_provider_pinned = bool(model_json.pinned) if model_json else True
+
+        def _route_provider(route: str, fallback: str) -> str:
+            candidate = str(model_routes.get(route) or fallback or "").strip().lower()
+            return candidate if candidate in model_providers else str(fallback or "").strip().lower()
+
+        chat_provider = _route_provider("chat", llm_active_provider)
+        chat_api_key, chat_base_url = _provider_values(model_providers, chat_provider)
+        lesson_plan_provider = _route_provider("lesson_plan", chat_provider)
+        lesson_plan_api_key, lesson_plan_base_url = _provider_values(model_providers, lesson_plan_provider)
+        review_provider = _route_provider("review", chat_provider)
+
+        openrouter_api_key, base_url = _provider_values(model_providers, "openrouter")
+        moonshot_api_key, moonshot_base_url = _provider_values(model_providers, "moonshot")
+        fireworks_api_key, fireworks_base_url = _provider_values(model_providers, "fireworks")
+        zhipu_api_key, zhipu_base_url = _provider_values(model_providers, "zhipu")
         metaso_base_url = _get_str("METASO_BASE_URL", "https://metaso.cn/api/v1").rstrip("/")
         tavily_base_url = _get_str("TAVILY_BASE_URL", "https://api.tavily.com").rstrip("/")
-
-        if model_json:
-            cfg = model_json.providers or {}
-            if cfg.get("openrouter"):
-                if cfg["openrouter"].api_key:
-                    openrouter_api_key = cfg["openrouter"].api_key
-                if cfg["openrouter"].base_url:
-                    base_url = cfg["openrouter"].base_url
-            if cfg.get("moonshot"):
-                if cfg["moonshot"].api_key:
-                    moonshot_api_key = cfg["moonshot"].api_key
-                if cfg["moonshot"].base_url:
-                    moonshot_base_url = cfg["moonshot"].base_url
-            if cfg.get("fireworks"):
-                if cfg["fireworks"].api_key:
-                    fireworks_api_key = cfg["fireworks"].api_key
-                if cfg["fireworks"].base_url:
-                    fireworks_base_url = cfg["fireworks"].base_url
 
         metaso_api_key = _get_str("METASO_API_KEY", "")
         metaso_timeout_seconds = env_int("METASO_TIMEOUT", 30)
         tavily_api_key = _get_str("TAVILY_API_KEY", "")
         tavily_timeout_seconds = env_int("TAVILY_TIMEOUT", 60)
-        zhipu_api_key = _get_str("ZHIPU_API_KEY", "")
-
-        chat_base_url = ""
-        chat_api_key = ""
-        if llm_provider_pinned and model_json:
-            # Pinned provider mode: always use the explicitly configured provider.
-            provider_key = llm_active_provider
-            prov = (model_json.providers or {}).get(provider_key)
-            if prov:
-                chat_provider = provider_key
-                chat_base_url = str(prov.base_url or "").strip().rstrip("/")
-                chat_api_key = str(prov.api_key or "").strip()
-            else:
-                # Invalid config; fall back to env behavior.
-                llm_provider_pinned = False
-                chat_provider = ""
-        if not chat_base_url:
-            chat_provider_raw = _get_str("CHAT_PROVIDER", "openrouter").lower()
-            chat_provider = (
-                chat_provider_raw if chat_provider_raw in {"openrouter", "fireworks", "moonshot"} else "openrouter"
-            )
-            if chat_provider == "fireworks":
-                chat_base_url = fireworks_base_url
-                chat_api_key = fireworks_api_key
-            elif chat_provider == "moonshot":
-                chat_base_url = moonshot_base_url
-                chat_api_key = moonshot_api_key
-            else:
-                chat_base_url = base_url
-                chat_api_key = openrouter_api_key
-
-        if llm_provider_pinned:
-            lesson_plan_provider = str(chat_provider or "").strip().lower()
-            lesson_plan_base_url = str(chat_base_url or "").strip().rstrip("/")
-            lesson_plan_api_key = str(chat_api_key or "").strip()
-        else:
-            lesson_plan_provider_raw = _get_str("LESSON_PLAN_PROVIDER", chat_provider).lower()
-            lesson_plan_provider = (
-                lesson_plan_provider_raw
-                if lesson_plan_provider_raw in {"openrouter", "fireworks", "moonshot"}
-                else chat_provider
-            )
-            if lesson_plan_provider == "fireworks":
-                lesson_plan_base_url = fireworks_base_url
-                lesson_plan_api_key = fireworks_api_key
-            elif lesson_plan_provider == "moonshot":
-                lesson_plan_base_url = moonshot_base_url
-                lesson_plan_api_key = moonshot_api_key
-            else:
-                lesson_plan_base_url = base_url
-                lesson_plan_api_key = openrouter_api_key
-
-        def _pick_provider_scoped(value: Any, provider_name: str) -> str:
-            if isinstance(value, str):
-                return value.strip()
-            if isinstance(value, dict):
-                key = str(provider_name or "").strip().lower()
-                v = value.get(key)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-                v = value.get("default")
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-                for vv in value.values():
-                    if isinstance(vv, str) and vv.strip():
-                        return vv.strip()
-            return ""
-
-        provider_for_models = str(chat_provider or "").strip().lower()
-        lesson_plan_model = _get_str("LESSON_PLAN_MODEL", _get_str("MAIN_MODEL", "openai/gpt-5-mini"))
-        if model_json:
-            picked = _pick_provider_scoped(model_json.models.get("lesson_plan"), provider_for_models)
-            if picked:
-                lesson_plan_model = picked
+        main_model = _pick_provider_scoped(model_roles.get("main"), chat_provider) or "openai/gpt-5-mini"
+        sub_model = _pick_provider_scoped(model_roles.get("sub"), chat_provider) or "openai/gpt-4o-mini"
+        lesson_plan_model = (
+            _pick_provider_scoped(model_roles.get("lesson_plan"), lesson_plan_provider) or main_model
+        )
         lesson_plan_concurrency = env_int("LESSON_PLAN_SUBAGENT_CONCURRENCY", 3)
 
-        main_model = _get_str("MAIN_MODEL", "openai/gpt-5-mini")
-        sub_model = _get_str("SUB_MODEL", "openai/gpt-4o-mini")
-        if model_json:
-            picked_main = _pick_provider_scoped(model_json.models.get("main"), provider_for_models)
-            if picked_main:
-                main_model = picked_main
-            picked_sub = _pick_provider_scoped(model_json.models.get("sub"), provider_for_models)
-            if picked_sub:
-                sub_model = picked_sub
         study_materials_thinking_model_default = str(sub_model or lesson_plan_model or main_model).strip()
         study_materials_writer_model_default = str(main_model or lesson_plan_model or sub_model).strip()
-        if llm_provider_pinned and model_json:
-            study_materials_thinking_model = study_materials_thinking_model_default
-            study_materials_writer_model = study_materials_writer_model_default
-        else:
-            study_materials_thinking_model = _get_str(
-                "STUDY_MATERIALS_THINKING_MODEL",
-                study_materials_thinking_model_default,
-            )
-            study_materials_writer_model = _get_str(
-                "STUDY_MATERIALS_WRITER_MODEL",
-                study_materials_writer_model_default,
-            )
-        deepthink_generator_model = _get_str("DEEPTHINK_GENERATOR_MODEL", main_model)
-        deepthink_evaluator_model = _get_str("DEEPTHINK_EVALUATOR_MODEL", "")
-        review_model = _get_str("REVIEW_MODEL", "accounts/fireworks/models/llama-v3p3-70b-instruct")
+        study_materials_thinking_model = (
+            _pick_provider_scoped(model_roles.get("study_materials_thinking"), lesson_plan_provider)
+            or study_materials_thinking_model_default
+        )
+        study_materials_writer_model = (
+            _pick_provider_scoped(model_roles.get("study_materials_writer"), lesson_plan_provider)
+            or study_materials_writer_model_default
+        )
+        deepthink_generator_model = (
+            _pick_provider_scoped(model_roles.get("deepthink_generator"), chat_provider) or main_model
+        )
+        deepthink_evaluator_model = _pick_provider_scoped(model_roles.get("deepthink_evaluator"), chat_provider)
+        review_model = (
+            _pick_provider_scoped(model_roles.get("review"), review_provider)
+            or main_model
+        )
 
         model_tier_map = _normalize_model_tier_map(
             {
@@ -397,14 +354,14 @@ class Settings:
                 "main": main_model or lesson_plan_model,
                 "heavy": review_model or deepthink_generator_model or main_model or lesson_plan_model,
             },
-            _get_json_dict("MODEL_TIER_MAP"),
+            model_params.get("model_tier_map") if isinstance(model_params.get("model_tier_map"), dict) else {},
         )
 
-        deepthink_generator_temperature = _get_float("DEEPTHINK_GENERATOR_TEMPERATURE", 0.4)
-        deepthink_generator_max_tokens = env_int("DEEPTHINK_GENERATOR_MAX_TOKENS", 1400)
-        deepthink_evaluator_temperature = _get_float("DEEPTHINK_EVALUATOR_TEMPERATURE", 0.2)
-        deepthink_evaluator_max_tokens = env_int("DEEPTHINK_EVALUATOR_MAX_TOKENS", 900)
-        deepthink_reasoning_effort = _get_str("DEEPTHINK_REASONING_EFFORT", "high")
+        deepthink_generator_temperature = _model_param_float(model_params, "deepthink_generator_temperature", 0.4)
+        deepthink_generator_max_tokens = _model_param_int(model_params, "deepthink_generator_max_tokens", 1400)
+        deepthink_evaluator_temperature = _model_param_float(model_params, "deepthink_evaluator_temperature", 0.2)
+        deepthink_evaluator_max_tokens = _model_param_int(model_params, "deepthink_evaluator_max_tokens", 900)
+        deepthink_reasoning_effort = str(model_params.get("deepthink_reasoning_effort") or "high").strip()
 
         tot_branch_factor = env_int("TOT_BRANCH_FACTOR", 3)
         tot_beam_width = env_int("TOT_BEAM_WIDTH", 3)
@@ -412,37 +369,25 @@ class Settings:
         tot_prune_threshold = _get_float("TOT_PRUNE_THRESHOLD", 5.0)
         tot_timeout_seconds = env_int("TOT_TIMEOUT", 60)
 
-        main_model_temperature = _get_float("MAIN_MODEL_TEMPERATURE", 0.7)
-        main_model_max_tokens = env_int("MAIN_MODEL_MAX_TOKENS", 2000)
-        sub_model_temperature = _get_float("SUB_MODEL_TEMPERATURE", 0.3)
-        sub_model_max_tokens = env_int("SUB_MODEL_MAX_TOKENS", 1000)
-
-        thinking_effort_env = str(
-            os.getenv("STUDY_MATERIALS_THINKING_EFFORT") or os.getenv("STUDY_MATERIALS_REASONING_EFFORT") or ""
+        main_model_temperature = _model_param_float(model_params, "main_temperature", 0.7)
+        main_model_max_tokens = _model_param_int(model_params, "main_max_tokens", 2000)
+        sub_model_temperature = _model_param_float(model_params, "sub_temperature", 0.3)
+        sub_model_max_tokens = _model_param_int(model_params, "sub_max_tokens", 1000)
+        thinking_effort = str(
+            model_params.get("study_materials_thinking_effort")
+            or model_params.get("thinking_effort")
+            or "xhigh"
         ).strip()
-        thinking_effort = thinking_effort_env or "xhigh"
-        if model_json:
-            p = model_json.params or {}
-            if isinstance(p.get("main_temperature"), (int, float)):
-                main_model_temperature = float(p.get("main_temperature"))  # type: ignore[arg-type]
-            if isinstance(p.get("main_max_tokens"), (int, float)):
-                main_model_max_tokens = int(p.get("main_max_tokens"))  # type: ignore[arg-type]
-            if isinstance(p.get("sub_temperature"), (int, float)):
-                sub_model_temperature = float(p.get("sub_temperature"))  # type: ignore[arg-type]
-            if isinstance(p.get("sub_max_tokens"), (int, float)):
-                sub_model_max_tokens = int(p.get("sub_max_tokens"))  # type: ignore[arg-type]
-            # Apply model.json defaults only when env vars are not set.
-            if not thinking_effort_env:
-                p_effort = p.get("thinking_effort")
-                if not isinstance(p_effort, str) or not p_effort.strip():
-                    p_effort = p.get("reasoning_effort")
-                if isinstance(p_effort, str) and p_effort.strip():
-                    thinking_effort = p_effort
 
         return cls(
             model_config_path=model_config_path,
             llm_provider_pinned=llm_provider_pinned,
             llm_active_provider=llm_active_provider,
+            model_providers=model_providers,
+            model_routes=model_routes,
+            model_roles=model_roles,
+            model_params=model_params,
+            model_context=model_context,
             chat_provider=chat_provider,
             chat_api_key=SecretString(chat_api_key),
             chat_base_url=chat_base_url,
@@ -478,10 +423,15 @@ class Settings:
             study_materials_thinking_effort=_normalize_reasoning_effort(thinking_effort, default="xhigh"),
             study_materials_thinking_model=study_materials_thinking_model,
             study_materials_writer_model=study_materials_writer_model,
-            lesson_plan_temperature=_get_float("LESSON_PLAN_TEMPERATURE", _get_float("MAIN_MODEL_TEMPERATURE", 0.7)),
-            lesson_plan_max_tokens=env_int(
-                "LESSON_PLAN_MAX_TOKENS",
-                max(env_int("MAIN_MODEL_MAX_TOKENS", 2000), 50000),
+            lesson_plan_temperature=_model_param_float(
+                model_params,
+                "lesson_plan_temperature",
+                main_model_temperature,
+            ),
+            lesson_plan_max_tokens=_model_param_int(
+                model_params,
+                "lesson_plan_max_tokens",
+                max(main_model_max_tokens, 50000),
             ),
             max_tool_iterations=env_int("MAX_TOOL_ITERATIONS", 10),
             api_timeout_seconds=env_int("API_TIMEOUT", 120),
@@ -490,20 +440,20 @@ class Settings:
             llm_circuit_breaker_open_seconds=env_int("LLM_CIRCUIT_BREAKER_OPEN_SECONDS", 30),
             default_subject=_get_str("DEFAULT_SUBJECT", "高中数学"),
             difficulty_query_mode=_get_str("DIFFICULTY_QUERY_MODE", "multi").lower(),
-            review_provider=_get_str("REVIEW_PROVIDER", "fireworks").lower(),
+            review_provider=review_provider,
             fireworks_api_key=SecretString(fireworks_api_key),
             fireworks_base_url=fireworks_base_url,
             # Fireworks model IDs change over time; default to a currently listed, chat-capable model.
             review_model=review_model,
-            review_model_temperature=_get_float("REVIEW_MODEL_TEMPERATURE", 0.2),
-            review_model_max_tokens=env_int("REVIEW_MODEL_MAX_TOKENS", 1800),
+            review_model_temperature=_model_param_float(model_params, "review_temperature", 0.2),
+            review_model_max_tokens=_model_param_int(model_params, "review_max_tokens", 1800),
             review_timeout_seconds=env_int("REVIEW_TIMEOUT", 90),
             review_max_stem_chars=env_int("REVIEW_MAX_STEM_CHARS", 900),
             review_http_referer=_get_str("REVIEW_HTTP_REFERER", "http://localhost:8000"),
             review_x_title=_get_str("REVIEW_X_TITLE", "Exam Paper Assistant - Reviewer"),
             zhipu_api_key=SecretString(zhipu_api_key),
             zhipu_base_url=zhipu_base_url,
-            zhipu_model=_get_str("ZHIPU_MODEL", "glm-4.5"),
+            zhipu_model=_pick_provider_scoped(model_roles.get("zhipu_search"), "zhipu") or "glm-4.5",
             zhipu_timeout_seconds=env_int("ZHIPU_TIMEOUT", 60),
             metaso_api_key=SecretString(metaso_api_key),
             metaso_base_url=metaso_base_url,
@@ -543,6 +493,77 @@ class Settings:
 
 
 settings = Settings.from_env()
+
+
+def model_name(role: str, default: str = "", *, provider: str = "") -> str:
+    """Resolve a named model role exclusively from the active model.json payload."""
+
+    role_key = str(role or "").strip().lower().replace("-", "_")
+    provider_name = str(provider or settings.lesson_plan_provider or settings.chat_provider or "").strip().lower()
+    return _pick_provider_scoped(settings.model_roles.get(role_key), provider_name) or str(default or "").strip()
+
+
+def model_param(name: str, default: Any = None) -> Any:
+    """Read a generation/model parameter from model.json."""
+
+    key = str(name or "").strip().lower().replace("-", "_")
+    return settings.model_params.get(key, default)
+
+
+def model_param_int(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    value = _model_param_int(settings.model_params, name, default)
+    if minimum is not None:
+        value = max(int(minimum), value)
+    if maximum is not None:
+        value = min(int(maximum), value)
+    return value
+
+
+def model_param_float(
+    name: str,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    value = _model_param_float(settings.model_params, name, default)
+    if minimum is not None:
+        value = max(float(minimum), value)
+    if maximum is not None:
+        value = min(float(maximum), value)
+    return value
+
+
+def model_param_bool(name: str, default: bool) -> bool:
+    value = model_param(name, default)
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def model_context_value(name: str, default: Any = None) -> Any:
+    key = str(name or "").strip().lower().replace("-", "_")
+    return settings.model_context.get(key, default)
+
+
+def model_provider(name: str = "") -> ProviderConfig:
+    provider_name = str(name or settings.chat_provider or settings.llm_active_provider or "").strip().lower()
+    configured = settings.model_providers.get(provider_name)
+    if configured:
+        return configured
+    return ProviderConfig(
+        name=provider_name,
+        base_url=str(DEFAULT_PROVIDER_BASE_URLS.get(provider_name, "")),
+        api_key="",
+    )
+
+
+def model_route(name: str, default: str = "") -> str:
+    route = str(name or "").strip().lower().replace("-", "_")
+    return str(settings.model_routes.get(route) or default or settings.llm_active_provider or "").strip().lower()
 
 # Chat provider (OpenAI-compatible)
 CHAT_PROVIDER = settings.chat_provider

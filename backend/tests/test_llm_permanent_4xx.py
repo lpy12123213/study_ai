@@ -241,8 +241,12 @@ class StudyMaterialsModelSelfCheckPingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mock_chat.await_count, 2)
         self.assertTrue(any("study_materials_model_self_check_failed" in line for line in logs.output))
-        self.assertTrue(any(getattr(r, "env", "") == "STUDY_MATERIALS_THINKING_MODEL" for r in logs.records))
-        self.assertTrue(any("STUDY_MATERIALS_THINKING_MODEL" in str(getattr(r, "hint", "")) for r in logs.records))
+        self.assertTrue(
+            any(getattr(r, "config", "") == "models.study_materials_thinking" for r in logs.records)
+        )
+        self.assertTrue(
+            any("models.study_materials_thinking" in str(getattr(r, "hint", "")) for r in logs.records)
+        )
 
     async def test_self_check_never_raises_on_unexpected_error(self) -> None:
         from backend import app as app_module

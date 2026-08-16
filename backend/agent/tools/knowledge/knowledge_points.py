@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_name
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -183,7 +184,7 @@ class KnowledgePointsToolsMixin:
         # LLM-powered split when configured.
         if is_llm_configured():
             # Use a faster model for small JSON tasks by default; allow override via env.
-            model = str(os.getenv("STUDY_MATERIALS_KP_SPLIT_MODEL") or "").strip()
+            model = model_name("study_materials_kp_split")
             if not model:
                 model = (
                     str(getattr(self.config, "summarizer_model", "") or "").strip()
@@ -321,7 +322,7 @@ class KnowledgePointsToolsMixin:
 
         if is_llm_configured() and points:
             # Allow override, but default to a faster model for this small JSON-only task.
-            model = str(os.getenv("STUDY_MATERIALS_KP_REVIEW_MODEL") or "").strip()
+            model = model_name("study_materials_kp_review")
             if not model:
                 model = (
                     str(getattr(self.config, "summarizer_model", "") or "").strip()

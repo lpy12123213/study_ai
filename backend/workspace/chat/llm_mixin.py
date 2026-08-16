@@ -13,6 +13,7 @@ from backend.core.settings import (
     MAIN_MODEL,
     MAIN_MODEL_MAX_TOKENS,
     MAIN_MODEL_TEMPERATURE,
+    model_context_value,
 )
 from backend.llm.client import _estimate_messages_tokens, cacheable_message, chat_completion, is_llm_configured
 from backend.workspace.chat.prompts import PLAN_TAG_CLOSE, PLAN_TAG_OPEN, get_system_prompt
@@ -39,10 +40,10 @@ class ChatLLMMixin:
         return max(2_000, min(value, 1_000_000))
 
     def _context_message_max_tokens(self) -> int:
-        raw = (os.getenv("CHAT_CONTEXT_MESSAGE_MAX_TOKENS") or "").strip()
-        if raw:
+        configured = model_context_value("chat_message_max_tokens", None)
+        if configured not in {None, ""}:
             try:
-                value = int(raw)
+                value = int(configured)
             except (TypeError, ValueError):
                 value = 0
         else:
@@ -50,10 +51,10 @@ class ChatLLMMixin:
         return max(128, min(value, 250_000))
 
     def _context_total_max_tokens(self) -> int:
-        raw = (os.getenv("CHAT_CONTEXT_MAX_TOKENS") or "").strip()
-        if raw:
+        configured = model_context_value("chat_max_tokens", None)
+        if configured not in {None, ""}:
             try:
-                value = int(raw)
+                value = int(configured)
             except (TypeError, ValueError):
                 value = 0
         else:

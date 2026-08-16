@@ -2,11 +2,19 @@
 
 用法::
 
-    python -m backend.evals.study_materials.runner --case all --dry-run   # 校验 40 例
-    python -m backend.evals.study_materials.runner --case light           # 轻量 8 例、自动并发
+    python -m backend.evals.study_materials.runner --case all --dry-run   # 校验全部用例
+    python -m backend.evals.study_materials.runner --case light           # 轻量套件、自动并发
     python -m backend.evals.study_materials.runner --case light-probe     # 同门槛单例真实探针
     python -m backend.evals.study_materials.runner --case derivative_monotonicity_optimization \
         --base-url http://127.0.0.1:8000 [--llm-judge] [--check-links]
+
+阶段评测（拆开检索与撰写、各省各的 token；全量端到端仍是默认）::
+
+    # 1) 只评检索：跑到拆分+检索为止，落盘研究快照并自动存为该用例的夹具
+    python -m backend.evals.study_materials.runner --case <id|light> --stage research
+    # 2) 只评撰写：从研究夹具起跑蓝图→填充→汇编，不做任何真实检索
+    python -m backend.evals.study_materials.runner --case <id|light> --stage write
+    # 夹具默认在 <out>/_fixtures/<case_id>/，可用 --fixture-dir 指定
 
 每个用例在 ``--out/<case_id>/<timestamp>/`` 下落盘：
 ``events.jsonl``、``final.md``、``meta.json``、``task_info.json``、
@@ -19,6 +27,7 @@ import argparse
 import asyncio
 import json
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -33,11 +42,14 @@ from backend.evals.study_materials.case_schema import (
     load_case_file,
     load_cases,
 )
-from backend.evals.study_materials.scorecard import grade_case, write_outputs
+from backend.evals.study_materials.scorecard import grade_case, grade_research_stage, write_outputs
 
 GENERATE_URL = "/api/study-materials/generate"
 TASK_URL = "/api/study-materials/tasks/{task_id}"
 TASK_STREAM_URL = "/api/study-materials/tasks/{task_id}/stream"
+
+VALID_STAGES = ("full", "research", "write")
+FIXTURE_FILES = ("knowledge_points.json", "research.md", "source_registry.json")
 
 
 # ---------------------------------------------------------------- 采集
@@ -151,16 +163,31 @@ def _consume_sse_lines(
                 state["error"] = str(data.get("message") or data.get("error") or "unknown_error")
 
 
+def _done_research_report(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """done 事件里的 research_report（检索阶段评测的结构化产物）。"""
+    for frame in reversed(events):
+        if str(frame.get("type") or "") != "done":
+            continue
+        data = frame.get("data") if isinstance(frame.get("data"), dict) else {}
+        report = data.get("research_report")
+        if isinstance(report, dict):
+            return report
+    return {}
+
+
 def collect_run(
     case: BenchmarkCase,
     *,
     base_url: str,
     timeout_s: float,
     max_resumes: int = 3,
+    payload_overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """POST /generate 并消费 SSE；断流时按 after_seq 断点重连（API 原生支持续流）。"""
     root = base_url.rstrip("/")
     payload = case.request_payload()
+    if payload_overrides:
+        payload.update(payload_overrides)
     events: List[Dict[str, Any]] = []
     task_id = ""
     started = time.monotonic()
@@ -378,6 +405,28 @@ def _effective_parallel(requested: int, case_count: int) -> int:
     return min(requested, case_count)
 
 
+def resolve_fixture_dir(case_id: str, *, fixture_root: Path, fixture_dir: str = "") -> Path:
+    """撰写阶段的研究夹具目录：显式 --fixture-dir 优先，否则 <out>/_fixtures/<case_id>。"""
+    return Path(fixture_dir) if fixture_dir else Path(fixture_root) / case_id
+
+
+def validate_fixture_dir(path: Path) -> List[str]:
+    """返回缺失的夹具文件名列表；空列表表示夹具可用。"""
+    return [name for name in FIXTURE_FILES if not (Path(path) / name).is_file()]
+
+
+def _harvest_research_snapshot(report: Dict[str, Any], *, out_dir: Path, fixture_dir: Path) -> str:
+    """把服务端落盘的研究快照回收到运行目录与夹具目录（本地优先架构，共享文件系统）。"""
+    src = Path(str(report.get("snapshot_dir") or ""))
+    if not src.is_dir():
+        return f"研究快照目录不可读: {src}"
+
+    shutil.copytree(src, out_dir / "research_snapshot", dirs_exist_ok=True)
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, fixture_dir, dirs_exist_ok=True)
+    return ""
+
+
 def run_case(
     case: BenchmarkCase,
     *,
@@ -386,45 +435,80 @@ def run_case(
     timeout_s: float,
     llm_judge: bool,
     check_links: bool,
+    stage: str = "full",
+    fixture_dir: str = "",
 ) -> Dict[str, Any]:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_dir = Path(out_root) / case.id / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
+    fixture_root = Path(out_root) / "_fixtures"
 
-    print(f"[{case.id}] 开始生成（{case.preset}）→ {base_url} ...", flush=True)
-    run = collect_run(case, base_url=base_url, timeout_s=timeout_s)
+    payload_overrides: Dict[str, Any] = {}
+    if stage == "research":
+        payload_overrides["benchmark_stage"] = "research"
+    elif stage == "write":
+        fixture = resolve_fixture_dir(case.id, fixture_root=fixture_root, fixture_dir=fixture_dir)
+        payload_overrides["research_fixture_dir"] = str(fixture.resolve())
+
+    print(f"[{case.id}] 开始生成（{case.preset}·{stage}）→ {base_url} ...", flush=True)
+    run = collect_run(case, base_url=base_url, timeout_s=timeout_s, payload_overrides=payload_overrides)
     events: List[Dict[str, Any]] = run["events"]
     markdown: str = run["markdown"]
 
     (out_dir / "events.jsonl").write_text(
         "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n", encoding="utf-8"
     )
-    (out_dir / "final.md").write_text(markdown, encoding="utf-8")
     task_info = fetch_task_info(base_url, run["task_id"])
     (out_dir / "task_info.json").write_text(json.dumps(task_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     notes: List[str] = []
     if run["error"]:
         notes.append(f"生成侧报错: {run['error']}")
-    if run.get("markdown_source") not in ("done_event", "none", ""):
-        notes.append(f"markdown 来源: {run['markdown_source']}")
-    if not markdown.strip():
-        notes.append("未取得成稿 markdown（生成失败或 done 事件为空）")
 
     meta = {
         "case_id": case.id,
+        "stage": stage,
         "task_id": run["task_id"],
         "elapsed_s": run["elapsed_s"],
         "event_count": len(events),
         "markdown_chars": len(markdown),
         "markdown_source": run.get("markdown_source") or "",
-        "request": case.request_payload(),
+        "request": {**case.request_payload(), **payload_overrides},
         "base_url": base_url,
         "llm_judge": llm_judge,
         "check_links": check_links,
         "error": run["error"],
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if stage == "research":
+        report = _done_research_report(events)
+        if not report:
+            notes.append("done 事件缺 research_report（检索阶段未正常终态）")
+        else:
+            harvest_error = _harvest_research_snapshot(
+                report,
+                out_dir=out_dir,
+                fixture_dir=resolve_fixture_dir(case.id, fixture_root=fixture_root, fixture_dir=fixture_dir),
+            )
+            if harvest_error:
+                notes.append(harvest_error)
+        card = grade_research_stage(case, events, research_report=report, task_info=task_info, notes=notes)
+        paths = write_outputs(card, out_dir)
+        print(
+            f"[{case.id}] 检索阶段 {card.total:.1f}/{card.total_max:.0f}"
+            f"（覆盖门槛 {'通过' if all(g.passed for g in card.quality_gates) else '未通过'}）→ {paths['report']}",
+            flush=True,
+        )
+        return card.to_dict()
+
+    (out_dir / "final.md").write_text(markdown, encoding="utf-8")
+    if run.get("markdown_source") not in ("done_event", "none", ""):
+        notes.append(f"markdown 来源: {run['markdown_source']}")
+    if not markdown.strip():
+        notes.append("未取得成稿 markdown（生成失败或 done 事件为空）")
+    if stage == "write":
+        notes.append("撰写阶段评测：检索由研究夹具注入，R 维度只反映夹具内容而非检索能力")
 
     card = grade_case(
         case,
@@ -436,10 +520,11 @@ def run_case(
         llm_rubric_judge=build_llm_rubric_judge() if llm_judge else None,
         link_checker=build_link_checker() if check_links else None,
         notes=notes,
+        stage=stage,
     )
     paths = write_outputs(card, out_dir)
     print(
-        f"[{case.id}] 成熟度 {card.total:.1f}/100（原始诊断 {card.raw_total:.1f}，"
+        f"[{case.id}] 成熟度 {card.total:.1f}/{card.total_max:.0f}（原始诊断 {card.raw_total:.1f}，"
         f"封顶 {card.applied_ceiling:.0f}）→ {paths['report']}",
         flush=True,
     )
@@ -545,6 +630,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--llm-judge", action="store_true", help="启用 LLM 复核（事实点/排版/写作 rubric）")
     parser.add_argument("--check-links", action="store_true", help="抽查参考文献 URL 可访问性")
     parser.add_argument("--dry-run", action="store_true", help="只加载校验用例，不跑生成")
+    parser.add_argument(
+        "--stage",
+        choices=list(VALID_STAGES),
+        default="full",
+        help=(
+            "评测阶段：full=全量端到端（默认）；research=只跑拆分+检索并落盘研究快照（省撰写 token）；"
+            "write=从研究夹具起跑撰写（省检索调用，需先跑 research 阶段）"
+        ),
+    )
+    parser.add_argument(
+        "--fixture-dir",
+        default="",
+        help="write 阶段的研究夹具目录（默认 <out>/_fixtures/<case_id>，由 research 阶段自动产出）",
+    )
     args = parser.parse_args(argv)
 
     if args.regrade:
@@ -580,8 +679,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"facts={len(case.required_facts)} traps={len(case.traps)} contrasts={len(case.contrasts)} "
                 f"questions>={case.learning_requirements.min_practice_questions}"
             )
-        print(f"[dry-run] {len(cases)} 个用例校验通过；真实运行并发={workers}")
+        print(f"[dry-run] {len(cases)} 个用例校验通过；真实运行并发={workers}；stage={args.stage}")
         return 0
+
+    if args.stage == "write":
+        # 撰写阶段的夹具在启动前统一校验：中途才发现缺夹具会白烧已完成用例的 token。
+        fixture_root = Path(args.out) / "_fixtures"
+        missing_lines = []
+        for case in cases:
+            fixture = resolve_fixture_dir(case.id, fixture_root=fixture_root, fixture_dir=args.fixture_dir)
+            missing = validate_fixture_dir(fixture)
+            if missing:
+                missing_lines.append(f"  {case.id}: {fixture}（缺 {', '.join(missing)}）")
+        if missing_lines:
+            print(
+                "write 阶段缺研究夹具，请先对这些用例跑 --stage research：\n" + "\n".join(missing_lines),
+                file=sys.stderr,
+            )
+            return 2
 
     results: List[Dict[str, Any]] = []
     if workers > 1:
@@ -599,6 +714,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     timeout_s=args.timeout_s,
                     llm_judge=args.llm_judge,
                     check_links=args.check_links,
+                    stage=args.stage,
+                    fixture_dir=args.fixture_dir,
                 ): case
                 for case in cases
             }
@@ -620,6 +737,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     timeout_s=args.timeout_s,
                     llm_judge=args.llm_judge,
                     check_links=args.check_links,
+                    stage=args.stage,
+                    fixture_dir=args.fixture_dir,
                 ))
             except (httpx.HTTPError, OSError) as exc:
                 print(f"[{case.id}] 采集失败: {exc}", file=sys.stderr)
@@ -631,13 +750,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     for item in results:
         final_score = float(item.get("total", 0.0))
         raw_score = float(item.get("raw_total", final_score))
-        line = f"{item['case_id']}: 成熟度 {final_score:.1f}/100（原始诊断 {raw_score:.1f}）"
+        score_max = float(item.get("total_max") or 100.0)
+        label = "检索阶段" if str(item.get("stage") or "") == "research" else "成熟度"
+        line = f"{item['case_id']}: {label} {final_score:.1f}/{score_max:.0f}（原始诊断 {raw_score:.1f}）"
         if item.get("error"):
             line += f"（采集异常: {item['error']}）"
         print(line)
+    score_max_mean = max(float(r.get("total_max") or 100.0) for r in results)
     mean = sum(float(r.get("total", 0.0)) for r in results) / len(results)
     raw_mean = sum(float(r.get("raw_total", r.get("total", 0.0))) for r in results) / len(results)
-    print(f"成熟度平均: {mean:.1f}/100；原始诊断平均: {raw_mean:.1f}/100")
+    print(f"平均: {mean:.1f}/{score_max_mean:.0f}；原始诊断平均: {raw_mean:.1f}/{score_max_mean:.0f}")
     failed_gates: Dict[str, int] = {}
     for result in results:
         for gate in result.get("quality_gates") or []:

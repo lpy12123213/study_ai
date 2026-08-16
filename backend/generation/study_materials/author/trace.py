@@ -14,6 +14,7 @@ TRACE_EVENT_TYPES = frozenset({
     "section_fill",     # 填充开始/完成 {sec_id, status}
     "text_delta",       # 成稿快照（沿用现有）
     "progress",         # 长任务阶段进度 {progress, stage}
+    "research_report",  # 检索阶段评测终态报告 {knowledge_points, unique_sources, snapshot_dir, ...}
 })
 
 

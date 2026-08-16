@@ -20,13 +20,13 @@ python -m pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-如果需要 LLM 审卷、智能选题或联网搜索，请配置 `.env`：
+如果需要 LLM 审卷或智能选题，请配置 `config/model.json`：
 
-- `CHAT_PROVIDER`
-- `OPENROUTER_API_KEY` / `FIREWORKS_API_KEY` / `MOONSHOT_API_KEY`
-- `MAIN_MODEL`
-- `SUB_MODEL`
-- `TAVILY_API_KEY` / `EXA_API_KEY` / `ZHIPU_API_KEY`
+- `providers`：LLM/Zhipu provider 的 Base URL 和 API Key
+- `routes`：chat、lesson_plan、review 路由
+- `models`：main、sub 和专项模型
+
+Tavily、Exa 等非模型搜索服务的 API Key 仍配置在 `.env`。
 
 ## 推荐启动命令
 
@@ -141,7 +141,7 @@ MCP 无法连接时：
 2. 确认 Cherry Studio 的 `cwd` 是仓库根目录。
 3. 确认虚拟环境依赖安装完成。
 4. 如果工具调用 crawler 失败，先运行 `python -m playwright install chromium`。
-5. 如果 LLM 工具失败，检查 `.env` 中 provider、API key 和模型名。
+5. 如果 LLM 工具失败，检查 `config/model.json` 中的 provider、路由、API Key 和模型名。
 
 更多排查见 `TROUBLESHOOTING.md`。
 

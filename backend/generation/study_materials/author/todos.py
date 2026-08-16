@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 TODO_TYPES = frozenset({"research", "backbone", "fill", "fig", "audit", "revision", "learning_contract"})
 TODO_STATUSES = frozenset({"pending", "in_progress", "done", "waived", "failed"})
+_REPLACE_ATTEMPTS = 4
+_REPLACE_RETRY_BASE_SECONDS = 0.01
 
 
 @dataclass
@@ -75,7 +78,17 @@ class TodoList:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(self.to_json(), fh, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
+            for attempt in range(_REPLACE_ATTEMPTS):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    # Windows virus scanners/indexers may briefly retain the old
+                    # todos.json handle. Retry only that transient error; other I/O
+                    # failures remain immediate and visible.
+                    if attempt + 1 >= _REPLACE_ATTEMPTS:
+                        raise
+                    time.sleep(_REPLACE_RETRY_BASE_SECONDS * (2 ** attempt))
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)

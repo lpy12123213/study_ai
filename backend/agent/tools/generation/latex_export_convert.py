@@ -17,7 +17,7 @@ from backend.agent.tools.generation.latex_export_utils import (
 from backend.agent.tools.utils.text_utils import _trim_overlap
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
-from backend.core.settings import STUDY_MATERIALS_WRITER_MODEL
+from backend.core.settings import STUDY_MATERIALS_WRITER_MODEL, model_name, model_param_int
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 from backend.media.generated import default_generated_media_ttl_s, publish_generated_text
@@ -54,7 +54,7 @@ class LatexConvertMixin:
         await self._emit_progress(percent=5, stage="解析 Markdown")
 
         model = str(
-            os.getenv("STUDY_MATERIALS_LATEX_MODEL")
+            model_name("study_materials_latex")
             or STUDY_MATERIALS_WRITER_MODEL
             or self.config.summarizer_model
             or self.config.planner_model
@@ -122,7 +122,7 @@ class LatexConvertMixin:
         }
 
         max_tokens = _clamp_int(
-            os.getenv("STUDY_MATERIALS_LATEX_MAX_TOKENS") or 8000,
+            model_param_int("study_materials_latex_max_tokens", 8000),
             default=8000,
             min_value=1200,
             max_value=20000,

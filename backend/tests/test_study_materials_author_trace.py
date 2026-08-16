@@ -10,7 +10,15 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(ev["agent_path"], "fill:sec-1.2")
 
     def test_declared_types_cover_design_contract(self):
-        for t in {"thinking_delta", "note_write", "todo_update", "figure_trace", "progress", "research_budget"}:
+        for t in {
+            "thinking_delta",
+            "note_write",
+            "todo_update",
+            "figure_trace",
+            "progress",
+            "research_budget",
+            "research_report",
+        }:
             self.assertIn(t, TRACE_EVENT_TYPES)
 
     def test_rejects_undeclared_type(self):

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_name
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
 
@@ -90,7 +91,7 @@ class SelfCritiqueToolsMixin:
         knowledge_types = dict(knowledge_types) if isinstance(knowledge_types, dict) else {}
 
         model = str(
-            os.getenv("STUDY_MATERIALS_CRITIQUE_MODEL")
+            model_name("study_materials_critique")
             or getattr(getattr(self, "config", None), "reflector_model", "")
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()

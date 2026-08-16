@@ -106,14 +106,13 @@
 
 - 现在由 `backend/core/text_lint.py` 在验收门自动检测：`unclosed_display_math`（独立公式未闭合）、`heading_with_empty_body`（空标题）、`eof_mid_sentence`（句末截断），另有 `unclosed_code_fence` / `unbalanced_inline_math` / `unresolved_placeholder`。
 - 命中 lint 信号会产生 `markdown_lint_failed` 失败项并触发定向 revise；`content_review` 工具同样消费这些信号。
-- 兜底仍是提高对应 `*_MAX_TOKENS` 和续写次数。
+- 兜底仍是提高 `config/model.json` 中对应的 max_tokens 参数和 `.env` 中的续写次数。
 
 相关配置：
 
-- `STUDY_MATERIALS_WRITER_MAX_TOKENS`
 - `STUDY_MATERIALS_MAX_CONTINUATIONS`
-- `STUDY_MATERIALS_LATEX_MAX_TOKENS`
-- `STUDY_MATERIALS_LATEX_REFINE_MAX_TOKENS`
+- `params.study_materials_latex_max_tokens`
+- `params.study_materials_latex_refine_max_tokens`
 
 ### 检索不足
 
@@ -167,14 +166,23 @@ STUDY_MATERIALS_STAGE_PROMPT_MAX_CHARS=30000
 STUDY_MATERIALS_SEARCH_MODE=
 STUDY_MATERIALS_WEB_DECOMPOSE=0
 STUDY_MATERIALS_WEB_SUBQUERIES=4
-STUDY_MATERIALS_THINKING_MODEL=
-STUDY_MATERIALS_WRITER_MODEL=
 STUDY_MATERIALS_STEP_TIMEOUT_S=240
 STUDY_MATERIALS_SSE_HEARTBEAT_S=4
 STUDY_MATERIALS_TASK_TTL_S=3600
 STUDY_MATERIALS_TASK_MAX_EVENTS=8000
 STUDY_MATERIALS_ARCHIVE_MAX_AGE_S=1209600
 STUDY_MATERIALS_TRACE_TTL_S=0
+```
+
+模型角色单独配置在 `config/model.json`：
+
+```json
+{
+  "models": {
+    "study_materials_thinking": "...",
+    "study_materials_writer": "..."
+  }
+}
 ```
 
 说明：

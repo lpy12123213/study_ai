@@ -9,6 +9,7 @@ import httpx
 
 from backend.agent.types import CompressedContext
 from backend.core.logging_utils import get_logger
+from backend.core.settings import model_name, model_param, model_param_int, model_provider
 from backend.generation.question_library.diagram_utils import (
     render_asy_to_url,
     render_chemistry_to_url,
@@ -410,35 +411,31 @@ class DiagramToolsMixin:
         if not prompt:
             return {"success": False, "error": "prompt 不能为空", "knowledge_point": kp}
 
-        api_key = str(os.getenv("ARK_API_KEY") or os.getenv("ARK_API") or "").strip()
+        ark_provider = model_provider("ark")
+        api_key = str(ark_provider.api_key or "").strip()
         if not api_key:
             return {"success": False, "error": "ark_api_key_missing", "knowledge_point": kp}
 
-        base_url = str(os.getenv("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3").strip().rstrip("/")
+        base_url = str(ark_provider.base_url or "").strip().rstrip("/")
         endpoint = f"{base_url}/images/generations"
 
         model = str(
             args.get("model")
-            or os.getenv("SEEDREAM_MODEL")
-            or os.getenv("ARK_IMAGE_MODEL")
-            or os.getenv("ARK_IMAGES_MODEL")
+            or model_name("image_generation", provider="ark")
             or ""
         ).strip()
         if not model:
             return {"success": False, "error": "seedream_model_missing", "knowledge_point": kp}
 
-        size = str(
-            args.get("size") or os.getenv("SEEDREAM_SIZE") or os.getenv("ARK_IMAGES_SIZE") or "1024x1024"
-        ).strip()
+        size = str(args.get("size") or model_param("image_size", "1024x1024")).strip()
         try:
-            n = int(args.get("n") or os.getenv("SEEDREAM_N") or 1)
+            n = int(args.get("n") or model_param_int("image_count", 1))
         except (TypeError, ValueError):
             n = 1
         n = max(1, min(n, 4))
         response_format = str(
             args.get("response_format")
-            or os.getenv("ARK_IMAGES_RESPONSE_FORMAT")
-            or os.getenv("SEEDREAM_RESPONSE_FORMAT")
+            or model_param("image_response_format", "b64_json")
             or "b64_json"
         ).strip()
 

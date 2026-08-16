@@ -15,8 +15,8 @@ Study AI 通过 OpenAI-compatible Chat Completions 风格调用模型供应商�
 
 核心配置位于：
 
-- `.env`
 - `config/model.json`
+- `config/model.example.json`
 - `backend/core/settings.py`
 - `backend/llm/`
 
@@ -34,6 +34,11 @@ Study AI 通过 OpenAI-compatible Chat Completions 风格调用模型供应商�
       "api_key": "sk-..."
     }
   },
+  "routes": {
+    "chat": "openai-compatible",
+    "lesson_plan": "openai-compatible",
+    "review": "openai-compatible"
+  },
   "models": {
     "main": "gpt-5-mini",
     "sub": "gpt-5-mini",
@@ -42,23 +47,18 @@ Study AI 通过 OpenAI-compatible Chat Completions 风格调用模型供应商�
 }
 ```
 
-如果只使用 `.env`，则选择内置 provider：
-
-```bash
-CHAT_PROVIDER=openrouter
-OPENROUTER_API_KEY=sk-or-...
-MAIN_MODEL=openai/gpt-5-mini
-SUB_MODEL=openai/gpt-5-mini
-```
+不能再用 `.env` 选择 provider、填写 LLM API Key 或覆盖模型名；旧变量会被忽略。需要改变文件位置时，只在环境中设置 `MODEL_CONFIG_PATH`。
 
 ## 模型使用场景
 
-- `MAIN_MODEL`：对话主模型、复杂生成、工具编排。
-- `SUB_MODEL`：较轻的选择、提取、判断、拆分任务。
-- `LESSON_PLAN_MODEL`：教案和自学资料相关生成，可不设置，默认回落到主模型。
-- `STUDY_MATERIALS_THINKING_MODEL`：自学资料检索/拆分/规划。
-- `STUDY_MATERIALS_WRITER_MODEL`：自学资料正文写作。
-- `QUESTION_LIBRARY_JUDGE_MODEL`：AI 出题后的审题模型。
+- `models.main`：对话主模型、复杂生成、工具编排。
+- `models.sub`：较轻的选择、提取、判断、拆分任务。
+- `models.lesson_plan`：教案相关生成，可不设置，默认回落到主模型。
+- `models.study_materials_thinking`：自学资料检索、拆分和规划。
+- `models.study_materials_writer`：自学资料正文写作。
+- `models.question_library_judge`：AI 出题后的审题模型。
+
+完整模型角色、生成参数和上下文限制见 `config/model.example.json`。
 
 ## 工具调用
 
@@ -86,10 +86,10 @@ LLM_CONSOLE_STREAM=1
 
 如果模型调用失败，优先检查：
 
-- provider 是否被 `LLM_PROVIDER_PINNED=1` 或 `config/model.json` 锁定。
+- `active_provider`、`routes` 和 `pinned` 是否匹配。
 - 模型名是否带了供应商要求的前缀。
 - base URL 是否以 `/v1` 结尾，具体取决于供应商。
-- API key 是否配置到实际运行进程可见的环境中。
+- API key 是否位于对应的 `providers.<name>` 中且能够由本机解密。
 
 ## 安全
 
@@ -99,6 +99,6 @@ LLM_CONSOLE_STREAM=1
 
 ## 相关文档
 
-- `CONFIGURATION.md`：完整环境变量说明。
+- `CONFIGURATION.md`：完整环境变量与模型配置说明。
 - `DEVELOPMENT.md`：新增模型相关代码的维护规则。
 - `TROUBLESHOOTING.md`：模型调用失败排查。

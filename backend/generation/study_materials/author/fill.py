@@ -4,8 +4,8 @@ Each blueprint section is filled by a dedicated sub-LLM call that sees only a *b
 context pack: an excerpt of the backbone where the text attaches, a slice of the research
 notes, the numbered source registry (``[^n] title url`` lines — the only URL form allowed
 in the fill context), the terminology table, and the section spec. The produced text must
-pass an acceptance check (length, no bare URLs / reference sections, required
-[EXn]/[Qn]/[An] tags, sourced misconception correction, requested comparison semantics,
+pass an acceptance check (length, no bare URLs / reference sections, allocated
+[EXn]/[Qn]/[An] quotas, sourced misconception correction, requested comparison semantics,
 and at least one resolvable ``[^n]`` marker whenever the section has usable sources);
 failed attempts are retried with the missing items appended to the prompt. When retries
 are exhausted the section is flagged for author rewrite instead of silently accepting bad content.
@@ -33,8 +33,9 @@ MIN_TARGET_RATIO = 0.5
 _FALLBACK_SYSTEM_PROMPT = (
     "你是严谨的自学教材作者。只为指定的某一个小节撰写核心讲解正文，输出 Markdown。\n"
     "必须执行用户载荷中的全局输出要求与本节硬性标记，并写出标记要求的实际说明；"
-    "要求：严格遵守给定术语符号表；必须包含 [EXn] 带步骤例题、[Qn] 分层自测题、[An] 答案与评分点；"
-    "三类标签各自独立编号、独占加粗行，不得合并书写；"
+    "要求：严格遵守给定术语符号表；仅按用户载荷中的“本节学习闭环硬性配额”生成 "
+    "[EXn] 带步骤例题、[Qn] 分层自测题、[An] 答案与评分点，未列出或配额为 0 的标签类型不强制生成；"
+    "若生成，三类标签各自独立编号、独占加粗行，不得合并书写；"
     "每个 [Qn] 必须标注层级（基础/应用/迁移）；[An] 答案与 [Qn] 一一对应并给出评分点，"
     "禁止用 [EXn] 充当答案标签；"
     "篇幅严格控制在本节规格目标篇幅的 80%~130%，优先删去重复解释，不得用重复题目凑字数；"
@@ -300,9 +301,15 @@ class FillRunner:
             missing.append("包含 [[ ]] 式引用标记或占位符")
         if "\\(" in prose_text or "\\[" in prose_text:
             missing.append("使用了 \\( 或 \\[ 定界符（LaTeX 定界符请用 $...$ / $$...$$）")
-        for tag in ("[EX", "[Q", "[A"):
-            if tag not in text:
-                missing.append(f"缺少 {tag}n] 标签（例题/自测题/答案）")
+        if min_examples > 0 and "[EX" not in text:
+            missing.append("缺少 [EXn] 标签（本节已分配例题配额）")
+        if min_questions > 0 and "[Q" not in text:
+            missing.append("缺少 [Qn] 标签（本节已分配自测题配额）")
+        if min_questions > 0 and "[A" not in text:
+            missing.append("缺少 [An] 标签（本节已分配答案配额）")
+        question_ids = set(_QUESTION_ID_RE.findall(text))
+        answer_ids = set(_ANSWER_ID_RE.findall(text))
+        example_ids = set(_EXAMPLE_ID_RE.findall(text))
         if "[Q" in text:
             if not _QUESTION_NUMBER_RE.search(text):
                 missing.append("自测题标签必须带编号（[Q1] 形式），且不得与 [EXn] 合并书写")
@@ -311,12 +318,11 @@ class FillRunner:
         if "[A" in text and not _ANSWER_NUMBER_RE.search(text):
             missing.append("答案标签必须带编号（[A1] 形式），与 [Qn] 一一对应，禁止用 [EXn] 充当答案标签")
         if min_questions > 0:
-            question_ids = set(_QUESTION_ID_RE.findall(text))
-            answer_ids = set(_ANSWER_ID_RE.findall(text))
             if len(question_ids) < min_questions:
                 missing.append(
                     f"自测题数量不足（{len(question_ids)}/{min_questions}），请补足带层级的 [Qn] 自测题"
                 )
+        if question_ids or answer_ids:
             unpaired = sorted(question_ids ^ answer_ids, key=int)
             if unpaired:
                 missing.append(
@@ -326,13 +332,12 @@ class FillRunner:
             if question_ids and not _RUBRIC_CUE_RE.search(text):
                 missing.append("每道 [An] 答案必须写明评分点/得分点")
         if min_examples > 0:
-            example_ids = set(_EXAMPLE_ID_RE.findall(text))
             if len(example_ids) < min_examples:
                 missing.append(
                     f"带步骤例题数量不足（{len(example_ids)}/{min_examples}），请补足 [EXn] 例题"
                 )
-            if example_ids and not _WORKED_STEP_CUE_RE.search(text):
-                missing.append("[EXn] 例题必须写出显式解答步骤（步骤/解答/推导）")
+        if example_ids and not _WORKED_STEP_CUE_RE.search(text):
+            missing.append("[EXn] 例题必须写出显式解答步骤（步骤/解答/推导）")
         for marker in required_markers or []:
             if marker not in text:
                 missing.append(f"缺少必需标记 {marker}")

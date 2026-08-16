@@ -12,10 +12,10 @@ Challenge v2 同时报告两种分数：
 ## 快速开始
 
 ```bash
-# 1. 校验 40 个用例和评分契约（不跑生成）
+# 1. 校验 43 个用例和评分契约（不跑生成）
 python -m backend.evals.study_materials.runner --case all --dry-run
 
-# 2. 启动后端后先跑单例真实探针，再按需跑轻量回归套件（8 例）
+# 2. 启动后端后先跑单例真实探针，再按需跑轻量回归套件（11 例）
 python -m uvicorn backend.app:app --port 8000
 python -m backend.evals.study_materials.runner --case light-probe
 python -m backend.evals.study_materials.runner --case light
@@ -25,7 +25,11 @@ python -m backend.evals.study_materials.runner --case derivative_monotonicity_op
 python -m backend.evals.study_materials.runner \
   --regrade artifacts/evals/study_materials/<case_id>/<timestamp>
 
-# 4. 可选 LLM 语义复核与联网链接诊断
+# 4. 可选：检索/撰写分阶段评测（省 token；全量仍用默认 --stage full）
+python -m backend.evals.study_materials.runner --case light --stage research
+python -m backend.evals.study_materials.runner --case light --stage write
+
+# 5. 可选 LLM 语义复核与联网链接诊断
 python -m backend.evals.study_materials.runner --case light --llm-judge --check-links
 ```
 
@@ -39,25 +43,25 @@ runner 把生成等待视为 I/O 密集任务：`--parallel 0`（默认）在单
 `min(4, 用例数)` 个线程。可用 `--parallel 1` 强制串行，或显式指定服务端能够承受的并发数。
 离线 `--dry-run` 只解析并编译评分正则，不发 HTTP 请求。
 
-负载套件按运行规模划分，评分权重和成熟度门槛保持一致。`light` 包含 8 个以高中课程为
+负载套件按运行规模划分，评分权重和成熟度门槛保持一致。`light` 包含 11 个以高中课程为
 主线的高难例，并允许每例 2–3 个明确标为 `[拓展:主题名]` 的大学桥接概念；这些概念必须从高中
 知识推导、说明对高中解题/实验/材料分析的帮助，且不得作为默认前置知识。`heavy` 包含其余
 32 个大学或专业主题。两者互斥，且并集严格等于 `all`。因此日常反馈跑 `light`，
 夜间或发布前可以跑 `heavy` 补齐覆盖；需要一条命令完成发布门禁时直接跑 `all`。
 `light-probe` 固定选择其中的含参导数最优化用例，题目和门槛完全相同，只把一次真实反馈
-从 8 例缩成 1 例；适合生成链路改动后的第一轮验证，不能替代完整 `light` 覆盖。
+从 11 例缩成 1 例；适合生成链路改动后的第一轮验证，不能替代完整 `light` 覆盖。
 
 ```bash
 # 探针：与 light 相同难度和评分门槛，只生成 1 例
 python -m backend.evals.study_materials.runner --case light-probe
 
-# 轻量：8 个高中主线 + 受控大学拓展高难例，自动 4 并发
+# 轻量：11 个高中主线 + 受控大学拓展高难例，自动 4 并发
 python -m backend.evals.study_materials.runner --case light
 
 # 重量：其余 32 例；可在 CI 中继续分片
 python -m backend.evals.study_materials.runner --case heavy --shard-count 4 --shard-index 0
 
-# 完整 40 例；显式把本机并发限制到 2
+# 完整 43 例；显式把本机并发限制到 2
 python -m backend.evals.study_materials.runner --case all --parallel 2
 
 # CI/多机稳定分成 4 片；index 为 0-based，各片互斥且并集恰为所选套件
@@ -123,8 +127,9 @@ runner 会按每个用例的门槛动态生成 Challenge v2 协议，写入生�
 - 关键事实句后的 `[^n]` 引文，以及文末含标题与 URL 的脚注；
 - 明确的边界条件、误区和反例。
 
-`light` 会把上述数量提高到 5 个目标、4 个例题和 12 道逐题评分自测；受控拓展还必须逐项
-使用完整主题名标记，并在下一个拓展主题前给出 `[高中连接]`，不能用集中堆放的标签替代解释。
+`light` 至少把上述数量提高到 5 个目标、4 个例题和 12 道逐题评分自测；新增的三道综合题
+进一步提高到 6 个目标、5 个例题和 14 道自测。受控拓展还必须逐项使用完整主题名标记，
+并在下一个拓展主题前给出 `[高中连接]`，不能用集中堆放的标签替代解释。
 
 标签用于确定性定位，不替代内容评分。即使标签齐全，事实、误区、对比、来源和交付门槛
 仍会独立判定。测试中同时有“当前风格低分锚点”和“可通过全部门槛的 golden fixture”，
@@ -148,13 +153,39 @@ benchmark 的门槛已落实到生成链路，而不是仅在评分阶段事后�
   `[拓展:主题全名]` 标记，并要求该节正文包含带实际解释的 `[高中连接]`。
 - 小节写手接收原始核心问题、全局输出要求和本节硬性标记；有可用来源却没有有效内联引用、
   有来源易错点却未明确驳正、要求辨析却没有比较语义时都会重试。各小节局部生成的 `[EXn]`、
-  `[Qn]`、`[An]` 在全书汇编前统一连续编号，学习修复只补全实际缺口。
+  `[Qn]`、`[An]` 按整书目标精确分配（配额为 0 的小节不强制生成），在全书汇编前统一连续编号；
+  单节上限之外的真实缺口才交给学习修复补全，避免把整书题量重复到每个小节。
 - 作者验收会联合检查知识点小节数量、标题覆盖、受控拓展连接、学习闭环、占位符和篇幅。
   未达标会显式降级；残留占位符仍会令任务失败，不能由较长篇幅掩盖。
 
 已有 artifact 是冻结产物，`--regrade` 只会用新评分规则重算旧 Markdown，不会自动经过新生成
 链路。因此旧产物继续低于 20 分仍是有效的历史基线，但不能当作本次链路修改后的实测成绩。
 新链路效果需要重新运行真实生成 benchmark 验证。
+
+### 阶段评测：检索与撰写分开
+
+全量 `--stage full`（默认）仍是端到端门禁。为了少烧 token、把失败定位到具体环节，可以把同一套
+评分契约拆成两段：
+
+```bash
+# 1) 只评检索：跑拆分 + 检索，落盘研究快照并写入 <out>/_fixtures/<case_id>/
+python -m backend.evals.study_materials.runner --case light --stage research
+
+# 2) 只评撰写：从研究夹具起跑蓝图→填充→汇编，不再做真实检索
+python -m backend.evals.study_materials.runner --case light --stage write
+```
+
+- `--stage research` 请求 `benchmark_stage=research`。管线在研究完成后即终态，`done` 携带
+  `research_report`（知识点数、唯一来源、权威域名、逐知识点证据）。评分只算 R 维度（满分 10）
+  和检索覆盖门槛 `GR_research_coverage`。成功快照会复制到运行目录与夹具目录，供撰写阶段复用。
+- `--stage write` 请求 `research_fixture_dir`。管线跳过拆分与检索，从夹具注入知识点、研究笔记
+  和来源登记表后进入撰写。评分仍走 K/L/F/A/C 与 G0–G3；R 维度只反映夹具内容，不代表检索能力。
+  缺夹具时 runner 启动前统一失败，避免中途才发现而白烧已完成用例的 token。
+- 夹具默认在 `artifacts/evals/study_materials/_fixtures/<case_id>/`，可用 `--fixture-dir` 覆盖。
+  夹具文件为 `knowledge_points.json`、`research.md`、`source_registry.json`
+  （可选 `research_evidence.json`）。
+- 检索阶段与撰写阶段可以隔开跑：先批量检索、人工抽查来源质量，再对同一夹具反复迭代撰写提示词。
+  全量 `full` 仍用于发布前确认两段衔接没有漂移。
 
 正确关键词也不会自动通过误区与对比项：误区必须有明确纠错语境，对比必须有比较语义。
 目录与图形工具降级等问题则继续反映在 F/A 维度。
@@ -164,25 +195,27 @@ benchmark 的门槛已落实到生成链路，而不是仅在评分阶段事后�
 
 ## 用例集
 
-共有 40 个逻辑用例。9 个独立 JSON 保留用于重点校准，31 个新增用例收在
+共有 43 个逻辑用例。12 个独立 JSON 保留用于重点校准，31 个新增用例收在
 `cases/challenge_v2_extended_pack.json`；pack 只复用 preset、生成选项和学习/格式门槛，
 每个主题仍有独立知识点、事实正则、来源、误区和辨析对。
 
 | selector | 数量 | 选择规则 | 用途 |
 |---|---:|---|---|
 | `light-probe` | 1 | 固定选择 `derivative_monotonicity_optimization` | 同门槛、低等待的真实生成探针 |
-| `light` | 8 | `tier=smoke` 且 `curriculum_scope=high_school_plus` | 日常/PR 的高中主线 + 受控拓展回归 |
+| `light` | 11 | `tier=smoke` 且 `curriculum_scope=high_school_plus` | 日常/PR 的高中主线 + 受控拓展回归 |
 | `heavy` | 32 | `tier=core` 或 `extended` | 夜间或发布前补齐重负载覆盖 |
-| `smoke` | 8 | `light` 的兼容别名 | 最快的高中主线 + 受控拓展回归 |
-| `core` | 12 | smoke 8 + `tier=core` 4 | 主干质量门禁 |
+| `smoke` | 11 | `light` 的兼容别名 | 最快的高中主线 + 受控拓展回归 |
+| `core` | 15 | smoke 11 + `tier=core` 4 | 主干质量门禁 |
 | `extended` | 28 | 仅 `tier=extended` | 扩展主题专项覆盖 |
-| `all` | 40 | 全部 tier | 发布前全量评测 |
+| `all` | 43 | 全部 tier | 发布前全量评测 |
 
 主题覆盖如下：
 
-- `light` 高中主线 8 例：诊断试验条件概率、含参导数最优化、斜抛与机械能、电表与电源内阻、
-  化学平衡与滴定、光合—呼吸限制因素、季风与城市洪峰、法国大革命多层因果；每例另含
-  似然比/数值迭代/戴维南等效/活度/史料批判等受控桥接内容。
+- `light` 高中主线 11 例：诊断试验条件概率、含参导数最优化、斜抛与机械能、电表与电源内阻、
+  化学平衡与滴定、光合—呼吸限制因素、季风与城市洪峰、法国大革命多层因果；以及三道更高门槛的
+  综合题：数列递推与放缩证明、导轨电磁感应与能量链条、氧化还原/电化学与氯碱工业。每例另含
+  似然比/数值迭代/戴维南等效/活度/史料批判/特征根/能斯特等受控桥接内容。
+  综合题把知识点/事实点提到 12、陷阱与辨析提到 5、篇幅 12000、自测 14 道。
 - `heavy` 数学/统计 10 例：特征分解、梯度下降、傅里叶/采样、群同态、ODE 数值稳定性、
   KKT、PCA/SVD、因果 DAG、实验设计、信息论。
 - `heavy` 物理/化学 8 例：量子谐振子、狭义相对论、麦克斯韦方程、热力学熵、PN 结、
@@ -196,9 +229,10 @@ benchmark 的门槛已落实到生成链路，而不是仅在评分阶段事后�
 `source_url`；正则必须可编译，`traps`、`contrasts`、`expected_domains` 和
 `expected_knowledge_points` 都不能为空。当前 `light` 进一步强制每例至少 10 个知识点、10 个
 事实点（其中至少 2 个是大学到高中的桥接事实）、4 个陷阱、4 组辨析、4 个完整例题和 12 道
-逐题评分自测，最低篇幅 10000 字、来源 12 个。请求协议会按用例动态生成这些数量，并列出
-允许的拓展主题与用途约束。runner 会强制 `prefer_local_archive=false`，避免历史归档跳过真实生成；
-smoke/light 请求默认使用 `research_budget=lean`，但不降低上述用例和评分阈值。
+逐题评分自测，最低篇幅 10000 字、来源 12 个；三道综合题在此之上再加严。请求协议会按用例
+动态生成这些数量，并列出允许的拓展主题与用途约束。runner 会强制 `prefer_local_archive=false`，
+避免历史归档跳过真实生成；smoke/light 请求默认使用 `research_budget=lean`，但不降低上述用例
+和评分阈值。
 
 ## 校准记录
 

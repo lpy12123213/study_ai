@@ -5,7 +5,7 @@ import os
 import re
 from typing import Any, Dict, List
 
-from backend.core.settings import env_int
+from backend.core.settings import model_name, model_param_float, model_param_int
 from backend.generation.knowledge_video.models import GeneratedVideoPackage, KnowledgeVideoRequest
 from backend.llm.client import chat_completion_text
 from backend.llm.json_utils import strip_code_fences
@@ -70,9 +70,9 @@ async def generate_manim_package(
     previous_code: str = "",
     render_error: str = "",
 ) -> GeneratedVideoPackage:
-    model = str(os.getenv("KNOWLEDGE_VIDEO_MODEL") or os.getenv("STUDY_MATERIALS_WRITER_MODEL") or os.getenv("SUB_MODEL") or "").strip()
-    max_tokens = env_int("KNOWLEDGE_VIDEO_MAX_TOKENS", 8000)
-    temp = _env_float("KNOWLEDGE_VIDEO_TEMPERATURE", 0.3)
+    model = model_name("knowledge_video", model_name("study_materials_writer", model_name("sub")))
+    max_tokens = model_param_int("knowledge_video_max_tokens", 8000, minimum=1)
+    temp = model_param_float("knowledge_video_temperature", 0.3, minimum=0.0, maximum=2.0)
 
     repair = ""
     if previous_code or render_error:

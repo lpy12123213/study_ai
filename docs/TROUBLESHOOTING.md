@@ -25,7 +25,7 @@ python -c "import backend.app, backend.mcp.stdio_server"
 
 - 重新运行 `start.bat setup` 或 `./start.sh setup`。
 - 确认正在使用仓库内 `venv`。
-- 确认 `.env` 没有把 provider、base URL 或模型名写错。
+- 确认 `config/model.json` 是合法 JSON，且 provider、base URL、路由和模型名正确。
 - 如果 optional 的 ChromaDB 依赖安装失败，可先跳过 `requirements-semantic-memory.txt`。
 
 ## 前端无法启动
@@ -58,10 +58,11 @@ npm run dev -- --port 5174
 
 检查：
 
-- `CHAT_PROVIDER` 是否为 `openrouter`、`fireworks` 或 `moonshot`。
-- 对应的 API key 和 base URL 是否存在。
-- `MAIN_MODEL`、`SUB_MODEL` 是否是该 provider 可识别的模型名。
-- 如果使用 `config/model.json`，确认 `active_provider`、`pinned` 和模型映射一致。
+- `config/model.json` 的 `active_provider` 是否存在于 `providers`。
+- `routes.chat`、`routes.lesson_plan` 是否指向已配置 API Key 和 Base URL 的 provider。
+- `models.main`、`models.sub` 以及专项模型是否是对应 provider 可识别的模型名。
+- `pinned`、provider-scoped 模型映射和实际路由是否一致。
+- 不要在 `.env` 中设置旧的模型变量；它们不再生效。
 
 后端配置摘要：
 

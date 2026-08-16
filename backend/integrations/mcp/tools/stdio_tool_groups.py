@@ -866,7 +866,7 @@ def search_and_compute_tools() -> List[Tool]:
             description=(
                 "【联网搜索】互联网搜索并返回结构化结果。\n"
                 "- provider=auto 时优先 Tavily，无 Tavily key 时回退 Exa，再回退 BigModel。\n"
-                "- 需要配置 TAVILY_API_KEY、EXA_API_KEY 或 ZHIPU_API_KEY。"
+                "- Tavily/Exa 密钥配置在 .env；Zhipu 密钥配置在 config/model.json 的 providers.zhipu。"
             ),
             inputSchema={
                 "type": "object",
@@ -1269,7 +1269,7 @@ def diagram_tools() -> List[Tool]:
         Tool(
             name="generate_image",
             description="""【AI 文生图】通过 Volcano ARK Seedream 文生图模型生成图片。
-- 需要配置 ARK_API_KEY + SEEDREAM_MODEL（或 ARK_IMAGE_MODEL）。
+- 需要在 config/model.json 中配置 providers.ark 和 models.image_generation。
 - 适合自学资料、教案、知识点配图等开放主题；不适合精确数学图（用 plot_function/render_tikz）。
 - size 默认 1024x1024；n 默认 1（最多 4）。
 - 返回 images 列表：每张含 url / markdown / filename / media_id / bytes。
@@ -1282,7 +1282,7 @@ def diagram_tools() -> List[Tool]:
                     "caption": {"type": "string", "description": "可选：图说明文字", "default": ""},
                     "model": {
                         "type": "string",
-                        "description": "可选：覆盖 SEEDREAM_MODEL 环境变量",
+                        "description": "可选：覆盖 config/model.json 中的 models.image_generation",
                         "default": "",
                     },
                     "size": {

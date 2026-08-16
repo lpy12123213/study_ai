@@ -78,7 +78,7 @@ git diff --check
 
 配置：
 
-- `.env.example` 包含新增配置。
+- `config/model.example.json` 包含新增模型配置，`.env.example` 包含新增非模型环境变量。
 - `CONFIGURATION.md` 说明用途、默认值和安全属性。
 - 密钥不出现在日志、测试快照或文档示例中。
 
@@ -93,7 +93,7 @@ git diff --check
 
 1. 运行完整 `doctor`。
 2. 检查 `git status`，确认没有误提交本地数据。
-3. 检查 `.env.example` 与 `CONFIGURATION.md` 是否同步。
+3. 检查 `config/model.example.json`、`.env.example` 与 `CONFIGURATION.md` 是否同步。
 4. 检查 `README.md`、`USER_GUIDE.md` 和专项文档是否覆盖用户可见变化。
 5. 验证登录、健康检查和至少一个长任务流程。
 6. 如涉及导出，验证目标格式至少一种成功路径。

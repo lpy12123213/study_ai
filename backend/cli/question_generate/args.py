@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from backend.core.settings import settings
 from backend.generation.question_library.preview_store import (
     load_session,
     new_preview_id,
@@ -184,7 +185,8 @@ def _resolve_params_from_args(args: argparse.Namespace) -> RunParams:
         _section_header(console, "高级设置")
         stream_reasoning = _prompt_bool("流式输出 reasoning", default=stream_reasoning)
         default_mcp = use_mcp_search or bool(
-            (os.getenv("TAVILY_API_KEY") or os.getenv("EXA_API_KEY") or os.getenv("ZHIPU_API_KEY") or "").strip()
+            (os.getenv("TAVILY_API_KEY") or os.getenv("EXA_API_KEY") or "").strip()
+            or settings.zhipu_api_key
         )
         use_mcp_search = _prompt_bool("MCP 搜索补充素材", default=default_mcp)
         if use_mcp_search:

@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Dict
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, model_name
 from backend.generation.lesson_plan.common import GENERATED_DIR, lesson_plan_infinite_max_tokens
 from backend.generation.lesson_plan.llm import call_llm_text
 from backend.llm.prompts import create_default_prompt_registry
@@ -88,7 +88,7 @@ async def publish_generated_text(
 async def convert_markdown_to_latex(*, markdown: str, title: str, subject: str) -> str:
     model = (
         str(
-            os.getenv("LESSON_PLAN_LATEX_MODEL") or os.getenv("STUDY_MATERIALS_LATEX_MODEL") or LESSON_PLAN_MODEL
+            model_name("lesson_plan_latex") or model_name("study_materials_latex") or LESSON_PLAN_MODEL
         ).strip()
         or LESSON_PLAN_MODEL
     )
@@ -161,7 +161,7 @@ async def convert_markdown_to_latex(*, markdown: str, title: str, subject: str) 
 async def refine_latex(*, latex: str, topic: str, subject: str, compile_error: str = "") -> str:
     model = (
         str(
-            os.getenv("LESSON_PLAN_LATEX_REFINE_MODEL") or os.getenv("LESSON_PLAN_LATEX_MODEL") or LESSON_PLAN_MODEL
+            model_name("lesson_plan_latex_refine") or model_name("lesson_plan_latex") or LESSON_PLAN_MODEL
         ).strip()
         or LESSON_PLAN_MODEL
     )

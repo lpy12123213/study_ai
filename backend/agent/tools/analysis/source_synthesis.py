@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 from backend.agent.tools.utils.text_utils import credibility_for_url
 from backend.agent.types import CompressedContext
+from backend.core.settings import model_name
 from backend.core.text_utils import clip_text as _clip_text
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
@@ -64,7 +65,7 @@ class SourceSynthesisToolsMixin:
         max_page_chars = max(800, min(int(args.get("max_page_chars") or 2600), 12000))
 
         model = str(
-            os.getenv("STUDY_MATERIALS_SYNTHESIS_MODEL")
+            model_name("study_materials_synthesis")
             or getattr(getattr(self, "config", None), "summarizer_model", "")
             or getattr(getattr(self, "config", None), "planner_model", "")
         ).strip()
