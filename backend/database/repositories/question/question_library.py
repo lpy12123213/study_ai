@@ -3,16 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
-from sqlalchemy import delete, desc, func, or_, select
+from sqlalchemy import String, and_, cast, delete, desc, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.engine import async_session_maker
 from backend.database.repositories.user_ids import normalize_user_id
-from backend.database.schema import QuestionCache, QuestionLibraryItem
+from backend.database.schema import GaokaoQuestionSource, QuestionCache, QuestionLibraryItem
 from backend.shared.question_thinking import extract_thinking_depth
 
 HiddenFilter = Literal["0", "1", "all"]
+LibraryAreaFilter = Literal["general", "gaokao", "all"]
 
 
 def _normalize_user_id(user_id: str) -> str:
@@ -182,6 +183,7 @@ async def list_question_library_items(
     user_id: str,
     subject: str = "",
     origin: str = "",
+    area: LibraryAreaFilter = "all",
     hidden: HiddenFilter = "0",
     q: str = "",
     exam_scene: str = "",
@@ -216,6 +218,7 @@ async def list_question_library_items(
                 user_id=uid,
                 subject=subject,
                 origin=origin,
+                area=area,
                 hidden=hidden,
                 q=q,
                 exam_scene=exam_scene,
@@ -237,7 +240,19 @@ async def list_question_library_items(
                 session=session,
             )
 
+    area_v = str(area or "all").strip().lower()
+    if area_v not in {"general", "gaokao", "all"}:
+        area_v = "all"
+
+    gaokao_join = and_(
+        GaokaoQuestionSource.user_id == QuestionLibraryItem.user_id,
+        GaokaoQuestionSource.question_id == QuestionLibraryItem.question_id,
+    )
     where = [QuestionLibraryItem.user_id == uid]
+    if area_v == "general":
+        where.append(GaokaoQuestionSource.question_id.is_(None))
+    elif area_v == "gaokao":
+        where.append(GaokaoQuestionSource.question_id.is_not(None))
     if subj:
         where.append(QuestionLibraryItem.subject == subj)
     if origin_v:
@@ -250,7 +265,13 @@ async def list_question_library_items(
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
         where.append(QuestionLibraryItem.updated_at >= cutoff)
 
-    source_columns = (QuestionCache.source, QuestionCache.stem)
+    source_columns = (
+        QuestionCache.source,
+        QuestionCache.stem,
+        GaokaoQuestionSource.paper_name,
+        GaokaoQuestionSource.paper_variant,
+        GaokaoQuestionSource.region,
+    )
     broad_columns = (
         QuestionCache.source,
         QuestionCache.stem,
@@ -261,7 +282,10 @@ async def list_question_library_items(
         _like_filter(source_columns, exam_scene),
         _question_type_filter(question_type),
         _like_filter(broad_columns, category),
-        _like_filter((QuestionCache.source, QuestionCache.date, QuestionCache.stem), year),
+        _like_filter(
+            (QuestionCache.source, QuestionCache.date, QuestionCache.stem, cast(GaokaoQuestionSource.exam_year, String)),
+            year,
+        ),
         _like_filter(source_columns, region),
         _like_filter(source_columns, grade),
         _like_filter((QuestionCache.source, QuestionCache.date, QuestionCache.stem), semester),
@@ -303,9 +327,19 @@ async def list_question_library_items(
             QuestionCache.date,
             func.length(func.trim(func.coalesce(QuestionCache.answer, ""))),
             func.length(func.trim(func.coalesce(QuestionCache.analysis, ""))),
+            GaokaoQuestionSource.question_id,
+            GaokaoQuestionSource.exam_year,
+            GaokaoQuestionSource.region,
+            GaokaoQuestionSource.paper_name,
+            GaokaoQuestionSource.paper_variant,
+            GaokaoQuestionSource.question_number,
+            GaokaoQuestionSource.source_url,
+            GaokaoQuestionSource.source_note,
+            GaokaoQuestionSource.verified,
         )
         .select_from(QuestionLibraryItem)
         .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
+        .join(GaokaoQuestionSource, gaokao_join, isouter=True)
         .where(*where)
     )
     if q_filter is not None:
@@ -323,6 +357,7 @@ async def list_question_library_items(
             select(func.count())
             .select_from(QuestionLibraryItem)
             .join(QuestionCache, QuestionCache.question_id == QuestionLibraryItem.question_id, isouter=True)
+            .join(GaokaoQuestionSource, gaokao_join, isouter=True)
         )
         if q_filter is not None:
             total_stmt = total_stmt.where(*where, q_filter)
@@ -336,6 +371,18 @@ async def list_question_library_items(
     for r in rows:
         has_answer = int(r[20] or 0) > 0
         has_analysis = int(r[21] or 0) > 0
+        gaokao_source = None
+        if r[22] is not None:
+            gaokao_source = {
+                "exam_year": int(r[23]),
+                "region": r[24] or "",
+                "paper_name": r[25] or "",
+                "paper_variant": r[26] or "",
+                "question_number": r[27] or "",
+                "source_url": r[28] or "",
+                "source_note": r[29] or "",
+                "verified": bool(r[30]),
+            }
         item = {
             "question_id": r[0],
             "subject": r[1] or "",
@@ -359,6 +406,8 @@ async def list_question_library_items(
             "date": r[19] or "",
             "has_answer": has_answer,
             "has_analysis": has_analysis,
+            "library_area": "gaokao" if gaokao_source is not None else "general",
+            "gaokao_source": gaokao_source,
         }
         items.append(_with_thinking_depth_fields(item, r[7] or ""))
 
@@ -384,6 +433,12 @@ async def bulk_delete_question_library_items(
             await session.commit()
             return n
 
+    await session.execute(
+        delete(GaokaoQuestionSource).where(
+            GaokaoQuestionSource.user_id == uid,
+            GaokaoQuestionSource.question_id.in_(ids),
+        )
+    )
     stmt = delete(QuestionLibraryItem).where(
         QuestionLibraryItem.user_id == uid, QuestionLibraryItem.question_id.in_(ids)
     )
@@ -479,16 +534,36 @@ async def get_question_library_item(
         async with async_session_maker() as session:
             return await get_question_library_item(user_id=uid, question_id=qid, session=session)
 
+    source_join = and_(
+        GaokaoQuestionSource.user_id == QuestionLibraryItem.user_id,
+        GaokaoQuestionSource.question_id == QuestionLibraryItem.question_id,
+    )
     result = await session.execute(
-        select(QuestionLibraryItem).where(
+        select(QuestionLibraryItem, GaokaoQuestionSource)
+        .join(GaokaoQuestionSource, source_join, isouter=True)
+        .where(
             QuestionLibraryItem.user_id == uid,
             QuestionLibraryItem.question_id == qid,
         )
     )
-    row = result.scalar_one_or_none()
+    pair = result.one_or_none()
 
-    if not row:
+    if not pair:
         return None
+    row, source = pair
+
+    gaokao_source = None
+    if source is not None:
+        gaokao_source = {
+            "exam_year": int(source.exam_year),
+            "region": source.region or "",
+            "paper_name": source.paper_name or "",
+            "paper_variant": source.paper_variant or "",
+            "question_number": source.question_number or "",
+            "source_url": source.source_url or "",
+            "source_note": source.source_note or "",
+            "verified": bool(source.verified),
+        }
 
     item = {
         "question_id": row.question_id,
@@ -502,6 +577,8 @@ async def get_question_library_item(
         "ai_summary": row.ai_summary or "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+        "library_area": "gaokao" if gaokao_source is not None else "general",
+        "gaokao_source": gaokao_source,
     }
     return _with_thinking_depth_fields(item, row.ai_dimensions_json or "")
 

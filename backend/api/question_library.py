@@ -10,6 +10,8 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.auth import require_auth
 from backend.api.question_library_schemas import (
+    GaokaoQuestionCrawlRequest,
+    GaokaoQuestionImportRequest,
     QuestionLibraryBulkDeleteRequest,
     QuestionLibraryCommitPreviewRequest,
     QuestionLibraryCommitPreviewResponse,
@@ -24,6 +26,7 @@ from backend.api.question_library_schemas import (
 from backend.api.sse_polling import next_poll_delay, wait_for_task_event_or_timeout
 from backend.api.sse_utils import is_sse_client_disconnected
 from backend.core.audit import AuditAction, audit_logger
+from backend.database.repositories.question.gaokao import upsert_gaokao_questions
 from backend.database.repositories.question.question_cache import get_question_cache
 from backend.database.repositories.question.question_library import (
     bulk_delete_question_library_items,
@@ -134,6 +137,7 @@ async def _stream_task_from_db(
 async def list_items(
     subject: str = Query(""),
     origin: str = Query(""),
+    area: str = Query("general"),
     hidden: str = Query("0"),
     q: str = Query(""),
     exam_scene: str = Query(""),
@@ -159,6 +163,7 @@ async def list_items(
         user_id=user_id,
         subject=subject,
         origin=origin,
+        area=area if area in {"general", "gaokao", "all"} else "general",
         hidden=hidden if hidden in {"0", "1", "all"} else "0",
         q=q,
         exam_scene=exam_scene,
@@ -178,6 +183,22 @@ async def list_items(
         offset=offset,
         include_total=include_total,
     )
+
+
+@router.post("/gaokao/items/import", response_model=dict, include_in_schema=False)
+@router.post("/gaokao/items/manual-import", response_model=dict)
+async def manual_import_gaokao_items(
+    request: GaokaoQuestionImportRequest, user: dict = Depends(require_auth)
+) -> dict:
+    user_id = _require_user_id(user)
+    try:
+        result = await upsert_gaokao_questions(
+            user_id=user_id,
+            items=[item.model_dump() for item in request.items],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, **result}
 
 
 @router.get("/items/{question_id}", response_model=dict)
@@ -489,6 +510,18 @@ async def crawl_and_save(
     user_id = _require_user_id(user)
     try:
         task = await ql_runner.create_crawl_task(user_id=user_id, request=request.model_dump())
+    except RunnerError as exc:
+        raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
+    return await _stream_task(task.task_id, after_seq=0, request=http_request)
+
+
+@router.post("/gaokao/crawl")
+async def crawl_gaokao_and_save(
+    request: GaokaoQuestionCrawlRequest, http_request: Request, user: dict = Depends(require_auth)
+) -> StreamingResponse:
+    user_id = _require_user_id(user)
+    try:
+        task = await ql_runner.create_gaokao_crawl_task(user_id=user_id, request=request.model_dump())
     except RunnerError as exc:
         raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
     return await _stream_task(task.task_id, after_seq=0, request=http_request)

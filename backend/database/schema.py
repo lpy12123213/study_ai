@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from backend.database.base import Base
@@ -336,6 +347,37 @@ class QuestionLibraryItem(Base):
             "question_id",
             sqlite_where=(origin == "crawled") & ai_score.is_(None),
         ),
+    )
+
+
+class GaokaoQuestionSource(Base):
+    """高考真题区域的结构化出处；存在记录即表示题目属于该隔离区。"""
+
+    __tablename__ = "gaokao_question_sources"
+
+    user_id = Column(String(64), primary_key=True)
+    question_id = Column(String(50), primary_key=True)
+    exam_year = Column(Integer, nullable=False)
+    region = Column(String(80), nullable=False, default="")
+    paper_name = Column(String(200), nullable=False)
+    paper_variant = Column(String(100), default="")
+    question_number = Column(String(50), default="")
+    source_url = Column(String(1000), default="")
+    source_note = Column(Text, default="")
+    verified = Column(Integer, nullable=False, default=0)  # 0/1，人工或正式来源核验
+
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "question_id"],
+            ["question_library.user_id", "question_library.question_id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_gaokao_sources_user_year", "user_id", "exam_year"),
+        Index("ix_gaokao_sources_user_region_year", "user_id", "region", "exam_year"),
+        Index("ix_gaokao_sources_user_paper", "user_id", "paper_name"),
     )
 
 

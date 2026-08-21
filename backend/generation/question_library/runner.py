@@ -14,6 +14,7 @@ from backend.database.repositories.content.study_archives import (
     get_latest_reusable_study_archive,
     get_latest_reusable_study_archive_for_subject,
 )
+from backend.database.repositories.question.gaokao import upsert_gaokao_questions
 from backend.database.repositories.question.question_cache import get_question_cache, upsert_question_cache
 from backend.database.repositories.question.question_library import (
     list_question_library_items,
@@ -308,6 +309,234 @@ async def create_crawl_task(
         user_id=user_id,
         task_type="question_library_crawl",
         title=f"题库抓取：{subject or query or 'crawl'}",
+        request=req,
+        runner_factory=runner_factory,
+        parent_task_id=parent_task_id,
+    )
+
+
+def _compact_source_text(value: Any) -> str:
+    return "".join(char.casefold() for char in str(value or "") if char.isalnum())
+
+
+def _matches_gaokao_source(*, source: str, date: str, marker: str, exam_year: int) -> bool:
+    actual = _compact_source_text(f"{source} {date}")
+    expected = _compact_source_text(marker)
+    return bool(actual and expected and expected in actual and str(exam_year) in actual)
+
+
+async def create_gaokao_crawl_task(
+    *,
+    user_id: str,
+    request: Dict[str, Any],
+    parent_task_id: Optional[str] = None,
+) -> RuntimeTask:
+    """Crawl one declared Gaokao paper and persist only source-matched questions."""
+
+    req = dict(request or {})
+    subject = str(req.get("subject") or "").strip()
+    query = str(req.get("query") or "").strip()
+    region = str(req.get("region") or "").strip()
+    paper_name = str(req.get("paper_name") or "").strip()
+    source_contains = str(req.get("source_contains") or "").strip()
+    if not subject:
+        raise RunnerError("subject_required", status_code=400)
+    if not query:
+        raise RunnerError("query_required", status_code=400)
+    if not region:
+        raise RunnerError("region_required", status_code=400)
+    if not paper_name:
+        raise RunnerError("paper_name_required", status_code=400)
+    if len(source_contains) < 2:
+        raise RunnerError("source_contains_required", status_code=400)
+    try:
+        exam_year = int(req.get("exam_year"))
+    except (TypeError, ValueError) as exc:
+        raise RunnerError("invalid_exam_year", status_code=400) from exc
+    if exam_year < 1952 or exam_year > 2100:
+        raise RunnerError("invalid_exam_year", status_code=400)
+
+    edu_level = str(req.get("edu_level") or "高中").strip()
+    paper_variant = str(req.get("paper_variant") or "").strip()
+    declared_source_url = str(req.get("source_url") or "").strip()
+    declared_source_note = str(req.get("source_note") or "").strip()
+    verified = bool(req.get("verified"))
+    difficulty = str(req.get("difficulty") or "").strip()
+    question_type = str(req.get("question_type") or "").strip()
+    limit = _clamp_int(req.get("limit"), default=30, min_value=1, max_value=200)
+    max_pages = _clamp_int(req.get("max_pages"), default=3, min_value=1, max_value=50)
+    min_quality_score = _clamp_int(req.get("min_quality_score"), default=0, min_value=0, max_value=100)
+    task_id = str(req.get("task_id") or "").strip() or f"ql_gaokao_crawl_{uuid.uuid4().hex[:12]}"
+
+    async def runner_factory(task: RuntimeTask) -> None:
+        try:
+            await task_runtime.append_event(
+                task,
+                {
+                    "type": "step",
+                    "step": {
+                        "id": "gaokao_crawl",
+                        "title": "高考真题爬取",
+                        "status": "running",
+                        "startTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "toolName": "question_library_gaokao_crawl",
+                        "input": {
+                            "taskId": task.task_id,
+                            "subject": subject,
+                            "query": query,
+                            "exam_year": exam_year,
+                            "region": region,
+                            "paper_name": paper_name,
+                            "source_contains": source_contains,
+                            "limit": limit,
+                        },
+                    },
+                },
+            )
+            crawler = await get_crawler(subject=subject, edu_level=edu_level, strict=True)
+            result = await crawler.search_by_keyword(
+                keyword=query,
+                subject=subject,
+                edu_level=edu_level,
+                limit=limit,
+                difficulty=difficulty,
+                question_type=question_type,
+                max_pages=max_pages,
+                year=exam_year,
+                source_contains=source_contains,
+                min_quality_score=min_quality_score,
+                dedup_by_stem=True,
+                parse_content=True,
+            )
+            if not bool(result.get("success")):
+                await _fail_crawl_task(task, _crawl_failure_payload(result))
+                return
+
+            questions = result.get("questions") if isinstance(result.get("questions"), list) else []
+            prepared: list[dict] = []
+            seen_ids: set[str] = set()
+            skipped_missing_source = 0
+            skipped_source_mismatch = 0
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                qid = str(question.get("question_id") or "").strip()
+                stem = str(question.get("stem") or "").strip()
+                source_label = str(question.get("source") or "").strip()
+                date = str(question.get("date") or "").strip()
+                if not qid or not stem or qid in seen_ids:
+                    continue
+                seen_ids.add(qid)
+                if not source_label:
+                    skipped_missing_source += 1
+                    continue
+                if not _matches_gaokao_source(
+                    source=source_label,
+                    date=date,
+                    marker=source_contains,
+                    exam_year=exam_year,
+                ):
+                    skipped_source_mismatch += 1
+                    continue
+
+                links = question.get("links") if isinstance(question.get("links"), dict) else {}
+                source_url = (
+                    declared_source_url
+                    or str(links.get("source_paper_url") or "").strip()
+                    or str(question.get("source_url") or "").strip()
+                )
+                notes = [note for note in (declared_source_note, f"爬取题源标注：{source_label}") if note]
+                prepared.append(
+                    {
+                        "question_id": qid,
+                        "subject": subject,
+                        "stem": stem,
+                        "answer": str(question.get("answer") or "").strip(),
+                        "analysis": str(question.get("analysis") or "").strip(),
+                        "question_type": str(question.get("question_type") or question.get("type") or "").strip(),
+                        "difficulty": str(question.get("difficulty") or "").strip(),
+                        "difficulty_value": question.get("difficulty_value"),
+                        "knowledge_point": str(question.get("knowledge_point") or "").strip(),
+                        "knowledge_points": question.get("knowledge_points") or [],
+                        "origin": "crawled",
+                        "source": {
+                            "exam_year": exam_year,
+                            "region": region,
+                            "paper_name": paper_name,
+                            "paper_variant": paper_variant,
+                            "question_number": str(
+                                question.get("question_index") or question.get("question_number") or ""
+                            ).strip(),
+                            "source_url": source_url,
+                            "source_note": "；".join(notes),
+                            "verified": verified,
+                        },
+                    }
+                )
+
+            if not prepared:
+                await _fail_crawl_task(
+                    task,
+                    {
+                        "success": False,
+                        "error": "gaokao_source_not_matched",
+                        "message": "爬取结果均缺少或不匹配声明的高考出处，未写入真题区。",
+                        "skipped_missing_source": skipped_missing_source,
+                        "skipped_source_mismatch": skipped_source_mismatch,
+                    },
+                )
+                return
+
+            persisted = await upsert_gaokao_questions(user_id=user_id, items=prepared)
+            for index, item in enumerate(prepared, start=1):
+                await task_runtime.append_event(
+                    task,
+                    {
+                        "type": "item_saved",
+                        "data": {
+                            "item": {
+                                "question_id": item["question_id"],
+                                "subject": subject,
+                                "origin": "crawled",
+                                "library_area": "gaokao",
+                                "stem": item["stem"],
+                                "gaokao_source": item["source"],
+                            }
+                        },
+                    },
+                )
+                await task_runtime.append_event(
+                    task,
+                    {"type": "progress", "data": {"progress": int(index / len(prepared) * 100)}},
+                )
+
+            done = {
+                "success": True,
+                "inserted": int(persisted.get("upserted") or 0),
+                "count": len(prepared),
+                "question_ids": list(persisted.get("question_ids") or []),
+                "library_area": "gaokao",
+                "skipped_missing_source": skipped_missing_source,
+                "skipped_source_mismatch": skipped_source_mismatch,
+            }
+            await task_runtime.append_event(task, {"type": "done", "data": done})
+            await task_runtime.complete_task(task, result=done)
+        except asyncio.CancelledError:
+            if task.status == "running":
+                await task_runtime.fail_task(task, "Task cancelled")
+            raise
+        except Exception as exc:  # pragma: no cover
+            logger.exception("gaokao_question_crawl_runner_failed", extra={"task_id": task.task_id})
+            await _fail_crawl_task(task, _crawl_failure_payload(exc))
+        finally:
+            if task.status == "running":
+                await task_runtime.fail_task(task, "Task ended unexpectedly")
+
+    return await task_runtime.create_task(
+        task_id=task_id,
+        user_id=user_id,
+        task_type="question_library_gaokao_crawl",
+        title=f"高考真题爬取：{exam_year} {paper_name}",
         request=req,
         runner_factory=runner_factory,
         parent_task_id=parent_task_id,

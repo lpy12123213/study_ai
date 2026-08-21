@@ -206,6 +206,79 @@ PDF 依赖本机 LaTeX 引擎，DOCX 优先使用 Pandoc。
 - `POST /api/question-library/items/{question_id}/unstar`
 - `POST /api/question-library/items/bulk-delete`
 - `POST /api/question-library/items/{question_id}/export-to-basket`
+- `POST /api/question-library/gaokao/items/manual-import`
+- `POST /api/question-library/gaokao/crawl`（SSE）
+- `POST /api/tasks/question-library/gaokao-crawl`（规范长任务入口，返回 `taskId`）
+
+`GET /api/question-library/items` 的 `area` 参数用于题库区域隔离：`general`（默认，排除高考真题）、
+`gaokao`（只返回带结构化高考出处的题目）、`all`（仓储/管理用途）。高考真题通过
+`POST /api/question-library/gaokao/items/manual-import` 批量写入；每题必须携带 `exam_year`、`region`、
+`paper_name`，可附试卷版本、题号、原始链接、出处备注和核验状态。列表与详情返回
+`library_area` 和 `gaokao_source`，不得仅凭题干或自由文本 `source` 猜测真题身份。
+
+### 高考真题爬取
+
+`POST /api/question-library/gaokao/crawl` 使用 SSE 返回 `step`、`item_saved`、`progress`、`done` 或
+`error` 事件。只需要任务句柄时，使用 `POST /api/tasks/question-library/gaokao-crawl`；请求体相同。
+
+```json
+{
+  "subject": "高中数学",
+  "query": "新课标I卷",
+  "edu_level": "高中",
+  "exam_year": 2024,
+  "region": "全国",
+  "paper_name": "2024年普通高等学校招生全国统一考试新课标I卷数学",
+  "paper_variant": "新课标I卷",
+  "source_contains": "新课标I卷",
+  "source_url": "https://example.edu/2024-math.pdf",
+  "source_note": "依据正式发布试卷核验",
+  "verified": true,
+  "limit": 30,
+  "max_pages": 3
+}
+```
+
+`exam_year`、`region`、`paper_name` 与 `source_contains` 是必填项。爬虫查询同时携带年份和
+`source_contains` 过滤，写库前还会再次检查题源返回的 `source + date`：必须同时包含指定题源标记
+和四位年份。缺少出处或不匹配的题目不会进入真题区；全部不匹配时任务以
+`gaokao_source_not_matched` 失败，并返回跳过计数。
+
+### 高考真题手动导入
+
+`POST /api/question-library/gaokao/items/manual-import` 接收 1–500 题并在同一事务中写入题干、用户题库
+关系和结构化出处。兼容路径 `/api/question-library/gaokao/items/import` 仍可调用，但不再作为新客户端契约。
+
+```json
+{
+  "items": [
+    {
+      "question_id": "gaokao-2024-math-1",
+      "subject": "高中数学",
+      "stem": "题干……",
+      "answer": "A",
+      "analysis": "解析……",
+      "question_type": "单选题",
+      "difficulty": "中等",
+      "knowledge_points": ["集合"],
+      "origin": "media",
+      "source": {
+        "exam_year": 2024,
+        "region": "全国",
+        "paper_name": "2024年普通高等学校招生全国统一考试新课标I卷数学",
+        "paper_variant": "新课标I卷",
+        "question_number": "1",
+        "source_url": "https://example.edu/2024-math.pdf",
+        "source_note": "依据正式发布试卷核验",
+        "verified": true
+      }
+    }
+  ]
+}
+```
+
+成功响应为 `{"success": true, "upserted": 1, "question_ids": ["gaokao-2024-math-1"]}`。
+缺少题干、学科或出处必填字段返回 422；重复题号或仓储级约束错误返回 400。
 
 Preview 与 session：
 

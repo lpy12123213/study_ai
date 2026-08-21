@@ -2,11 +2,12 @@
  *  本文件是 question-library 的公共 API 面：跨 feature 只允许从这里导入。 */
 import { apiFetch } from "@/shared/api/http-client";
 import { streamPost, type StreamHandlers } from "@/lib/sse";
-import type { LibraryListResponse, LibraryPreview, LibrarySession } from "@/shared/api/types";
+import type { GaokaoQuestionSource, LibraryListResponse, LibraryPreview, LibrarySession } from "@/shared/api/types";
 
 export interface LibraryItemsQuery {
   subject?: string;
   origin?: string;
+  area?: "general" | "gaokao" | "all";
   hidden?: "0" | "1" | "all";
   q?: string;
   question_type?: string;
@@ -19,10 +20,25 @@ export interface LibraryItemsQuery {
   offset?: number;
 }
 
+export interface GaokaoQuestionImportItem {
+  question_id: string;
+  subject: string;
+  stem: string;
+  answer?: string;
+  analysis?: string;
+  question_type?: string;
+  difficulty?: string;
+  difficulty_value?: number | null;
+  knowledge_point?: string;
+  knowledge_points?: string[];
+  origin?: "crawled" | "media";
+  source: GaokaoQuestionSource;
+}
+
 export const libraryApi = {
   items: (query: LibraryItemsQuery = {}) =>
     apiFetch<LibraryListResponse>("/api/question-library/items", {
-      query: { hidden: "0", limit: 50, offset: 0, ...query } as any,
+      query: { area: "general", hidden: "0", limit: 50, offset: 0, ...query } as any,
     }),
   getItem: (questionId: string) =>
     apiFetch<{ library_item: any; question_cache: any }>(
@@ -39,6 +55,11 @@ export const libraryApi = {
     }),
   exportToBasket: (qid: string) =>
     apiFetch(`/api/question-library/items/${encodeURIComponent(qid)}/export-to-basket`, { method: "POST" }),
+  importGaokao: (items: GaokaoQuestionImportItem[]) =>
+    apiFetch<{ success: boolean; upserted: number; question_ids: string[] }>(
+      "/api/question-library/gaokao/items/manual-import",
+      { method: "POST", body: { items } },
+    ),
 
   // ---- 预览审核流 ----
   preview: (previewId: string) =>
@@ -86,6 +107,26 @@ export interface LibraryCrawlPayload {
   min_quality_score?: number;
 }
 
+export interface GaokaoQuestionCrawlPayload {
+  subject: string;
+  query: string;
+  edu_level?: string;
+  exam_year: number;
+  region: string;
+  paper_name: string;
+  source_contains: string;
+  paper_variant?: string;
+  source_url?: string;
+  source_note?: string;
+  verified?: boolean;
+  difficulty?: string;
+  question_type?: string;
+  limit?: number;
+  max_pages?: number;
+  min_quality_score?: number;
+  task_id?: string;
+}
+
 export interface LibraryGeneratePayload {
   subject: string;
   topic: string;
@@ -110,6 +151,11 @@ export interface LibraryGeneratePayload {
 /** 题库抓取（POST 即流） */
 export function crawlLibrary(payload: LibraryCrawlPayload, handlers: StreamHandlers) {
   return streamPost("/api/question-library/crawl", payload, handlers);
+}
+
+/** 高考真题爬取：仅将年份与题源标记匹配的结果写入隔离区。 */
+export function crawlGaokaoLibrary(payload: GaokaoQuestionCrawlPayload, handlers: StreamHandlers) {
+  return streamPost("/api/question-library/gaokao/crawl", payload, handlers);
 }
 
 /** AI 出题（POST 即流）；done 后取 preview_id → libraryApi.preview 进入审核 */

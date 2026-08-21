@@ -26,6 +26,7 @@ backend/database/repositories/<domain>/<scope>.py
 
 - `question/question_library.py`：用户题库聚合视图（list / detail / hide / star / bulk delete）。
 - `question/question_cache.py`：题目原始内容缓存（按 question_id）。
+- `question/gaokao.py`：高考真题与结构化出处的事务导入；出处记录同时作为独立区域的成员资格。
 - `question/wrongbook.py`：错题本。
 
 ## Workspace

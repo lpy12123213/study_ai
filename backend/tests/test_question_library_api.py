@@ -97,6 +97,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     params={
                         "subject": "高中数学",
                         "origin": "crawled",
+                        "area": "gaokao",
                         "hidden": "0",
                         "q": "函数",
                         "exam_scene": "期末",
@@ -119,6 +120,7 @@ class TestQuestionLibraryApi(unittest.TestCase):
         mock_list.assert_awaited_once()
         kwargs = mock_list.await_args.kwargs
         self.assertEqual(kwargs["user_id"], "u-1")
+        self.assertEqual(kwargs["area"], "gaokao")
         self.assertEqual(kwargs["exam_scene"], "期末")
         self.assertEqual(kwargs["question_type"], "单选题")
         self.assertEqual(kwargs["difficulty"], "容易")
@@ -129,6 +131,56 @@ class TestQuestionLibraryApi(unittest.TestCase):
         self.assertEqual(kwargs["semester"], "期末")
         self.assertEqual(kwargs["method"], "分类讨论")
         self.assertIs(kwargs["only_new"], True)
+
+    def test_gaokao_import_endpoint_forwards_question_and_source(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        mock_import = AsyncMock(return_value={"upserted": 1, "question_ids": ["gk-2024-1"]})
+        payload = {
+            "items": [
+                {
+                    "question_id": "gk-2024-1",
+                    "subject": "高中数学",
+                    "stem": "真题题干",
+                    "answer": "A",
+                    "source": {
+                        "exam_year": 2024,
+                        "region": "全国",
+                        "paper_name": "2024年新课标I卷数学",
+                        "paper_variant": "新课标I卷",
+                        "question_number": "1",
+                        "source_url": "https://example.test/gaokao.pdf",
+                        "verified": True,
+                    },
+                }
+            ]
+        }
+        try:
+            client = TestClient(app)
+            with patch("backend.api.question_library.upsert_gaokao_questions", new=mock_import):
+                resp = client.post("/api/question-library/gaokao/items/manual-import", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["question_ids"], ["gk-2024-1"])
+        kwargs = mock_import.await_args.kwargs
+        self.assertEqual(kwargs["user_id"], "u-1")
+        self.assertEqual(kwargs["items"][0]["source"]["paper_name"], "2024年新课标I卷数学")
+
+    def test_gaokao_import_rejects_missing_provenance(self) -> None:
+        app = create_app()
+        self._override_auth(app)
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/api/question-library/gaokao/items/manual-import",
+                json={"items": [{"question_id": "gk-1", "subject": "高中数学", "stem": "题干"}]},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        self.assertEqual(resp.status_code, 422)
 
     def test_latest_pending_preview_returns_current_users_latest_draft(self) -> None:
         app = create_app()

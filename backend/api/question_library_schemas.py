@@ -112,6 +112,17 @@ class QuestionLibraryPracticeStatePatch(BaseModel):
     completed: Optional[bool] = None
 
 
+class GaokaoQuestionSourceInput(BaseModel):
+    exam_year: int = Field(ge=1952, le=2100)
+    region: str = Field(min_length=1, max_length=80)
+    paper_name: str = Field(min_length=1, max_length=200)
+    paper_variant: str = Field(default="", max_length=100)
+    question_number: str = Field(default="", max_length=50)
+    source_url: str = Field(default="", max_length=1000)
+    source_note: str = Field(default="", max_length=4000)
+    verified: bool = False
+
+
 class QuestionLibraryListResponseItem(BaseModel):
     question_id: str = ""
     subject: str = ""
@@ -129,6 +140,8 @@ class QuestionLibraryListResponseItem(BaseModel):
     thinking_depth_comment: str = ""
     updated_at: str = ""
     stem: str = ""
+    library_area: Literal["general", "gaokao"] = "general"
+    gaokao_source: Optional[GaokaoQuestionSourceInput] = None
 
 
 class QuestionLibraryListResponse(BaseModel):
@@ -137,6 +150,45 @@ class QuestionLibraryListResponse(BaseModel):
     limit: int = 50
     offset: int = 0
     items: List[QuestionLibraryListResponseItem] = Field(default_factory=list)
+
+
+class GaokaoQuestionImportItem(BaseModel):
+    question_id: str = Field(min_length=1, max_length=50)
+    subject: str = Field(min_length=1, max_length=100)
+    stem: str = Field(min_length=1, max_length=20000)
+    answer: str = Field(default="", max_length=12000)
+    analysis: str = Field(default="", max_length=20000)
+    question_type: str = Field(default="", max_length=50)
+    difficulty: str = Field(default="", max_length=20)
+    difficulty_value: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    knowledge_point: str = Field(default="", max_length=200)
+    knowledge_points: List[str] = Field(default_factory=list, max_length=50)
+    origin: Literal["crawled", "media"] = "media"
+    source: GaokaoQuestionSourceInput
+
+
+class GaokaoQuestionImportRequest(BaseModel):
+    items: List[GaokaoQuestionImportItem] = Field(min_length=1, max_length=500)
+
+
+class GaokaoQuestionCrawlRequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=100)
+    query: str = Field(min_length=1, max_length=200)
+    edu_level: str = Field(default="高中", max_length=30)
+    exam_year: int = Field(ge=1952, le=2100)
+    region: str = Field(min_length=1, max_length=80)
+    paper_name: str = Field(min_length=1, max_length=200)
+    source_contains: str = Field(min_length=2, max_length=100)
+    paper_variant: str = Field(default="", max_length=100)
+    source_url: str = Field(default="", max_length=1000)
+    source_note: str = Field(default="", max_length=4000)
+    verified: bool = False
+    difficulty: str = Field(default="", max_length=20)
+    question_type: str = Field(default="", max_length=50)
+    limit: int = Field(default=30, ge=1, le=200)
+    max_pages: int = Field(default=3, ge=1, le=50)
+    min_quality_score: int = Field(default=0, ge=0, le=100)
+    task_id: str = Field(default="", max_length=100)
 
 
 class QuestionLibraryCrawlRequest(BaseModel):

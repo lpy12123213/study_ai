@@ -364,6 +364,10 @@ class TestTasksApiContract(unittest.TestCase):
 
         cases = [
             ("question_library_crawl", "backend.generation.question_library.runner.create_crawl_task"),
+            (
+                "question_library_gaokao_crawl",
+                "backend.generation.question_library.runner.create_gaokao_crawl_task",
+            ),
             ("question_library_generate", "backend.generation.question_library.runner.create_generate_task"),
             ("question_library_score", "backend.generation.question_library.runner.create_score_task"),
             ("question_library_media_import", "backend.generation.question_library.runner.create_media_import_task"),

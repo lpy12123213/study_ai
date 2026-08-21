@@ -15,6 +15,7 @@ from backend.api.knowledge_video_schemas import KnowledgeVideoGenerateRequest
 from backend.api.lesson_plan_schemas import LessonPlanGenerateRequest
 from backend.api.question_evaluate_schemas import QuestionEvaluateRequest
 from backend.api.question_library_schemas import (
+    GaokaoQuestionCrawlRequest,
     QuestionLibraryCrawlRequest,
     QuestionLibraryGenerateRequest,
     QuestionLibraryScoreRequest,
@@ -436,6 +437,26 @@ async def submit_question_library_crawl(request: QuestionLibraryCrawlRequest, us
     return {"success": True, "taskId": task.task_id}
 
 
+@router.post("/question-library/gaokao-crawl", response_model=dict)
+async def submit_gaokao_question_crawl(
+    request: GaokaoQuestionCrawlRequest, user: dict = Depends(require_auth)
+) -> dict:
+    """Canonical long-task submit endpoint for source-verified Gaokao crawling."""
+
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_token")
+
+    from backend.generation.question_library import runner as ql_runner
+    from backend.generation.question_library.runner import RunnerError
+
+    try:
+        task = await ql_runner.create_gaokao_crawl_task(user_id=user_id, request=request.model_dump())
+    except RunnerError as exc:
+        raise HTTPException(status_code=int(exc.status_code), detail=str(exc.detail)) from exc
+    return {"success": True, "taskId": task.task_id}
+
+
 @router.post("/question-library/generate", response_model=dict)
 async def submit_question_library_generate(
     request: QuestionLibraryGenerateRequest, user: dict = Depends(require_auth)
@@ -849,6 +870,7 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
 
     if task_type in {
         "question_library_crawl",
+        "question_library_gaokao_crawl",
         "question_library_generate",
         "question_library_score",
         "question_library_media_import",
@@ -857,6 +879,7 @@ async def retry_task(task_id: str, user: dict = Depends(require_auth)) -> dict:
 
         creator = {
             "question_library_crawl": ql_runner.create_crawl_task,
+            "question_library_gaokao_crawl": ql_runner.create_gaokao_crawl_task,
             "question_library_generate": ql_runner.create_generate_task,
             "question_library_score": ql_runner.create_score_task,
             "question_library_media_import": ql_runner.create_media_import_task,

@@ -8,6 +8,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from backend.database.repositories.question import gaokao as gaokao_repo
 from backend.database.repositories.question import question_cache as cache_repo
 from backend.database.repositories.question import question_library as lib_repo
 from backend.database.schema import Base, QuestionLibraryItem
@@ -26,6 +27,7 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         self.patches = [
             patch.object(lib_repo, "async_session_maker", self.session_maker),
             patch.object(cache_repo, "async_session_maker", self.session_maker),
+            patch.object(gaokao_repo, "async_session_maker", self.session_maker),
         ]
         for p in self.patches:
             p.start()
@@ -41,6 +43,61 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
             rows = (await conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
         names = {r[0] for r in rows}
         self.assertIn("question_library", names)
+        self.assertIn("gaokao_question_sources", names)
+
+    async def test_gaokao_area_is_isolated_and_exposes_structured_source(self) -> None:
+        await cache_repo.upsert_question_cache(
+            [{"question_id": "general-1", "subject": "高中数学", "stem": "普通练习题"}]
+        )
+        await lib_repo.upsert_question_library_items(
+            user_id="user-a",
+            items=[{"question_id": "general-1", "subject": "高中数学", "origin": "crawled"}],
+        )
+        result = await gaokao_repo.upsert_gaokao_questions(
+            user_id="user-a",
+            items=[
+                {
+                    "question_id": "gaokao-2024-bj-1",
+                    "subject": "高中数学",
+                    "stem": "设集合 A，求 A 的补集。",
+                    "answer": "略",
+                    "question_type": "单选题",
+                    "origin": "media",
+                    "source": {
+                        "exam_year": 2024,
+                        "region": "北京",
+                        "paper_name": "2024年普通高等学校招生全国统一考试（北京卷）数学",
+                        "paper_variant": "北京卷",
+                        "question_number": "1",
+                        "source_url": "https://example.test/2024-beijing-math.pdf",
+                        "source_note": "依据正式试卷逐题转录",
+                        "verified": True,
+                    },
+                }
+            ],
+        )
+        self.assertEqual(result, {"upserted": 1, "question_ids": ["gaokao-2024-bj-1"]})
+
+        general = await lib_repo.list_question_library_items(user_id="user-a", area="general", hidden="all")
+        gaokao = await lib_repo.list_question_library_items(user_id="user-a", area="gaokao", hidden="all")
+        all_items = await lib_repo.list_question_library_items(user_id="user-a", area="all", hidden="all")
+
+        self.assertEqual([item["question_id"] for item in general["items"]], ["general-1"])
+        self.assertEqual([item["question_id"] for item in gaokao["items"]], ["gaokao-2024-bj-1"])
+        self.assertEqual({item["question_id"] for item in all_items["items"]}, {"general-1", "gaokao-2024-bj-1"})
+        item = gaokao["items"][0]
+        self.assertEqual(item["library_area"], "gaokao")
+        self.assertEqual(item["gaokao_source"]["exam_year"], 2024)
+        self.assertEqual(item["gaokao_source"]["region"], "北京")
+        self.assertTrue(item["gaokao_source"]["verified"])
+
+        detail = await lib_repo.get_question_library_item(user_id="user-a", question_id="gaokao-2024-bj-1")
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["library_area"], "gaokao")
+        self.assertEqual(detail["gaokao_source"]["question_number"], "1")
+
+        other_user = await lib_repo.list_question_library_items(user_id="user-b", area="gaokao", hidden="all")
+        self.assertEqual(other_user["items"], [])
 
     async def test_upsert_and_list_scoped_by_user(self) -> None:
         await cache_repo.upsert_question_cache(

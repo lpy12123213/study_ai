@@ -69,11 +69,137 @@ class TestQuestionLibraryCrawl(unittest.IsolatedAsyncioTestCase):
         # NOTE: the app has a GET/HEAD SPA fallback route; unknown POST paths return 405.
         self.assertNotIn(resp.status_code, {404, 405})
 
+    def test_gaokao_crawl_endpoints_exist(self) -> None:
+        app = create_app()
+        client = TestClient(app)
+        stream_resp = client.post("/api/question-library/gaokao/crawl", json={})
+        task_resp = client.post("/api/tasks/question-library/gaokao-crawl", json={})
+        self.assertNotIn(stream_resp.status_code, {404, 405})
+        self.assertNotIn(task_resp.status_code, {404, 405})
+
     def test_task_stream_endpoint_exists(self) -> None:
         app = create_app()
         client = TestClient(app)
         resp = client.get("/api/question-library/tasks/test-task/stream")
         self.assertNotEqual(resp.status_code, 404)
+
+    async def test_gaokao_crawl_only_persists_source_matched_questions(self) -> None:
+        from backend.generation.question_library import runner as ql_runner
+
+        class GaokaoCrawler:
+            def __init__(self) -> None:
+                self.kwargs: dict = {}
+
+            async def search_by_keyword(self, **kwargs: Any) -> dict:
+                self.kwargs = dict(kwargs)
+                return {
+                    "success": True,
+                    "questions": [
+                        {
+                            "question_id": "gk-match",
+                            "stem": "匹配声明试卷的真题题干。",
+                            "answer": "A",
+                            "analysis": "解析",
+                            "source": "2024年普通高等学校招生全国统一考试·新课标I卷",
+                            "date": "2024/06",
+                            "question_index": 1,
+                            "links": {"source_paper_url": "https://source.test/paper"},
+                        },
+                        {
+                            "question_id": "gk-wrong-paper",
+                            "stem": "同年但属于另一套试卷。",
+                            "source": "2024年普通高等学校招生全国统一考试·全国甲卷",
+                            "date": "2024/06",
+                        },
+                        {
+                            "question_id": "gk-no-source",
+                            "stem": "没有出处的题目。",
+                            "source": "",
+                            "date": "2024/06",
+                        },
+                    ],
+                }
+
+        crawler = GaokaoCrawler()
+        fake_runtime = _InlineTaskRuntime()
+        with (
+            patch.object(ql_runner, "task_runtime", fake_runtime),
+            patch.object(ql_runner, "get_crawler", new=AsyncMock(return_value=crawler)),
+            patch.object(
+                ql_runner,
+                "upsert_gaokao_questions",
+                new=AsyncMock(return_value={"upserted": 1, "question_ids": ["gk-match"]}),
+            ) as upsert_mock,
+        ):
+            task = await ql_runner.create_gaokao_crawl_task(
+                user_id="u-1",
+                request={
+                    "task_id": "gaokao-crawl-1",
+                    "subject": "高中数学",
+                    "query": "新课标I卷",
+                    "exam_year": 2024,
+                    "region": "全国",
+                    "paper_name": "2024年新课标I卷数学",
+                    "paper_variant": "新课标I卷",
+                    "source_contains": "新课标I卷",
+                    "source_url": "https://official.test/2024-math.pdf",
+                    "verified": True,
+                },
+            )
+
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(crawler.kwargs["year"], 2024)
+        self.assertEqual(crawler.kwargs["source_contains"], "新课标I卷")
+        upsert_mock.assert_awaited_once()
+        saved = upsert_mock.await_args.kwargs["items"]
+        self.assertEqual([item["question_id"] for item in saved], ["gk-match"])
+        self.assertEqual(saved[0]["source"]["question_number"], "1")
+        self.assertEqual(saved[0]["source"]["source_url"], "https://official.test/2024-math.pdf")
+        self.assertTrue(saved[0]["source"]["verified"])
+        done = [event for event in fake_runtime.events if event.get("type") == "done"][-1]["data"]
+        self.assertEqual(done["inserted"], 1)
+        self.assertEqual(done["skipped_missing_source"], 1)
+        self.assertEqual(done["skipped_source_mismatch"], 1)
+
+    async def test_gaokao_crawl_fails_when_no_source_matches(self) -> None:
+        from backend.generation.question_library import runner as ql_runner
+
+        class WrongSourceCrawler:
+            async def search_by_keyword(self, **_kwargs: Any) -> dict:
+                return {
+                    "success": True,
+                    "questions": [
+                        {
+                            "question_id": "wrong-1",
+                            "stem": "另一试卷题目",
+                            "source": "2024年全国甲卷",
+                            "date": "2024/06",
+                        }
+                    ],
+                }
+
+        fake_runtime = _InlineTaskRuntime()
+        with (
+            patch.object(ql_runner, "task_runtime", fake_runtime),
+            patch.object(ql_runner, "get_crawler", new=AsyncMock(return_value=WrongSourceCrawler())),
+            patch.object(ql_runner, "upsert_gaokao_questions", new=AsyncMock()) as upsert_mock,
+        ):
+            task = await ql_runner.create_gaokao_crawl_task(
+                user_id="u-1",
+                request={
+                    "task_id": "gaokao-crawl-no-match",
+                    "subject": "高中数学",
+                    "query": "新课标I卷",
+                    "exam_year": 2024,
+                    "region": "全国",
+                    "paper_name": "2024年新课标I卷数学",
+                    "source_contains": "新课标I卷",
+                },
+            )
+
+        self.assertEqual(task.status, "failed")
+        self.assertEqual(fake_runtime.failed["error"]["error"], "gaokao_source_not_matched")
+        upsert_mock.assert_not_awaited()
 
     async def test_crawl_task_failure_preserves_challenge_recovery_guidance(self) -> None:
         from backend.generation.question_library import runner as ql_runner

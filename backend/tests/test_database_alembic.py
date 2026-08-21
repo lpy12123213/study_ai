@@ -62,6 +62,23 @@ class TestDatabaseAlembic(unittest.TestCase):
             command.upgrade(cfg, "head")
 
             self.assertIn("user_id", _columns(db_path, "paper_questions"))
+            self.assertEqual(
+                _columns(db_path, "gaokao_question_sources"),
+                {
+                    "user_id",
+                    "question_id",
+                    "exam_year",
+                    "region",
+                    "paper_name",
+                    "paper_variant",
+                    "question_number",
+                    "source_url",
+                    "source_note",
+                    "verified",
+                    "created_at",
+                    "updated_at",
+                },
+            )
             conn = sqlite3.connect(db_path)
             try:
                 row = conn.execute("SELECT user_id FROM paper_questions WHERE id = 1").fetchone()

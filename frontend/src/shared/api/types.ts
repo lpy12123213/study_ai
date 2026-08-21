@@ -102,6 +102,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   export_paper: "试卷导出",
   export_study_archive: "资料导出",
   question_library_crawl: "题库抓取",
+  question_library_gaokao_crawl: "高考真题抓取",
   question_library_generate: "AI 出题",
   question_library_score: "题库评分",
   question_library_media_import: "媒体录入",
@@ -240,6 +241,17 @@ export interface Blueprint {
 }
 
 // ---------------- 题库 ----------------
+export interface GaokaoQuestionSource {
+  exam_year: number;
+  region: string;
+  paper_name: string;
+  paper_variant?: string;
+  question_number?: string;
+  source_url?: string;
+  source_note?: string;
+  verified: boolean;
+}
+
 export interface LibraryItem {
   question_id: string;
   stem?: string;
@@ -265,6 +277,8 @@ export interface LibraryItem {
   has_analysis?: boolean;
   updated_at?: string;
   created_at?: string;
+  library_area?: "general" | "gaokao";
+  gaokao_source?: GaokaoQuestionSource | null;
   [k: string]: any;
 }
 
