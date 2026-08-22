@@ -106,6 +106,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
                         "category": "新文化题",
                         "year": "2024",
                         "region": "北京",
+                        "paper_name": "北京卷",
+                        "question_number": "11",
                         "grade": "高三",
                         "semester": "期末",
                         "method": "分类讨论",
@@ -127,6 +129,8 @@ class TestQuestionLibraryApi(unittest.TestCase):
         self.assertEqual(kwargs["category"], "新文化题")
         self.assertEqual(kwargs["year"], "2024")
         self.assertEqual(kwargs["region"], "北京")
+        self.assertEqual(kwargs["paper_name"], "北京卷")
+        self.assertEqual(kwargs["question_number"], "11")
         self.assertEqual(kwargs["grade"], "高三")
         self.assertEqual(kwargs["semester"], "期末")
         self.assertEqual(kwargs["method"], "分类讨论")

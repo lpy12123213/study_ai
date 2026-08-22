@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { StemHtml } from "@/components/question/stem-html";
 import { DifficultyBadge } from "@/components/question/difficulty-badge";
+import { Spinner } from "@/components/ui/spinner";
 
 export interface QuestionCardData {
   question_id?: string;
@@ -23,6 +24,8 @@ export interface QuestionCardData {
   date?: string;
   quality_score?: number | null;
   ai_verdict?: string;
+  has_answer?: boolean;
+  has_analysis?: boolean;
 }
 
 function knowledgePoints(q: QuestionCardData): string[] {
@@ -43,6 +46,11 @@ export function QuestionCard({
   selected,
   onSelect,
   defaultExpanded = false,
+  expanded: controlledExpanded,
+  onExpandedChange,
+  detailLoading = false,
+  detailError,
+  onRetryDetail,
   className,
 }: {
   question: QuestionCardData;
@@ -50,12 +58,33 @@ export function QuestionCard({
   selected?: boolean;
   onSelect?: (checked: boolean) => void;
   defaultExpanded?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  detailLoading?: boolean;
+  detailError?: string;
+  onRetryDetail?: () => void;
   className?: string;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
+  const expanded = controlledExpanded ?? internalExpanded;
   const kps = knowledgePoints(question);
   const qtype = question.type ?? question.question_type;
-  const hasDetail = Boolean(question.answer || question.analysis);
+  const hasDetail = Boolean(
+    question.answer || question.analysis || question.has_answer || question.has_analysis || detailLoading || detailError,
+  );
+  const toggleExpanded = () => {
+    const next = !expanded;
+    if (controlledExpanded === undefined) setInternalExpanded(next);
+    onExpandedChange?.(next);
+  };
+  const sourceHost = (() => {
+    if (!question.source_url) return "";
+    try {
+      return new URL(question.source_url, window.location.origin).hostname || "查看来源";
+    } catch {
+      return "查看来源";
+    }
+  })();
 
   return (
     <Card
@@ -64,6 +93,7 @@ export function QuestionCard({
         selected && "ring-2 ring-primary/50",
         className,
       )}
+      style={{ contentVisibility: "auto", containIntrinsicSize: "240px" }}
     >
       <div className="flex items-start gap-3">
         {onSelect ? (
@@ -76,45 +106,85 @@ export function QuestionCard({
           />
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            {qtype ? <Badge variant="secondary">{qtype}</Badge> : null}
-            <DifficultyBadge difficulty={question.difficulty} />
-            {kps.map((kp) => (
-              <Badge key={kp} variant="outline">
-                {kp}
-              </Badge>
-            ))}
-            {question.quality_score != null ? (
-              <Badge variant="muted">质量 {question.quality_score}</Badge>
-            ) : null}
-            {question.ai_verdict ? <Badge variant="default">{question.ai_verdict}</Badge> : null}
-            {question.source ? <span className="text-xs text-muted-foreground">{question.source}</span> : null}
+          <div
+            className={cn(hasDetail && "cursor-pointer")}
+            onClick={(event) => {
+              if (!hasDetail) return;
+              const target = event.target as HTMLElement;
+              if (target.closest("a, button, input")) return;
+              toggleExpanded();
+            }}
+          >
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {qtype ? <Badge variant="secondary">{qtype}</Badge> : null}
+              <DifficultyBadge difficulty={question.difficulty} />
+              {kps.map((kp) => (
+                <Badge key={kp} variant="outline">
+                  {kp}
+                </Badge>
+              ))}
+              {question.quality_score != null ? (
+                <Badge variant="muted">质量 {question.quality_score}</Badge>
+              ) : null}
+              {question.ai_verdict ? <Badge variant="default">{question.ai_verdict}</Badge> : null}
+              {question.source ? <span className="text-xs text-muted-foreground">{question.source}</span> : null}
+              {question.source_url ? (
+                <a
+                  href={question.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  {sourceHost}
+                  <ExternalLink className="size-3" />
+                </a>
+              ) : null}
+            </div>
+            <StemHtml html={question.stem} className="text-[0.925rem]" />
           </div>
-          <StemHtml html={question.stem} className="text-[0.925rem]" />
           {hasDetail ? (
             <div className="mt-2">
               <Button
                 variant="ghost"
                 size="sm"
                 className="-ml-2 h-7 text-xs text-muted-foreground"
-                onClick={() => setExpanded((v) => !v)}
+                onClick={toggleExpanded}
+                aria-expanded={expanded}
               >
                 {expanded ? <ChevronUp /> : <ChevronDown />}
                 {expanded ? "收起答案解析" : "查看答案解析"}
               </Button>
               {expanded ? (
                 <div className="mt-1 space-y-2 rounded-lg bg-muted/60 p-3 text-sm animate-fade-in">
-                  {question.answer ? (
+                  {detailLoading ? (
+                    <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                      <Spinner />
+                      正在加载答案与解析…
+                    </div>
+                  ) : detailError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-destructive">
+                      <span>{detailError}</span>
+                      {onRetryDetail ? (
+                        <Button size="sm" variant="outline" onClick={onRetryDetail}>
+                          重试
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {!detailLoading && !detailError && question.answer ? (
                     <div>
                       <div className="mb-1 text-xs font-medium text-muted-foreground">答案</div>
                       <StemHtml html={question.answer} />
                     </div>
                   ) : null}
-                  {question.analysis ? (
+                  {!detailLoading && !detailError && question.analysis ? (
                     <div>
                       <div className="mb-1 text-xs font-medium text-muted-foreground">解析</div>
                       <StemHtml html={question.analysis} />
                     </div>
+                  ) : null}
+                  {!detailLoading && !detailError && !question.answer && !question.analysis ? (
+                    <div className="text-xs text-muted-foreground">当前来源未提供答案或解析。</div>
                   ) : null}
                 </div>
               ) : null}

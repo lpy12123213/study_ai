@@ -99,6 +99,60 @@ class TestQuestionLibraryRepository(unittest.IsolatedAsyncioTestCase):
         other_user = await lib_repo.list_question_library_items(user_id="user-b", area="gaokao", hidden="all")
         self.assertEqual(other_user["items"], [])
 
+    async def test_gaokao_filters_use_structured_source_and_subject_aliases(self) -> None:
+        await gaokao_repo.upsert_gaokao_questions(
+            user_id="user-a",
+            items=[
+                {
+                    "question_id": "gaokao-math-2024-3",
+                    "subject": "高中数学",
+                    "stem": "三角函数题干",
+                    "source": {
+                        "exam_year": 2024,
+                        "region": "全国",
+                        "paper_name": "2024年新课标I卷数学",
+                        "paper_variant": "新课标I卷",
+                        "question_number": "3",
+                        "verified": False,
+                    },
+                },
+                {
+                    "question_id": "gaokao-physics-2023-17",
+                    "subject": "物理",
+                    "stem": "电磁感应题干",
+                    "source": {
+                        "exam_year": 2023,
+                        "region": "全国甲卷",
+                        "paper_name": "2023年全国甲卷理综物理",
+                        "paper_variant": "全国甲卷",
+                        "question_number": "17",
+                        "verified": False,
+                    },
+                },
+            ],
+        )
+
+        math_rows = await lib_repo.list_question_library_items(
+            user_id="user-a",
+            area="gaokao",
+            subject="数学",
+            year="2024",
+            region="全国",
+            paper_name="新课标I卷",
+            question_number="3",
+            hidden="all",
+        )
+        physics_rows = await lib_repo.list_question_library_items(
+            user_id="user-a",
+            area="gaokao",
+            subject="高中物理",
+            q="17",
+            hidden="all",
+        )
+
+        self.assertEqual([item["question_id"] for item in math_rows["items"]], ["gaokao-math-2024-3"])
+        self.assertEqual([item["question_id"] for item in physics_rows["items"]], ["gaokao-physics-2023-17"])
+
     async def test_upsert_and_list_scoped_by_user(self) -> None:
         await cache_repo.upsert_question_cache(
             [

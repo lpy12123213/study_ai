@@ -26,6 +26,7 @@ export function rewriteStemHtml(html?: string | null): string {
       const src = img.getAttribute("src");
       if (src) img.setAttribute("src", proxyImageUrl(src));
       img.setAttribute("loading", "lazy");
+      img.setAttribute("decoding", "async");
       img.setAttribute("referrerpolicy", "no-referrer");
     });
     return doc.body.innerHTML;

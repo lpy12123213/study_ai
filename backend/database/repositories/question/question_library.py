@@ -73,6 +73,21 @@ def _difficulty_aliases(value: Any) -> List[str]:
     return aliases.get(v, [v])
 
 
+def _subject_aliases(value: Any) -> List[str]:
+    v = _clean_filter(value)
+    if not v:
+        return []
+    aliases = {
+        "数学": ["数学", "高中数学", "math", "mathematics"],
+        "高中数学": ["高中数学", "数学", "math", "mathematics"],
+        "物理": ["物理", "高中物理", "physics"],
+        "高中物理": ["高中物理", "物理", "physics"],
+        "化学": ["化学", "高中化学", "chemistry"],
+        "高中化学": ["高中化学", "化学", "chemistry"],
+    }
+    return list(dict.fromkeys(aliases.get(v, [v])))
+
+
 def _question_type_aliases(value: Any) -> List[str]:
     v = _clean_filter(value)
     if not v:
@@ -192,6 +207,8 @@ async def list_question_library_items(
     category: str = "",
     year: str = "",
     region: str = "",
+    paper_name: str = "",
+    question_number: str = "",
     grade: str = "",
     semester: str = "",
     method: str = "",
@@ -227,6 +244,8 @@ async def list_question_library_items(
                 category=category,
                 year=year,
                 region=region,
+                paper_name=paper_name,
+                question_number=question_number,
                 grade=grade,
                 semester=semester,
                 method=method,
@@ -253,8 +272,9 @@ async def list_question_library_items(
         where.append(GaokaoQuestionSource.question_id.is_(None))
     elif area_v == "gaokao":
         where.append(GaokaoQuestionSource.question_id.is_not(None))
-    if subj:
-        where.append(QuestionLibraryItem.subject == subj)
+    subject_values = _subject_aliases(subj)
+    if subject_values:
+        where.append(QuestionLibraryItem.subject.in_(subject_values))
     if origin_v:
         where.append(QuestionLibraryItem.origin == origin_v)
     if hidden in {"0", "1"}:
@@ -278,15 +298,32 @@ async def list_question_library_items(
         QuestionCache.knowledge_point,
         QuestionCache.knowledge_points_json,
     )
+    year_v = _clean_filter(year)
+    region_v = _clean_filter(region)
+    paper_name_v = _clean_filter(paper_name)
+    question_number_v = _clean_filter(question_number)
+    if area_v == "gaokao" and year_v.isdigit():
+        where.append(GaokaoQuestionSource.exam_year == int(year_v))
+    elif year_v:
+        where.append(
+            _like_filter(
+                (QuestionCache.source, QuestionCache.date, QuestionCache.stem, cast(GaokaoQuestionSource.exam_year, String)),
+                year_v,
+            )
+        )
+    if area_v == "gaokao" and region_v:
+        where.append(GaokaoQuestionSource.region.like(f"%{region_v}%"))
+    elif region_v:
+        where.append(_like_filter(source_columns, region_v))
+    if paper_name_v:
+        where.append(GaokaoQuestionSource.paper_name.like(f"%{paper_name_v}%"))
+    if question_number_v:
+        where.append(GaokaoQuestionSource.question_number.like(f"%{question_number_v}%"))
+
     for extra_filter in (
         _like_filter(source_columns, exam_scene),
         _question_type_filter(question_type),
         _like_filter(broad_columns, category),
-        _like_filter(
-            (QuestionCache.source, QuestionCache.date, QuestionCache.stem, cast(GaokaoQuestionSource.exam_year, String)),
-            year,
-        ),
-        _like_filter(source_columns, region),
         _like_filter(source_columns, grade),
         _like_filter((QuestionCache.source, QuestionCache.date, QuestionCache.stem), semester),
         _like_filter((*broad_columns, QuestionLibraryItem.ai_summary, QuestionLibraryItem.ai_dimensions_json), method),
@@ -301,7 +338,14 @@ async def list_question_library_items(
     q_filter = None
     if qv:
         like = f"%{qv}%"
-        q_filter = or_(QuestionCache.stem.like(like), QuestionLibraryItem.question_id.like(like))
+        q_filter = or_(
+            QuestionCache.stem.like(like),
+            QuestionLibraryItem.question_id.like(like),
+            GaokaoQuestionSource.paper_name.like(like),
+            GaokaoQuestionSource.paper_variant.like(like),
+            GaokaoQuestionSource.region.like(like),
+            GaokaoQuestionSource.question_number.like(like),
+        )
 
     stmt = (
         select(

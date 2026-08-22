@@ -12,6 +12,10 @@ export interface LibraryItemsQuery {
   q?: string;
   question_type?: string;
   difficulty?: string;
+  year?: string;
+  region?: string;
+  paper_name?: string;
+  question_number?: string;
   only_new?: boolean;
   min_score?: number;
   sort?: "updated_at" | "ai_score";

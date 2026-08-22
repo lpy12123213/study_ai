@@ -160,8 +160,48 @@ class TestGeneratedDocumentFilenameWhitelist(unittest.TestCase):
         self.assertTrue(exports_filename_ok(docx_name))
         self.assertTrue(exports_filename_ok(zip_name))
 
+    def test_registered_gaokao_svg_sidecar_names_are_narrowly_allowed(self) -> None:
+        self.assertTrue(media._is_safe_generated_filename(f"eol-{'a' * 32}.svg"))
+        self.assertTrue(media._is_safe_generated_filename("gaokao-2007-chemistry-shanghai-figure-01.svg"))
+        self.assertFalse(media._is_safe_generated_filename("gaokao-../secret.svg"))
+        self.assertFalse(media._is_safe_generated_filename("gaokao-report.pdf"))
+
 
 class TestGeneratedMediaDownloadApi(unittest.TestCase):
+    def test_registered_gaokao_svg_sidecar_is_served_inline(self) -> None:
+        app = create_app()
+        app.dependency_overrides[require_auth] = lambda: {"user_id": "u-1", "username": "alice", "role": "user"}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                generated_dir = Path(tmpdir)
+                filename = f"eol-{'a' * 32}.svg"
+                payload = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>'
+                (generated_dir / filename).write_bytes(payload)
+                meta = {
+                    "filename": filename,
+                    "user_id": "u-1",
+                    "file_type": "gaokao-figure",
+                    "mime_type": "image/svg+xml",
+                    "bytes": len(payload),
+                    "created_at": "",
+                    "expires_at": "",
+                }
+
+                with patch.object(app_module, "init_db", new=AsyncMock()):
+                    with patch.object(app_module, "close_crawler", new=AsyncMock()):
+                        with patch.object(app_module, "close_proxy_http_client", new=AsyncMock()):
+                            with patch("backend.api.media.GENERATED_DIR", generated_dir):
+                                with patch("backend.api.media.get_generated_file", new=AsyncMock(return_value=meta)):
+                                    with TestClient(app) as client:
+                                        res = client.get(f"/api/media/generated/{filename}")
+
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.content, payload)
+                self.assertNotIn("attachment", str(res.headers.get("content-disposition") or ""))
+        finally:
+            app.dependency_overrides.clear()
+
     def test_generated_docx_and_zip_are_served_as_download_attachments(self) -> None:
         app = create_app()
         app.dependency_overrides[require_auth] = lambda: {"user_id": "u-1", "username": "alice", "role": "user"}
