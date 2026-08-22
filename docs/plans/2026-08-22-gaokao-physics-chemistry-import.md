@@ -5,9 +5,9 @@
 ## 数据建设状态
 
 - 目标年度：2007–2026；`question_cache.subject` 以 `物理`、`化学` 为隔离标签，并兼容已有 `physics`、`chemistry` 别名，每题同时写入 `gaokao_question_sources`。
-- 当前数据库快照：物理 1,218 题、化学 2,063 题；两科每题均有来源记录，年份均覆盖 2007–2026。答案非空分别为 766、1,622，仍全部标记为未核验。
-- 已合并题源：`rainewhk/gaokao` 文字题、`GAOKAO-MM` 选择题与图片、GaokaoHub 活动页面、GaokaoHub 禁用卡片/公开别名中经页面身份校验恢复的 33 个页面（新增物理 54、化学 27；其中 32 个对应禁用清单条目）、2007 新浪视觉题页、学业规划平台单科文档、8 份可解析理综 DOCX 的分科拆分（新增物理 106、化学 94），以及中国教育在线 EOL 在 2016–2018、2020–2021 目录中身份校验通过的 38 个地方/省份卷视觉页（物理 19、化学 19）和 2022–2024 目录中身份校验通过的 64 个地方/省份卷视觉页（物理 36、化学 28）。恢复页面只代表站点列出的题卡，来源备注标记为 `site_listed_count_only`，不宣称为完整试卷；EOL 卷标记为 `visual_page_range_only`。
-- 图形：题面引用统一改为 `/api/media/generated/<filename>.svg`；当前物理/化学题面和答案共有 2,691 个本地 SVG 引用（2,143 个唯一文件），均已注册且文件存在。EOL 2016–2021 视觉卷新增 95 个 SVG 侧车并复用 1 个，题面 76 张、答案 20 张；EOL 2022–2024 视觉卷新增 126 个 SVG 侧车（题面 86 张、答案 63 张）；本轮又将 3 道化学题中的 11 个残留远程图片转为本地 SVG。SVG 是内嵌原始栅格/原始格式容器，保留来源映射，不宣称完成路径级矢量重绘。
+- 当前数据库快照：物理 1,220 题、化学 2,066 题；两科每题均有来源记录，年份均覆盖 2007–2026。答案非空分别为 767、1,625，仍全部标记为未核验。
+- 已合并题源：`rainewhk/gaokao` 文字题、`GAOKAO-MM` 选择题与图片、GaokaoHub 活动页面、GaokaoHub 禁用卡片/公开别名中经页面身份校验恢复的 33 个页面（新增物理 54、化学 27；其中 32 个对应禁用清单条目）、2007 新浪视觉题页、学业规划平台单科文档、8 份可解析理综 DOCX 的分科拆分（新增物理 106、化学 94），以及中国教育在线 EOL 2015 年 5 个可访问视觉页（物理 2、化学 3）、2016–2018、2020–2021 目录中身份校验通过的 38 个地方/省份卷视觉页（物理 19、化学 19）和 2022–2024 目录中身份校验通过的 64 个地方/省份卷视觉页（物理 36、化学 28）。恢复页面只代表站点列出的题卡，来源备注标记为 `site_listed_count_only`，不宣称为完整试卷；EOL 卷标记为 `visual_page_range_only`。
+- 图形：题面引用统一改为 `/api/media/generated/<filename>.svg`；当前物理/化学题面和答案共有 2,700 个本地 SVG 引用（2,152 个唯一文件），均已注册且文件存在。EOL 2015 新增 9 个 SVG 侧车（题面 5 张、答案 4 张）；EOL 2016–2021 视觉卷新增 95 个 SVG 侧车并复用 1 个，题面 76 张、答案 20 张；EOL 2022–2024 视觉卷新增 126 个 SVG 侧车（题面 86 张、答案 63 张）；本轮又将 3 道化学题中的 11 个残留远程图片转为本地 SVG。SVG 是内嵌原始栅格/原始格式容器，保留来源映射，不宣称完成路径级矢量重绘。
 - 来源核验：当前 `verified=0`，答案/解析按来源保留，未人工臆造缺失答案。
 
 ## 前端建设计划
@@ -46,6 +46,11 @@
 - `.local/imports/eol-gaokao-source/legacy/legacy-image-fetch-report.json`
 - `.local/imports/eol-gaokao-source/legacy/legacy-image-svg-manifest.json`
 - `.local/imports/eol-gaokao-source/legacy/legacy-visual-import-report.json`
+- `.local/imports/eol-gaokao-source/legacy2015/legacy2015-source-inventory.json`
+- `.local/imports/eol-gaokao-source/legacy2015/legacy2015-fetch-report.json`
+- `.local/imports/eol-gaokao-source/legacy2015/legacy2015-image-fetch-report.json`
+- `.local/imports/eol-gaokao-source/legacy2015/legacy2015-image-svg-manifest.json`
+- `.local/imports/eol-gaokao-source/legacy2015/legacy2015-visual-import-report.json`
 - `.local/imports/gaokaohub-source/remote-science-svg-repair-report.json`
 
 ## 已知缺口与后续验收
@@ -57,5 +62,6 @@
 - 2007 新浪条目为题号区间视觉题，答案以本地答案图保存；需后续 OCR/人工校验时才可变为逐题文本答案。
 - EOL 目录共列出 94 个候选入口，其中 64 个通过年份、地区、科目一致性校验后导入；这些记录保留整页题图和可匹配的答案图，不冒充逐题 OCR。其余 30 个错链或身份不一致入口保留在抓取报告中。
 - EOL 2016–2018、2020–2021 目录另有 38 个入口通过同样校验并导入；其中 2020 年答案链接无法独立校验的记录保留空答案，不把题面图冒充答案。
+- EOL 2015 目录中可访问且身份一致的 5 个页面已导入；2008–2014 旧入口大多 HTTP 404，未把失效链接当作题源。
 - GaokaoHub 禁用清单的 103 条未匹配统计与 EOL 的 64 个视觉页是独立来源口径，尚未逐卷去重闭合；因此当前仍不能宣称“所有地方卷”已完成。
 - 验收命令至少包括 `PRAGMA integrity_check`、按科目/年份/来源统计、来源 URL 非空检查、SVG 文件存在性检查和逐卷预期题号对照。
