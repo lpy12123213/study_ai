@@ -280,6 +280,12 @@ PDF 依赖本机 LaTeX 引擎，DOCX 优先使用 Pandoc。
 成功响应为 `{"success": true, "upserted": 1, "question_ids": ["gaokao-2024-math-1"]}`。
 缺少题干、学科或出处必填字段返回 422；重复题号或仓储级约束错误返回 400。
 
+物理/化学真题的导入约束：题干、答案和解析中的公式必须使用 LaTeX 定界符
+`\(...\)` 或 `\[...\]`（化学式可使用 `\ce{...}`）；表格必须使用 LaTeX 的
+`array`/`matrix` 环境，不得把 GaokaoHub 的原始私有区字体或乱码直接写入。PDF 文字层无法可靠还原的
+公式、结构式和表格，应写入 LaTeX 视觉来源提示，并附现有媒体登记的本地 SVG：
+`/api/media/generated/{filename}.svg`（同时保留 `data-source-url` 和 `source_note`），标记为待人工核验。
+
 Preview 与 session：
 
 - `GET /api/question-library/previews/{preview_id}`

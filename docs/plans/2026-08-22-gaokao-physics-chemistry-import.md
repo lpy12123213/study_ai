@@ -5,9 +5,11 @@
 ## 数据建设状态
 
 - 目标年度：2007–2026；`question_cache.subject` 以 `物理`、`化学` 为隔离标签，并兼容已有 `physics`、`chemistry` 别名，每题同时写入 `gaokao_question_sources`。
-- 当前数据库快照：物理 1,389 题、化学 2,066 题；两科每题均有来源记录，年份均覆盖 2007–2026。答案非空分别为 767、1,625，仍全部标记为未核验。
+- 当前数据库快照：物理 1,389 题、化学 2,104 题；两科每题均有来源记录，年份均覆盖 2007–2026。答案非空分别为 767、1,642，仍全部标记为未核验。
 - 已合并题源：`rainewhk/gaokao` 文字题、`GAOKAO-MM` 选择题与图片、GaokaoHub 活动页面、GaokaoHub 禁用卡片/公开别名中经页面身份校验恢复的 33 个页面（新增物理 54、化学 27；其中 32 个对应禁用清单条目）、2007 新浪视觉题页、学业规划平台单科文档、8 份可解析理综 DOCX 的分科拆分（新增物理 106、化学 94），中国教育在线 EOL 2015 年 5 个可访问视觉页（物理 2、化学 3）、2016–2018、2020–2021 目录中身份校验通过的 38 个地方/省份卷视觉页（物理 19、化学 19）、2022–2024 目录中身份校验通过的 64 个地方/省份卷视觉页（物理 36、化学 28），以及 2023 年 10 套物理合订 PDF（浙江 1 月/6 月、全国甲/乙/新课标、江苏、湖南、湖北、辽宁、山东，新增物理 169）。恢复页面只代表站点列出的题卡，来源备注标记为 `site_listed_count_only`，不宣称为完整试卷；EOL 卷标记为 `visual_page_range_only`；2023 PDF 批次标记为 `question_text_extracted_unverified`。
-- 图形：题面和答案共有 2,939 个本地 SVG 引用（2,231 个唯一文件），均已注册且文件存在；远程 `<img src>` 为 0。EOL 2015 新增 9 个 SVG 侧车（题面 5 张、答案 4 张）；EOL 2016–2021 视觉卷新增 95 个 SVG 侧车并复用 1 个，题面 76 张、答案 20 张；EOL 2022–2024 视觉卷新增 126 个 SVG 侧车（题面 86 张、答案 63 张）；另有 3 道化学题的 11 个残留远程图片已转为本地 SVG；2023 PDF 批次新增 81 个整页 SVG 侧车，题目引用 239 次。SVG 是内嵌原始栅格/原始格式容器，保留来源映射，不宣称完成路径级矢量重绘。
+- 图形：题面和答案共有 3,002 个本地 SVG 引用（2,256 个唯一文件），均已注册、哈希/大小一致且文件存在；远程 `<img src>` 为 0。EOL 2015 新增 9 个 SVG 侧车（题面 5 张、答案 4 张）；EOL 2016–2021 视觉卷新增 95 个 SVG 侧车并复用 1 个，题面 76 张、答案 20 张；EOL 2022–2024 视觉卷新增 126 个 SVG 侧车（题面 86 张、答案 63 张）；另有 3 道化学题的 11 个残留远程图片已转为本地 SVG；2023 PDF 批次新增 81 个整页 SVG 侧车，题目引用 239 次；2023 化学 PDF 新增 29 个整页 SVG 侧车。SVG 是内嵌原始栅格/原始格式容器，保留来源映射，不宣称完成路径级矢量重绘。
+- 2023 化学原卷补充：浙江卷 21 题、江苏卷 17 题，共 38 题，来源文件与 SHA-256 记录在 `.local/imports/gaokao-2023-chemistry-pdfs/import-report.json`；两份 PDF 共生成 29 个整页 SVG 侧车。江苏卷客观题答案仅作文字摘录，主观题答案保留参考答案页 SVG；全部标记为未核验。
+- 公式/表格硬规则：新导入题面不把 PDF Symbol 字体的上标、电荷、箭头或结构式乱码当作公式写入；可可靠识别的文字只使用 LaTeX 分隔符，无法可靠还原的公式或表格写成 LaTeX 视觉来源提示并保留原页 SVG。GaokaoHub 历史卡片已将 `$...$`/`$$...$$` 统一为 `\(...\)`/`\[...\]`，3 个 HTML 表格转为 LaTeX `array`，私有区乱码清除；仍有 748 条含未可靠公式候选的卡片标记 `gaokaohub_latex_pending_visual_review`，原始字段保存在 `.local/imports/gaokaohub-source/gaokaohub-latex-originals.json`。
 - 来源核验：当前 `verified=0`，答案/解析按来源保留，未人工臆造缺失答案。
 
 ## 前端建设计划
@@ -40,6 +42,9 @@
 - `.local/imports/gaokao-physics-chemistry-final-audit.json`
 - `.local/imports/gaokao-2023-physics-10/import-report.json`
 - `.local/imports/gaokao-2023-physics-10/source-inventory.json`
+- `.local/imports/gaokao-2023-chemistry-pdfs/import-report.json`
+- `.local/imports/gaokaohub-source/gaokaohub-latex-encoding-audit.json`
+- `.local/imports/gaokaohub-source/gaokaohub-latex-originals.json`
 - `.local/imports/eol-gaokao-source-inventory.json`
 - `.local/imports/eol-gaokao-source/fetch-report.json`
 - `.local/imports/eol-gaokao-source/image-fetch-report.json`
@@ -68,6 +73,8 @@
 - EOL 2016–2018、2020–2021 目录另有 38 个入口通过同样校验并导入；其中 2020 年答案链接无法独立校验的记录保留空答案，不把题面图冒充答案。
 - EOL 2015 目录中可访问且身份一致的 5 个页面已导入；2008–2014 旧入口大多 HTTP 404，未把失效链接当作题源。
 - 2023 年第三方合订 PDF 的 10 套物理卷已导入 169 道题面和 81 个整页 SVG；该文件不含答案，文字层未逐题人工核验，不能将该批次显示为“答案已核验”。
+- 2023 年浙江、江苏化学 PDF 已导入 38 道题面和 29 个整页 SVG；PDF 文字层的公式/表格区域未可靠还原，已用 LaTeX 视觉来源提示 + SVG 保真兜底，不能将该批次显示为“公式已逐题转录”或“答案已核验”。
+- GaokaoHub 乱码治理只对确定的运算符、分隔符、数学定界符和 HTML 表格做数据层修复；748 条含未可靠公式候选的历史卡片仍待人工对照原始页面，不能把 pending 标记当作已完成公式转录。
 - 只读审核发现 10 条记录的题面与答案共用同一 SVG（其中 7 条 EOL 记录的答案页与题面页相同），64 条 EOL 记录的 `paper_name` 含 `?` 占位符；另有 83 组纸名/题号重复键，后续必须以 `source_url` 继续区分，不得静默合并。
 - GaokaoHub 禁用清单的 103 条未匹配统计与 EOL 的 64 个视觉页是独立来源口径，尚未逐卷去重闭合；因此当前仍不能宣称“所有地方卷”已完成。
 - 验收命令至少包括 `PRAGMA integrity_check`、按科目/年份/来源统计、来源 URL 非空检查、SVG 文件存在性检查和逐卷预期题号对照。
