@@ -5,8 +5,8 @@
 ## 数据建设状态
 
 - 目标年度：2007–2026；`question_cache.subject` 使用 `物理`、`化学`，每题同时写入 `gaokao_question_sources`。
-- 当前数据库快照：物理 1,109 题、化学 1,989 题；两科每题均有来源记录，年份均覆盖 2007–2026。
-- 已合并题源：`rainewhk/gaokao` 文字题、`GAOKAO-MM` 选择题与图片、GaokaoHub 活动页面、2007 新浪视觉题页、学业规划平台单科文档，以及 8 份可解析理综 DOCX 的分科拆分（新增物理 106、化学 94）。
+- 当前数据库快照：物理 1,163 题、化学 2,016 题；两科每题均有来源记录，年份均覆盖 2007–2026。
+- 已合并题源：`rainewhk/gaokao` 文字题、`GAOKAO-MM` 选择题与图片、GaokaoHub 活动页面、GaokaoHub 禁用卡片/公开别名中经页面身份校验恢复的 33 个页面（新增物理 54、化学 27；其中 32 个对应禁用清单条目）、2007 新浪视觉题页、学业规划平台单科文档，以及 8 份可解析理综 DOCX 的分科拆分（新增物理 106、化学 94）。恢复页面只代表站点列出的题卡，来源备注标记为 `site_listed_count_only`，不宣称为完整试卷。
 - 图形：题面引用统一改为 `/api/media/generated/<filename>.svg`；本轮理综拆分新增 572 个 SVG 侧车、674 次引用。SVG 是内嵌原始栅格/原始格式容器，保留来源映射，不宣称完成路径级矢量重绘。
 - 来源核验：当前 `verified=0`，答案/解析按来源保留，未人工臆造缺失答案。
 
@@ -22,6 +22,12 @@
 
 - `.local/imports/gaokao-physics-chemistry-final-coverage-report.json`
 - `.local/imports/gaokaohub-source/gaokao-science-pages-import-report.json`
+- `.local/imports/gaokaohub-source/disabled-candidate-probe.json`
+- `.local/imports/gaokaohub-source/disabled-recovered-fetch-report.json`
+- `.local/imports/gaokaohub-source/disabled-recovered-import-report.json`
+- `.local/imports/gaokaohub-source/disabled-expanded-candidate-probe.json`
+- `.local/imports/gaokaohub-source/disabled-expanded-recovered-fetch-report.json`
+- `.local/imports/gaokaohub-source/disabled-expanded-recovered-import-report.json`
 - `.local/imports/gaokaohub-source/science-figure-svg-manifest.json`
 - `.local/imports/gaokaohub-source/sitemap-science-inventory.json`
 - `.local/imports/gaokao-2007-source/sina-visual-import-report.json`
@@ -33,7 +39,7 @@
 
 ## 已知缺口与后续验收
 
-- GaokaoHub 仍有 135 个无公开链接的禁用地方卷条目（物理 100、化学 35），须补齐可下载来源后再标记完成。
+- GaokaoHub 禁用清单仍有 103 个条目没有匹配到公开页面（物理 75、化学 28）；已恢复的 33 个页面仅导入站点列出的题卡，须补齐可下载来源和逐卷题号后才能标记完整。
 - 学业规划平台的 22 份理综合卷中，8 份 DOCX 已按各卷题号规则拆入 200 行（物理 106、化学 94）；其余 14 份 OLE/DOCX 仍仅保留原始文档，且组合卷没有答案文档，不能将其宣称为答案已核验。
 - 2020 全国卷1的物理 11、19 和化学 13、19 为 `visual_only`，物理 24 为 `partial_text`；原图均已转为本地 SVG，待后续人工/OCR 校验题面。
 - 学业规划平台另有 10 个单科 HTML/error 响应；Xuebake 物理合集页面没有资源 ID 或直链，下载流程受登录/站点验证阻断，均保留在报告中而不冒充已导入。
