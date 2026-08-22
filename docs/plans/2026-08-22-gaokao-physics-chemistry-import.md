@@ -23,6 +23,7 @@
 - `.local/imports/gaokao-physics-chemistry-final-coverage-report.json`
 - `.local/imports/gaokaohub-source/gaokao-science-pages-import-report.json`
 - `.local/imports/gaokaohub-source/science-figure-svg-manifest.json`
+- `.local/imports/gaokaohub-source/sitemap-science-inventory.json`
 - `.local/imports/gaokao-2007-source/sina-visual-import-report.json`
 - `.local/imports/xueyeguihua-source/fetch-report.json`
 - `.local/imports/xueyeguihua-source/question-import-report.json`
