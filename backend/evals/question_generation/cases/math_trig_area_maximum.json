@@ -1,0 +1,32 @@
+{
+  "id": "math_trig_area_maximum",
+  "title": "解三角形：面积最大值与外接圆（压轴级）",
+  "subject": "高中数学",
+  "topic": "解三角形解答题：在 $\\triangle ABC$ 中，$A=60^{\\circ}$，$b+c=4$。求：(1) 面积最大值——$S=\\frac{1}{2}bc\\sin60^{\\circ}\\leq\\frac{\\sqrt{3}}{4}\\left(\\frac{b+c}{2}\\right)^{2}=\\sqrt{3}$，当且仅当 $b=c=2$；(2) 此时由余弦定理 $a^{2}=(b+c)^{2}-3bc=16-12=4$，$a=2$；(3) 外接圆半径 $R=\\frac{a}{2\\sin A}=\\frac{2\\sqrt{3}}{3}$。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "困难",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": [
+    "余弦定理",
+    "三角形面积公式",
+    "基本不等式求最值",
+    "正弦定理与外接圆"
+  ],
+  "stem_anchors": [
+    "60.{0,10}(°|度|circ)",
+    "b\\s*\\+\\s*c.{0,10}4|b\\+c.?=.?4",
+    "(面积|S).{0,14}(最大|最大值)"
+  ],
+  "answer_anchors": [
+    "√\\s*3|\\\\sqrt\\{3\\}",
+    "b\\s*=\\s*c\\s*=\\s*2|b=c=2|均为\\s*2|都等于\\s*2",
+    "a\\s*=\\s*2|a.?=.?2"
+  ],
+  "analysis_anchors": [
+    "余弦定理|a.?[2²].{0,24}16",
+    "基本不等式|均值|\\\\frac\\{b\\+c\\}\\{2\\}|\\(b\\+c\\)\\s*/\\s*2"
+  ],
+  "forbidden_patterns": [],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

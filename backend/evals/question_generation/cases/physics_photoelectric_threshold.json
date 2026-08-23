@@ -1,0 +1,16 @@
+{
+  "id": "physics_photoelectric_threshold",
+  "title": "光电效应：动能、遏止电压与截止频率（压轴级）",
+  "subject": "高中物理",
+  "topic": "光电效应解答题：某金属逸出功 $W_{0}=2.0\\,\\mathrm{eV}$，用光子能量为 $3.5\\,\\mathrm{eV}$ 的单色光照射（$h=6.63\\times10^{-34}\\,\\mathrm{J\\cdot s}$，$1\\,\\mathrm{eV}=1.6\\times10^{-19}\\,\\mathrm{J}$）。求：(1) 由光电效应方程 $E_{k}=h\\nu-W_{0}=3.5-2.0=1.5\\,\\mathrm{eV}$；(2) 遏止电压满足 $eU_{c}=E_{k}$，$U_{c}=1.5\\,\\mathrm{V}$；(3) 截止频率 $\\nu_{0}=\\frac{W_{0}}{h}=\\frac{2\\times1.6\\times10^{-19}}{6.63\\times10^{-34}}\\approx4.8\\times10^{14}\\,\\mathrm{Hz}$。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "困难",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": ["光电效应方程", "遏止电压", "截止频率与逸出功"],
+  "stem_anchors": ["2\\.0|逸出功", "3\\.5", "光子|照射|单色光"],
+  "answer_anchors": ["1\\.5.{0,12}(eV|电子伏)", "1\\.5.{0,8}V|遏止.{0,14}1\\.5", "4\\.8.{0,12}10.{0,8}14|截止频率.{0,20}4\\.8"],
+  "analysis_anchors": ["光电效应|h\\s*ν|h\\\\nu", "e.{0,6}U|遏止", "W.{0,10}h|\\\\frac\\{W"],
+  "forbidden_patterns": [],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

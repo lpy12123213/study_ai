@@ -23,71 +23,14 @@ from backend.database.engine import async_session_maker
 from backend.database.repositories.question.question_cache import upsert_question_cache
 from backend.database.repositories.question.question_library import upsert_question_library_items
 from backend.database.schema import QuestionLibraryItem
+from backend.generation.question_library.crawl_plan import (
+    KeywordPlanItem,
+    normalize_domains,
+)
+from backend.generation.question_library.crawl_plan import (
+    build_keyword_plan as _build_shared_plan,
+)
 from backend.integrations.crawler.zujuan.client import ZujuanCrawler
-
-DEFAULT_PHYSICS_MECHANICS_KEYWORDS = (
-    "力学",
-    "运动学",
-    "匀变速直线运动",
-    "牛顿运动定律",
-    "受力分析",
-    "共点力平衡",
-    "圆周运动",
-    "万有引力",
-    "功和能",
-    "动能定理",
-    "机械能守恒",
-    "动量守恒",
-    "碰撞",
-    "抛体运动",
-    "运动合成与分解",
-    "弹簧模型",
-    "板块模型",
-    "传送带",
-    "绳连接体",
-    "力矩",
-)
-
-DEFAULT_PHYSICS_ELECTROMAGNETISM_KEYWORDS = (
-    "电磁学",
-    "电场",
-    "库仑定律",
-    "电势能",
-    "电容器",
-    "带电粒子电场",
-    "恒定电流",
-    "欧姆定律",
-    "闭合电路欧姆定律",
-    "电路动态分析",
-    "磁场",
-    "安培力",
-    "洛伦兹力",
-    "带电粒子磁场",
-    "电磁感应",
-    "法拉第电磁感应定律",
-    "楞次定律",
-    "交流电",
-    "变压器",
-    "带电粒子复合场",
-)
-
-DOMAIN_ALIASES = {
-    "all": "all",
-    "physics": "all",
-    "physics-core": "all",
-    "mechanics": "力学",
-    "mechanic": "力学",
-    "力学": "力学",
-    "electromagnetism": "电磁学",
-    "electromag": "电磁学",
-    "电磁学": "电磁学",
-}
-
-
-@dataclass(frozen=True)
-class KeywordPlanItem:
-    domain: str
-    query: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +44,7 @@ class CrawlImportConfig:
     limit_per_query: int = 120
     max_pages: int = 12
     rounds: int = 3
+    concurrency: int = 2
     parse_content: bool = True
     replace_existing: bool = False
     dry_run: bool = False
@@ -118,49 +62,15 @@ def _split_csv(value: str) -> tuple[str, ...]:
 
 
 def _normalize_domains(values: Iterable[str]) -> tuple[str, ...]:
-    domains: list[str] = []
-    for value in values:
-        normalized = DOMAIN_ALIASES.get(str(value or "").strip().lower()) or DOMAIN_ALIASES.get(str(value or "").strip())
-        if not normalized:
-            raise SystemExit(f"unsupported_domain: {value}")
-        if normalized == "all":
-            return ("all",)
-        if normalized not in domains:
-            domains.append(normalized)
-    return tuple(domains or ["all"])
+    try:
+        return normalize_domains(values)
+    except ValueError as exc:
+        # CLI 语义保持不变：非法域直接终止并给出可读错误。
+        raise SystemExit(str(exc)) from exc
 
 
 def build_keyword_plan(config: CrawlImportConfig) -> list[KeywordPlanItem]:
-    if config.custom_keywords:
-        domains = _normalize_domains(config.domains)
-        domain = "力学" if domains == ("力学",) else "电磁学" if domains == ("电磁学",) else "自定义"
-        return [KeywordPlanItem(domain=domain, query=query) for query in config.custom_keywords if query.strip()]
-
-    domains = _normalize_domains(config.domains)
-    include_mechanics = domains == ("all",) or "力学" in domains
-    include_electromag = domains == ("all",) or "电磁学" in domains
-
-    plan: list[KeywordPlanItem] = []
-    mechanics_plan = [
-        KeywordPlanItem(domain="力学", query=query)
-        for query in DEFAULT_PHYSICS_MECHANICS_KEYWORDS
-        if include_mechanics
-    ]
-    electromag_plan = [
-        KeywordPlanItem(domain="电磁学", query=query)
-        for query in DEFAULT_PHYSICS_ELECTROMAGNETISM_KEYWORDS
-        if include_electromag
-    ]
-    if mechanics_plan and electromag_plan:
-        for index in range(max(len(mechanics_plan), len(electromag_plan))):
-            if index < len(mechanics_plan):
-                plan.append(mechanics_plan[index])
-            if index < len(electromag_plan):
-                plan.append(electromag_plan[index])
-    else:
-        plan.extend(mechanics_plan)
-        plan.extend(electromag_plan)
-    return plan
+    return _build_shared_plan(custom_keywords=config.custom_keywords, domains=config.domains)
 
 
 def _difficulty_value_ok(item: dict[str, Any], *, max_value: float, require_value: bool) -> bool:
@@ -385,11 +295,41 @@ async def run_import(config: CrawlImportConfig) -> dict[str, Any]:
     crawler = ZujuanCrawler(subject=config.subject)
     await crawler.initialize()
     try:
+        # 同一轮内的关键词查询并发执行（信号量限并发，实际请求速率仍由
+        # ZUJUAN_RATE_LIMIT_RPS 限流桶约束）；seen_ids 的 check+add 在
+        # normalize_crawl_items 内同步完成，事件循环下无竞争。
+        concurrency = max(1, min(int(config.concurrency or 1), 4))
+        sem = asyncio.Semaphore(concurrency)
+
+        async def _run_plan_item(item: KeywordPlanItem) -> list[dict[str, Any]]:
+            async with sem:
+                if inserted >= config.target:
+                    return []
+                return await _crawl_query(crawler, config, plan_item=item, seen_ids=seen_ids)
+
         for round_index in range(1, max(1, config.rounds) + 1):
-            for plan_item in plan:
+            if inserted >= config.target:
+                break
+            # return_exceptions：单查询的网络/解析异常按 query_failed 记录并继续，
+            # 否则 gather 立刻抛出会丢掉本轮其余查询已抓到的结果，且外层 finally
+            # 关闭 crawler 时兄弟协程仍在飞行中。
+            round_results = await asyncio.gather(
+                *[_run_plan_item(item) for item in plan], return_exceptions=True
+            )
+            for plan_item, batch in zip(plan, round_results):
                 if inserted >= config.target:
                     break
-                batch = await _crawl_query(crawler, config, plan_item=plan_item, seen_ids=seen_ids)
+                if isinstance(batch, asyncio.CancelledError):
+                    raise batch
+                if isinstance(batch, BaseException):
+                    _log(
+                        config,
+                        "query_failed",
+                        query=plan_item.query,
+                        domain=plan_item.domain,
+                        error=f"{type(batch).__name__}: {batch}",
+                    )
+                    continue
                 if not batch:
                     continue
                 remaining = config.target - inserted
@@ -420,6 +360,7 @@ async def run_import(config: CrawlImportConfig) -> dict[str, Any]:
                     "domain_counts": domain_counts,
                     "last_query": plan_item.query,
                     "round": round_index,
+                    "concurrency": concurrency,
                     "dry_run": config.dry_run,
                     "difficulty_value_max": config.difficulty_value_max,
                 }
@@ -469,6 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pages", type=int, default=12)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=2,
+        help="同一轮内并发的关键词查询数（1-4）；实际请求速率仍由 ZUJUAN_RATE_LIMIT_RPS 约束。",
+    )
+    parser.add_argument(
         "--parse-content",
         dest="parse_content",
         action="store_true",
@@ -505,6 +452,7 @@ def config_from_args(args: argparse.Namespace) -> CrawlImportConfig:
         limit_per_query=max(1, min(int(args.limit_per_query or 120), 200)),
         max_pages=max(1, min(int(args.max_pages or 12), 50)),
         rounds=max(1, min(int(args.rounds or 3), 10)),
+        concurrency=max(1, min(int(args.concurrency or 2), 4)),
         parse_content=True if args.parse_content is None else bool(args.parse_content),
         replace_existing=bool(args.replace_existing),
         dry_run=bool(args.dry_run),
@@ -728,6 +676,7 @@ def prompt_interactive_config(
         limit_per_query=limit_per_query,
         max_pages=max_pages,
         rounds=rounds,
+        concurrency=defaults.concurrency,
         parse_content=parse_content,
         replace_existing=replace_existing,
         dry_run=dry_run,

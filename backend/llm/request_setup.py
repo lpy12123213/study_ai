@@ -58,6 +58,7 @@ def record_replay_request(
     tools: List[Dict[str, Any]] | None,
     tool_choice: Any,
     stream: bool,
+    protocol: str = "chat_completions",
 ) -> Dict[str, Any]:
     return {
         "provider": provider,
@@ -71,6 +72,7 @@ def record_replay_request(
         "tools": tools or None,
         "tool_choice": tool_choice or None,
         "stream": bool(stream),
+        "protocol": str(protocol or "chat_completions"),
     }
 
 
@@ -122,8 +124,15 @@ async def build_payload(
     stream: bool,
     get_client: Any,
     client_get: Any,
+    protocol: str = "chat_completions",
 ) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature, "stream": False}
+    is_responses = str(protocol or "").strip().lower() == "responses"
+    payload: Dict[str, Any] = {
+        "model": model,
+        ("input" if is_responses else "messages"): messages,
+        "temperature": temperature,
+        "stream": False,
+    }
     payload_max = await payload_max_tokens(
         provider=provider,
         base_url=base_url,
@@ -135,10 +144,10 @@ async def build_payload(
         client_get=client_get,
     )
     if payload_max > 0:
-        payload["max_tokens"] = payload_max
-    if isinstance(response_format, dict) and response_format:
+        payload["max_output_tokens" if is_responses else "max_tokens"] = payload_max
+    if isinstance(response_format, dict) and response_format and not is_responses:
         payload["response_format"] = dict(response_format)
-    if isinstance(tools, list) and tools:
+    if isinstance(tools, list) and tools and not is_responses:
         payload["tools"] = list(tools)
         # DeepSeek reasoner models don't support tool_choice parameter.
         # This includes deepseek-reasoner, deepseek-r1*, and deepseek-v4-flash (which is a reasoner variant).
@@ -151,8 +160,13 @@ async def build_payload(
         )
         if not is_deepseek_reasoner:
             payload["tool_choice"] = effective_tool_choice
-    if stream and provider in {"openrouter", "moonshot", "ikuncode"}:
+    if stream and (is_responses or provider in {"openrouter", "moonshot", "ikuncode", "opencode_go"}):
         payload["stream"] = True
-    if isinstance(reasoning, dict) and reasoning and not (provider == "openrouter" and not stream and model.lower().startswith("deepseek/")):
+    if (
+        isinstance(reasoning, dict)
+        and reasoning
+        and not is_responses
+        and not (provider == "openrouter" and not stream and model.lower().startswith("deepseek/"))
+    ):
         payload["reasoning"] = dict(reasoning)
     return payload

@@ -1,0 +1,33 @@
+{
+  "id": "physics_angular_momentum_pullin",
+  "title": "收臂转动系统：角动量守恒与做功（竞赛级）",
+  "subject": "高中物理",
+  "topic": "角动量竞赛题：人站在无摩擦转台上双手持哑铃转动，初始转动惯量 $I_{1}=2\\,\\mathrm{kg\\cdot m^{2}}$、角速度 $\\omega_{1}=2\\,\\mathrm{rad/s}$；收臂后转动惯量减小为 $I_{2}=1\\,\\mathrm{kg\\cdot m^{2}}$。求：(1) 收臂后角速度 $\\omega_{2}=\\frac{I_{1}\\omega_{1}}{I_{2}}=4\\,\\mathrm{rad/s}$；(2) 角动量 $L=I\\omega=4\\,\\mathrm{kg\\cdot m^{2}/s}$ 全程守恒；(3) 转动动能由 $\\frac{1}{2}I_{1}\\omega_{1}^{2}=4\\,\\mathrm{J}$ 增至 $\\frac{1}{2}I_{2}\\omega_{2}^{2}=8\\,\\mathrm{J}$，人收臂做功 $4\\,\\mathrm{J}$（角动量守恒但动能不守恒，须说明能量来自人体做功）。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "压轴",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": [
+    "角动量守恒定律",
+    "转动动能",
+    "力矩做功与能量来源分析"
+  ],
+  "stem_anchors": [
+    "2.{0,14}kg|I.{0,4}1.{0,10}2",
+    "2.{0,14}rad/s|ω.{0,4}1.{0,12}2",
+    "1.{0,14}kg|I.{0,4}2.{0,12}1"
+  ],
+  "answer_anchors": [
+    "4.{0,14}rad/s|ω.{0,4}2.{0,12}4",
+    "(L|角动量).{0,20}(守恒|不变)|4\\s*kg.{0,6}m",
+    "(做?功|人体).{0,20}4.{0,10}J|做功\\s*4"
+  ],
+  "analysis_anchors": [
+    "角动量守恒",
+    "转动动能|\\\\frac\\{1\\}\\{2\\}I|½\\s*I"
+  ],
+  "forbidden_patterns": [
+    "(?<![0-9.])16\\s*J"
+  ],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

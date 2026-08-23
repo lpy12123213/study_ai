@@ -184,8 +184,13 @@ if __name__ == "__main__":
 # ---- from backend/tests/test_zujuan_request_building.py ----
 
 
+import asyncio
+import os
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from backend.integrations.crawler.zujuan.question_list import fetch_question_list
 from backend.integrations.crawler.zujuan.search import search_by_keyword
@@ -352,6 +357,115 @@ class TestZujuanSearchRequestFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(crawler.fetch_calls[0]["course_id_py"], "gzsx")
+
+
+class ChunkedPagingFakeCrawler(SearchFakeCrawler):
+    """带门控的 _fetch_question_list，用于观测分页的并发与早停行为。"""
+
+    def __init__(self, *, empty_pages: set[int] = frozenset(), failing_pages: set[int] = frozenset()) -> None:
+        super().__init__()
+        self.events: list[tuple[str, int]] = []
+        self.empty_pages = set(empty_pages)
+        self.failing_pages = set(failing_pages)
+
+    async def _fetch_question_list(self, **kwargs):  # type: ignore[no-untyped-def]
+        page = int(kwargs.get("cur_page", 0) or 0)
+        self.events.append(("start", page))
+        await asyncio.sleep(0.02)
+        self.events.append(("end", page))
+        if page in self.failing_pages:
+            raise httpx.ConnectError("simulated transient network failure")
+        if page in self.empty_pages:
+            return [], {"raw_count": 0, "page": page}
+        return (
+            [
+                {
+                    "question_id": f"q{page}",
+                    "stem": "这是一道用于测试分页并发行为的完整题干。",
+                    "difficulty": "",
+                }
+            ],
+            {"raw_count": 1, "page": page},
+        )
+
+
+class TestZujuanSearchChunkedPaging(unittest.IsolatedAsyncioTestCase):
+    async def test_search_fetches_pages_within_chunk_concurrently(self) -> None:
+        crawler = ChunkedPagingFakeCrawler()
+
+        with patch.dict(os.environ, {"ZUJUAN_SEARCH_PAGE_CONCURRENCY": "3"}):
+            result = await search_by_keyword(crawler, keyword="函数", limit=10, max_pages=3, parse_content=False)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["questions"]), 3)
+        starts = [page for kind, page in crawler.events if kind == "start"]
+        # 块内 3 页应同时进入请求（所有 start 先于任何 end）。
+        self.assertEqual(starts, [1, 2, 3])
+        self.assertTrue(all(kind == "start" for kind, _ in crawler.events[:3]))
+
+    async def test_search_stops_paging_between_chunks_when_limit_reached(self) -> None:
+        crawler = ChunkedPagingFakeCrawler()
+
+        with patch.dict(os.environ, {"ZUJUAN_SEARCH_PAGE_CONCURRENCY": "2"}):
+            result = await search_by_keyword(crawler, keyword="函数", limit=1, max_pages=5, parse_content=False)
+
+        self.assertTrue(result["success"])
+        fetched_pages = {page for kind, page in crawler.events if kind == "start"}
+        # 第一块取 1-2 页后凑够 limit，不再请求第 3 页及以后。
+        self.assertEqual(fetched_pages, {1, 2})
+        self.assertEqual(len(result["questions"]), 1)
+
+    async def test_search_stops_processing_remaining_chunk_pages_on_empty_page(self) -> None:
+        crawler = ChunkedPagingFakeCrawler(empty_pages={1})
+
+        with patch.dict(os.environ, {"ZUJUAN_SEARCH_PAGE_CONCURRENCY": "2"}):
+            result = await search_by_keyword(crawler, keyword="函数", limit=10, max_pages=4, parse_content=False)
+
+        # 第 1 页为空：即使同块的第 2 页已被取回，也不并入结果（与旧的串行行为一致）。
+        self.assertTrue(result["success"])
+        self.assertEqual(result["questions"], [])
+
+    async def test_search_continues_when_single_page_raises_network_error(self) -> None:
+        crawler = ChunkedPagingFakeCrawler(failing_pages={2})
+
+        with patch.dict(os.environ, {"ZUJUAN_SEARCH_PAGE_CONCURRENCY": "2"}):
+            result = await search_by_keyword(crawler, keyword="函数", limit=10, max_pages=4, parse_content=False)
+
+        # 第 2 页抛网络异常：第 1/3/4 页正常并入，分页不因瞬时错误早停。
+        self.assertTrue(result["success"])
+        self.assertEqual([q["question_id"] for q in result["questions"]], ["q1", "q3", "q4"])
+        fetched_pages = {page for kind, page in crawler.events if kind == "start"}
+        self.assertEqual(fetched_pages, {1, 2, 3, 4})
+        failed_pages = [
+            dbg
+            for dbg in result.get("trace", {}).get("pages", [])
+            if str(dbg.get("error") or "").startswith("fetch_failed")
+        ]
+        self.assertEqual(len(failed_pages), 1)
+        self.assertTrue(failed_pages[0].get("retryable"))
+
+
+class TestZujuanBatchDetailsDefaults(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_get_question_details_has_no_default_inter_batch_delay(self) -> None:
+        crawler = ZujuanCrawler(subject="高中数学")
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(
+                crawler,
+                "get_question_detail",
+                new=AsyncMock(return_value={"success": True, "question_id": "q"}),
+            ),
+        ):
+            os.environ.pop("ZUJUAN_BATCH_GET_DETAILS_DELAY_S", None)
+            started = time.monotonic()
+            result = await crawler.batch_get_question_details(["1", "2", "3"], max_concurrent=1)
+            elapsed = time.monotonic() - started
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 3)
+        # 旧默认批间延迟 0.2s * 2 批 = 0.4s；新默认无延迟，留足裕量断言 < 0.3s。
+        self.assertLess(elapsed, 0.3)
 
 
 class TestZujuanCrawlerInitialization(unittest.IsolatedAsyncioTestCase):

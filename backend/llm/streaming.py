@@ -34,12 +34,14 @@ async def read_stream_response(
     emit_interval_s: float,
     on_reasoning_delta: Optional[Callable[[str], Awaitable[None]]],
     on_content_delta: Optional[Callable[[str], Awaitable[None]]],
+    protocol: str = "chat_completions",
 ) -> ChatCompletionResult:
     content_parts: List[str] = []
     finish_reason = ""
     usage: Dict[str, Any] = {}
     tool_call_chunks: Dict[int, Dict[str, Any]] = {}
     reasoning_buf = ""
+    response_error = ""
     loop = asyncio.get_running_loop()
     last_emit_t = loop.time()
     async for line in resp.aiter_lines():
@@ -53,6 +55,27 @@ async def read_stream_response(
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError:
+            continue
+        if str(protocol or "").strip().lower() == "responses":
+            event_type = str(obj.get("type") or "").strip()
+            if event_type == "response.output_text.delta":
+                content_chunk = obj.get("delta")
+                if isinstance(content_chunk, str) and content_chunk:
+                    content_parts.append(content_chunk)
+                    llm_console.log_delta(req_id=req_id, channel="content", text=content_chunk)
+                    await _emit(content_chunk, on_content_delta)
+            elif event_type in {"response.reasoning_text.delta", "response.reasoning_summary_text.delta"}:
+                reasoning_chunk = obj.get("delta")
+                if isinstance(reasoning_chunk, str) and reasoning_chunk:
+                    reasoning_buf += reasoning_chunk
+            elif event_type in {"response.completed", "response.failed", "response.incomplete"}:
+                response = obj.get("response") if isinstance(obj.get("response"), dict) else {}
+                finish_reason = str(response.get("status") or event_type.rsplit(".", 1)[-1])
+                if isinstance(response.get("usage"), dict):
+                    usage.update(dict(response.get("usage") or {}))
+                if event_type != "response.completed":
+                    error = response.get("error") if isinstance(response.get("error"), dict) else {}
+                    response_error = str(error.get("code") or error.get("message") or event_type).strip()
             continue
         choices = obj.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -88,6 +111,7 @@ async def read_stream_response(
         usage=usage,
         tool_calls=finalize_tool_call_chunks(tool_call_chunks),
         cached_tokens=usage_cached_tokens(usage),
+        error_code="response_failed" if response_error else "",
     )
 
 
@@ -123,7 +147,10 @@ async def request_stream(**kwargs: Any) -> Optional[ChatCompletionResult]:
             emit_interval_s=kwargs["emit_interval_s"],
             on_reasoning_delta=kwargs["on_reasoning_delta"],
             on_content_delta=kwargs["on_content_delta"],
+            protocol=str(kwargs.get("protocol") or "chat_completions"),
         )
+        if result.error_code:
+            raise RuntimeError(f"llm_response_failed:{result.finish_reason or result.error_code}")
         llm_console.log_end(
             req_id=kwargs["req_id"],
             elapsed_s=elapsed_s(kwargs["start_ts"]),

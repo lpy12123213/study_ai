@@ -223,11 +223,19 @@ python scripts/check_config.py --strict
 - `QUESTION_LIBRARY_TASK_TTL_S`
 - `QUESTION_LIBRARY_TASK_MAX_EVENTS`
 - `config/model.json`: `params.question_library_realize_max_tokens`
-- `config/model.json`: `models.question_library_judge`、`question_library_mcp_search`、`question_library_score`
+- `config/model.json`: `providers.opencode_go.base_url` 固定为 `https://opencode.ai/zen/go/v1`
+- `config/model.json`: `routes.question_library_generator`、`question_library_supervisor`、`question_library_arbiter` 必须全部指向 `opencode_go`
+- `config/model.json`: `models.question_library_generator=muse-spark-1.2-contributor`
+- `config/model.json`: `models.question_library_supervisor=models.question_library_arbiter=deepseek-v4-flash`
+- `config/model.json`: `models.question_library_judge`、`question_library_mcp_search`、`question_library_score` 仅保留给旧的独立评分/搜索入口，不是进化式出题的回退路由
 - `QUESTION_LIBRARY_AUTO_SCORE`
 - `QUESTION_LIBRARY_SCORE_INTERVAL_S`
 - `QUESTION_LIBRARY_SCORE_BATCH`
 - `QUESTION_LIBRARY_HIDE_THRESHOLD`
+
+进化式出题不使用 `lesson_plan`、`review`、普通 OpenCode Zen 或 DeepSeek 官方 API 作为隐式回退。Muse 使用 Responses 协议，DeepSeek V4 Flash 使用 Chat Completions 协议；任一专用角色缺失、模型 ID 漂移或 Go 权限不足时任务明确失败。API Key 通过模型设置保存后以 `enc:v2:` 加密形式留在已忽略的 `config/model.json` 中；`config/opencodeapikey.txt` 也被精确忽略，但运行时不读取该文本文件。
+
+Muse Contributor 允许用提示与补全训练未来模型。发送给 Muse 的负载会删除学习档案正文、参考真题和参考题干，只保留抽象题型结构、知识范围、条件/表征/边界/不变量约束及必要生成规格。完整题目仅在本地产生后交给不用于训练的 DeepSeek Go 监督链。
 
 题库生成的长任务应通过 `/api/tasks/question-library/*` 使用。
 

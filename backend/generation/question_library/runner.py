@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.core.logging_utils import get_logger
-from backend.core.settings import LESSON_PLAN_MODEL
+from backend.core.settings import LESSON_PLAN_MODEL, model_role_binding
 from backend.database.repositories.content.study_archives import (
     get_latest_reusable_study_archive,
     get_latest_reusable_study_archive_for_subject,
@@ -31,10 +31,25 @@ from backend.generation.agentic.task_specs import (
     build_agent_run_spec_for_task,
     build_agentic_starter_event,
 )
+from backend.generation.question_library.crawl_plan import KeywordPlanItem, build_keyword_plan
 from backend.generation.question_library.curriculum_context import (
     build_curriculum_context,
     enrich_source_pack_with_curriculum,
 )
+from backend.generation.question_library.evolution import (
+    ARBITER_ROLE,
+    GENERATOR_MODEL,
+    GENERATOR_ROLE,
+    OPENCODE_GO_PROVIDER,
+    SUPERVISOR_MODEL,
+    SUPERVISOR_ROLE,
+    bind_trace,
+    create_trace,
+    policy_payload,
+    record_policy_outcomes,
+    reset_trace,
+)
+from backend.generation.question_library.evolution_penalties import normalize_evolution_evaluation
 from backend.generation.question_library.generation import (
     analyze_reference_questions,
     build_source_pack,
@@ -90,6 +105,11 @@ from backend.shared.tasks import RuntimeTask, task_runtime
 logger = get_logger(__name__)
 
 
+def _unbounded_live_test_enabled() -> bool:
+    raw = str(os.getenv("QUESTION_GENERATION_UNBOUNDED_LIVE_TEST") or "").strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
 def _crawl_failure_payload(source: Any, *, default_error: str = "crawl_failed") -> Dict[str, Any]:
     if hasattr(source, "payload") and isinstance(getattr(source, "payload"), dict):
         source = getattr(source, "payload")
@@ -139,8 +159,24 @@ async def create_crawl_task(
     subject = str(req.get("subject") or "").strip()
     edu_level = str(req.get("edu_level") or "").strip()
     query = str(req.get("query") or "").strip()
-    if not query:
-        raise RunnerError("query_required", status_code=400)
+    queries_raw = req.get("queries") if isinstance(req.get("queries"), list) else []
+    queries = [str(q or "").strip() for q in queries_raw if str(q or "").strip()][:50]
+    domains_raw = req.get("domains") if isinstance(req.get("domains"), list) else []
+    domains = [str(d or "").strip() for d in domains_raw if str(d or "").strip()]
+
+    # 计划构造与 CLI 批量导入共用 crawl_plan：支持 query（单查）、queries（自定义关键词批查）
+    # 与 domains（力学/电磁学默认关键词表）三种入口，语义与 `question_library_crawl` 完全一致。
+    try:
+        if queries:
+            plan = build_keyword_plan(custom_keywords=queries, domains=domains or ("all",))
+        elif domains:
+            plan = build_keyword_plan(domains=domains)
+        elif query:
+            plan = [KeywordPlanItem(domain="自定义", query=query)]
+        else:
+            raise RunnerError("query_required", status_code=400)
+    except ValueError as exc:
+        raise RunnerError(str(exc), status_code=400) from exc
 
     difficulty = str(req.get("difficulty") or "").strip()
     question_type = str(req.get("question_type") or "").strip()
@@ -173,7 +209,8 @@ async def create_crawl_task(
                             "taskId": task.task_id,
                             "subject": subject,
                             "edu_level": edu_level,
-                            "query": query,
+                            "query": query or plan[0].query,
+                            "queries": [item.query for item in plan],
                             "difficulty": difficulty,
                             "question_type": question_type,
                             "limit": limit,
@@ -188,42 +225,48 @@ async def create_crawl_task(
             )
 
             crawler = await get_crawler(subject=subject, edu_level=edu_level, strict=True)
-            res = await crawler.search_by_keyword(
-                keyword=query,
-                subject=subject,
-                edu_level=edu_level,
-                limit=limit,
-                difficulty=difficulty,
-                question_type=question_type,
-                max_pages=max_pages,
-                min_quality_score=min_quality_score,
-                difficulty_value_min=difficulty_value_min,
-                difficulty_value_max=difficulty_value_max,
-                require_difficulty_value=require_difficulty_value,
-                parse_content=True,
-            )
-            if not bool(res.get("success")):
-                await _fail_crawl_task(task, _crawl_failure_payload(res))
-                return
-
-            questions = res.get("questions") if isinstance(res.get("questions"), list) else []
-            total = len(questions)
+            seen_ids: set[str] = set()
+            last_failure: Optional[dict] = None
             inserted = 0
             qids: list[str] = []
 
-            for i, q in enumerate(questions, start=1):
-                if task.status != "running":
+            for plan_item in plan:
+                if inserted >= limit or task.status != "running":
                     break
-                if not isinstance(q, dict):
+                res = await crawler.search_by_keyword(
+                    keyword=plan_item.query,
+                    subject=subject,
+                    edu_level=edu_level,
+                    limit=min(max(1, limit - inserted), 200),
+                    difficulty=difficulty,
+                    question_type=question_type,
+                    max_pages=max_pages,
+                    min_quality_score=min_quality_score,
+                    difficulty_value_min=difficulty_value_min,
+                    difficulty_value_max=difficulty_value_max,
+                    require_difficulty_value=require_difficulty_value,
+                    parse_content=True,
+                )
+                if not bool(res.get("success")):
+                    # 单个查询失败不终止批量：记录最后一个失败载荷，
+                    # 只有整批一题未入时才把任务标记为失败（保留挑战页恢复指引）。
+                    last_failure = _crawl_failure_payload(res)
                     continue
 
-                qid = str(q.get("question_id") or "").strip()
-                stem = str(q.get("stem") or "").strip()
-                if not qid or not stem:
-                    continue
+                questions = res.get("questions") if isinstance(res.get("questions"), list) else []
 
-                await upsert_question_cache(
-                    [
+                # 先逐题过滤并构造入库载荷，再按块批量写库：
+                # 每题两次 DB 往返在大结果集下是纯串行开销。
+                prepared: list[dict] = []
+                for q in questions:
+                    if not isinstance(q, dict):
+                        continue
+                    qid = str(q.get("question_id") or "").strip()
+                    stem = str(q.get("stem") or "").strip()
+                    if not qid or not stem or qid in seen_ids:
+                        continue
+                    seen_ids.add(qid)
+                    prepared.append(
                         {
                             "question_id": qid,
                             "stem": stem,
@@ -234,38 +277,49 @@ async def create_crawl_task(
                             "source": str(q.get("source") or "").strip(),
                             "date": str(q.get("date") or "").strip(),
                         }
-                    ]
-                )
-                await upsert_question_library_items(
-                    user_id=user_id,
-                    items=[{"question_id": qid, "subject": subject, "origin": "crawled"}],
-                )
+                    )
 
-                inserted += 1
-                qids.append(qid)
-
-                await task_runtime.append_event(
-                    task,
-                    {
-                        "type": "item_saved",
-                        "data": {
-                            "item": {
-                                "question_id": qid,
-                                "subject": subject,
-                                "origin": "crawled",
-                                "hidden": False,
-                                "stem": stem,
-                            }
-                        },
-                    },
-                )
-
-                pct = int((i / max(1, total)) * 100)
-                await task_runtime.append_event(task, {"type": "progress", "data": {"progress": pct}})
+                upsert_chunk_size = 25
+                for start in range(0, len(prepared), upsert_chunk_size):
+                    if task.status != "running":
+                        break
+                    chunk = prepared[start : start + upsert_chunk_size]
+                    await upsert_question_cache(chunk)
+                    await upsert_question_library_items(
+                        user_id=user_id,
+                        items=[
+                            {"question_id": item["question_id"], "subject": subject, "origin": "crawled"}
+                            for item in chunk
+                        ],
+                    )
+                    for item in chunk:
+                        inserted += 1
+                        qids.append(item["question_id"])
+                        await task_runtime.append_event(
+                            task,
+                            {
+                                "type": "item_saved",
+                                "data": {
+                                    "item": {
+                                        "question_id": item["question_id"],
+                                        "subject": subject,
+                                        "origin": "crawled",
+                                        "hidden": False,
+                                        "stem": item["stem"],
+                                    }
+                                },
+                            },
+                        )
+                    pct = int(((start + len(chunk)) / max(1, len(prepared))) * 100)
+                    await task_runtime.append_event(task, {"type": "progress", "data": {"progress": pct}})
 
             if task.status != "running":
                 async with task.cond:
                     task.cond.notify_all()
+                return
+
+            if inserted == 0 and last_failure is not None:
+                await _fail_crawl_task(task, last_failure)
                 return
 
             await task_runtime.append_event(
@@ -1076,6 +1130,15 @@ async def create_generate_task(
         mode = "standard"
     append_mode = bool(req.get("append"))
     stream_reasoning = bool(req.get("stream_reasoning"))
+    generation_strategy = str(req.get("generation_strategy") or "adaptive_evolution").strip()
+    if generation_strategy not in {"adaptive_evolution", "legacy_beam"}:
+        generation_strategy = "adaptive_evolution"
+    supervision_mode = str(req.get("supervision_mode") or "tiered_consensus").strip()
+    if supervision_mode not in {"tiered_consensus", "single"}:
+        supervision_mode = "tiered_consensus"
+    policy_mode = str(req.get("policy_mode") or "champion").strip()
+    if policy_mode not in {"champion", "shadow_compare", "fixed"}:
+        policy_mode = "champion"
     use_archive = bool(req.get("use_study_archive"))
     use_reference_questions = bool(req.get("use_reference_questions"))
     reference_source = str(req.get("reference_source") or "any").strip() or "any"
@@ -1090,8 +1153,25 @@ async def create_generate_task(
     knowledge_point_ids = [str(item or "").strip() for item in (req.get("knowledge_point_ids") or []) if str(item or "").strip()]
     knowledge_points = [str(item or "").strip() for item in (req.get("knowledge_points") or []) if str(item or "").strip()]
     intuition_practice = normalize_intuition_practice_config(req.get("intuition_practice"))
+    evolution_evaluation = normalize_evolution_evaluation(req.get("evolution_evaluation"))
 
     task_id = str(req.get("task_id") or "").strip() or f"ql_gen_{uuid.uuid4().hex[:12]}"
+    expected_roles = {
+        GENERATOR_ROLE: GENERATOR_MODEL,
+        SUPERVISOR_ROLE: SUPERVISOR_MODEL,
+        ARBITER_ROLE: SUPERVISOR_MODEL,
+    }
+    for role_name, expected_model in expected_roles.items():
+        binding = model_role_binding(role_name, required_provider=OPENCODE_GO_PROVIDER)
+        if binding.model != expected_model:
+            raise RunnerError(f"question_generation_model_mismatch:{role_name}", status_code=500)
+    evolution_trace = create_trace(
+        generation_strategy=generation_strategy,
+        supervision_mode=supervision_mode,
+        policy_mode=policy_mode,
+        seed=f"{task_id}:{subject}:{topic_raw}",
+        unbounded_live_test=_unbounded_live_test_enabled(),
+    )
     topic_key = normalize_topic_key(topic_raw) or topic_raw
     agent_spec = build_agent_run_spec_for_task(task_type="question_library_generate", request=req)
 
@@ -1129,6 +1209,10 @@ async def create_generate_task(
         intuition_practice=intuition_practice,
     )
     current_session["status"] = "running"
+    current_session["generation_strategy"] = generation_strategy
+    current_session["supervision_mode"] = supervision_mode
+    current_session["policy_mode"] = policy_mode
+    current_session["strategy_versions"] = [policy.version for policy in evolution_trace.policies]
     save_session(current_session)
 
     async def runner_factory(task: RuntimeTask) -> None:
@@ -1164,6 +1248,11 @@ async def create_generate_task(
                 session["requested_count"] = count
                 session["draft_count"] = len(progress_drafts)
                 session["count"] = len(progress_drafts)
+                session["generation_strategy"] = generation_strategy
+                session["supervision_mode"] = supervision_mode
+                session["policy_mode"] = policy_mode
+                session["strategy_versions"] = [policy.version for policy in evolution_trace.policies]
+                session["evolution_summary"] = evolution_trace.summary()
                 session.setdefault("reasoning_blocks", [])
                 save_session(session)
 
@@ -1183,6 +1272,11 @@ async def create_generate_task(
                     "reference_source": reference_source,
                     "reference_year_range": reference_year_range,
                     "intuition_practice": intuition_practice,
+                    "generation_strategy": generation_strategy,
+                    "supervision_mode": supervision_mode,
+                    "policy_mode": policy_mode,
+                    "strategy_versions": [policy.version for policy in evolution_trace.policies],
+                    "evolution_summary": evolution_trace.summary(),
                     "study_markdown": "",
                     "count": len(progress_drafts),
                     "requested_count": count,
@@ -1206,6 +1300,17 @@ async def create_generate_task(
             phase = str(payload.get("phase") or "").strip()
             if not phase:
                 return
+            if phase in {"strategy_evolution", "ai_supervision", "draft_evolution"}:
+                event_data = dict(payload)
+                event_data.pop("phase", None)
+                await _emit_event(
+                    task,
+                    event_type=phase,
+                    data=event_data,
+                    user_id=user_id,
+                    persist_task_id=task_id,
+                    progress=float(payload.get("progress") or 0.0),
+                )
             await _emit_progress(
                 phase,
                 progress=float(payload.get("progress") or 0.0),
@@ -1251,8 +1356,24 @@ async def create_generate_task(
                 return True
             return task.status != "running"
 
+        trace_token = bind_trace(evolution_trace)
         try:
             _save_snapshot(session_status="running", preview_status="running")
+            await _on_stage_event(
+                {
+                    "phase": "strategy_evolution",
+                    "label": "策略种群初始化",
+                    "progress": 2.0,
+                    "stats": {
+                        "generation_strategy": generation_strategy,
+                        "supervision_mode": supervision_mode,
+                        "policy_mode": policy_mode,
+                        "generation": 0,
+                        "max_generations": 2 if generation_strategy == "adaptive_evolution" else 1,
+                        "policies": [policy_payload(policy) for policy in evolution_trace.policies],
+                    },
+                }
+            )
             await _emit_progress("source_pack", progress=5.0, stats={"use_study_archive": bool(use_archive)})
 
             study_markdown = ""
@@ -1314,6 +1435,8 @@ async def create_generate_task(
             source_pack["grade_id"] = grade_id
             source_pack["textbook_version_id"] = textbook_version_id
             source_pack["intuition_practice"] = intuition_practice
+            source_pack["target_difficulty"] = difficulty
+            source_pack["evolution_evaluation"] = evolution_evaluation
             await _emit_progress(
                 "curriculum_context",
                 progress=14.0,
@@ -1427,6 +1550,19 @@ async def create_generate_task(
                     preview_status="running",
                     replace_drafts=merge_drafts(batch_base_drafts, materialized),
                 )
+                record_policy_outcomes(
+                    evolution_trace,
+                    [
+                        {
+                            "strategy_version": item.get("strategy_version"),
+                            "policy_status": ((item.get("evolution_lineage") or {}).get("policy_status")),
+                            "evidence_count": ((item.get("supervision_summary") or {}).get("evidence_count")),
+                            "fitness": ((item.get("evolution_lineage") or {}).get("fitness")),
+                        }
+                        for item in finals
+                        if isinstance(item, dict)
+                    ],
+                )
 
                 if mode != "infinite":
                     break
@@ -1442,6 +1578,14 @@ async def create_generate_task(
             _save_snapshot(session_status=final_session_status, preview_status="pending_review")
 
             await _emit_progress("pending_review", progress=96.0, stats={"draft_count": len(progress_drafts), "batches": batches})
+            await _on_stage_event(
+                {
+                    "phase": "strategy_evolution",
+                    "label": "策略进化完成",
+                    "progress": 95.0,
+                    "stats": {**evolution_trace.summary(), "generation": 1 if generation_strategy == "adaptive_evolution" else 0},
+                }
+            )
             await _emit_event(
                 task,
                 event_type="done",
@@ -1461,6 +1605,10 @@ async def create_generate_task(
                     "count": len(progress_drafts),
                     "requested_count": count,
                     "draft_count": len(progress_drafts),
+                    "generation_strategy": generation_strategy,
+                    "supervision_mode": supervision_mode,
+                    "policy_mode": policy_mode,
+                    "evolution_summary": evolution_trace.summary(),
                 },
                 user_id=user_id,
                 persist_task_id=task_id,
@@ -1503,6 +1651,7 @@ async def create_generate_task(
         finally:
             if task.status == "running":
                 await task_runtime.fail_task(task, "Task ended unexpectedly")
+            reset_trace(trace_token)
 
     return await task_runtime.create_task(
         task_id=task_id,

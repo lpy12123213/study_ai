@@ -76,6 +76,7 @@ async def get_question_cache(
     out: Dict[str, dict] = {}
     for r in rows:
         intuition_packet_json = str(getattr(r, "intuition_packet_json", "") or "")
+        generation_metadata_json = str(getattr(r, "generation_metadata_json", "") or "")
         out[str(r.question_id)] = {
             "question_id": r.question_id,
             "subject": r.subject,
@@ -89,6 +90,8 @@ async def get_question_cache(
             "analysis": r.analysis or "",
             "intuition_packet_json": intuition_packet_json,
             "intuition_packet": _parse_json_obj(intuition_packet_json),
+            "generation_metadata_json": generation_metadata_json,
+            "generation_metadata": _parse_json_obj(generation_metadata_json),
             "difficulty_value": r.difficulty_value,
             "quality_score": int(r.quality_score or 0),
             "quality_flags": r.quality_flags or "",
@@ -117,11 +120,21 @@ async def upsert_question_cache(items: List[dict], *, session: Optional[AsyncSes
         qid = str(it.get("question_id") or "").strip()
         if not qid:
             continue
+        preserve_intuition = "intuition_packet" not in it and "intuition_packet_json" not in it
+        preserve_generation = "generation_metadata" not in it and "generation_metadata_json" not in it
+        existing = await session.get(QuestionCache, qid) if preserve_intuition or preserve_generation else None
         if "intuition_packet" in it or "intuition_packet_json" in it:
             intuition_packet_json = _to_json_str(it.get("intuition_packet_json") or it.get("intuition_packet") or "")
         else:
-            existing = await session.get(QuestionCache, qid)
             intuition_packet_json = str(getattr(existing, "intuition_packet_json", "") or "") if existing else ""
+        if "generation_metadata" in it or "generation_metadata_json" in it:
+            generation_metadata_json = _to_json_str(
+                it.get("generation_metadata_json") or it.get("generation_metadata") or ""
+            )
+        else:
+            generation_metadata_json = (
+                str(getattr(existing, "generation_metadata_json", "") or "") if existing else ""
+            )
         row = QuestionCache(
             question_id=qid,
             subject=str(it.get("subject") or "").strip(),
@@ -134,6 +147,7 @@ async def upsert_question_cache(items: List[dict], *, session: Optional[AsyncSes
             answer=_clip(str(it.get("answer") or it.get("solution") or ""), 12000),
             analysis=_clip(str(it.get("analysis") or it.get("explanation") or ""), 20000),
             intuition_packet_json=_clip(intuition_packet_json, 50000),
+            generation_metadata_json=_clip(generation_metadata_json, 50000),
             difficulty_value=it.get("difficulty_value"),
             quality_score=int(it.get("quality_score") or 0),
             quality_flags=_to_json_str(it.get("quality_flags") or ""),

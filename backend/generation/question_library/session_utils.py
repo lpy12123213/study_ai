@@ -172,6 +172,12 @@ def normalize_draft_questions(input_value: Any) -> List[dict]:
                 atom=intuition_packet.get("atom") if isinstance(intuition_packet.get("atom"), dict) else {},
                 legacy_question=normalized,
             )
+        for metadata_key in ("strategy_version", "evolution_lineage", "supervision_summary"):
+            metadata_value = item.get(metadata_key)
+            if metadata_key == "strategy_version" and isinstance(metadata_value, str):
+                normalized[metadata_key] = _bounded_text(metadata_value, 120)
+            elif isinstance(metadata_value, dict):
+                normalized[metadata_key] = dict(metadata_value)
         out.append(normalized)
     return out
 
@@ -209,6 +215,19 @@ def serialize_session_preview(obj: dict) -> dict:
         "requested_count": resolve_requested_count(obj, draft_count=draft_count),
         "draft_count": draft_count,
         "intuition_practice": normalize_intuition_practice_config((obj or {}).get("intuition_practice")),
+        "generation_strategy": str((obj or {}).get("generation_strategy") or "adaptive_evolution"),
+        "supervision_mode": str((obj or {}).get("supervision_mode") or "tiered_consensus"),
+        "policy_mode": str((obj or {}).get("policy_mode") or "champion"),
+        "strategy_versions": [
+            str(item or "").strip()
+            for item in ((obj or {}).get("strategy_versions") or [])
+            if str(item or "").strip()
+        ]
+        if isinstance((obj or {}).get("strategy_versions"), list)
+        else [],
+        "evolution_summary": dict((obj or {}).get("evolution_summary") or {})
+        if isinstance((obj or {}).get("evolution_summary"), dict)
+        else {},
         "draft_questions": drafts,
     }
 

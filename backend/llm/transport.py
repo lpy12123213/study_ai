@@ -82,7 +82,13 @@ async def close_shared_llm_http_client() -> None:
         await _close_http_client(client)
 
 
-async def client_get(client: httpx.AsyncClient, url: str, *, headers: Dict[str, str], timeout_s: float) -> httpx.Response:
+async def client_get(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: Dict[str, str],
+    timeout_s: Optional[float],
+) -> httpx.Response:
     try:
         return await client.get(url, headers=headers, timeout=timeout_s)
     except TypeError as exc:
@@ -97,7 +103,7 @@ async def client_post(
     *,
     headers: Dict[str, str],
     payload: Dict[str, Any],
-    timeout_s: float,
+    timeout_s: Optional[float],
 ) -> httpx.Response:
     try:
         return await client.post(url, headers=headers, json=payload, timeout=timeout_s)
@@ -114,7 +120,7 @@ def client_stream(
     *,
     headers: Dict[str, str],
     payload: Dict[str, Any],
-    timeout_s: float,
+    timeout_s: Optional[float],
 ):
     try:
         return client.stream(method, url, headers=headers, json=payload, timeout=timeout_s)

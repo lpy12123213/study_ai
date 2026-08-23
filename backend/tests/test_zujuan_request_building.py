@@ -244,8 +244,8 @@ class TestZujuanSubjectSearchIsolation(unittest.IsolatedAsyncioTestCase):
         async def fake_search_impl(**kwargs):  # type: ignore[no-untyped-def]
             return {"success": True, "questions": [], "self_seen": "self" in kwargs}
 
-        # search_by_knowledge 的客户端包装器已持有 _subject_lock；旧实现内部再走
-        # self.search_by_keyword 会重复抢同一把不可重入锁，wait_for 必超时。
+        # search_by_knowledge 的客户端包装器在慢路径下持有 _subject_lock；旧实现内部
+        # 再走 self.search_by_keyword 会重复抢同一把不可重入锁，wait_for 必超时。
         with patch("backend.integrations.crawler.zujuan.search.search_by_keyword", new=fake_search_impl):
             res = await asyncio.wait_for(
                 crawler.search_by_knowledge("等差数列", subject="高中数学", limit=1),
@@ -254,6 +254,65 @@ class TestZujuanSubjectSearchIsolation(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(res.get("success"))
         self.assertTrue(res.get("self_seen"))
+
+    async def test_same_subject_searches_run_concurrently(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        crawler = ZujuanCrawler(subject="高中数学")
+        first_entered = asyncio.Event()
+        release = asyncio.Event()
+        overlapped = False
+
+        async def fake_search_impl(**kwargs):  # type: ignore[no-untyped-def]
+            nonlocal overlapped
+            if first_entered.is_set():
+                # 第二个搜索在第一个仍被阻塞时进入了 impl，说明快路径没有互斥。
+                overlapped = True
+            else:
+                first_entered.set()
+            await release.wait()
+            return {"success": True, "questions": []}
+
+        with patch("backend.integrations.crawler.zujuan.search.search_by_keyword", new=fake_search_impl):
+            first = asyncio.create_task(crawler.search_by_keyword("函数", subject="高中数学", limit=1))
+            await first_entered.wait()
+            second = asyncio.create_task(crawler.search_by_keyword("数列", subject="高中数学", limit=1))
+            # 给第二个搜索进入 impl 的机会；若仍被 _subject_lock 串行化则不会重叠。
+            await asyncio.sleep(0.05)
+            release.set()
+            await asyncio.gather(first, second)
+
+        self.assertTrue(overlapped)
+
+    async def test_subject_switch_waits_for_inflight_same_subject_search(self) -> None:
+        from backend.integrations.crawler.zujuan.client import ZujuanCrawler
+
+        crawler = ZujuanCrawler(subject="高中数学")
+        fast_entered = asyncio.Event()
+        release = asyncio.Event()
+        observed_subjects: list[str] = []
+
+        async def fake_search_impl(**kwargs):  # type: ignore[no-untyped-def]
+            inst = kwargs["self"]
+            fast_entered.set()
+            await release.wait()
+            observed_subjects.append(inst.subject)
+            return {"success": True, "questions": []}
+
+        with patch("backend.integrations.crawler.zujuan.search.search_by_keyword", new=fake_search_impl):
+            fast = asyncio.create_task(crawler.search_by_keyword("函数", subject="高中数学", limit=1))
+            await fast_entered.wait()
+            switching = asyncio.create_task(crawler.search_by_keyword("电磁感应", subject="高中物理", limit=1))
+            await asyncio.sleep(0.05)
+            # 同学科搜索仍在途时，慢路径不允许切换学科。
+            self.assertEqual(crawler.subject, "高中数学")
+            release.set()
+            await asyncio.gather(fast, switching)
+
+        self.assertEqual(crawler.subject, "高中物理")
+        # 在途的同学科搜索全程观察到的是切换前的学科，没有被污染；
+        # 切换后的搜索观察到新学科。
+        self.assertEqual(observed_subjects, ["高中数学", "高中物理"])
 
 
 class FakeResponse:

@@ -17,7 +17,7 @@
     {"id": "sign_monotonicity", "description": "在区间上 f'>0 推出递增、f'<0 推出递减；判断依赖整个区间而非单点", "match": {"all": ["f.?'.{0,4}>.{0,4}0", "f.?'.{0,4}<.{0,4}0"], "any": ["单调递增", "单调递减", "区间"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
     {"id": "critical_candidates", "description": "临界点包括定义域内 f'=0 或导数不存在的点，它们只是极值候选点", "match": {"all": ["临界点"], "any": ["导数.{0,6}(不存在|无定义)", "f.?'.{0,4}=.{0,4}0", "候选"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-3-maxima-and-minima"]},
     {"id": "parameter_derivative", "description": "f_a'(x)=3(x²-a)；a<0 时恒正，a=0 时除 x=0 外为正，a>0 时零点为 ±sqrt(a)", "match": {"all": ["3.{0,3}x.?2.{0,3}-.{0,3}3.?a", "a.{0,3}<.{0,3}0", "a.{0,3}=.{0,3}0", "a.{0,3}>.{0,3}0"], "any": ["√a|sqrt.{0,3}a", "恒正"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
-    {"id": "parameter_classification", "description": "a>0 时 -sqrt(a) 为极大点、sqrt(a) 为极小点；a<=0 时无极值，a=0 的原点是水平切线但非极值", "match": {"all": ["a.{0,3}>.{0,3}0", "极大", "极小"], "any": ["-.?√a", "a.{0,3}≤.{0,3}0.{0,8}无极值", "水平切线.{0,8}(非|不是).{0,4}极值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
+    {"id": "parameter_classification", "description": "a>0 时 -sqrt(a) 为极大点、sqrt(a) 为极小点；a<=0 时无极值，a=0 的原点是水平切线但非极值", "match": {"all": ["a.{0,3}>.{0,3}0", "极大", "极小"], "any": ["(?:[-±]|\\\\pm).{0,12}sqrt|(?:[-±]|\\\\pm).{0,6}√", "a.{0,3}[<≤=].{0,3}0.{0,80}(无|没有|不存在)极值", "水平切线.{0,8}(非|不是).{0,4}极值", "(只在|仅在).{0,16}为零"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
     {"id": "stationary_counterexample", "description": "f(x)=x³ 在 x=0 导数为零但导数不变号，因此不是极值点", "match": {"all": ["x.?3|x³", "x.{0,3}=.{0,3}0"], "any": ["导数.{0,6}为零", "不变号", "不是.{0,4}极值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-5-derivatives-and-the-shape-of-a-graph"]},
     {"id": "closed_interval", "description": "求闭区间绝对最值要比较区间内临界点与两个端点的函数值", "match": {"all": ["闭区间", "端点"], "any": ["临界点", "函数值.{0,8}比较", "绝对最值"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-3-maxima-and-minima"]},
     {"id": "optimization_example", "description": "g(x)=x+4/x 在 x>0 时 g'=1-4/x²，x=2 取得最小值 4，并检验边界趋势或实际约束", "match": {"all": ["x.{0,3}[+].{0,3}4.?/.?x", "x.{0,3}>.{0,3}0", "x.{0,3}=.{0,3}2"], "any": ["最小值.{0,4}4", "边界", "实际意义"]}, "source_urls": ["https://openstax.org/books/calculus-volume-1/pages/4-7-applied-optimization-problems"]},
@@ -30,7 +30,7 @@
     {"id": "second_derivative_zero", "description": "误解：二阶导数等于零就说明没有极值", "wrong_pattern": "二阶导数.{0,6}(等于|=).{0,2}0.{0,10}(没有|不存在).{0,4}极值", "correct_pattern": "不能判定|一阶导数.{0,6}变号|更高阶|反例"},
     {"id": "newton_always_converges", "description": "误解：牛顿迭代从任意初值都必然收敛到所需根", "wrong_pattern": "牛顿迭代.{0,10}(任意|任何).{0,4}初值.{0,8}(都|必然|一定).{0,6}收敛", "correct_pattern": "初值|局部收敛|导数.{0,6}为零|可能发散"}
   ],
-  "contrasts": [["驻点", "极值点"], ["局部极值", "闭区间绝对最值"], ["必要条件", "充分条件"], ["解析求根", "牛顿迭代近似"]],
+  "contrasts": [["驻点", "极值点"], ["局部", "全局"], ["必要条件", "充分条件"], ["牛顿迭代", "近似解"]],
   "format_requirements": {"key_formulas": ["f.?'.{0,4}x", "3.{0,3}x.?2.{0,3}-.{0,3}3.?a", "1.{0,3}-.{0,3}4.?/.?x.?2", "x.{0,4}n.{0,4}[+].{0,4}1"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
   "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
 }

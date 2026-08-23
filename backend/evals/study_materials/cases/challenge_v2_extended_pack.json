@@ -400,11 +400,11 @@
       "min_unique_sources": 12,
       "expected_domains": ["openstax.org", "chem.libretexts.org", "iupac.org", "rsc.org"],
       "required_facts": [
-        {"id": "dynamic_equilibrium", "description": "动态平衡时正逆反应速率相等，宏观浓度保持不变但反应没有停止", "match": {"all": ["动态平衡", "正.{0,4}逆.{0,4}反应速率.{0,6}相等"], "any": ["浓度.{0,8}不变", "反应.{0,8}(没有|并未)停止"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-1-chemical-equilibria"]},
+        {"id": "dynamic_equilibrium", "description": "动态平衡时正逆反应速率相等，宏观浓度保持不变但反应没有停止", "match": {"all": ["动态平衡", "正.{0,8}逆.{0,24}速率.{0,24}相等|[vV].{0,14}正.{0,6}="], "any": ["浓度.{0,10}(不变|不再改变|不再变化)", "反应.{0,8}(没有|并未)停止"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-1-chemical-equilibria"]},
         {"id": "q_vs_k", "description": "比较 Q 与 K 判断净反应方向：Q<K 向正反应，Q>K 向逆反应，Q=K 平衡", "match": {"all": ["Q.{0,4}<.{0,4}K", "Q.{0,4}>.{0,4}K"], "any": ["正反应方向", "逆反应方向", "Q.{0,4}=.{0,4}K"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-3-shifting-equilibria-le-chateliers-principle"]},
         {"id": "equilibrium_expression", "description": "平衡常数式的幂次来自配平系数，纯固体和纯液体不写入浓度平衡常数式", "match": {"all": ["平衡常数"], "any": ["化学计量数|配平系数", "纯固体.{0,10}(不|省略)", "纯液体.{0,10}(不|省略)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-2-equilibrium-constants"]},
         {"id": "temperature_catalyst", "description": "一定反应的 K 只随温度改变；催化剂同时降低正逆反应活化能、缩短达平衡时间但不改变 K 和平衡组成", "match": {"all": ["催化剂", "平衡常数"], "any": ["温度.{0,8}改变", "正逆反应.{0,12}加快", "不改变.{0,8}平衡组成"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/13-3-shifting-equilibria-le-chateliers-principle"]},
-        {"id": "weak_acid_equilibrium", "description": "醋酸是弱酸，只部分电离；稀释会提高电离程度但氢离子浓度仍可下降", "match": {"all": ["醋酸", "部分电离|不完全电离"], "any": ["稀释.{0,8}电离程度.{0,8}(增大|提高)", "氢离子浓度.{0,8}(减小|下降)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-3-relative-strengths-of-acids-and-bases"]},
+        {"id": "weak_acid_equilibrium", "description": "醋酸是弱酸，只部分电离；稀释会提高电离程度但氢离子浓度仍可下降", "match": {"all": ["醋酸", "部分电离|不完全电离"], "any": ["(稀释|越稀|加水).{0,60}(电离度|电离程度)", "(电离度|电离程度).{0,10}(增大|提高|变大|增加)", "(氢离子|H\\^?\\+).{0,24}(减小|下降|降低)"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-3-relative-strengths-of-acids-and-bases"]},
         {"id": "titration_stages", "description": "弱酸强碱滴定中半中和点酸与共轭碱等量，化学计量点主要为盐且 pH>7，过量后由过量 OH- 控制", "match": {"all": ["半中和点", "化学计量点|当量点"], "any": ["pH.{0,4}>.{0,4}7", "醋酸根", "过量.{0,6}OH"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-7-acid-base-titrations"]},
         {"id": "equivalence_endpoint", "description": "化学计量点由反应计量关系定义，滴定终点由指示剂变色或仪器信号观察，二者不必严格重合", "match": {"all": ["化学计量点|当量点", "滴定终点|终点"], "any": ["指示剂", "不.{0,6}(完全|严格).{0,4}重合", "计量关系"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/4-5-quantitative-chemical-analysis"]},
         {"id": "indicator_choice", "description": "指示剂变色范围应落在化学计量点附近的陡跃区，弱酸强碱滴定通常不选甲基橙", "match": {"all": ["变色范围", "陡跃|突跃"], "any": ["酚酞", "甲基橙.{0,8}(不适合|不宜)", "指示剂选择"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/14-7-acid-base-titrations"]},
@@ -417,7 +417,7 @@
         {"id": "equivalence_neutral", "description": "误解：任何酸碱滴定的化学计量点 pH 都等于 7", "wrong_pattern": "(任何|所有).{0,6}(酸碱)?滴定.{0,10}(化学计量点|当量点).{0,6}pH.{0,4}(等于|=).{0,2}7", "correct_pattern": "弱酸强碱|盐的水解|pH.{0,4}>.{0,4}7"},
         {"id": "henderson_universal", "description": "误解：Henderson–Hasselbalch 公式可在滴定全过程无条件直接套用", "wrong_pattern": "(Henderson|亨德森).{0,12}(滴定全过程|任何阶段).{0,8}(都|均|无条件).{0,4}(适用|套用)", "correct_pattern": "缓冲区|适用条件|化学计量点|过量"}
       ],
-      "contrasts": [["反应速率相等", "反应停止"], ["平衡常数改变", "平衡移动"], ["化学计量点", "滴定终点"], ["活度", "浓度"]],
+      "contrasts": [["速率相等", "停止"], ["平衡常数", "平衡移动"], ["化学计量点", "滴定终点"], ["活度", "浓度"]],
       "format_requirements": {"key_formulas": ["Q.{0,4}[<=>].{0,4}K", "K[a-z]?|平衡常数", "pH", "pK|Henderson"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
       "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
     },
@@ -707,6 +707,60 @@
       ],
       "contrasts": [["熵", "语义信息"], ["源编码", "信道编码"]],
       "format_requirements": {"key_formulas": ["-log", "H.{0,3}X", "I.{0,3}X", "KL|相对熵"]}
+    },
+    {
+      "id": "fluid_mechanics_bernoulli",
+      "title": "流体力学：连续性方程、伯努利与粘性流动（结构压力用例）",
+      "options": {"max_points": 12},
+      "query": "系统自学流体力学基础：理想流体与定常流动、流线与流管、连续性方程 A1v1=A2v2、伯努利方程的推导与适用条件、皮托管与文丘里管的测量原理、托里拆利出流、飞机升力的环流解释、牛顿流体粘度、层流与湍流的雷诺数判据和泊肃叶定律；要求用能量与动量两种观点统一推导，并对多组工作数据做对比计算",
+      "subject": "流体力学",
+      "requirements": "结构要求：每个主要概念配图（流线/流管/装置示意）与数据表（流速-压强、流量-管径、雷诺数分区等），推导与装置分析并用。",
+      "expected_knowledge_points": ["理想流体与定常流动", "流线与流管", "连续性方程", "伯努利方程推导", "伯努利方程适用条件", "皮托管测速", "文丘里流量计", "托里拆利定理", "升力与环流", "粘度与牛顿流体", "层流湍流与雷诺数", "泊肃叶定律与流阻"],
+      "min_unique_sources": 12,
+      "expected_domains": ["openstax.org", "grc.nasa.gov", "britannica.com", "phys.libretexts.org"],
+      "required_facts": [
+        {"id": "continuity_eq", "description": "定常不可压流动沿流管体积流量 Q=Av 守恒，截面变小流速变大", "match": {"all": ["连续性方程|Q.{0,4}=.?A.?v|A.?1.?v.?1"], "any": ["变细|缩小.{0,14}(增大|变快)", "体积流量"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/12-1-flow-rate-and-its-relation-to-velocity"]},
+        {"id": "bernoulli_terms", "description": "伯努利方程 p+½ρv²+ρgh 沿同一流线为常量；适用理想、定常、不可压流体且忽略粘性损耗", "match": {"all": ["伯努利", "ρ|\\\\rho"], "any": ["½|1/2|\\\\frac\\{1\\}\\{2\\}", "流线", "守恒|常量"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/12-2-bernoullis-equation"]},
+        {"id": "torricelli", "description": "托里拆利定理：容器小孔出流速度 v=√(2gh)，等于自由下落同高度末速度", "match": {"all": ["托里拆利"], "any": ["2.?g.?h|v.?=.?√|√", "自由落体|自由下落|小孔"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/12-3-the-most-general-applications-of-bernoullis-equation"]},
+        {"id": "pitot_venturi", "description": "皮托管用驻点总压与静压差测流速；文丘里管用喉部压降与连续性方程算流量", "match": {"all": ["皮托管", "文丘里"], "any": ["总压|驻点", "压降|压差", "流量"]}, "source_urls": ["https://www.grc.nasa.gov/www/k-12/airplane/bern.html"]},
+        {"id": "reynolds_transition", "description": "雷诺数 Re=ρvd/μ 度量惯性力与粘性力之比；圆管内低于约 2000 为层流、高于约 4000 为湍流", "match": {"all": ["雷诺数|Re.?="], "any": ["层流.{0,16}湍流|湍流.{0,16}层流", "2000|4000", "ρ.?v.?d.?|惯性力.{0,12}粘性"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/12-5-the-onset-of-turbulence"]},
+        {"id": "poiseuille", "description": "泊肃叶定律 Q=πΔPr⁴/(8ηL)：层流流量与管半径四次方成正比，与粘度成反比", "match": {"all": ["泊肃叶|Poiseuille"], "any": ["r.?4|R.?4|四次方", "粘度|η", "层流"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/12-4-viscosity-and-laminar-flow-poiseuilles-law"]}
+      ],
+      "traps": [
+        {"id": "fast_always_low_pressure", "description": "误解：流速大处压强一定小，不考虑高度差与适用条件", "wrong_pattern": "流速.{0,10}(越大|大).{0,14}压强.{0,10}(一定|必然|总是|就).{0,6}(小|低)", "correct_pattern": "同一水平|同一流线|适用条件|高度差"},
+        {"id": "same_speed_everywhere", "description": "误解：连续性方程意味着管道各处流速相同", "wrong_pattern": "连续性.{0,14}(所有|各处|每处).{0,10}(速度|流速).{0,8}(相同|一样|相等)", "correct_pattern": "截面.{0,12}(反比|不同|变小|缩小)"},
+        {"id": "turbulence_useless", "description": "误解：湍流只有害处，没有任何积极作用", "wrong_pattern": "湍流.{0,12}(只有|毫无|全无).{0,10}(害处|坏处|不利|负面)", "correct_pattern": "混合|传热|掺混|有利|强化"}
+      ],
+      "contrasts": [["层流", "湍流"], ["理想流体", "粘性流体"], ["体积流量", "流速"]],
+      "format_requirements": {"key_formulas": ["A.?1.?v.?1|Q.?=.?A", "½|\\\\frac\\{1\\}\\{2\\}", "Re", "r.?4|R.?4"], "min_figures": 4, "min_tables": 4, "min_chars": 15000},
+      "learning_requirements": {"min_objectives": 4, "min_worked_examples": 3, "min_practice_questions": 8, "min_answered_questions": 8, "required_levels": ["基础", "应用", "迁移"]}
+    },
+    {
+      "id": "molecular_orbital_theory",
+      "title": "分子轨道理论：能级图、键级与双原子分子（结构压力用例）",
+      "options": {"max_points": 12},
+      "query": "系统自学分子轨道理论：LCAO-MO 线性组合、成键/反键/非键轨道、σ 与 π 分子轨道、同核双原子两种能级序（N2 型与 O2 型）、电子填充三规则、键级的定义与计算、O2 顺磁性解释、键级与键长键能关系、异核双原子（CO、HF）与离域 π 体系，并与价键理论逐点比较",
+      "subject": "结构化学",
+      "requirements": "结构要求：为 N2、O2、CO 等分子给出能级图与电子排布表，键级-键长-键能数据成表对比，轨道形状配图。",
+      "expected_knowledge_points": ["LCAO 基本原理", "成键反键与非键轨道", "σ 与 π 分子轨道", "轨道对称性匹配与能级图", "同核双原子两种能级序", "电子填充三规则", "键级的定义与计算", "O2 的顺磁性", "键级与键长键能", "异核双原子 MO", "离域 π 体系", "MO 与价键理论比较"],
+      "min_unique_sources": 12,
+      "expected_domains": ["openstax.org", "chem.libretexts.org", "britannica.com"],
+      "required_facts": [
+        {"id": "lcao_form", "description": "分子轨道由原子轨道线性组合 ΨMO=cAψA±cBψB 得到；同相叠加成键能量降低、反相叠加反键升高", "match": {"all": ["LCAO|线性组合"], "any": ["Ψ|ψ|psi", "成键.{0,18}反键|反键.{0,18}成键", "降低.{0,12}升高"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/8-4-molecular-orbital-theory"]},
+        {"id": "bond_order_formula", "description": "键级 =（成键电子数−反键电子数）/2；H2+ 键级 0.5，介于无键与单键之间", "match": {"all": ["键级"], "any": ["成键电子.{0,14}反键|N.?b", "/.?2|除以 ?2|½", "0.?5|半个"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/8-4-molecular-orbital-theory"]},
+        {"id": "o2_paramagnetism", "description": "O2 的 π*2p 上有两个自旋平行的未成对电子，因此具有顺磁性——MO 理论的成功预言", "match": {"all": ["O.?2"], "any": ["顺磁", "未成对|不成对", "π.?[∗*]"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/8-4-molecular-orbital-theory"]},
+        {"id": "n2_o2_order_swap", "description": "N2 型（B2、C2、N2）中 π2p 能级低于 σ2p；O2 型（O2、F2）相反，差异源于 2s-2p 混杂强度不同", "match": {"all": ["σ.?2.?p", "π.?2.?p"], "any": ["N.?2.{0,26}O.?2|O.?2.{0,26}N.?2", "相反|不同|互换|颠倒", "混杂|混合"]}, "source_urls": ["https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Supplemental_Modules_(Physical_and_Theoretical_Chemistry)/Chemical_Bonding/09%3A_Molecular_Orbital_Theory"]},
+        {"id": "co_isoelectronic", "description": "CO 与 N2 是等电子体（14 个价电子），键级为 3，键长与键能相近", "match": {"all": ["CO"], "any": ["等电子", "键级.{0,8}3", "相近|相似"]}, "source_urls": ["https://www.britannica.com/science/chemical-bonding"]},
+        {"id": "antibonding_population", "description": "电子按能量由低到高填充，可以进入反键轨道（如 O2 的 π*2p），使键级相对纯成键下降", "match": {"all": ["反键"], "any": ["能量.{0,8}(最低|顺序|由低)", "填充|排布", "π.?[∗*]"]}, "source_urls": ["https://openstax.org/books/chemistry-2e/pages/8-4-molecular-orbital-theory"]}
+      ],
+      "traps": [
+        {"id": "antibonding_empty", "description": "误解：电子永远不会进入反键轨道", "wrong_pattern": "(电子)?(绝不|不会|从不|永远不).{0,12}进入?.{0,8}反键|反键轨道.{0,12}(不填|从不|永远不|不能填)", "correct_pattern": "O.?2|π.?[∗*]|能量.{0,8}(最低|顺序)"},
+        {"id": "bond_order_integer", "description": "误解：键级只能取整数", "wrong_pattern": "键级.{0,12}(只能|必须|一定|只能取).{0,10}(整数|为整数)", "correct_pattern": "0.?5|H.?2.?\\+|半个"},
+        {"id": "o2_diamagnetic", "description": "误解：O2 中所有电子都已成对、表现为抗磁性", "wrong_pattern": "O.?2.{0,18}(抗磁|逆磁|所有电子(都)?成对|全部成对)", "correct_pattern": "顺磁|未成对|π.?[∗*]"}
+      ],
+      "contrasts": [["成键轨道", "反键轨道"], ["分子轨道理论", "价键理论"], ["σ 轨道", "π 轨道"]],
+      "format_requirements": {"key_formulas": ["键级|N.?b", "Ψ|ψ", "π.?[∗*]"], "min_figures": 4, "min_tables": 4, "min_chars": 15000},
+      "learning_requirements": {"min_objectives": 4, "min_worked_examples": 3, "min_practice_questions": 8, "min_answered_questions": 8, "required_levels": ["基础", "应用", "迁移"]}
     }
   ]
 }

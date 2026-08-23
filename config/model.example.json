@@ -3,6 +3,10 @@
   "pinned": true,
   "auto": false,
   "providers": {
+    "opencode_go": {
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key": ""
+    },
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": ""
@@ -28,7 +32,10 @@
     "chat": "openrouter",
     "lesson_plan": "openrouter",
     "review": "openrouter",
-    "image": "ark"
+    "image": "ark",
+    "question_library_generator": "opencode_go",
+    "question_library_supervisor": "opencode_go",
+    "question_library_arbiter": "opencode_go"
   },
   "models": {
     "main": "openai/gpt-5-mini",
@@ -56,6 +63,9 @@
     "question_library_judge": "openai/gpt-4o-mini",
     "question_library_mcp_search": "openai/gpt-4o-mini",
     "question_library_score": "openai/gpt-4o-mini",
+    "question_library_generator": "muse-spark-1.2-contributor",
+    "question_library_supervisor": "deepseek-v4-flash",
+    "question_library_arbiter": "deepseek-v4-flash",
     "paper_analysis": "openai/gpt-4o-mini",
     "paper_compose_review": "openai/gpt-4o-mini",
     "knowledge_video": "openai/gpt-5-mini",
@@ -90,6 +100,9 @@
     "deepthink_evaluator_max_tokens": 900,
     "deepthink_reasoning_effort": "high",
     "question_library_realize_max_tokens": 0,
+    "question_library_supervisor_confidence_threshold": 0.75,
+    "question_library_muse_call_limit": 40,
+    "question_library_deepseek_call_limit": 20,
     "knowledge_video_temperature": 0.3,
     "knowledge_video_max_tokens": 8000,
     "image_size": "1024x1024",

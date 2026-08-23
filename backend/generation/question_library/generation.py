@@ -25,6 +25,13 @@ from backend.generation.question_library.draft_realization import (
     realize_drafts,
     regenerate_question_section,
 )
+from backend.generation.question_library.evolution import (
+    current_trace,
+    lineage_metadata,
+    policy_fitness,
+    policy_for_index,
+)
+from backend.generation.question_library.evolution_penalties import evaluate_evolution_penalties
 from backend.generation.question_library.gen_common import DEFAULT_SEARCH_CONFIG, _clip_unique
 from backend.generation.question_library.gen_utils import (
     CandidateAcceptedHandler,
@@ -50,6 +57,8 @@ from backend.generation.question_library.judging import (
     quick_validate_draft,
     refine_draft,
     solve_draft,
+    standardized_issue_codes,
+    supervise_draft,
 )
 from backend.generation.question_library.reference_analysis import (
     analyze_reference_questions,
@@ -113,7 +122,10 @@ async def generate_questions(
     stream_reasoning: bool = False,
     config: Optional[dict] = None,
 ) -> List[dict]:
+    trace = current_trace()
     cfg = _resolve_runtime_search_config(config, count=count)
+    if trace is not None and trace.generation_strategy == "adaptive_evolution" and trace.policies:
+        cfg.update(trace.policies[0].generation_config())
     cfg["target_difficulty"] = str(difficulty or "").strip()
 
     # Ensure source_pack contains distilled guidance for novelty/template avoidance.
@@ -174,6 +186,8 @@ async def generate_questions(
 
     beam_width = max(1, int(cfg.get("beam_width") or DEFAULT_SEARCH_CONFIG["beam_width"]))
     search_beam_width = max(beam_width, int(max(1, count or 1) * 2))
+    if trace is not None and trace.generation_strategy == "adaptive_evolution":
+        search_beam_width = max(6, min(12, search_beam_width))
 
     def _score_and_beam(items: List[dict]) -> List[dict]:
         scored = [score_spec(s, source_pack, cfg) for s in items if isinstance(s, dict)]
@@ -267,6 +281,15 @@ async def generate_questions(
     per_spec = max(1, min(int(cfg.get("drafts_per_spec") or DEFAULT_SEARCH_CONFIG["drafts_per_spec"]), 4))
     max_specs = max(1, min(int(count or 1) * 3, max(4, search_beam_width)))
     specs = specs[:max_specs]
+    if trace is not None and trace.policies:
+        specs = [
+            {
+                **dict(spec),
+                "_policy_index": index % len(trace.policies),
+                "strategy_version": policy_for_index(trace, index).version,
+            }
+            for index, spec in enumerate(specs)
+        ]
 
     await _emit_stage_event(
         on_stage_event,
@@ -290,19 +313,34 @@ async def generate_questions(
 
     raw_candidates: List[dict] = []
     realize_failures = 0
+    realize_errors: List[str] = []
     realize_sem = asyncio.Semaphore(max(1, int(cfg.get("max_concurrent_realize") or 4)))
 
     async def _realize_spec(spec: dict) -> tuple[list[dict], Optional[Exception]]:
         async with realize_sem:
             try:
+                policy = (
+                    policy_for_index(trace, int(spec.get("_policy_index") or 0))
+                    if trace is not None and trace.policies
+                    else None
+                )
                 ds = await realize_drafts(
                     spec,
                     source_pack=source_pack,
                     n=per_spec,
                     stream_reasoning=stream_reasoning,
                     on_reasoning_event=on_reasoning_event,
+                    policy=policy,
                 )
-                out = [dict(item) for item in (ds or []) if isinstance(item, dict)]
+                out: list[dict] = []
+                for item in (ds or []):
+                    if not isinstance(item, dict):
+                        continue
+                    draft = dict(item)
+                    if policy is not None:
+                        draft["strategy_version"] = policy.version
+                        draft["evolution_lineage"] = lineage_metadata(policy=policy, generation=0)
+                    out.append(draft)
                 return out, None
             except RuntimeError as exc:
                 return [], exc
@@ -319,6 +357,7 @@ async def generate_questions(
             drafts, error = result
         if error is not None:
             realize_failures += 1
+            realize_errors.append(str(error))
             logger.warning(
                 "question_library_realize_drafts_failed",
                 extra={
@@ -354,6 +393,23 @@ async def generate_questions(
         },
         sample=_summarize_candidate_sample(raw_candidates[0]) if raw_candidates else None,
     )
+    if trace is not None:
+        await _emit_stage_event(
+            on_stage_event,
+            phase="draft_evolution",
+            label="草稿种群第一代",
+            progress=56.0,
+            stats={
+                "generation": 0,
+                "draft_count": len(raw_candidates),
+                "strategy_versions": [policy.version for policy in trace.policies],
+                "model": "muse-spark-1.2-contributor",
+                "protocol": "responses",
+                "calls": trace.summary()["calls"],
+                "output_tokens": trace.summary()["output_tokens"],
+                "latency_s": trace.summary()["latency_s"],
+            },
+        )
     await _emit_callback(
         on_generation_snapshot,
         {
@@ -365,6 +421,11 @@ async def generate_questions(
     )
 
     if not raw_candidates:
+        if trace is not None and realize_failures:
+            raise RuntimeError(
+                "question_generation_provider_unavailable:"
+                + str(realize_errors[0] if realize_errors else "draft_realization_failed")[:240]
+            )
         return []
 
     # Stage: diagram generation (best-effort, subject-aware). Runs before judging so the judge
@@ -438,6 +499,7 @@ async def generate_questions(
             current = dict(cand)
             local_repairs = 0
             while True:
+                independent_solution: dict | None = None
                 packet_issues = validate_intuition_packet_structure(
                     current.get("intuition_packet"),
                     packet_size=int(source_pack["intuition_practice"]["packet_size"]),
@@ -460,15 +522,55 @@ async def generate_questions(
                     }
                 else:
                     try:
-                        validation_result = await quick_validate_draft(
-                            current,
-                            spec,
-                            source_pack=source_pack,
-                            stream_reasoning=stream_reasoning,
-                            on_reasoning_event=on_reasoning_event,
-                        )
+                        if trace is None:
+                            validation_result = await quick_validate_draft(
+                                current,
+                                spec,
+                                source_pack=source_pack,
+                                stream_reasoning=stream_reasoning,
+                                on_reasoning_event=on_reasoning_event,
+                            )
+                        else:
+                            independent_solution = await solve_draft(
+                                stem,
+                                {
+                                    "subject": str(source_pack.get("subject") or spec.get("subject") or ""),
+                                    "proposed_answer": ans,
+                                },
+                                stream_reasoning=stream_reasoning,
+                                on_reasoning_event=on_reasoning_event,
+                            )
+                            validation_result = await supervise_draft(
+                                current,
+                                spec,
+                                source_pack=source_pack,
+                                supervision_mode=trace.supervision_mode,
+                                confidence_threshold=(
+                                    policy_for_index(trace, int(spec.get("_policy_index") or 0)).confidence_threshold
+                                    if trace.policies
+                                    else 0.75
+                                ),
+                                stream_reasoning=stream_reasoning,
+                                on_reasoning_event=on_reasoning_event,
+                            )
+                            if not bool(independent_solution.get("match")):
+                                validation_result = dict(validation_result or {})
+                                validation_result["pass"] = False
+                                validation_result["answer_correct"] = False
+                                validation_result["answer_analysis_consistent"] = False
+                                validation_result["issues"] = list(
+                                    dict.fromkeys(
+                                        [
+                                            "independent_answer_mismatch",
+                                            *(validation_result.get("issues") or []),
+                                            *standardized_issue_codes(independent_solution.get("issues")),
+                                        ]
+                                    )
+                                )[:12]
                     except Exception as exc:
                         logger.warning("question_library_quick_validation_failed", exc_info=True)
+                        if trace is not None:
+                            raise RuntimeError(f"question_generation_supervision_unavailable:{str(exc)[:240]}") from exc
                         validation_result = {
                             "pass": False,
                             "scope_ok": False,
@@ -485,17 +587,13 @@ async def generate_questions(
                             "overall_score": 0,
                         }
                 judge = dict(validation_result or {})
+                solved = independent_solution if isinstance(independent_solution, dict) else {}
                 solved = {
-                    "match": bool(judge.get("answer_correct"))
-                    and bool(judge.get("answer_analysis_consistent")),
-                    "final_answer": str(current.get("answer") or "").strip(),
-                    "issues": [
-                        str(x or "").strip()
-                        for x in (judge.get("issues") or [])
-                        if str(x or "").strip()
-                        and ("answer" in str(x).lower() or "答案" in str(x))
-                    ],
-                    "match_votes": 1 if bool(judge.get("answer_correct")) else 0,
+                    "match": bool(solved.get("match"))
+                    if trace is not None
+                    else bool(judge.get("answer_correct")) and bool(judge.get("answer_analysis_consistent")),
+                    "issues": standardized_issue_codes(solved.get("issues")) if trace is not None else [],
+                    "match_votes": 1 if bool(solved.get("match")) else 0,
                     "consensus_n": 1,
                     "consistency_score": 1.0 if bool(judge.get("pass")) else 0.0,
                 }
@@ -515,8 +613,22 @@ async def generate_questions(
 
                 issues = list(judge.get("issues") or []) if isinstance(judge.get("issues"), list) else []
                 judge_pass = bool(judge.get("pass"))
-                overall = 100 if judge_pass else 0
-                penalty_total = 0
+                evolution_penalties = evaluate_evolution_penalties(
+                    draft=current,
+                    target_difficulty=(source_pack or {}).get("target_difficulty") or difficulty,
+                    assessed_difficulty=judge.get("difficulty_estimate"),
+                    difficulty_evidence=judge.get("difficulty_evidence") or [],
+                    evaluation=(source_pack or {}).get("evolution_evaluation"),
+                    supervisor_similarity=float(judge.get("solution_similarity") or 0.0),
+                    supervisor_similarity_evidence=judge.get("solution_similarity_evidence") or [],
+                    supervisor_matched_ids=judge.get("matched_fingerprint_ids") or [],
+                )
+                penalty_total = int(round(float(evolution_penalties.get("total") or 0.0) * 100))
+                overall = max(0, 100 - penalty_total) if judge_pass else 0
+                if float(evolution_penalties["difficulty"].get("penalty") or 0.0) > 0:
+                    issues.append("difficulty_mismatch")
+                if float(evolution_penalties["imitation"].get("penalty") or 0.0) > 0:
+                    issues.append("solution_imitation_excessive")
                 if not bool(solved.get("match")):
                     issues.append("answer_mismatch")
                     solver_issues = solved.get("issues")
@@ -534,7 +646,6 @@ async def generate_questions(
                 keep["judge"]["issues"] = normalized_reasons
                 keep["judge"]["penalty_total"] = penalty_total
                 keep["judge"]["solver_match"] = bool(solved.get("match"))
-                keep["judge"]["solver_final_answer"] = str(solved.get("final_answer") or "").strip()
                 keep["judge"]["solver_issues"] = list(solved.get("issues") or []) if isinstance(solved.get("issues"), list) else []
                 keep["judge"]["solver_votes"] = int(solved.get("match_votes") or 0)
                 keep["judge"]["solver_consensus_n"] = int(solved.get("consensus_n") or 0)
@@ -544,6 +655,43 @@ async def generate_questions(
                 keep["judge"]["ambiguity"] = bool(amb.get("ambiguous"))
                 keep["judge"]["ambiguity_issues"] = ambiguous_issues
                 keep["quick_validation"] = dict(judge)
+                evidence = judge.get("evidence") if isinstance(judge.get("evidence"), list) else []
+                confidence = float(judge.get("confidence") or 0.0)
+                keep["supervision_summary"] = {
+                    "passed": bool(judge_pass),
+                    "confidence": round(max(0.0, min(1.0, confidence)), 4),
+                    "issue_codes": [str(item or "").strip() for item in normalized_reasons[:10]],
+                    "evidence_count": len([item for item in evidence if isinstance(item, dict)]),
+                    "arbitrated": bool(judge.get("arbitrated")),
+                    "dimensions": list(judge.get("dimensions") or [])[:12]
+                    if isinstance(judge.get("dimensions"), list)
+                    else [],
+                    "recommended_mutation": dict(judge.get("recommended_mutation") or {})
+                    if isinstance(judge.get("recommended_mutation"), dict)
+                    else {},
+                    "model": "deepseek-v4-flash",
+                    "protocol": "chat_completions",
+                    "difficulty_estimate": str(judge.get("difficulty_estimate") or ""),
+                    "difficulty_evidence_count": len(judge.get("difficulty_evidence") or []),
+                    "evolution_penalties": evolution_penalties,
+                }
+                lineage = dict(keep.get("evolution_lineage") or {})
+                lineage["fitness"] = policy_fitness(
+                    passed=judge_pass,
+                    confidence=confidence,
+                    evidence_count=int(keep["supervision_summary"]["evidence_count"]),
+                    usage={},
+                    latency_s=0.0,
+                    arbitrated=bool(judge.get("arbitrated")),
+                    difficulty_penalty=float(evolution_penalties["difficulty"].get("penalty") or 0.0),
+                    imitation_penalty=float(evolution_penalties["imitation"].get("penalty") or 0.0),
+                )
+                keep["evolution_lineage"] = lineage
+                if trace is not None:
+                    trace.record_fitness(
+                        strategy_version=str(keep.get("strategy_version") or ""),
+                        fitness=float(lineage.get("fitness") or 0.0),
+                    )
                 keep["intuition_packet"] = attach_quick_validation(
                     current.get("intuition_packet") if isinstance(current.get("intuition_packet"), dict) else {},
                     judge,
@@ -574,8 +722,40 @@ async def generate_questions(
                     "highlights": [],
                     "issues": normalized_reasons,
                     "summary": str(judge.get("summary") or "").strip(),
-                    "model": "quick-validation",
+                    "model": "opencode-go/deepseek-v4-flash",
                 }
+
+                await _emit_stage_event(
+                    on_stage_event,
+                    phase="ai_supervision",
+                    label="AI 分层监督",
+                    progress=80.0,
+                    stats={
+                        "strategy_version": str(keep.get("strategy_version") or ""),
+                        "confidence": confidence,
+                        "evidence_count": int(keep["supervision_summary"]["evidence_count"]),
+                        "arbitrated": bool(judge.get("arbitrated")),
+                        "model": "deepseek-v4-flash",
+                        "protocol": "chat_completions",
+                        "issue_codes": normalized_reasons[:10],
+                        "fitness": float(lineage.get("fitness") or 0.0),
+                        "difficulty_penalty": float(
+                            evolution_penalties["difficulty"].get("penalty") or 0.0
+                        ),
+                        "imitation_similarity": float(
+                            evolution_penalties["imitation"].get("similarity") or 0.0
+                        ),
+                        "imitation_penalty": float(
+                            evolution_penalties["imitation"].get("penalty") or 0.0
+                        ),
+                        "penalty_total": penalty_total,
+                        "calls": trace.summary()["calls"] if trace is not None else 0,
+                        "input_tokens": trace.summary()["input_tokens"] if trace is not None else 0,
+                        "output_tokens": trace.summary()["output_tokens"] if trace is not None else 0,
+                        "latency_s": trace.summary()["latency_s"] if trace is not None else 0.0,
+                        "arbitration_count": trace.summary()["arbitration_count"] if trace is not None else 0,
+                    },
+                )
 
                 passable = judge_pass
 
@@ -606,14 +786,44 @@ async def generate_questions(
                         },
                     }
 
+                parent_id = str(current.get("question_id") or current.get("spec_id") or "").strip()
                 current = await refine_draft(
                     current,
-                    judge,
+                    {
+                        "issues": standardized_issue_codes(normalized_reasons),
+                        "recommended_mutation": dict(judge.get("recommended_mutation") or {})
+                        if isinstance(judge.get("recommended_mutation"), dict)
+                        else {},
+                    },
                     spec=spec,
                     source_pack=source_pack,
                     stream_reasoning=stream_reasoning,
                     on_reasoning_event=on_reasoning_event,
                 )
+                if trace is not None and trace.policies:
+                    policy = policy_for_index(trace, int(spec.get("_policy_index") or 0))
+                    current["strategy_version"] = policy.version
+                    current["evolution_lineage"] = lineage_metadata(
+                        policy=policy,
+                        generation=1,
+                        parent_id=parent_id,
+                    )
+                    await _emit_stage_event(
+                        on_stage_event,
+                        phase="draft_evolution",
+                        label="草稿定向变异",
+                        progress=79.0,
+                        stats={
+                            "generation": 1,
+                            "strategy_version": policy.version,
+                            "standardized_issue_codes": normalized_reasons[:10],
+                            "model": "muse-spark-1.2-contributor",
+                            "protocol": "responses",
+                            "calls": trace.summary()["calls"],
+                            "output_tokens": trace.summary()["output_tokens"],
+                            "latency_s": trace.summary()["latency_s"],
+                        },
+                    )
                 local_repairs += 1
                 attempt += 1
 

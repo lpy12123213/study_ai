@@ -7,6 +7,11 @@ from typing import Any
 
 from backend.core.settings import LESSON_PLAN_MODEL, model_name
 from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
+from backend.generation.question_library.evolution import ARBITER_ROLE
+from backend.generation.question_library.evolution_penalties import (
+    normalize_difficulty,
+    normalize_evolution_evaluation,
+)
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
 from backend.generation.question_library.intuition_practice import (
@@ -16,6 +21,18 @@ from backend.generation.question_library.intuition_practice import (
 from backend.generation.question_library.subject_knowledge import get_subject_bank, infer_subject_family
 from backend.llm.client import is_llm_configured
 from backend.llm.prompts import create_default_prompt_registry
+
+_ISSUE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,79}$")
+
+
+def standardized_issue_codes(value: Any) -> list[str]:
+    raw_items = value if isinstance(value, list) else []
+    out: list[str] = []
+    for item in raw_items:
+        code = str(item or "").strip().lower()
+        if _ISSUE_CODE_RE.fullmatch(code) and code not in out:
+            out.append(code)
+    return out[:12]
 
 
 def _prompt(prompt_id: str) -> str:
@@ -146,6 +163,42 @@ def _evidence_is_grounded(evidence: Any, source: str) -> bool:
         if all_grounded:
             return True
     return False
+
+
+def _normalize_evolution_assessment(obj: dict, *, source_text: str, source_pack: dict | None) -> dict:
+    contract = normalize_evolution_evaluation((source_pack or {}).get("evolution_evaluation"))
+    valid_ids = {str(item.get("id") or "") for item in contract["solution_fingerprint"]}
+    difficulty_evidence = [
+        excerpt
+        for excerpt in _evidence_values(obj.get("difficulty_evidence"))
+        if _evidence_is_grounded(excerpt, source_text)
+    ][:6]
+    similarity_evidence = [
+        excerpt
+        for excerpt in _evidence_values(obj.get("solution_similarity_evidence"))
+        if _evidence_is_grounded(excerpt, source_text)
+    ][:8]
+    matched_ids = list(
+        dict.fromkeys(
+            str(item or "").strip()
+            for item in (obj.get("matched_fingerprint_ids") or [])
+            if str(item or "").strip() in valid_ids
+        )
+    )[:12]
+    try:
+        similarity = max(0.0, min(1.0, float(obj.get("solution_similarity") or 0.0)))
+    except (TypeError, ValueError):
+        similarity = 0.0
+    # An unsupported similarity label must never enter fitness.
+    if not similarity_evidence or not matched_ids:
+        similarity = 0.0
+    return {
+        "difficulty_estimate": normalize_difficulty(obj.get("difficulty_estimate")),
+        "difficulty_evidence": difficulty_evidence,
+        "solution_similarity": round(similarity, 4),
+        "solution_similarity_evidence": similarity_evidence,
+        "matched_fingerprint_ids": matched_ids,
+    }
 
 
 def _label_matches(expected: str, actual: str) -> bool:
@@ -862,10 +915,9 @@ async def solve_draft(
     payload = {
         "subject": subject,
         "stem": str(stem or "").strip(),
-        "task": "First solve the problem completely and independently, including detailed derivation and the final answer. After solving, compare your result with the reference answer below and judge whether the reference answer is correct.",
+        "task": "Solve independently in private, then compare the conclusion with the reference answer. Do not output the private derivation.",
         "proposed_answer": proposed_answer,
         "output_schema": {
-            "solving_steps": "string (your complete solving process, including key derivation steps)",
             "final_answer": "string (the final answer you independently derived, in LaTeX)",
             "match": "bool (whether your answer is conclusion-equivalent to the reference answer)",
             "issues": "string[] (errors or inconsistencies in the reference answer; empty array if none)",
@@ -881,7 +933,7 @@ async def solve_draft(
                     + "\n\n"
                     f"<role>{str(bank.system_role or '').strip() or 'You are a rigorous problem-solving expert'}. Solve independently and do not be influenced by the reference answer.</role>\n"
                     "<task>\n"
-                    "  <phase id='1'>Completely ignore the reference answer. Solve independently and write key derivation steps and the final answer.</phase>\n"
+                    "  <phase id='1'>Completely ignore the reference answer and solve independently in private.</phase>\n"
                     "  <phase id='2'>Compare your answer with the reference answer and judge whether the conclusions are equivalent.</phase>\n"
                     "</task>\n"
                     f"<subject_family>{family}</subject_family>\n"
@@ -895,7 +947,7 @@ async def solve_draft(
                     "  If conclusions are equivalent, such as x=2 and \\(x=2\\), set match=true.\n"
                     "  If inconsistent, first check whether your own solution is wrong before making the final judgment.\n"
                     "</match_criteria>\n"
-                    "<output_format>Output a strict JSON object only. Do not output Markdown or extra explanation.</output_format>"
+                    "<output_format>Output a strict JSON object containing only final_answer, match, issues, and a brief summary. Never output hidden reasoning.</output_format>"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -1010,6 +1062,14 @@ async def quick_validate_draft(
             "request_aligned": False,
             "issues": ["llm_not_configured"],
             "summary": "",
+            "overall_score": 0,
+            "confidence": 0.0,
+            "dimensions": [],
+            "evidence": [],
+            "recommended_mutation": {},
+            "deterministic_conflict": False,
+            "deterministic_failures": ["llm_not_configured"],
+            "deterministic_flags": {},
         }
 
     subject = str((spec or {}).get("subject") or (source_pack or {}).get("subject") or "").strip()
@@ -1041,6 +1101,16 @@ async def quick_validate_draft(
             "issues": ["request_contract_mismatch", "practice_goal_mismatch"],
             "summary": "候选练习包改写了请求中的训练目标。",
             "overall_score": 0,
+            "confidence": 1.0,
+            "dimensions": [],
+            "evidence": [],
+            "recommended_mutation": {
+                "target": "demand",
+                "action": "恢复请求指定的训练目标，并重建与该目标一致的题干和练习包。",
+            },
+            "deterministic_conflict": False,
+            "deterministic_failures": ["request_contract_mismatch", "practice_goal_mismatch"],
+            "deterministic_flags": {"request_aligned": False},
         }
     requested_knowledge_points = [
         str(item or "").strip()
@@ -1064,6 +1134,12 @@ async def quick_validate_draft(
             "requested_knowledge_points": requested_knowledge_points,
             "requested_practice_goal": request_config["practice_goal"],
             "requested_intuition_kinds": request_config["intuition_kinds"],
+            "target_difficulty": str(
+                (source_pack or {}).get("target_difficulty") or (spec or {}).get("difficulty") or ""
+            ).strip(),
+            "anti_imitation": normalize_evolution_evaluation(
+                (source_pack or {}).get("evolution_evaluation")
+            ),
         },
         "question": {
             "stem": str((draft or {}).get("stem") or "").strip()[:2400],
@@ -1117,6 +1193,24 @@ async def quick_validate_draft(
                 },
             },
             "issues": "string[] (short, actionable issue codes or descriptions)",
+            "issue_codes": "string[] (stable snake_case codes)",
+            "dimensions": [
+                {
+                    "name": "string",
+                    "score": "number 0-10",
+                    "evidence": "string[] (exact contiguous excerpts from stem/answer/analysis)",
+                }
+            ],
+            "confidence": "number 0-1",
+            "difficulty_estimate": "string (基础|中等|困难|压轴)",
+            "difficulty_evidence": "string[] (exact candidate excerpts supporting the estimate)",
+            "solution_similarity": "number 0-1 (similarity to the abstract ordered solution fingerprint)",
+            "matched_fingerprint_ids": "string[] (only ids from request_contract.anti_imitation)",
+            "solution_similarity_evidence": "string[] (exact candidate excerpts proving the matches)",
+            "recommended_mutation": {
+                "target": "string (condition|representation|boundary|invariant|demand|transfer)",
+                "action": "string (short mutation instruction, no hidden reasoning)",
+            },
             "summary": "string",
             "pass": "bool (true only when all nine checks above pass)",
         },
@@ -1151,7 +1245,8 @@ async def quick_validate_draft(
                     "  <solution_appreciation>Require a non-mechanical core even before aesthetic commentary. Return at least two route fingerprints, each with representation, organizing_object, decisive_move, and grounded excerpts. The fingerprints must be genuinely different, and the comparison must cite a concrete criterion such as invariant visibility, economy, boundary clarity, unification, or transferability. The mother stem should require multiple routes without naming them in advance; therefore each route may use the same grounded stem_evidence excerpt for that shared requirement, while route-specific differences must be grounded separately in analysis_evidence.</solution_appreciation>\n"
                     "  <other_goals>fluency requires independent cue or representation selection; structural_intuition requires a hidden decisive structure; intuition_correction requires a plausible initial misjudgment plus discriminating evidence; transfer requires the same decisive structure under a changed relation, constraint, boundary, or representation.</other_goals>\n"
                     "</request_alignment>\n"
-                    "<not_required>Do not score novelty, competition difficulty, discrimination, elegance, or psychometrics.</not_required>\n"
+                    "<evolution_assessment>Difficulty and solution-fingerprint similarity are soft evolution signals, not hard gates. Estimate the requested difficulty band from the actual independent decisions and proof load. Compare only against the supplied abstract fingerprint; high similarity requires the same distinctive ordered moves, not generic overlap such as using contradiction. Every assessment must cite exact candidate excerpts.</evolution_assessment>\n"
+                    "<not_required>Do not score elegance or claim psychometric precision.</not_required>\n"
                     "<ambiguity>Case discussion and open reflection are not ambiguity when the allowed response space and reference criteria are clear.</ambiguity>\n"
                     "<pass_rule>pass=true only if scope_ok, answer_correct, answer_analysis_consistent, conditions_sufficient, unambiguous, transfer_valid, intuition_aligned, structural_depth, and request_aligned are all true.</pass_rule>\n"
                     "<output_format>Output one strict JSON object only.</output_format>"
@@ -1192,6 +1287,7 @@ async def quick_validate_draft(
         "structural_depth": _required_flag("structural_depth"),
         "request_aligned": _required_flag("request_aligned"),
     }
+    ai_flags = dict(flags)
     mother_depth_ok, mother_depth_issues = _mother_question_structural_depth(draft, spec)
     # Fail closed: semantic review may reject more cases, but it cannot override a
     # deterministic high-confidence routine-mother-question veto.
@@ -1203,7 +1299,11 @@ async def quick_validate_draft(
         obj,
     )
     flags["request_aligned"] = flags["request_aligned"] and request_contract_ok
-    issues = [str(item or "").strip() for item in (obj.get("issues") or []) if str(item or "").strip()]
+    issues = [
+        str(item or "").strip()
+        for item in [*(obj.get("issue_codes") or []), *(obj.get("issues") or [])]
+        if str(item or "").strip()
+    ]
     issue_by_flag = {
         "scope_ok": "out_of_scope",
         "answer_correct": "answer_incorrect",
@@ -1220,13 +1320,271 @@ async def quick_validate_draft(
         dict.fromkeys([*required_issues, *mother_depth_issues, *request_contract_issues, *issues])
     )
     passed = all(flags.values())
+    try:
+        confidence = max(0.0, min(1.0, float(obj.get("confidence", 1.0))))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    source_text = "\n".join(
+        [
+            str((draft or {}).get("stem") or ""),
+            str((draft or {}).get("answer") or ""),
+            str((draft or {}).get("analysis") or ""),
+        ]
+    )
+    dimensions: list[dict] = []
+    evidence: list[dict] = []
+    for raw_dimension in obj.get("dimensions") or []:
+        if not isinstance(raw_dimension, dict):
+            continue
+        name = str(raw_dimension.get("name") or "").strip()
+        grounded = [
+            excerpt
+            for excerpt in _evidence_values(raw_dimension.get("evidence"))
+            if _evidence_is_grounded(excerpt, source_text)
+        ]
+        dimension = {
+            "name": name,
+            "score": max(0, min(10, _coerce_int(raw_dimension.get("score"), 0))),
+            "evidence": grounded[:4],
+        }
+        dimensions.append(dimension)
+        evidence.extend({"dimension": name, "excerpt": excerpt} for excerpt in grounded[:4])
+    mutation_raw = obj.get("recommended_mutation") if isinstance(obj.get("recommended_mutation"), dict) else {}
+    evolution_assessment = _normalize_evolution_assessment(
+        obj,
+        source_text=source_text,
+        source_pack=source_pack,
+    )
+    deterministic_conflict = any(ai_flags.get(name) and not flags.get(name) for name in flags)
     return {
         "pass": passed,
         **flags,
         "issues": issues[:12],
         "summary": str(obj.get("summary") or "").strip(),
         "overall_score": 100 if passed else 0,
+        "confidence": confidence,
+        "dimensions": dimensions[:12],
+        "evidence": evidence[:24],
+        "recommended_mutation": {
+            "target": str(mutation_raw.get("target") or "").strip()[:80],
+            "action": str(mutation_raw.get("action") or "").strip()[:300],
+        },
+        **evolution_assessment,
+        "deterministic_conflict": deterministic_conflict,
+        "deterministic_failures": list(dict.fromkeys([*mother_depth_issues, *request_contract_issues]))[:12],
+        "deterministic_flags": {
+            "structural_depth": bool(mother_depth_ok),
+            "request_aligned": bool(request_contract_ok),
+        },
     }
+
+
+_SUPERVISION_FLAGS = (
+    "scope_ok",
+    "answer_correct",
+    "answer_analysis_consistent",
+    "conditions_sufficient",
+    "unambiguous",
+    "transfer_valid",
+    "intuition_aligned",
+    "structural_depth",
+    "request_aligned",
+)
+
+
+async def _arbitrate_draft(
+    draft: dict,
+    spec: dict,
+    *,
+    source_pack: dict | None,
+    stream_reasoning: bool,
+    on_reasoning_event: ReasoningEventHandler,
+) -> dict:
+    payload = {
+        "request_contract": {
+            "subject": str((spec or {}).get("subject") or (source_pack or {}).get("subject") or "").strip(),
+            "topic": str(
+                (source_pack or {}).get("requested_topic")
+                or (source_pack or {}).get("topic")
+                or (spec or {}).get("topic")
+                or ""
+            ).strip(),
+            "knowledge_points": [
+                str(item or "").strip()
+                for item in ((source_pack or {}).get("knowledge_points") or [])
+                if str(item or "").strip()
+            ],
+            "target_difficulty": str(
+                (source_pack or {}).get("target_difficulty") or (spec or {}).get("difficulty") or ""
+            ).strip(),
+            "anti_imitation": normalize_evolution_evaluation(
+                (source_pack or {}).get("evolution_evaluation")
+            ),
+        },
+        "question": {
+            "stem": str((draft or {}).get("stem") or "").strip()[:2400],
+            "answer": str((draft or {}).get("answer") or "").strip()[:2000],
+            "analysis": str((draft or {}).get("analysis") or "").strip()[:3200],
+            "intuition_packet": (draft or {}).get("intuition_packet")
+            if isinstance((draft or {}).get("intuition_packet"), dict)
+            else {},
+        },
+        "output_schema": {
+            **{name: "bool" for name in _SUPERVISION_FLAGS},
+            "confidence": "number 0-1",
+            "dimensions": [{"name": "string", "score": "number 0-10", "evidence": "string[] exact excerpts"}],
+            "issue_codes": "string[]",
+            "difficulty_estimate": "string (基础|中等|困难|压轴)",
+            "difficulty_evidence": "string[] exact candidate excerpts",
+            "solution_similarity": "number 0-1",
+            "matched_fingerprint_ids": "string[] from request_contract.anti_imitation",
+            "solution_similarity_evidence": "string[] exact candidate excerpts",
+            "recommended_mutation": {"target": "string", "action": "string"},
+        },
+    }
+    text = await _chat_json_with_reasoning(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "<role>You are an isolated high-school mathematics quality arbiter.</role>\n"
+                    "<isolation>You have not seen any prior supervisor verdict. Solve and check the candidate independently.</isolation>\n"
+                    "<hard_gates>Check correctness, sufficient conditions, ambiguity, curriculum scope, real structural depth, request alignment, and non-cosmetic transfer. No score may override a failed hard gate.</hard_gates>\n"
+                    "<evolution_assessment>Independently estimate the difficulty band and compare the candidate solution with the supplied abstract fingerprint. Treat these as soft ranking signals and ground them in exact candidate excerpts.</evolution_assessment>\n"
+                    "<evidence>For each dimension, cite exact contiguous excerpts from the supplied stem, answer, or analysis. Unsupported labels must be omitted.</evidence>\n"
+                    "<output_format>Output one strict JSON object only. Do not expose hidden chain-of-thought.</output_format>"
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        model="deepseek-v4-flash",
+        temperature=0.05,
+        max_tokens=0,
+        req_id_prefix="ql_arbiter",
+        retries=2,
+        raise_on_fail=False,
+        stage_id="arbiter",
+        stage_label="独立仲裁",
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
+        role=ARBITER_ROLE,
+    )
+    obj = _extract_json_obj(text)
+    flags = {name: obj.get(name) is True for name in _SUPERVISION_FLAGS}
+    source_text = "\n".join(
+        [
+            str((draft or {}).get("stem") or ""),
+            str((draft or {}).get("answer") or ""),
+            str((draft or {}).get("analysis") or ""),
+        ]
+    )
+    dimensions: list[dict] = []
+    evidence: list[dict] = []
+    for raw_dimension in obj.get("dimensions") or []:
+        if not isinstance(raw_dimension, dict):
+            continue
+        name = str(raw_dimension.get("name") or "").strip()
+        grounded = [
+            excerpt
+            for excerpt in _evidence_values(raw_dimension.get("evidence"))
+            if _evidence_is_grounded(excerpt, source_text)
+        ]
+        dimensions.append(
+            {
+                "name": name,
+                "score": max(0, min(10, _coerce_int(raw_dimension.get("score"), 0))),
+                "evidence": grounded[:4],
+            }
+        )
+        evidence.extend({"dimension": name, "excerpt": excerpt} for excerpt in grounded[:4])
+    try:
+        confidence = max(0.0, min(1.0, float(obj.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    issue_codes = [str(item or "").strip() for item in (obj.get("issue_codes") or []) if str(item or "").strip()]
+    required_issues = [f"arbiter_{name}_failed" for name, passed in flags.items() if not passed]
+    mutation = obj.get("recommended_mutation") if isinstance(obj.get("recommended_mutation"), dict) else {}
+    evolution_assessment = _normalize_evolution_assessment(
+        obj,
+        source_text=source_text,
+        source_pack=source_pack,
+    )
+    return {
+        **flags,
+        "pass": all(flags.values()),
+        "confidence": confidence,
+        "dimensions": dimensions[:12],
+        "evidence": evidence[:24],
+        "issues": list(dict.fromkeys([*required_issues, *issue_codes]))[:12],
+        "recommended_mutation": {
+            "target": str(mutation.get("target") or "").strip()[:80],
+            "action": str(mutation.get("action") or "").strip()[:300],
+        },
+        **evolution_assessment,
+    }
+
+
+async def supervise_draft(
+    draft: dict,
+    spec: dict,
+    *,
+    source_pack: dict | None = None,
+    supervision_mode: str = "tiered_consensus",
+    confidence_threshold: float = 0.75,
+    stream_reasoning: bool = False,
+    on_reasoning_event: ReasoningEventHandler = None,
+) -> dict:
+    primary = await quick_validate_draft(
+        draft,
+        spec,
+        source_pack=source_pack,
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
+    )
+    primary = dict(primary or {})
+    primary["arbitrated"] = False
+    if str(supervision_mode or "").strip() != "tiered_consensus":
+        return primary
+
+    try:
+        confidence = max(0.0, min(1.0, float(primary.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    dimension_scores = [
+        _coerce_int(item.get("score"), 0)
+        for item in (primary.get("dimensions") or [])
+        if isinstance(item, dict)
+    ]
+    mean_dimension = sum(dimension_scores) / len(dimension_scores) if dimension_scores else 10.0
+    near_boundary = 4.5 <= mean_dimension <= 7.0
+    needs_arbiter = (
+        confidence < max(0.7, min(0.9, float(confidence_threshold or 0.75)))
+        or bool(primary.get("deterministic_conflict"))
+        or near_boundary
+    )
+    if not needs_arbiter:
+        return primary
+
+    arbiter = await _arbitrate_draft(
+        draft,
+        spec,
+        source_pack=source_pack,
+        stream_reasoning=stream_reasoning,
+        on_reasoning_event=on_reasoning_event,
+    )
+    deterministic_flags = primary.get("deterministic_flags") if isinstance(primary.get("deterministic_flags"), dict) else {}
+    for name, passed in deterministic_flags.items():
+        if name in _SUPERVISION_FLAGS and not bool(passed):
+            arbiter[name] = False
+    arbiter["pass"] = all(bool(arbiter.get(name)) for name in _SUPERVISION_FLAGS)
+    arbiter["overall_score"] = 100 if arbiter["pass"] else 0
+    arbiter["arbitrated"] = True
+    arbiter["deterministic_flags"] = dict(deterministic_flags)
+    arbiter["deterministic_failures"] = list(primary.get("deterministic_failures") or [])
+    arbiter["issues"] = list(
+        dict.fromkeys([*(primary.get("deterministic_failures") or []), *(arbiter.get("issues") or [])])
+    )[:12]
+    return arbiter
 
 
 async def judge_draft(
@@ -1380,7 +1738,9 @@ async def refine_draft(
     if not is_llm_configured():
         return dict(draft or {})
 
-    issues = judge.get("issues") if isinstance(judge, dict) else []
+    issues = standardized_issue_codes(judge.get("issues") if isinstance(judge, dict) else [])
+    mutation = judge.get("recommended_mutation") if isinstance(judge, dict) else {}
+    mutation = mutation if isinstance(mutation, dict) else {}
     sp = source_pack if isinstance(source_pack, dict) else {}
     spec_data = spec if isinstance(spec, dict) else {}
     existing_packet = (
@@ -1414,7 +1774,11 @@ async def refine_draft(
             if isinstance((draft or {}).get("intuition_packet"), dict)
             else {},
         },
-        "issues": list(issues or []) if isinstance(issues, list) else [],
+        "issues": issues,
+        "modification_target": {
+            "target": str(mutation.get("target") or "").strip()[:80],
+            "action": str(mutation.get("action") or "").strip()[:300],
+        },
         "output_schema": {
             "stem": "string",
             "answer": "string",
@@ -1466,12 +1830,15 @@ async def refine_draft(
         on_reasoning_event=on_reasoning_event,
     )
     obj = _extract_json_obj(text)
+    repaired_question = obj.get("fixed_question") if isinstance(obj.get("fixed_question"), dict) else obj
     out = dict(draft or {})
-    out["stem"] = str(obj.get("stem") or out.get("stem") or "").strip()
-    out["answer"] = str(obj.get("answer") or out.get("answer") or "").strip()
-    out["analysis"] = str(obj.get("analysis") or out.get("analysis") or "").strip()
+    out["stem"] = str(repaired_question.get("stem") or out.get("stem") or "").strip()
+    out["answer"] = str(repaired_question.get("answer") or out.get("answer") or "").strip()
+    out["analysis"] = str(repaired_question.get("analysis") or out.get("analysis") or "").strip()
     out["intuition_packet"] = normalize_intuition_packet(
-        obj.get("intuition_packet") if isinstance(obj.get("intuition_packet"), dict) else existing_packet,
+        repaired_question.get("intuition_packet")
+        if isinstance(repaired_question.get("intuition_packet"), dict)
+        else existing_packet,
         practice_config=requested_config,
         atom=existing_packet.get("atom") if isinstance(existing_packet.get("atom"), dict) else {},
         subject=str(sp.get("subject") or spec_data.get("subject") or "").strip(),

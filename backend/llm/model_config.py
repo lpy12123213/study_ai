@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from backend.core.encryption import decrypt_string
 
 DEFAULT_PROVIDER_BASE_URLS: Dict[str, str] = {
+    "opencode_go": "https://opencode.ai/zen/go/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "moonshot": "https://api.moonshot.cn/v1",
     "fireworks": "https://api.fireworks.ai/inference/v1",

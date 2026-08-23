@@ -1,4 +1,8 @@
+import json
+import os
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Optional
 from unittest.mock import AsyncMock, patch
 
@@ -82,6 +86,50 @@ class TestQuestionLibraryCrawl(unittest.IsolatedAsyncioTestCase):
         client = TestClient(app)
         resp = client.get("/api/question-library/tasks/test-task/stream")
         self.assertNotEqual(resp.status_code, 404)
+
+    async def test_crawl_task_upserts_questions_in_batches(self) -> None:
+        from backend.generation.question_library import runner as ql_runner
+
+        questions = [
+            {
+                "question_id": f"q-{i}",
+                "stem": f"这是第 {i} 道用于验证批量入库的完整题干，长度足以通过过滤。",
+                "answer": "",
+                "analysis": "",
+                "difficulty": "",
+                "question_type": "",
+                "source": "",
+                "date": "",
+            }
+            for i in range(1, 61)
+        ]
+
+        class SuccessCrawler:
+            async def search_by_keyword(self, **kwargs: Any) -> dict:
+                return {"success": True, "questions": [dict(q) for q in questions], "count": len(questions)}
+
+        fake_runtime = _InlineTaskRuntime()
+        with (
+            patch.object(ql_runner, "task_runtime", fake_runtime),
+            patch.object(ql_runner, "get_crawler", new=AsyncMock(return_value=SuccessCrawler())),
+            patch.object(ql_runner, "upsert_question_cache", new=AsyncMock(return_value=None)) as cache_mock,
+            patch.object(ql_runner, "upsert_question_library_items", new=AsyncMock(return_value=None)) as library_mock,
+        ):
+            task = await ql_runner.create_crawl_task(
+                user_id="u-1",
+                request={"task_id": "ql-crawl-batch", "subject": "高中数学", "query": "函数", "limit": 60},
+            )
+
+        self.assertEqual(task.status, "completed")
+        # 60 题按 25 一块批量写库：3 次、每次载荷不超过 25。
+        self.assertEqual(cache_mock.await_count, 3)
+        batch_sizes = [len(call.args[0]) for call in cache_mock.await_args_list]
+        self.assertEqual(batch_sizes, [25, 25, 10])
+        self.assertEqual(library_mock.await_count, 3)
+        item_saved = [event for event in fake_runtime.events if event.get("type") == "item_saved"]
+        self.assertEqual(len(item_saved), 60)
+        done_events = [event for event in fake_runtime.events if event.get("type") == "done"]
+        self.assertEqual(done_events[-1]["data"]["inserted"], 60)
 
     async def test_gaokao_crawl_only_persists_source_matched_questions(self) -> None:
         from backend.generation.question_library import runner as ql_runner
@@ -254,3 +302,212 @@ class TestQuestionLibraryCrawl(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error_payload["cookie_file"]["variable"], "ZUJUAN_COOKIE_FILE")
         self.assertIn("missing", error_payload["message"])
         self.assertIn("仓库根目录", " ".join(error_payload["instructions"]))
+
+
+    async def test_crawl_task_runs_multi_query_plan_with_cross_query_dedup(self) -> None:
+        from backend.generation.question_library import runner as ql_runner
+
+        class MultiQueryCrawler:
+            def __init__(self) -> None:
+                self.keywords: list[str] = []
+
+            async def search_by_keyword(self, **kwargs: Any) -> dict:
+                keyword = str(kwargs.get("keyword") or "")
+                self.keywords.append(keyword)
+                # 两个查询都返回重叠的 q-shared + 各自独占题，验证跨查询去重。
+                questions = [
+                    {
+                        "question_id": "q-shared",
+                        "stem": "两个查询都会返回的共享题干，应只入库一次。",
+                        "answer": "",
+                        "analysis": "",
+                        "difficulty": "",
+                        "question_type": "",
+                        "source": "",
+                        "date": "",
+                    },
+                    {
+                        "question_id": f"q-{keyword}",
+                        "stem": f"关键词 {keyword} 的独占题干。",
+                        "answer": "",
+                        "analysis": "",
+                        "difficulty": "",
+                        "question_type": "",
+                        "source": "",
+                        "date": "",
+                    },
+                ]
+                return {"success": True, "questions": questions, "count": len(questions)}
+
+        crawler = MultiQueryCrawler()
+        fake_runtime = _InlineTaskRuntime()
+        with (
+            patch.object(ql_runner, "task_runtime", fake_runtime),
+            patch.object(ql_runner, "get_crawler", new=AsyncMock(return_value=crawler)),
+            patch.object(ql_runner, "upsert_question_cache", new=AsyncMock(return_value=None)) as cache_mock,
+            patch.object(ql_runner, "upsert_question_library_items", new=AsyncMock(return_value=None)),
+        ):
+            task = await ql_runner.create_crawl_task(
+                user_id="u-1",
+                request={
+                    "task_id": "ql-crawl-multi",
+                    "subject": "高中物理",
+                    "queries": ["牛顿运动定律", "电磁感应"],
+                    "limit": 30,
+                },
+            )
+
+        self.assertEqual(task.status, "completed")
+        self.assertEqual(crawler.keywords, ["牛顿运动定律", "电磁感应"])
+        # 去重后 3 题（q-shared 只算一次）。
+        all_saved = [item["question_id"] for call in cache_mock.await_args_list for item in call.args[0]]
+        self.assertEqual(sorted(all_saved), ["q-shared", "q-牛顿运动定律", "q-电磁感应"])
+        done_events = [event for event in fake_runtime.events if event.get("type") == "done"]
+        self.assertEqual(done_events[-1]["data"]["inserted"], 3)
+
+    async def test_crawl_task_fails_only_when_every_query_fails(self) -> None:
+        from backend.generation.question_library import runner as ql_runner
+
+        class FlakyCrawler:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def search_by_keyword(self, **kwargs: Any) -> dict:
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "success": False,
+                        "error": "js_challenge",
+                        "instructions": ["设置 ZUJUAN_COOKIE_FILE 后重试。"],
+                        "trace": {"pages": [{"error": "js_challenge", "status": 200}]},
+                    }
+                return {
+                    "success": True,
+                    "questions": [
+                        {
+                            "question_id": "q-ok",
+                            "stem": "第二个查询成功的完整题干。",
+                            "answer": "",
+                            "analysis": "",
+                            "difficulty": "",
+                            "question_type": "",
+                            "source": "",
+                            "date": "",
+                        }
+                    ],
+                    "count": 1,
+                }
+
+        fake_runtime = _InlineTaskRuntime()
+        with (
+            patch.object(ql_runner, "task_runtime", fake_runtime),
+            patch.object(ql_runner, "get_crawler", new=AsyncMock(return_value=FlakyCrawler())),
+            patch.object(ql_runner, "upsert_question_cache", new=AsyncMock(return_value=None)),
+            patch.object(ql_runner, "upsert_question_library_items", new=AsyncMock(return_value=None)),
+        ):
+            task = await ql_runner.create_crawl_task(
+                user_id="u-1",
+                request={
+                    "task_id": "ql-crawl-partial",
+                    "subject": "高中物理",
+                    "queries": ["坏查询", "好查询"],
+                    "limit": 10,
+                },
+            )
+
+        # 第一个查询失败不终止批量：第二个查询入库，任务整体成功。
+        self.assertEqual(task.status, "completed")
+        done_events = [event for event in fake_runtime.events if event.get("type") == "done"]
+        self.assertEqual(done_events[-1]["data"]["inserted"], 1)
+
+    async def test_crawl_task_accepts_domain_plan(self) -> None:
+        from backend.generation.question_library import runner as ql_runner
+
+        class CountingCrawler:
+            def __init__(self) -> None:
+                self.keywords: list[str] = []
+
+            async def search_by_keyword(self, **kwargs: Any) -> dict:
+                self.keywords.append(str(kwargs.get("keyword") or ""))
+                return {"success": True, "questions": [], "count": 0}
+
+        crawler = CountingCrawler()
+        fake_runtime = _InlineTaskRuntime()
+        with (
+            patch.object(ql_runner, "task_runtime", fake_runtime),
+            patch.object(ql_runner, "get_crawler", new=AsyncMock(return_value=crawler)),
+            patch.object(ql_runner, "upsert_question_cache", new=AsyncMock(return_value=None)),
+            patch.object(ql_runner, "upsert_question_library_items", new=AsyncMock(return_value=None)),
+        ):
+            task = await ql_runner.create_crawl_task(
+                user_id="u-1",
+                request={
+                    "task_id": "ql-crawl-domains",
+                    "subject": "高中物理",
+                    "domains": ["mechanics"],
+                    "limit": 5,
+                },
+            )
+
+        self.assertEqual(task.status, "completed")
+        # mechanics 域展开为力学默认关键词表（20 个）。
+        self.assertEqual(len(crawler.keywords), 20)
+        self.assertIn("牛顿运动定律", crawler.keywords)
+
+
+class TestCrawlImportRunImport(unittest.IsolatedAsyncioTestCase):
+    async def test_run_import_continues_when_single_query_raises(self) -> None:
+        from backend.cli import question_library_crawl as qlc
+        from backend.cli.question_library_crawl import CrawlImportConfig
+
+        async def fake_crawl_query(
+            crawler: Any, config: Any, *, plan_item: Any, seen_ids: set[str]
+        ) -> list[dict]:
+            if plan_item.query == "bad-query":
+                raise RuntimeError("simulated network failure")
+            seen_ids.add("q-ok-1")
+            return [
+                {
+                    "question_id": "q-ok-1",
+                    "stem": "用于验证单查询异常不终止导入的完整题干。",
+                    "answer": "",
+                    "analysis": "",
+                    "difficulty": "",
+                    "question_type": "",
+                    "source": "",
+                    "date": "",
+                }
+            ]
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "crawl.jsonl"
+            config = CrawlImportConfig(
+                subject="高中物理",
+                target=5,
+                custom_keywords=("good-query", "bad-query"),
+                rounds=1,
+                concurrency=2,
+                log_path=log_path,
+                summary_path=Path(tmp) / "summary.json",
+            )
+            crawler = AsyncMock()
+            with (
+                # patch.dict 回滚 run_import 里 os.environ.setdefault 的副作用
+                patch.dict(os.environ, {}, clear=False),
+                patch.object(qlc, "load_existing_question_ids", new=AsyncMock(return_value=set())),
+                patch.object(qlc, "ZujuanCrawler", return_value=crawler),
+                patch.object(qlc, "_crawl_query", new=fake_crawl_query),
+                patch.object(qlc, "upsert_question_cache", new=AsyncMock(return_value=None)) as cache_mock,
+                patch.object(qlc, "upsert_question_library_items", new=AsyncMock(return_value=None)),
+            ):
+                summary = await qlc.run_import(config)
+
+            # 坏查询只记 query_failed：好查询的结果正常入库，爬虫正常关闭，汇总可读。
+            self.assertEqual(summary["inserted"], 1)
+            self.assertFalse(summary["success"])
+            cache_mock.assert_awaited_once()
+            crawler.close.assert_awaited_once()
+            events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+            failures = [e for e in events if e.get("message") == "query_failed" and e.get("query") == "bad-query"]
+            self.assertEqual(len(failures), 1)
+            self.assertIn("RuntimeError", str(failures[0].get("error")))

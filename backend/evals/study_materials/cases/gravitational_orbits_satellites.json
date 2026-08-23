@@ -1,0 +1,38 @@
+{
+  "id": "gravitational_orbits_satellites",
+  "title": "高中万有引力与卫星轨道：环绕模型、宇宙速度与变轨",
+  "query": "在高中物理范围内，从万有引力定律出发推导卫星环绕模型：黄金代换 GM=gR²、第一宇宙速度 7.9 km/s 的推导、开普勒第三定律 T²∝r³、同步卫星周期 24 h 与离地高度约 3.6×10⁷ m；计算离地面高 h=R 处卫星的线速度约 5.6×10³ m/s 与周期约 4 小时（取 g=9.8 m/s²、R=6.4×10⁶ m），并比较变轨过程中近地点与远地点的速度和加速度",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["活力公式与轨道能量", "潮汐力与洛希极限"],
+  "subject": "高中物理",
+  "preset": "deep",
+  "requirements": "推导与计算必须逐步写出万有引力提供向心力的方程；变轨比较要把速度与加速度分开讨论。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["万有引力定律与适用条件", "重力与万有引力的关系", "环绕模型与向心力方程", "第一宇宙速度的推导", "第二与第三宇宙速度", "线速度周期与轨道半径的关系", "开普勒行星运动定律", "同步卫星的约束条件", "变轨过程的速度与加速度", "中心天体质量与密度的计算"],
+  "min_unique_sources": 12,
+  "expected_domains": ["openstax.org", "nasa.gov", "noaa.gov", "britannica.com"],
+  "required_facts": [
+    {"id": "gravity_law", "description": "万有引力 F=GMm/r²，适用于质点或均匀球体，r 从球心量起", "match": {"all": ["万有引力", "G.?M.?m"], "any": ["球心", "质点", "距离"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-5-newtons-universal-law-of-gravitation"]},
+    {"id": "golden_substitution", "description": "忽略自转时地表 GM=gR²，可由 g 与 R 求地球质量 M=gR²/G≈6.0×10²⁴ kg", "match": {"all": ["GM.{0,6}g.?R.?[2²]|黄金代换"], "any": ["6.?0.{0,8}10.{0,6}(24|²⁴)", "质量.{0,12}M|M.{0,6}="]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-5-newtons-universal-law-of-gravitation"]},
+    {"id": "first_cosmic_velocity", "description": "第一宇宙速度 7.9 km/s 是近地卫星的最大环绕速度、最小发射速度，由 GMm/R²=mv²/R 推出 v=√(GM/R)", "match": {"all": ["7.?9", "km/s|千米.{0,4}秒"], "any": ["环绕", "发射", "√|sqrt"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "orbital_relations", "description": "轨道半径越大，线速度与角速度越小、周期越大；v=√(GM/r)、T=2π√(r³/GM)", "match": {"all": ["2.?π|2\\\\pi|T.{0,8}2", "r.?3|r³|\\\\dfrac"], "any": ["越(大|高).{0,14}越小", "越小.{0,14}越大", "轨道半径"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "kepler_third_law", "description": "开普勒第三定律：同一中心天体系统的 T²/r³ 为常量，r 取椭圆轨道半长轴", "match": {"all": ["开普勒", "T.{0,2}(2|²)"], "any": ["半长轴", "常量", "同一中心天体"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "geostationary_constraints", "description": "同步卫星周期 24 h、轨道平面位于赤道正上方、离地高度约 3.6×10⁷ m，角速度与地球自转相同", "match": {"all": ["同步卫星", "3.?6.{0,8}10.{0,6}(7|⁷)|36000 ?km|三万六"], "any": ["赤道", "24 ?h|24 ?小时|周期.{0,6}24"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "near_earth_period", "description": "近地卫星周期约 85 分钟（由 T=2π√(R/g) 估算），远小于同步卫星的 24 小时", "match": {"all": ["8[45].{0,6}(min|分钟)"], "any": ["近地", "T.{0,8}=", "2.?π"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "transfer_orbit_analysis", "description": "变轨过程中远地点速度小于近地点，但两点的加速度都由万有引力决定、只与到地心距离有关", "match": {"all": ["变轨|椭圆轨道", "加速度"], "any": ["近地点.{0,20}远地点|远地点.{0,20}近地点", "只.{0,10}(与|取决于).{0,8}(距离|r)"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "orbit_calculation_example", "description": "在 h=R 处：r=2R，v=√(gR/2)≈5.6×10³ m/s，周期约 4 小时（约 1.4×10⁴ s）", "match": {"all": ["5.?6.{0,10}(10.{0,6}(3|³)|m/s)|5600", "4 ?小时|1.?4.{0,8}10.{0,6}(4|⁴)|1436[01]"], "any": ["h.{0,6}=?R|高度.{0,8}R|2.?R"]}, "source_urls": ["https://openstax.org/books/college-physics-2e/pages/6-6-satellites-and-keplers-laws-an-argument-for-simplicity"]},
+    {"id": "vis_viva_bridge", "description": "[拓展] 活力公式 v²=GM(2/r−1/a) 可由机械能守恒推出，统一圆轨道与椭圆轨道的速度计算，a 为半长轴", "match": {"all": ["活力公式|vis.?viva", "2.?/.?r"], "any": ["机械能", "半长轴", "守恒"]}, "source_urls": ["https://www.britannica.com/science/orbit-astronomy"]},
+    {"id": "tidal_force_bridge", "description": "[拓展] 潮汐由月球与太阳引力的差动（引力差）引起，潮汐隆起使多数海岸每日两涨两落；洛希极限是天体不被潮汐撕裂的最小距离", "match": {"all": ["潮汐", "引力差|差动"], "any": ["月球", "两次|两涨", "洛希"]}, "source_urls": ["https://oceanservice.noaa.gov/education/tutorial_tides/tides02_cause.html"]}
+  ],
+  "traps": [
+    {"id": "geostationary_anywhere", "description": "误解：同步卫星可以定点在任意纬度上空", "wrong_pattern": "同步卫星.{0,20}(任意|任何|不同)纬度|定点.{0,14}(北京|任意)", "correct_pattern": "赤道|纬度.{0,12}(0|零|只能)"},
+    {"id": "higher_orbit_faster", "description": "误解：轨道越高卫星的环绕速度越大", "wrong_pattern": "(轨道|高度).{0,12}越(高|大).{0,14}(速度|线速度|环绕速度).{0,10}越(大|快)", "correct_pattern": "越小|越慢|减小"},
+    {"id": "weightless_no_gravity", "description": "误解：卫星中的失重现象说明万有引力消失", "wrong_pattern": "失重.{0,14}(万有引力|引力|重力).{0,10}(消失|为零|不存在|没有)", "correct_pattern": "完全失重|提供向心力|仍受|仍存在"},
+    {"id": "all_satellites_79", "description": "误解：所有卫星的环绕速度都是 7.9 km/s", "wrong_pattern": "(所有|任意|一切).{0,10}卫星.{0,14}(都|均|速度).{0,12}7.?9", "correct_pattern": "越小|轨道.{0,10}高|近地"},
+    {"id": "apogee_zero_acceleration", "description": "误解：远地点速度最小因此加速度为零", "wrong_pattern": "远地点.{0,14}加速度.{0,6}(为零|是零|等于零|消失)", "correct_pattern": "万有引力|G.?M.?m|不.{0,6}为零|仍"}
+  ],
+  "contrasts": [["环绕速度", "发射速度"], ["近地点", "远地点"], ["圆轨道", "椭圆轨道"], ["重力", "万有引力"]],
+  "format_requirements": {"key_formulas": ["G.?M.?m", "g.?R", "7.?9", "2.?π"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

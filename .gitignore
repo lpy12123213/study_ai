@@ -65,6 +65,7 @@ logs/
 .env
 .env.local
 config/model.json
+config/opencodeapikey.txt
 
 # Playwright
 .playwright/

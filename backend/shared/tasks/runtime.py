@@ -99,12 +99,33 @@ class TaskRuntime:
         self._event_batch_size = max(1, int(task_event_batch_size or 50))
 
     async def restart_recovery(self, *, reason: str = "server_restarted") -> None:
-        """Best-effort startup hook to fail orphaned DB tasks left as running."""
+        """Best-effort startup hook to fail orphaned DB tasks left as running.
+
+        误杀保护：另一个后端实例仍存活（如 benchmark/测试套件与服务共享同一
+        SQLite）时，库里的 running 任务属于那个活实例——跳过恢复并告警，
+        而不是把它们标记失败。
+        """
+
+        from backend.core.instance_lock import mark_backend_instance_started, other_live_backend_instance
+
+        holder = other_live_backend_instance()
+        if holder is not None:
+            logger.warning(
+                "task_runtime_restart_recovery_skipped_live_instance",
+                extra={
+                    "reason": reason,
+                    "other_pid": holder.get("pid"),
+                    "hint": "另一个后端实例正在运行；请勿共享同一 SQLite 库并行运行多个实例",
+                },
+            )
+            return
 
         try:
             await self._store.fail_running_tasks_on_startup(reason=reason)
         except Exception:
             logger.warning("task_runtime_restart_recovery_failed", extra={"reason": reason}, exc_info=True)
+
+        mark_backend_instance_started()
 
     async def shutdown(self, *, reason: str = "server_shutdown") -> None:
         """Best-effort graceful shutdown: cancel running tasks and persist terminal state."""

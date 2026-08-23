@@ -19,7 +19,7 @@ from backend.evals.study_materials.graders.aesthetics import grade_aesthetics
 from backend.evals.study_materials.graders.citations import grade_citations
 from backend.evals.study_materials.graders.common import DIMENSION_MAX, PROCESS_DIMENSION_MAX, validate_weights
 from backend.evals.study_materials.graders.events import EventStats, grade_research, grade_subagents
-from backend.evals.study_materials.graders.knowledge import grade_knowledge
+from backend.evals.study_materials.graders.knowledge import _contrast_hit, _fact_passed, grade_knowledge
 from backend.evals.study_materials.graders.learning import grade_learning
 from backend.evals.study_materials.graders.rubric import grade_rubric
 from backend.evals.study_materials.graders.structure import grade_structure
@@ -88,9 +88,9 @@ def _search_result(urls: list[str]) -> dict:
 class CaseSchemaTests(unittest.TestCase):
     def test_all_shipped_cases_load_and_validate(self) -> None:
         cases = load_cases(_CASE_DIR)
-        self.assertEqual(len(cases), 43)
+        self.assertEqual(len(cases), 48)
         tier_counts = {tier: sum(case.tier == tier for case in cases) for tier in ("smoke", "core", "extended")}
-        self.assertEqual(tier_counts, {"smoke": 11, "core": 4, "extended": 28})
+        self.assertEqual(tier_counts, {"smoke": 14, "core": 4, "extended": 30})
         for case in cases:
             self.assertGreaterEqual(len(case.required_facts), 5, case.id)
             self.assertGreaterEqual(len(case.traps), 2, case.id)
@@ -625,6 +625,62 @@ class KnowledgeGraderTests(unittest.TestCase):
         self.assertEqual(by_id["K3_contrasts"].score, 0.0)
 
 
+class AnchorPhrasingRobustnessTests(unittest.TestCase):
+    """锚点表述等价性回归：真实成稿的标准等价写法不得被确定性正则误判为缺失。
+
+    依据三份健康成稿（chemical/derivative/conditional_probability，raw 80+）：
+    LaTeX 符号式（$v_{\\text{正}}=v_{\\text{逆}}$）、「电离度」与「电离程度」、
+    「不再改变」与「不变」、「±\\sqrt a」与「-√a」等表述实质等价但字面不同。
+    """
+
+    def _case(self, case_id: str):
+        return next(c for c in load_cases(_CASE_DIR) if c.id == case_id)
+
+    def test_dynamic_equilibrium_accepts_symbolic_and_split_wordings(self) -> None:
+        facts = {f.id: f for f in self._case("chemical_equilibrium_titration").required_facts}
+        variants = [
+            "当 $v_{\\text{正}}=v_{\\text{逆}}\\ne 0$ 时体系达到动态平衡，宏观上各物质浓度不再改变。",
+            "正反应速率与逆反应速率相等时建立动态平衡，各物质浓度保持不变。",
+            "这就是动态平衡。“动态”二字强调：正、逆反应都没有停止，只是速率相等。",
+        ]
+        for text in variants:
+            self.assertTrue(_fact_passed(facts["dynamic_equilibrium"], text), text)
+
+    def test_weak_acid_dilution_accepts_degree_and_symbolic_hplus(self) -> None:
+        facts = {f.id: f for f in self._case("chemical_equilibrium_titration").required_facts}
+        text = "醋酸是弱酸，只部分电离；加水稀释后电离度增大，但 $c(\\mathrm{H^+})$ 实际减小。"
+        self.assertTrue(_fact_passed(facts["weak_acid_equilibrium"], text))
+
+    def test_parameter_classification_accepts_latex_roots_and_case_split(self) -> None:
+        facts = {f.id: f for f in self._case("derivative_monotonicity_optimization").required_facts}
+        variants = [
+            "a>0 时 $x=\\pm\\sqrt a$ 为极大、极小候选点。",
+            "a>0 时临界点为 $-\\sqrt a$ 与 $\\sqrt a$，分别取极大与极小。",
+            "a>0 时有极大与极小两个极值；当 $a<0$ 时导数恒正、严格递增，无极值。",
+            "a>0 时取得极大与极小；当 $a=0$ 时导数只在一点为零，同样无极值。",
+        ]
+        for text in variants:
+            self.assertTrue(_fact_passed(facts["parameter_classification"], text), text)
+
+    def test_contrast_pairs_use_canonical_short_terms(self) -> None:
+        snippets = {
+            ("chemical_equilibrium_titration", ("速率相等", "停止")):
+                "平衡时正、逆反应都没有停止，只是速率相等，这与反应停止不同。",
+            ("chemical_equilibrium_titration", ("平衡常数", "平衡移动")):
+                "平衡常数改变与平衡移动是两个不同概念：只有温度改变平衡常数，浓度变化只引起平衡移动。",
+            ("derivative_monotonicity_optimization", ("局部", "全局")):
+                "极值是比较邻域内函数值得到的局部概念，最值是整个定义域上的全局概念。",
+            ("derivative_monotonicity_optimization", ("牛顿迭代", "近似解")):
+                "牛顿迭代为无法因式分解的方程提供近似解，而非精确的解析求根。",
+            ("conditional_probability_diagnostic_test", ("ROC 曲线", "准确率")):
+                "ROC 曲线覆盖所有阈值，准确率只是单一阈值指标，前者不能替代后者。",
+        }
+        for (case_id, pair), text in snippets.items():
+            with self.subTest(case=case_id, pair=pair):
+                self.assertIn(list(pair), self._case(case_id).contrasts)
+                self.assertTrue(_contrast_hit(list(pair), text))
+
+
 class LearningGraderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.case = parse_case(_mini_case())
@@ -1020,10 +1076,10 @@ class RunnerHelperTests(unittest.TestCase):
             self.assertIn("regrade", result["notes"][0])
 
     def test_tier_suites_have_expected_sizes(self) -> None:
-        self.assertEqual(len(_resolve_cases("smoke", _CASE_DIR)), 11)
-        self.assertEqual(len(_resolve_cases("core", _CASE_DIR)), 15)
-        self.assertEqual(len(_resolve_cases("extended", _CASE_DIR)), 28)
-        self.assertEqual(len(_resolve_cases("all", _CASE_DIR)), 43)
+        self.assertEqual(len(_resolve_cases("smoke", _CASE_DIR)), 14)
+        self.assertEqual(len(_resolve_cases("core", _CASE_DIR)), 18)
+        self.assertEqual(len(_resolve_cases("extended", _CASE_DIR)), 30)
+        self.assertEqual(len(_resolve_cases("all", _CASE_DIR)), 48)
         self.assertEqual(
             [case.id for case in _resolve_cases("light-probe", _CASE_DIR)],
             ["derivative_monotonicity_optimization"],
@@ -1040,7 +1096,10 @@ class RunnerHelperTests(unittest.TestCase):
                 "circuit_measurement_internal_resistance",
                 "conditional_probability_diagnostic_test",
                 "derivative_monotonicity_optimization",
+                "earth_motion_time_zones",
                 "electromagnetic_induction_rail_energy",
+                "genetic_inheritance_laws",
+                "gravitational_orbits_satellites",
                 "french_revolution_causes",
                 "monsoon_water_cycle_urbanization",
                 "photosynthesis_respiration_limits",
@@ -1094,8 +1153,8 @@ class RunnerHelperTests(unittest.TestCase):
         all_cases = _resolve_cases("all", _CASE_DIR)
         light_ids = {case.id for case in light}
         heavy_ids = {case.id for case in heavy}
-        self.assertEqual(len(light), 11)
-        self.assertEqual(len(heavy), 32)
+        self.assertEqual(len(light), 14)
+        self.assertEqual(len(heavy), 34)
         self.assertFalse(light_ids & heavy_ids)
         self.assertEqual(light_ids | heavy_ids, {case.id for case in all_cases})
         self.assertEqual(light_ids, {case.id for case in _resolve_cases("smoke", _CASE_DIR)})

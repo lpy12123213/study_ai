@@ -211,15 +211,12 @@ class BugrepScriptImportTests(unittest.TestCase):
     def test_save_login_import_does_not_start_browser_or_parse_cli(self) -> None:
         self._assert_import_is_side_effect_free("scripts.ops.crawler.save_login")
 
-    def test_test_login_import_does_not_start_browser_or_prompt(self) -> None:
-        self._assert_import_is_side_effect_free("scripts.ops.crawler.test_login")
-
     def test_start_spawn_uses_windows_process_group_for_dev_children(self) -> None:
         start = importlib.import_module("scripts.start")
         popen = MagicMock(return_value=MagicMock())
 
         with patch.object(start, "_is_windows", return_value=True), patch.object(start.subprocess, "Popen", popen):
-            start._spawn(["python", "-m", "backend.app"], cwd=ROOT)
+            start._spawn_tracked(["python", "-m", "backend.app"], cwd=ROOT, label="backend")
 
         kwargs = popen.call_args.kwargs
         self.assertTrue(kwargs.get("creationflags", 0) & start.subprocess.CREATE_NEW_PROCESS_GROUP)

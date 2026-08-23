@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.integrations.crawler.zujuan.utils import _safe_float, _safe_int
+import httpx
+
+from backend.integrations.crawler.zujuan.utils import _safe_float, _safe_int, search_page_concurrency
 
 
 async def fallback_question_list(
@@ -71,26 +74,47 @@ async def fallback_question_list(
 
     all_questions: List[Dict[str, Any]] = []
     debug_pages = []
-    for page_idx in range(1, max_pages + 1):
-        questions, dbg = await self._fetch_question_list(
-            page_name=page_name,
-            bank_id=bank_id,
-            category_id=category_id,
-            cur_page=page_idx,
-            difficulty=difficulty,
-            question_type=question_type,
-            learn_grade_id=resolved_learn_grade_id,
-            year=year,
-            province_id=province_id,
-            paper_type_id=paper_type_id,
-            term=term,
-            order_by=order_by,
-            parse_content=True,
-        )
-        all_questions.extend(questions)
-        debug_pages.append(dbg)
-        if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0):
-            break
+
+    async def _fetch_page(page: int):
+        # 单页网络异常只作废本页（与 search.py 主路径一致）；retryable 页不触发早停。
+        try:
+            return await self._fetch_question_list(
+                page_name=page_name,
+                bank_id=bank_id,
+                category_id=category_id,
+                cur_page=page,
+                difficulty=difficulty,
+                question_type=question_type,
+                learn_grade_id=resolved_learn_grade_id,
+                year=year,
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
+                parse_content=True,
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            return [], {
+                "error": f"fetch_failed:{type(exc).__name__}",
+                "raw_count": 0,
+                "page": page,
+                "retryable": True,
+            }
+
+    # 分块并发取页（与 search.py 主路径一致）：块内并发请求，块间早停。
+    page_concurrency = search_page_concurrency()
+    page_idx = 1
+    stop_paging = False
+    while page_idx <= max_pages and not stop_paging:
+        chunk = range(page_idx, min(page_idx + page_concurrency, max_pages + 1))
+        chunk_results = await asyncio.gather(*[_fetch_page(p) for p in chunk])
+        for questions, dbg in chunk_results:
+            all_questions.extend(questions)
+            debug_pages.append(dbg)
+            if len(all_questions) >= limit or (dbg.get("raw_count", 0) == 0 and not dbg.get("retryable")):
+                stop_paging = True
+                break
+        page_idx = chunk[-1] + 1
 
     if not all_questions:
         return {

@@ -19,6 +19,10 @@ class CliMcpSearchModelTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.dict(os.environ, {}, clear=False),
             patch.object(question_generate.helpers, "settings", create=True),
+            # model_name 读的是 backend.core.settings 的真实 model_roles（本地
+            # config/model.json 可定义 question_library_mcp_search role 并直接生效），
+            # 必须一并 patch 掉，否则测试依赖本地模型配置、无法在任意机器复现。
+            patch.object(question_generate.helpers, "model_name", return_value=""),
             patch.object(question_generate.mcp_tools, "chat_completion", side_effect=fake_chat_completion),
             patch.object(
                 question_generate.mcp_tools,
@@ -122,6 +126,8 @@ class CliMcpSearchModelResolveTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"QUESTION_LIBRARY_MCP_SEARCH_MODEL": ""}, clear=False),
             patch.object(question_generate.helpers, "settings", create=True),
+            # 同上：屏蔽本地 config/model.json 里的显式 role，验证 settings 回退路径。
+            patch.object(question_generate.helpers, "model_name", return_value=""),
         ):
             question_generate.helpers.settings.chat_provider = "openrouter"
             question_generate.helpers.settings.lesson_plan_provider = "openrouter"

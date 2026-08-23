@@ -110,20 +110,76 @@ async def _study_materials_model_self_check() -> None:
 
     A deprecated or misspelled model id makes every LLM call fail permanently (4xx);
     without this check that only surfaces as each knowledge point burning its full
-    step timeout. Log loudly at startup instead. Never raises.
+    step timeout. Log loudly at startup instead. Never raises. Results are recorded
+    into backend.core.model_health so /api/system/model-status can surface them.
     """
     from backend.core import settings as _settings
+    from backend.core.model_health import record_model_health
+    from backend.generation.question_library.evolution import (
+        ARBITER_ROLE,
+        GENERATOR_MODEL,
+        GENERATOR_ROLE,
+        OPENCODE_GO_PROVIDER,
+        SUPERVISOR_MODEL,
+        SUPERVISOR_ROLE,
+    )
     from backend.llm import client as _llm_client
+    from backend.llm.model_settings import fetch_provider_models
 
     candidates = [
         ("models.study_materials_thinking", str(_settings.STUDY_MATERIALS_THINKING_MODEL or "").strip()),
         ("models.study_materials_writer", str(_settings.STUDY_MATERIALS_WRITER_MODEL or "").strip()),
     ]
+    roles: list[dict] = []
+    try:
+        expected = {
+            GENERATOR_ROLE: GENERATOR_MODEL,
+            SUPERVISOR_ROLE: SUPERVISOR_MODEL,
+            ARBITER_ROLE: SUPERVISOR_MODEL,
+        }
+        bindings = [
+            _settings.model_role_binding(role, required_provider=OPENCODE_GO_PROVIDER)
+            for role in expected
+        ]
+        provider = bindings[0]
+        catalog = await fetch_provider_models(base_url=provider.base_url, api_key=provider.api_key, timeout_s=8.0)
+        available = {
+            str(item.get("id") or "").strip()
+            for item in (catalog.get("models") or [])
+            if isinstance(item, dict)
+        }
+        for binding in bindings:
+            model_ok = binding.model == expected[binding.role] and binding.model in available
+            roles.append(
+                {
+                    "config": f"models.{binding.role}",
+                    "provider": binding.provider,
+                    "model": binding.model,
+                    "protocol": "responses" if binding.role == GENERATOR_ROLE else "chat_completions",
+                    "status": "ok" if model_ok else "failed",
+                    "error_code": "" if model_ok else "model_not_authorized",
+                    "hint": "" if model_ok else "OpenCode Go /models 未返回所需专用模型",
+                }
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        roles.append(
+            {
+                "config": "routes.question_library_*",
+                "provider": OPENCODE_GO_PROVIDER,
+                "model": "",
+                "status": "failed",
+                "error_code": "opencode_go_preflight_failed",
+                "hint": str(exc)[:220],
+            }
+        )
     checked: set = set()
     for config_key, model in candidates:
         if not model or model in checked:
             continue
         checked.add(model)
+        entry = {"config": config_key, "model": model, "status": "ok", "error_code": "", "hint": ""}
         try:
             result = await _llm_client.chat_completion(
                 messages=[{"role": "user", "content": "ping"}],
@@ -138,23 +194,31 @@ async def _study_materials_model_self_check() -> None:
             raise
         except Exception:
             logger.exception("study_materials_model_self_check_error", extra={"model": model, "config": config_key})
+            entry.update(status="error", hint="模型调用抛出异常：请检查网络与 config/model.json 的供应商配置")
+            roles.append(entry)
             continue
         error_code = str(getattr(result, "error_code", "") or "")
         if error_code == "4xx":
+            hint = f"模型调用永久失败（4xx）：请检查 config/model.json 的 {config_key}（当前={model}）"
+            entry.update(status="failed", error_code=error_code, hint=hint)
             logger.error(
                 "study_materials_model_self_check_failed",
                 extra={
                     "model": model,
                     "config": config_key,
                     "status": error_code,
-                    "hint": f"模型调用永久失败（4xx）：请检查 config/model.json 的 {config_key}（当前={model}）",
+                    "hint": hint,
                 },
             )
         elif error_code:
+            entry.update(status="degraded", error_code=error_code, hint="模型调用暂时失败（网络/限流），通常可自行恢复")
             logger.warning(
                 "study_materials_model_self_check_degraded",
                 extra={"model": model, "config": config_key, "error_code": error_code},
             )
+        roles.append(entry)
+
+    record_model_health(roles)
 
 
 async def _run_study_materials_model_self_check() -> None:

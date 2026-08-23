@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,20 @@ PROVINCE_UNLIMITED_ALIASES = {
     "all",
     "ALL",
 }
+
+
+def search_page_concurrency() -> int:
+    """搜索分页的每块并发页数（ZUJUAN_SEARCH_PAGE_CONCURRENCY，默认 2，1-8）。
+
+    页与页之间无依赖，分块并发可显著缩短多页搜索的等待；块间保留早停判断，
+    避免在已凑够 limit 后继续多取后续页。实际请求速率仍由全局限流桶约束。
+    """
+    raw = os.getenv("ZUJUAN_SEARCH_PAGE_CONCURRENCY") or "2"
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = 2
+    return max(1, min(8, value))
 
 
 def _extract_js_var_json(text: str, var_name: str) -> Optional[str]:

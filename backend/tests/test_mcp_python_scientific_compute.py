@@ -6,6 +6,7 @@ from backend.integrations.mcp.tools.python_scientific_compute import python_scie
 class PythonScientificComputeTests(unittest.IsolatedAsyncioTestCase):
     async def test_executes_basic_math_and_returns_result(self) -> None:
         result = await python_scientific_compute(
+            timeout_seconds=15,
             code="""
 x = 3
 y = 4
@@ -19,6 +20,7 @@ result = (x ** 2 + y ** 2) ** 0.5
 
     async def test_uses_last_expression_when_result_not_assigned(self) -> None:
         result = await python_scientific_compute(
+            timeout_seconds=15,
             code="""
 import math
 math.factorial(6)
@@ -29,6 +31,7 @@ math.factorial(6)
         self.assertIn("不允许", str(result.get("error") or ""))
 
         result = await python_scientific_compute(
+            timeout_seconds=15,
             code="""
 math.factorial(6)
 """.strip()
@@ -40,6 +43,7 @@ math.factorial(6)
 
     async def test_captures_stdout(self) -> None:
         result = await python_scientific_compute(
+            timeout_seconds=15,
             code="""
 print('intermediate=', 42)
 result = 7 * 8
@@ -52,6 +56,7 @@ result = 7 * 8
 
     async def test_supports_basic_function_def(self) -> None:
         result = await python_scientific_compute(
+            timeout_seconds=15,
             code="""
 def hypotenuse(a, b):
     return (a ** 2 + b ** 2) ** 0.5
@@ -66,6 +71,7 @@ result = hypotenuse(5, 12)
 
     async def test_rejects_function_annotations(self) -> None:
         result = await python_scientific_compute(
+            timeout_seconds=15,
             code="""
 def square(x: float) -> float:
     return x * x

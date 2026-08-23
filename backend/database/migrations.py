@@ -175,6 +175,13 @@ def sync_migrate_db_schema(conn) -> None:
             ddl="TEXT NOT NULL DEFAULT ''",
             existing_cols=question_cache_cols,
         )
+        _add_col(
+            conn,
+            table="question_cache",
+            name="generation_metadata_json",
+            ddl="TEXT NOT NULL DEFAULT ''",
+            existing_cols=question_cache_cols,
+        )
 
     # Wrongbook SRS scheduling additions.
     wq_cols = _table_cols(conn, "wrong_questions")

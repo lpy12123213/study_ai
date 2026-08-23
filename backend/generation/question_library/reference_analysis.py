@@ -4,6 +4,10 @@ import json
 from typing import List, Optional
 
 from backend.core.settings import LESSON_PLAN_MODEL
+from backend.generation.question_library.evolution_penalties import (
+    normalize_evolution_evaluation,
+    normalize_solution_fingerprint,
+)
 from backend.generation.question_library.gen_common import _clip_unique
 from backend.generation.question_library.gen_llm import _chat_json_with_reasoning, _extract_json_obj
 from backend.generation.question_library.gen_utils import ReasoningEventHandler, _clip
@@ -121,6 +125,7 @@ def _fallback_reference_analysis(topic: str, reference_questions: List[dict]) ->
         "innovative_angles": innovative_angles[:6],
         "format_conventions": format_conventions[:6],
         "representative_examples": examples[:3],
+        "solution_fingerprint": [],
     }
 
 
@@ -172,6 +177,13 @@ async def analyze_reference_questions(
                     "analysis_style": "string",
                 }
             ],
+            "solution_fingerprint": [
+                {
+                    "id": "short snake_case semantic step id",
+                    "concepts": ["2-6 short abstract concept labels; no original wording, values, or equations"],
+                    "weight": "number 0.5-3; distinctive moves are heavier",
+                }
+            ],
         },
     }
 
@@ -187,6 +199,7 @@ async def analyze_reference_questions(
                     "<avoid>Do not praise long derivations, parameter case counts, large computation, or finale-question difficulty as quality by themselves.</avoid>\n"
                     "<transfer>Describe how to preserve the underlying structure while changing at least two surface features.</transfer>\n"
                     "<anti_copy>Never copy the reference stem, values, context, conclusion, or solution wording.</anti_copy>\n"
+                    "<fingerprint>Describe only the distinctive ordered solution moves as short abstract concept labels. Generic moves such as calculation or contradiction alone are not distinctive. Never place original prose, values, or equations in the fingerprint.</fingerprint>\n"
                     "<output_format>Output one strict JSON object matching output_schema.</output_format>"
                 ),
             },
@@ -221,6 +234,7 @@ async def analyze_reference_questions(
         + list(fallback.get("format_conventions") or []), 6,
     )
     examples: List[dict] = []
+    solution_fingerprint = normalize_solution_fingerprint(obj.get("solution_fingerprint"))
     for item in (obj.get("representative_examples") or []):
         normalized = _normalize_reference_example(item if isinstance(item, dict) else {})
         if normalized is not None:
@@ -245,6 +259,7 @@ async def analyze_reference_questions(
         "innovative_angles": innovative_angles[:6],
         "format_conventions": format_conventions[:6],
         "representative_examples": deduped_examples[:3],
+        "solution_fingerprint": solution_fingerprint,
     }
 
 
@@ -287,4 +302,11 @@ def enrich_source_pack_with_reference(source_pack: dict, reference_analysis: dic
     )
     base["reference_question_count"] = len([item for item in (reference_questions or []) if isinstance(item, dict)])
     base["reference_summary"] = "；".join((base.get("reference_patterns") or [])[:3])
+    existing_evaluation = normalize_evolution_evaluation(base.get("evolution_evaluation"))
+    if not existing_evaluation["solution_fingerprint"]:
+        existing_evaluation["reference_id"] = "retrieved_reference_set"
+        existing_evaluation["solution_fingerprint"] = normalize_solution_fingerprint(
+            analysis.get("solution_fingerprint")
+        )
+    base["evolution_evaluation"] = existing_evaluation
     return base

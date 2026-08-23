@@ -1,0 +1,39 @@
+{
+  "id": "earth_motion_time_zones",
+  "title": "高中地球运动：自转公转、时区计算与太阳高度",
+  "query": "在高中地理范围内，系统讲解地球自转与公转：自转角速度 15°/h 与线速度的纬度差异、地方时与区时计算（东加西减、每 15° 差 1 小时）、日界线与日期变更；黄赤交角 23°26′ 与太阳直射点回归运动、正午太阳高度公式 H=90°−纬度差、昼夜长短与季节变化；计算夏至日北京（40°N）正午太阳高度 73°26′，以及 120°E 与 90°W 的时差 14 小时与两地的早晚判断",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["太阳视运动与均时差", "开普勒定律与公转快慢"],
+  "subject": "高中地理",
+  "preset": "deep",
+  "requirements": "时间与太阳高度计算必须写清经度差换算和方向判断步骤；光照图与公转轨道图须配图解释。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["自转的方向与周期", "角速度与线速度的分布", "地方时与经度的关系", "时区划分与区时计算", "日界线与日期变更", "地转偏向力", "黄赤交角与直射点回归运动", "正午太阳高度的计算", "昼夜长短的变化规律", "四季更替与五带划分"],
+  "min_unique_sources": 12,
+  "expected_domains": ["nasa.gov", "noaa.gov", "britannica.com", "timeanddate.com"],
+  "required_facts": [
+    {"id": "rotation_rate", "description": "自转角速度除极点外均约 15°/h（360°/24h）；恒星日 23h56min4s，太阳日 24h", "match": {"all": ["15°|15 ?度每|角速度.{0,10}15"], "any": ["极点.{0,12}(无|为零|为 ?0|没有)", "恒星日.{0,14}太阳日", "23 ?小时 ?56|23h56", "360"]}, "source_urls": ["https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html"]},
+    {"id": "linear_velocity_latitude", "description": "线速度赤道最大约 1670 km/h，随纬度升高递减，极点为零，同纬度相同", "match": {"all": ["线速度", "赤道"], "any": ["1670", "递减", "最大", "60°.{0,12}(一半|837|减半)"]}, "source_urls": ["https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html"]},
+    {"id": "local_time_rule", "description": "地方时东早西晚；经度每差 15° 时间差 1 小时，每差 1° 差 4 分钟", "match": {"all": ["地方时", "15°.{0,12}1 ?小时|每 ?度.{0,10}4 ?分钟"], "any": ["东.{0,8}(早|加)", "4 ?分钟", "东加西减"]}, "source_urls": ["https://www.timeanddate.com/time/map/"]},
+    {"id": "zone_time_calc", "description": "全球划分 24 个时区，中央经线为 15° 的倍数；北京使用东八区区时（120°E）；区时东加西减", "match": {"all": ["时区", "东八区|120°E|120.?°?E"], "any": ["24 ?个", "东加西减", "中央经线"]}, "source_urls": ["https://www.timeanddate.com/time/map/"]},
+    {"id": "date_line", "description": "日界线大致沿 180° 经线但有三处弯曲；东十二区比西十二区早一天，自西向东越过日界线日期减一天", "match": {"all": ["日界线|国际日期变更线", "180°|180 ?度"], "any": ["减一天|退一天|加一天", "弯曲|不重合|并不重合"]}, "source_urls": ["https://www.britannica.com/place/International-Date-Line"]},
+    {"id": "coriolis_deflection", "description": "北半球水平运动物体向右偏、南半球向左偏、赤道不偏；影响大气环流、洋流与河流侵蚀岸", "match": {"all": ["地转偏向力|科里奥利"], "any": ["北半球.{0,10}右", "南半球.{0,10}左", "赤道.{0,8}不"]}, "source_urls": ["https://www.britannica.com/science/Coriolis-force"]},
+    {"id": "axial_tilt_regression", "description": "黄赤交角 23°26′（约 23.5°）基本不变，使直射点在南北回归线间回归运动，回归年约 365d5h48m", "match": {"all": ["23°26|23.?5°|黄赤交角"], "any": ["回归运动|南北回归线", "北回归线.{0,12}南回归线"]}, "source_urls": ["https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html"]},
+    {"id": "noon_solar_altitude", "description": "正午太阳高度 H=90°−|当地纬度−直射点纬度|；夏至日 40°N 的北京 H=73°26′；直射点为 90°，向南北两侧递减", "match": {"all": ["73°26|73.?5", "太阳高度"], "any": ["90°", "H.{0,6}=", "递减"]}, "source_urls": ["https://gml.noaa.gov/grad/solcalc/calcdetails.html"]},
+    {"id": "day_length_season", "description": "夏至日北半球各地昼最长、夜最短，纬度越高昼越长，北极圈内极昼；南半球同时相反", "match": {"all": ["夏至|北半球"], "any": ["昼(最?长|长夜短)", "极昼|北极圈", "南半球.{0,12}(相反|昼短)"]}, "source_urls": ["https://www.britannica.com/science/solstice"]},
+    {"id": "example_time_calc", "description": "计算示例：120°E 与 90°W 经度差 210°、时差 14 小时，120°E 位于东边、地方时更早", "match": {"all": ["210|14 ?小时"], "any": ["120.?E.{0,24}90.?W|90.?W.{0,24}120.?E", "东.{0,8}(早|超前)"]}, "source_urls": ["https://www.timeanddate.com/time/map/"]},
+    {"id": "apparent_solar_bridge", "description": "[拓展] 太阳视运动：北半球夏季日出东北、日落西北，冬季东南升西南落；真太阳时与平太阳时之差为均时差（约 ±15 分钟内）", "match": {"all": ["视运动|太阳方位"], "any": ["东北.{0,16}西北", "均时差|真太阳时", "日出.{0,10}方位"]}, "source_urls": ["https://gml.noaa.gov/grad/solcalc/calcdetails.html"]},
+    {"id": "kepler_season_bridge", "description": "[拓展] 地球 1 月初过近日点公转最快、7 月初过远日点最慢；由开普勒第二定律（面积速度不变）解释北半球冬半年较短", "match": {"all": ["近日点", "远日点"], "any": ["开普勒|面积速度|面积定律", "冬半年|较快|较快"]}, "source_urls": ["https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html"]}
+  ],
+  "traps": [
+    {"id": "dateline_equals_180", "description": "误解：日界线与 180° 经线完全重合", "wrong_pattern": "日界线.{0,20}(完全重合|就是|等同于|与 ?180 ?度经线重合)", "correct_pattern": "弯曲|不重合|三处"},
+    {"id": "cross_dateline_sign", "description": "误解：自东向西越过日界线要加一天", "wrong_pattern": "(自)?东向?西.{0,12}越过?.{0,6}日界线.{0,12}(加一天|日期加 ?一 ?天)", "correct_pattern": "减一天|退一天|西.{0,8}东.{0,12}加"},
+    {"id": "summer_solstice_global", "description": "误解：夏至日全球各地昼最长", "wrong_pattern": "夏至.{0,12}(全球|全世界|所有地区).{0,12}昼(最长|最长夜最短)", "correct_pattern": "北半球|南半球.{0,12}(相反|昼短)"},
+    {"id": "noon_altitude_monotonic", "description": "误解：正午太阳高度总是随纬度升高而减小", "wrong_pattern": "正午太阳高度.{0,16}总是.{0,10}随.{0,10}纬度.{0,10}(升高|增大|增高).{0,10}(减小|降低)", "correct_pattern": "直射点|向.{0,8}(南北|两侧)|纬度差"},
+    {"id": "same_linear_velocity", "description": "误解：全球各地自转线速度相同", "wrong_pattern": "(全球|各地|所有纬度|任何纬度).{0,14}(线速度|自转速度).{0,10}(相同|一样|相等)", "correct_pattern": "赤道.{0,14}(最大|1670)|纬度.{0,12}(递减|不同)|极点.{0,10}(零|0)"}
+  ],
+  "contrasts": [["恒星日", "太阳日"], ["地方时", "区时"], ["夏至", "冬至"], ["角速度", "线速度"]],
+  "format_requirements": {"key_formulas": ["15°|15 ?度", "90.?-.?", "23°26|23.?5°", "4 ?分钟"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

@@ -30,7 +30,7 @@
     {"id": "multiply_retests", "description": "误解：两次阳性的假阳性率必然等于单次假阳性率平方", "wrong_pattern": "两次.{0,6}阳性.{0,12}假阳性率.{0,8}(必然|一定|直接).{0,8}(平方|相乘)", "correct_pattern": "条件独立|相关|假设"},
     {"id": "roc_guarantees_ppv", "description": "误解：ROC/AUC 很高就保证任何人群的阳性预测值都很高", "wrong_pattern": "(ROC|AUC).{0,8}(高|接近.?1).{0,12}(任何|所有).{0,6}人群.{0,8}(PPV|阳性预测值).{0,6}(都|必然).{0,4}高", "correct_pattern": "患病率|基础概率|阈值|不直接"}
   ],
-  "contrasts": [["P(阳性|患病)", "P(患病|阳性)"], ["灵敏度", "阳性预测值"], ["互斥事件", "独立事件"], ["ROC 曲线", "阳性预测值"]],
+  "contrasts": [["P(阳性|患病)", "P(患病|阳性)"], ["灵敏度", "阳性预测值"], ["互斥事件", "独立事件"], ["ROC 曲线", "准确率"]],
   "format_requirements": {"key_formulas": ["P.{0,3}A.{0,3}B", "全概率", "90.{0,4}/.{0,4}585", "LR|似然比"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
   "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
 }

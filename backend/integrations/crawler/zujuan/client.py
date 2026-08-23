@@ -111,35 +111,43 @@ class ZujuanCrawler:
         self._formula_inflight: Dict[str, "asyncio.Future[str]"] = {}
         self._formula_http_sem = asyncio.Semaphore(20)
         self._formula_pandoc_sem = asyncio.Semaphore(8)
+        # 学科作用域并发控制（读写锁语义）：
+        # - 同学科搜索（常态）走快路径无锁并发，仅登记在途计数；
+        # - 跨学科搜索拿 _subject_lock，等在途计数清零后 set_subject 并持锁执行。
         self._subject_lock = asyncio.Lock()
+        self._same_subject_inflight = 0
+        self._same_subject_idle = asyncio.Event()
+        self._same_subject_idle.set()
+        # /zujuan-api/base 加载 single-flight：并发搜索共享同一次加载，避免重复拉取 734KB 元数据。
+        self._base_meta_inflight: Optional[asyncio.Future] = None
 
         # Global crawler rate limiter (process-local). This limits outbound requests
         # to reduce anti-bot triggers when multiple tasks run concurrently.
-        rps_raw = os.getenv("ZUJUAN_RATE_LIMIT_RPS") or os.getenv("ZUJIAN_RATE_LIMIT_RPS") or "2.0"
-        burst_raw = os.getenv("ZUJUAN_RATE_LIMIT_BURST") or os.getenv("ZUJIAN_RATE_LIMIT_BURST") or "4"
+        rps_raw = os.getenv("ZUJUAN_RATE_LIMIT_RPS") or os.getenv("ZUJIAN_RATE_LIMIT_RPS") or "3.0"
+        burst_raw = os.getenv("ZUJUAN_RATE_LIMIT_BURST") or os.getenv("ZUJIAN_RATE_LIMIT_BURST") or "6"
         try:
             rps = float(rps_raw)
         except (TypeError, ValueError):
-            rps = 2.0
+            rps = 3.0
         try:
             burst = int(burst_raw)
         except (TypeError, ValueError):
-            burst = 4
+            burst = 6
         self._http_rate_limiter = get_rate_limiter(key="zujuan", rate_per_s=rps, burst=burst)
 
         # 静态资源（公式 .mml 等，托管在 staticzujuan.xkw.com CDN）走独立限流桶：
         # CDN 静态文件本就为高并发分发设计（浏览器打开题目页会并行拉几十张公式图），
-        # 与 API 共用 2rps 桶会把公式转换拖到分钟级。默认仍保持保守的 8rps。
-        static_rps_raw = os.getenv("ZUJUAN_STATIC_RATE_LIMIT_RPS") or "8.0"
-        static_burst_raw = os.getenv("ZUJUAN_STATIC_RATE_LIMIT_BURST") or "16"
+        # 与 API 共用桶会把公式转换拖到分钟级。默认 12rps，仍明显低于浏览器并行水平。
+        static_rps_raw = os.getenv("ZUJUAN_STATIC_RATE_LIMIT_RPS") or "12.0"
+        static_burst_raw = os.getenv("ZUJUAN_STATIC_RATE_LIMIT_BURST") or "24"
         try:
             static_rps = float(static_rps_raw)
         except (TypeError, ValueError):
-            static_rps = 8.0
+            static_rps = 12.0
         try:
             static_burst = int(static_burst_raw)
         except (TypeError, ValueError):
-            static_burst = 16
+            static_burst = 24
         self._http_static_rate_limiter = get_rate_limiter(
             key="zujuan_static", rate_per_s=static_rps, burst=static_burst
         )
@@ -267,6 +275,45 @@ class ZujuanCrawler:
         if normalized_difficulty:
             normalized_difficulty = normalize_difficulty(normalized_difficulty, strict=True)
         return resolved_subject, normalized_difficulty
+
+    async def _run_subject_scoped(self, *, subject: str, edu_level: str, strict_subject: bool, run):
+        """按学科作用域执行搜索实现（读写锁语义）。
+
+        - 快路径（常态）：请求学科与实例当前学科一致——搜索只读学科状态，
+          无需互斥，登记在途计数后直接并发执行；实际请求速率由全局限流桶约束。
+          check 与计数之间无 await，事件循环单线程下原子。
+        - 慢路径：学科不一致（如 MCP 单实例跨学科调用）——拿 _subject_lock 等
+          在途搜索清零后 set_subject，并持锁执行完毕，保持旧的串行切换语义，
+          避免并发搜索读到切换到一半的学科状态。
+        """
+        try:
+            resolved = resolve_subject(
+                (subject or "").strip() or self.subject,
+                edu_level=(edu_level or "").strip(),
+                strict=strict_subject,
+            )
+        except ValueError:
+            # 未知学科：不做任何状态变更，交由 impl 的 _apply_search_constraints 返回错误。
+            return await run()
+
+        if resolved == self.subject:
+            self._same_subject_inflight += 1
+            self._same_subject_idle.clear()
+            try:
+                return await run()
+            finally:
+                self._same_subject_inflight -= 1
+                if self._same_subject_inflight <= 0:
+                    self._same_subject_inflight = 0
+                    self._same_subject_idle.set()
+
+        async with self._subject_lock:
+            # 拿到锁后复查：可能已有其他慢路径搜索把实例切到目标学科。
+            if resolved != self.subject:
+                while self._same_subject_inflight > 0:
+                    await self._same_subject_idle.wait()
+                self.set_subject(resolved)
+            return await run()
 
     async def initialize(self):
         """初始化 HTTP 客户端。
@@ -748,9 +795,31 @@ class ZujuanCrawler:
         if not self.client:
             return
         if self._base_meta_data is None:
-            await self._load_base_meta()
+            await self._load_base_meta_singleflight()
             return
         self._load_bank_meta_from_base()
+
+    async def _load_base_meta_singleflight(self) -> None:
+        """并发搜索共享同一次 /zujuan-api/base 加载（single-flight）。
+
+        跟随者不感知加载错误：失败时 _load_base_meta 自身已设置负缓存窗口，
+        后续调用会像以前一样直接跳过重试。
+        """
+        if self._base_meta_data is not None:
+            return
+        existing = self._base_meta_inflight
+        if existing is not None:
+            await existing
+            return
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._base_meta_inflight = fut
+        try:
+            await self._load_base_meta()
+        finally:
+            self._base_meta_inflight = None
+            if not fut.done():
+                fut.set_result(None)
 
     def _resolve_textbook_category_id(self, textbook_version: str) -> str:
         version = (textbook_version or "").strip()
@@ -1244,11 +1313,10 @@ class ZujuanCrawler:
         with_quality: bool = True,
         parse_content: bool = True,
     ) -> Dict[str, Any]:
-        async with self._subject_lock:
-            from backend.integrations.crawler.zujuan.search import search_by_keyword as impl
+        kwargs = dict(locals())
 
-            kwargs = dict(locals())
-            kwargs.pop("impl", None)
+        async def _run() -> Dict[str, Any]:
+            from backend.integrations.crawler.zujuan.search import search_by_keyword as impl
 
             rr_req = self._record_replay_request("search_by_keyword", kwargs)
             replayed = self._maybe_replay(rr_req)
@@ -1258,6 +1326,8 @@ class ZujuanCrawler:
             res = await impl(**kwargs)
             self._maybe_record(rr_req, res)
             return res
+
+        return await self._run_subject_scoped(subject=subject, edu_level=edu_level, strict_subject=strict_subject, run=_run)
 
     async def search_by_knowledge(
         self,
@@ -1293,11 +1363,10 @@ class ZujuanCrawler:
         with_quality: bool = True,
         parse_content: bool = True,
     ) -> Dict[str, Any]:
-        async with self._subject_lock:
-            from backend.integrations.crawler.zujuan.search import search_by_knowledge as impl
+        kwargs = dict(locals())
 
-            kwargs = dict(locals())
-            kwargs.pop("impl", None)
+        async def _run() -> Dict[str, Any]:
+            from backend.integrations.crawler.zujuan.search import search_by_knowledge as impl
 
             rr_req = self._record_replay_request("search_by_knowledge", kwargs)
             replayed = self._maybe_replay(rr_req)
@@ -1307,6 +1376,8 @@ class ZujuanCrawler:
             res = await impl(**kwargs)
             self._maybe_record(rr_req, res)
             return res
+
+        return await self._run_subject_scoped(subject=subject, edu_level=edu_level, strict_subject=strict_subject, run=_run)
 
     async def get_available_filters(self) -> Dict[str, Any]:
         """
@@ -1507,7 +1578,7 @@ class ZujuanCrawler:
         self._maybe_record(rr_req, res)
         return res
 
-    async def batch_get_question_details(self, question_ids: List[str], max_concurrent: int = 5) -> Dict[str, Any]:
+    async def batch_get_question_details(self, question_ids: List[str], max_concurrent: int = 8) -> Dict[str, Any]:
         """
         批量获取题目详情。
         """
@@ -1526,14 +1597,15 @@ class ZujuanCrawler:
         if max_total:
             question_ids = question_ids[:max_total]
 
-        max_concurrent = _safe_int(max_concurrent, 5)
+        max_concurrent = _safe_int(max_concurrent, 8)
         max_concurrent = max(1, min(max_concurrent, 20))
 
-        delay_raw = os.getenv("ZUJUAN_BATCH_GET_DETAILS_DELAY_S") or "0.2"
+        # 批间延迟默认 0：实际请求速率由全局限流桶控制，额外 sleep 只是纯延迟。
+        delay_raw = os.getenv("ZUJUAN_BATCH_GET_DETAILS_DELAY_S") or "0.0"
         try:
             delay_s = float(delay_raw)
         except (TypeError, ValueError):
-            delay_s = 0.2
+            delay_s = 0.0
         delay_s = max(0.0, min(delay_s, 3.0))
 
         results = []
@@ -1547,7 +1619,7 @@ class ZujuanCrawler:
                     results.append({"success": False, "question_id": qid, "error": str(result)})
                 else:
                     results.append(result)
-            # 添加小延迟避免请求过快（减少延迟以提升速度）
+            # 可选的小延迟（默认关闭），用于需要对齐请求节奏的场景
             if delay_s > 0 and i + max_concurrent < len(question_ids):
                 await asyncio.sleep(delay_s)
 

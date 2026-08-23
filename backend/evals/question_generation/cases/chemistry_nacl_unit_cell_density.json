@@ -1,0 +1,31 @@
+{
+  "id": "chemistry_nacl_unit_cell_density",
+  "title": "NaCl 晶胞均摊、化学式与密度计算（竞赛级）",
+  "subject": "高中化学",
+  "topic": "晶体结构竞赛题：氯化钠晶胞为面心立方结构，$\\mathrm{Na^{+}}$ 占据顶点与面心、$\\mathrm{Cl^{-}}$ 占据体心与棱心（或反之），晶胞边长 $a=0.564\\,\\mathrm{nm}$，$M(\\mathrm{NaCl})=58.5\\,\\mathrm{g/mol}$，$N_{A}=6.02\\times10^{23}\\,\\mathrm{mol^{-1}}$。求：(1) 用均摊法算出每个晶胞含 $4$ 个 $\\mathrm{Na^{+}}$ 和 $4$ 个 $\\mathrm{Cl^{-}}$（即 $Z=4$）；(2) 配位数为 $6{:}6$；(3) 晶体密度 $\\rho=\\frac{ZM}{a^{3}N_{A}}\\approx2.16\\,\\mathrm{g/cm^{3}}$（注意 $0.564\\,\\mathrm{nm}=5.64\\times10^{-8}\\,\\mathrm{cm}$ 的单位换算）。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "压轴",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": [
+    "晶胞与均摊法",
+    "配位数与晶体结构",
+    "晶体密度计算"
+  ],
+  "stem_anchors": [
+    "NaCl|氯化钠|\\\\mathrm\\{NaCl\\}",
+    "0\\.564|564",
+    "58\\.5|58\\.44"
+  ],
+  "answer_anchors": [
+    "2\\.1[5-8]",
+    "(Z\\s*=\\s*4|4\\s*(个|个).{0,16}(Na|钠|离子))",
+    "6.{0,4}[:：].{0,4}6"
+  ],
+  "analysis_anchors": [
+    "(面心立方|顶点|棱|面心)",
+    "(均摊|1\\s*/\\s*8|1/8|八分之)"
+  ],
+  "forbidden_patterns": [],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,26 @@ class QuestionLibraryIntuitionPracticeConfig(BaseModel):
     )
     packet_size: int = Field(default=3, ge=3, le=5)
     feedback_mode: FeedbackMode = "guided"
+
+
+class QuestionLibrarySolutionFingerprintUnit(BaseModel):
+    id: str = ""
+    concepts: List[str] = Field(default_factory=list, min_length=2, max_length=6)
+    weight: float = Field(default=1.0, ge=0.5, le=3.0)
+
+
+class QuestionLibraryEvolutionEvaluation(BaseModel):
+    """Abstract-only reference contract used by evolution penalties.
+
+    It intentionally has no field for an original stem, answer, or solution.
+    """
+
+    reference_id: str = ""
+    solution_fingerprint: List[QuestionLibrarySolutionFingerprintUnit] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    max_solution_similarity: float = Field(default=0.58, ge=0.35, le=0.9)
 
 
 class QuestionLibraryIntuitionAtom(BaseModel):
@@ -195,6 +215,10 @@ class QuestionLibraryCrawlRequest(BaseModel):
     subject: str = ""
     edu_level: str = ""
     query: str = ""
+    # 批量入口（与 CLI question_library_crawl 同一计划语义）：
+    # queries=自定义关键词列表；domains=力学/电磁学默认关键词表。
+    queries: List[str] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)
     difficulty: str = ""
     question_type: str = ""
     limit: int = 30
@@ -233,6 +257,12 @@ class QuestionLibraryGenerateRequest(BaseModel):
     knowledge_points: List[str] = Field(default_factory=list)
     append: bool = False
     stream_reasoning: bool = False
+    generation_strategy: Literal["adaptive_evolution", "legacy_beam"] = "adaptive_evolution"
+    supervision_mode: Literal["tiered_consensus", "single"] = "tiered_consensus"
+    policy_mode: Literal["champion", "shadow_compare", "fixed"] = "champion"
+    evolution_evaluation: QuestionLibraryEvolutionEvaluation = Field(
+        default_factory=QuestionLibraryEvolutionEvaluation
+    )
     task_id: str = ""
     intuition_practice: QuestionLibraryIntuitionPracticeConfig = Field(
         default_factory=QuestionLibraryIntuitionPracticeConfig
@@ -274,6 +304,9 @@ class QuestionLibraryDraftQuestion(BaseModel):
     review: Optional[QuestionLibraryDraftReview] = None
     diagrams: Optional[List[QuestionLibraryDiagram]] = None
     intuition_packet: Optional[QuestionLibraryIntuitionPacket] = None
+    strategy_version: str = ""
+    evolution_lineage: Dict[str, Any] = Field(default_factory=dict)
+    supervision_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 class QuestionLibraryPreviewData(BaseModel):
@@ -296,6 +329,11 @@ class QuestionLibraryPreviewData(BaseModel):
         default_factory=QuestionLibraryIntuitionPracticeConfig
     )
     draft_questions: List[QuestionLibraryDraftQuestion] = Field(default_factory=list)
+    generation_strategy: Literal["adaptive_evolution", "legacy_beam"] = "adaptive_evolution"
+    supervision_mode: Literal["tiered_consensus", "single"] = "tiered_consensus"
+    policy_mode: Literal["champion", "shadow_compare", "fixed"] = "champion"
+    strategy_versions: List[str] = Field(default_factory=list)
+    evolution_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 class QuestionLibraryPreviewResponse(QuestionLibraryPreviewData):

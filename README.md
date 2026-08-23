@@ -61,8 +61,10 @@ chmod +x start.sh
 ```bash
 start.bat backend     # 只启动后端，Linux/macOS 使用 ./start.sh backend
 start.bat frontend    # 只启动前端
-start.bat all         # 后端 + 前端 + MCP
-start.bat mcp         # 只启动 MCP stdio server
+start.bat all         # 同 dev（后端 + 前端）；MCP stdio server 由 MCP 客户端按 mcp_config.json 拉起
+start.bat mcp         # 前台运行 MCP stdio server（手动联调用）
+start.bat stop        # 终止开发栈（按 PID 文件 + 8000/5173 端口清理孤儿进程）
+start.bat status      # 查看开发栈进程与端口占用
 start.bat doctor      # 运行本地健康检查
 ```
 
@@ -202,6 +204,7 @@ Copy-Item config/model.example.json config/model.json
 常用配置：
 
 - `config/model.json`：唯一的模型配置源，包含 provider、API Key、Base URL、路由、模型 ID、生成参数和上下文限制
+- 数学题库进化式生成使用专用 OpenCode Go 路由：Muse Contributor 负责生成，DeepSeek V4 Flash 负责监督与隔离仲裁；这些角色配置错误时不会回退到其他供应商
 - `MODEL_CONFIG_PATH`：仅在需要把模型配置放到其他位置时设置
 - `TAVILY_API_KEY`、`EXA_API_KEY`、`METASO_API_KEY`：检索 provider（至少一个）
 - `JWT_SECRET`、`ADMIN_USERNAME`、`ADMIN_PASSWORD`

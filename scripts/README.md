@@ -6,10 +6,10 @@
 
 优先使用仓库根目录的启动器：
 
-- Windows: `start.bat dev|all|backend|frontend|mcp|setup|doctor`
-- Linux / macOS: `./start.sh dev|all|backend|frontend|mcp|setup|doctor`
+- Windows: `start.bat dev|all|backend|frontend|mcp|stop|status|menu|setup|doctor`
+- Linux / macOS: `./start.sh dev|all|backend|frontend|mcp|stop|status|menu|setup|doctor`
 
-这些入口最终调用 `scripts/start.py`，它负责创建虚拟环境、安装依赖、启动后端/前端/MCP，以及运行 `doctor` 检查。
+这些入口最终调用 `scripts/start.py`，它负责创建虚拟环境、安装依赖、启动开发栈（后端 + 前端；`all` 为 `dev` 的别名，MCP stdio server 由 MCP 客户端按 `mcp_config.json` 拉起，`mcp` 子命令用于前台联调）、按 PID 文件与端口清理进程（`stop`/`status`），以及运行 `doctor` 检查。
 `doctor` 会执行结构审计和异常策略预算 gate；当前异常策略预算用于防止遗留 broad-except 数量反弹。GitHub Actions 会复用这些 gate，并额外运行 Alembic 升降级、后端 unittest、前端 lint/build/vitest coverage 和 Playwright smoke。
 
 ## 目录分类
@@ -18,6 +18,14 @@
 - `scripts/dev/`：开发辅助和实验脚本，不作为生产入口。
 - `scripts/migrate/`：数据、schema 或本地状态迁移脚本。
 - `scripts/ops/`：本地运维辅助、状态整理、爬虫相关工具。
+
+快速跑全量后端测试（按文件分片并行，串行全量约 15 分钟时可降到约 1/4）：
+
+- `python scripts/dev/run_tests_parallel.py`：全量并行（默认 jobs=CPU 核数，上限 8）。
+- `python scripts/dev/run_tests_parallel.py -k zujuan -j 2`：只跑文件名含关键字的部分。
+- `python scripts/dev/run_tests_parallel.py --hermetic`：用 `config/model.example.json` 隔离本地模型配置，
+  暴露依赖本机 `config/model.json`/`.env` 的非密闭测试；共享固定资源、并行会冲突的测试文件加入
+  脚本内 `SERIAL_FILES` 强制串行。
 
 常用审计入口：
 

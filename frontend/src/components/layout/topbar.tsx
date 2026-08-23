@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { Activity, LogOut, Monitor, Moon, PanelLeft, Search, Settings, Sun } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, LogOut, Monitor, Moon, PanelLeft, RefreshCw, Search, Settings, Sun, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useTasksStore } from "@/stores/tasks";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { routeTitle } from "@/app/router/catalog";
+import { systemApi } from "@/shared/api/system";
 import { TASK_STATUS_LABELS, TASK_TYPE_LABELS } from "@/shared/api/types";
 
 function TaskIndicator() {
@@ -61,6 +63,61 @@ function TaskIndicator() {
   );
 }
 
+function ModelHealthIndicator() {
+  const queryClient = useQueryClient();
+  const statusQuery = useQuery({
+    queryKey: ["model-status"],
+    queryFn: () => systemApi.modelStatus(),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const status = statusQuery.data?.status;
+  // 健康/未知不占顶栏空间：指示器只为"已确认的异常"而存在。
+  if (status !== "failed" && status !== "degraded") return null;
+
+  const failed = statusQuery.data?.roles ?? [];
+  const isFailed = status === "failed";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-2">
+          <TriangleAlert className={`size-3.5 ${isFailed ? "text-destructive" : "text-amber-500"}`} />
+          {isFailed ? "模型不可用" : "模型降级"}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuLabel>模型自检{isFailed ? "失败" : "降级"}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {failed.map((role) => (
+          <div key={role.config} className="flex flex-col gap-1 px-2 py-2 text-sm">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate font-medium">{role.model}</span>
+              <Badge variant={role.status === "failed" ? "destructive" : "warning"} className="shrink-0">
+                {role.status === "failed" ? "4xx 永久失败" : role.error_code || role.status}
+              </Badge>
+            </div>
+            <div className="text-xs text-muted-foreground">{role.hint || `配置项 ${role.config}`}</div>
+          </div>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={() => {
+            void systemApi
+              .refreshModelStatus()
+              .then((data) => queryClient.setQueryData(["model-status"], data))
+              .catch(() => undefined);
+          }}
+        >
+          <RefreshCw /> 重新检测
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function Topbar() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -98,6 +155,8 @@ export function Topbar() {
         </Button>
 
         <TaskIndicator />
+
+        <ModelHealthIndicator />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

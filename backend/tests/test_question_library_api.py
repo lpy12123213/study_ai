@@ -891,6 +891,9 @@ class TestQuestionLibraryApi(unittest.TestCase):
                     }
                 ),
             ), patch(
+                "backend.generation.question_library.runner.build_curriculum_context",
+                new=AsyncMock(return_value={}),
+            ), patch(
                 "backend.generation.question_library.runner.generate_questions", new=AsyncMock(side_effect=fake_generate_questions)
             ), patch("backend.shared.tasks.db_store.db_upsert_task", new=AsyncMock()), patch(
                 "backend.shared.tasks.db_store.db_append_task_event", new=AsyncMock()

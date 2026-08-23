@@ -219,6 +219,15 @@ async def commit_preview_to_library(
                     and preview_by_id[qid].get("intuition_packet")
                     else {}
                 ),
+                "generation_metadata": {
+                    "strategy_version": str(preview_by_id[qid].get("strategy_version") or "").strip(),
+                    "evolution_lineage": dict(preview_by_id[qid].get("evolution_lineage") or {})
+                    if isinstance(preview_by_id[qid].get("evolution_lineage"), dict)
+                    else {},
+                    "supervision_summary": dict(preview_by_id[qid].get("supervision_summary") or {})
+                    if isinstance(preview_by_id[qid].get("supervision_summary"), dict)
+                    else {},
+                },
             }
         )
 

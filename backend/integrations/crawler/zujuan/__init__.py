@@ -6,7 +6,9 @@ This package hosts the zujuan.xkw.com crawler implementation, split by concerns:
 - parsing and quality scoring
 - blueprint composition helpers
 
-`backend/crawler/zujuan_crawler.py` remains as a compatibility wrapper.
+The historical monolith `backend/crawler/zujuan_crawler.py` was removed in the
+2026-06 migration; `backend/integrations/crawler/zujuan_crawler.py` is the
+remaining thin compatibility entry.
 """
 
 from __future__ import annotations

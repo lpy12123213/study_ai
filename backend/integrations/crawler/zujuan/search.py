@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from backend.core.subjects import (
     DIFFICULTY_LEVELS,
     SUBJECTS,
@@ -12,6 +14,7 @@ from backend.core.subjects import (
 from backend.integrations.crawler.zujuan.utils import (
     _safe_float,
     _safe_int,
+    search_page_concurrency,
 )
 
 
@@ -240,60 +243,83 @@ async def search_by_keyword(
     target_question_type_id = _safe_int(target.get("question_type_id"), 0)
     question_type_id_for_request = target_question_type_id if not (question_type or "").strip() else 0
     min_quality_score = _safe_int(min_quality_score, 0)
-    for page_idx in range(1, max_pages + 1):
-        questions, dbg = await self._fetch_question_list(
-            page_name=target["page_name"],
-            bank_id=bank_id_for_request,
-            category_id=target["category_id"],
-            course_id=course_id_for_request,
-            course_id_py=str(target.get("course_id_py") or ""),
-            cur_page=page_idx,
-            difficulty=difficulty,
-            question_type=question_type,
-            question_type_id=question_type_id_for_request,
-            learn_grade_id=resolved_learn_grade_id,
-            year=year,
-            province_id=province_id,
-            paper_type_id=paper_type_id,
-            term=term,
-            order_by=order_by,
-            parse_content=bool(parse_content),
-        )
-        for q in questions:
-            qid = (q.get("question_id") or "").strip()
-            if not qid or qid in seen_ids:
-                continue
-            seen_ids.add(qid)
-            if self._matches_local_filters(
-                q,
-                source_contains=source_contains,
-                stem_contains=stem_contains,
-                knowledge_contains=knowledge_contains,
-                elective_mode=elective_mode,
-                elective_keywords=elective_keywords,
-                exclude_elective=exclude_elective,
+
+    async def _fetch_page(page: int):
+        # 单页网络异常只作废本页：同块其余页已并发取回，不应陪葬。
+        # retryable 页不触发分页早停——瞬时网络抖动不代表后续页也为空。
+        try:
+            return await self._fetch_question_list(
+                page_name=target["page_name"],
+                bank_id=bank_id_for_request,
+                category_id=target["category_id"],
+                course_id=course_id_for_request,
+                course_id_py=str(target.get("course_id_py") or ""),
+                cur_page=page,
+                difficulty=difficulty,
+                question_type=question_type,
+                question_type_id=question_type_id_for_request,
+                learn_grade_id=resolved_learn_grade_id,
                 year=year,
-                difficulty_value_min=difficulty_value_min,
-                difficulty_value_max=difficulty_value_max,
-                require_difficulty_value=bool(require_difficulty_value),
-            ):
-                score, flags = self._quality_score(q)
-                if with_quality:
-                    q["quality_score"] = score
-                    if flags:
-                        q["quality_flags"] = flags
-                if min_quality_score > 0 and score < min_quality_score:
+                province_id=province_id,
+                paper_type_id=paper_type_id,
+                term=term,
+                order_by=order_by,
+                parse_content=bool(parse_content),
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            return [], {
+                "error": f"fetch_failed:{type(exc).__name__}",
+                "raw_count": 0,
+                "page": page,
+                "retryable": True,
+            }
+
+    # 分块并发取页：块内页与页无依赖可同时请求，块间保留早停判断
+    # （凑够 limit 或遇到空页即停），避免无谓地多取后续页。
+    page_concurrency = search_page_concurrency()
+    page_idx = 1
+    stop_paging = False
+    while page_idx <= max_pages and not stop_paging:
+        chunk = range(page_idx, min(page_idx + page_concurrency, max_pages + 1))
+        chunk_results = await asyncio.gather(*[_fetch_page(p) for p in chunk])
+        for questions, dbg in chunk_results:
+            for q in questions:
+                qid = (q.get("question_id") or "").strip()
+                if not qid or qid in seen_ids:
                     continue
-                if dedup_by_stem:
-                    fp = self._stem_fingerprint(q.get("stem") or "")
-                    if fp and fp in seen_stem_fps:
+                seen_ids.add(qid)
+                if self._matches_local_filters(
+                    q,
+                    source_contains=source_contains,
+                    stem_contains=stem_contains,
+                    knowledge_contains=knowledge_contains,
+                    elective_mode=elective_mode,
+                    elective_keywords=elective_keywords,
+                    exclude_elective=exclude_elective,
+                    year=year,
+                    difficulty_value_min=difficulty_value_min,
+                    difficulty_value_max=difficulty_value_max,
+                    require_difficulty_value=bool(require_difficulty_value),
+                ):
+                    score, flags = self._quality_score(q)
+                    if with_quality:
+                        q["quality_score"] = score
+                        if flags:
+                            q["quality_flags"] = flags
+                    if min_quality_score > 0 and score < min_quality_score:
                         continue
-                    if fp:
-                        seen_stem_fps.add(fp)
-                selected_questions.append(q)
-        debug_pages.append(dbg)
-        if len(selected_questions) >= limit or (dbg.get("raw_count", 0) == 0):
-            break
+                    if dedup_by_stem:
+                        fp = self._stem_fingerprint(q.get("stem") or "")
+                        if fp and fp in seen_stem_fps:
+                            continue
+                        if fp:
+                            seen_stem_fps.add(fp)
+                    selected_questions.append(q)
+            debug_pages.append(dbg)
+            if len(selected_questions) >= limit or (dbg.get("raw_count", 0) == 0 and not dbg.get("retryable")):
+                stop_paging = True
+                break
+        page_idx = chunk[-1] + 1
 
     # 如果 SSE 返回了错误学科的 bankId 且强制校正后没有结果，降级到兜底路径：
     # 直接用当前学科默认 categoryId 拉取，至少保证学科/学段不会混入。
@@ -425,9 +451,9 @@ async def search_by_knowledge(
     通过知识点搜索（内部复用关键词搜索）。
 
     注意：这里必须调用模块级 search_by_keyword（按包装器约定以 kwargs 传入
-    self），不能走 self.search_by_keyword——客户端包装器持有 _subject_lock
-    （asyncio.Lock 不可重入），而本函数的客户端包装器已经持有同一把锁，
-    走实例方法会让同一协程重复抢锁，永久死锁。
+    self），不能走 self.search_by_keyword——客户端包装器在慢路径（学科切换）
+    下持有 _subject_lock（asyncio.Lock 不可重入），本函数的客户端包装器可能
+    已经持有同一把锁，走实例方法会让同一协程重复抢锁，永久死锁。
     """
     return await search_by_keyword(
         self=self,

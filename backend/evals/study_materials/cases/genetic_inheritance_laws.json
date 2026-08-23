@@ -1,0 +1,39 @@
+{
+  "id": "genetic_inheritance_laws",
+  "title": "高中遗传定律：分离、自由组合与伴性遗传",
+  "query": "在高中生物范围内，用豌豆一对和两对相对性状杂交实验讲清分离定律与自由组合定律（含 3:1 与 9:3:3:1 及测交 1:1 的推导），再结合人类红绿色盲的伴 X 染色体隐性遗传做系谱分析：给出具体杂交组合 Aa×Aa 与 X^B X^b × X^b Y，计算子代基因型、表现型比例和患病男孩概率，并说明判断常染色体遗传与伴性遗传的依据",
+  "tier": "smoke",
+  "curriculum_scope": "high_school_plus",
+  "extension_topics": ["哈代-温伯格平衡的等位基因频率", "连锁与交换的重组率"],
+  "subject": "高中生物",
+  "preset": "deep",
+  "requirements": "所有比例必须用配子棋盘或系谱图推导；概率题要标明乘法与加法的使用位置；系谱判断要写显隐性判据。",
+  "options": {"with_questions": true, "with_diagrams": true, "max_points": 10, "prefer_local_archive": false},
+  "expected_knowledge_points": ["一对相对性状杂交与分离现象", "分离定律与测交验证", "两对相对性状与自由组合定律", "9:3:3:1 的分解与变式", "概率乘法与加法", "性别决定与伴 X 隐性遗传", "红绿色盲基因型与患病率", "系谱图显隐性判别", "常染色体与伴性遗传的判别", "交叉遗传与隔代遗传"],
+  "min_unique_sources": 12,
+  "expected_domains": ["openstax.org", "yourgenome.org", "nei.nih.gov", "genome.gov"],
+  "required_facts": [
+    {"id": "segregation_ratio", "description": "Aa×Aa 子代基因型比为 1:2:1、表现型比为 3:1，显性纯合与杂合表现型相同", "match": {"all": ["Aa", "3.?[:：].?1"], "any": ["1.?[:：].?2.?[:：].?1", "基因型.{0,10}(比例|比)"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/12-3-laws-of-inheritance"]},
+    {"id": "testcross_ratio", "description": "测交 Aa×aa 后代分离比 1:1，用于验证 F1 是杂合子还是纯合子", "match": {"all": ["测交", "1.?[:：].?1"], "any": ["杂合", "Aa.{0,8}aa", "验证"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/12-3-laws-of-inheritance"]},
+    {"id": "dihybrid_ratio", "description": "YyRr×YyRr 的 F2 表现型比为 9:3:3:1，每对性状仍各自按 3:1 分离", "match": {"all": ["9.?[:：].?3.?[:：].?3.?[:：].?1", "自由组合"], "any": ["两对相对性状", "YyRr", "9/16"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/12-3-laws-of-inheritance"]},
+    {"id": "ratio_decomposition", "description": "9:3:3:1 可分解为 (3:1)×(3:1)，9:7、15:1 等变式可由基因互作或合并表现型解释", "match": {"all": ["9.?[:：].?3.?[:：].?3.?[:：].?1"], "any": ["分解", "9.?[:：].?7", "15.?[:：].?1", "基因互作"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/12-1-mendels-experiments-and-the-laws-of-probability"]},
+    {"id": "probability_rules", "description": "概率乘法用于独立事件同时发生，加法用于互斥事件至少其一发生；分离比例是概率的统计结果", "match": {"all": ["乘法|相乘", "加法|相加"], "any": ["独立", "互斥", "统计"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/12-1-mendels-experiments-and-the-laws-of-probability"]},
+    {"id": "sex_linkage_recessive", "description": "红绿色盲是伴 X 染色体隐性遗传：男性 X^bY 即患病，女性需 X^b X^b 才患病", "match": {"all": ["色盲", "X"], "any": ["隐性", "伴.?X", "X.?b.?Y"]}, "source_urls": ["https://www.nei.nih.gov/learn-about-eye-health/eye-conditions-and-diseases/color-blindness"]},
+    {"id": "male_female_prevalence", "description": "男性红绿色盲约占 8%、女性约占 0.5%，差异源于女性需要两个隐性等位基因才患病", "match": {"all": ["8%|百分之八", "0.?5%"], "any": ["男性.{0,14}女性", "女性.{0,12}(两|双|两个).{0,8}隐性"]}, "source_urls": ["https://www.nei.nih.gov/learn-about-eye-health/eye-conditions-and-diseases/color-blindness"]},
+    {"id": "cross_inheritance", "description": "交叉遗传：男性的 X 染色体只能来自母亲且只能传给女儿；X^B X^b × X^b Y 时儿子有 50% 患病", "match": {"all": ["交叉遗传|隔代"], "any": ["母亲.{0,12}女儿", "儿子.{0,14}(50%|1/2|一半)", "X.?B.?X.?b"]}, "source_urls": ["https://www.yourgenome.org/facts/what-are-dominant-and-recessive-alleles"]},
+    {"id": "pedigree_criteria", "description": "系谱判别：双亲正常生出患病女儿可判常染色体隐性；无中生有提示隐性，生女患病排除伴 X 隐性", "match": {"all": ["系谱"], "any": ["常染色体隐性", "双亲正常.{0,14}(患病|患者)", "无中生有"]}, "source_urls": ["https://www.genome.gov/genetics-glossary/Pedigree"]},
+    {"id": "autosomal_vs_sexlinked", "description": "判别依据：男女患病率是否有差异、是否存在男传男（伴 X 隐性无男传男路径）", "match": {"all": ["伴.?X", "常染色体"], "any": ["男传男|男.{0,6}(传|到).{0,6}男", "判断|判据"]}, "source_urls": ["https://openstax.org/books/biology-2e/pages/12-2-characteristics-and-traits"]},
+    {"id": "hardy_weinberg_bridge", "description": "[拓展] 用 p²+2pq+q²=1 从隐性患病率估计等位基因频率（如男性色盲率约 8% 得 q≈0.28），前提是随机婚配与无选择", "match": {"all": ["p.?2.{0,4}[+].{0,4}2pq.{0,4}[+].{0,4}q.?2.{0,6}1|哈代|Hardy"], "any": ["0.?28", "随机婚配|随机交配", "等位基因频率"]}, "source_urls": ["https://www.genome.gov/genetics-glossary/Hardy-Weinberg-Principle"]},
+    {"id": "linkage_recombination_bridge", "description": "[拓展] 连锁使两对基因不服从 9:3:3:1，重组型比例由交换率决定，重组率可估计图距", "match": {"all": ["连锁", "交换"], "any": ["重组", "交换率|重组率", "偏离"]}, "source_urls": ["https://www.britannica.com/science/linkage-genetics"]}
+  ],
+  "traps": [
+    {"id": "recessive_weak_gene", "description": "误解：隐性基因是弱基因，会随显性存在而消失", "wrong_pattern": "隐性基因.{0,12}(弱|劣势|会消失|被消灭)", "correct_pattern": "纯合.{0,12}表达|隐性.{0,8}(并非|不是).{0,8}弱|aa"},
+    {"id": "gene_decides_all", "description": "误解：性状完全由基因决定，与环境无关", "wrong_pattern": "基因.{0,12}(完全|唯一|绝对).{0,8}(决定|控制).{0,10}(性状|表现)", "correct_pattern": "环境|基因型.{0,12}环境|表型.{0,12}环境"},
+    {"id": "sexlinked_male_to_male", "description": "误解：伴 X 隐性遗传存在父亲直接传给儿子的路径", "wrong_pattern": "(父亲|男性).{0,12}(传给|遗传给).{0,10}(儿子|男性).{0,14}(色盲|伴.?X)", "correct_pattern": "交叉遗传|传给女儿|母亲.{0,12}儿子"},
+    {"id": "exact_ratio_guaranteed", "description": "误解：任何一次杂交的子代比例都精确等于 3:1", "wrong_pattern": "子代.{0,12}(一定|必然|精确|完全).{0,10}(等于|符合).{0,8}3.?[:：].?1", "correct_pattern": "统计|样本量|概率.{0,12}(近似|接近|预期)"},
+    {"id": "affected_boy_equals_boy_affected", "description": "误解：『患病男孩』概率与『男孩患病』概率总相同", "wrong_pattern": "患病男孩.{0,14}(等于|相同|一样|等同于).{0,12}男孩患病", "correct_pattern": "1/4|1/2|先后|顺序|整体.{0,8}条件"}
+  ],
+  "contrasts": [["分离定律", "自由组合定律"], ["常染色体遗传", "伴性遗传"], ["患病男孩概率", "男孩患病概率"], ["基因型", "表现型"]],
+  "format_requirements": {"key_formulas": ["3.?[:：].?1", "9.?[:：].?3.?[:：].?3.?[:：].?1", "1.?[:：].?2.?[:：].?1"], "min_figures": 2, "min_tables": 2, "min_chars": 10000},
+  "learning_requirements": {"min_objectives": 5, "min_worked_examples": 4, "min_practice_questions": 12, "min_answered_questions": 12, "required_levels": ["基础", "应用", "迁移"]}
+}

@@ -1,0 +1,16 @@
+{
+  "id": "chemistry_weak_acid_ka_calc",
+  "title": "弱酸电离平衡 Ka 计算、近似条件与半中和点（压轴级）",
+  "subject": "高中化学",
+  "topic": "弱酸电离平衡压轴解答题：$25\\,^{\\circ}\\mathrm{C}$ 时醋酸 $K_{a}=1.8\\times10^{-5}$，求 $0.100\\,\\mathrm{mol/L}$ 醋酸溶液的氢离子浓度 $[\\mathrm{H^{+}}]\\approx1.34\\times10^{-3}\\,\\mathrm{mol/L}$、$\\mathrm{pH}\\approx2.87$、电离度 $\\alpha\\approx1.34\\%$（须验证 $\\frac{x}{c}<5\\%$ 近似条件），并用强碱滴定至半中和点时 $\\mathrm{pH}=\\mathrm{p}K_{a}\\approx4.74$。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "困难",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": ["弱电解质的电离平衡", "Ka 与电离度计算", "pH 计算", "滴定中的半中和点"],
+  "stem_anchors": ["醋酸|CH.?3.?COOH|CH3COOH|\\\\mathrm\\{CH\\}", "1\\.8.{0,14}10.{0,8}[−-]?5|K.?a\\s*=\\s*1\\.8", "0\\.100|0\\.1\\s*mol"],
+  "answer_anchors": ["2\\.8[0-9]?|2\\.9(?![0-9])", "1\\.34.{0,18}10|电离度.{0,14}1\\.3", "pK.?a|4\\.7[0-9]?"],
+  "analysis_anchors": ["(起始|初始).{0,26}(转化|变化).{0,26}平衡|三段", "近似|5\\s*%|忽略.{0,12}(x|电离)"],
+  "forbidden_patterns": ["3\\.8"],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

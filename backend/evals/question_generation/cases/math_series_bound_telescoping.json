@@ -1,0 +1,30 @@
+{
+  "id": "math_series_bound_telescoping",
+  "title": "级数放缩与裂项上界 7/4（竞赛级）",
+  "subject": "高中数学",
+  "topic": "数列不等式竞赛题：证明对一切正整数 $n$，$\\sum_{k=1}^{n}\\frac{1}{k^{2}}<\\frac{7}{4}$。要求用分段裂项：前两项之和为 $1+\\frac{1}{4}=\\frac{5}{4}$；当 $k\\geq 3$ 时 $\\frac{1}{k^{2}}<\\frac{1}{k(k-1)}=\\frac{1}{k-1}-\\frac{1}{k}$，而 $\\sum_{k=3}^{\\infty}\\left(\\frac{1}{k-1}-\\frac{1}{k}\\right)=\\frac{1}{2}$，故总和小于 $\\frac{5}{4}+\\frac{1}{2}=\\frac{7}{4}$。每道题都必须完整呈现该分段裂项论证与结论，不得改动数据",
+  "difficulty": "压轴",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": [
+    "裂项放缩",
+    "数列不等式证明",
+    "无穷级数上界"
+  ],
+  "stem_anchors": [
+    "1.{0,4}k.{0,8}[2²]|1\\s*/\\s*k",
+    "7\\s*/\\s*4|\\\\frac\\{7\\}\\{4\\}|1\\.75",
+    "(证明|求证)"
+  ],
+  "answer_anchors": [
+    "7\\s*/\\s*4|\\\\frac\\{7\\}\\{4\\}|1\\.75",
+    "5\\s*/\\s*4|\\\\frac\\{5\\}\\{4\\}|1\\.25"
+  ],
+  "analysis_anchors": [
+    "裂项|拆项",
+    "k\\s*\\(\\s*k\\s*-\\s*1\\s*\\)|\\\\frac\\{1\\}\\{k\\(k-1\\)\\}|1\\s*/\\s*\\(?\\s*k\\s*\\(?\\s*k"
+  ],
+  "forbidden_patterns": [],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

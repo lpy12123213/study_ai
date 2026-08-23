@@ -24,7 +24,8 @@ _MENU_ROWS = [
     ("8", "前端服务", "scripts/start.py frontend"),
     ("9", "MCP 服务", "scripts/start.py mcp"),
     ("10", "开发服务", "scripts/start.py dev"),
-    ("11", "全部服务", "scripts/start.py all"),
+    ("11", "停止开发栈", "scripts/start.py stop"),
+    ("12", "开发栈状态", "scripts/start.py status"),
     ("0", "退出", ""),
 ]
 
@@ -42,7 +43,8 @@ _SERVICE_CHOICES = {
     "8": "frontend",
     "9": "mcp",
     "10": "dev",
-    "11": "all",
+    "11": "stop",
+    "12": "status",
 }
 
 

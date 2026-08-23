@@ -12,10 +12,10 @@ Challenge v2 同时报告两种分数：
 ## 快速开始
 
 ```bash
-# 1. 校验 43 个用例和评分契约（不跑生成）
+# 1. 校验 48 个用例和评分契约（不跑生成）
 python -m backend.evals.study_materials.runner --case all --dry-run
 
-# 2. 启动后端后先跑单例真实探针，再按需跑轻量回归套件（11 例）
+# 2. 启动后端后先跑单例真实探针，再按需跑轻量回归套件（14 例）
 python -m uvicorn backend.app:app --port 8000
 python -m backend.evals.study_materials.runner --case light-probe
 python -m backend.evals.study_materials.runner --case light
@@ -43,10 +43,10 @@ runner 把生成等待视为 I/O 密集任务：`--parallel 0`（默认）在单
 `min(4, 用例数)` 个线程。可用 `--parallel 1` 强制串行，或显式指定服务端能够承受的并发数。
 离线 `--dry-run` 只解析并编译评分正则，不发 HTTP 请求。
 
-负载套件按运行规模划分，评分权重和成熟度门槛保持一致。`light` 包含 11 个以高中课程为
+负载套件按运行规模划分，评分权重和成熟度门槛保持一致。`light` 包含 14 个以高中课程为
 主线的高难例，并允许每例 2–3 个明确标为 `[拓展:主题名]` 的大学桥接概念；这些概念必须从高中
 知识推导、说明对高中解题/实验/材料分析的帮助，且不得作为默认前置知识。`heavy` 包含其余
-32 个大学或专业主题。两者互斥，且并集严格等于 `all`。因此日常反馈跑 `light`，
+34 个大学或专业主题。两者互斥，且并集严格等于 `all`。因此日常反馈跑 `light`，
 夜间或发布前可以跑 `heavy` 补齐覆盖；需要一条命令完成发布门禁时直接跑 `all`。
 `light-probe` 固定选择其中的含参导数最优化用例，题目和门槛完全相同，只把一次真实反馈
 从 11 例缩成 1 例；适合生成链路改动后的第一轮验证，不能替代完整 `light` 覆盖。
@@ -55,13 +55,13 @@ runner 把生成等待视为 I/O 密集任务：`--parallel 0`（默认）在单
 # 探针：与 light 相同难度和评分门槛，只生成 1 例
 python -m backend.evals.study_materials.runner --case light-probe
 
-# 轻量：11 个高中主线 + 受控大学拓展高难例，自动 4 并发
+# 轻量：14 个高中主线 + 受控大学拓展高难例，自动 4 并发
 python -m backend.evals.study_materials.runner --case light
 
-# 重量：其余 32 例；可在 CI 中继续分片
+# 重量：其余 34 例；可在 CI 中继续分片
 python -m backend.evals.study_materials.runner --case heavy --shard-count 4 --shard-index 0
 
-# 完整 43 例；显式把本机并发限制到 2
+# 完整 48 例；显式把本机并发限制到 2
 python -m backend.evals.study_materials.runner --case all --parallel 2
 
 # CI/多机稳定分成 4 片；index 为 0-based，各片互斥且并集恰为所选套件
@@ -195,7 +195,7 @@ python -m backend.evals.study_materials.runner --case light --stage write
 
 ## 用例集
 
-共有 43 个逻辑用例。12 个独立 JSON 保留用于重点校准，31 个新增用例收在
+共有 48 个逻辑用例。15 个独立 JSON 保留用于重点校准，33 个新增用例收在
 `cases/challenge_v2_extended_pack.json`；pack 只复用 preset、生成选项和学习/格式门槛，
 每个主题仍有独立知识点、事实正则、来源、误区和辨析对。
 
@@ -207,19 +207,23 @@ python -m backend.evals.study_materials.runner --case light --stage write
 | `smoke` | 11 | `light` 的兼容别名 | 最快的高中主线 + 受控拓展回归 |
 | `core` | 15 | smoke 11 + `tier=core` 4 | 主干质量门禁 |
 | `extended` | 28 | 仅 `tier=extended` | 扩展主题专项覆盖 |
-| `all` | 43 | 全部 tier | 发布前全量评测 |
+| `all` | 48 | 全部 tier | 发布前全量评测 |
 
 主题覆盖如下：
 
-- `light` 高中主线 11 例：诊断试验条件概率、含参导数最优化、斜抛与机械能、电表与电源内阻、
-  化学平衡与滴定、光合—呼吸限制因素、季风与城市洪峰、法国大革命多层因果；以及三道更高门槛的
-  综合题：数列递推与放缩证明、导轨电磁感应与能量链条、氧化还原/电化学与氯碱工业。每例另含
+- `light` 高中主线 14 例：诊断试验条件概率、含参导数最优化、斜抛与机械能、电表与电源内阻、
+  化学平衡与滴定、光合—呼吸限制因素、季风与城市洪峰、法国大革命多层因果；三道更高门槛的
+  综合题：数列递推与放缩证明、导轨电磁感应与能量链条、氧化还原/电化学与氯碱工业；以及三道
+  新增高难例：遗传定律与伴性遗传（哈代-温伯格/连锁桥接）、万有引力与卫星轨道（活力公式/潮汐
+  桥接）、地球运动与时区计算（太阳视运动/开普勒桥接）。每例另含
   似然比/数值迭代/戴维南等效/活度/史料批判/特征根/能斯特等受控桥接内容。
   综合题把知识点/事实点提到 12、陷阱与辨析提到 5、篇幅 12000、自测 14 道。
 - `heavy` 数学/统计 10 例：特征分解、梯度下降、傅里叶/采样、群同态、ODE 数值稳定性、
   KKT、PCA/SVD、因果 DAG、实验设计、信息论。
 - `heavy` 物理/化学 8 例：量子谐振子、狭义相对论、麦克斯韦方程、热力学熵、PN 结、
   化学平衡热力学、Nernst 方程、SN1/SN2/E1/E2。
+- `heavy` 结构压力 2 例：流体力学伯努利、分子轨道理论——以 12 个知识点小节、4 图 4 表、
+  6 条关键公式与 15000 字篇幅下限专项压测结构（F）与美观（A）维度的交付上限。
 - `heavy` 生命科学 5 例：CRISPR、孟德尔连锁、免疫与疫苗、细胞呼吸、Hardy–Weinberg 平衡。
 - `heavy` 计算机与 AI 5 例：Raft、虚拟内存、密码散列与签名、编译器、Transformer。
 - `heavy` 社会与地球科学 4 例：货币政策、比较优势、宪政分权、板块构造。

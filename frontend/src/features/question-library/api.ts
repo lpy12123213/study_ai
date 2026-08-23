@@ -144,6 +144,18 @@ export interface LibraryGeneratePayload {
   mode?: "standard" | "infinite";
   knowledge_points?: string[];
   stream_reasoning?: boolean;
+  generation_strategy?: "adaptive_evolution" | "legacy_beam";
+  supervision_mode?: "tiered_consensus" | "single";
+  policy_mode?: "champion" | "shadow_compare" | "fixed";
+  evolution_evaluation?: {
+    reference_id?: string;
+    solution_fingerprint?: Array<{
+      id: string;
+      concepts: string[];
+      weight?: number;
+    }>;
+    max_solution_similarity?: number;
+  };
   intuition_practice?: {
     practice_goal?: string;
     intuition_kinds?: string[];

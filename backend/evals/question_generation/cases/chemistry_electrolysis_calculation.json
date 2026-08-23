@@ -1,0 +1,16 @@
+{
+  "id": "chemistry_electrolysis_calculation",
+  "title": "惰性电极电解 CuSO₄：电子守恒计算（竞赛级）",
+  "subject": "高中化学",
+  "topic": "电解竞赛题：用惰性电极电解 $\\mathrm{CuSO_{4}}$ 溶液，电路中通过 $0.2\\,\\mathrm{mol}$ 电子。写出电极反应（阴极 $\\mathrm{Cu^{2+}+2e^{-}=Cu}$，阳极 $\\mathrm{2H_{2}O-4e^{-}=4H^{+}+O_{2}\\uparrow}$）并求：(1) 阴极析出 $n(\\mathrm{Cu})=\\frac{0.2}{2}=0.1\\,\\mathrm{mol}$，质量 $6.4\\,\\mathrm{g}$；(2) 阳极 $n(\\mathrm{O_{2}})=\\frac{0.2}{4}=0.05\\,\\mathrm{mol}$，标况体积 $1.12\\,\\mathrm{L}$；(3) 溶液酸性增强（生成 $\\mathrm{H_{2}SO_{4}}$）。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "压轴",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": ["电解池电极反应", "电子守恒计算", "气体摩尔体积"],
+  "stem_anchors": ["CuSO|硫酸铜", "0\\.2|电子", "惰性|电解"],
+  "answer_anchors": ["6\\.4", "1\\.12", "(?<![0-9.])0\\.1(?![0-9.])"],
+  "analysis_anchors": ["电子守恒|2\\s*e|电极反应", "22\\.4|标况|0\\.05"],
+  "forbidden_patterns": ["(?<![0-9.])12\\.8(?![0-9.])|(?<![0-9.])3\\.2\\s*g"],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

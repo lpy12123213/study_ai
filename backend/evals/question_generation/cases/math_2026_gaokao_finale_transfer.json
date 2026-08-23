@@ -1,0 +1,65 @@
+{
+  "id": "math_2026_gaokao_finale_transfer",
+  "title": "2026 全国一卷压轴题认知结构迁移：切线偏差集合",
+  "subject": "高中数学",
+  "topic": "生成一道三问解答题。设 f(x)=x^4-2x^2，l_a(x) 为曲线 y=f(x) 在 x=a 处的切线。定义连续延拓的切线偏差 Q_a(x)：当 x 不等于 a 时，Q_a(x)=[f(x)-l_a(x)]/(x-a)^2；当 x=a 时取极限值。再定义 T(a)={x∈R | Q_a(x)≥0}。第(1)问推导 Q_a(x)=(x+a)^2+2a^2-2；第(2)问求 T(a) 并按 |a|≥1 与 |a|<1 分类；第(3)问求所有满足 T(0)⊆T(b) 的实数 b，结论必须为 b=0 或 |b|≥2√2/3。训练目标是新定义读取、代数因式分解、区间补集的包含关系与局部信息到全局分类。只迁移 2026 全国一卷压轴题的认知层级，不引用原题；不得使用平移增量集合、指数函数已知半轴、奇函数或跨零点平移反证。",
+  "difficulty": "压轴",
+  "question_type": "解答题",
+  "count": 1,
+  "knowledge_points": [
+    "导函数与切线",
+    "多项式与因式分解",
+    "集合与区间",
+    "参数与分类讨论"
+  ],
+  "stem_anchors": [
+    "x\\^\\{?4\\}?[^\\n]{0,30}2x\\^\\{?2\\}?",
+    "Q_?\\{?a\\}?",
+    "T\\s*\\(\\s*a\\s*\\)",
+    "T\\s*\\(\\s*0\\s*\\)[^\\n]{0,30}(?:subset|subseteq|\\\\subset|⊆)[^\\n]{0,30}T\\s*\\(\\s*b\\s*\\)"
+  ],
+  "answer_anchors": [
+    "b\\s*=\\s*0",
+    "(?:\\|?b\\|?[^\\n]{0,15}(?:\\\\ge|≥)[^\\n]{0,10}(?:2\\s*\\\\sqrt\\{2\\}\\s*/\\s*3|\\\\frac\\{2\\\\sqrt\\{2\\}\\}\\{3\\}))"
+  ],
+  "analysis_anchors": [
+    "\\(x-a\\)\\^\\{?2\\}?",
+    "\\(x\\+a\\)\\^\\{?2\\}?[+＋]2a\\^\\{?2\\}?[-−]2",
+    "补集|区间.{0,20}包含|包含.{0,20}区间"
+  ],
+  "forbidden_patterns": [
+    "D\\s*\\(\\s*x",
+    "2\\^\\{?x\\}?",
+    "奇函数",
+    "平移量",
+    "跨.{0,6}零点"
+  ],
+  "min_stem_chars": 180,
+  "min_analysis_chars": 500,
+  "evolution_evaluation": {
+    "reference_id": "gaokao_2026_national_i_q19_abstract",
+    "max_solution_similarity": 0.56,
+    "solution_fingerprint": [
+      {
+        "id": "additive_increment_set",
+        "concepts": ["平移参数", "增量集合", "函数值比较"],
+        "weight": 3.0
+      },
+      {
+        "id": "reverse_order_inclusion",
+        "concepts": ["反向包含", "函数值次序", "集合包含"],
+        "weight": 3.0
+      },
+      {
+        "id": "cross_known_half_axis",
+        "concepts": ["选择平移量", "跨过零点", "已知半轴"],
+        "weight": 3.0
+      },
+      {
+        "id": "shift_contradiction_monotonicity",
+        "concepts": ["反证法", "严格递增", "包含关系"],
+        "weight": 2.0
+      }
+    ]
+  }
+}

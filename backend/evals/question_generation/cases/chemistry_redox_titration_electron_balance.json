@@ -1,0 +1,16 @@
+{
+  "id": "chemistry_redox_titration_electron_balance",
+  "title": "高锰酸钾滴定亚铁：电子守恒与绿矾纯度计算（压轴级）",
+  "subject": "高中化学",
+  "topic": "氧化还原滴定压轴解答题：酸性条件下 $\\mathrm{KMnO_{4}}$ 标准液滴定 $\\mathrm{Fe^{2+}}$，离子方程式 $\\mathrm{MnO_{4}^{-}+5Fe^{2+}+8H^{+}=Mn^{2+}+5Fe^{3+}+4H_{2}O}$。用 $20.00\\,\\mathrm{mL}$、$0.02000\\,\\mathrm{mol/L}$ 的 $\\mathrm{KMnO_{4}}$ 溶液恰好完全滴定试样中的 $\\mathrm{Fe^{2+}}$：求 $n(\\mathrm{Fe^{2+}})=2.000\\times10^{-3}\\,\\mathrm{mol}$（电子守恒：转移电子 $2.000\\times10^{-3}\\,\\mathrm{mol}$）；若试样为绿矾 $\\mathrm{FeSO_{4}\\cdot7H_{2}O}$（$M=278\\,\\mathrm{g/mol}$），其质量为 $0.556\\,\\mathrm{g}$。每道题都必须使用这组数据与结论，不得改动",
+  "difficulty": "困难",
+  "question_type": "解答题",
+  "count": 3,
+  "knowledge_points": ["氧化还原反应方程式配平", "电子守恒计算", "滴定分析与纯度计算"],
+  "stem_anchors": ["KMnO|高锰酸钾|\\\\mathrm\\{KMnO\\}", "Fe\\s*[2²]?\\s*[+⁺]?|Fe²⁺|亚铁|FeSO", "0\\.02(000)?|20\\.00"],
+  "answer_anchors": ["0\\.0020|2\\.000.{0,14}10|2\\s*mmol", "0\\.556|556\\s*mg", "5\\s*Fe|5Fe"],
+  "analysis_anchors": ["(电子守恒|得失电子|化合价)", "(5|五).{0,10}(倍|mol|Fe|\\))"],
+  "forbidden_patterns": [],
+  "min_stem_chars": 60,
+  "min_analysis_chars": 150
+}

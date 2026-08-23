@@ -503,6 +503,42 @@ def model_name(role: str, default: str = "", *, provider: str = "") -> str:
     return _pick_provider_scoped(settings.model_roles.get(role_key), provider_name) or str(default or "").strip()
 
 
+@dataclass(frozen=True)
+class ModelRoleBinding:
+    role: str
+    provider: str
+    model: str
+    base_url: str
+    api_key: str
+
+
+def model_role_binding(role: str, *, required_provider: str = "") -> ModelRoleBinding:
+    """Resolve a specialist role without crossing to a generic provider route."""
+
+    role_key = str(role or "").strip().lower().replace("-", "_")
+    provider_name = str(settings.model_routes.get(role_key) or "").strip().lower()
+    required = str(required_provider or "").strip().lower()
+    if not provider_name:
+        raise RuntimeError(f"model_role_route_missing:{role_key}")
+    if required and provider_name != required:
+        raise RuntimeError(f"model_role_provider_mismatch:{role_key}:{provider_name}")
+    provider = settings.model_providers.get(provider_name)
+    if provider is None:
+        raise RuntimeError(f"model_role_provider_missing:{role_key}:{provider_name}")
+    model = _pick_provider_scoped(settings.model_roles.get(role_key), provider_name)
+    if not model:
+        raise RuntimeError(f"model_role_model_missing:{role_key}")
+    if not str(provider.base_url or "").strip() or not str(provider.api_key or "").strip():
+        raise RuntimeError(f"model_role_not_configured:{role_key}")
+    return ModelRoleBinding(
+        role=role_key,
+        provider=provider_name,
+        model=model,
+        base_url=str(provider.base_url or "").strip().rstrip("/"),
+        api_key=str(provider.api_key or "").strip(),
+    )
+
+
 def model_param(name: str, default: Any = None) -> Any:
     """Read a generation/model parameter from model.json."""
 

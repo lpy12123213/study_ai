@@ -273,6 +273,21 @@ def _materialize_drafts(
                 ),
                 **({"diagrams": normalized_diagrams} if normalized_diagrams is not None else {}),
                 **({"intuition_packet": dict(intuition_packet)} if intuition_packet is not None else {}),
+                **(
+                    {"strategy_version": str(item.get("strategy_version") or "").strip()}
+                    if str(item.get("strategy_version") or "").strip()
+                    else {}
+                ),
+                **(
+                    {"evolution_lineage": dict(item.get("evolution_lineage") or {})}
+                    if isinstance(item.get("evolution_lineage"), dict)
+                    else {}
+                ),
+                **(
+                    {"supervision_summary": dict(item.get("supervision_summary") or {})}
+                    if isinstance(item.get("supervision_summary"), dict)
+                    else {}
+                ),
             }
         )
     return out, draft_key_to_id

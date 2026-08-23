@@ -437,6 +437,21 @@ export interface HealthStatus {
   [k: string]: any;
 }
 
+/** 模型可用性自检（/api/model-status）：余额不足/模型 id 写错等永久性故障事前可见。 */
+export interface ModelStatusRole {
+  config: string;
+  model: string;
+  status: "ok" | "degraded" | "failed" | "error" | string;
+  error_code?: string;
+  hint?: string;
+}
+
+export interface ModelStatus {
+  status: "unknown" | "ok" | "degraded" | "failed" | "skipped" | string;
+  checked_at: number | null;
+  roles: ModelStatusRole[];
+}
+
 export interface ModelProviderInfo {
   name: string;
   base_url?: string;

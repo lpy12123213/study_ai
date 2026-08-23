@@ -32,9 +32,9 @@ DIFFICULTY_HARD = 0.8
 CACHE_TTL_SECONDS = 3600  # 1 hour
 CACHE_MAX_SIZE = 1000
 
-# Rate limiting
-RATE_LIMIT_REQUESTS_PER_SECOND = 2
-RATE_LIMIT_BURST = 5
+# Rate limiting（实际生效值以 zujuan client 读取的环境变量为准）
+RATE_LIMIT_REQUESTS_PER_SECOND = 3
+RATE_LIMIT_BURST = 6
 
 # Retry settings
 RETRY_DELAYS = [1, 2, 5, 10]  # seconds

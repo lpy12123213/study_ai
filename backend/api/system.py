@@ -139,6 +139,23 @@ async def llm_debug(limit: int = Query(50, ge=1, le=200), _: dict = Depends(requ
     return recent_llm_calls(limit=limit)
 
 
+@router.get("/model-status")
+async def model_status(refresh: bool = Query(False), _: dict = Depends(require_auth)) -> dict:
+    """模型可用性状态（启动自检结果；`?refresh=1` 重新 ping 一轮）。
+
+    status: unknown（尚未自检）| ok | degraded（暂时失败）| failed（4xx 永久失败）| skipped。
+    """
+    if refresh:
+        # 请求期懒加载：backend.app 导入本模块，模块层反向引用会成环。
+        from backend.app import _run_study_materials_model_self_check
+
+        await _run_study_materials_model_self_check()
+
+    from backend.core.model_health import get_model_health
+
+    return get_model_health()
+
+
 @router.get("/config")
 async def get_runtime_config(_: dict = Depends(require_auth)) -> dict:
     """返回当前运行配置摘要（不包含密钥等敏感信息）。"""

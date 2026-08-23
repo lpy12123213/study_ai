@@ -2,6 +2,19 @@ from __future__ import annotations
 
 from typing import Tuple
 
+CHAT_COMPLETIONS_PROTOCOL = "chat_completions"
+RESPONSES_PROTOCOL = "responses"
+
+
+def resolve_protocol(*, provider: str, model: str) -> str:
+    """Select the wire protocol without rewriting the provider's raw model id."""
+
+    provider_name = str(provider or "").strip().lower()
+    model_id = str(model or "").strip().lower()
+    if provider_name == "opencode_go" and model_id == "muse-spark-1.2-contributor":
+        return RESPONSES_PROTOCOL
+    return CHAT_COMPLETIONS_PROTOCOL
+
 
 def resolve_provider(
     *,
@@ -39,4 +52,3 @@ def resolve_provider(
             normalized_model = normalized_model.split("/")[-1]
 
     return normalized_provider, normalized_base_url, normalized_api_key, normalized_model
-

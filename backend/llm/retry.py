@@ -13,6 +13,7 @@ from backend.core.settings import API_TIMEOUT
 from backend.llm import console as llm_console
 from backend.llm.circuit_breaker import circuit_is_open, circuit_key, circuit_record_failure, circuit_record_success
 from backend.llm.model_limits import maybe_append_v1_base_url
+from backend.llm.providers import RESPONSES_PROTOCOL, resolve_protocol
 from backend.llm.request_setup import build_payload, record_replay_request, request_headers, resolve_request_config
 from backend.llm.response_handlers import drop_optional_fields, handle_http_status, parse_response, retry_after
 from backend.llm.result import (
@@ -29,6 +30,20 @@ from backend.llm.streaming import request_stream
 from backend.llm.transport import client_get, client_post, get_shared_llm_http_client
 
 logger = get_logger(__name__)
+
+
+def _request_timeout_s(timeout_s: Optional[float]) -> Optional[float]:
+    """Resolve the per-request timeout; an explicit non-positive value disables it."""
+
+    if timeout_s is not None:
+        try:
+            explicit = float(timeout_s)
+        except (TypeError, ValueError):
+            explicit = float(API_TIMEOUT or 120)
+        if explicit <= 0:
+            return None
+        return max(1.0, min(explicit, 600.0))
+    return max(1.0, min(float(API_TIMEOUT or 120), 600.0))
 
 
 async def chat_completion(
@@ -70,11 +85,13 @@ async def chat_completion(
         temperature=temperature,
         provider_resolver=provider_resolver,
     )
+    protocol = resolve_protocol(provider=resolved_provider, model=resolved_model)
     rr_store = RecordReplayStore("llm")
     rr_request = record_replay_request(
         provider=resolved_provider, base_url=resolved_base_url, model=resolved_model, messages=messages,
         temperature=temp, max_tokens=max_tokens, response_format=response_format, reasoning=reasoning,
         tools=tools, tool_choice=tool_choice, stream=stream,
+        protocol=protocol,
     )
     if replay_enabled():
         fixture, key = rr_store.load(request=rr_request)
@@ -91,7 +108,7 @@ async def chat_completion(
         return empty_llm_result("llm_not_configured")
 
     req_id_base = f"{req_id_prefix}-{uuid.uuid4().hex[:8]}"
-    request_timeout_s = max(1.0, min(float(timeout_s) if timeout_s is not None else float(API_TIMEOUT or 120), 600.0))
+    request_timeout_s = _request_timeout_s(timeout_s)
     retry_statuses = {408, 409, 425, 429, 500, 502, 503, 504}
     max_retries, last_error = max(1, min(int(retries or 3), 10)), ""
     cb_key = circuit_key(provider=resolved_provider, model=resolved_model)
@@ -118,6 +135,7 @@ async def chat_completion(
         stream=stream,
         get_client=lambda: get_shared_llm_http_client(httpx_factory),
         client_get=client_get,
+        protocol=protocol,
     )
     headers = request_headers(resolved_provider, resolved_api_key)
     dropped_reasoning = dropped_response_format = retried_with_v1 = False
@@ -133,10 +151,12 @@ async def chat_completion(
     adaptive_retries_left = 5
     while attempt < max_retries and request_count < max_retries + 5:
         request_count += 1
-        req_id, url = f"{req_id_base}-{request_count}", f"{request_base_url}/chat/completions"
+        endpoint = "responses" if protocol == RESPONSES_PROTOCOL else "chat/completions"
+        req_id, url = f"{req_id_base}-{request_count}", f"{request_base_url}/{endpoint}"
         start_ts = llm_console.log_start(
             req_id=req_id, provider=resolved_provider, model=resolved_model, stream=bool(payload.get("stream")),
-            temperature=float(payload.get("temperature") or 0.0), max_tokens=int(payload.get("max_tokens") or 0),
+            temperature=float(payload.get("temperature") or 0.0),
+            max_tokens=int(payload.get("max_tokens") or payload.get("max_output_tokens") or 0),
             base_url=request_base_url,
         )
         try:
@@ -148,6 +168,7 @@ async def chat_completion(
                     start_ts=start_ts, provider=resolved_provider, model=resolved_model, emit_chars=emit_chars,
                     emit_interval_s=emit_interval_s, on_reasoning_delta=on_reasoning_delta,
                     on_content_delta=on_content_delta,
+                    protocol=protocol,
                 )
                 if result is None:
                     attempt += 1
@@ -192,7 +213,20 @@ async def chat_completion(
                     raise RuntimeError(f"llm_request_failed model={resolved_model} err={last_error}")
                 circuit_record_failure(cb_key)
                 return empty_llm_result(last_error)
-            result, retry_without_reasoning = parse_response(data, payload, dropped_reasoning)
+            if protocol == RESPONSES_PROTOCOL and isinstance(data.get("error"), dict):
+                error = data.get("error") or {}
+                raise RuntimeError(
+                    "llm_response_failed:"
+                    + str(error.get("code") or error.get("message") or "unknown").strip()
+                )
+            result, retry_without_reasoning = parse_response(
+                data,
+                payload,
+                dropped_reasoning,
+                protocol=protocol,
+            )
+            if protocol == RESPONSES_PROTOCOL and result.error_code:
+                raise RuntimeError(f"llm_response_failed:{result.error_code}")
             if retry_without_reasoning:
                 dropped_reasoning, last_error = True, "empty_content_drop_reasoning"
                 logger.warning("llm_empty_content_drop_reasoning", extra={"req_id": req_id, "model": resolved_model, "provider": resolved_provider, "base_url": request_base_url})

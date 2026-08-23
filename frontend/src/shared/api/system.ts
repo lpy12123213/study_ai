@@ -5,11 +5,16 @@ import type {
   GlobalSearchResult,
   HealthStatus,
   ModelSettings,
+  ModelStatus,
 } from "@/shared/api/types";
 
 export const systemApi = {
   config: () => apiFetch<AppConfig>("/api/config"),
   health: () => apiFetch<HealthStatus>("/api/health", { silent: true }),
+  modelStatus: (refresh = false) =>
+    apiFetch<ModelStatus>("/api/model-status", { query: { refresh }, silent: true }),
+  refreshModelStatus: () =>
+    apiFetch<ModelStatus>("/api/model-status", { query: { refresh: true }, silent: true }),
   modelSettings: () => apiFetch<ModelSettings>("/api/model-settings"),
   putModelSettings: (payload: Record<string, any>) =>
     apiFetch<ModelSettings>("/api/model-settings", { method: "PUT", body: payload }),

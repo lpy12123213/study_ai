@@ -20,7 +20,66 @@ def retry_after(resp: Any, attempt: int) -> float:
     return DEFAULT_RETRY_POLICY.http_retry_delay(resp, attempt=attempt)
 
 
-def parse_response(data: Dict[str, Any], payload: Dict[str, Any], dropped_reasoning: bool) -> tuple[ChatCompletionResult, bool]:
+def _parse_responses_api(data: Dict[str, Any]) -> ChatCompletionResult:
+    content_parts: list[str] = []
+    tool_calls: list[dict] = []
+    shortcut = data.get("output_text")
+    if isinstance(shortcut, str) and shortcut:
+        content_parts.append(shortcut)
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip()
+            if item_type in {"function_call", "tool_call"}:
+                tool_calls.append(
+                    {
+                        "id": str(item.get("call_id") or item.get("id") or "").strip(),
+                        "type": "function",
+                        "function": {
+                            "name": str(item.get("name") or "").strip(),
+                            "arguments": str(item.get("arguments") or ""),
+                        },
+                    }
+                )
+            contents = item.get("content")
+            if not isinstance(contents, list):
+                continue
+            for part in contents:
+                if not isinstance(part, dict):
+                    continue
+                if str(part.get("type") or "").strip() in {"output_text", "text"}:
+                    text = part.get("text")
+                    if isinstance(text, str) and text and text not in content_parts:
+                        content_parts.append(text)
+    usage = dict(data.get("usage") or {}) if isinstance(data.get("usage"), dict) else {}
+    status = str(data.get("status") or "").strip().lower()
+    incomplete = data.get("incomplete_details") if isinstance(data.get("incomplete_details"), dict) else {}
+    error = data.get("error") if isinstance(data.get("error"), dict) else {}
+    error_code = ""
+    if status and status != "completed":
+        error_code = str(error.get("code") or incomplete.get("reason") or f"response_{status}").strip()
+    return ChatCompletionResult(
+        content="".join(content_parts).strip(),
+        finish_reason=status,
+        usage=usage,
+        tool_calls=tool_calls,
+        cached_tokens=usage_cached_tokens(usage),
+        error_code=error_code,
+    )
+
+
+def parse_response(
+    data: Dict[str, Any],
+    payload: Dict[str, Any],
+    dropped_reasoning: bool,
+    *,
+    protocol: str = "chat_completions",
+) -> tuple[ChatCompletionResult, bool]:
+    if str(protocol or "").strip().lower() == "responses":
+        result = _parse_responses_api(data)
+        return result, False
     try:
         choice0 = data.get("choices", [{}])[0] if isinstance(data, dict) else {}
         message0 = choice0.get("message", {}) if isinstance(choice0, dict) else {}
@@ -102,11 +161,12 @@ async def handle_http_status(**kwargs: Any) -> Dict[str, Any]:
             input_tokens = input_tokens or int(estimate_messages_tokens(kwargs["messages"]) * context_input_multiplier())
             allowed = int(limit - input_tokens - context_reserve_tokens(limit))
             try:
-                current = int(kwargs["payload"].get("max_tokens") or 0)
+                token_key = "max_output_tokens" if "max_output_tokens" in kwargs["payload"] else "max_tokens"
+                current = int(kwargs["payload"].get(token_key) or 0)
             except (AttributeError, TypeError, ValueError):
                 current = 0
             if allowed > 0 and current > allowed:
-                kwargs["payload"]["max_tokens"] = int(allowed)
+                kwargs["payload"][token_key] = int(allowed)
                 llm_console.log_end(req_id=req_id, elapsed_s=elapsed_s(start_ts), error=api_msg or last_error)
                 await asyncio.sleep(DEFAULT_RETRY_POLICY.adaptation_delay())
                 return {"retry": True}

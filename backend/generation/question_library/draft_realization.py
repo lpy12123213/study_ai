@@ -10,6 +10,7 @@ from backend.core.settings import (
     model_param_int,
 )
 from backend.generation.question_library.curriculum_context import curriculum_context_for_prompt
+from backend.generation.question_library.evolution import PolicyIndividual
 from backend.generation.question_library.gen_common import (
     DEFAULT_SEARCH_CONFIG,
     _difficulty_instruction,
@@ -127,6 +128,7 @@ async def realize_drafts(
     n: int = 2,
     stream_reasoning: bool = False,
     on_reasoning_event: ReasoningEventHandler = None,
+    policy: PolicyIndividual | None = None,
 ) -> List[dict]:
     if not is_llm_configured():
         return []
@@ -139,7 +141,7 @@ async def realize_drafts(
     n = max(1, min(int(n or 1), 4))
 
     model = str(LESSON_PLAN_MODEL or "").strip() or "openai/gpt-5-mini"
-    temperature = _resolve_realize_temperature(difficulty)
+    temperature = float(policy.temperature) if policy is not None else _resolve_realize_temperature(difficulty)
     max_tokens = _resolve_realize_max_tokens()
 
     # First attempt: generate `n` drafts in one shot.
@@ -156,6 +158,7 @@ async def realize_drafts(
             count=target_n,
             spec=spec,
             source_pack=source_pack,
+            policy_prompt=policy.prompt_block() if policy is not None else "",
         )
         if attempt > 0:
             # Force a compact retry: keep the output short and avoid meta commentary
@@ -217,6 +220,7 @@ def build_generation_messages(
     count: int,
     spec: Optional[dict] = None,
     source_pack: Optional[dict] = None,
+    policy_prompt: str = "",
 ) -> List[Dict[str, str]]:
     family = infer_subject_family(subject)
     bank = get_subject_bank(subject)
@@ -278,6 +282,11 @@ def build_generation_messages(
     skills = [str(x).strip() for x in (sp.get("skills") or []) if str(x or "").strip()]
     reference_patterns = [str(x).strip() for x in (sp.get("reference_patterns") or []) if str(x or "").strip()]
     difficulty_calibration = [str(x).strip() for x in (sp.get("difficulty_calibration") or []) if str(x or "").strip()]
+    evolution_evaluation = (
+        dict(sp.get("evolution_evaluation") or {})
+        if isinstance(sp.get("evolution_evaluation"), dict)
+        else {}
+    )
     reference_format_conventions = [str(x).strip() for x in (sp.get("reference_format_conventions") or []) if str(x or "").strip()]
     raw_reference_examples = sp.get("reference_examples") if isinstance(sp.get("reference_examples"), list) else []
     reference_examples = []
@@ -339,6 +348,15 @@ def build_generation_messages(
             "forbidden_patterns": forbid[:12],
             "reference_patterns": reference_patterns[:8],
             "difficulty_calibration": difficulty_calibration[:6],
+            "anti_imitation": {
+                "reference_id": str(evolution_evaluation.get("reference_id") or "").strip(),
+                "solution_fingerprint": list(evolution_evaluation.get("solution_fingerprint") or [])[:12],
+                "max_solution_similarity": evolution_evaluation.get("max_solution_similarity", 0.58),
+                "instruction": (
+                    "Do not reproduce the same ordered solution process. Change the mathematical carrier, "
+                    "decisive invariant, and proof mechanism while preserving only the requested cognitive demand."
+                ),
+            },
             "format_conventions": reference_format_conventions[:6],
             "length_budget": {
                 # Hard-ish caps to keep JSON responses small enough to be reliably
@@ -566,6 +584,7 @@ def build_generation_messages(
         "  Do not copy the original question, values, or conclusions. Borrow only the question-writing method, not the question content.\n"
         "</reference_learning>\n"
         "<json_integrity>Ensure the JSON is complete, closed, and parseable. Do not output truncated content.</json_integrity>"
+        + ("\n" + str(policy_prompt or "").strip() if str(policy_prompt or "").strip() else "")
     )
 
     return [
